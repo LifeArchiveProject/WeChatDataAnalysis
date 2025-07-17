@@ -26,29 +26,16 @@ WECHAT_KEY = None
 SQLITE_HEADER = b"SQLite format 3\x00"
 
 def setup_logging():
-    """设置日志配置"""
+    """设置日志配置 - 已弃用，使用统一的日志配置"""
+    from .logging_config import setup_logging as unified_setup_logging, get_log_file_path
+
+    # 使用统一的日志配置
+    log_file = unified_setup_logging()
+    log_dir = log_file.parent
+
     import logging
-    
-    # 创建日志目录
-    now = datetime.now()
-    log_dir = Path("output/logs") / str(now.year) / f"{now.month:02d}" / f"{now.day:02d}"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 设置日志文件名
-    date_str = now.strftime("%d")
-    log_file = log_dir / f"{date_str}_decrypt.log"
-    
-    # 配置日志
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s | %(levelname)s | %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    logging.info(f"日志系统初始化完成，日志文件: {log_file}")
+    logger = logging.getLogger(__name__)
+    logger.info(f"解密模块日志系统初始化完成，日志文件: {log_file}")
     return log_dir
 
 
@@ -72,30 +59,31 @@ class WeChatDatabaseDecryptor:
     
     def decrypt_database(self, db_path: str, output_path: str) -> bool:
         """解密微信4.x版本数据库
-        
+
         使用SQLCipher 4.0参数:
         - PBKDF2-SHA512, 256000轮迭代
         - AES-256-CBC加密
         - HMAC-SHA512验证
         - 页面大小4096字节
         """
-        import logging
-        
-        logging.info(f"开始解密数据库: {db_path}")
+        from .logging_config import get_logger
+        logger = get_logger(__name__)
+
+        logger.info(f"开始解密数据库: {db_path}")
         
         try:
             with open(db_path, 'rb') as f:
                 encrypted_data = f.read()
             
-            logging.info(f"读取文件大小: {len(encrypted_data)} bytes")
-            
+            logger.info(f"读取文件大小: {len(encrypted_data)} bytes")
+
             if len(encrypted_data) < 4096:
-                logging.warning(f"文件太小，跳过解密: {db_path}")
+                logger.warning(f"文件太小，跳过解密: {db_path}")
                 return False
-            
+
             # 检查是否已经是解密的数据库
             if encrypted_data.startswith(SQLITE_HEADER):
-                logging.info(f"文件已是SQLite格式，直接复制: {db_path}")
+                logger.info(f"文件已是SQLite格式，直接复制: {db_path}")
                 with open(output_path, 'wb') as f:
                     f.write(encrypted_data)
                 return True
@@ -152,7 +140,7 @@ class WeChatDatabaseDecryptor:
                 page_num = cur_page + 1  # 页面编号从1开始
                 
                 if len(page) < page_size:
-                    logging.warning(f"页面 {page_num} 大小不足: {len(page)} bytes")
+                    logger.warning(f"页面 {page_num} 大小不足: {len(page)} bytes")
                     break
                 
                 # 确定偏移量：第一页(cur_page == 0)需要跳过salt
@@ -174,7 +162,7 @@ class WeChatDatabaseDecryptor:
                 expected_hmac = mac.digest()
                 
                 if stored_hmac != expected_hmac:
-                    logging.warning(f"页面 {page_num} HMAC验证失败")
+                    logger.warning(f"页面 {page_num} HMAC验证失败")
                     failed_pages += 1
                     continue
                 
@@ -199,21 +187,21 @@ class WeChatDatabaseDecryptor:
                     successful_pages += 1
                 
                 except Exception as e:
-                    logging.error(f"页面 {page_num} AES解密失败: {e}")
+                    logger.error(f"页面 {page_num} AES解密失败: {e}")
                     failed_pages += 1
                     continue
-            
-            logging.info(f"解密完成: 成功 {successful_pages} 页, 失败 {failed_pages} 页")
-            
+
+            logger.info(f"解密完成: 成功 {successful_pages} 页, 失败 {failed_pages} 页")
+
             # 写入解密后的文件
             with open(output_path, 'wb') as f:
                 f.write(decrypted_data)
-            
-            logging.info(f"解密文件大小: {len(decrypted_data)} bytes")
+
+            logger.info(f"解密文件大小: {len(decrypted_data)} bytes")
             return True
-            
+
         except Exception as e:
-            logging.error(f"解密失败: {db_path}, 错误: {e}")
+            logger.error(f"解密失败: {db_path}, 错误: {e}")
             return False
 
 def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> dict:
@@ -238,10 +226,10 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
             "failed_files": ["解密失败的文件列表"]
         }
     """
-    import logging
+    from .logging_config import get_logger
 
-    # 初始化日志系统
-    setup_logging()
+    # 获取日志器
+    logger = get_logger(__name__)
 
     # 验证密钥是否提供
     if not key:
@@ -258,25 +246,58 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
 
     decrypt_key = key
 
-    logging.info("=" * 60)
-    logging.info("微信4.x数据库解密工具 - API模式")
-    logging.info("=" * 60)
+    logger.info("=" * 60)
+    logger.info("微信4.x数据库解密工具 - API模式")
+    logger.info("=" * 60)
 
-    # 创建输出目录
-    output_dir = Path("output/databases")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    logging.info(f"输出目录: {output_dir.absolute()}")
+    # 创建基础输出目录
+    base_output_dir = Path("output/databases")
+    base_output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"基础输出目录: {base_output_dir.absolute()}")
 
-    # 查找数据库文件
+    # 查找数据库文件并按账号组织
+    account_databases = {}  # {account_name: [db_info, ...]}
+
     if db_storage_path:
         # 使用指定路径查找数据库
-        database_paths = []
         storage_path = Path(db_storage_path)
         if storage_path.exists():
+            # 尝试从路径中提取账号名
+            account_name = "unknown_account"
+            path_parts = storage_path.parts
+
+            # 常见的微信账号格式模式
+            account_patterns = ['wxid_']
+
+            for part in path_parts:
+                # 检查是否匹配已知的账号格式
+                for pattern in account_patterns:
+                    if part.startswith(pattern):
+                        account_name = part.split('_')[0] if '_' in part else part
+                        break
+                if account_name != "unknown_account":
+                    break
+
+            # 如果没有匹配到已知格式，使用包含数据库的目录名
+            if account_name == "unknown_account":
+                # 查找包含db_storage的父目录作为账号名
+                for part in reversed(path_parts):
+                    if part != "db_storage" and len(part) > 3:
+                        account_name = part
+                        break
+
+            databases = []
             for db_file in storage_path.glob("*.db"):
                 if db_file.is_file() and db_file.name != 'key_info.db':
-                    database_paths.append(str(db_file))
-            logging.info(f"在指定路径找到 {len(database_paths)} 个数据库文件")
+                    databases.append({
+                        'path': str(db_file),
+                        'name': db_file.name,
+                        'account': account_name
+                    })
+
+            if databases:
+                account_databases[account_name] = databases
+                logger.info(f"在指定路径找到账号 {account_name} 的 {len(databases)} 个数据库文件")
         else:
             return {
                 "status": "error",
@@ -284,90 +305,135 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
                 "total_databases": 0,
                 "successful_count": 0,
                 "failed_count": 0,
-                "output_directory": str(output_dir.absolute()),
+                "output_directory": str(base_output_dir.absolute()),
                 "processed_files": [],
                 "failed_files": []
             }
     else:
-        # 使用检测函数获取数据库列表
+        # 使用检测函数获取数据库列表，按账号组织
         try:
             from .wechat_detection import detect_wechat_installation
             wechat_info = detect_wechat_installation()
-            if wechat_info and wechat_info.get('databases'):
-                database_paths = [db['path'] for db in wechat_info['databases']]
-                logging.info(f"通过检测函数找到 {len(database_paths)} 个数据库文件")
-            else:
-                database_paths = []
-                logging.warning("检测函数未找到数据库文件")
-        except Exception as e:
-            logging.error(f"检测函数调用失败: {e}")
-            database_paths = []
+            if wechat_info and wechat_info.get('accounts'):
+                for account in wechat_info['accounts']:
+                    account_name = account['account_name']
+                    databases = []
+                    for db in account['databases']:
+                        databases.append({
+                            'path': db['path'],
+                            'name': db['name'],
+                            'account': account_name
+                        })
+                    if databases:
+                        account_databases[account_name] = databases
 
-    if not database_paths:
+                total_dbs = sum(len(dbs) for dbs in account_databases.values())
+                logger.info(f"通过检测函数找到 {len(account_databases)} 个账号的 {total_dbs} 个数据库文件")
+            else:
+                logger.warning("检测函数未找到数据库文件")
+        except Exception as e:
+            logger.error(f"检测函数调用失败: {e}")
+
+    if not account_databases:
         return {
             "status": "error",
             "message": "未找到微信数据库文件！请确保微信已安装并有数据，或提供正确的db_storage路径",
             "total_databases": 0,
             "successful_count": 0,
             "failed_count": 0,
-            "output_directory": str(output_dir.absolute()),
+            "output_directory": str(base_output_dir.absolute()),
             "processed_files": [],
             "failed_files": []
         }
+
+    # 计算总数据库数量
+    total_databases = sum(len(dbs) for dbs in account_databases.values())
 
     # 创建解密器
     try:
         decryptor = WeChatDatabaseDecryptor(decrypt_key)
-        logging.info("解密器初始化成功")
+        logger.info("解密器初始化成功")
     except ValueError as e:
         return {
             "status": "error",
             "message": f"密钥错误: {e}",
-            "total_databases": len(database_paths),
+            "total_databases": total_databases,
             "successful_count": 0,
             "failed_count": 0,
-            "output_directory": str(output_dir.absolute()),
+            "output_directory": str(base_output_dir.absolute()),
             "processed_files": [],
             "failed_files": []
         }
 
-    # 批量解密
+    # 按账号批量解密
     success_count = 0
-    total_count = len(database_paths)
     processed_files = []
     failed_files = []
+    account_results = {}
 
-    for db_path in database_paths:
-        # 生成输出文件名
-        db_name = os.path.basename(db_path)
-        output_path = output_dir / f"decrypted_{db_name}"
+    for account_name, databases in account_databases.items():
+        logger.info(f"开始解密账号 {account_name} 的 {len(databases)} 个数据库")
 
-        # 解密数据库
-        if decryptor.decrypt_database(db_path, str(output_path)):
-            success_count += 1
-            processed_files.append(str(output_path))
-        else:
-            failed_files.append(db_path)
-            logging.error(f"解密失败: {db_path}")
+        # 为每个账号创建专门的输出目录
+        account_output_dir = base_output_dir / account_name
+        account_output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"账号 {account_name} 输出目录: {account_output_dir}")
+
+        account_success = 0
+        account_processed = []
+        account_failed = []
+
+        for db_info in databases:
+            db_path = db_info['path']
+            db_name = db_info['name']
+
+            # 生成输出文件名（保持原始文件名，不添加前缀）
+            output_path = account_output_dir / db_name
+
+            # 解密数据库
+            logger.info(f"解密 {account_name}/{db_name}")
+            if decryptor.decrypt_database(db_path, str(output_path)):
+                account_success += 1
+                success_count += 1
+                account_processed.append(str(output_path))
+                processed_files.append(str(output_path))
+                logger.info(f"解密成功: {account_name}/{db_name}")
+            else:
+                account_failed.append(db_path)
+                failed_files.append(db_path)
+                logger.error(f"解密失败: {account_name}/{db_name}")
+
+        # 记录账号解密结果
+        account_results[account_name] = {
+            "total": len(databases),
+            "success": account_success,
+            "failed": len(databases) - account_success,
+            "output_dir": str(account_output_dir),
+            "processed_files": account_processed,
+            "failed_files": account_failed
+        }
+
+        logger.info(f"账号 {account_name} 解密完成: 成功 {account_success}/{len(databases)}")
 
     # 返回结果
     result = {
         "status": "success" if success_count > 0 else "error",
-        "message": f"解密完成: 成功 {success_count}/{total_count}",
-        "total_databases": total_count,
+        "message": f"解密完成: 成功 {success_count}/{total_databases}",
+        "total_databases": total_databases,
         "successful_count": success_count,
-        "failed_count": total_count - success_count,
-        "output_directory": str(output_dir.absolute()),
+        "failed_count": total_databases - success_count,
+        "output_directory": str(base_output_dir.absolute()),
         "processed_files": processed_files,
-        "failed_files": failed_files
+        "failed_files": failed_files,
+        "account_results": account_results  # 新增：按账号的详细结果
     }
 
-    logging.info("=" * 60)
-    logging.info("解密任务完成!")
-    logging.info(f"成功: {success_count}/{total_count}")
-    logging.info(f"失败: {total_count - success_count}/{total_count}")
-    logging.info(f"输出目录: {output_dir.absolute()}")
-    logging.info("=" * 60)
+    logger.info("=" * 60)
+    logger.info("解密任务完成!")
+    logger.info(f"成功: {success_count}/{total_databases}")
+    logger.info(f"失败: {total_databases - success_count}/{total_databases}")
+    logger.info(f"输出目录: {output_dir.absolute()}")
+    logger.info("=" * 60)
 
     return result
 
