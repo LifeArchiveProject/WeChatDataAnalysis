@@ -1,18 +1,17 @@
+<div align="center">
+  <img src="logo.png" alt="微信数据库解密工具" width="200">
+</div>
+
 # 微信数据库解密工具
 
-一个专门用于微信4.x版本数据库解密的工具，基于SQLCipher 4.0加密机制，支持批量解密微信数据库文件。
-
-## 系统要求
-
-- Python 3.11+
-- Windows 11 (主要测试平台)
+一个专门用于微信4.x版本数据库解密的工具
 
 ## 快速开始
 
 ### 1. 克隆项目
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/LifeArchiveProject/WeChatDataAnalysis
 ```
 
 ### 2. 安装Python依赖
