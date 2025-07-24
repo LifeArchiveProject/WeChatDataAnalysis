@@ -9,25 +9,24 @@ python wechat_decrypt.py
 密钥: 请通过参数传入您的解密密钥
 """
 
-import os
 import hashlib
 import hmac
+import os
 from pathlib import Path
-from datetime import datetime
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
 
-# 默认密钥已移除，请通过参数传入
-WECHAT_KEY = None
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+# 注意：不再支持默认密钥，所有密钥必须通过参数传入
 
 # SQLite文件头
 SQLITE_HEADER = b"SQLite format 3\x00"
 
 def setup_logging():
     """设置日志配置 - 已弃用，使用统一的日志配置"""
-    from .logging_config import setup_logging as unified_setup_logging, get_log_file_path
+    from .logging_config import setup_logging as unified_setup_logging
 
     # 使用统一的日志配置
     log_file = unified_setup_logging()
@@ -211,7 +210,7 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
     参数:
         db_storage_path: 数据库存储路径，如 ......\\{微信id}\\db_storage
                         如果为None，将自动搜索数据库文件
-        key: 解密密钥，如果为None，将使用默认密钥
+        key: 解密密钥（必需参数），64位十六进制字符串
 
     返回值:
         dict: 解密结果统计信息
@@ -261,6 +260,7 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
     if db_storage_path:
         # 使用指定路径查找数据库
         storage_path = Path(db_storage_path)
+
         if storage_path.exists():
             # 尝试从路径中提取账号名
             account_name = "unknown_account"
@@ -273,7 +273,13 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
                 # 检查是否匹配已知的账号格式
                 for pattern in account_patterns:
                     if part.startswith(pattern):
-                        account_name = part.split('_')[0] if '_' in part else part
+                        # 提取主要部分，去掉后面的随机后缀
+                        # 例如：wxid_demouser000322_1e7a -> wxid_demouser000322
+                        parts = part.split('_')
+                        if len(parts) >= 3:  # wxid_主要部分_随机后缀
+                            account_name = '_'.join(parts[:-1])  # 去掉最后一个随机部分
+                        else:
+                            account_name = part  # 如果格式不符合预期，保留原名
                         break
                 if account_name != "unknown_account":
                     break
@@ -287,11 +293,21 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
                         break
 
             databases = []
-            for db_file in storage_path.glob("*.db"):
-                if db_file.is_file() and db_file.name != 'key_info.db':
+            # 使用递归查找，与自动检测逻辑一致
+            for root, dirs, files in os.walk(storage_path):
+                # 只处理db_storage目录下的数据库文件
+                if "db_storage" not in str(root):
+                    continue
+                for file_name in files:
+                    if not file_name.endswith(".db"):
+                        continue
+                    # 排除不需要解密的数据库
+                    if file_name in ["key_info.db"]:
+                        continue
+                    db_path = os.path.join(root, file_name)
                     databases.append({
-                        'path': str(db_file),
-                        'name': db_file.name,
+                        'path': db_path,
+                        'name': file_name,
                         'account': account_name
                     })
 
@@ -310,29 +326,17 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
                 "failed_files": []
             }
     else:
-        # 使用检测函数获取数据库列表，按账号组织
-        try:
-            from .wechat_detection import detect_wechat_installation
-            wechat_info = detect_wechat_installation()
-            if wechat_info and wechat_info.get('accounts'):
-                for account in wechat_info['accounts']:
-                    account_name = account['account_name']
-                    databases = []
-                    for db in account['databases']:
-                        databases.append({
-                            'path': db['path'],
-                            'name': db['name'],
-                            'account': account_name
-                        })
-                    if databases:
-                        account_databases[account_name] = databases
-
-                total_dbs = sum(len(dbs) for dbs in account_databases.values())
-                logger.info(f"通过检测函数找到 {len(account_databases)} 个账号的 {total_dbs} 个数据库文件")
-            else:
-                logger.warning("检测函数未找到数据库文件")
-        except Exception as e:
-            logger.error(f"检测函数调用失败: {e}")
+        # 不再支持自动检测，要求用户提供具体的db_storage_path
+        return {
+            "status": "error",
+            "message": "请提供具体的db_storage_path参数。由于一个密钥只能对应一个账户，不支持自动检测多账户。",
+            "total_databases": 0,
+            "successful_count": 0,
+            "failed_count": 0,
+            "output_directory": str(base_output_dir.absolute()),
+            "processed_files": [],
+            "failed_files": []
+        }
 
     if not account_databases:
         return {
@@ -432,7 +436,7 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
     logger.info("解密任务完成!")
     logger.info(f"成功: {success_count}/{total_databases}")
     logger.info(f"失败: {total_databases - success_count}/{total_databases}")
-    logger.info(f"输出目录: {output_dir.absolute()}")
+    logger.info(f"输出目录: {base_output_dir.absolute()}")
     logger.info("=" * 60)
 
     return result
