@@ -1,0 +1,163 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 自定义全局样式 - 微信配色主题 */
+@layer base {
+  :root {
+    /* 微信品牌色 */
+    --wechat-green: #07c160;
+    --wechat-green-hover: #06ad56;
+    --wechat-green-light: #e6f7f0;
+    --wechat-green-dark: #059341;
+    
+    /* 主色调 */
+    --primary-color: #07c160;
+    --primary-hover: #06ad56;
+    --secondary-color: #4c9e5f;
+    
+    /* 危险色 */
+    --danger-color: #fa5151;
+    --danger-hover: #e94848;
+    
+    /* 警告色 */
+    --warning-color: #ffc300;
+    --warning-hover: #e6ad00;
+    
+    /* 背景色 */
+    --bg-primary: #f7f8fa;
+    --bg-secondary: #ffffff;
+    --bg-gray: #ededed;
+    --bg-dark: #191919;
+    
+    /* 文字颜色 */
+    --text-primary: #191919;
+    --text-secondary: #576b95;
+    --text-light: #888888;
+    --text-white: #ffffff;
+    
+    /* 边框颜色 */
+    --border-color: #e7e7e7;
+    --border-light: #f4f4f4;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* 微信风格组件样式 */
+@layer components {
+  /* 按钮样式 */
+  .btn {
+    @apply px-6 py-3 rounded-full font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 transform active:scale-95;
+  }
+
+  .btn-primary {
+    @apply bg-[#07c160] text-white hover:bg-[#06ad56] focus:ring-[#07c160] shadow-md hover:shadow-lg;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-[#07c160] border-2 border-[#07c160] hover:bg-[#e6f7f0] focus:ring-[#07c160];
+  }
+
+  .btn-danger {
+    @apply bg-[#fa5151] text-white hover:bg-[#e94848] focus:ring-[#fa5151] shadow-md hover:shadow-lg;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent text-[#576b95] hover:bg-gray-100 focus:ring-gray-300;
+  }
+
+  /* 卡片样式 */
+  .card {
+    @apply bg-white rounded-2xl shadow-sm border border-[#f4f4f4] p-6 hover:shadow-md transition-shadow duration-300;
+  }
+
+  .card-hover {
+    @apply hover:transform hover:scale-[1.02] transition-all duration-300;
+  }
+
+  /* 输入框样式 */
+  .input {
+    @apply w-full px-4 py-3 bg-[#f7f8fa] border border-transparent rounded-xl focus:outline-none focus:ring-2 focus:ring-[#07c160] focus:bg-white focus:border-[#07c160] transition-all duration-200;
+  }
+
+  .input-error {
+    @apply border-[#fa5151] focus:ring-[#fa5151] focus:border-[#fa5151];
+  }
+
+  /* 标签样式 */
+  .tag {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-medium;
+  }
+
+  .tag-green {
+    @apply bg-[#e6f7f0] text-[#07c160];
+  }
+
+  .tag-blue {
+    @apply bg-blue-100 text-blue-700;
+  }
+
+  .tag-red {
+    @apply bg-red-100 text-red-700;
+  }
+
+  /* 加载动画 */
+  .loading-spinner {
+    @apply inline-block w-8 h-8 border-4 border-[#e7e7e7] border-t-[#07c160] rounded-full animate-spin;
+  }
+
+  .loading-dots {
+    @apply inline-flex items-center space-x-1;
+  }
+
+  .loading-dots span {
+    @apply w-2 h-2 bg-[#07c160] rounded-full animate-bounce;
+  }
+
+  /* 微信风格的列表项 */
+  .list-item {
+    @apply flex items-center justify-between py-4 px-4 hover:bg-[#f7f8fa] transition-colors duration-200 cursor-pointer;
+  }
+
+  /* 分割线 */
+  .divider {
+    @apply border-t border-[#f4f4f4] my-4;
+  }
+
+  /* 提示框 */
+  .alert {
+    @apply p-4 rounded-xl border;
+  }
+
+  .alert-success {
+    @apply bg-[#e6f7f0] border-[#07c160] text-[#059341];
+  }
+
+  .alert-warning {
+    @apply bg-yellow-50 border-[#ffc300] text-yellow-800;
+  }
+
+  .alert-error {
+    @apply bg-red-50 border-[#fa5151] text-red-800;
+  }
+
+  /* 动画效果 */
+  .fade-enter {
+    @apply opacity-0 transform scale-95;
+  }
+
+  .fade-enter-active {
+    @apply transition-all duration-300 ease-out;
+  }
+
+  .fade-enter-to {
+    @apply opacity-100 transform scale-100;
+  }
+}
