@@ -10,8 +10,13 @@
     
     <!-- 主要内容区域 -->
     <div class="relative z-10 text-center">
-      <!-- 标题部分 -->
+      <!-- Logo和标题部分 -->
       <div class="mb-12 animate-fade-in">
+        <!-- Logo -->
+        <div class="flex justify-center mb-8">
+          <img src="/logo.png" alt="微信解密助手Logo" class="w-48 h-48 object-contain">
+        </div>
+        
         <h1 class="text-5xl font-bold text-[#000000e6] mb-4">
           <span class="bg-gradient-to-r from-[#07C160] to-[#10AEEF] bg-clip-text text-transparent">微信</span>
           <span class="text-[#000000e6]">解密助手</span>
