@@ -111,6 +111,10 @@ npm run dev
    - 提供了SQLCipher 4.0解密的正确实现参考
    - 本项目的HMAC验证和页面处理逻辑基于此项目的实现
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=LifeArchiveProject/WeChatDataAnalysis&type=Date)](https://www.star-history.com/#LifeArchiveProject/WeChatDataAnalysis&Date)
+
 ## 贡献
 
 欢迎提交Issue和Pull Request来改进这个项目。
