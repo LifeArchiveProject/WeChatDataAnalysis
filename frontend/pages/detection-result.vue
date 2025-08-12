@@ -23,6 +23,21 @@
           返回首页
         </NuxtLink>
       </div>
+
+      <!-- 兜底：允许输入数据库路径再次检测 -->
+      <div class="bg-white rounded-xl p-4 border border-[#EDEDED] mb-4">
+        <label class="block text-sm text-[#000000e6] mb-2">数据库文件夹路径（可选）</label>
+        <div class="flex gap-2">
+          <input
+            v-model="customPath"
+            type="text"
+            placeholder="例如：D:\wechatMSG\xwechat_files"
+            class="flex-1 px-4 py-2 bg-white border border-[#EDEDED] rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
+          />
+          <button @click="startDetection" class="px-4 py-2 bg-[#07C160] text-white rounded-lg text-sm hover:bg-[#06AD56]">重新检测</button>
+        </div>
+        <p class="text-xs text-[#7F7F7F] mt-1">未找到时可填写 xwechat_files 根目录。</p>
+      </div>
       
       <!-- 主内容区域 -->
       <div>
@@ -183,13 +198,18 @@ import { useApi } from '~/composables/useApi'
 const { detectWechat } = useApi()
 const loading = ref(false)
 const detectionResult = ref(null)
+const customPath = ref('')
 
 // 开始检测
 const startDetection = async () => {
   loading.value = true
   
   try {
-    const result = await detectWechat()
+    const params = {}
+    if (customPath.value && customPath.value.trim()) {
+      params.data_root_path = customPath.value.trim()
+    }
+    const result = await detectWechat(params)
     detectionResult.value = result
   } catch (err) {
     console.error('检测过程中发生错误:', err)
