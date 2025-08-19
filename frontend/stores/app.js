@@ -9,6 +9,9 @@ export const useAppStore = defineStore('app', {
     // 最近的检测结果
     lastDetectionResult: null,
     
+    // 当前登录账号信息
+    currentAccount: null,
+    
     // 全局加载状态
     globalLoading: false,
     
@@ -26,6 +29,11 @@ export const useAppStore = defineStore('app', {
     // 保存检测结果
     saveDetectionResult(result) {
       this.lastDetectionResult = result
+    },
+    
+    // 设置当前登录账号
+    setCurrentAccount(account) {
+      this.currentAccount = account
     },
     
     // 设置全局加载状态

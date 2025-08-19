@@ -39,6 +39,9 @@
     /* 边框颜色 */
     --border-color: #e7e7e7;
     --border-light: #f4f4f4;
+
+    /* 统一消息圆角（聊天所有消息共用） */
+    --message-radius: 4px;
   }
 
   body {
@@ -52,6 +55,31 @@
 
 /* 微信风格组件样式 */
 @layer components {
+  /* 聊天气泡尾巴（左右），与高度 42px 居中对齐 */
+  .bubble-tail-l, .bubble-tail-r { position: relative; }
+  .bubble-tail-l::after {
+    content: '';
+    position: absolute;
+    left: -4px;
+    top: 12px; /* 36px 中线 18px，减去 6px ≈ 12px */
+    width: 12px; height: 12px;
+    background: #FFFFFF;
+    transform: rotate(45deg);
+    border-radius: 2px;
+  }
+  .bubble-tail-r::after {
+    content: '';
+    position: absolute;
+    right: -4px;
+    top: 12px;
+    width: 12px; height: 12px;
+    background: #95EC69;
+    transform: rotate(45deg);
+    border-radius: 2px;
+  }
+  /* 统一的消息圆角工具类 */
+  .msg-radius { border-radius: var(--message-radius); }
+  .msg-bubble { @apply leading-normal break-words text-pretty; border-radius: var(--message-radius); }
   /* 按钮样式 */
   .btn {
     @apply px-6 py-3 rounded-full font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 transform active:scale-95;

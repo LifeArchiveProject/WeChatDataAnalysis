@@ -91,7 +91,7 @@
                 </div>
                 <div class="w-12 h-12 bg-[#10AEEF]/10 rounded-lg flex items-center justify-center">
                   <svg class="w-6 h-6 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283-.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
                   </svg>
                 </div>
                 </div>
@@ -110,17 +110,19 @@
                 </div>
                 </div>
               </div>
+              
             </div>
             
             <!-- 账户列表 -->
-          <div v-if="detectionResult.data?.accounts && detectionResult.data.accounts.length > 0" 
+          <div v-if="detectionResult.data?.accounts && detectionResult.data.accounts.length > 0"
             class="bg-white rounded-2xl border border-[#EDEDED] overflow-hidden">
             <div class="p-4 border-b border-[#EDEDED] bg-gray-50">
               <h3 class="text-base font-semibold text-[#000000e6]">微信账户详情</h3>
             </div>
             <div class="divide-y divide-[#EDEDED] max-h-64 overflow-y-auto">
-              <div v-for="(account, index) in detectionResult.data.accounts" :key="index" 
-                class="p-4 hover:bg-gray-50 transition-all duration-200">
+              <!-- 将当前登录账号放在第一位 -->
+              <div v-for="(account, index) in sortedAccounts" :key="index"
+                :class="['p-4 hover:bg-gray-50 transition-all duration-200', isCurrentAccount(account.account_name) ? 'bg-[#07C160]/5' : '']">
                 <div class="flex items-center justify-between">
                   <div class="flex-1">
                     <div class="flex items-center">
@@ -128,7 +130,17 @@
                         <span class="text-[#07C160] font-bold text-lg">{{ account.account_name?.charAt(0)?.toUpperCase() || 'U' }}</span>
                       </div>
                       <div>
-                        <p class="text-lg font-medium text-[#000000e6]">{{ account.account_name || '未知账户' }}</p>
+                        <div class="flex items-center">
+                          <p class="text-lg font-medium text-[#000000e6]">{{ account.account_name || '未知账户' }}</p>
+                          <!-- 当前登录账号标识 -->
+                          <span v-if="isCurrentAccount(account.account_name)"
+                            class="ml-2 inline-flex items-center px-2 py-1 bg-[#07C160]/10 text-[#07C160] rounded text-xs font-medium">
+                            <svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                              <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/>
+                            </svg>
+                            当前登录
+                          </span>
+                        </div>
                         <div class="flex items-center mt-1 space-x-4 text-sm text-[#7F7F7F]">
                           <span class="flex items-center">
                             <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -146,7 +158,7 @@
                       </div>
                     </div>
                   </div>
-                  <button @click="goToDecrypt(account)" 
+                  <button @click="goToDecrypt(account)"
                     class="inline-flex items-center px-4 py-2 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56] transition-all duration-200 text-sm">
                     <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/>
@@ -192,13 +204,34 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useApi } from '~/composables/useApi'
+import { useAppStore } from '~/stores/app'
 
-const { detectWechat } = useApi()
+const { detectWechat, detectCurrentAccount } = useApi()
+const appStore = useAppStore()
 const loading = ref(false)
 const detectionResult = ref(null)
 const customPath = ref('')
+
+// 计算属性：将当前登录账号排在第一位
+const sortedAccounts = computed(() => {
+  if (!detectionResult.value?.data?.accounts) return []
+  
+  const accounts = [...detectionResult.value.data.accounts]
+  const currentAccountName = detectionResult.value.data?.current_account?.current_account
+  
+  if (!currentAccountName) return accounts
+  
+  // 将当前登录账号移到第一位
+  const sorted = accounts.sort((a, b) => {
+    if (a.account_name === currentAccountName) return -1
+    if (b.account_name === currentAccountName) return 1
+    return 0
+  })
+  
+  return sorted
+})
 
 // 开始检测
 const startDetection = async () => {
@@ -209,8 +242,28 @@ const startDetection = async () => {
     if (customPath.value && customPath.value.trim()) {
       params.data_root_path = customPath.value.trim()
     }
+    
+    // 检测微信安装信息
     const result = await detectWechat(params)
     detectionResult.value = result
+    
+    // 如果检测成功，同时检测当前登录账号
+    if (result.status === 'success') {
+      try {
+        const currentAccountResult = await detectCurrentAccount(params)
+        if (currentAccountResult.status === 'success') {
+          // 保存当前账号信息到状态管理
+          appStore.setCurrentAccount(currentAccountResult.data)
+          
+          // 同时更新检测结果中的当前账号信息
+          if (detectionResult.value.data) {
+            detectionResult.value.data.current_account = currentAccountResult.data
+          }
+        }
+      } catch (accountErr) {
+        console.error('检测当前登录账号失败:', accountErr)
+      }
+    }
   } catch (err) {
     console.error('检测过程中发生错误:', err)
     detectionResult.value = {
@@ -235,6 +288,36 @@ const goToDecrypt = (account) => {
   }
   // 跳转到解密页面
   navigateTo('/decrypt')
+}
+
+// 判断是否为当前登录账号
+const isCurrentAccount = (accountName) => {
+  if (!detectionResult.value?.data?.current_account) {
+    return false
+  }
+  return detectionResult.value.data.current_account.current_account === accountName
+}
+
+// 获取当前登录账号信息
+const getCurrentAccountInfo = () => {
+  return detectionResult.value?.data?.current_account
+}
+
+// 格式化时间显示
+const formatTime = (timeString) => {
+  if (!timeString) return ''
+  try {
+    const date = new Date(timeString)
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  } catch {
+    return timeString
+  }
 }
 
 // 页面加载时自动检测
