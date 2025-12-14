@@ -12,6 +12,7 @@ python wechat_decrypt.py
 import hashlib
 import hmac
 import os
+import json
 from pathlib import Path
 
 from cryptography.hazmat.backends import default_backend
@@ -382,6 +383,29 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
         account_output_dir = base_output_dir / account_name
         account_output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"账号 {account_name} 输出目录: {account_output_dir}")
+
+        try:
+            source_db_storage_path = str(db_storage_path or "")
+            wxid_dir = ""
+            if db_storage_path:
+                sp = Path(db_storage_path)
+                if sp.name.lower() == "db_storage":
+                    wxid_dir = str(sp.parent)
+                else:
+                    wxid_dir = str(sp)
+            (account_output_dir / "_source.json").write_text(
+                json.dumps(
+                    {
+                        "db_storage_path": source_db_storage_path,
+                        "wxid_dir": wxid_dir,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
         account_success = 0
         account_processed = []

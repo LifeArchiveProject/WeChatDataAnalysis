@@ -41,6 +41,14 @@
           </svg>
           <span>直接解密</span>
         </NuxtLink>
+        
+        <NuxtLink to="/chat" 
+          class="group inline-flex items-center px-12 py-4 bg-white text-[#10AEEF] border border-[#10AEEF] rounded-lg text-lg font-medium hover:bg-[#F7F7F7] transform hover:scale-105 transition-all duration-200">
+          <svg class="w-6 h-6 mr-3 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M8 10h8M8 14h5M4 6h16v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/>
+          </svg>
+          <span>聊天预览</span>
+        </NuxtLink>
       </div>
     </div>
   </div>

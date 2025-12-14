@@ -13,3 +13,6 @@ wheels/
 /.history/
 /.augment/
 /CLAUDE.md
+
+# Local config templates
+/wechat_db_config_template.json

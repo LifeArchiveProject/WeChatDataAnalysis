@@ -39,6 +39,11 @@ export default defineNuxtConfig({
     '@nuxtjs/tailwindcss',
     '@pinia/nuxt'
   ],
+
+  // 启用组件自动导入
+  components: [
+    { path: '~/components', pathPrefix: false }
+  ],
   
   // Tailwind配置
   tailwindcss: {
