@@ -94,6 +94,37 @@ export const useApi = () => {
     const url = '/chat/media/open_folder' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url, { method: 'POST' })
   }
+
+  // 获取图片解密密钥
+  const getMediaKeys = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.force_extract) query.set('force_extract', 'true')
+    const url = '/media/keys' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 保存图片解密密钥
+  const saveMediaKeys = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.xor_key) query.set('xor_key', params.xor_key)
+    if (params && params.aes_key) query.set('aes_key', params.aes_key)
+    const url = '/media/keys' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'POST', body: { account: params.account, force_extract: false } })
+  }
+
+  // 批量解密所有图片
+  const decryptAllMedia = async (params = {}) => {
+    return await request('/media/decrypt_all', {
+      method: 'POST',
+      body: {
+        account: params.account || null,
+        xor_key: params.xor_key || null,
+        aes_key: params.aes_key || null
+      }
+    })
+  }
   
   return {
     detectWechat,
@@ -103,6 +134,9 @@ export const useApi = () => {
     listChatAccounts,
     listChatSessions,
     listChatMessages,
-    openChatMediaFolder
+    openChatMediaFolder,
+    getMediaKeys,
+    saveMediaKeys,
+    decryptAllMedia
   }
 }

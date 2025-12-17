@@ -49,6 +49,7 @@
 - **API接口**: 提供RESTful API接口进行数据库解密操作
 - **Web界面**: 提供现代化的Web操作界面
 - **聊天记录查看**: 支持查看解密后的聊天记录（基础功能）
+- **图片资源解密**: 支持批量解密微信图片(.dat文件)，按MD5哈希存储便于快速访问
 
 ### 开发计划
 
@@ -155,6 +156,48 @@ uv run analyze_wechat_databases.py
   - `field_relationships.md`：跨数据库字段关联分析
   - `{数据库名}/README.md`：该数据库概览
   - `{数据库名}/{表名}.md`：各表详细结构、索引、外键、示例数据与建表语句
+
+### 图片资源解密
+
+微信的图片文件(.dat)是加密存储的，需要解密后才能正常显示。本工具提供了API接口进行批量解密。
+
+#### 1. 获取图片解密密钥
+
+```bash
+# GET请求获取密钥（需要微信正在运行以提取AES密钥）
+curl http://localhost:8000/api/media/keys
+
+# 强制重新提取密钥
+curl "http://localhost:8000/api/media/keys?force_extract=true"
+```
+
+返回示例：
+```json
+{
+  "status": "success",
+  "xor_key": "0xA5",
+  "aes_key": "xxxxxxxxxxxxxxxx",
+  "message": "XOR密钥提取成功。已从微信进程提取AES密钥"
+}
+```
+
+#### 2. 批量解密所有图片
+
+```bash
+# POST请求批量解密所有图片到 output/databases/{账号}/resource 目录
+curl -X POST http://localhost:8000/api/media/decrypt_all \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+解密后的图片按MD5哈希命名，存储在 `resource/{md5前2位}/{md5}.{ext}` 路径下，便于快速查找。
+
+#### 3. 获取已解密的图片
+
+```bash
+# 直接通过MD5获取已解密的图片（更快）
+curl http://localhost:8000/api/media/resource/{md5}
+```
 
 ## 安全说明
 
