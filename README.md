@@ -222,6 +222,9 @@ curl http://localhost:8000/api/media/resource/{md5}
    - 提供了优秀的聊天记录界面设计参考
    - 本项目的聊天界面风格参考了此项目的实现
 
+4. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)** - 微信聊天记录工具（Vue3）
+   - 提供了聊天记录展示与交互的实现参考
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=LifeArchiveProject/WeChatDataAnalysis&type=Date)](https://www.star-history.com/#LifeArchiveProject/WeChatDataAnalysis&Date)
