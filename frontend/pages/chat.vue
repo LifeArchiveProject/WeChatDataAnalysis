@@ -1,7 +1,7 @@
 <template>
   <div class="h-screen flex overflow-hidden" style="background-color: #EDEDED">
     <!-- 左侧边栏 -->
-    <div class="w-16 border-r border-gray-200 flex flex-col" style="background-color: #EDEDED">
+    <div class="w-16 border-r border-gray-200 flex flex-col" style="background-color: #e8e7e7">
       <div class="flex-1 flex flex-col justify-start pt-0">
         <!-- 聊天图标 (与 oh-my-wechat 一致) -->
         <div class="w-16 h-16 flex items-center justify-center chat-tab text-[#03C160]">
@@ -75,7 +75,7 @@
           <template v-else>
             <div v-for="contact in filteredContacts" :key="contact.id"
               class="px-3 py-2 cursor-pointer transition-colors duration-150 border-b border-gray-100"
-              :class="selectedContact?.id === contact.id ? 'bg-[#DEDEDE]' : 'hover:bg-[#eaeaea]'"
+              :class="selectedContact?.id === contact.id ? 'bg-[#DEDEDE] hover:bg-[#d3d3d3]' : 'hover:bg-[#eaeaea]'"
               @click="selectContact(contact)">
               <div class="flex items-center space-x-3">
                 <!-- 联系人头像 -->
@@ -156,13 +156,13 @@
 
           <div v-for="message in renderMessages" :key="message.id" class="mb-6">
             <div v-if="message.showTimeDivider" class="flex justify-center mb-4">
-              <div class="px-3 py-1 rounded-md text-xs text-gray-600" style="background-color: rgba(222,222,222,0.65)">
+              <div class="px-3 py-1 text-xs text-[#9e9e9e]">
                 {{ message.timeDivider }}
               </div>
             </div>
 
             <div v-if="message.renderType === 'system'" class="flex justify-center">
-              <div class="px-3 py-1 rounded-md text-xs text-gray-600" style="background-color: rgba(222,222,222,0.65)">
+              <div class="px-3 py-1 text-xs text-[#9e9e9e]">
                 {{ message.content }}
               </div>
             </div>
@@ -201,22 +201,21 @@
                     :from="message.from"
                   />
                   <div v-else-if="message.renderType === 'file'"
-                    class="max-w-80 py-2.5 pr-2 pl-4 flex items-start bg-white space-x-2.5 rounded-xl cursor-pointer border border-neutral-200 hover:bg-gray-50 transition-colors"
+                    class="max-w-80 py-2.5 pr-2 pl-4 flex items-start bg-white space-x-2.5 msg-radius cursor-pointer border border-neutral-200 hover:bg-gray-50 transition-colors"
+                    @click="onFileClick(message)"
                     @contextmenu="openMediaContextMenu($event, message, 'file')">
                     <div class="flex-1 min-w-0">
                       <h4 class="break-words font-medium text-sm text-gray-900">{{ message.title || message.content }}</h4>
                       <small class="text-neutral-500 text-xs" v-if="message.fileSize">{{ formatFileSize(message.fileSize) }}</small>
                     </div>
                     <div class="shrink-0 w-10 h-10 flex items-center justify-center">
-                      <!-- 文件图标 -->
-                      <svg class="w-8 h-8 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 2l5 5h-5V4zM6 20V4h6v6h6v10H6z"/>
-                      </svg>
+                      <!-- 根据文件类型显示图标 -->
+                      <component :is="getFileIcon(message.title || message.content)" class="w-8 h-8" />
                     </div>
                   </div>
                   <div v-else-if="message.renderType === 'image'"
                     class="max-w-sm">
-                    <div class="rounded-lg overflow-hidden cursor-pointer" :class="message.isSent ? '' : ''" @click="message.imageUrl && openImagePreview(message.imageUrl)" @contextmenu="openMediaContextMenu($event, message, 'image')">
+                    <div class="msg-radius overflow-hidden cursor-pointer" :class="message.isSent ? '' : ''" @click="message.imageUrl && openImagePreview(message.imageUrl)" @contextmenu="openMediaContextMenu($event, message, 'image')">
                       <img v-if="message.imageUrl" :src="message.imageUrl" alt="图片" class="max-w-[240px] max-h-[240px] object-cover hover:opacity-90 transition-opacity">
                       <div v-else class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                         :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
@@ -225,7 +224,7 @@
                     </div>
                   </div>
                   <div v-else-if="message.renderType === 'video'" class="max-w-sm">
-                    <div class="rounded-lg overflow-hidden relative bg-black/5" @contextmenu="openMediaContextMenu($event, message, 'video')">
+                    <div class="msg-radius overflow-hidden relative bg-black/5" @contextmenu="openMediaContextMenu($event, message, 'video')">
                       <img v-if="message.videoThumbUrl" :src="message.videoThumbUrl" alt="视频" class="max-w-[260px] max-h-[260px] object-cover">
                       <div v-else class="px-3 py-2 text-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                         :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
@@ -250,26 +249,24 @@
                     </div>
                   </div>
                   <div v-else-if="message.renderType === 'voice'"
-                    class="voice-message-wrap"
-                    :class="message.isSent ? 'justify-end' : 'justify-start'"
+                    class="wechat-voice-wrapper"
                     @contextmenu="openMediaContextMenu($event, message, 'voice')">
                     <div
-                      class="voice-bubble cursor-pointer select-none"
-                      :class="message.isSent ? 'bg-[#95EC69] voice-sent' : 'bg-white voice-received'"
-                      :style="{ minWidth: '80px', maxWidth: '180px' }"
+                      class="wechat-voice-bubble msg-radius"
+                      :class="message.isSent ? 'wechat-voice-sent' : 'wechat-voice-received'"
+                      :style="{ width: getVoiceWidth(message.voiceDuration) }"
                       @click="message.voiceUrl && playVoice(message)"
                     >
-                      <div class="flex items-center gap-1.5 px-3 py-2" :class="message.isSent ? 'flex-row-reverse' : ''">
-                        <!-- 声波图标 -->
-                        <svg class="w-5 h-5 flex-shrink-0" :class="message.isSent ? 'text-gray-700' : 'text-gray-500'" viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+                      <div class="wechat-voice-content" :class="message.isSent ? 'flex-row-reverse' : ''">
+                        <svg class="wechat-voice-icon" :class="[message.isSent ? 'voice-icon-sent' : 'voice-icon-received', { 'voice-playing': playingVoiceId === message.id }]" viewBox="0 0 32 32" fill="currentColor">
+                          <path d="M10.24 11.616l-4.224 4.192 4.224 4.192c1.088-1.056 1.76-2.56 1.76-4.192s-0.672-3.136-1.76-4.192z"></path>
+                          <path class="voice-wave-2" d="M15.199 6.721l-1.791 1.76c1.856 1.888 3.008 4.48 3.008 7.328s-1.152 5.44-3.008 7.328l1.791 1.76c2.336-2.304 3.809-5.536 3.809-9.088s-1.473-6.784-3.809-9.088z"></path>
+                          <path class="voice-wave-3" d="M20.129 1.793l-1.762 1.76c3.104 3.168 5.025 7.488 5.025 12.256s-1.921 9.088-5.025 12.256l1.762 1.76c3.648-3.616 5.887-8.544 5.887-14.016s-2.239-10.432-5.887-14.016z"></path>
                         </svg>
-                        <span class="text-xs font-medium" :class="message.isSent ? 'text-gray-700' : 'text-gray-600'">
-                          {{ message.voiceDuration || '' }}
-                        </span>
+                        <span class="wechat-voice-duration">{{ getVoiceDurationInSeconds(message.voiceDuration) }}"</span>
                       </div>
+                      <span v-if="!message.voiceRead && !message.isSent" class="wechat-voice-unread"></span>
                     </div>
-                    <!-- 隐藏的 audio 元素用于播放 -->
                     <audio
                       v-if="message.voiceUrl"
                       :ref="el => setVoiceRef(message.id, el)"
@@ -278,6 +275,15 @@
                       class="hidden"
                     ></audio>
                   </div>
+                  <div v-else-if="message.renderType === 'voip'"
+                    class="wechat-voip-bubble msg-radius"
+                    :class="message.isSent ? 'wechat-voip-sent' : 'wechat-voip-received'">
+                    <div class="wechat-voip-content" :class="message.isSent ? 'flex-row-reverse' : ''">
+                      <img v-if="message.voipType === 'video'" src="/assets/images/wechat/wechat-video-light.png" class="wechat-voip-icon" alt="">
+                      <img v-else src="/assets/images/wechat/wechat-audio-light.png" class="wechat-voip-icon" alt="">
+                      <span class="wechat-voip-text">{{ message.content || '通话' }}</span>
+                    </div>
+                  </div>
                   <div v-else-if="message.renderType === 'emoji'" class="max-w-sm">
                     <img v-if="message.emojiUrl" :src="message.emojiUrl" alt="表情" class="w-24 h-24 object-contain" @contextmenu="openMediaContextMenu($event, message, 'emoji')">
                     <div v-else class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
@@ -285,72 +291,60 @@
                       {{ message.content }}
                     </div>
                   </div>
-                  <div v-else-if="message.renderType === 'quote'"
-                    class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed rounded-lg"
-                    :class="message.isSent ? 'bg-[#95EC69] text-black' : 'bg-white text-gray-800'">
-                    <div>{{ message.content }}</div>
-                    <div 
+                  <template v-else-if="message.renderType === 'quote'">
+                    <div
+                      class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
+                      :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
+                      <template v-for="(seg, idx) in parseTextWithEmoji(message.content)" :key="idx">
+                        <span v-if="seg.type === 'text'">{{ seg.content }}</span>
+                        <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px">
+                      </template>
+                    </div>
+                    <div
                       v-if="message.quoteTitle || message.quoteContent"
-                      class="mt-2 pl-1.5 pr-2.5 py-1 text-xs leading-normal text-neutral-600 border-l-2 rounded"
-                      :class="message.isSent ? 'bg-white/25 border-white/55' : 'bg-[rgba(222,222,222,0.3)] border-[rgba(193,193,193,0.6)]'">
-                      <div class="font-medium" v-if="message.quoteTitle">{{ message.quoteTitle }}</div>
-                      <div class="line-clamp-2 opacity-80" v-if="message.quoteContent">{{ message.quoteContent }}</div>
+                      class="mt-[5px] px-2 text-xs text-neutral-600 rounded max-w-[404px] max-h-[61px] flex items-center bg-[#e1e1e1]">
+                      <div class="line-clamp-2 py-2">{{ message.quoteTitle }}: {{ message.quoteContent }}</div>
                     </div>
-                  </div>
+                  </template>
                   <div v-else-if="message.renderType === 'transfer'"
-                    class="max-w-[20em] w-fit py-4 pl-4 pr-6 flex gap-4 items-center bg-white rounded-2xl border border-neutral-200">
-                    <div class="shrink-0 w-10 h-10">
-                      <!-- 转账图标 (黄色双向箭头) -->
-                      <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 relative -left-1 -top-1">
-                        <rect width="40" height="40" fill="white"/>
-                        <path fill-rule="evenodd" clip-rule="evenodd" d="M20 36C28.8366 36 36 28.8366 36 20C36 11.1634 28.8366 4 20 4C11.1634 4 4 11.1634 4 20C4 28.8366 11.1634 36 20 36ZM16.872 13.8839C17.3602 13.3957 17.3602 12.6043 16.872 12.1161C16.3839 11.628 15.5924 11.628 15.1043 12.1161L12.3602 14.8602C11.5466 15.6738 11.5466 16.9929 12.3602 17.8065L15.1043 20.5506C15.5924 21.0387 16.3839 21.0387 16.872 20.5506C17.3602 20.0624 17.3602 19.2709 16.872 18.7828L15.6726 17.5833H26.4048C27.0951 17.5833 27.6548 17.0237 27.6548 16.3333C27.6548 15.643 27.0951 15.0833 26.4048 15.0833H15.6726L16.872 13.8839ZM24.372 20.4494C23.8838 19.9613 23.0924 19.9613 22.6042 20.4494C22.1161 20.9376 22.1161 21.7291 22.6042 22.2172L23.8037 23.4167H13.0715C12.3811 23.4167 11.8215 23.9763 11.8215 24.6667C11.8215 25.357 12.3811 25.9167 13.0715 25.9167H23.8037L22.6042 27.1161C22.1161 27.6043 22.1161 28.3957 22.6042 28.8839C23.0924 29.372 23.8838 29.372 24.372 28.8839L27.116 26.1399L27.1161 26.1398C27.9297 25.3262 27.9297 24.0071 27.1161 23.1935L27.116 23.1934L24.372 20.4494Z" fill="#FFCC33"/>
-                      </svg>
+                    class="wechat-transfer-card msg-radius"
+                    :class="[{ 'wechat-transfer-received': message.transferReceived, 'wechat-transfer-returned': isTransferReturned(message) }, message.isSent ? 'wechat-transfer-sent-side' : 'wechat-transfer-received-side']">
+                    <div class="wechat-transfer-content">
+                      <img src="/assets/images/wechat/wechat-returned.png" v-if="isTransferReturned(message)" class="wechat-transfer-icon" alt="">
+                      <img src="/assets/images/wechat/wechat-trans-icon2.png" v-else-if="message.transferReceived" class="wechat-transfer-icon" alt="">
+                      <img src="/assets/images/wechat/wechat-trans-icon1.png" v-else class="wechat-transfer-icon" alt="">
+                      <div class="wechat-transfer-info">
+                        <span class="wechat-transfer-amount" v-if="message.amount">¥{{ formatTransferAmount(message.amount) }}</span>
+                        <span class="wechat-transfer-status">{{ getTransferTitle(message) }}</span>
+                      </div>
                     </div>
-                    <div>
-                      <h4 class="font-medium text-sm">{{ getTransferTitle(message) }}</h4>
-                      <p class="text-sm text-neutral-600" v-if="message.amount">{{ message.amount }}</p>
+                    <div class="wechat-transfer-bottom">
+                      <span>微信转账</span>
                     </div>
                   </div>
-                  <div v-else-if="message.renderType === 'redPacket'" class="max-w-64">
-                    <!-- 有封面的红包 -->
-                    <div v-if="message.coverUrl" class="w-64 bg-white overflow-hidden rounded-2xl border border-neutral-200">
-                      <img :src="message.coverUrl" alt="红包封面" class="rounded-2xl w-full object-cover">
-                      <div class="py-2 pl-2 pr-3 flex gap-1">
-                        <div class="w-6 h-6">
-                          <!-- 红包图标 -->
-                          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full h-full">
-                            <rect width="24" height="24" rx="4" fill="#FA9D3B"/>
-                            <path d="M12 6C9.5 6 7.5 7.5 7.5 9.5C7.5 11 8.5 12 10 12.5L9 14H15L14 12.5C15.5 12 16.5 11 16.5 9.5C16.5 7.5 14.5 6 12 6Z" fill="#FFF2D9"/>
-                            <rect x="9" y="14" width="6" height="4" rx="0.5" fill="#FFF2D9"/>
-                          </svg>
-                        </div>
-                        <div>
-                          <h4 class="font-medium text-sm">{{ message.content || '红包' }}</h4>
-                        </div>
+                  <!-- 红包消息 - 微信风格橙色卡片 -->
+                  <div v-else-if="message.renderType === 'redPacket'" class="wechat-redpacket-card msg-radius"
+                    :class="{ 'wechat-redpacket-received': message.redPacketReceived }">
+                    <div class="wechat-redpacket-content">
+                      <img src="/assets/images/wechat/wechat-trans-icon3.png" v-if="!message.redPacketReceived" class="wechat-redpacket-icon" alt="">
+                      <img src="/assets/images/wechat/wechat-trans-icon4.png" v-else class="wechat-redpacket-icon" alt="">
+                      <div class="wechat-redpacket-info">
+                        <span class="wechat-redpacket-text">{{ message.content || '恭喜发财，大吉大利' }}</span>
+                        <span class="wechat-redpacket-status" v-if="message.redPacketReceived">已领取</span>
                       </div>
                     </div>
-                    <!-- 无封面的红包 -->
-                    <div v-else class="max-w-[20em] w-fit py-4 pl-4 pr-6 flex gap-4 items-center bg-white rounded-2xl border border-neutral-200">
-                      <div class="shrink-0 w-10 h-10">
-                        <!-- 红包图标 -->
-                        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 relative -left-1 -top-1">
-                          <rect width="40" height="40" fill="white"/>
-                          <path fill-rule="evenodd" clip-rule="evenodd" d="M20 36C28.8366 36 36 28.8366 36 20C36 11.1634 28.8366 4 20 4C11.1634 4 4 11.1634 4 20C4 28.8366 11.1634 36 20 36Z" fill="#FA9D3B"/>
-                          <path d="M20 10C15.5 10 12 12.5 12 15.5C12 18 14 20 16.5 21L15 24H25L23.5 21C26 20 28 18 28 15.5C28 12.5 24.5 10 20 10Z" fill="#FFF2D9"/>
-                          <rect x="15" y="24" width="10" height="6" rx="1" fill="#FFF2D9"/>
-                        </svg>
-                      </div>
-                      <div>
-                        <h4 class="font-medium text-sm">{{ message.content || '红包' }}</h4>
-                        <p class="text-sm text-neutral-600" v-if="message.title">{{ message.title }}</p>
-                      </div>
+                    <div class="wechat-redpacket-bottom">
+                      <span>微信红包</span>
                     </div>
                   </div>
                   <!-- 文本消息 -->
                   <div v-else-if="message.renderType === 'text'"
                     class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                     :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
-                    {{ message.content }}
+                    <template v-for="(seg, idx) in parseTextWithEmoji(message.content)" :key="idx">
+                      <span v-if="seg.type === 'text'">{{ seg.content }}</span>
+                      <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px">
+                    </template>
                   </div>
                   <!-- 表情消息 -->
                   <!-- 其他类型统一降级为普通文本展示 -->
@@ -418,6 +412,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, defineComponent, h } from 'vue'
 
 import { useApi } from '~/composables/useApi'
+import { parseTextWithEmoji } from '~/utils/wechat-emojis'
 
 // 设置页面标题
 useHead({
@@ -467,10 +462,17 @@ const closeImagePreview = () => {
 
 const voiceRefs = ref({})
 const currentPlayingVoice = ref(null)
+const playingVoiceId = ref(null)
 
 const setVoiceRef = (id, el) => {
   if (el) {
     voiceRefs.value[id] = el
+    el.onended = () => {
+      if (playingVoiceId.value === id) {
+        playingVoiceId.value = null
+        currentPlayingVoice.value = null
+      }
+    }
   }
 }
 
@@ -482,16 +484,34 @@ const playVoice = (message) => {
   if (currentPlayingVoice.value && currentPlayingVoice.value !== audio) {
     currentPlayingVoice.value.pause()
     currentPlayingVoice.value.currentTime = 0
+    playingVoiceId.value = null
   }
 
   if (audio.paused) {
     audio.play()
     currentPlayingVoice.value = audio
+    playingVoiceId.value = message.id
   } else {
     audio.pause()
     audio.currentTime = 0
     currentPlayingVoice.value = null
+    playingVoiceId.value = null
   }
+}
+
+// 将毫秒转换为秒（voiceLength 存储的是毫秒）
+const getVoiceDurationInSeconds = (durationMs) => {
+  const ms = parseInt(durationMs) || 0
+  return Math.round(ms / 1000)
+}
+
+// 根据语音时长计算宽度（基于秒数）
+const getVoiceWidth = (durationMs) => {
+  const seconds = getVoiceDurationInSeconds(durationMs)
+  const minWidth = 80
+  const maxWidth = 200
+  const width = Math.min(maxWidth, minWidth + seconds * 4)
+  return `${width}px`
 }
 
 const contextMenu = ref({ visible: false, x: 0, y: 0, message: null, kind: '', disabled: false })
@@ -636,21 +656,144 @@ const formatFileSize = (size) => {
   return `${(num / 1024 / 1024).toFixed(2)} MB`
 }
 
+const formatTransferAmount = (amount) => {
+  const s = String(amount ?? '').trim()
+  if (!s) return ''
+  return s.replace(/[￥¥]/g, '').trim()
+}
+
+// 文件类型图标组件
+const FileIconPdf = defineComponent({
+  render() {
+    return h('svg', { viewBox: '0 0 24 24', fill: 'none', class: 'text-red-500' }, [
+      h('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z', stroke: 'currentColor', 'stroke-width': '1.5', fill: 'none' }),
+      h('path', { d: 'M14 2v6h6', stroke: 'currentColor', 'stroke-width': '1.5' }),
+      h('text', { x: '7', y: '17', 'font-size': '6', fill: 'currentColor', 'font-weight': 'bold' }, 'PDF')
+    ])
+  }
+})
+
+const FileIconZip = defineComponent({
+  render() {
+    return h('svg', { viewBox: '0 0 24 24', fill: 'none', class: 'text-yellow-600' }, [
+      h('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z', stroke: 'currentColor', 'stroke-width': '1.5', fill: 'none' }),
+      h('path', { d: 'M14 2v6h6', stroke: 'currentColor', 'stroke-width': '1.5' }),
+      h('text', { x: '7', y: '17', 'font-size': '6', fill: 'currentColor', 'font-weight': 'bold' }, 'ZIP')
+    ])
+  }
+})
+
+const FileIconDoc = defineComponent({
+  render() {
+    return h('svg', { viewBox: '0 0 24 24', fill: 'none', class: 'text-blue-600' }, [
+      h('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z', stroke: 'currentColor', 'stroke-width': '1.5', fill: 'none' }),
+      h('path', { d: 'M14 2v6h6', stroke: 'currentColor', 'stroke-width': '1.5' }),
+      h('text', { x: '5', y: '17', 'font-size': '5', fill: 'currentColor', 'font-weight': 'bold' }, 'DOC')
+    ])
+  }
+})
+
+const FileIconXls = defineComponent({
+  render() {
+    return h('svg', { viewBox: '0 0 24 24', fill: 'none', class: 'text-green-600' }, [
+      h('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z', stroke: 'currentColor', 'stroke-width': '1.5', fill: 'none' }),
+      h('path', { d: 'M14 2v6h6', stroke: 'currentColor', 'stroke-width': '1.5' }),
+      h('text', { x: '6', y: '17', 'font-size': '5', fill: 'currentColor', 'font-weight': 'bold' }, 'XLS')
+    ])
+  }
+})
+
+const FileIconPpt = defineComponent({
+  render() {
+    return h('svg', { viewBox: '0 0 24 24', fill: 'none', class: 'text-orange-500' }, [
+      h('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z', stroke: 'currentColor', 'stroke-width': '1.5', fill: 'none' }),
+      h('path', { d: 'M14 2v6h6', stroke: 'currentColor', 'stroke-width': '1.5' }),
+      h('text', { x: '6', y: '17', 'font-size': '5', fill: 'currentColor', 'font-weight': 'bold' }, 'PPT')
+    ])
+  }
+})
+
+const FileIconTxt = defineComponent({
+  render() {
+    return h('svg', { viewBox: '0 0 24 24', fill: 'none', class: 'text-gray-500' }, [
+      h('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z', stroke: 'currentColor', 'stroke-width': '1.5', fill: 'none' }),
+      h('path', { d: 'M14 2v6h6', stroke: 'currentColor', 'stroke-width': '1.5' }),
+      h('text', { x: '6', y: '17', 'font-size': '5', fill: 'currentColor', 'font-weight': 'bold' }, 'TXT')
+    ])
+  }
+})
+
+const FileIconDefault = defineComponent({
+  render() {
+    return h('svg', { viewBox: '0 0 24 24', fill: 'currentColor', class: 'text-gray-400' }, [
+      h('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 2l5 5h-5V4zM6 20V4h6v6h6v10H6z' })
+    ])
+  }
+})
+
+// 根据文件名获取对应图标
+const getFileIcon = (fileName) => {
+  if (!fileName) return FileIconDefault
+  const ext = String(fileName).split('.').pop()?.toLowerCase() || ''
+  switch (ext) {
+    case 'pdf': return FileIconPdf
+    case 'zip': case 'rar': case '7z': case 'tar': case 'gz': return FileIconZip
+    case 'doc': case 'docx': return FileIconDoc
+    case 'xls': case 'xlsx': case 'csv': return FileIconXls
+    case 'ppt': case 'pptx': return FileIconPpt
+    case 'txt': case 'md': case 'log': return FileIconTxt
+    default: return FileIconDefault
+  }
+}
+
+// 文件点击事件 - 打开文件所在文件夹
+const onFileClick = async (message) => {
+  if (!message?.fileMd5) return
+  const api = useApi()
+  
+  try {
+    if (!selectedAccount.value) return
+    if (!selectedContact.value?.username) return
+    
+    await api.openChatMediaFolder({
+      account: selectedAccount.value,
+      username: selectedContact.value.username,
+      kind: 'file',
+      md5: message.fileMd5
+    })
+  } catch (err) {
+    console.error('打开文件夹失败:', err)
+  }
+}
+
+const isTransferReturned = (message) => {
+  const paySubType = String(message?.paySubType || '').trim()
+  if (paySubType === '4' || paySubType === '9') return true
+  const s = String(message?.transferStatus || '').trim()
+  const c = String(message?.content || '').trim()
+  const text = `${s} ${c}`.trim()
+  if (!text) return false
+  return text.includes('退回') || text.includes('退还')
+}
+
 const getTransferTitle = (message) => {
+  const paySubType = String(message.paySubType || '').trim()
+  // paysubtype 含义：
+  // 1=不明确 3=已收款/接收转账 4=对方退回给你 8=发起转账 9=被对方退回 10=已过期
+  // 优先使用后端计算的 transferStatus（如果有）
   if (message.transferStatus) return message.transferStatus
+  switch (paySubType) {
+    case '1': return '转账'
+    case '3': return message.isSent ? '已收款' : '已被接收'
+    case '8': return '发起转账'
+    case '4': return '已退还'
+    case '9': return '已被退还'
+    case '10': return '已过期'
+  }
   if (message.content && message.content !== '转账' && message.content !== '[转账]') {
     return message.content
   }
-  const paySubType = String(message.paySubType || '').trim()
-  switch (paySubType) {
-    case '1': return '转账'
-    case '3': return '接收转账'
-    case '8': return '发起转账'
-    case '4': return '已退回'
-    case '9': return '已被退回'
-    case '10': return '已过期'
-    default: return '转账'
-  }
+  return '转账'
 }
 
 const renderMessages = computed(() => {
@@ -842,8 +985,9 @@ const normalizeMessage = (msg) => {
     fileMd5: msg.fileMd5 || '',
     paySubType: msg.paySubType || '',
     transferStatus: msg.transferStatus || '',
+    transferReceived: msg.paySubType === '3' || msg.transferStatus === '已收款',
     voiceUrl: normalizedVoiceUrl || '',
-    voiceDuration: msg.voiceDuration || '',
+    voiceDuration: msg.voiceLength || msg.voiceDuration || '',
     preview: msg.thumbUrl || '',
     from: '',
     isGroup: !!selectedContact.value?.isGroup,
@@ -978,7 +1122,7 @@ const LinkCard = defineComponent({
         href: props.href,
         target: '_blank',
         rel: 'noreferrer',
-        class: 'block max-w-sm w-full bg-white rounded-xl border border-neutral-200 overflow-hidden hover:bg-gray-50 transition-colors'
+        class: 'block max-w-sm w-full bg-white msg-radius border border-neutral-200 overflow-hidden hover:bg-gray-50 transition-colors'
       },
       [
         props.preview ? h('div', { class: 'w-full bg-black/5' }, [
@@ -1017,7 +1161,7 @@ const LinkCard = defineComponent({
 
 /* 消息气泡样式 */
 .message-bubble {
-  border-radius: 8px;
+  border-radius: var(--message-radius);
   position: relative;
   z-index: 1;
 }
@@ -1025,7 +1169,7 @@ const LinkCard = defineComponent({
 /* 发送的消息（右侧绿色气泡） */
 .sent-message {
   background-color: #95EB69 !important;
-  border-radius: 8px;
+  border-radius: var(--message-radius);
 }
 
 .sent-message::after {
@@ -1034,17 +1178,16 @@ const LinkCard = defineComponent({
   top: 50%;
   right: -4px;
   transform: translateY(-50%) rotate(45deg);
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   background-color: #95EB69;
-  border-radius: 3px;
-  z-index: -1;
+  border-radius: 2px;
 }
 
 /* 接收的消息（左侧白色气泡） */
 .received-message {
   background-color: white !important;
-  border-radius: 8px;
+  border-radius: var(--message-radius);
 }
 
 .received-message::before {
@@ -1053,11 +1196,10 @@ const LinkCard = defineComponent({
   top: 50%;
   left: -4px;
   transform: translateY(-50%) rotate(45deg);
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   background-color: white;
-  border-radius: 3px;
-  z-index: -1;
+  border-radius: 2px;
 }
 
 /* 聊天标签页样式 */
@@ -1086,7 +1228,7 @@ const LinkCard = defineComponent({
 }
 
 .voice-bubble {
-  border-radius: 8px;
+  border-radius: var(--message-radius);
   position: relative;
   transition: opacity 0.15s ease;
 }
@@ -1100,7 +1242,7 @@ const LinkCard = defineComponent({
 }
 
 .voice-sent {
-  border-radius: 8px;
+  border-radius: var(--message-radius);
 }
 
 .voice-sent::after {
@@ -1113,11 +1255,10 @@ const LinkCard = defineComponent({
   height: 10px;
   background-color: #95EC69;
   border-radius: 2px;
-  z-index: -1;
 }
 
 .voice-received {
-  border-radius: 8px;
+  border-radius: var(--message-radius);
 }
 
 .voice-received::before {
@@ -1130,7 +1271,376 @@ const LinkCard = defineComponent({
   height: 10px;
   background-color: white;
   border-radius: 2px;
-  z-index: -1;
+}
+
+/* 语音消息样式 - 微信风格 */
+.wechat-voice-wrapper {
+  display: flex;
+  width: 100%;
+  position: relative;
+}
+
+.wechat-voice-bubble {
+  border-radius: var(--message-radius);
+  position: relative;
+  transition: opacity 0.15s ease;
+  min-width: 80px;
+  max-width: 200px;
+}
+
+.wechat-voice-bubble:hover {
+  opacity: 0.85;
+}
+
+.wechat-voice-bubble:active {
+  opacity: 0.7;
+}
+
+.wechat-voice-sent {
+  background: #95EC69;
+}
+
+.wechat-voice-sent::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -4px;
+  transform: translateY(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: #95EC69;
+  border-radius: 2px;
+}
+
+.wechat-voice-received {
+  background: white;
+}
+
+.wechat-voice-received::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -4px;
+  transform: translateY(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: white;
+  border-radius: 2px;
+}
+
+.wechat-voice-content {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  gap: 8px;
+}
+
+/* 语音图标样式 */
+.wechat-voice-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #1a1a1a;
+}
+
+.voice-icon-sent {
+  transform: scaleX(-1);
+}
+
+/* 播放时的波动动画 */
+.wechat-voice-icon.voice-playing .voice-wave-2 {
+  animation: voice-wave-2 1s infinite;
+}
+
+.wechat-voice-icon.voice-playing .voice-wave-3 {
+  animation: voice-wave-3 1s infinite;
+}
+
+@keyframes voice-wave-2 {
+  0%, 33% { opacity: 0; }
+  34%, 100% { opacity: 1; }
+}
+
+@keyframes voice-wave-3 {
+  0%, 66% { opacity: 0; }
+  67%, 100% { opacity: 1; }
+}
+
+.wechat-voice-duration {
+  font-size: 14px;
+  color: #1a1a1a;
+}
+
+.wechat-voice-unread {
+  position: absolute;
+  top: 50%;
+  right: -20px;
+  transform: translateY(-50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e75e58;
+}
+
+/* 音视频通话消息样式 - 微信风格 */
+.wechat-voip-bubble {
+  border-radius: var(--message-radius);
+  position: relative;
+  min-width: 120px;
+}
+
+.wechat-voip-sent {
+  background: #95EC69;
+}
+
+.wechat-voip-sent::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -4px;
+  transform: translateY(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: #95EC69;
+  border-radius: 2px;
+}
+
+.wechat-voip-received {
+  background: white;
+}
+
+.wechat-voip-received::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -4px;
+  transform: translateY(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: white;
+  border-radius: 2px;
+}
+
+.wechat-voip-content {
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+  gap: 8px;
+}
+
+.wechat-voip-icon {
+  width: 22px;
+  height: 14px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.wechat-voip-text {
+  font-size: 14px;
+  color: #1a1a1a;
+}
+
+/* 转账消息样式 - 微信风格 */
+.wechat-transfer-card {
+  width: 240px;
+  background: #f79c46;
+  border-radius: var(--message-radius);
+  overflow: visible;
+  position: relative;
+}
+
+.wechat-transfer-card::after {
+  content: '';
+  position: absolute;
+  top: 16px;
+  left: -4px;
+  width: 10px;
+  height: 10px;
+  background: #f79c46;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+.wechat-transfer-sent-side::after {
+  left: auto;
+  right: -4px;
+}
+
+.wechat-transfer-content {
+  display: flex;
+  align-items: center;
+  padding: 12px 14px;
+  min-height: 56px;
+}
+
+.wechat-transfer-icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.wechat-transfer-info {
+  flex: 1;
+  margin-left: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wechat-transfer-amount {
+  font-size: 16px;
+  font-weight: 500;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wechat-transfer-status {
+  font-size: 12px;
+  color: #fff;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wechat-transfer-bottom {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-top: 1px solid rgba(255,255,255,0.2);
+}
+
+.wechat-transfer-bottom span {
+  font-size: 11px;
+  color: #fff;
+}
+
+/* 已领取的转账样式 */
+.wechat-transfer-received {
+  background: #f8e2c6;
+}
+
+.wechat-transfer-received::after {
+  background: #f8e2c6;
+}
+
+.wechat-transfer-received .wechat-transfer-amount,
+.wechat-transfer-received .wechat-transfer-status {
+  color: #fff;
+}
+
+.wechat-transfer-received .wechat-transfer-bottom span {
+  color: #fff;
+}
+
+/* 退回的转账样式 */
+.wechat-transfer-returned {
+  background: #fde1c3;
+}
+
+.wechat-transfer-returned::after {
+  background: #fde1c3;
+}
+
+.wechat-transfer-returned .wechat-transfer-amount,
+.wechat-transfer-returned .wechat-transfer-status {
+  color: #fff;
+}
+
+.wechat-transfer-returned .wechat-transfer-bottom span {
+  color: #fff;
+}
+
+/* 红包消息样式 - 微信风格 */
+.wechat-redpacket-card {
+  width: 240px;
+  background: #fa9d3b;
+  border-radius: var(--message-radius);
+  overflow: hidden;
+  position: relative;
+}
+
+.wechat-redpacket-card::after {
+  content: '';
+  position: absolute;
+  top: 16px;
+  left: -4px;
+  width: 10px;
+  height: 10px;
+  background: #fa9d3b;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+.wechat-redpacket-content {
+  display: flex;
+  align-items: center;
+  padding: 12px 14px;
+  min-height: 56px;
+}
+
+.wechat-redpacket-icon {
+  width: 32px;
+  height: 36px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.wechat-redpacket-info {
+  flex: 1;
+  margin-left: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wechat-redpacket-text {
+  font-size: 14px;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wechat-redpacket-status {
+  font-size: 12px;
+  color: #fff;
+  margin-top: 2px;
+}
+
+.wechat-redpacket-bottom {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-top: 1px solid rgba(255,255,255,0.2);
+}
+
+.wechat-redpacket-bottom span {
+  font-size: 11px;
+  color: #faecda;
+}
+
+/* 已领取的红包样式 */
+.wechat-redpacket-received {
+  background: #f8e2c6;
+}
+
+.wechat-redpacket-received::after {
+  background: #f8e2c6;
+}
+
+.wechat-redpacket-received .wechat-redpacket-text,
+.wechat-redpacket-received .wechat-redpacket-status {
+  color: #b88550;
+}
+
+.wechat-redpacket-received .wechat-redpacket-bottom span {
+  color: #c9a67a;
 }
 
 /* 隐私模式模糊效果 */
