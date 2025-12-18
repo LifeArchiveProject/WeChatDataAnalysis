@@ -4,7 +4,7 @@
     <div class="w-16 border-r border-gray-200 flex flex-col" style="background-color: #e8e7e7">
       <div class="flex-1 flex flex-col justify-start pt-0">
         <!-- 聊天图标 (与 oh-my-wechat 一致) -->
-        <div class="w-16 h-16 flex items-center justify-center chat-tab text-[#03C160]">
+        <div class="w-16 h-16 flex items-center justify-center chat-tab selected text-[#07b75b]">
           <div class="w-7 h-7">
             <svg class="w-full h-full" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M12 19.8C17.52 19.8 22 15.99 22 11.3C22 6.6 17.52 2.8 12 2.8C6.48 2.8 2 6.6 2 11.3C2 13.29 2.8 15.12 4.15 16.57C4.6 17.05 4.82 17.29 4.92 17.44C5.14 17.79 5.21 17.99 5.23 18.4C5.24 18.59 5.22 18.81 5.16 19.26C5.1 19.75 5.07 19.99 5.13 20.16C5.23 20.49 5.53 20.71 5.87 20.72C6.04 20.72 6.27 20.63 6.72 20.43L8.07 19.86C8.43 19.71 8.61 19.63 8.77 19.59C8.95 19.55 9.04 19.54 9.22 19.54C9.39 19.53 9.64 19.57 10.14 19.65C10.74 19.75 11.37 19.8 12 19.8Z"/>
@@ -284,8 +284,18 @@
                       <span class="wechat-voip-text">{{ message.content || '通话' }}</span>
                     </div>
                   </div>
-                  <div v-else-if="message.renderType === 'emoji'" class="max-w-sm">
-                    <img v-if="message.emojiUrl" :src="message.emojiUrl" alt="表情" class="w-24 h-24 object-contain" @contextmenu="openMediaContextMenu($event, message, 'emoji')">
+                  <div v-else-if="message.renderType === 'emoji'" class="max-w-sm flex items-center group">
+                    <template v-if="message.emojiUrl">
+                      <img :src="message.emojiUrl" alt="表情" class="w-24 h-24 object-contain" @contextmenu="openMediaContextMenu($event, message, 'emoji')">
+                      <button
+                        v-if="shouldShowEmojiDownload(message)"
+                        class="ml-2 text-xs px-2 py-1 rounded bg-white border border-gray-200 text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                        :disabled="!!message._emojiDownloading"
+                        @click.stop="onEmojiDownloadClick(message)"
+                      >
+                        {{ message._emojiDownloading ? '下载中...' : (message._emojiDownloaded ? '已下载' : '下载') }}
+                      </button>
+                    </template>
                     <div v-else class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                       :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
                       {{ message.content }}
@@ -295,10 +305,10 @@
                     <div
                       class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                       :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
-                      <template v-for="(seg, idx) in parseTextWithEmoji(message.content)" :key="idx">
+                      <span v-for="(seg, idx) in parseTextWithEmoji(message.content)" :key="idx">
                         <span v-if="seg.type === 'text'">{{ seg.content }}</span>
                         <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px">
-                      </template>
+                      </span>
                     </div>
                     <div
                       v-if="message.quoteTitle || message.quoteContent"
@@ -341,10 +351,10 @@
                   <div v-else-if="message.renderType === 'text'"
                     class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                     :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
-                    <template v-for="(seg, idx) in parseTextWithEmoji(message.content)" :key="idx">
+                    <span v-for="(seg, idx) in parseTextWithEmoji(message.content)" :key="idx">
                       <span v-if="seg.type === 'text'">{{ seg.content }}</span>
                       <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px">
-                    </template>
+                    </span>
                   </div>
                   <!-- 表情消息 -->
                   <!-- 其他类型统一降级为普通文本展示 -->
@@ -696,7 +706,7 @@ const FileIconDoc = defineComponent({
 const FileIconXls = defineComponent({
   render() {
     return h('svg', { viewBox: '0 0 24 24', fill: 'none', class: 'text-green-600' }, [
-      h('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z', stroke: 'currentColor', 'stroke-width': '1.5', fill: 'none' }),
+      h('path', { d: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 2l5 5h-5V4zM6 20V4h6v6h6v10H6z', stroke: 'currentColor', 'stroke-width': '1.5', fill: 'none' }),
       h('path', { d: 'M14 2v6h6', stroke: 'currentColor', 'stroke-width': '1.5' }),
       h('text', { x: '6', y: '17', 'font-size': '5', fill: 'currentColor', 'font-weight': 'bold' }, 'XLS')
     ])
@@ -931,11 +941,32 @@ const normalizeMessage = (msg) => {
   const fallbackAvatar = (!isSent && !selectedContact.value?.isGroup) ? (selectedContact.value?.avatar || null) : null
 
   const mediaBase = process.client ? 'http://localhost:8000' : ''
+  const localEmojiUrl = msg.emojiMd5 ? `${mediaBase}/api/chat/media/emoji?account=${encodeURIComponent(selectedAccount.value || '')}&md5=${encodeURIComponent(msg.emojiMd5)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : ''
   const normalizedImageUrl = msg.imageUrl || (msg.imageMd5 ? `${mediaBase}/api/chat/media/image?account=${encodeURIComponent(selectedAccount.value || '')}&md5=${encodeURIComponent(msg.imageMd5)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : '')
-  const normalizedEmojiUrl = msg.emojiUrl || (msg.emojiMd5 ? `${mediaBase}/api/chat/media/emoji?account=${encodeURIComponent(selectedAccount.value || '')}&md5=${encodeURIComponent(msg.emojiMd5)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : '')
+  const normalizedEmojiUrl = msg.emojiUrl || localEmojiUrl
   const normalizedVideoThumbUrl = msg.videoThumbUrl || (msg.videoThumbMd5 ? `${mediaBase}/api/chat/media/video_thumb?account=${encodeURIComponent(selectedAccount.value || '')}&md5=${encodeURIComponent(msg.videoThumbMd5)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : '')
   const normalizedVideoUrl = msg.videoUrl || (msg.videoMd5 ? `${mediaBase}/api/chat/media/video?account=${encodeURIComponent(selectedAccount.value || '')}&md5=${encodeURIComponent(msg.videoMd5)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : '')
   const normalizedVoiceUrl = msg.voiceUrl || (msg.serverId ? `${mediaBase}/api/chat/media/voice?account=${encodeURIComponent(selectedAccount.value || '')}&server_id=${encodeURIComponent(String(msg.serverId))}` : '')
+
+  const remoteFromServer = (
+    typeof msg.emojiRemoteUrl === 'string'
+    && /^https?:\/\//i.test(msg.emojiRemoteUrl)
+    && !/\/api\/chat\/media\/emoji\b/i.test(msg.emojiRemoteUrl)
+    && !/\blocalhost\b/i.test(msg.emojiRemoteUrl)
+    && !/\b127\.0\.0\.1\b/i.test(msg.emojiRemoteUrl)
+  ) ? msg.emojiRemoteUrl : ''
+
+  const remoteFromEmojiUrl = (
+    typeof msg.emojiUrl === 'string'
+    && /^https?:\/\//i.test(msg.emojiUrl)
+    && !/\/api\/chat\/media\/emoji\b/i.test(msg.emojiUrl)
+    && !/\blocalhost\b/i.test(msg.emojiUrl)
+    && !/\b127\.0\.0\.1\b/i.test(msg.emojiUrl)
+  ) ? msg.emojiUrl : ''
+
+  const emojiRemoteUrl = remoteFromServer || remoteFromEmojiUrl
+  const emojiIsLocal = typeof normalizedEmojiUrl === 'string' && /\/api\/chat\/media\/emoji\b/i.test(normalizedEmojiUrl)
+  const emojiDownloaded = !!emojiRemoteUrl && !!emojiIsLocal
 
   const replyText = String(msg.content || '').trim()
   let quoteContent = String(msg.quoteContent || '')
@@ -971,6 +1002,9 @@ const normalizeMessage = (msg) => {
     imageMd5: msg.imageMd5 || '',
     emojiMd5: msg.emojiMd5 || '',
     emojiUrl: normalizedEmojiUrl || '',
+    emojiLocalUrl: localEmojiUrl || '',
+    emojiRemoteUrl,
+    _emojiDownloaded: !!emojiDownloaded,
     thumbUrl: msg.thumbUrl || '',
     imageUrl: normalizedImageUrl || '',
     videoMd5: msg.videoMd5 || '',
@@ -993,6 +1027,47 @@ const normalizeMessage = (msg) => {
     isGroup: !!selectedContact.value?.isGroup,
     avatar: msg.senderAvatar || fallbackAvatar || null,
     avatarColor: null
+  }
+}
+
+const shouldShowEmojiDownload = (message) => {
+  if (!message?.emojiMd5) return false
+  const u = String(message?.emojiRemoteUrl || '').trim()
+  if (!u) return false
+  if (!/^https?:\/\//i.test(u)) return false
+  return true
+}
+
+const onEmojiDownloadClick = async (message) => {
+  if (!process.client) return
+  if (!message?.emojiMd5) return
+  if (!selectedAccount.value) return
+
+  const emojiUrl = String(message?.emojiRemoteUrl || '').trim()
+  if (!emojiUrl) {
+    window.alert('该表情没有可用的下载地址')
+    return
+  }
+
+  if (message._emojiDownloading) return
+  message._emojiDownloading = true
+
+  try {
+    const api = useApi()
+    await api.downloadChatEmoji({
+      account: selectedAccount.value,
+      md5: message.emojiMd5,
+      emoji_url: emojiUrl,
+      force: false
+    })
+    message._emojiDownloaded = true
+    if (message.emojiLocalUrl) {
+      message.emojiUrl = message.emojiLocalUrl
+    }
+  } catch (e) {
+    window.alert(e?.message || '下载失败')
+  } finally {
+    message._emojiDownloading = false
   }
 }
 
@@ -1137,6 +1212,7 @@ const LinkCard = defineComponent({
     )
   }
 })
+
 </script>
 
 <style scoped>
@@ -1214,11 +1290,11 @@ const LinkCard = defineComponent({
 }
 
 .chat-tab.selected {
-  color: #03C160;
+  color: #07b75b !important;
 }
 
 .chat-tab:not(.selected):hover {
-  color: #03C160;
+  color: #07b75b;
 }
 
 /* 语音消息样式 */
