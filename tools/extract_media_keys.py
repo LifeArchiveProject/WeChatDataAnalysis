@@ -11,15 +11,14 @@
 
 import sys
 sys.path.insert(0, "src")
-sys.path.insert(0, "WxDatDecrypt")
 
 import json
 from pathlib import Path
 
 try:
-    from key import find_key
+    from wechat_decrypt_tool.media_key_finder import find_key
 except ImportError as e:
-    print(f"[ERROR] 无法导入 WxDatDecrypt: {e}")
+    print(f"[ERROR] 无法导入 media_key_finder: {e}")
     print("请确保 pymem, yara-python, pycryptodome 已安装")
     sys.exit(1)
 
