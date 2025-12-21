@@ -201,16 +201,20 @@
                     :from="message.from"
                   />
                   <div v-else-if="message.renderType === 'file'"
-                    class="max-w-80 py-2.5 pr-2 pl-4 flex items-start bg-white space-x-2.5 msg-radius cursor-pointer border border-neutral-200 hover:bg-gray-50 transition-colors"
+                    class="wechat-redpacket-card wechat-special-card wechat-file-card msg-radius"
+                    :class="message.isSent ? 'wechat-special-sent-side' : ''"
                     @click="onFileClick(message)"
                     @contextmenu="openMediaContextMenu($event, message, 'file')">
-                    <div class="flex-1 min-w-0">
-                      <h4 class="break-words font-medium text-sm text-gray-900">{{ message.title || message.content }}</h4>
-                      <small class="text-neutral-500 text-xs" v-if="message.fileSize">{{ formatFileSize(message.fileSize) }}</small>
+                    <div class="wechat-redpacket-content">
+                      <div class="wechat-redpacket-info wechat-file-info">
+                        <span class="wechat-file-name">{{ message.title || message.content || '文件' }}</span>
+                        <span class="wechat-file-size" v-if="message.fileSize">{{ formatFileSize(message.fileSize) }}</span>
+                      </div>
+                      <img :src="getFileIconUrl(message.title)" alt="" class="wechat-file-icon" />
                     </div>
-                    <div class="shrink-0 w-10 h-10 flex items-center justify-center">
-                      <!-- 根据文件类型显示图标 -->
-                      <component :is="getFileIcon(message.title || message.content)" class="w-8 h-8" />
+                    <div class="wechat-redpacket-bottom wechat-file-bottom">
+                      <img :src="wechatPcLogoUrl" alt="" class="wechat-file-logo" />
+                      <span>微信电脑版</span>
                     </div>
                   </div>
                   <div v-else-if="message.renderType === 'image'"
@@ -333,13 +337,13 @@
                     </div>
                   </div>
                   <!-- 红包消息 - 微信风格橙色卡片 -->
-                  <div v-else-if="message.renderType === 'redPacket'" class="wechat-redpacket-card msg-radius"
-                    :class="{ 'wechat-redpacket-received': message.redPacketReceived }">
+                  <div v-else-if="message.renderType === 'redPacket'" class="wechat-redpacket-card wechat-special-card msg-radius"
+                    :class="[{ 'wechat-redpacket-received': message.redPacketReceived }, message.isSent ? 'wechat-special-sent-side' : '']">
                     <div class="wechat-redpacket-content">
                       <img src="/assets/images/wechat/wechat-trans-icon3.png" v-if="!message.redPacketReceived" class="wechat-redpacket-icon" alt="">
                       <img src="/assets/images/wechat/wechat-trans-icon4.png" v-else class="wechat-redpacket-icon" alt="">
                       <div class="wechat-redpacket-info">
-                        <span class="wechat-redpacket-text">{{ message.content || '恭喜发财，大吉大利' }}</span>
+                        <span class="wechat-redpacket-text">{{ getRedPacketText(message) }}</span>
                         <span class="wechat-redpacket-status" v-if="message.redPacketReceived">已领取</span>
                       </div>
                     </div>
@@ -419,15 +423,59 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, defineComponent, h } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, defineComponent, h } from 'vue'
+
+definePageMeta({
+  key: 'chat'
+})
 
 import { useApi } from '~/composables/useApi'
 import { parseTextWithEmoji } from '~/utils/wechat-emojis'
+import wechatPcLogoUrl from '~/assets/images/wechat/WeChat-Icon-Logo.wine.svg'
+import zipIconUrl from '~/assets/images/wechat/zip.png'
+import pdfIconUrl from '~/assets/images/wechat/pdf.png'
+import wordIconUrl from '~/assets/images/wechat/word.png'
+import excelIconUrl from '~/assets/images/wechat/excel.png'
+
+// 根据文件名获取对应的图标URL
+const getFileIconUrl = (fileName) => {
+  if (!fileName) return zipIconUrl
+  const ext = String(fileName).split('.').pop()?.toLowerCase() || ''
+  switch (ext) {
+    case 'pdf':
+      return pdfIconUrl
+    case 'doc':
+    case 'docx':
+      return wordIconUrl
+    case 'xls':
+    case 'xlsx':
+    case 'csv':
+      return excelIconUrl
+    case 'zip':
+    case 'rar':
+    case '7z':
+    case 'tar':
+    case 'gz':
+    default:
+      return zipIconUrl
+  }
+}
 
 // 设置页面标题
 useHead({
   title: '聊天记录查看器 - 微信数据分析助手'
 })
+
+const route = useRoute()
+
+const routeUsername = computed(() => {
+  const raw = route.params.username
+  return (Array.isArray(raw) ? raw[0] : raw) || ''
+})
+
+const buildChatPath = (username) => {
+  return username ? `/chat/${encodeURIComponent(username)}` : '/chat'
+}
 
 // 响应式数据
 const selectedContact = ref(null)
@@ -611,21 +659,53 @@ const messages = computed(() => {
   return allMessages.value[selectedContact.value.username] || []
 })
 
-const formatTimeDivider = (ts) => {
+// 智能时间格式化：今天显示时间，昨天显示"昨天 HH:MM"，本周显示"星期X HH:MM"，本年显示"MM月DD日 HH:MM"，跨年显示"YYYY年MM月DD日 HH:MM"
+const formatSmartTime = (ts) => {
   if (!ts) return ''
   try {
     const d = new Date(Number(ts) * 1000)
     const now = new Date()
     const hh = String(d.getHours()).padStart(2, '0')
     const mm = String(d.getMinutes()).padStart(2, '0')
-    const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
-    if (sameDay) return `${hh}:${mm}`
-    const m = String(d.getMonth() + 1).padStart(2, '0')
-    const dd = String(d.getDate()).padStart(2, '0')
-    return `${m}-${dd} ${hh}:${mm}`
+    const timeStr = `${hh}:${mm}`
+
+    // 计算日期差异（基于日历日期，而非24小时）
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const targetStart = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+    const dayDiff = Math.floor((todayStart - targetStart) / (1000 * 60 * 60 * 24))
+
+    // 今天
+    if (dayDiff === 0) {
+      return timeStr
+    }
+
+    // 昨天
+    if (dayDiff === 1) {
+      return `昨天 ${timeStr}`
+    }
+
+    // 本周内（2-6天前，显示星期）
+    if (dayDiff >= 2 && dayDiff <= 6) {
+      const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+      return `${weekDays[d.getDay()]} ${timeStr}`
+    }
+
+    // 本年内
+    const month = d.getMonth() + 1
+    const day = d.getDate()
+    if (d.getFullYear() === now.getFullYear()) {
+      return `${month}月${day}日 ${timeStr}`
+    }
+
+    // 跨年
+    return `${d.getFullYear()}年${month}月${day}日 ${timeStr}`
   } catch {
     return ''
   }
+}
+
+const formatTimeDivider = (ts) => {
+  return formatSmartTime(ts)
 }
 
 const formatMessageTime = (ts) => {
@@ -670,6 +750,12 @@ const formatTransferAmount = (amount) => {
   const s = String(amount ?? '').trim()
   if (!s) return ''
   return s.replace(/[￥¥]/g, '').trim()
+}
+
+const getRedPacketText = (message) => {
+  const text = String(message?.content ?? '').trim()
+  if (!text || text === '[Red Packet]') return '恭喜发财，大吉大利'
+  return text
 }
 
 // 文件类型图标组件
@@ -845,9 +931,38 @@ const hasMoreMessages = computed(() => {
 // 已移除切换标签逻辑
 
 // 选择联系人
-const selectContact = (contact) => {
+const selectContact = async (contact, options = {}) => {
+  if (!contact) return
   selectedContact.value = contact
-  loadMessages({ username: contact.username, reset: true })
+  const username = contact?.username || ''
+  if (!username) return
+  if (options.syncRoute !== false && username) {
+    const current = routeUsername.value || ''
+    if (current !== username) {
+      await navigateTo(buildChatPath(username), { replace: options.replaceRoute !== false })
+    }
+  }
+  loadMessages({ username, reset: true })
+}
+
+const applyRouteSelection = async () => {
+  if (!contacts.value || contacts.value.length === 0) {
+    selectedContact.value = null
+    return
+  }
+
+  const requested = routeUsername.value || ''
+  if (requested) {
+    const matched = contacts.value.find((c) => c.username === requested)
+    if (matched) {
+      if (selectedContact.value?.username !== matched.username) {
+        await selectContact(matched, { syncRoute: false })
+      }
+      return
+    }
+  }
+
+  await selectContact(contacts.value[0], { syncRoute: true, replaceRoute: true })
 }
 
 // 已移除样式选择逻辑
@@ -918,9 +1033,7 @@ const loadSessionsForSelectedAccount = async () => {
   messagesError.value = ''
   selectedContact.value = null
 
-  if (contacts.value.length > 0) {
-    selectContact(contacts.value[0])
-  }
+  await applyRouteSelection()
 }
 
 const onAccountChange = async () => {
@@ -1162,6 +1275,15 @@ const refreshSelectedMessages = async () => {
   if (!selectedContact.value) return
   await loadMessages({ username: selectedContact.value.username, reset: true })
 }
+
+watch(
+  routeUsername,
+  async () => {
+    if (isLoadingContacts.value) return
+    await applyRouteSelection()
+  },
+  { immediate: true }
+)
 
 const autoLoadReady = ref(true)
 
@@ -1516,9 +1638,32 @@ const LinkCard = defineComponent({
   color: #1a1a1a;
 }
 
+/* 统一特殊消息尾巴（红包 / 文件等） */
+.wechat-special-card {
+  position: relative;
+  overflow: visible;
+}
+
+.wechat-special-card::after {
+  content: '';
+  position: absolute;
+  top: 16px;
+  left: -4px;
+  width: 10px;
+  height: 10px;
+  background-color: inherit;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+.wechat-special-sent-side::after {
+  left: auto;
+  right: -4px;
+}
+
 /* 转账消息样式 - 微信风格 */
 .wechat-transfer-card {
-  width: 240px;
+  width: 210px;
   background: #f79c46;
   border-radius: var(--message-radius);
   overflow: visible;
@@ -1545,8 +1690,8 @@ const LinkCard = defineComponent({
 .wechat-transfer-content {
   display: flex;
   align-items: center;
-  padding: 12px 14px;
-  min-height: 56px;
+  padding: 10px 12px;
+  min-height: 58px;
 }
 
 .wechat-transfer-icon {
@@ -1583,11 +1728,22 @@ const LinkCard = defineComponent({
 }
 
 .wechat-transfer-bottom {
-  height: 24px;
+  height: 27px;
   display: flex;
   align-items: center;
-  padding: 0 14px;
-  border-top: 1px solid rgba(255,255,255,0.2);
+  padding: 0 12px;
+  border-top: none;
+  position: relative;
+}
+
+.wechat-transfer-bottom::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 13px;
+  right: 13px;
+  height: 1px;
+  background: rgba(255,255,255,0.2);
 }
 
 .wechat-transfer-bottom span {
@@ -1633,30 +1789,18 @@ const LinkCard = defineComponent({
 
 /* 红包消息样式 - 微信风格 */
 .wechat-redpacket-card {
-  width: 240px;
+  width: 210px;
   background: #fa9d3b;
   border-radius: var(--message-radius);
-  overflow: hidden;
+  overflow: visible;
   position: relative;
-}
-
-.wechat-redpacket-card::after {
-  content: '';
-  position: absolute;
-  top: 16px;
-  left: -4px;
-  width: 10px;
-  height: 10px;
-  background: #fa9d3b;
-  transform: rotate(45deg);
-  border-radius: 2px;
 }
 
 .wechat-redpacket-content {
   display: flex;
   align-items: center;
-  padding: 12px 14px;
-  min-height: 56px;
+  padding: 10px 12px;
+  min-height: 58px;
 }
 
 .wechat-redpacket-icon {
@@ -1689,11 +1833,22 @@ const LinkCard = defineComponent({
 }
 
 .wechat-redpacket-bottom {
-  height: 24px;
+  height: 27px;
   display: flex;
   align-items: center;
-  padding: 0 14px;
-  border-top: 1px solid rgba(255,255,255,0.2);
+  padding: 0 12px;
+  border-top: none;
+  position: relative;
+}
+
+.wechat-redpacket-bottom::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 13px;
+  right: 13px;
+  height: 1px;
+  background: rgba(255,255,255,0.2);
 }
 
 .wechat-redpacket-bottom span {
@@ -1706,10 +1861,6 @@ const LinkCard = defineComponent({
   background: #f8e2c6;
 }
 
-.wechat-redpacket-received::after {
-  background: #f8e2c6;
-}
-
 .wechat-redpacket-received .wechat-redpacket-text,
 .wechat-redpacket-received .wechat-redpacket-status {
   color: #b88550;
@@ -1717,6 +1868,85 @@ const LinkCard = defineComponent({
 
 .wechat-redpacket-received .wechat-redpacket-bottom span {
   color: #c9a67a;
+}
+
+/* 文件消息样式 - 基于红包样式覆盖 */
+.wechat-file-card {
+  width: 210px;
+  background: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.wechat-file-card .wechat-redpacket-content {
+  padding: 10px 12px;
+  min-height: 58px;
+}
+
+.wechat-file-card .wechat-redpacket-bottom {
+  height: 27px;
+  padding: 0 12px;
+  border-top: none;
+  position: relative;
+}
+
+.wechat-file-card .wechat-redpacket-bottom::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 13px;
+  right: 13px;
+  height: 1.5px;
+  background: #e8e8e8;
+}
+
+.wechat-file-card:hover {
+  background: #f5f5f5;
+}
+
+.wechat-file-card .wechat-file-info {
+  margin-left: 0;
+  margin-right: 10px;
+}
+
+.wechat-file-name {
+  font-size: 14px;
+  color: #1a1a1a;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.wechat-file-size {
+  font-size: 12px;
+  color: #b2b2b2;
+  margin-top: 4px;
+}
+
+.wechat-file-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.wechat-file-bottom {
+  border-top: 1px solid #e8e8e8;
+}
+
+.wechat-file-bottom span {
+  font-size: 12px;
+  color: #b2b2b2;
+}
+
+.wechat-file-logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  margin-right: 4px;
 }
 
 /* 隐私模式模糊效果 */
