@@ -1,4 +1,5 @@
 import ctypes
+import datetime
 import hashlib
 import json
 import mimetypes
@@ -377,10 +378,183 @@ def _resolve_media_path_from_hardlink(
             if not row:
                 continue
 
-            dir1 = str(row["dir1"] or "").strip()
-            dir2 = str(row["dir2"] or "").strip()
             file_name = str(row["file_name"] or "").strip()
-            if not dir1 or not dir2 or not file_name:
+            if not file_name:
+                continue
+
+            if kind_key == "file":
+                try:
+                    full_row = conn.execute(
+                        f"SELECT file_name, file_size, modify_time FROM {quoted} WHERE md5 = ? ORDER BY modify_time DESC LIMIT 1",
+                        (md5,),
+                    ).fetchone()
+                except Exception:
+                    full_row = None
+
+                file_size: Optional[int] = None
+                modify_time: Optional[int] = None
+                if full_row is not None:
+                    try:
+                        if full_row["file_size"] is not None:
+                            file_size = int(full_row["file_size"])
+                    except Exception:
+                        file_size = None
+                    try:
+                        if full_row["modify_time"] is not None:
+                            modify_time = int(full_row["modify_time"])
+                    except Exception:
+                        modify_time = None
+
+                roots: list[Path] = []
+                for r in [wxid_dir] + (extra_roots or []):
+                    if not r:
+                        continue
+                    try:
+                        rr = r.resolve()
+                    except Exception:
+                        rr = r
+                    if rr not in roots:
+                        roots.append(rr)
+
+                file_base_dirs: list[Path] = []
+                for root in roots:
+                    candidates = [
+                        root / "msg" / "file",
+                        root / "file" if root.name.lower() == "msg" else None,
+                        root if root.name.lower() == "file" else None,
+                    ]
+                    for c in candidates:
+                        if not c:
+                            continue
+                        try:
+                            if c.exists() and c.is_dir() and c not in file_base_dirs:
+                                file_base_dirs.append(c)
+                        except Exception:
+                            continue
+
+                if not file_base_dirs:
+                    return None
+
+                guessed_month: Optional[str] = None
+                if modify_time:
+                    try:
+                        dt = datetime.datetime.fromtimestamp(int(modify_time))
+                        guessed_month = f"{dt.year:04d}-{dt.month:02d}"
+                    except Exception:
+                        guessed_month = None
+
+                file_stem = Path(file_name).stem
+
+                def _iter_month_dirs(base: Path) -> list[Path]:
+                    out: list[Path] = []
+                    try:
+                        for child in base.iterdir():
+                            try:
+                                if not child.is_dir():
+                                    continue
+                            except Exception:
+                                continue
+                            name = str(child.name)
+                            if re.fullmatch(r"\d{4}-\d{2}", name):
+                                out.append(child)
+                    except Exception:
+                        return []
+                    return sorted(out, key=lambda p: str(p.name))
+
+                def _pick_best_hit(hits: list[Path]) -> Optional[Path]:
+                    if not hits:
+                        return None
+                    if file_size is not None and file_size >= 0:
+                        for h in hits:
+                            try:
+                                if h.stat().st_size == file_size:
+                                    return h
+                            except Exception:
+                                continue
+                    return hits[0]
+
+                for base in file_base_dirs:
+                    month_dirs = _iter_month_dirs(base)
+                    month_names: list[str] = []
+                    if guessed_month:
+                        month_names.append(guessed_month)
+                    for d in month_dirs:
+                        n = str(d.name)
+                        if n not in month_names:
+                            month_names.append(n)
+
+                    for month_name in month_names:
+                        month_dir = base / month_name
+                        try:
+                            if not (month_dir.exists() and month_dir.is_dir()):
+                                continue
+                        except Exception:
+                            continue
+
+                        direct = month_dir / file_name
+                        try:
+                            if direct.exists() and direct.is_file():
+                                return direct
+                        except Exception:
+                            pass
+
+                        in_stem_dir = month_dir / file_stem / file_name
+                        try:
+                            if in_stem_dir.exists() and in_stem_dir.is_file():
+                                return in_stem_dir
+                        except Exception:
+                            pass
+
+                        hits: list[Path] = []
+                        try:
+                            for p in month_dir.rglob(file_name):
+                                try:
+                                    if p.is_file():
+                                        hits.append(p)
+                                        if len(hits) >= 20:
+                                            break
+                                except Exception:
+                                    continue
+                        except Exception:
+                            hits = []
+
+                        best = _pick_best_hit(hits)
+                        if best:
+                            return best
+
+                    # Final fallback: search across all months (covers rare nesting patterns)
+                    hits_all: list[Path] = []
+                    try:
+                        for p in base.rglob(file_name):
+                            try:
+                                if p.is_file():
+                                    hits_all.append(p)
+                                    if len(hits_all) >= 50:
+                                        break
+                            except Exception:
+                                continue
+                    except Exception:
+                        hits_all = []
+
+                    best_all = _pick_best_hit(hits_all)
+                    if best_all:
+                        return best_all
+
+                    if guessed_month:
+                        fallback_dir = base / guessed_month
+                        try:
+                            if fallback_dir.exists() and fallback_dir.is_dir():
+                                return fallback_dir
+                        except Exception:
+                            pass
+
+                    return base
+
+                return None
+
+            dir1 = str(row["dir1"] if row["dir1"] is not None else "").strip()
+            dir2 = str(row["dir2"] if row["dir2"] is not None else "").strip()
+            if not dir1 or not dir2:
                 continue
 
             dir_name = dir2

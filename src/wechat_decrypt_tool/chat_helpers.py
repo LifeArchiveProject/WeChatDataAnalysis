@@ -98,14 +98,39 @@ def _should_keep_session(username: str, include_official: bool) -> bool:
 
 
 def _format_session_time(ts: Optional[int]) -> str:
+    """智能时间格式化：今天显示时间，昨天显示"昨天 HH:MM"，本周显示"星期X HH:MM"，本年显示"M月D日 HH:MM"，跨年显示"YYYY年M月D日 HH:MM"""
     if not ts:
         return ""
     try:
         dt = datetime.fromtimestamp(int(ts))
         now = datetime.now()
-        if dt.date() == now.date():
-            return dt.strftime("%H:%M")
-        return dt.strftime("%m/%d")
+        time_str = dt.strftime("%H:%M")
+
+        # 计算日期差异（基于日历日期）
+        today_start = datetime(now.year, now.month, now.day)
+        target_start = datetime(dt.year, dt.month, dt.day)
+        day_diff = (today_start - target_start).days
+
+        # 今天
+        if day_diff == 0:
+            return time_str
+
+        # 昨天
+        if day_diff == 1:
+            return f"昨天 {time_str}"
+
+        # 本周内（2-6天前，显示星期）
+        if 2 <= day_diff <= 6:
+            week_days = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+            # Python weekday(): Monday=0, Sunday=6
+            return f"{week_days[dt.weekday()]} {time_str}"
+
+        # 本年内
+        if dt.year == now.year:
+            return f"{dt.month}月{dt.day}日 {time_str}"
+
+        # 跨年
+        return f"{dt.year}年{dt.month}月{dt.day}日 {time_str}"
     except Exception:
         return ""
 
