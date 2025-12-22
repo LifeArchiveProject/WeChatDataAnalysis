@@ -133,15 +133,27 @@
             <div class="bg-gray-50 rounded-lg p-4">
               <div class="flex justify-between items-center mb-2">
                 <span class="text-sm font-medium text-[#000000e6]">XOR 密钥</span>
-                <span class="font-mono text-sm px-3 py-1 bg-white rounded border border-[#EDEDED]">
+                <button
+                  type="button"
+                  class="font-mono text-sm px-3 py-1 bg-white rounded border border-[#EDEDED] transition-colors"
+                  :class="mediaKeys.xor_key ? 'cursor-pointer hover:bg-gray-50' : 'cursor-not-allowed opacity-60'"
+                  :title="mediaKeys.xor_key ? '点击复制' : ''"
+                  @click="copyKey('XOR 密钥', mediaKeys.xor_key)"
+                >
                   {{ mediaKeys.xor_key || '未获取' }}
-                </span>
+                </button>
               </div>
               <div class="flex justify-between items-center">
                 <span class="text-sm font-medium text-[#000000e6]">AES 密钥</span>
-                <span class="font-mono text-sm px-3 py-1 bg-white rounded border border-[#EDEDED]">
-                  {{ mediaKeys.aes_key ? mediaKeys.aes_key.substring(0, 8) + '...' : '未获取' }}
-                </span>
+                <button
+                  type="button"
+                  class="font-mono text-sm px-3 py-1 bg-white rounded border border-[#EDEDED] transition-colors"
+                  :class="mediaKeys.aes_key ? 'cursor-pointer hover:bg-gray-50' : 'cursor-not-allowed opacity-60'"
+                  :title="mediaKeys.aes_key ? '点击复制' : ''"
+                  @click="copyKey('AES 密钥', mediaKeys.aes_key)"
+                >
+                  {{ mediaKeys.aes_key || '未获取' }}
+                </button>
               </div>
             </div>
 
@@ -150,6 +162,13 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
               </svg>
               {{ mediaKeys.message }}
+            </div>
+
+            <div v-if="copyMessage" class="text-sm text-[#07C160] flex items-start">
+              <svg class="w-4 h-4 mr-2 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+              </svg>
+              {{ copyMessage }}
             </div>
           </div>
 
@@ -300,7 +319,7 @@
                 <p class="mb-2">可能的失败原因：</p>
                 <ul class="list-disc list-inside space-y-1">
                   <li><strong>解密后非有效图片</strong>：文件不是图片格式(如视频缩略图损坏)</li>
-                  <li><strong>V4-V2版本需要AES密钥</strong>：需要微信运行时才能提取AES密钥</li>
+                  <li><strong>V4-V2版本需要AES密钥</strong>：需要微信运行，且部分环境需以管理员身份运行后端才能提取</li>
                   <li><strong>未知加密版本</strong>：新版微信使用了不支持的加密方式</li>
                   <li><strong>文件为空</strong>：原始文件损坏或为空文件</li>
                 </ul>
@@ -411,6 +430,8 @@ const mediaKeys = reactive({
   message: ''
 })
 const mediaLoading = ref(false)
+const copyMessage = ref('')
+let copyMessageTimer = null
 
 // 图片解密相关
 const mediaDecryptResult = ref(null)
@@ -525,6 +546,53 @@ const fetchMediaKeys = async (forceExtract = false) => {
   } finally {
     mediaLoading.value = false
   }
+}
+
+const _copyToClipboard = async (text) => {
+  if (!process.client || typeof window === 'undefined') return false
+  if (!text) return false
+
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch (e) {
+    // Ignore and fallback below
+  }
+
+  try {
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.setAttribute('readonly', '')
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    textarea.style.left = '-9999px'
+    textarea.style.top = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    textarea.setSelectionRange(0, textarea.value.length)
+    const ok = document.execCommand('copy')
+    document.body.removeChild(textarea)
+    return ok
+  } catch (e) {
+    return false
+  }
+}
+
+const _setCopyMessage = (message) => {
+  copyMessage.value = message
+  if (copyMessageTimer) clearTimeout(copyMessageTimer)
+  copyMessageTimer = setTimeout(() => {
+    copyMessage.value = ''
+    copyMessageTimer = null
+  }, 2000)
+}
+
+const copyKey = async (label, value) => {
+  if (!value) return
+  const ok = await _copyToClipboard(value)
+  _setCopyMessage(ok ? `${label}已复制` : `${label}复制失败，请手动复制`)
 }
 
 // 批量解密所有图片（使用SSE实时进度）

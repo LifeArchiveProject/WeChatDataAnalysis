@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
+from ctypes import wintypes
 
 from fastapi import HTTPException
 
@@ -999,6 +1000,14 @@ def _verify_wechat_aes_key(ciphertext: bytes, key16: bytes) -> bool:
             return True
         if plain.startswith(b"\x89PNG\r\n\x1a\n"):
             return True
+        if plain.startswith(b"GIF87a") or plain.startswith(b"GIF89a"):
+            return True
+        if plain.startswith(b"wxgf"):
+            return True
+        if len(plain) >= 12 and plain.startswith(b"RIFF") and plain[8:12] == b"WEBP":
+            return True
+        if len(plain) >= 8 and plain[4:8] == b"ftyp":
+            return True
         return False
     except Exception:
         return False
@@ -1016,28 +1025,112 @@ class _MEMORY_BASIC_INFORMATION(ctypes.Structure):
     ]
 
 
-def _find_weixin_pid() -> Optional[int]:
+def _find_weixin_pids() -> list[int]:
     if psutil is None:
-        return None
-    for p in psutil.process_iter(["name"]):
+        return []
+
+    preferred = ["weixin.exe", "wechat.exe", "wechatappex.exe", "wechatapp.exe"]
+    preferred_set = set(preferred)
+    pids_by_name: dict[str, list[int]] = {n: [] for n in preferred}
+    extra: list[int] = []
+
+    for p in psutil.process_iter(["pid", "name"]):
         try:
             name = (p.info.get("name") or "").lower()
-            if name in {"weixin.exe", "wechat.exe"}:
-                return int(p.pid)
+            pid = int(p.info.get("pid") or 0)
         except Exception:
             continue
-    return None
+        if pid <= 0:
+            continue
+
+        if name in preferred_set:
+            pids_by_name[name].append(pid)
+            continue
+
+        if name.startswith("wechat") or name.startswith("weixin"):
+            extra.append(pid)
+
+    ordered: list[int] = []
+    for n in preferred:
+        ordered.extend(pids_by_name.get(n, []))
+    ordered.extend(extra)
+
+    seen: set[int] = set()
+    out: list[int] = []
+    for pid in ordered:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        out.append(pid)
+    return out
+
+
+def _try_enable_windows_debug_privilege() -> None:
+    if os.name != "nt":
+        return
+
+    try:
+        advapi32 = ctypes.windll.advapi32
+        kernel32 = ctypes.windll.kernel32
+
+        TOKEN_ADJUST_PRIVILEGES = 0x0020
+        TOKEN_QUERY = 0x0008
+        SE_PRIVILEGE_ENABLED = 0x0002
+
+        class _LUID(ctypes.Structure):
+            _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+        class _LUID_AND_ATTRIBUTES(ctypes.Structure):
+            _fields_ = [("Luid", _LUID), ("Attributes", wintypes.DWORD)]
+
+        class _TOKEN_PRIVILEGES(ctypes.Structure):
+            _fields_ = [("PrivilegeCount", wintypes.DWORD), ("Privileges", _LUID_AND_ATTRIBUTES * 1)]
+
+        token = wintypes.HANDLE()
+        if not advapi32.OpenProcessToken(
+            kernel32.GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            ctypes.byref(token),
+        ):
+            return
+
+        try:
+            luid = _LUID()
+            if not advapi32.LookupPrivilegeValueW(None, "SeDebugPrivilege", ctypes.byref(luid)):
+                return
+
+            tp = _TOKEN_PRIVILEGES()
+            tp.PrivilegeCount = 1
+            tp.Privileges[0].Luid = luid
+            tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED
+            advapi32.AdjustTokenPrivileges(token, False, ctypes.byref(tp), 0, None, None)
+        finally:
+            kernel32.CloseHandle(token)
+    except Exception:
+        return
 
 
 def _extract_wechat_aes_key_from_process(ciphertext: bytes) -> Optional[bytes]:
-    pid = _find_weixin_pid()
-    if not pid:
+    _try_enable_windows_debug_privilege()
+    pids = _find_weixin_pids()
+    if not pids:
         return None
 
     PROCESS_VM_READ = 0x0010
     PROCESS_QUERY_INFORMATION = 0x0400
     MEM_COMMIT = 0x1000
     MEM_PRIVATE = 0x20000
+    MEM_MAPPED = 0x40000
+    MEM_IMAGE = 0x1000000
+
+    PAGE_NOACCESS = 0x01
+    PAGE_READONLY = 0x02
+    PAGE_READWRITE = 0x04
+    PAGE_WRITECOPY = 0x08
+    PAGE_EXECUTE_READ = 0x20
+    PAGE_EXECUTE_READWRITE = 0x40
+    PAGE_EXECUTE_WRITECOPY = 0x80
+    PAGE_GUARD = 0x100
 
     kernel32 = ctypes.windll.kernel32
 
@@ -1063,68 +1156,98 @@ def _extract_wechat_aes_key_from_process(ciphertext: bytes) -> Optional[bytes]:
     CloseHandle.argtypes = [ctypes.c_void_p]
     CloseHandle.restype = ctypes.c_bool
 
-    handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
-    if not handle:
-        return None
+    readable_mask = (
+        PAGE_READONLY
+        | PAGE_READWRITE
+        | PAGE_WRITECOPY
+        | PAGE_EXECUTE_READ
+        | PAGE_EXECUTE_READWRITE
+        | PAGE_EXECUTE_WRITECOPY
+    )
 
-    stop = threading.Event()
-    result: list[Optional[bytes]] = [None]
-    pattern = re.compile(rb"[^a-z0-9]([a-z0-9]{32})[^a-z0-9]", flags=re.IGNORECASE)
+    def is_readable(protect: int) -> bool:
+        if protect & PAGE_GUARD:
+            return False
+        if protect & PAGE_NOACCESS:
+            return False
+        return bool(protect & readable_mask)
 
-    def read_mem(addr: int, size: int) -> Optional[bytes]:
-        buf = ctypes.create_string_buffer(size)
-        read = ctypes.c_size_t(0)
-        ok = ReadProcessMemory(handle, ctypes.c_void_p(addr), buf, size, ctypes.byref(read))
-        if not ok or read.value <= 0:
+    pattern = re.compile(rb"(?i)(?<![0-9a-z])([0-9a-z]{16}|[0-9a-z]{32})(?![0-9a-z])")
+
+    def scan_pid(pid: int) -> Optional[bytes]:
+        handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
+        if not handle:
             return None
-        return buf.raw[: read.value]
 
-    def scan_region(base: int, region_size: int) -> Optional[bytes]:
-        chunk = 4 * 1024 * 1024
-        offset = 0
-        tail = b""
-        while offset < region_size and not stop.is_set():
-            to_read = min(chunk, region_size - offset)
-            b = read_mem(base + offset, int(to_read))
-            if not b:
+        stop = threading.Event()
+        result: list[Optional[bytes]] = [None]
+
+        def read_mem(addr: int, size: int) -> Optional[bytes]:
+            buf = ctypes.create_string_buffer(size)
+            read = ctypes.c_size_t(0)
+            ok = ReadProcessMemory(handle, ctypes.c_void_p(addr), buf, size, ctypes.byref(read))
+            if not ok or read.value <= 0:
                 return None
-            data = tail + b
-            for m in pattern.finditer(data):
-                cand32 = m.group(1)
-                cand16 = cand32[:16]
-                if _verify_wechat_aes_key(ciphertext, cand16):
-                    return cand16
-            tail = data[-64:] if len(data) > 64 else data
-            offset += to_read
-        return None
+            return buf.raw[: read.value]
 
-    regions: list[tuple[int, int]] = []
-    mbi = _MEMORY_BASIC_INFORMATION()
-    addr = 0
-    try:
-        while VirtualQueryEx(handle, ctypes.c_void_p(addr), ctypes.byref(mbi), ctypes.sizeof(mbi)):
-            try:
-                if int(mbi.State) == MEM_COMMIT and int(mbi.Type) == MEM_PRIVATE:
-                    base = int(mbi.BaseAddress)
-                    size = int(mbi.RegionSize)
-                    if size > 0:
-                        regions.append((base, size))
-                addr = int(mbi.BaseAddress) + int(mbi.RegionSize)
-            except Exception:
-                addr += 0x1000
-            if addr <= 0:
-                break
+        def scan_region(base: int, region_size: int) -> Optional[bytes]:
+            chunk = 4 * 1024 * 1024
+            offset = 0
+            tail = b""
+            while offset < region_size and not stop.is_set():
+                to_read = min(chunk, region_size - offset)
+                b = read_mem(base + offset, int(to_read))
+                if not b:
+                    return None
+                data = tail + b
+                for m in pattern.finditer(data):
+                    cand = m.group(1)
+                    if len(cand) == 16:
+                        candidates = [cand]
+                    else:
+                        candidates = [cand[:16], cand[16:]]
+                    for cand16 in candidates:
+                        if _verify_wechat_aes_key(ciphertext, cand16):
+                            return cand16
+                tail = data[-64:] if len(data) > 64 else data
+                offset += to_read
+            return None
 
-        with ThreadPoolExecutor(max_workers=min(32, max(1, len(regions)))) as ex:
-            for found in ex.map(lambda r: scan_region(r[0], r[1]), regions):
-                if found:
-                    result[0] = found
-                    stop.set()
+        regions: list[tuple[int, int]] = []
+        mbi = _MEMORY_BASIC_INFORMATION()
+        addr = 0
+        try:
+            while VirtualQueryEx(handle, ctypes.c_void_p(addr), ctypes.byref(mbi), ctypes.sizeof(mbi)):
+                try:
+                    if int(mbi.State) == MEM_COMMIT and int(mbi.Type) in {MEM_PRIVATE, MEM_MAPPED, MEM_IMAGE}:
+                        protect = int(mbi.Protect)
+                        if is_readable(protect):
+                            base = int(mbi.BaseAddress)
+                            size = int(mbi.RegionSize)
+                            if size > 0:
+                                regions.append((base, size))
+                    addr = int(mbi.BaseAddress) + int(mbi.RegionSize)
+                except Exception:
+                    addr += 0x1000
+                if addr <= 0:
                     break
-    finally:
-        CloseHandle(handle)
 
-    return result[0]
+            with ThreadPoolExecutor(max_workers=min(32, max(1, len(regions)))) as ex:
+                for found in ex.map(lambda r: scan_region(r[0], r[1]), regions):
+                    if found:
+                        result[0] = found
+                        stop.set()
+                        break
+        finally:
+            CloseHandle(handle)
+
+        return result[0]
+
+    for pid in pids:
+        found = scan_pid(pid)
+        if found:
+            return found
+    return None
 
 
 def _save_media_keys(account_dir: Path, xor_key: int, aes_key16: bytes) -> None:
