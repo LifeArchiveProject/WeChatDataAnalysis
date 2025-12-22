@@ -73,7 +73,19 @@ def _verify(encrypted: bytes, key: bytes) -> bool:
     aes_key = key[:16]
     cipher = AES.new(aes_key, AES.MODE_ECB)
     text = cipher.decrypt(encrypted)
-    return bool(text.startswith(b"\xff\xd8\xff"))
+    if text.startswith(b"\xff\xd8\xff"):
+        return True
+    if text.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    if text.startswith(b"GIF87a") or text.startswith(b"GIF89a"):
+        return True
+    if text.startswith(b"wxgf"):
+        return True
+    if len(text) >= 12 and text.startswith(b"RIFF") and text[8:12] == b"WEBP":
+        return True
+    if len(text) >= 8 and text[4:8] == b"ftyp":
+        return True
+    return False
 
 
 def _search_memory_chunk(process_handle, base_address: int, region_size: int, encrypted: bytes, rules):
@@ -101,7 +113,7 @@ def _get_aes_key(encrypted: bytes, pid: int) -> Any:
     rules_key = r"""
     rule AesKey {
         strings:
-            $pattern = /[^a-z0-9][a-z0-9]{32}[^a-z0-9]/
+            $pattern = /[^0-9a-z]([0-9a-z]{16}|[0-9a-z]{32})[^0-9a-z]/ nocase
         condition:
             $pattern
     }

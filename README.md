@@ -1,40 +1,24 @@
+<p align="center">
+    <img src="frontend/public/logo.png" alt="微信数据库解密工具" width="200" />
+</p>
+
 <div align="center">
-  <img src="frontend/public/logo.png" alt="微信数据库解密工具" width="200">
+    <h1>WeChatDataAnalysis - 微信数据库解密与分析工具</h1>
+    <p>一个专门用于微信4.x版本数据库解密的工具</p>
+    <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
+    <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
+    <img src="https://img.shields.io/github/forks/LifeArchiveProject/WeChatDataAnalysis" alt="Forks" />
+    <img src="https://img.shields.io/github/license/LifeArchiveProject/WeChatDataAnalysis" alt="License" />
+    <img src="https://img.shields.io/badge/Python-3776AB?logo=Python&logoColor=white" alt="Python" />
+    <img src="https://img.shields.io/badge/FastAPI-009688?logo=FastAPI&logoColor=white" alt="FastAPI" />
+    <img src="https://img.shields.io/badge/Vue.js-4FC08D?logo=Vue.js&logoColor=white" alt="Vue.js" />
+    <img src="https://img.shields.io/badge/SQLite-003B57?logo=SQLite&logoColor=white" alt="SQLite" />
 </div>
-
-# 微信数据库解密工具
-
-一个专门用于微信4.x版本数据库解密的工具
 
 ## 界面预览
 
-### 检测页面
 
-<div align="center">
-</div>
-
-自动检测微信安装路径和数据库文件位置，支持多账户识别。
-
-### 解密页面
-
-<div align="center">
-</div>
-
-输入解密密钥，选择数据库文件进行批量解密操作。
-
-### 解密成功页面
-
-<div align="center">
-</div>
-
-解密完成后显示统计信息，可直接跳转查看聊天记录。
-
-### 聊天记录页面
-
-<div align="center">
-</div>
-
-> **注意**: 聊天记录页面目前仅完成了基础展示功能，包括消息列表、文本/图片/语音等基本消息类型的显示。更多功能（如搜索、导出、高级筛选等）尚在开发中，当前界面不代表最终成品。
+> **Note**: 聊天记录页面目前仅完成了基础展示功能，更多功能（搜索、导出、高级筛选等）尚在开发中。
 
 ## 功能特性
 
@@ -160,7 +144,7 @@ uv run analyze_wechat_databases.py
 #### 1. 获取图片解密密钥
 
 ```bash
-# GET请求获取密钥（需要微信正在运行以提取AES密钥）
+# GET请求获取密钥（需要微信正在运行；部分版本需以管理员身份运行后端才能提取AES密钥）
 curl http://localhost:8000/api/media/keys
 
 # 强制重新提取密钥
