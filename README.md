@@ -48,9 +48,15 @@
   <tr>
     <td colspan="2" align="center"><img src="frontend/public/message.png" alt="聊天记录页面" width="800"/></td>
   </tr>
+  <tr>
+    <td align="center" colspan="2"><b>聊天记录导出</b></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="frontend/public/export.png" alt="聊天记录导出" width="800"/></td>
+  </tr>
 </table>
 
-> **Note**: 聊天记录页面目前仅完成了基础展示功能，更多功能（搜索、导出、高级筛选等）尚在开发中。
+> **Note**: 聊天记录页面已支持基础展示与离线导出，更多功能（搜索、高级筛选等）尚在开发中。
 
 ## 功能特性
 
