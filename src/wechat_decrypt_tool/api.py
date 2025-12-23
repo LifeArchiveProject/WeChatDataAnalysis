@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .logging_config import setup_logging, get_logger
 from .path_fix import PathFixRoute
 from .routers.chat import router as _chat_router
+from .routers.chat_export import router as _chat_export_router
 from .routers.chat_media import router as _chat_media_router
 from .routers.decrypt import router as _decrypt_router
 from .routers.health import router as _health_router
@@ -39,6 +40,7 @@ app.include_router(_wechat_detection_router)
 app.include_router(_decrypt_router)
 app.include_router(_media_router)
 app.include_router(_chat_router)
+app.include_router(_chat_export_router)
 app.include_router(_chat_media_router)
 
 
