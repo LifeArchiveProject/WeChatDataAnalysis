@@ -98,7 +98,7 @@ async def get_media_keys(account: Optional[str] = None, force_extract: bool = Fa
                 # 保存密钥到缓存
                 _save_media_keys(account_dir, xor_key, aes_key16)
             else:
-                aes_message = "无法从微信进程提取AES密钥（请确认微信正在运行，并尝试以管理员身份运行后端；部分新版微信可能暂不兼容）"
+                aes_message = "无法从微信进程提取AES密钥（请确认微信正在运行，并尝试以管理员身份运行后端；可尝试打开朋友圈图片并点开大图 2-3 次后再提取）"
         else:
             aes_message = "未找到V2加密模板文件"
     else:
