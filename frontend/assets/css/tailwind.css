@@ -188,4 +188,735 @@
   .fade-enter-to {
     @apply opacity-100 transform scale-100;
   }
+
+  /* 现代化搜索面板样式 */
+  .search-panel-container {
+    @apply border-b border-gray-200;
+    background: linear-gradient(to bottom, #f8f9fa, #f0f1f2);
+  }
+
+  .search-panel {
+    @apply px-5 py-4;
+  }
+
+  /* 搜索输入行 */
+  .search-input-row {
+    @apply flex items-center gap-3;
+  }
+
+  .search-input-wrapper {
+    @apply flex-1 flex items-center bg-white border border-gray-200 rounded-lg overflow-hidden transition-all duration-200;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+
+  .search-input-wrapper:hover {
+    @apply border-gray-300;
+  }
+
+  .search-input-focused {
+    @apply border-[#03C160] ring-2 ring-[#03C160]/20;
+  }
+
+  .search-input-icon {
+    @apply w-4 h-4 text-gray-400 ml-3 flex-shrink-0;
+  }
+
+  .search-input {
+    @apply flex-1 px-3 py-2.5 text-sm bg-transparent border-none outline-none;
+  }
+
+  .search-input::placeholder {
+    @apply text-gray-400;
+  }
+
+  .search-clear-btn {
+    @apply p-2 text-gray-400 hover:text-gray-600 transition-colors;
+  }
+
+  .search-btn-primary {
+    @apply px-4 py-2.5 text-sm font-medium text-white bg-[#03C160] rounded-lg hover:bg-[#02a650] transition-all duration-200 flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed;
+    box-shadow: 0 2px 4px rgba(3, 193, 96, 0.2);
+  }
+
+  .search-btn-primary:hover:not(:disabled) {
+    box-shadow: 0 4px 8px rgba(3, 193, 96, 0.3);
+    transform: translateY(-1px);
+  }
+
+  .search-btn-close {
+    @apply p-2.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors;
+  }
+
+  /* 搜索控制行 */
+  .search-controls-row {
+    @apply flex items-center gap-3 mt-3 flex-wrap;
+  }
+
+  /* 搜索范围切换器 */
+  .search-scope-switcher {
+    @apply flex items-center bg-gray-100 rounded-lg p-0.5;
+  }
+
+  .scope-btn {
+    @apply flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 rounded-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .scope-btn:hover:not(:disabled) {
+    @apply text-gray-800;
+  }
+
+  .scope-btn-active {
+    @apply bg-white text-[#03C160] shadow-sm;
+  }
+
+  /* 快捷过滤标签 */
+  .quick-filter-tags {
+    @apply flex items-center gap-1.5 flex-wrap;
+  }
+
+  .filter-tag {
+    @apply flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-full transition-all duration-200 hover:border-gray-300 hover:bg-gray-50;
+  }
+
+  .filter-tag-icon {
+    @apply text-sm;
+  }
+
+  .filter-tag-active {
+    @apply bg-[#03C160]/10 border-[#03C160] text-[#03C160];
+  }
+
+  .filter-tag-active:hover {
+    @apply bg-[#03C160]/15 border-[#03C160];
+  }
+
+  /* 高级过滤器切换 */
+  .advanced-filter-toggle {
+    @apply flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg transition-all duration-200 hover:border-gray-300 hover:bg-gray-50 ml-auto;
+  }
+
+  .advanced-filter-toggle-active {
+    @apply bg-gray-100 border-gray-300;
+  }
+
+  /* 高级过滤器面板 */
+  .advanced-filters-panel {
+    @apply overflow-hidden transition-all duration-300 ease-in-out;
+    max-height: 0;
+    opacity: 0;
+  }
+
+  .advanced-filters-expanded {
+    max-height: 200px;
+    opacity: 1;
+    @apply mt-3;
+  }
+
+  .advanced-filters-content {
+    @apply flex items-center gap-4 p-3 bg-white rounded-lg border border-gray-200 flex-wrap;
+  }
+
+  .filter-group {
+    @apply flex items-center gap-2;
+  }
+
+  .filter-label {
+    @apply text-xs font-medium text-gray-600;
+  }
+
+  .filter-select {
+    @apply text-xs px-3 py-1.5 rounded-md border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-[#03C160]/20 focus:border-[#03C160] transition-all;
+  }
+
+  .filter-checkbox {
+    @apply flex items-center gap-2 text-xs cursor-pointer;
+  }
+
+  .filter-checkbox-input {
+    @apply w-4 h-4 text-[#03C160] border-gray-300 rounded focus:ring-[#03C160]/20;
+  }
+
+  .filter-checkbox-label {
+    @apply font-medium text-gray-700;
+  }
+
+  .filter-checkbox-hint {
+    @apply text-gray-400;
+  }
+
+  /* 搜索历史面板 */
+  .search-history-panel {
+    @apply mt-3 p-3 bg-white rounded-lg border border-gray-200;
+  }
+
+  .search-history-header {
+    @apply flex items-center justify-between mb-2;
+  }
+
+  .search-history-title {
+    @apply text-xs font-medium text-gray-600;
+  }
+
+  .search-history-clear {
+    @apply text-xs text-gray-400 hover:text-gray-600 transition-colors;
+  }
+
+  .search-history-list {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .search-history-item {
+    @apply flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-600 bg-gray-50 rounded-full hover:bg-gray-100 transition-colors;
+  }
+
+  /* 搜索状态栏 */
+  .search-status-bar {
+    @apply mt-3 text-xs;
+  }
+
+  .search-status-error {
+    @apply flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2 rounded-lg;
+  }
+
+  .search-status-info {
+    @apply text-gray-600;
+  }
+
+  .search-status-count {
+    @apply text-gray-800;
+  }
+
+  .search-status-count strong {
+    @apply text-[#03C160] font-semibold;
+  }
+
+  .search-status-detail {
+    @apply text-gray-500;
+  }
+
+  .search-status-hint {
+    @apply flex items-center gap-2 text-gray-400;
+  }
+
+  /* 搜索结果容器 */
+  .search-results-container {
+    @apply bg-white border-b border-gray-200;
+    max-height: 320px;
+  }
+
+  .search-results-list {
+    @apply overflow-y-auto;
+    max-height: 260px;
+  }
+
+  /* 搜索结果卡片 */
+  .search-result-card {
+    @apply px-5 py-3 border-b border-gray-100 cursor-pointer transition-all duration-150;
+    border-left: 3px solid transparent;
+  }
+
+  .search-result-card:hover {
+    @apply bg-gray-50;
+    border-left-color: #e5e7eb;
+  }
+
+  .search-result-card-selected {
+    @apply bg-[#03C160]/5;
+    border-left-color: #03C160;
+  }
+
+  .search-result-card-selected:hover {
+    @apply bg-[#03C160]/10;
+    border-left-color: #03C160;
+  }
+
+  .search-result-meta {
+    @apply flex items-center gap-2 text-[11px] text-gray-500 mb-1;
+  }
+
+  .search-result-contact {
+    @apply font-medium text-gray-700;
+  }
+
+  .search-result-contact::after {
+    content: '·';
+    @apply ml-2;
+  }
+
+  .search-result-time {
+    @apply text-gray-400;
+  }
+
+  .search-result-sender {
+    @apply text-gray-500;
+  }
+
+  .search-result-sender::before {
+    content: '·';
+    @apply mr-2;
+  }
+
+  .search-result-content {
+    @apply text-sm text-gray-800 truncate leading-relaxed;
+  }
+
+  /* 搜索高亮 */
+  .search-highlight {
+    @apply bg-[#03C160]/20 text-[#03C160] px-0.5 rounded font-medium;
+  }
+
+  /* 搜索结果底部 */
+  .search-results-footer {
+    @apply px-5 py-3 flex items-center justify-between border-t border-gray-100 bg-gray-50/50;
+  }
+
+  .search-load-more-btn {
+    @apply flex items-center gap-2 text-xs px-3 py-1.5 rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .search-results-hint {
+    @apply text-xs text-gray-400;
+  }
+
+  .search-results-hint kbd {
+    @apply px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-[10px] font-mono;
+  }
+
+  /* 空状态 */
+  .search-empty-state {
+    @apply py-8 px-5 text-center bg-white border-b border-gray-200;
+  }
+
+  .search-empty-icon {
+    @apply w-16 h-16 mx-auto text-gray-300 mb-4;
+  }
+
+  .search-empty-title {
+    @apply text-base font-medium text-gray-600 mb-3;
+  }
+
+  .search-empty-tips {
+    @apply text-sm text-gray-500 text-left max-w-xs mx-auto;
+  }
+
+  .search-empty-tips p {
+    @apply mb-2;
+  }
+
+  .search-empty-tips ul {
+    @apply list-disc list-inside space-y-1 text-gray-400;
+  }
+
+  /* 联系人搜索栏样式 */
+  .contact-search-wrapper {
+    @apply flex items-center bg-[#EAEAEA] rounded-lg overflow-hidden transition-all duration-200;
+  }
+
+  .contact-search-wrapper:focus-within {
+    @apply ring-2 ring-[#03C160]/20 bg-white;
+  }
+
+  .contact-search-icon {
+    @apply w-4 h-4 text-gray-400 ml-2.5 flex-shrink-0;
+  }
+
+  .contact-search-input {
+    @apply flex-1 px-2 py-2 text-sm bg-transparent border-none outline-none;
+  }
+
+  .contact-search-input::placeholder {
+    @apply text-gray-400;
+  }
+
+  .contact-search-clear {
+    @apply p-2 text-gray-400 hover:text-gray-600 transition-colors;
+  }
+
+  .account-select {
+    @apply text-xs px-2 py-2 rounded-lg border border-gray-200 bg-[#EAEAEA] focus:outline-none focus:ring-2 focus:ring-[#03C160]/20 focus:border-[#03C160] transition-all;
+  }
+
+  /* 骨架屏动画 */
+  .skeleton-pulse {
+    animation: skeleton-pulse 1.5s ease-in-out infinite;
+  }
+
+  @keyframes skeleton-pulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  /* 聊天头部样式 */
+  .chat-header {
+    @apply h-14 px-5 flex items-center border-b border-gray-200;
+    background-color: #EDEDED;
+  }
+
+  .header-btn {
+    @apply flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-white border border-gray-200 text-gray-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .header-btn:hover:not(:disabled) {
+    @apply bg-gray-50 border-gray-300;
+  }
+
+  .header-btn:active:not(:disabled) {
+    @apply bg-gray-100;
+  }
+
+  .header-btn-icon {
+    @apply w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-gray-200 text-gray-600 transition-all duration-200;
+  }
+
+  .header-btn-icon:hover {
+    @apply bg-gray-50 border-gray-300 text-gray-800;
+  }
+
+  .header-btn-icon-active {
+    @apply bg-[#03C160]/10 border-[#03C160] text-[#03C160];
+  }
+
+  .header-btn-icon-active:hover {
+    @apply bg-[#03C160]/15;
+  }
+
+  /* 搜索侧边栏样式 */
+  .search-sidebar {
+    @apply w-[420px] h-full flex flex-col bg-white border-l border-gray-200 flex-shrink-0;
+  }
+
+  .search-sidebar-header {
+    @apply flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50;
+  }
+
+  .search-sidebar-title {
+    @apply flex items-center gap-2 text-sm font-medium text-gray-800;
+  }
+
+  .search-sidebar-close {
+    @apply p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-md transition-colors;
+  }
+
+  .search-sidebar-input-section {
+    @apply px-3 py-3 border-b border-gray-100;
+  }
+
+  /* 整合搜索框样式 */
+  .search-input-combined {
+    @apply flex items-center bg-white border-2 border-gray-200 rounded-lg overflow-hidden transition-all duration-200;
+  }
+
+  .search-input-combined:hover {
+    @apply border-gray-300;
+  }
+
+  .search-input-combined-focused {
+    @apply border-[#03C160] ring-2 ring-[#03C160]/20;
+  }
+
+  .search-scope-inline {
+    @apply flex items-center px-2 border-r border-gray-200 bg-gray-50;
+  }
+
+  .scope-inline-btn {
+    @apply text-[11px] font-medium text-gray-400 hover:text-gray-600 transition-colors px-1 py-2.5 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .scope-inline-btn-active {
+    @apply text-[#03C160] font-semibold;
+  }
+
+  .scope-inline-divider {
+    @apply text-gray-300 text-[10px];
+  }
+
+  .search-input-inline {
+    @apply flex-1 min-w-0 px-3 py-2.5 text-sm bg-transparent border-none outline-none;
+  }
+
+  .search-input-inline::placeholder {
+    @apply text-gray-400;
+  }
+
+  .search-clear-inline {
+    @apply p-2 text-gray-400 hover:text-gray-600 transition-colors;
+  }
+
+  .search-btn-inline {
+    @apply flex items-center justify-center w-10 h-10 bg-[#03C160] text-white hover:bg-[#02a650] transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex-shrink-0;
+  }
+
+  /* 筛选条件行 */
+  .search-filters-row {
+    @apply flex items-center gap-2 mt-2;
+  }
+
+  .search-session-type-row {
+    @apply flex items-center gap-1 mt-2;
+  }
+
+  .search-session-type-btn {
+    @apply flex-1 text-[11px] font-medium px-2 py-1.5 rounded-md border border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors;
+  }
+
+  .search-session-type-btn-active {
+    @apply bg-[#03C160]/10 border-[#03C160] text-[#03C160] font-semibold;
+  }
+
+  .search-filter-select {
+    @apply flex-1 text-xs px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-md outline-none cursor-pointer transition-all hover:border-gray-300 focus:border-[#03C160] focus:ring-1 focus:ring-[#03C160]/20;
+  }
+
+  .search-filter-select-time {
+    @apply flex-none w-28;
+  }
+
+  .search-filter-input {
+    @apply flex-1 text-xs px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-md outline-none transition-all hover:border-gray-300 focus:border-[#03C160] focus:ring-1 focus:ring-[#03C160]/20;
+  }
+
+  .search-filter-input::placeholder {
+    @apply text-gray-400;
+  }
+
+  /* 自定义日期行 */
+  .search-custom-date-row {
+    @apply flex items-center gap-2 mt-2;
+  }
+
+  .search-date-input {
+    @apply flex-1 text-xs px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-md outline-none transition-all hover:border-gray-300 focus:border-[#03C160] focus:ring-1 focus:ring-[#03C160]/20;
+  }
+
+  .search-date-separator {
+    @apply text-xs text-gray-400;
+  }
+
+  .search-sidebar-scope {
+    @apply px-4 py-3 border-b border-gray-100;
+  }
+
+  .search-sidebar-filters {
+    @apply px-4 py-3 border-b border-gray-100;
+  }
+
+  .quick-filter-tags-vertical {
+    @apply flex flex-wrap gap-1.5 mt-2;
+  }
+
+  .filter-tag-vertical {
+    @apply flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-600 bg-gray-50 border border-gray-200 rounded-md transition-all duration-200 hover:border-gray-300 hover:bg-gray-100;
+  }
+
+  .search-sidebar-advanced {
+    @apply px-4 py-3 border-b border-gray-100;
+  }
+
+  .sidebar-section-toggle {
+    @apply flex items-center justify-between w-full text-left;
+  }
+
+  .sidebar-section-title {
+    @apply text-xs font-medium text-gray-500 uppercase tracking-wide;
+  }
+
+  .sidebar-advanced-content {
+    @apply overflow-hidden transition-all duration-300 ease-in-out;
+    max-height: 0;
+    opacity: 0;
+  }
+
+  .sidebar-advanced-expanded {
+    max-height: 200px;
+    opacity: 1;
+    @apply mt-3;
+  }
+
+  .sidebar-filter-group {
+    @apply mb-3;
+  }
+
+  .sidebar-filter-label {
+    @apply block text-xs text-gray-600 mb-1;
+  }
+
+  .sidebar-filter-select {
+    @apply w-full text-xs px-2.5 py-1.5 rounded-md border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-[#03C160]/20 focus:border-[#03C160] transition-all;
+  }
+
+  .sidebar-checkbox {
+    @apply flex items-center gap-2 text-xs text-gray-600 cursor-pointer;
+  }
+
+  .sidebar-checkbox input {
+    @apply w-3.5 h-3.5 text-[#03C160] border-gray-300 rounded focus:ring-[#03C160]/20;
+  }
+
+  .search-sidebar-history {
+    @apply px-4 py-3 border-b border-gray-100;
+  }
+
+  .sidebar-section-header {
+    @apply flex items-center justify-between mb-2;
+  }
+
+  .sidebar-clear-btn {
+    @apply text-xs text-gray-400 hover:text-gray-600 transition-colors;
+  }
+
+  .sidebar-index-btn {
+    @apply px-2 py-1 text-[10px] font-medium text-gray-600 bg-gray-50 border border-gray-200 rounded-md hover:bg-gray-100 hover:border-gray-300 transition-colors disabled:opacity-60 disabled:cursor-not-allowed whitespace-nowrap;
+  }
+
+  .sidebar-history-list {
+    @apply space-y-1;
+  }
+
+  .sidebar-history-item {
+    @apply flex items-center gap-2 w-full px-2 py-1.5 text-xs text-gray-600 rounded-md hover:bg-gray-50 transition-colors text-left;
+  }
+
+  .search-sidebar-status {
+    @apply px-4 py-2 text-xs border-b border-gray-100;
+  }
+
+  .sidebar-status-error {
+    @apply text-red-600;
+  }
+
+  .sidebar-status-info {
+    @apply text-gray-600;
+  }
+
+  .sidebar-status-info strong {
+    @apply text-[#03C160] font-semibold;
+  }
+
+  .sidebar-status-detail {
+    @apply text-gray-400;
+  }
+
+  .search-sidebar-results {
+    @apply flex-1 overflow-y-auto min-h-0;
+  }
+
+  .sidebar-results-list {
+    @apply divide-y divide-gray-100;
+  }
+
+  .sidebar-result-card {
+    @apply px-4 py-3 cursor-pointer transition-all duration-150 hover:bg-gray-50;
+    border-left: 3px solid transparent;
+  }
+
+  .sidebar-result-row {
+    @apply flex items-start gap-3;
+  }
+
+  .sidebar-result-avatar {
+    @apply w-9 h-9 rounded-md overflow-hidden bg-gray-300 flex-shrink-0;
+  }
+
+  .sidebar-result-avatar-fallback {
+    @apply w-full h-full flex items-center justify-center text-white text-[10px] font-bold bg-gray-600;
+  }
+
+  .sidebar-result-body {
+    @apply min-w-0 flex-1;
+  }
+
+  .sidebar-result-card-selected {
+    @apply bg-[#03C160]/5;
+    border-left-color: #03C160;
+  }
+
+  .sidebar-result-card-selected:hover {
+    @apply bg-[#03C160]/10;
+  }
+
+  .sidebar-result-header {
+    @apply flex items-center gap-2 text-[10px] text-gray-400 mb-0.5;
+  }
+
+  .sidebar-result-contact {
+    @apply font-medium text-gray-600;
+  }
+
+  .sidebar-result-time {
+    @apply text-gray-400;
+  }
+
+  .sidebar-result-sender {
+    @apply text-[11px] text-gray-500 mb-1;
+  }
+
+  .sidebar-result-content {
+    @apply text-xs text-gray-700 line-clamp-2 leading-relaxed;
+  }
+
+  .sidebar-load-more {
+    @apply px-4 py-3;
+  }
+
+  .sidebar-load-more-btn {
+    @apply w-full text-xs px-3 py-2 rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 transition-colors disabled:opacity-50;
+  }
+
+  .sidebar-empty-state {
+    @apply flex flex-col items-center justify-center py-12 px-4 text-center;
+  }
+
+  .sidebar-empty-icon {
+    @apply w-12 h-12 text-gray-300 mb-3;
+  }
+
+  .sidebar-empty-text {
+    @apply text-sm font-medium text-gray-500 mb-1;
+  }
+
+  .sidebar-empty-hint {
+    @apply text-xs text-gray-400;
+  }
+
+  .sidebar-initial-state {
+    @apply flex flex-col items-center justify-center py-12 px-4 text-center;
+  }
+
+  .sidebar-initial-icon {
+    @apply w-16 h-16 text-gray-200 mb-4;
+  }
+
+  .sidebar-initial-text {
+    @apply text-sm text-gray-500 mb-2;
+  }
+
+  .sidebar-initial-hint {
+    @apply text-xs text-gray-400;
+  }
+
+  .sidebar-initial-hint kbd {
+    @apply px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded text-[10px] font-mono;
+  }
+
+  /* 侧边栏滑入动画 */
+  .sidebar-slide-enter-active,
+  .sidebar-slide-leave-active {
+    transition: all 0.3s ease;
+  }
+
+  .sidebar-slide-enter-from,
+  .sidebar-slide-leave-to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+
+  .sidebar-slide-enter-to,
+  .sidebar-slide-leave-from {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }

@@ -208,11 +208,12 @@ import { ref, onMounted, computed } from 'vue'
 import { useApi } from '~/composables/useApi'
 import { useAppStore } from '~/stores/app'
 
-const { detectWechat, detectCurrentAccount } = useApi()
+const { detectWechat } = useApi()
 const appStore = useAppStore()
 const loading = ref(false)
 const detectionResult = ref(null)
 const customPath = ref('')
+const STORAGE_KEY = 'wechat_data_root_path'
 
 // 计算属性：将当前登录账号排在第一位
 const sortedAccounts = computed(() => {
@@ -244,24 +245,51 @@ const startDetection = async () => {
     }
     
     // 检测微信安装信息
-    const result = await detectWechat(params)
+    let result = await detectWechat(params)
+
+    // 如果用户提供/缓存的路径不可用，自动回退到“自动检测”（避免因错误缓存导致一直检测不到）
+    const hasCustomPath = !!(params.data_root_path && String(params.data_root_path).trim())
+    const accounts0 = Array.isArray(result?.data?.accounts) ? result.data.accounts : []
+    if (hasCustomPath && (result?.status !== 'success' || accounts0.length === 0)) {
+      try {
+        const fallback = await detectWechat({})
+        const accounts1 = Array.isArray(fallback?.data?.accounts) ? fallback.data.accounts : []
+        if (fallback?.status === 'success' && accounts1.length > 0) {
+          result = fallback
+          if (process.client) {
+            try {
+              localStorage.removeItem(STORAGE_KEY)
+            } catch {}
+          }
+          customPath.value = ''
+        }
+      } catch {}
+    }
+
     detectionResult.value = result
     
-    // 如果检测成功，同时检测当前登录账号
     if (result.status === 'success') {
-      try {
-        const currentAccountResult = await detectCurrentAccount(params)
-        if (currentAccountResult.status === 'success') {
-          // 保存当前账号信息到状态管理
-          appStore.setCurrentAccount(currentAccountResult.data)
-          
-          // 同时更新检测结果中的当前账号信息
-          if (detectionResult.value.data) {
-            detectionResult.value.data.current_account = currentAccountResult.data
+      const current = result?.data?.current_account || null
+      if (current) {
+        appStore.setCurrentAccount(current)
+      }
+
+      if (process.client) {
+        try {
+          let toSave = String(customPath.value || '').trim()
+          if (!toSave) {
+            const accounts = Array.isArray(result?.data?.accounts) ? result.data.accounts : []
+            for (const acc of accounts) {
+              const dataDir = String(acc?.data_dir || '').trim()
+              if (!dataDir) continue
+              toSave = dataDir.replace(/[\\/][^\\/]+$/, '')
+              if (toSave) break
+            }
           }
-        }
-      } catch (accountErr) {
-        console.error('检测当前登录账号失败:', accountErr)
+          if (toSave) {
+            localStorage.setItem(STORAGE_KEY, toSave)
+          }
+        } catch {}
       }
     }
   } catch (err) {
@@ -322,6 +350,12 @@ const formatTime = (timeString) => {
 
 // 页面加载时自动检测
 onMounted(() => {
+  if (process.client) {
+    try {
+      const saved = String(localStorage.getItem(STORAGE_KEY) || '').trim()
+      if (saved) customPath.value = saved
+    } catch {}
+  }
   startDetection()
   
   // 调试：检查各元素高度
