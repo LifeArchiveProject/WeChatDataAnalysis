@@ -28,11 +28,11 @@
   </tr>
   <tr>
     <td align="center"><b>解密页面</b></td>
-    <td align="center"><b>图片密钥页面</b></td>
+    <td align="center"><b>图片密钥（填写）</b></td>
   </tr>
   <tr>
     <td><img src="frontend/public/decrypt.png" alt="数据库解密页面" width="400"/></td>
-    <td><img src="frontend/public/imageAES.png" alt="图片密钥页面" width="400"/></td>
+    <td><img src="frontend/public/imageAES.png" alt="图片密钥（填写）" width="400"/></td>
   </tr>
   <tr>
     <td align="center"><b>图片解密页面</b></td>
@@ -126,11 +126,11 @@ npm run dev
 
 ### 获取解密密钥
 
-在使用本工具之前，您需要先获取微信数据库的解密密钥。推荐使用以下工具：
+在使用本工具之前，您需要先获取微信数据库的解密密钥（以及图片解密所需的密钥）。推荐使用以下工具：
 
-**DbkeyHook** (推荐)
-   - 项目地址: https://github.com/gzygood/DbkeyHook
-   - 专门用于获取微信数据库密钥的工具
+**wx_key** (推荐)
+   - 项目地址: https://github.com/ycccccccy/wx_key
+   - 支持获取微信 4.x 数据库密钥与缓存图片密钥
 
 ### 生成字段配置模板（JSON）
 
@@ -176,40 +176,47 @@ uv run analyze_wechat_databases.py
   - `{数据库名}/README.md`：该数据库概览
   - `{数据库名}/{表名}.md`：各表详细结构、索引、外键、示例数据与建表语句
 
+### 聊天会话列表加速（session_preview.db）
+
+聊天页面左侧会话列表需要展示「最后一条消息」，如果每次刷新都去 `message_*.db` 里做 `ORDER BY ... LIMIT 1` 会非常慢（尤其是数据量大时）。
+
+本项目会在解密完成后，自动为账号目录生成一次性索引：
+- 索引文件：`output/databases/{账号名}/session_preview.db`
+- 可通过环境变量关闭：`WECHAT_TOOL_BUILD_SESSION_PREVIEW=0`
+
+如果你是旧版本已解密的账号目录（没有生成索引），可手动触发一次构建：
+
+```bash
+curl -X POST "http://localhost:8000/api/chat/session-preview/build?account={账号名}&rebuild=true"
+```
+
 ### 图片资源解密
 
 微信的图片文件(.dat)是加密存储的，需要解密后才能正常显示。本工具提供了API接口进行批量解密。
 
-#### 1. 获取图片解密密钥
+#### 1. 准备图片解密密钥（XOR/AES）
+
+本项目不再提供密钥提取流程，请使用 [wx_key](https://github.com/ycccccccy/wx_key) 获取图片密钥后再进行解密。
+
+获取到密钥后，可调用 API 保存（也可在前端「图片密钥」步骤填写并保存）：
 
 ```bash
-# GET请求获取密钥（需要微信正在运行；部分版本需以管理员身份运行后端才能提取AES密钥）
-curl http://localhost:8000/api/media/keys
-
-# 强制重新提取密钥
-curl "http://localhost:8000/api/media/keys?force_extract=true"
+curl -X POST http://localhost:8000/api/media/keys \
+  -H "Content-Type: application/json" \
+  -d '{"xor_key":"0xA5","aes_key":"xxxxxxxxxxxxxxxx"}'
 ```
 
-> 提示：部分版本的 AES 密钥可能需要微信触发过图片加载/解密后才会出现在进程内存中。可尝试：完全退出微信 → 重新启动并登录 → 打开朋友圈图片并点开大图 2-3 次 → 立刻回到工具获取密钥。
-
-返回示例：
-```json
-{
-  "status": "success",
-  "xor_key": "0xA5",
-  "aes_key": "xxxxxxxxxxxxxxxx",
-  "message": "XOR密钥提取成功。已从微信进程提取AES密钥"
-}
-```
+> 提示：`aes_key` 可选（仅部分图片 V4-V2 需要）。获取不到图片密钥时请参考 wx_key README 的建议流程。
 
 #### 2. 批量解密所有图片
 
 ```bash
-# POST请求批量解密所有图片到 output/databases/{账号}/resource 目录
 curl -X POST http://localhost:8000/api/media/decrypt_all \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
+
+如需临时覆盖密钥，可在 body 中传入 `xor_key` / `aes_key`。
 
 解密后的图片按MD5哈希命名，存储在 `resource/{md5前2位}/{md5}.{ext}` 路径下，便于快速查找。
 
@@ -235,8 +242,8 @@ curl http://localhost:8000/api/media/resource/{md5}
 
 ### 主要参考项目
 
-1. **[DbkeyHook](https://github.com/gzygood/DbkeyHook)** - 微信数据库密钥获取工具
-   - 提供了获取微信数据库解密密钥的解决方案
+1. **[wx_key](https://github.com/ycccccccy/wx_key)** - 微信数据库与图片密钥提取工具
+   - 支持获取微信 4.x 数据库密钥与缓存图片密钥
    - 本项目推荐使用此工具获取密钥
 
 2. **[wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs)** - Rust实现的微信数据库解密工具
