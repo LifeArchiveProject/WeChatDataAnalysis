@@ -963,6 +963,45 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
 
     remaining = {u for u in usernames if u}
     best: dict[str, tuple[tuple[int, int, int], str]] = {}
+    expected_ts_by_user: dict[str, int] = {}
+
+    session_db_path = Path(account_dir) / "session.db"
+    if session_db_path.exists() and remaining:
+        sconn = sqlite3.connect(str(session_db_path))
+        sconn.row_factory = sqlite3.Row
+        try:
+            uniq = list(dict.fromkeys([u for u in remaining if u]))
+            chunk_size = 900
+            for i in range(0, len(uniq), chunk_size):
+                chunk = uniq[i : i + chunk_size]
+                placeholders = ",".join(["?"] * len(chunk))
+                try:
+                    rows = sconn.execute(
+                        f"SELECT username, sort_timestamp, last_timestamp FROM SessionTable WHERE username IN ({placeholders})",
+                        chunk,
+                    ).fetchall()
+                    for r in rows:
+                        u = str(r["username"] or "").strip()
+                        if not u:
+                            continue
+                        ts = int(r["sort_timestamp"] or 0)
+                        if ts <= 0:
+                            ts = int(r["last_timestamp"] or 0)
+                        expected_ts_by_user[u] = int(ts or 0)
+                except sqlite3.OperationalError:
+                    rows = sconn.execute(
+                        f"SELECT username, last_timestamp FROM SessionTable WHERE username IN ({placeholders})",
+                        chunk,
+                    ).fetchall()
+                    for r in rows:
+                        u = str(r["username"] or "").strip()
+                        if not u:
+                            continue
+                        expected_ts_by_user[u] = int(r["last_timestamp"] or 0)
+        except Exception:
+            expected_ts_by_user = {}
+        finally:
+            sconn.close()
 
     if _DEBUG_SESSIONS:
         logger.info(
@@ -1024,7 +1063,39 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                 create_time = int(r["create_time"] or 0)
                 sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
                 local_id = int(r["local_id"] or 0)
-                sort_key = (sort_seq, local_id, create_time)
+
+                expected_ts = int(expected_ts_by_user.get(u) or 0)
+                if expected_ts > 0 and create_time > 0 and create_time < expected_ts:
+                    try:
+                        r2 = conn.execute(
+                            "SELECT "
+                            "m.local_type, m.message_content, m.compress_content, m.create_time, m.sort_seq, m.local_id, "
+                            "n.user_name AS sender_username "
+                            f"FROM {quoted} m "
+                            "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
+                            "ORDER BY COALESCE(m.create_time, 0) DESC, COALESCE(m.sort_seq, 0) DESC, m.local_id DESC "
+                            "LIMIT 1"
+                        ).fetchone()
+                    except Exception:
+                        try:
+                            r2 = conn.execute(
+                                "SELECT "
+                                "local_type, message_content, compress_content, create_time, sort_seq, local_id, '' AS sender_username "
+                                f"FROM {quoted} "
+                                "ORDER BY COALESCE(create_time, 0) DESC, COALESCE(sort_seq, 0) DESC, local_id DESC "
+                                "LIMIT 1"
+                            ).fetchone()
+                        except Exception:
+                            r2 = None
+
+                    if r2 is not None:
+                        r = r2
+                        local_type = int(r["local_type"] or 0)
+                        create_time = int(r["create_time"] or 0)
+                        sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
+                        local_id = int(r["local_id"] or 0)
+
+                sort_key = (create_time, sort_seq, local_id)
 
                 raw_text = _decode_message_content(r["compress_content"], r["message_content"]).strip()
                 sender_username = _decode_sqlite_text(r["sender_username"]).strip()
