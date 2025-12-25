@@ -33,7 +33,7 @@ class ChatExportCreateRequest(BaseModel):
     )
     allow_process_key_extract: bool = Field(
         False,
-        description="是否允许尝试从微信进程提取媒体密钥（预留；当前仅使用已存在的本地文件）",
+        description="预留字段：本项目不从微信进程提取媒体密钥，请使用 wx_key 获取并保存/批量解密",
     )
     privacy_mode: bool = Field(
         False,

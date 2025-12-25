@@ -11,11 +11,7 @@ from ..media_helpers import (
     _collect_all_dat_files,
     _decrypt_and_save_resource,
     _detect_image_media_type,
-    _extract_wechat_aes_key_from_process,
-    _find_wechat_xor_key,
     _get_resource_dir,
-    _get_wechat_template_most_common_last2,
-    _get_wechat_v2_ciphertext,
     _load_media_keys,
     _resolve_account_dir,
     _resolve_account_wxid_dir,
@@ -29,11 +25,12 @@ logger = get_logger(__name__)
 router = APIRouter(route_class=PathFixRoute)
 
 
-class MediaKeysRequest(BaseModel):
-    """媒体密钥请求模型"""
+class MediaKeysSaveRequest(BaseModel):
+    """媒体密钥保存请求模型（用户手动提供）"""
 
     account: Optional[str] = Field(None, description="账号目录名（可选，默认使用第一个）")
-    force_extract: bool = Field(False, description="是否强制从微信进程重新提取密钥")
+    xor_key: str = Field(..., description="XOR密钥（十六进制格式，如 0xA5 或 A5）")
+    aes_key: Optional[str] = Field(None, description="AES密钥（可选，至少16字符，V4-V2需要）")
 
 
 class MediaDecryptRequest(BaseModel):
@@ -44,105 +41,37 @@ class MediaDecryptRequest(BaseModel):
     aes_key: Optional[str] = Field(None, description="AES密钥（16字符ASCII字符串）")
 
 
-@router.get("/api/media/keys", summary="获取图片解密密钥")
-async def get_media_keys(account: Optional[str] = None, force_extract: bool = False):
-    """获取图片解密密钥（XOR和AES）
-
-    如果已缓存密钥且不强制提取，直接返回缓存的密钥。
-    否则尝试从微信进程中提取密钥。
-
-    注意：提取AES密钥需要微信进程正在运行。
-    """
-    account_dir = _resolve_account_dir(account)
-    wxid_dir = _resolve_account_wxid_dir(account_dir)
-
-    # 尝试加载已缓存的密钥
-    cached_keys = _load_media_keys(account_dir)
-    if cached_keys and not force_extract:
-        xor_key = cached_keys.get("xor")
-        aes_key = cached_keys.get("aes")
-        if xor_key is not None and aes_key:
-            return {
-                "status": "success",
-                "source": "cache",
-                "xor_key": f"0x{int(xor_key):02X}",
-                "aes_key": str(aes_key)[:16] if aes_key else "",
-                "message": "已从缓存加载密钥",
-            }
-
-    if not wxid_dir:
-        return {
-            "status": "error",
-            "message": "未找到微信数据目录，请确保已正确配置 db_storage_path",
-        }
-
-    # 尝试提取XOR密钥
-    xor_key = _find_wechat_xor_key(str(wxid_dir))
-    if xor_key is None:
-        return {
-            "status": "error",
-            "message": "无法提取XOR密钥，请确保微信数据目录中存在 _t.dat 模板文件",
-        }
-
-    # 尝试提取AES密钥（需要微信进程运行）
-    aes_key16: Optional[bytes] = None
-    aes_message = ""
-
-    most_common = _get_wechat_template_most_common_last2(str(wxid_dir))
-    if most_common:
-        ct = _get_wechat_v2_ciphertext(wxid_dir, most_common)
-        if ct:
-            aes_key16 = _extract_wechat_aes_key_from_process(ct)
-            if aes_key16:
-                aes_message = "已从微信进程提取AES密钥"
-                # 保存密钥到缓存
-                _save_media_keys(account_dir, xor_key, aes_key16)
-            else:
-                aes_message = "无法从微信进程提取AES密钥（请确认微信正在运行，并尝试以管理员身份运行后端；可尝试打开朋友圈图片并点开大图 2-3 次后再提取）"
-        else:
-            aes_message = "未找到V2加密模板文件"
-    else:
-        aes_message = "未找到足够的模板文件用于提取AES密钥"
-
-    return {
-        "status": "success",
-        "source": "extracted",
-        "xor_key": f"0x{xor_key:02X}",
-        "aes_key": aes_key16.decode("ascii", errors="ignore") if aes_key16 else "",
-        "message": f"XOR密钥提取成功。{aes_message}",
-    }
-
-
 @router.post("/api/media/keys", summary="保存图片解密密钥")
-async def save_media_keys_api(request: MediaKeysRequest, xor_key: str, aes_key: str):
+async def save_media_keys_api(request: MediaKeysSaveRequest):
     """手动保存图片解密密钥
 
     参数:
     - xor_key: XOR密钥（十六进制格式，如 0xA5 或 A5）
-    - aes_key: AES密钥（16字符ASCII字符串）
+    - aes_key: AES密钥（可选，至少16个字符；V4-V2需要）
     """
     account_dir = _resolve_account_dir(request.account)
 
     # 解析XOR密钥
     try:
-        xor_hex = xor_key.strip().lower().replace("0x", "")
+        xor_hex = request.xor_key.strip().lower().replace("0x", "")
         xor_int = int(xor_hex, 16)
     except Exception:
         raise HTTPException(status_code=400, detail="XOR密钥格式无效，请使用十六进制格式如 0xA5")
 
-    # 验证AES密钥
-    aes_str = aes_key.strip()
-    if len(aes_str) < 16:
+    # 验证AES密钥（可选）
+    aes_str = str(request.aes_key or "").strip()
+    if aes_str and len(aes_str) < 16:
         raise HTTPException(status_code=400, detail="AES密钥长度不足，需要至少16个字符")
 
     # 保存密钥
-    _save_media_keys(account_dir, xor_int, aes_str[:16].encode("ascii", errors="ignore"))
+    aes_key16 = aes_str[:16].encode("ascii", errors="ignore") if aes_str else None
+    _save_media_keys(account_dir, xor_int, aes_key16)
 
     return {
         "status": "success",
         "message": "密钥已保存",
         "xor_key": f"0x{xor_int:02X}",
-        "aes_key": aes_str[:16],
+        "aes_key": aes_str[:16] if aes_str else "",
     }
 
 
@@ -193,14 +122,10 @@ async def decrypt_all_media(request: MediaDecryptRequest):
             if len(aes_str) >= 16:
                 aes_key16 = aes_str[:16].encode("ascii", errors="ignore")
 
-    # 如果仍然没有XOR密钥，尝试自动提取
-    if xor_key_int is None:
-        xor_key_int = _find_wechat_xor_key(str(wxid_dir))
-
     if xor_key_int is None:
         raise HTTPException(
             status_code=400,
-            detail="未找到XOR密钥，请先调用 /api/media/keys 获取密钥或手动提供",
+            detail="未找到XOR密钥，请先使用 wx_key 获取并通过前端填写（或调用 /api/media/keys 保存）",
         )
 
     # 收集所有.dat文件
@@ -353,12 +278,8 @@ async def decrypt_all_media_stream(
                     if len(aes_str) >= 16:
                         aes_key16 = aes_str[:16].encode("ascii", errors="ignore")
 
-            # 如果仍然没有XOR密钥，尝试自动提取
             if xor_key_int is None:
-                xor_key_int = _find_wechat_xor_key(str(wxid_dir))
-
-            if xor_key_int is None:
-                yield f"data: {json.dumps({'type': 'error', 'message': '未找到XOR密钥，请先获取密钥'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': '未找到XOR密钥，请先使用 wx_key 获取并保存/填写'})}\n\n"
                 return
 
             # 收集所有.dat文件
