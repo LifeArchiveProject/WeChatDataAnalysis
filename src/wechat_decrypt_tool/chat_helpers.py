@@ -669,8 +669,7 @@ def _parse_app_message(text: str) -> dict[str, Any]:
     des = _extract_xml_tag_text(text, "des")
     url = _extract_xml_tag_text(text, "url")
 
-    if "<patmsg" in text.lower() or "<template>" in text.lower():
-        return {"renderType": "system", "content": "[拍一拍]"}
+    lower = text.lower()
 
     if app_type in (5, 68) and url:
         thumb_url = _extract_xml_tag_text(text, "thumburl")
@@ -698,7 +697,7 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             "fileMd5": file_md5 or "",
         }
 
-    if app_type == 57 or "<refermsg" in text:
+    if app_type == 57 or "<refermsg" in lower:
         refer_block = _extract_refermsg_block(text)
 
         try:
@@ -713,6 +712,12 @@ def _parse_app_message(text: str) -> dict[str, Any]:
 
         reply_text = _extract_xml_tag_text(text_wo_refer, "title") or _extract_xml_tag_text(text, "title")
         refer_displayname = _extract_xml_tag_or_attr(refer_block, "displayname")
+        refer_fromusr = (
+            _extract_xml_tag_or_attr(refer_block, "fromusr")
+            or _extract_xml_tag_or_attr(refer_block, "fromusername")
+            or ""
+        )
+        refer_svrid = _extract_xml_tag_or_attr(refer_block, "svrid")
         refer_content = _extract_xml_tag_text(refer_block, "content")
         refer_type = _extract_xml_tag_or_attr(refer_block, "type")
 
@@ -730,6 +735,7 @@ def _parse_app_message(text: str) -> dict[str, Any]:
                     refer_content = rest
 
         t = str(refer_type or "").strip()
+        quote_voice_length = ""
         if t == "3":
             refer_content = "[图片]"
         elif t == "47":
@@ -737,6 +743,17 @@ def _parse_app_message(text: str) -> dict[str, Any]:
         elif t == "43" or t == "62":
             refer_content = "[视频]"
         elif t == "34":
+            # Some versions embed voice length (ms) in refermsg.content, e.g.
+            # "wxid_xxx:15369:1:" -> 15s
+            try:
+                rc = str(refer_content or "").strip()
+                parts = rc.split(":")
+                if len(parts) >= 2:
+                    dur_raw = (parts[1] or "").strip()
+                    if dur_raw.isdigit():
+                        quote_voice_length = str(int(dur_raw))
+            except Exception:
+                quote_voice_length = ""
             refer_content = "[语音]"
         elif t == "49" and refer_content:
             refer_content = f"[链接] {refer_content}".strip()
@@ -744,9 +761,16 @@ def _parse_app_message(text: str) -> dict[str, Any]:
         return {
             "renderType": "quote",
             "content": reply_text or "[引用消息]",
+            "quoteUsername": str(refer_fromusr or "").strip(),
             "quoteTitle": refer_displayname or "",
             "quoteContent": refer_content or "",
+            "quoteType": t,
+            "quoteServerId": str(refer_svrid or "").strip(),
+            "quoteVoiceLength": quote_voice_length,
         }
+
+    if app_type == 62 or "<patmsg" in lower or 'type="patmsg"' in lower or "type='patmsg'" in lower:
+        return {"renderType": "system", "content": "[拍一拍]"}
 
     if app_type == 2000 or (
         "<wcpayinfo" in text and ("transfer" in text.lower() or "paysubtype" in text.lower())
@@ -976,7 +1000,7 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                             "n.user_name AS sender_username "
                             f"FROM {quoted} m "
                             "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
-                            "ORDER BY m.create_time DESC, m.sort_seq DESC, m.local_id DESC "
+                            "ORDER BY m.sort_seq DESC, m.local_id DESC "
                             "LIMIT 1"
                         ).fetchone()
                     except Exception:
@@ -984,7 +1008,7 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                             "SELECT "
                             "local_type, message_content, compress_content, create_time, sort_seq, local_id, '' AS sender_username "
                             f"FROM {quoted} "
-                            "ORDER BY create_time DESC, sort_seq DESC, local_id DESC "
+                            "ORDER BY sort_seq DESC, local_id DESC "
                             "LIMIT 1"
                         ).fetchone()
                 except Exception as e:
@@ -1000,7 +1024,7 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                 create_time = int(r["create_time"] or 0)
                 sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
                 local_id = int(r["local_id"] or 0)
-                sort_key = (create_time, sort_seq, local_id)
+                sort_key = (sort_seq, local_id, create_time)
 
                 raw_text = _decode_message_content(r["compress_content"], r["message_content"]).strip()
                 sender_username = _decode_sqlite_text(r["sender_username"]).strip()
@@ -1087,3 +1111,263 @@ def _load_contact_rows(contact_db_path: Path, usernames: list[str]) -> dict[str,
         return result
     finally:
         conn.close()
+
+
+def _make_search_tokens(q: str) -> list[str]:
+    tokens = [t for t in re.split(r"\s+", str(q or "").strip()) if t]
+    if len(tokens) > 8:
+        tokens = tokens[:8]
+    return tokens
+
+
+def _make_snippet(text: str, tokens: list[str], *, max_len: int = 90) -> str:
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    if not tokens or max_len <= 0:
+        return s[:max_len]
+
+    lowered = s.lower()
+    best_idx = None
+    best_tok = ""
+    for t in tokens:
+        i = lowered.find(t.lower())
+        if i >= 0 and (best_idx is None or i < best_idx):
+            best_idx = i
+            best_tok = t
+    if best_idx is None:
+        return s[:max_len]
+
+    left = max(0, best_idx - max_len // 2)
+    right = min(len(s), left + max_len)
+    if right - left < max_len and left > 0:
+        left = max(0, right - max_len)
+    out = s[left:right].strip()
+    if left > 0:
+        out = "…" + out
+    if right < len(s):
+        out = out + "…"
+    if best_tok and best_tok not in out:
+        out = s[:max_len].strip()
+    return out
+
+
+def _match_tokens(haystack: str, tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    h = (haystack or "").lower()
+    return all(t.lower() in h for t in tokens)
+
+
+def _to_char_token_text(s: str) -> str:
+    t = str(s or "").strip()
+    if not t:
+        return ""
+    chars = [ch for ch in t.lower() if not ch.isspace()]
+    return " ".join(chars)
+
+
+def _build_fts_query(q: str) -> str:
+    tokens = _make_search_tokens(q)
+    parts: list[str] = []
+    for tok in tokens:
+        clean = str(tok or "").replace('"', "").strip()
+        if not clean:
+            continue
+        phrase = " ".join([ch for ch in clean if not ch.isspace()])
+        phrase = phrase.strip()
+        if not phrase:
+            continue
+        parts.append(f"\"{phrase}\"")
+    return " AND ".join(parts)
+
+
+def _row_to_search_hit(
+    r: sqlite3.Row,
+    *,
+    db_path: Path,
+    table_name: str,
+    username: str,
+    account_dir: Path,
+    is_group: bool,
+    my_rowid: Optional[int],
+) -> dict[str, Any]:
+    local_id = int(r["local_id"] or 0)
+    create_time = int(r["create_time"] or 0)
+    sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
+    local_type = int(r["local_type"] or 0)
+    sender_username = _decode_sqlite_text(r["sender_username"]).strip()
+
+    is_sent = False
+    if my_rowid is not None:
+        try:
+            is_sent = int(r["real_sender_id"] or 0) == int(my_rowid)
+        except Exception:
+            is_sent = False
+
+    raw_text = _decode_message_content(r["compress_content"], r["message_content"]).strip()
+
+    sender_prefix = ""
+    if is_group and raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
+        sender_prefix, raw_text = _split_group_sender_prefix(raw_text)
+
+    if is_group and sender_prefix:
+        sender_username = sender_prefix
+
+    if is_group and raw_text and (raw_text.startswith("<") or raw_text.startswith('"<')):
+        xml_sender = _extract_sender_from_group_xml(raw_text)
+        if xml_sender:
+            sender_username = xml_sender
+
+    if is_sent:
+        sender_username = account_dir.name
+    elif (not is_group) and (not sender_username):
+        sender_username = username
+
+    render_type = "text"
+    content_text = raw_text
+    title = ""
+    url = ""
+    quote_username = ""
+    quote_title = ""
+    quote_content = ""
+    amount = ""
+    pay_sub_type = ""
+    transfer_status = ""
+    voip_type = ""
+
+    if local_type == 10000:
+        render_type = "system"
+        if "revokemsg" in raw_text:
+            content_text = "撤回了一条消息"
+        else:
+            content_text = re.sub(r"</?[_a-zA-Z0-9]+[^>]*>", "", raw_text)
+            content_text = re.sub(r"\s+", " ", content_text).strip() or "[系统消息]"
+    elif local_type == 49:
+        parsed = _parse_app_message(raw_text)
+        render_type = str(parsed.get("renderType") or "text")
+        content_text = str(parsed.get("content") or "")
+        title = str(parsed.get("title") or "")
+        url = str(parsed.get("url") or "")
+        quote_title = str(parsed.get("quoteTitle") or "")
+        quote_content = str(parsed.get("quoteContent") or "")
+        quote_username = str(parsed.get("quoteUsername") or "")
+        amount = str(parsed.get("amount") or "")
+        pay_sub_type = str(parsed.get("paySubType") or "")
+        if render_type == "transfer":
+            transfer_status = _infer_transfer_status_text(
+                is_sent=is_sent,
+                paysubtype=pay_sub_type,
+                receivestatus=str(parsed.get("receiveStatus") or ""),
+                sendertitle=str(parsed.get("senderTitle") or ""),
+                receivertitle=str(parsed.get("receiverTitle") or ""),
+                senderdes=str(parsed.get("senderDes") or ""),
+                receiverdes=str(parsed.get("receiverDes") or ""),
+            )
+            if not content_text:
+                content_text = transfer_status or "转账"
+    elif local_type == 266287972401:
+        render_type = "system"
+        content_text = "[拍一拍]"
+    elif local_type == 244813135921:
+        render_type = "quote"
+        parsed = _parse_app_message(raw_text)
+        content_text = str(parsed.get("content") or "[引用消息]")
+        quote_title = str(parsed.get("quoteTitle") or "")
+        quote_content = str(parsed.get("quoteContent") or "")
+        quote_username = str(parsed.get("quoteUsername") or "")
+    elif local_type == 3:
+        render_type = "image"
+        content_text = "[图片]"
+    elif local_type == 34:
+        render_type = "voice"
+        duration = _extract_xml_attr(raw_text, "voicelength")
+        content_text = f"[语音 {duration}秒]" if duration else "[语音]"
+    elif local_type == 43 or local_type == 62:
+        render_type = "video"
+        content_text = "[视频]"
+    elif local_type == 47:
+        render_type = "emoji"
+        content_text = "[表情]"
+    elif local_type == 50:
+        render_type = "voip"
+        try:
+            block = raw_text
+            m_voip = re.search(
+                r"(<VoIPBubbleMsg[^>]*>.*?</VoIPBubbleMsg>)",
+                raw_text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if m_voip:
+                block = m_voip.group(1) or raw_text
+            room_type = str(_extract_xml_tag_text(block, "room_type") or "").strip()
+            if room_type == "0":
+                voip_type = "video"
+            elif room_type == "1":
+                voip_type = "audio"
+            voip_msg = str(_extract_xml_tag_text(block, "msg") or "").strip()
+            content_text = voip_msg or "通话"
+        except Exception:
+            content_text = "通话"
+    elif local_type != 1:
+        if not content_text:
+            content_text = _infer_message_brief_by_local_type(local_type)
+        else:
+            if content_text.startswith("<") or content_text.startswith('"<'):
+                if "<appmsg" in content_text.lower():
+                    parsed = _parse_app_message(content_text)
+                    rt = str(parsed.get("renderType") or "")
+                    if rt and rt != "text":
+                        render_type = rt
+                        content_text = str(parsed.get("content") or content_text)
+                        title = str(parsed.get("title") or title)
+                        url = str(parsed.get("url") or url)
+                        quote_title = str(parsed.get("quoteTitle") or quote_title)
+                        quote_content = str(parsed.get("quoteContent") or quote_content)
+                        amount = str(parsed.get("amount") or amount)
+                        pay_sub_type = str(parsed.get("paySubType") or pay_sub_type)
+                        quote_username = str(parsed.get("quoteUsername") or quote_username)
+
+                        if render_type == "transfer":
+                            transfer_status = _infer_transfer_status_text(
+                                is_sent=is_sent,
+                                paysubtype=pay_sub_type,
+                                receivestatus=str(parsed.get("receiveStatus") or ""),
+                                sendertitle=str(parsed.get("senderTitle") or ""),
+                                receivertitle=str(parsed.get("receiverTitle") or ""),
+                                senderdes=str(parsed.get("senderDes") or ""),
+                                receiverdes=str(parsed.get("receiverDes") or ""),
+                            )
+                            if not content_text:
+                                content_text = transfer_status or "转账"
+                t = _extract_xml_tag_text(content_text, "title")
+                d = _extract_xml_tag_text(content_text, "des")
+                content_text = t or d or _infer_message_brief_by_local_type(local_type)
+
+    if not content_text:
+        content_text = _infer_message_brief_by_local_type(local_type)
+
+    return {
+        "id": f"{db_path.stem}:{table_name}:{local_id}",
+        "db": str(db_path.stem),
+        "table": str(table_name),
+        "username": str(username),
+        "localId": local_id,
+        "serverId": int(r["server_id"] or 0),
+        "type": local_type,
+        "createTime": create_time,
+        "sortSeq": sort_seq,
+        "senderUsername": sender_username,
+        "isSent": bool(is_sent),
+        "renderType": render_type,
+        "content": content_text,
+        "title": title,
+        "url": url,
+        "quoteUsername": quote_username,
+        "quoteTitle": quote_title,
+        "quoteContent": quote_content,
+        "amount": amount,
+        "paySubType": pay_sub_type,
+        "transferStatus": transfer_status,
+        "voipType": voip_type,
+    }

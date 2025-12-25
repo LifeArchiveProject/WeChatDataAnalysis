@@ -441,6 +441,24 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
             "failed_files": account_failed
         }
 
+        # 构建“会话最后一条消息”索引：把耗时挪到解密阶段，一劳永逸
+        if os.environ.get("WECHAT_TOOL_BUILD_SESSION_PREVIEW", "1") != "0":
+            try:
+                from .session_preview_index import build_session_preview_index
+
+                account_results[account_name]["session_preview_index"] = build_session_preview_index(
+                    account_output_dir,
+                    rebuild=True,
+                    include_hidden=True,
+                    include_official=True,
+                )
+            except Exception as e:
+                logger.warning(f"构建会话预览索引失败: {account_name}: {e}")
+                account_results[account_name]["session_preview_index"] = {
+                    "status": "error",
+                    "message": str(e),
+                }
+
         logger.info(f"账号 {account_name} 解密完成: 成功 {account_success}/{len(databases)}")
 
     # 返回结果
