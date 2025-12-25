@@ -49,14 +49,18 @@
     <td colspan="2" align="center"><img src="frontend/public/message.png" alt="聊天记录页面" width="800"/></td>
   </tr>
   <tr>
+    <td align="center" colspan="2"><b>聊天记录搜索</b></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="frontend/public/search.png" alt="聊天记录搜索" width="800"/></td>
+  </tr>
+  <tr>
     <td align="center" colspan="2"><b>聊天记录导出</b></td>
   </tr>
   <tr>
     <td colspan="2" align="center"><img src="frontend/public/export.png" alt="聊天记录导出" width="800"/></td>
   </tr>
 </table>
-
-> **Note**: 聊天记录页面已支持基础展示与离线导出，更多功能（搜索、高级筛选等）尚在开发中。
 
 ## 功能特性
 
@@ -66,8 +70,7 @@
 - **多账户检测**: 自动检测并处理多个微信账户的数据库文件
 - **API接口**: 提供RESTful API接口进行数据库解密操作
 - **Web界面**: 提供现代化的Web操作界面
-- **聊天记录查看**: 支持查看解密后的聊天记录（基础功能）
-- **图片资源解密**: 支持批量解密微信图片(.dat文件)，按MD5哈希存储便于快速访问
+- **聊天记录查看**: 支持查看解密后的聊天记录、消息搜索与离线导出
 - **聊天图片展示**: 支持部分版本图片消息无MD5时通过 file_id 兜底定位本地资源
 
 ### 开发计划
@@ -75,7 +78,7 @@
 - **数据分析**: 对解密后的数据进行深度分析
 - **数据可视化**: 提供图表、统计报告等可视化展示
 - **聊天记录分析**: 消息频率、活跃时间、关键词分析等
-- **聊天记录优化**: 搜索、导出、高级筛选等功能
+- **聊天记录优化**: 高级筛选、统计报表等功能
 
 > **项目进展**: 查看 [GitHub项目面板](https://github.com/orgs/LifeArchiveProject/projects/1/views/1) 了解当前开发状态和后续功能规划
 
@@ -126,106 +129,11 @@ npm run dev
 
 ### 获取解密密钥
 
-在使用本工具之前，您需要先获取微信数据库的解密密钥（以及图片解密所需的密钥）。推荐使用以下工具：
+在使用本工具之前，您需要先获取微信数据库的解密密钥。推荐使用以下工具：
 
 **wx_key** (推荐)
    - 项目地址: https://github.com/ycccccccy/wx_key
-   - 支持获取微信 4.x 数据库密钥与缓存图片密钥
-
-### 生成字段配置模板（JSON）
-
-在完成数据库解密后（默认输出到 `output/databases/{账号名}/`），可基于实际解密出的数据库结构生成一份可填写的字段说明模板。
-
-前置条件：
-- `output/databases/{账号名}/*.db` 下已有解密后的数据库文件（通过后端 API 或命令行完成解密）。
-
-运行命令：
-
-```bash
-uv run generate_config_template.py
-```
-
-输出结果：
-- 在项目根目录生成 `wechat_db_config_template.json`
-
-接下来：
-- 打开并填写模板中的字段含义（`meaning`）、表/数据库功能描述（`description`），以及可选的 `message_types`、`friend_types` 映射示例。
-- 填写完成后，将其另存为根目录下的 `wechat_db_config.json`（分析脚本默认读取此文件名）。
-
-提示：若未提供 `wechat_db_config.json`，分析脚本会使用内置的最小默认映射，生成的文档字段含义将较为粗略。
-
-### 生成数据库表结构文档（Markdown）
-
-该脚本会扫描解密后的数据库，输出每个数据库与表的结构说明、示例数据以及跨库字段关联分析。
-
-前置条件：
-- `output/databases/{账号名}/*.db` 下已有解密后的数据库文件
--（可选）根目录存在 `wechat_db_config.json`，用于提供更准确的字段含义映射
-
-运行命令：
-
-```bash
-uv run analyze_wechat_databases.py
-```
-
-输出结果：
-- 文档目录：`output/docs/database/`
-- 主要文件：
-  - `README.md`：总览文档
-  - `field_relationships.md`：跨数据库字段关联分析
-  - `{数据库名}/README.md`：该数据库概览
-  - `{数据库名}/{表名}.md`：各表详细结构、索引、外键、示例数据与建表语句
-
-### 聊天会话列表加速（session_preview.db）
-
-聊天页面左侧会话列表需要展示「最后一条消息」，如果每次刷新都去 `message_*.db` 里做 `ORDER BY ... LIMIT 1` 会非常慢（尤其是数据量大时）。
-
-本项目会在解密完成后，自动为账号目录生成一次性索引：
-- 索引文件：`output/databases/{账号名}/session_preview.db`
-- 可通过环境变量关闭：`WECHAT_TOOL_BUILD_SESSION_PREVIEW=0`
-
-如果你是旧版本已解密的账号目录（没有生成索引），可手动触发一次构建：
-
-```bash
-curl -X POST "http://localhost:8000/api/chat/session-preview/build?account={账号名}&rebuild=true"
-```
-
-### 图片资源解密
-
-微信的图片文件(.dat)是加密存储的，需要解密后才能正常显示。本工具提供了API接口进行批量解密。
-
-#### 1. 准备图片解密密钥（XOR/AES）
-
-本项目不再提供密钥提取流程，请使用 [wx_key](https://github.com/ycccccccy/wx_key) 获取图片密钥后再进行解密。
-
-获取到密钥后，可调用 API 保存（也可在前端「图片密钥」步骤填写并保存）：
-
-```bash
-curl -X POST http://localhost:8000/api/media/keys \
-  -H "Content-Type: application/json" \
-  -d '{"xor_key":"0xA5","aes_key":"xxxxxxxxxxxxxxxx"}'
-```
-
-> 提示：`aes_key` 可选（仅部分图片 V4-V2 需要）。获取不到图片密钥时请参考 wx_key README 的建议流程。
-
-#### 2. 批量解密所有图片
-
-```bash
-curl -X POST http://localhost:8000/api/media/decrypt_all \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
-
-如需临时覆盖密钥，可在 body 中传入 `xor_key` / `aes_key`。
-
-解密后的图片按MD5哈希命名，存储在 `resource/{md5前2位}/{md5}.{ext}` 路径下，便于快速查找。
-
-#### 3. 获取已解密的图片
-
-```bash
-# 直接通过MD5获取已解密的图片（更快）
-curl http://localhost:8000/api/media/resource/{md5}
-```
+   - 支持获取微信 4.x 数据库密钥
 
 ## 安全说明
 
