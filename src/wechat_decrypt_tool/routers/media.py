@@ -11,6 +11,7 @@ from ..media_helpers import (
     _collect_all_dat_files,
     _decrypt_and_save_resource,
     _detect_image_media_type,
+    _is_probably_valid_image,
     _get_resource_dir,
     _load_media_keys,
     _resolve_account_dir,
@@ -315,14 +316,26 @@ async def decrypt_all_media_stream(
                 # 检查是否已解密
                 existing = _try_find_decrypted_resource(account_dir, md5)
                 if existing:
-                    skip_count += 1
-                    # 每100个跳过的文件发送一次进度，减少消息量
-                    if skip_count % 100 == 0 or current == total_files:
-                        yield (
-                            f"data: {json.dumps({'type': 'progress', 'current': current, 'total': total_files, 'success_count': success_count, 'skip_count': skip_count, 'fail_count': fail_count, 'current_file': file_name, 'status': 'skip', 'message': '已存在'})}\n\n"
-                        )
-                        await asyncio.sleep(0)
-                    continue
+                    try:
+                        cached = existing.read_bytes()
+                        cached_mt = _detect_image_media_type(cached[:32])
+                        if cached_mt != "application/octet-stream" and _is_probably_valid_image(cached, cached_mt):
+                            skip_count += 1
+                            # 每100个跳过的文件发送一次进度，减少消息量
+                            if skip_count % 100 == 0 or current == total_files:
+                                yield (
+                                    f"data: {json.dumps({'type': 'progress', 'current': current, 'total': total_files, 'success_count': success_count, 'skip_count': skip_count, 'fail_count': fail_count, 'current_file': file_name, 'status': 'skip', 'message': '已存在'})}\n\n"
+                                )
+                                await asyncio.sleep(0)
+                            continue
+                        # Cache exists but looks corrupted: remove and regenerate.
+                        existing.unlink(missing_ok=True)
+                    except Exception:
+                        # If we can't read/validate it, try regenerating.
+                        try:
+                            existing.unlink(missing_ok=True)
+                        except Exception:
+                            pass
 
                 # 解密并保存
                 success, msg = _decrypt_and_save_resource(
