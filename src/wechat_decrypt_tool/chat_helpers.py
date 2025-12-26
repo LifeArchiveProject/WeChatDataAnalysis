@@ -530,6 +530,17 @@ def _strip_cdata(s: str) -> str:
     return out.strip()
 
 
+def _normalize_xml_url(url: str) -> str:
+    """Normalize URLs extracted from XML attributes/tags (e.g. decode '&amp;')."""
+    u = str(url or "").strip()
+    if not u:
+        return ""
+    try:
+        return html.unescape(u).strip()
+    except Exception:
+        return u.replace("&amp;", "&").strip()
+
+
 def _extract_xml_tag_text(xml_text: str, tag: str) -> str:
     if not xml_text or not tag:
         return ""
