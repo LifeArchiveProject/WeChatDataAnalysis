@@ -584,6 +584,10 @@
     @apply bg-[#03C160]/15;
   }
 
+  .message-filter-select {
+    @apply text-xs px-2 py-1.5 rounded-lg bg-white border border-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#03C160]/20 focus:border-[#03C160] transition-all disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
   /* 搜索侧边栏样式 */
   .search-sidebar {
     @apply w-[420px] h-full flex flex-col bg-white border-l border-gray-200 flex-shrink-0;
