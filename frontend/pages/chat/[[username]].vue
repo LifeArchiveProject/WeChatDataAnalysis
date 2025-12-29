@@ -161,6 +161,16 @@
                 </svg>
                 <span>导出</span>
               </button>
+              <select
+                v-model="messageTypeFilter"
+                class="message-filter-select"
+                :disabled="isLoadingMessages || searchContext.active"
+                :title="searchContext.active ? '上下文模式下暂不可筛选' : '筛选消息类型'"
+              >
+                <option v-for="opt in messageTypeFilterOptions" :key="opt.value" :value="opt.value">
+                  {{ opt.label }}
+                </option>
+              </select>
               <button
                 class="header-btn-icon"
                 :class="{ 'header-btn-icon-active': messageSearchOpen }"
@@ -1106,11 +1116,73 @@
               </div>
 
               <div>
-                <div class="text-sm font-medium text-gray-800 mb-2">媒体（离线）</div>
+                <div class="text-sm font-medium text-gray-800 mb-2">消息类型（导出内容）</div>
+                <div class="space-y-2 text-sm text-gray-700">
+                  <label class="flex items-center gap-2">
+                    <input type="radio" value="all" v-model="exportMessageTypeMode" />
+                    <span>全部消息（不筛选）</span>
+                  </label>
+                  <label class="flex items-center gap-2">
+                    <input type="radio" value="filter" v-model="exportMessageTypeMode" />
+                    <span>按类型筛选（可多选）</span>
+                  </label>
+                </div>
+                <div v-if="exportMessageTypeMode === 'filter'" class="mt-2">
+                  <div class="flex items-center gap-2 mb-2">
+                    <button
+                      type="button"
+                      class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
+                      @click="exportMessageTypes = exportMessageTypeOptions.map((x) => x.value)"
+                    >
+                      全选
+                    </button>
+                    <button
+                      type="button"
+                      class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
+                      @click="exportMessageTypes = ['voice']"
+                    >
+                      只语音
+                    </button>
+                    <button
+                      type="button"
+                      class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
+                      @click="exportMessageTypes = ['transfer']"
+                    >
+                      只转账
+                    </button>
+                    <button
+                      type="button"
+                      class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
+                      @click="exportMessageTypes = ['redPacket']"
+                    >
+                      只红包
+                    </button>
+                    <div class="ml-auto text-xs text-gray-500">已选 {{ exportMessageTypes.length }} 项</div>
+                  </div>
+                  <div class="grid grid-cols-2 gap-2 text-sm text-gray-700">
+                    <label v-for="opt in exportMessageTypeOptions" :key="opt.value" class="flex items-center gap-2">
+                      <input type="checkbox" :value="opt.value" v-model="exportMessageTypes" />
+                      <span>{{ opt.label }}</span>
+                    </label>
+                  </div>
+                  <div class="mt-1 text-xs text-gray-500">
+                    仅导出所选类型的消息（影响导出消息条数与进度统计）。
+                  </div>
+                </div>
+                <div v-else class="mt-1 text-xs text-gray-500">
+                  默认导出会话内全部消息；如需只导出语音/转账/红包等，请选择“按类型筛选”。
+                </div>
+              </div>
+
+              <div>
+                <div class="text-sm font-medium text-gray-800 mb-2">离线媒体文件（可选）</div>
                 <label class="flex items-center gap-2 text-sm text-gray-700">
                   <input type="checkbox" v-model="exportIncludeMedia" :disabled="privacyMode" />
                   <span>打包媒体文件到 ZIP（图片/表情/视频/语音/文件）</span>
                 </label>
+                <div class="mt-1 text-xs text-gray-500">
+                  仅影响 ZIP 是否包含媒体文件；消息条数由“消息类型（导出内容）”决定。
+                </div>
                 <div class="grid grid-cols-2 gap-2 mt-2 text-sm text-gray-700">
                   <label class="flex items-center gap-2" :class="(exportIncludeMedia && !privacyMode) ? '' : 'opacity-50'">
                     <input type="checkbox" value="image" v-model="exportMediaKinds" :disabled="!exportIncludeMedia || privacyMode" />
@@ -1325,6 +1397,24 @@ const allMessages = ref({})
 const messagesMeta = ref({})
 const isLoadingMessages = ref(false)
 const messagesError = ref('')
+
+// 消息类型筛选（展示）
+const messageTypeFilter = ref('all')
+const messageTypeFilterOptions = [
+  { value: 'all', label: '全部' },
+  { value: 'text', label: '文本' },
+  { value: 'image', label: '图片' },
+  { value: 'emoji', label: '表情' },
+  { value: 'video', label: '视频' },
+  { value: 'voice', label: '语音' },
+  { value: 'transfer', label: '转账' },
+  { value: 'redPacket', label: '红包' },
+  { value: 'file', label: '文件' },
+  { value: 'link', label: '链接' },
+  { value: 'quote', label: '引用' },
+  { value: 'system', label: '系统' },
+  { value: 'voip', label: '通话' }
+]
 
   // 消息搜索（会话内/全局）
   const messageSearchOpen = ref(false)
@@ -1796,6 +1886,22 @@ const exportError = ref('')
 // current: 当前会话（映射为 selected + 单个 username）
 const exportScope = ref('current') // current | selected | all | groups | singles
 const exportFormat = ref('json') // json | txt
+const exportMessageTypeMode = ref('all') // all | filter
+const exportMessageTypeOptions = [
+  { value: 'text', label: '文本' },
+  { value: 'image', label: '图片' },
+  { value: 'emoji', label: '表情' },
+  { value: 'video', label: '视频' },
+  { value: 'voice', label: '语音' },
+  { value: 'transfer', label: '转账' },
+  { value: 'redPacket', label: '红包' },
+  { value: 'file', label: '文件' },
+  { value: 'link', label: '链接' },
+  { value: 'quote', label: '引用' },
+  { value: 'system', label: '系统' },
+  { value: 'voip', label: '通话' }
+]
+const exportMessageTypes = ref(exportMessageTypeOptions.map((x) => x.value))
 const exportIncludeMedia = ref(true)
 const exportMediaKinds = ref(['image', 'emoji', 'video', 'video_thumb', 'voice', 'file'])
 const exportIncludeHidden = ref(false)
@@ -2031,6 +2137,14 @@ const startChatExport = async () => {
     return
   }
 
+  const messageTypes = exportMessageTypeMode.value === 'filter'
+    ? (Array.isArray(exportMessageTypes.value) ? exportMessageTypes.value.filter(Boolean) : [])
+    : []
+  if (exportMessageTypeMode.value === 'filter' && messageTypes.length === 0) {
+    exportError.value = '请选择至少一个消息类型'
+    return
+  }
+
   isExportCreating.value = true
   try {
     const api = useApi()
@@ -2043,6 +2157,7 @@ const startChatExport = async () => {
       end_time: endTime,
       include_hidden: exportIncludeHidden.value,
       include_official: exportIncludeOfficial.value,
+      message_types: messageTypes,
       include_media: exportIncludeMedia.value && !privacyMode.value,
       media_kinds: (exportIncludeMedia.value && !privacyMode.value) ? exportMediaKinds.value : [],
       privacy_mode: !!privacyMode.value,
@@ -3167,9 +3282,17 @@ const normalizeMessage = (msg) => {
   }
 
   const localEmojiUrl = msg.emojiMd5 ? `${mediaBase}/api/chat/media/emoji?account=${encodeURIComponent(selectedAccount.value || '')}&md5=${encodeURIComponent(msg.emojiMd5)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : ''
-  const localImageByMd5 = msg.imageMd5 ? `${mediaBase}/api/chat/media/image?account=${encodeURIComponent(selectedAccount.value || '')}&md5=${encodeURIComponent(msg.imageMd5)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : ''
-  const localImageByFileId = msg.imageFileId ? `${mediaBase}/api/chat/media/image?account=${encodeURIComponent(selectedAccount.value || '')}&file_id=${encodeURIComponent(msg.imageFileId)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : ''
-  const normalizedImageUrl = msg.imageUrl || localImageByMd5 || localImageByFileId || ''
+  const localImageUrl = (() => {
+    if (!msg.imageMd5 && !msg.imageFileId) return ''
+    const parts = [
+      `account=${encodeURIComponent(selectedAccount.value || '')}`,
+      msg.imageMd5 ? `md5=${encodeURIComponent(msg.imageMd5)}` : '',
+      msg.imageFileId ? `file_id=${encodeURIComponent(msg.imageFileId)}` : '',
+      `username=${encodeURIComponent(selectedContact.value?.username || '')}`,
+    ].filter(Boolean)
+    return `${mediaBase}/api/chat/media/image?${parts.join('&')}`
+  })()
+  const normalizedImageUrl = msg.imageUrl || localImageUrl || ''
   const normalizedEmojiUrl = msg.emojiUrl || localEmojiUrl
   const localVideoThumbUrl = (() => {
     if (!msg.videoThumbMd5 && !msg.videoThumbFileId) return ''
@@ -3414,13 +3537,18 @@ const loadMessages = async ({ username, reset }) => {
     const beforeScrollTop = container ? container.scrollTop : 0
     const offset = reset ? 0 : existing.length
 
-    const resp = await api.listChatMessages({
+    const params = {
       account: selectedAccount.value,
       username,
       limit: messagePageSize,
       offset,
       order: 'asc'
-    })
+    }
+    if (messageTypeFilter.value && messageTypeFilter.value !== 'all') {
+      params.render_types = messageTypeFilter.value
+    }
+
+    const resp = await api.listChatMessages(params)
 
     const raw = resp?.messages || []
     const mapped = raw.map(normalizeMessage)
@@ -3478,6 +3606,12 @@ const refreshSelectedMessages = async () => {
   if (searchContext.value?.active) await exitSearchContext()
   await loadMessages({ username: selectedContact.value.username, reset: true })
 }
+
+watch(messageTypeFilter, async (next, prev) => {
+  if (String(next || '') === String(prev || '')) return
+  if (!selectedContact.value?.username) return
+  await refreshSelectedMessages()
+})
 
 watch(
   routeUsername,

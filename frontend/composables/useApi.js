@@ -80,6 +80,7 @@ export const useApi = () => {
     if (params && params.limit != null) query.set('limit', String(params.limit))
     if (params && params.offset != null) query.set('offset', String(params.offset))
     if (params && params.order) query.set('order', params.order)
+    if (params && params.render_types) query.set('render_types', params.render_types)
     const url = '/chat/messages' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
@@ -209,6 +210,7 @@ export const useApi = () => {
         end_time: data.end_time != null ? Number(data.end_time) : null,
         include_hidden: !!data.include_hidden,
         include_official: !!data.include_official,
+        message_types: Array.isArray(data.message_types) ? data.message_types : [],
         include_media: data.include_media == null ? true : !!data.include_media,
         media_kinds: Array.isArray(data.media_kinds) ? data.media_kinds : ['image', 'emoji', 'video', 'video_thumb', 'voice', 'file'],
         allow_process_key_extract: !!data.allow_process_key_extract,
