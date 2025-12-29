@@ -15,6 +15,7 @@ router = APIRouter(route_class=PathFixRoute)
 ExportFormat = Literal["json", "txt"]
 ExportScope = Literal["selected", "all", "groups", "singles"]
 MediaKind = Literal["image", "emoji", "video", "video_thumb", "voice", "file"]
+MessageType = Literal["text", "image", "emoji", "video", "voice", "file", "link", "transfer", "redPacket", "system", "quote", "voip"]
 
 
 class ChatExportCreateRequest(BaseModel):
@@ -30,6 +31,10 @@ class ChatExportCreateRequest(BaseModel):
     media_kinds: list[MediaKind] = Field(
         default_factory=lambda: ["image", "emoji", "video", "video_thumb", "voice", "file"],
         description="打包的媒体类型",
+    )
+    message_types: list[MessageType] = Field(
+        default_factory=list,
+        description="导出消息类型（renderType）过滤：为空=导出全部消息；可多选（如仅 voice / 仅 transfer / 仅 redPacket 等）",
     )
     allow_process_key_extract: bool = Field(
         False,
@@ -55,6 +60,7 @@ async def create_chat_export(req: ChatExportCreateRequest):
         include_official=req.include_official,
         include_media=req.include_media,
         media_kinds=req.media_kinds,
+        message_types=req.message_types,
         allow_process_key_extract=req.allow_process_key_extract,
         privacy_mode=req.privacy_mode,
         file_name=req.file_name,
