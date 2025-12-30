@@ -1,5 +1,6 @@
 import asyncio
 from functools import lru_cache
+import hashlib
 import ipaddress
 import mimetypes
 import os
@@ -44,6 +45,101 @@ from ..path_fix import PathFixRoute
 logger = get_logger(__name__)
 
 router = APIRouter(route_class=PathFixRoute)
+
+
+@lru_cache(maxsize=4096)
+def _fast_probe_image_path_in_chat_attach(
+    *,
+    wxid_dir_str: str,
+    username: str,
+    md5: str,
+) -> Optional[str]:
+    """Fast-ish fallback for image md5 misses not indexed by hardlink.db.
+
+    Many `*_t.dat` / `*_h.dat` variants live under:
+      `{wxid_dir}/msg/attach/{md5(username)}/.../Img/{md5}(_t|_h).dat`
+
+    When `hardlink.db` has image tables, we avoid global `rglob` by default for performance.
+    This scoped walk makes those thumbnails discoverable without enabling `deep_scan`.
+    """
+    wxid_dir_str = str(wxid_dir_str or "").strip()
+    username = str(username or "").strip()
+    md5_norm = str(md5 or "").strip().lower()
+
+    if not wxid_dir_str or not username or (not _is_valid_md5(md5_norm)):
+        return None
+
+    try:
+        wxid_dir = Path(wxid_dir_str)
+    except Exception:
+        return None
+
+    try:
+        chat_hash = hashlib.md5(username.encode()).hexdigest()
+    except Exception:
+        return None
+
+    base_dir = wxid_dir / "msg" / "attach" / chat_hash
+    try:
+        if not (base_dir.exists() and base_dir.is_dir()):
+            return None
+    except Exception:
+        return None
+
+    def variant_rank(stem: str) -> int:
+        n = str(stem or "").lower()
+        if n.endswith(("_b", ".b")):
+            return 0
+        if n.endswith(("_h", ".h")):
+            return 1
+        if n.endswith(("_c", ".c")):
+            return 3
+        if n.endswith(("_t", ".t")):
+            return 4
+        return 2
+
+    best_key: Optional[tuple[int, int, int, float, str]] = None
+    best_path: Optional[str] = None
+
+    try:
+        for dirpath, _dirnames, filenames in os.walk(base_dir):
+            for fn in filenames:
+                fn_low = str(fn).lower()
+                if not fn_low.startswith(md5_norm):
+                    continue
+                p = Path(dirpath) / fn
+                try:
+                    if not p.is_file():
+                        continue
+                except Exception:
+                    continue
+
+                ext = str(p.suffix or "").lower()
+                if ext not in {".dat", ".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+                    continue
+
+                stem = str(p.stem or "")
+                rank = variant_rank(stem)
+                ext_penalty = 1 if ext == ".dat" else 0
+                try:
+                    st = p.stat()
+                    sz = int(st.st_size)
+                    mt = float(st.st_mtime)
+                except Exception:
+                    sz = 0
+                    mt = 0.0
+
+                key = (rank, ext_penalty, -sz, -mt, str(p))
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best_path = str(p)
+                    # Found a non-.dat big variant; that's good enough.
+                    if rank == 0 and ext_penalty == 0 and sz > 0:
+                        return best_path
+    except Exception:
+        return None
+
+    return best_path
 
 
 @lru_cache(maxsize=64)
@@ -369,6 +465,11 @@ async def get_chat_image(
 ):
     if (not md5) and (not file_id):
         raise HTTPException(status_code=400, detail="Missing md5/file_id.")
+
+    # Some WeChat versions put non-MD5 identifiers in the "md5" field; treat them as file_id.
+    if md5 and (not file_id) and (not _is_valid_md5(str(md5))):
+        file_id = str(md5)
+        md5 = None
     account_dir = _resolve_account_dir(account)
 
     # md5 模式：优先从解密资源目录读取（更快）
@@ -435,6 +536,16 @@ async def get_chat_image(
                 if hit:
                     p = Path(hit)
                     break
+
+        # Fast fallback for thumbnails not indexed by hardlink.db: scan only this chat's attach directory.
+        if (not p) and wxid_dir and username:
+            hit = _fast_probe_image_path_in_chat_attach(
+                wxid_dir_str=str(wxid_dir),
+                username=str(username),
+                md5=str(md5),
+            )
+            if hit:
+                p = Path(hit)
 
         # Deep scan is extremely expensive for misses (~seconds per md5). Only enable when:
         # - user explicitly requests `deep_scan=1`, OR
