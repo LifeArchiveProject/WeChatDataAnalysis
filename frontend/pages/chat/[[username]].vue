@@ -3292,7 +3292,14 @@ const normalizeMessage = (msg) => {
     ].filter(Boolean)
     return `${mediaBase}/api/chat/media/image?${parts.join('&')}`
   })()
-  const normalizedImageUrl = msg.imageUrl || localImageUrl || ''
+  const normalizedImageUrl = (() => {
+    const cur = (isUsableMediaUrl(msg.imageUrl) ? normalizeMaybeUrl(msg.imageUrl) : '')
+    // If backend already returns a local media endpoint, prefer the locally-built URL because it includes file_id.
+    if (cur && /\/api\/chat\/media\/image\b/i.test(cur) && localImageUrl) {
+      return localImageUrl
+    }
+    return cur || localImageUrl || ''
+  })()
   const normalizedEmojiUrl = msg.emojiUrl || localEmojiUrl
   const localVideoThumbUrl = (() => {
     if (!msg.videoThumbMd5 && !msg.videoThumbFileId) return ''
