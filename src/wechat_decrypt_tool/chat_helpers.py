@@ -426,6 +426,7 @@ def _decode_message_content(compress_value: Any, message_value: Any) -> str:
 
 
 _MD5_HEX_RE = re.compile(rb"(?i)[0-9a-f]{32}")
+_DAT_MD5_RE = re.compile(rb"(?i)([0-9a-f]{32})(?:[._][thbc])?\.dat")
 
 
 def _extract_md5_from_blob(blob: Any) -> str:
@@ -443,6 +444,21 @@ def _extract_md5_from_blob(blob: Any) -> str:
 
     if not data:
         return ""
+
+    # Prefer md5 that appears as an actual `.dat` filename (incl. _t.dat/.t.dat variants).
+    # This matches echotrace's idea: packed_info often contains multiple 32-hex tokens, but only
+    # the one referenced by a file path is the correct on-disk basename.
+    try:
+        m2 = _DAT_MD5_RE.findall(data)
+    except Exception:
+        m2 = []
+    if m2:
+        best2 = Counter([x.lower() for x in m2]).most_common(1)[0][0]
+        try:
+            return best2.decode("ascii", errors="ignore")
+        except Exception:
+            return ""
+
     m = _MD5_HEX_RE.findall(data)
     if not m:
         return ""
