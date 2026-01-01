@@ -171,7 +171,7 @@ def _infer_last_message_brief(msg_type: Optional[int], sub_type: Optional[int]) 
         if s == 2003:
             return "[Red Packet]"
         if s == 19:
-            return "[Chat History]"
+            return "[聊天记录]"
         return "[App Message]"
     if t == 10000:
         return "[System]"
@@ -209,7 +209,7 @@ def _infer_message_brief_by_local_type(local_type: Optional[int]) -> str:
     if t == 8594229559345:
         return "[Red Packet]"
     if t == 81604378673:
-        return "[Chat History]"
+        return "[聊天记录]"
     if t == 266287972401:
         return "[Pat]"
     if t == 8589934592049:
@@ -698,6 +698,22 @@ def _parse_app_message(text: str) -> dict[str, Any]:
 
     lower = text.lower()
 
+    if app_type == 19:
+        # 合并转发聊天记录（Chat History）
+        # 注意：recorditem 的 CDATA 内部可能包含 <refermsg> 等标签，不能据此把整条消息误判为引用消息。
+        record_item = _extract_xml_tag_text(text, "recorditem")
+        preview = (des or "").strip()
+        if not preview:
+            if record_item:
+                preview = str(_extract_xml_tag_text(record_item, "desc") or "").strip()
+
+        return {
+            "renderType": "chatHistory",
+            "content": preview or "[聊天记录]",
+            "title": (title or "").strip() or "聊天记录",
+            "recordItem": record_item or "",
+        }
+
     if app_type in (5, 68) and url:
         thumb_url = _extract_xml_tag_text(text, "thumburl")
         return {
@@ -724,7 +740,21 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             "fileMd5": file_md5 or "",
         }
 
-    if app_type == 57 or "<refermsg" in lower:
+    refermsg_probe = lower
+    if "<recorditem" in lower and "<refermsg" in lower:
+        # 合并转发聊天记录/其它 appmsg 里可能在 recorditem CDATA 内包含 refermsg，
+        # 需要先剔除 recorditem 再判断是否为真正的引用消息。
+        try:
+            refermsg_probe = re.sub(
+                r"(<recorditem[^>]*>.*?</recorditem>)",
+                "",
+                text,
+                flags=re.IGNORECASE | re.DOTALL,
+            ).lower()
+        except Exception:
+            refermsg_probe = lower
+
+    if app_type == 57 or "<refermsg" in refermsg_probe:
         refer_block = _extract_refermsg_block(text)
 
         try:
@@ -944,6 +974,8 @@ def _build_latest_message_preview(
         rt = str(parsed.get("renderType") or "")
         content_text = str(parsed.get("content") or "")
         title_text = str(parsed.get("title") or "").strip()
+        if rt == "chatHistory":
+            content_text = "[聊天记录]"
         if rt == "file" and title_text:
             content_text = title_text
         if (not content_text) and rt == "transfer":
