@@ -321,7 +321,76 @@ def _looks_like_xml(s: str) -> bool:
 
 
 def _decode_message_content(compress_value: Any, message_value: Any) -> str:
+    def try_decode_text_blob(text: str) -> Optional[str]:
+        t = (text or "").strip()
+        if not t:
+            return None
+
+        # zstd frame magic: 28 b5 2f fd
+        zstd_magic = b"\x28\xb5\x2f\xfd"
+
+        if len(t) >= 16 and len(t) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]+", t):
+            try:
+                raw = bytes.fromhex(t)
+                if zstd is not None and raw.startswith(zstd_magic):
+                    try:
+                        out = zstd.decompress(raw)
+                        s2 = out.decode("utf-8", errors="ignore")
+                        s2 = html.unescape(s2.strip())
+                        if _looks_like_xml(s2) or _is_mostly_printable_text(s2):
+                            return s2
+                    except Exception:
+                        pass
+                s2 = raw.decode("utf-8", errors="ignore")
+                s2 = html.unescape(s2.strip())
+                # Avoid decoding user-sent pure-hex text (e.g. "68656c6c6f") into arbitrary strings;
+                # only accept non-zstd hex if it still looks like a message XML payload.
+                s2_lower = s2.lower()
+                if (
+                    _looks_like_xml(s2)
+                    or ("<msg" in s2_lower and "</msg>" in s2_lower)
+                    or "<appmsg" in s2_lower
+                ):
+                    return s2
+            except Exception:
+                return None
+
+        if len(t) >= 24 and len(t) % 4 == 0 and re.fullmatch(r"[A-Za-z0-9+/=]+", t):
+            try:
+                raw = base64.b64decode(t)
+                if zstd is not None and raw.startswith(zstd_magic):
+                    try:
+                        out = zstd.decompress(raw)
+                        s2 = out.decode("utf-8", errors="ignore")
+                        s2 = html.unescape(s2.strip())
+                        if _looks_like_xml(s2) or _is_mostly_printable_text(s2):
+                            return s2
+                    except Exception:
+                        pass
+                s2 = raw.decode("utf-8", errors="ignore")
+                s2 = html.unescape(s2.strip())
+                s2_lower = s2.lower()
+                if (
+                    _looks_like_xml(s2)
+                    or ("<msg" in s2_lower and "</msg>" in s2_lower)
+                    or "<appmsg" in s2_lower
+                ):
+                    return s2
+            except Exception:
+                return None
+
+        return None
+
     msg_text = _decode_sqlite_text(message_value)
+
+    # Realtime WCDB mode can return message_content as a hex/base64 encoded blob string
+    # (often a zstd frame starting with 28b52ffd...), while compress_content is null.
+    # NOTE: some callers set sqlite3.text_factory=bytes, so TEXT may arrive as bytes even when it
+    # is actually hex/base64 text; decode from msg_text, not from the raw python type.
+    s = html.unescape(msg_text.strip())
+    s2 = try_decode_text_blob(s)
+    if s2:
+        msg_text = s2
 
     if isinstance(message_value, (bytes, bytearray, memoryview)):
         raw = bytes(message_value) if isinstance(message_value, memoryview) else message_value
@@ -337,51 +406,6 @@ def _decode_message_content(compress_value: Any, message_value: Any) -> str:
 
     if compress_value is None:
         return msg_text
-
-    def try_decode_text_blob(text: str) -> Optional[str]:
-        t = (text or "").strip()
-        if not t:
-            return None
-
-        if len(t) >= 16 and len(t) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]+", t):
-            try:
-                raw = bytes.fromhex(t)
-                if zstd is not None:
-                    try:
-                        out = zstd.decompress(raw)
-                        s2 = out.decode("utf-8", errors="ignore")
-                        s2 = html.unescape(s2.strip())
-                        if _looks_like_xml(s2) or _is_mostly_printable_text(s2):
-                            return s2
-                    except Exception:
-                        pass
-                s2 = raw.decode("utf-8", errors="ignore")
-                s2 = html.unescape(s2.strip())
-                if _looks_like_xml(s2) or _is_mostly_printable_text(s2):
-                    return s2
-            except Exception:
-                return None
-
-        if len(t) >= 24 and len(t) % 4 == 0 and re.fullmatch(r"[A-Za-z0-9+/=]+", t):
-            try:
-                raw = base64.b64decode(t)
-                if zstd is not None:
-                    try:
-                        out = zstd.decompress(raw)
-                        s2 = out.decode("utf-8", errors="ignore")
-                        s2 = html.unescape(s2.strip())
-                        if _looks_like_xml(s2) or _is_mostly_printable_text(s2):
-                            return s2
-                    except Exception:
-                        pass
-                s2 = raw.decode("utf-8", errors="ignore")
-                s2 = html.unescape(s2.strip())
-                if _looks_like_xml(s2) or _is_mostly_printable_text(s2):
-                    return s2
-            except Exception:
-                return None
-
-        return None
 
     if isinstance(compress_value, str):
         s = html.unescape(compress_value.strip())
@@ -427,6 +451,7 @@ def _decode_message_content(compress_value: Any, message_value: Any) -> str:
 
 _MD5_HEX_RE = re.compile(rb"(?i)[0-9a-f]{32}")
 _DAT_MD5_RE = re.compile(rb"(?i)([0-9a-f]{32})(?:[._][thbc])?\.dat")
+_PACKED_INFO_HEX_RE = re.compile(r"(?i)^[0-9a-f]+$")
 
 
 def _extract_md5_from_blob(blob: Any) -> str:
@@ -467,6 +492,42 @@ def _extract_md5_from_blob(blob: Any) -> str:
         return best.decode("ascii", errors="ignore")
     except Exception:
         return ""
+
+
+def _extract_md5_from_packed_info(packed_info: Any) -> str:
+    if packed_info is None:
+        return ""
+
+    data: bytes = b""
+    if isinstance(packed_info, memoryview):
+        data = packed_info.tobytes()
+    elif isinstance(packed_info, (bytes, bytearray)):
+        data = bytes(packed_info)
+    elif isinstance(packed_info, str):
+        s = packed_info.strip()
+        if s.lower().startswith("0x"):
+            s = s[2:]
+        if s and _PACKED_INFO_HEX_RE.fullmatch(s) and (len(s) % 2 == 0):
+            try:
+                data = bytes.fromhex(s)
+            except Exception:
+                data = b""
+        else:
+            data = s.encode("utf-8", errors="ignore")
+    else:
+        if isinstance(packed_info, (int, float, bool)):
+            data = b""
+        else:
+            try:
+                data = bytes(packed_info)
+            except Exception:
+                data = b""
+
+    md5 = _extract_md5_from_blob(data)
+    md5 = str(md5 or "").strip().lower()
+    if len(md5) == 32 and all(c in "0123456789abcdef" for c in md5):
+        return md5
+    return ""
 
 
 def _resource_lookup_chat_id(resource_conn: sqlite3.Connection, username: str) -> Optional[int]:
