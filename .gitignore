@@ -16,3 +16,12 @@ wheels/
 
 # Local config templates
 /wechat_db_config_template.json
+.ace-tool/
+
+# Local dev repos and data
+/WxDatDecrypt/
+/echotrace/
+/oh-my-wechat/
+/vue3-wechat-tool/
+/wechatDataBackup/
+/wx_key/
