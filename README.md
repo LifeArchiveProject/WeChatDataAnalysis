@@ -4,7 +4,8 @@
 
 <div align="center">
     <h1>WeChatDataAnalysis - 微信数据库解密与分析工具</h1>
-    <p>一个专门用于微信4.x版本数据库解密的工具</p>
+    <p>一个专门用于微信4.x版本数据库解密的工具（支持聊天记录实时更新）</p>
+    <p><b>特别致谢</b>：<a href="https://github.com/ycccccccy/echotrace">echotrace</a>（本项目大量功能参考其实现，提供了重要技术支持）</p>
     <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
     <img src="https://img.shields.io/github/forks/LifeArchiveProject/WeChatDataAnalysis" alt="Forks" />
@@ -24,6 +25,7 @@
 - **API接口**: 提供RESTful API接口进行数据库解密操作
 - **Web界面**: 提供现代化的Web操作界面
 - **聊天记录查看**: 支持查看解密后的聊天记录、消息搜索与离线导出
+- **实时更新（SSE）**: 支持开启实时模式，监听 `db_storage` 变更，增量同步新消息并自动刷新会话/消息列表
 - **聊天图片展示**: 支持部分版本图片消息无MD5时通过 file_id 兜底定位本地资源
 
 ### 开发计划
@@ -103,19 +105,22 @@ npm run dev
 
 ### 主要参考项目
 
-1. **[wx_key](https://github.com/ycccccccy/wx_key)** - 微信数据库与图片密钥提取工具
+1. **[echotrace](https://github.com/ycccccccy/echotrace)** - 微信数据解析/取证工具
+   - 本项目大量功能参考并复用其实现思路，提供了重要技术支持
+
+2. **[wx_key](https://github.com/ycccccccy/wx_key)** - 微信数据库与图片密钥提取工具
    - 支持获取微信 4.x 数据库密钥与缓存图片密钥
    - 本项目推荐使用此工具获取密钥
 
-2. **[wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs)** - Rust实现的微信数据库解密工具
+3. **[wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs)** - Rust实现的微信数据库解密工具
    - 提供了SQLCipher 4.0解密的正确实现参考
    - 本项目的HMAC验证和页面处理逻辑基于此项目的实现
 
-3. **[oh-my-wechat](https://github.com/chclt/oh-my-wechat)** - 微信聊天记录查看工具
+4. **[oh-my-wechat](https://github.com/chclt/oh-my-wechat)** - 微信聊天记录查看工具
    - 提供了优秀的聊天记录界面设计参考
    - 本项目的聊天界面风格参考了此项目的实现
 
-4. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)** - 微信聊天记录工具（Vue3）
+5. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)** - 微信聊天记录工具（Vue3）
    - 提供了聊天记录展示与交互的实现参考
 
 ## Star History
