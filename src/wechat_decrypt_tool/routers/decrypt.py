@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 from ..logging_config import get_logger
 from ..path_fix import PathFixRoute
+from ..key_store import upsert_account_keys_in_store
 from ..wechat_decrypt import decrypt_wechat_databases
 
 logger = get_logger(__name__)
@@ -48,6 +49,13 @@ async def decrypt_databases(request: DecryptRequest):
             raise HTTPException(status_code=400, detail=results["message"])
 
         logger.info(f"解密完成: 成功 {results['successful_count']}/{results['total_databases']} 个数据库")
+
+        # 成功解密后，按账号保存数据库密钥（用于前端自动回填）
+        try:
+            for account_name in (results.get("account_results") or {}).keys():
+                upsert_account_keys_in_store(str(account_name), db_key=request.key)
+        except Exception:
+            pass
 
         return {
             "status": "completed" if results["status"] == "success" else "failed",

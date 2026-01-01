@@ -20,6 +20,7 @@ from ..media_helpers import (
     _try_find_decrypted_resource,
 )
 from ..path_fix import PathFixRoute
+from ..key_store import upsert_account_keys_in_store
 
 logger = get_logger(__name__)
 
@@ -67,6 +68,14 @@ async def save_media_keys_api(request: MediaKeysSaveRequest):
     # 保存密钥
     aes_key16 = aes_str[:16].encode("ascii", errors="ignore") if aes_str else None
     _save_media_keys(account_dir, xor_int, aes_key16)
+    try:
+        upsert_account_keys_in_store(
+            account_dir.name,
+            image_xor_key=f"0x{xor_int:02X}",
+            image_aes_key=aes_str[:16] if aes_str else "",
+        )
+    except Exception:
+        pass
 
     return {
         "status": "success",
