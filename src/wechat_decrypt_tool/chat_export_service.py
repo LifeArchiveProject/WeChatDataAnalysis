@@ -833,15 +833,6 @@ def _iter_rows_for_conversation(
                     raw_text = _decode_message_content(r["compress_content"], r["message_content"]).strip()
 
                     is_group = bool(conv_username.endswith("@chatroom"))
-                    sender_prefix = ""
-                    if is_group and raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
-                        sender_prefix, raw_text = _split_group_sender_prefix(raw_text)
-                    if is_group and sender_prefix:
-                        sender_username = sender_prefix
-                    if is_group and raw_text and (raw_text.startswith("<") or raw_text.startswith('"<')):
-                        xml_sender = _extract_sender_from_group_xml(raw_text)
-                        if xml_sender:
-                            sender_username = xml_sender
 
                     if is_sent:
                         sender_username = account_wxid
@@ -881,8 +872,21 @@ def _parse_message_for_export(
     is_group: bool,
     resource_conn: Optional[sqlite3.Connection],
     resource_chat_id: Optional[int],
+    sender_alias: str = "",
 ) -> dict[str, Any]:
     raw_text = row.raw_text or ""
+    sender_username = str(row.sender_username or "").strip()
+
+    if is_group and raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
+        sender_prefix, raw_text = _split_group_sender_prefix(raw_text, sender_username, sender_alias)
+        if sender_prefix and (not sender_username):
+            sender_username = sender_prefix
+
+    if is_group and raw_text and (raw_text.startswith("<") or raw_text.startswith('"<')):
+        xml_sender = _extract_sender_from_group_xml(raw_text)
+        if xml_sender:
+            sender_username = xml_sender
+
     local_type = int(row.local_type or 0)
     is_sent = bool(row.is_sent)
 
@@ -1152,7 +1156,7 @@ def _parse_message_for_export(
         "type": local_type,
         "renderType": render_type,
         "isSent": bool(is_sent),
-        "senderUsername": row.sender_username,
+        "senderUsername": sender_username,
         "conversationUsername": conv_username,
         "isGroup": bool(is_group),
         "content": content_text,
@@ -1216,6 +1220,38 @@ def _write_conversation_json(
     arcname = f"{conv_dir}/messages.json"
     exported = 0
 
+    contact_conn: Optional[sqlite3.Connection] = None
+    alias_cache: dict[str, str] = {}
+    if conv_is_group:
+        try:
+            contact_db_path = account_dir / "contact.db"
+            if contact_db_path.exists():
+                contact_conn = sqlite3.connect(str(contact_db_path))
+        except Exception:
+            contact_conn = None
+
+    def lookup_alias(username: str) -> str:
+        u = str(username or "").strip()
+        if not u or contact_conn is None:
+            return ""
+        if u in alias_cache:
+            return alias_cache[u]
+
+        alias = ""
+        try:
+            r = contact_conn.execute("SELECT alias FROM contact WHERE username = ? LIMIT 1", (u,)).fetchone()
+            if r is not None and r[0] is not None:
+                alias = str(r[0] or "").strip()
+            if not alias:
+                r = contact_conn.execute("SELECT alias FROM stranger WHERE username = ? LIMIT 1", (u,)).fetchone()
+                if r is not None and r[0] is not None:
+                    alias = str(r[0] or "").strip()
+        except Exception:
+            alias = ""
+
+        alias_cache[u] = alias
+        return alias
+
     # NOTE: Do not keep an entry handle opened while also writing other entries (avatars/media).
     # zipfile forbids interleaving writes; stream to a temp file then add it to zip at the end.
     with tempfile.TemporaryDirectory(prefix="wechat_chat_export_") as tmp_dir:
@@ -1263,12 +1299,28 @@ def _write_conversation_json(
                 local_types=local_types,
             ):
                 scanned += 1
+
+                sender_alias = ""
+                if conv_is_group and row.raw_text and (not row.raw_text.startswith("<")) and (not row.raw_text.startswith('"<')):
+                    sep = row.raw_text.find(":\n")
+                    if sep > 0:
+                        prefix = row.raw_text[:sep].strip()
+                        su = str(row.sender_username or "").strip()
+                        if prefix and su and prefix != su:
+                            strong_hint = prefix.startswith("wxid_") or prefix.endswith("@chatroom") or "@" in prefix
+                            if not strong_hint:
+                                body_probe = row.raw_text[sep + 2 :].lstrip("\n").lstrip()
+                                body_is_xml = body_probe.startswith("<") or body_probe.startswith('"<')
+                                if not body_is_xml:
+                                    sender_alias = lookup_alias(su)
+
                 msg = _parse_message_for_export(
                     row=row,
                     conv_username=conv_username,
                     is_group=conv_is_group,
                     resource_conn=resource_conn,
                     resource_chat_id=resource_chat_id,
+                    sender_alias=sender_alias,
                 )
                 if want_types:
                     rt_key = _normalize_render_type_key(msg.get("renderType"))
@@ -1326,6 +1378,12 @@ def _write_conversation_json(
             tw.flush()
 
         zf.write(str(tmp_path), arcname)
+    if contact_conn is not None:
+        try:
+            contact_conn.close()
+        except Exception:
+            pass
+
     return exported
 
 
@@ -1360,6 +1418,38 @@ def _write_conversation_txt(
     arcname = f"{conv_dir}/messages.txt"
     exported = 0
 
+    contact_conn: Optional[sqlite3.Connection] = None
+    alias_cache: dict[str, str] = {}
+    if conv_is_group:
+        try:
+            contact_db_path = account_dir / "contact.db"
+            if contact_db_path.exists():
+                contact_conn = sqlite3.connect(str(contact_db_path))
+        except Exception:
+            contact_conn = None
+
+    def lookup_alias(username: str) -> str:
+        u = str(username or "").strip()
+        if not u or contact_conn is None:
+            return ""
+        if u in alias_cache:
+            return alias_cache[u]
+
+        alias = ""
+        try:
+            r = contact_conn.execute("SELECT alias FROM contact WHERE username = ? LIMIT 1", (u,)).fetchone()
+            if r is not None and r[0] is not None:
+                alias = str(r[0] or "").strip()
+            if not alias:
+                r = contact_conn.execute("SELECT alias FROM stranger WHERE username = ? LIMIT 1", (u,)).fetchone()
+                if r is not None and r[0] is not None:
+                    alias = str(r[0] or "").strip()
+        except Exception:
+            alias = ""
+
+        alias_cache[u] = alias
+        return alias
+
     # Same as JSON: write to temp file first to avoid zip interleaving writes.
     with tempfile.TemporaryDirectory(prefix="wechat_chat_export_") as tmp_dir:
         tmp_path = Path(tmp_dir) / "messages.txt"
@@ -1391,12 +1481,27 @@ def _write_conversation_txt(
                 local_types=local_types,
             ):
                 scanned += 1
+                sender_alias = ""
+                if conv_is_group and row.raw_text and (not row.raw_text.startswith("<")) and (not row.raw_text.startswith('"<')):
+                    sep = row.raw_text.find(":\n")
+                    if sep > 0:
+                        prefix = row.raw_text[:sep].strip()
+                        su = str(row.sender_username or "").strip()
+                        if prefix and su and prefix != su:
+                            strong_hint = prefix.startswith("wxid_") or prefix.endswith("@chatroom") or "@" in prefix
+                            if not strong_hint:
+                                body_probe = row.raw_text[sep + 2 :].lstrip("\n").lstrip()
+                                body_is_xml = body_probe.startswith("<") or body_probe.startswith('"<')
+                                if not body_is_xml:
+                                    sender_alias = lookup_alias(su)
+
                 msg = _parse_message_for_export(
                     row=row,
                     conv_username=conv_username,
                     is_group=conv_is_group,
                     resource_conn=resource_conn,
                     resource_chat_id=resource_chat_id,
+                    sender_alias=sender_alias,
                 )
                 if want_types:
                     rt_key = _normalize_render_type_key(msg.get("renderType"))
@@ -1449,6 +1554,12 @@ def _write_conversation_txt(
             tw.flush()
 
         zf.write(str(tmp_path), arcname)
+    if contact_conn is not None:
+        try:
+            contact_conn.close()
+        except Exception:
+            pass
+
     return exported
 
 

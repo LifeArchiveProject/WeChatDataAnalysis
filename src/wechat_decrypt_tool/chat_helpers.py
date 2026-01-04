@@ -694,7 +694,11 @@ def _infer_transfer_status_text(
     return "转账"
 
 
-def _split_group_sender_prefix(text: str) -> tuple[str, str]:
+def _split_group_sender_prefix(
+    text: str,
+    known_sender_username: str = "",
+    known_sender_alias: str = "",
+) -> tuple[str, str]:
     if not text:
         return "", text
     sep = text.find(":\n")
@@ -706,7 +710,21 @@ def _split_group_sender_prefix(text: str) -> tuple[str, str]:
         return "", text
     if re.search(r"\s", prefix):
         return "", text
-    if prefix.startswith("wxid_") or prefix.endswith("@chatroom") or "@" in prefix:
+
+    strong_hint = prefix.startswith("wxid_") or prefix.endswith("@chatroom") or "@" in prefix
+    probe = body.lstrip()
+    body_is_xml = probe.startswith("<") or probe.startswith('"<')
+
+    known_values = {str(known_sender_username or "").strip(), str(known_sender_alias or "").strip()}
+    known_values.discard("")
+    if known_values:
+        if prefix in known_values:
+            return prefix, body
+        if strong_hint or body_is_xml:
+            return prefix, body
+        return "", text
+
+    if strong_hint or body_is_xml:
         return prefix, body
     return "", text
 
@@ -1013,7 +1031,7 @@ def _build_latest_message_preview(
     raw_text = (raw_text or "").strip()
     sender_prefix = ""
     if is_group and raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
-        sender_prefix, raw_text = _split_group_sender_prefix(raw_text)
+        sender_prefix, raw_text = _split_group_sender_prefix(raw_text, sender_username)
     if is_group and (not sender_prefix) and sender_username:
         sender_prefix = str(sender_username).strip()
 
@@ -1400,7 +1418,7 @@ def _row_to_search_hit(
 
     sender_prefix = ""
     if is_group and raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
-        sender_prefix, raw_text = _split_group_sender_prefix(raw_text)
+        sender_prefix, raw_text = _split_group_sender_prefix(raw_text, sender_username)
 
     if is_group and sender_prefix:
         sender_username = sender_prefix
