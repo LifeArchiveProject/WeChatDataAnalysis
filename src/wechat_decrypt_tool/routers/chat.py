@@ -111,6 +111,33 @@ def _normalize_chat_source(value: Optional[str]) -> str:
     raise HTTPException(status_code=400, detail="Invalid source, use 'decrypted' or 'realtime'.")
 
 
+def _lookup_contact_alias(
+    conn: Optional[sqlite3.Connection],
+    cache: dict[str, str],
+    username: str,
+) -> str:
+    u = str(username or "").strip()
+    if not u or conn is None:
+        return ""
+    if u in cache:
+        return cache[u]
+
+    alias = ""
+    try:
+        r = conn.execute("SELECT alias FROM contact WHERE username = ? LIMIT 1", (u,)).fetchone()
+        if r is not None and r[0] is not None:
+            alias = str(r[0] or "").strip()
+        if not alias:
+            r = conn.execute("SELECT alias FROM stranger WHERE username = ? LIMIT 1", (u,)).fetchone()
+            if r is not None and r[0] is not None:
+                alias = str(r[0] or "").strip()
+    except Exception:
+        alias = ""
+
+    cache[u] = alias
+    return alias
+
+
 def _scan_db_storage_mtime_ns(db_storage_dir: Path) -> int:
     try:
         base = str(db_storage_dir)
@@ -1386,6 +1413,16 @@ def _append_full_messages_from_rows(
     resource_conn: Optional[sqlite3.Connection],
     resource_chat_id: Optional[int],
 ) -> None:
+    contact_conn: Optional[sqlite3.Connection] = None
+    alias_cache: dict[str, str] = {}
+    if is_group:
+        try:
+            contact_db_path = account_dir / "contact.db"
+            if contact_db_path.exists():
+                contact_conn = sqlite3.connect(str(contact_db_path))
+        except Exception:
+            contact_conn = None
+
     for r in rows:
         local_id = int(r["local_id"] or 0)
         create_time = int(r["create_time"] or 0)
@@ -1448,10 +1485,21 @@ def _append_full_messages_from_rows(
         raw_text = raw_text.strip()
 
         sender_prefix = ""
-        if is_group and not raw_text.startswith("<") and not raw_text.startswith('"<'):
-            sender_prefix, raw_text = _split_group_sender_prefix(raw_text)
+        if is_group and raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
+            sender_alias = ""
+            sep = raw_text.find(":\n")
+            if sep > 0:
+                prefix = raw_text[:sep].strip()
+                if prefix and sender_username and prefix != sender_username:
+                    strong_hint = prefix.startswith("wxid_") or prefix.endswith("@chatroom") or "@" in prefix
+                    if not strong_hint:
+                        body_probe = raw_text[sep + 2 :].lstrip("\n").lstrip()
+                        body_is_xml = body_probe.startswith("<") or body_probe.startswith('"<')
+                        if not body_is_xml:
+                            sender_alias = _lookup_contact_alias(contact_conn, alias_cache, sender_username)
+            sender_prefix, raw_text = _split_group_sender_prefix(raw_text, sender_username, sender_alias)
 
-        if is_group and sender_prefix:
+        if is_group and sender_prefix and (not sender_username):
             sender_username = sender_prefix
 
         if is_group and (raw_text.startswith("<") or raw_text.startswith('"<')):
@@ -1811,6 +1859,12 @@ def _append_full_messages_from_rows(
                 "_rawText": raw_text if local_type == 266287972401 else "",
             }
         )
+
+    if contact_conn is not None:
+        try:
+            contact_conn.close()
+        except Exception:
+            pass
 
 
 def _postprocess_full_messages(
@@ -2301,6 +2355,16 @@ def _collect_chat_messages(
     pat_usernames: set[str] = set()
     has_more_any = False
 
+    contact_conn: Optional[sqlite3.Connection] = None
+    alias_cache: dict[str, str] = {}
+    if is_group:
+        try:
+            contact_db_path = account_dir / "contact.db"
+            if contact_db_path.exists():
+                contact_conn = sqlite3.connect(str(contact_db_path))
+        except Exception:
+            contact_conn = None
+
     for db_path in db_paths:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
@@ -2384,10 +2448,21 @@ def _collect_chat_messages(
                 raw_text = raw_text.strip()
 
                 sender_prefix = ""
-                if is_group and not raw_text.startswith("<") and not raw_text.startswith('"<'):
-                    sender_prefix, raw_text = _split_group_sender_prefix(raw_text)
+                if is_group and raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
+                    sender_alias = ""
+                    sep = raw_text.find(":\n")
+                    if sep > 0:
+                        prefix = raw_text[:sep].strip()
+                        if prefix and sender_username and prefix != sender_username:
+                            strong_hint = prefix.startswith("wxid_") or prefix.endswith("@chatroom") or "@" in prefix
+                            if not strong_hint:
+                                body_probe = raw_text[sep + 2 :].lstrip("\n").lstrip()
+                                body_is_xml = body_probe.startswith("<") or body_probe.startswith('"<')
+                                if not body_is_xml:
+                                    sender_alias = _lookup_contact_alias(contact_conn, alias_cache, sender_username)
+                    sender_prefix, raw_text = _split_group_sender_prefix(raw_text, sender_username, sender_alias)
 
-                if is_group and sender_prefix:
+                if is_group and sender_prefix and (not sender_username):
                     sender_username = sender_prefix
 
                 if is_group and (raw_text.startswith("<") or raw_text.startswith('"<')):
@@ -2743,6 +2818,12 @@ def _collect_chat_messages(
                 )
         finally:
             conn.close()
+
+    if contact_conn is not None:
+        try:
+            contact_conn.close()
+        except Exception:
+            pass
 
     return merged, has_more_any, sender_usernames, quote_usernames, pat_usernames
 
