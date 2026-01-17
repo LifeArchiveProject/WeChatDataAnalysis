@@ -1,0 +1,55 @@
+{
+  "name": "wechat-data-analysis-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "main": "src/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k -s first \"cd ..\\\\frontend && npm run dev\" \"cross-env ELECTRON_START_URL=http://localhost:3000 electron .\"",
+    "dev:static": "pushd ..\\\\frontend && npm run generate && popd && cross-env ELECTRON_START_URL=http://127.0.0.1:8000 electron .",
+    "build:ui": "pushd ..\\\\frontend && npm run generate && popd && node scripts\\\\copy-ui.cjs",
+    "build:backend": "uv sync --extra build && node scripts/build-backend.cjs",
+    "build:icon": "node scripts/build-icon.cjs",
+    "dist": "npm run build:ui && npm run build:backend && npm run build:icon && electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.lifearchive.wechatdataanalysis",
+    "productName": "WeChatDataAnalysis",
+    "icon": "resources/icon.ico",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/ui",
+        "to": "ui"
+      },
+      {
+        "from": "resources/backend",
+        "to": "backend"
+      }
+    ],
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
+      "installerHeaderIcon": "resources/icon.ico"
+    }
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^40.0.0",
+    "electron-builder": "^26.4.0",
+    "png-to-ico": "^3.0.1"
+  }
+}
