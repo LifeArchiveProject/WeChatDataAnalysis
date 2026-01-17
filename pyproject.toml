@@ -10,7 +10,6 @@ dependencies = [
     "uvicorn[standard]>=0.24.0",
     "python-multipart>=0.0.6",
     "aiofiles>=23.2.1",
-    "pathlib>=1.0.1",
     "typing-extensions>=4.8.0",
     "pywin32>=310; sys_platform == 'win32'",
     "psutil>=7.0.0",
@@ -19,6 +18,11 @@ dependencies = [
     "loguru>=0.7.0",
     "zstandard>=0.23.0",
     "pilk>=0.2.4",
+]
+
+[project.optional-dependencies]
+build = [
+    "pyinstaller>=6.0.0",
 ]
 
 [project.scripts]
