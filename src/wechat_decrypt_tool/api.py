@@ -1,7 +1,13 @@
 ﻿"""微信解密工具的FastAPI Web服务器"""
 
+import os
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import FileResponse
+from starlette.staticfiles import StaticFiles
 
 from .logging_config import setup_logging, get_logger
 from .path_fix import PathFixRoute
@@ -47,6 +53,70 @@ app.include_router(_chat_export_router)
 app.include_router(_chat_media_router)
 
 
+class _SPAStaticFiles(StaticFiles):
+    """StaticFiles with a SPA fallback (Nuxt generate output)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._fallback_200 = Path(str(self.directory)) / "200.html"
+        self._fallback_index = Path(str(self.directory)) / "index.html"
+
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+
+            # For client-side routes (no file extension), return Nuxt's SPA fallback.
+            name = Path(path).name
+            if "." in name:
+                raise
+
+            if self._fallback_200.exists():
+                return FileResponse(str(self._fallback_200))
+            return FileResponse(str(self._fallback_index))
+
+
+def _maybe_mount_frontend() -> None:
+    """Serve the generated Nuxt static site at `/` if present.
+
+    This keeps web + desktop UI identical when the desktop shell (Electron) loads
+    http://127.0.0.1:<port>/ from the same backend that serves `/api/*`.
+    """
+
+    ui_dir_env = os.environ.get("WECHAT_TOOL_UI_DIR", "").strip()
+
+    candidates: list[Path] = []
+    if ui_dir_env:
+        candidates.append(Path(ui_dir_env))
+
+    # Repo default: `frontend/.output/public` after `npm --prefix frontend run generate`.
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates.append(repo_root / "frontend" / ".output" / "public")
+
+    ui_dir: Path | None = None
+    for p in candidates:
+        try:
+            if (p / "index.html").is_file():
+                ui_dir = p
+                break
+        except Exception:
+            continue
+
+    if not ui_dir:
+        return
+
+    try:
+        app.mount("/", _SPAStaticFiles(directory=str(ui_dir), html=True), name="ui")
+        logger.info("Serving frontend UI from: %s", ui_dir)
+    except Exception:
+        logger.exception("Failed to mount frontend UI from: %s", ui_dir)
+
+
+_maybe_mount_frontend()
+
+
 @app.on_event("shutdown")
 async def _shutdown_wcdb_realtime() -> None:
     try:
@@ -62,4 +132,6 @@ async def _shutdown_wcdb_realtime() -> None:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    host = os.environ.get("WECHAT_TOOL_HOST", "127.0.0.1")
+    port = int(os.environ.get("WECHAT_TOOL_PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)

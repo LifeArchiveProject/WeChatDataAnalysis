@@ -14,12 +14,16 @@ from pathlib import Path
 
 def main():
     """启动微信解密工具API服务"""
+    host = os.environ.get("WECHAT_TOOL_HOST", "127.0.0.1")
+    port = int(os.environ.get("WECHAT_TOOL_PORT", "8000"))
+    access_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+
     print("=" * 60)
     print("微信解密工具 API 服务")
     print("=" * 60)
     print("正在启动服务...")
-    print("API文档: http://localhost:8000/docs")
-    print("健康检查: http://localhost:8000/api/health")
+    print(f"API文档: http://{access_host}:{port}/docs")
+    print(f"健康检查: http://{access_host}:{port}/api/health")
     print("按 Ctrl+C 停止服务")
     print("=" * 60)
     
@@ -29,8 +33,8 @@ def main():
     # 启动API服务
     uvicorn.run(
         "wechat_decrypt_tool.api:app",
-        host="0.0.0.0",
-        port=8000,
+        host=host,
+        port=port,
         reload=enable_reload,
         reload_dirs=[str(repo_root / "src")] if enable_reload else None,
         reload_excludes=[

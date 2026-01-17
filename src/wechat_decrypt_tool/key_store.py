@@ -3,8 +3,9 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_KEY_STORE_PATH = _REPO_ROOT / "output" / "account_keys.json"
+from .app_paths import get_account_keys_path
+
+_KEY_STORE_PATH = get_account_keys_path()
 
 
 def _atomic_write_json(path: Path, payload: Any) -> None:
@@ -66,4 +67,3 @@ def upsert_account_keys_in_store(
         pass
 
     return item
-

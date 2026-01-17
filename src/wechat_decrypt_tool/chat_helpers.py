@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 from fastapi import HTTPException
 
+from .app_paths import get_output_databases_dir
 from .logging_config import get_logger
 
 try:
@@ -21,8 +22,7 @@ except Exception:
 
 logger = get_logger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_OUTPUT_DATABASES_DIR = _REPO_ROOT / "output" / "databases"
+_OUTPUT_DATABASES_DIR = get_output_databases_dir()
 _DEBUG_SESSIONS = os.environ.get("WECHAT_TOOL_DEBUG_SESSIONS", "0") == "1"
 
 

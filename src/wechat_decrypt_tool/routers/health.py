@@ -8,10 +8,10 @@ logger = get_logger(__name__)
 router = APIRouter(route_class=PathFixRoute)
 
 
-@router.get("/", summary="根端点")
-async def root():
-    """根端点"""
-    logger.info("访问根端点")
+@router.get("/api", summary="API 根端点")
+async def api_root():
+    """API 根端点"""
+    logger.info("访问 API 根端点")
     return {"message": "微信数据库解密工具 API"}
 
 
