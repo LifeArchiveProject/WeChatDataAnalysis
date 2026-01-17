@@ -358,8 +358,8 @@ onMounted(() => {
   }
   startDetection()
   
-  // 调试：检查各元素高度
-  if (process.client) {
+  // 调试：检查各元素高度（仅开发环境）
+  if (process.dev && process.client) {
     setTimeout(() => {
       const mainContainer = document.querySelector('.min-h-screen')
       const contentContainer = document.querySelector('.max-w-6xl')

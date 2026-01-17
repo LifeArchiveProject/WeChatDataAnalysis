@@ -127,7 +127,10 @@
     </div>
 
     <!-- 右侧聊天区域 -->
-    <div class="flex-1 flex min-h-0" style="background-color: #EDEDED">
+    <div class="flex-1 flex flex-col min-h-0" style="background-color: #EDEDED">
+      <!-- 桌面端将自绘标题栏放到右侧区域，避免遮挡左侧栏（更接近原生微信布局） -->
+      <DesktopTitleBar />
+      <div class="flex-1 flex min-h-0">
       <!-- 聊天主区域 -->
       <div class="flex-1 flex flex-col min-h-0 min-w-0">
         <div v-if="selectedContact" class="flex-1 flex flex-col min-h-0 relative">
@@ -1146,6 +1149,7 @@
             </div>
           </template>
         </div>
+      </div>
       </div>
     </div>
 

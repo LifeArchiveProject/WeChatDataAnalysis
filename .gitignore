@@ -25,3 +25,13 @@ wheels/
 /vue3-wechat-tool/
 /wechatDataBackup/
 /wx_key/
+
+# Electron desktop app
+/desktop/node_modules/
+/desktop/dist/
+/desktop/build/
+/desktop/resources/ui/*
+!/desktop/resources/ui/.gitkeep
+/desktop/resources/backend/*.exe
+!/desktop/resources/backend/.gitkeep
+/desktop/resources/icon.ico

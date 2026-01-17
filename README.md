@@ -127,6 +127,21 @@ npm run dev
 - API服务: http://localhost:8000
 - API文档: http://localhost:8000/docs
 
+## 打包为 EXE（Windows 桌面端）
+
+本项目提供基于 Electron 的桌面端安装包（NSIS `Setup.exe`）。
+
+```bash
+# 1) 安装桌面端依赖
+cd desktop
+npm install
+
+# 2) 打包（会自动：nuxt generate -> 拷贝静态资源 -> PyInstaller 打包后端 -> electron-builder 生成安装包）
+npm run dist
+```
+
+输出位置：`desktop/dist/WeChatDataAnalysis Setup <version>.exe`
+
 ## 使用指南
 
 ### 获取解密密钥
