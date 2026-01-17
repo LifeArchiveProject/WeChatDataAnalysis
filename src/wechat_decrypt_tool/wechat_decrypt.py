@@ -20,6 +20,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
+from .app_paths import get_output_databases_dir
+
 # 注意：不再支持默认密钥，所有密钥必须通过参数传入
 
 # SQLite文件头
@@ -251,7 +253,7 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
     logger.info("=" * 60)
 
     # 创建基础输出目录
-    base_output_dir = Path("output/databases")
+    base_output_dir = get_output_databases_dir()
     base_output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"基础输出目录: {base_output_dir.absolute()}")
 

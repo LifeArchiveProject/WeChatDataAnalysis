@@ -16,14 +16,14 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
+from .app_paths import get_output_databases_dir
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
 
 
-# 仓库根目录（用于定位 output/databases）
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_OUTPUT_DATABASES_DIR = _REPO_ROOT / "output" / "databases"
+# 运行时输出目录（桌面端可通过 WECHAT_TOOL_DATA_DIR 指向可写目录）
+_OUTPUT_DATABASES_DIR = get_output_databases_dir()
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 
 
