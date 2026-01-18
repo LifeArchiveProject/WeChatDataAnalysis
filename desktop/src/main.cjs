@@ -1,4 +1,12 @@
-const { app, BrowserWindow, Menu, ipcMain, globalShortcut } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  ipcMain,
+  globalShortcut,
+  dialog,
+  shell,
+} = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const http = require("http");
@@ -9,6 +17,74 @@ const BACKEND_PORT = Number(process.env.WECHAT_TOOL_PORT || "8000");
 const BACKEND_HEALTH_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}/api/health`;
 
 let backendProc = null;
+let backendStdioStream = null;
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function getUserDataDir() {
+  try {
+    return app.getPath("userData");
+  } catch {
+    return null;
+  }
+}
+
+function getMainLogPath() {
+  const dir = getUserDataDir();
+  if (!dir) return null;
+  return path.join(dir, "desktop-main.log");
+}
+
+function logMain(line) {
+  const p = getMainLogPath();
+  if (!p) return;
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.appendFileSync(p, `[${nowIso()}] ${line}\n`, { encoding: "utf8" });
+  } catch {}
+}
+
+function getBackendStdioLogPath(dataDir) {
+  return path.join(dataDir, "backend-stdio.log");
+}
+
+function attachBackendStdio(proc, logPath) {
+  // In packaged builds, stdout/stderr are often the only place we can see early crash
+  // reasons (missing DLLs, import errors) before the Python logger initializes.
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  } catch {}
+
+  try {
+    backendStdioStream = fs.createWriteStream(logPath, { flags: "a" });
+    backendStdioStream.write(`[${nowIso()}] [main] backend stdio -> ${logPath}\n`);
+  } catch {
+    backendStdioStream = null;
+    return;
+  }
+
+  const write = (prefix, chunk) => {
+    if (!backendStdioStream) return;
+    try {
+      const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      backendStdioStream.write(`[${nowIso()}] ${prefix} ${text}`);
+      if (!text.endsWith("\n")) backendStdioStream.write("\n");
+    } catch {}
+  };
+
+  if (proc.stdout) proc.stdout.on("data", (d) => write("[backend:stdout]", d));
+  if (proc.stderr) proc.stderr.on("data", (d) => write("[backend:stderr]", d));
+  proc.on("error", (err) => write("[backend:error]", err?.stack || String(err)));
+  proc.on("close", (code, signal) => {
+    write("[backend:close]", `code=${code} signal=${signal}`);
+    try {
+      backendStdioStream?.end();
+    } catch {}
+    backendStdioStream = null;
+  });
+}
 
 function repoRoot() {
   // desktop/src -> desktop -> repo root
@@ -27,6 +103,8 @@ function startBackend() {
     ...process.env,
     WECHAT_TOOL_HOST: BACKEND_HOST,
     WECHAT_TOOL_PORT: String(BACKEND_PORT),
+    // Make sure Python prints UTF-8 to stdout/stderr.
+    PYTHONIOENCODING: process.env.PYTHONIOENCODING || "utf-8",
   };
 
   // In packaged mode we expect to provide the generated Nuxt output dir via env.
@@ -51,9 +129,10 @@ function startBackend() {
     backendProc = spawn(backendExe, [], {
       cwd: env.WECHAT_TOOL_DATA_DIR,
       env,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    attachBackendStdio(backendProc, getBackendStdioLogPath(env.WECHAT_TOOL_DATA_DIR));
   } else {
     backendProc = spawn("uv", ["run", "main.py"], {
       cwd: repoRoot(),
@@ -67,6 +146,7 @@ function startBackend() {
     backendProc = null;
     // eslint-disable-next-line no-console
     console.log(`[backend] exited code=${code} signal=${signal}`);
+    logMain(`[backend] exited code=${code} signal=${signal}`);
   });
 
   return backendProc;
@@ -124,12 +204,12 @@ async function waitForBackend({ timeoutMs }) {
 
 function debugEnabled() {
   // Enable debug helpers in dev by default; in packaged builds require explicit opt-in.
-  return !app.isPackaged || process.env.WECHAT_DESKTOP_DEBUG === "1";
+  if (!app.isPackaged) return true;
+  if (process.env.WECHAT_DESKTOP_DEBUG === "1") return true;
+  return process.argv.includes("--debug") || process.argv.includes("--devtools");
 }
 
 function registerDebugShortcuts() {
-  if (!debugEnabled()) return;
-
   const toggleDevTools = () => {
     const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
     if (!win) return;
@@ -186,7 +266,9 @@ function createMainWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      devTools: debugEnabled(),
+      // Allow DevTools to be opened in packaged builds (F12 / Ctrl+Shift+I).
+      // We still only auto-open it when debugEnabled() returns true.
+      devTools: true,
     },
   });
 
@@ -245,6 +327,8 @@ async function main() {
   registerWindowIpc();
   registerDebugShortcuts();
 
+  logMain(`[main] app.isPackaged=${app.isPackaged} argv=${JSON.stringify(process.argv)}`);
+
   startBackend();
   await waitForBackend({ timeoutMs: 30_000 });
 
@@ -282,6 +366,17 @@ app.on("before-quit", () => {
 main().catch((err) => {
   // eslint-disable-next-line no-console
   console.error(err);
+  logMain(`[main] fatal: ${err?.stack || String(err)}`);
   stopBackend();
+  try {
+    const dir = getUserDataDir();
+    if (dir) {
+      dialog.showErrorBox(
+        "WeChatDataAnalysis 启动失败",
+        `启动失败：${err?.message || err}\n\n请查看日志目录：\n${dir}\n\n文件：desktop-main.log / backend-stdio.log / output\\\\logs\\\\...`
+      );
+      shell.openPath(dir);
+    }
+  } catch {}
   app.quit();
 });
