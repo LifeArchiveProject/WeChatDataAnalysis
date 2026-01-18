@@ -8,4 +8,7 @@ contextBridge.exposeInMainWorld("wechatDesktop", {
 
   getAutoLaunch: () => ipcRenderer.invoke("app:getAutoLaunch"),
   setAutoLaunch: (enabled) => ipcRenderer.invoke("app:setAutoLaunch", !!enabled),
+
+  getCloseBehavior: () => ipcRenderer.invoke("app:getCloseBehavior"),
+  setCloseBehavior: (behavior) => ipcRenderer.invoke("app:setCloseBehavior", String(behavior || "")),
 });

@@ -1602,6 +1602,25 @@
 
         <div class="flex items-center justify-between gap-4">
           <div class="min-w-0">
+            <div class="text-sm font-medium text-gray-900">关闭窗口行为</div>
+            <div class="text-xs text-gray-500">点击关闭按钮时：默认最小化到托盘</div>
+          </div>
+          <select
+            class="text-sm px-2 py-1 rounded-md border border-gray-200"
+            :disabled="desktopCloseBehaviorLoading"
+            :value="desktopCloseBehavior"
+            @change="onDesktopCloseBehaviorChange"
+          >
+            <option value="tray">最小化到托盘</option>
+            <option value="exit">直接退出</option>
+          </select>
+        </div>
+        <div v-if="desktopCloseBehaviorError" class="text-xs text-red-600 whitespace-pre-wrap">
+          {{ desktopCloseBehaviorError }}
+        </div>
+
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
             <div class="text-sm font-medium text-gray-900">启动后自动开启实时获取</div>
             <div class="text-xs text-gray-500">进入聊天页后自动打开“实时开关”（默认关闭）</div>
           </div>
@@ -1717,6 +1736,10 @@ const desktopAutoLaunch = ref(false)
 const desktopAutoLaunchLoading = ref(false)
 const desktopAutoLaunchError = ref('')
 
+const desktopCloseBehavior = ref('tray') // tray | exit
+const desktopCloseBehaviorLoading = ref(false)
+const desktopCloseBehaviorError = ref('')
+
 const readLocalBool = (key) => {
   if (!process.client) return false
   try {
@@ -1768,9 +1791,42 @@ const setDesktopAutoLaunch = async (enabled) => {
   }
 }
 
+const refreshDesktopCloseBehavior = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  if (!window.wechatDesktop?.getCloseBehavior) return
+  desktopCloseBehaviorLoading.value = true
+  desktopCloseBehaviorError.value = ''
+  try {
+    const v = await window.wechatDesktop.getCloseBehavior()
+    desktopCloseBehavior.value = (String(v || '').toLowerCase() === 'exit') ? 'exit' : 'tray'
+  } catch (e) {
+    desktopCloseBehaviorError.value = e?.message || '读取关闭窗口行为失败'
+  } finally {
+    desktopCloseBehaviorLoading.value = false
+  }
+}
+
+const setDesktopCloseBehavior = async (behavior) => {
+  if (!process.client || typeof window === 'undefined') return
+  if (!window.wechatDesktop?.setCloseBehavior) return
+  const desired = (String(behavior || '').toLowerCase() === 'exit') ? 'exit' : 'tray'
+  desktopCloseBehaviorLoading.value = true
+  desktopCloseBehaviorError.value = ''
+  try {
+    const v = await window.wechatDesktop.setCloseBehavior(desired)
+    desktopCloseBehavior.value = (String(v || '').toLowerCase() === 'exit') ? 'exit' : 'tray'
+  } catch (e) {
+    desktopCloseBehaviorError.value = e?.message || '设置关闭窗口行为失败'
+    await refreshDesktopCloseBehavior()
+  } finally {
+    desktopCloseBehaviorLoading.value = false
+  }
+}
+
 const openDesktopSettings = async () => {
   desktopSettingsOpen.value = true
   await refreshDesktopAutoLaunch()
+  await refreshDesktopCloseBehavior()
 }
 
 const closeDesktopSettings = () => {
@@ -1780,6 +1836,11 @@ const closeDesktopSettings = () => {
 const onDesktopAutoLaunchToggle = async (ev) => {
   const checked = !!ev?.target?.checked
   await setDesktopAutoLaunch(checked)
+}
+
+const onDesktopCloseBehaviorChange = async (ev) => {
+  const v = String(ev?.target?.value || '').trim()
+  await setDesktopCloseBehavior(v)
 }
 
 const onDesktopAutoRealtimeToggle = async (ev) => {

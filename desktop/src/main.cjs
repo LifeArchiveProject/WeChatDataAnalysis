@@ -2,6 +2,7 @@ const {
   app,
   BrowserWindow,
   Menu,
+  Tray,
   ipcMain,
   globalShortcut,
   dialog,
@@ -19,6 +20,10 @@ const BACKEND_HEALTH_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}/api/health`;
 let backendProc = null;
 let backendStdioStream = null;
 let resolvedDataDir = null;
+let mainWindow = null;
+let tray = null;
+let isQuitting = false;
+let desktopSettings = null;
 
 function nowIso() {
   return new Date().toISOString();
@@ -107,6 +112,163 @@ function logMain(line) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.appendFileSync(p, `[${nowIso()}] ${line}\n`, { encoding: "utf8" });
   } catch {}
+}
+
+function getDesktopSettingsPath() {
+  const dir = getUserDataDir();
+  if (!dir) return null;
+  return path.join(dir, "desktop-settings.json");
+}
+
+function loadDesktopSettings() {
+  if (desktopSettings) return desktopSettings;
+
+  const defaults = {
+    // 'tray' (default): closing the window hides it to the system tray.
+    // 'exit': closing the window quits the app.
+    closeBehavior: "tray",
+  };
+
+  const p = getDesktopSettingsPath();
+  if (!p) {
+    desktopSettings = { ...defaults };
+    return desktopSettings;
+  }
+
+  try {
+    if (!fs.existsSync(p)) {
+      desktopSettings = { ...defaults };
+      return desktopSettings;
+    }
+    const raw = fs.readFileSync(p, { encoding: "utf8" });
+    const parsed = JSON.parse(raw || "{}");
+    desktopSettings = { ...defaults, ...(parsed && typeof parsed === "object" ? parsed : {}) };
+  } catch (err) {
+    desktopSettings = { ...defaults };
+    logMain(`[main] failed to load settings: ${err?.message || err}`);
+  }
+
+  return desktopSettings;
+}
+
+function persistDesktopSettings() {
+  const p = getDesktopSettingsPath();
+  if (!p) return;
+  if (!desktopSettings) return;
+
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(desktopSettings, null, 2), { encoding: "utf8" });
+  } catch (err) {
+    logMain(`[main] failed to persist settings: ${err?.message || err}`);
+  }
+}
+
+function getCloseBehavior() {
+  const v = String(loadDesktopSettings()?.closeBehavior || "").trim().toLowerCase();
+  return v === "exit" ? "exit" : "tray";
+}
+
+function setCloseBehavior(next) {
+  const v = String(next || "").trim().toLowerCase();
+  loadDesktopSettings();
+  desktopSettings.closeBehavior = v === "exit" ? "exit" : "tray";
+  persistDesktopSettings();
+  return desktopSettings.closeBehavior;
+}
+
+function getTrayIconPath() {
+  // Prefer an icon shipped in `src/` so it works both in dev and packaged (asar) builds.
+  const shipped = path.join(__dirname, "icon.ico");
+  try {
+    if (fs.existsSync(shipped)) return shipped;
+  } catch {}
+
+  // Dev fallback (not available in packaged builds).
+  const dev = path.resolve(__dirname, "..", "build", "icon.ico");
+  try {
+    if (fs.existsSync(dev)) return dev;
+  } catch {}
+
+  return null;
+}
+
+function showMainWindow() {
+  if (!mainWindow) return;
+  try {
+    mainWindow.setSkipTaskbar(false);
+  } catch {}
+  try {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+  } catch {}
+  try {
+    mainWindow.show();
+  } catch {}
+  try {
+    mainWindow.focus();
+  } catch {}
+}
+
+function createTray() {
+  if (tray) return tray;
+  if (!app.isPackaged) return null;
+
+  const iconPath = getTrayIconPath();
+  if (!iconPath) {
+    logMain("[main] tray icon not found; disabling tray behavior");
+    return null;
+  }
+
+  try {
+    tray = new Tray(iconPath);
+  } catch (err) {
+    tray = null;
+    logMain(`[main] failed to create tray: ${err?.message || err}`);
+    return null;
+  }
+
+  try {
+    tray.setToolTip("WeChatDataAnalysis");
+  } catch {}
+
+  try {
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        {
+          label: "显示",
+          click: () => showMainWindow(),
+        },
+        {
+          label: "退出",
+          click: () => {
+            isQuitting = true;
+            app.quit();
+          },
+        },
+      ])
+    );
+  } catch {}
+
+  try {
+    tray.on("click", () => showMainWindow());
+    tray.on("double-click", () => showMainWindow());
+  } catch {}
+
+  return tray;
+}
+
+function destroyTray() {
+  if (!tray) return;
+  try {
+    tray.destroy();
+  } catch {}
+  tray = null;
+}
+
+function ensureTrayForCloseBehavior() {
+  const behavior = getCloseBehavior();
+  if (behavior === "tray") createTray();
+  else destroyTray();
 }
 
 function getBackendStdioLogPath(dataDir) {
@@ -335,6 +497,26 @@ function createMainWindow() {
     },
   });
 
+  win.on("close", (event) => {
+    // In packaged builds, we default to "close -> minimize to tray" unless the user opts out.
+    if (!app.isPackaged) return;
+    if (isQuitting) return;
+    if (getCloseBehavior() !== "tray") return;
+    if (!tray) return;
+
+    try {
+      event.preventDefault();
+      win.setSkipTaskbar(true);
+      win.hide();
+      try {
+        tray.displayBalloon({
+          title: "WeChatDataAnalysis",
+          content: "已最小化到托盘，可从托盘图标再次打开。",
+        });
+      } catch {}
+    } catch {}
+  });
+
   win.on("closed", () => {
     stopBackend();
   });
@@ -409,6 +591,26 @@ function registerWindowIpc() {
       return on;
     }
   });
+
+  ipcMain.handle("app:getCloseBehavior", () => {
+    try {
+      return getCloseBehavior();
+    } catch (err) {
+      logMain(`[main] getCloseBehavior failed: ${err?.message || err}`);
+      return "tray";
+    }
+  });
+
+  ipcMain.handle("app:setCloseBehavior", (_event, behavior) => {
+    try {
+      const next = setCloseBehavior(behavior);
+      ensureTrayForCloseBehavior();
+      return next;
+    } catch (err) {
+      logMain(`[main] setCloseBehavior failed: ${err?.message || err}`);
+      return getCloseBehavior();
+    }
+  });
 }
 
 async function main() {
@@ -428,6 +630,8 @@ async function main() {
   await waitForBackend({ timeoutMs: 30_000 });
 
   const win = createMainWindow();
+  mainWindow = win;
+  ensureTrayForCloseBehavior();
 
   const startUrl =
     process.env.ELECTRON_START_URL ||
@@ -455,6 +659,8 @@ app.on("will-quit", () => {
 });
 
 app.on("before-quit", () => {
+  isQuitting = true;
+  destroyTray();
   stopBackend();
 });
 
