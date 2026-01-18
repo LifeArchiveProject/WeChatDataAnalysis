@@ -25,6 +25,23 @@
             <circle v-if="!privacyMode" cx="12" cy="12" r="3" />
           </svg>
         </div>
+
+        <!-- 设置按钮（仅桌面端） -->
+        <div
+          v-if="isDesktopEnv"
+          class="w-16 h-12 flex items-center justify-center cursor-pointer transition-colors text-gray-500 hover:text-gray-700"
+          @click="openDesktopSettings"
+          title="设置"
+        >
+          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+            />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </div>
       </div>
     </div>
 
@@ -1543,6 +1560,85 @@
       </div>
     </div>
   </div>
+
+  <!-- 桌面端设置弹窗 -->
+  <div
+    v-if="desktopSettingsOpen"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+    @click.self="closeDesktopSettings"
+  >
+    <div class="w-full max-w-md bg-white rounded-lg shadow-lg">
+      <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+        <div class="text-base font-medium text-gray-900">设置</div>
+        <button
+          type="button"
+          class="text-gray-500 hover:text-gray-700"
+          @click="closeDesktopSettings"
+          title="关闭"
+        >
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="px-5 py-4 space-y-4">
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <div class="text-sm font-medium text-gray-900">开机自启动</div>
+            <div class="text-xs text-gray-500">系统登录后自动启动桌面端</div>
+          </div>
+          <input
+            type="checkbox"
+            class="h-4 w-4"
+            :checked="desktopAutoLaunch"
+            :disabled="desktopAutoLaunchLoading"
+            @change="onDesktopAutoLaunchToggle"
+          />
+        </div>
+        <div v-if="desktopAutoLaunchError" class="text-xs text-red-600 whitespace-pre-wrap">
+          {{ desktopAutoLaunchError }}
+        </div>
+
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <div class="text-sm font-medium text-gray-900">启动后自动开启实时获取</div>
+            <div class="text-xs text-gray-500">进入聊天页后自动打开“实时开关”（默认关闭）</div>
+          </div>
+          <input
+            type="checkbox"
+            class="h-4 w-4"
+            :checked="desktopAutoRealtime"
+            @change="onDesktopAutoRealtimeToggle"
+          />
+        </div>
+
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <div class="text-sm font-medium text-gray-900">有数据时默认进入聊天页</div>
+            <div class="text-xs text-gray-500">有已解密账号时，打开应用默认跳转到 /chat（默认关闭）</div>
+          </div>
+          <input
+            type="checkbox"
+            class="h-4 w-4"
+            :checked="desktopDefaultToChatWhenData"
+            @change="onDesktopDefaultToChatToggle"
+          />
+        </div>
+      </div>
+
+      <div class="px-5 py-4 border-t border-gray-200 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          class="text-sm px-3 py-2 rounded-md bg-white border border-gray-200 hover:bg-gray-50"
+          @click="closeDesktopSettings"
+        >
+          关闭
+        </button>
+      </div>
+    </div>
+  </div>
+
   </div>
 </template>
 
@@ -1606,6 +1702,103 @@ const selectedContact = ref(null)
 
 // 隐私模式
 const privacyMode = ref(false)
+
+// 桌面端设置（仅 Electron 环境可见）
+const isDesktopEnv = ref(false)
+const desktopSettingsOpen = ref(false)
+
+const DESKTOP_SETTING_AUTO_REALTIME_KEY = 'desktop.settings.autoRealtime'
+const DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY = 'desktop.settings.defaultToChatWhenData'
+
+const desktopAutoRealtime = ref(false)
+const desktopDefaultToChatWhenData = ref(false)
+
+const desktopAutoLaunch = ref(false)
+const desktopAutoLaunchLoading = ref(false)
+const desktopAutoLaunchError = ref('')
+
+const readLocalBool = (key) => {
+  if (!process.client) return false
+  try {
+    return localStorage.getItem(key) === 'true'
+  } catch {
+    return false
+  }
+}
+
+const writeLocalBool = (key, value) => {
+  if (!process.client) return
+  try {
+    localStorage.setItem(key, value ? 'true' : 'false')
+  } catch {}
+}
+
+// 尽量早读本地设置，避免首次加载联系人时拿不到 autoRealtime 选项
+if (process.client) {
+  desktopAutoRealtime.value = readLocalBool(DESKTOP_SETTING_AUTO_REALTIME_KEY)
+  desktopDefaultToChatWhenData.value = readLocalBool(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY)
+}
+
+const refreshDesktopAutoLaunch = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  if (!window.wechatDesktop?.getAutoLaunch) return
+  desktopAutoLaunchLoading.value = true
+  desktopAutoLaunchError.value = ''
+  try {
+    desktopAutoLaunch.value = !!(await window.wechatDesktop.getAutoLaunch())
+  } catch (e) {
+    desktopAutoLaunchError.value = e?.message || '读取开机自启动状态失败'
+  } finally {
+    desktopAutoLaunchLoading.value = false
+  }
+}
+
+const setDesktopAutoLaunch = async (enabled) => {
+  if (!process.client || typeof window === 'undefined') return
+  if (!window.wechatDesktop?.setAutoLaunch) return
+  desktopAutoLaunchLoading.value = true
+  desktopAutoLaunchError.value = ''
+  try {
+    desktopAutoLaunch.value = !!(await window.wechatDesktop.setAutoLaunch(!!enabled))
+  } catch (e) {
+    desktopAutoLaunchError.value = e?.message || '设置开机自启动失败'
+    await refreshDesktopAutoLaunch()
+  } finally {
+    desktopAutoLaunchLoading.value = false
+  }
+}
+
+const openDesktopSettings = async () => {
+  desktopSettingsOpen.value = true
+  await refreshDesktopAutoLaunch()
+}
+
+const closeDesktopSettings = () => {
+  desktopSettingsOpen.value = false
+}
+
+const onDesktopAutoLaunchToggle = async (ev) => {
+  const checked = !!ev?.target?.checked
+  await setDesktopAutoLaunch(checked)
+}
+
+const onDesktopAutoRealtimeToggle = async (ev) => {
+  const checked = !!ev?.target?.checked
+  desktopAutoRealtime.value = checked
+  writeLocalBool(DESKTOP_SETTING_AUTO_REALTIME_KEY, checked)
+  if (checked) {
+    // 开启后尝试立即启用实时模式（不可用则静默忽略）
+    try {
+      await tryEnableRealtimeAuto()
+    } catch {}
+  }
+}
+
+const onDesktopDefaultToChatToggle = (ev) => {
+  const checked = !!ev?.target?.checked
+  desktopDefaultToChatWhenData.value = checked
+  writeLocalBool(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, checked)
+}
 
 // 联系人数据
 const contacts = ref([])
@@ -3406,6 +3599,9 @@ const applyRouteSelection = async () => {
 
 // 默认选择第一个联系人
 onMounted(() => {
+  if (process.client && typeof window !== 'undefined') {
+    isDesktopEnv.value = !!window.wechatDesktop
+  }
   loadContacts()
   loadSearchHistory()
 })
@@ -3436,6 +3632,8 @@ const loadContacts = async () => {
   } finally {
     isLoadingContacts.value = false
   }
+
+  await tryEnableRealtimeAuto()
 }
 
 const loadSessionsForSelectedAccount = async () => {
@@ -4546,15 +4744,18 @@ const startRealtimeStream = () => {
   }
 }
 
-const toggleRealtime = async () => {
+const toggleRealtime = async (opts = {}) => {
+  const silent = !!opts?.silent
   if (!process.client || typeof window === 'undefined') return
   if (!selectedAccount.value) return
 
   if (!realtimeEnabled.value) {
     await fetchRealtimeStatus()
     if (!realtimeAvailable.value) {
-      window.alert(realtimeStatusError.value || '实时模式不可用：缺少密钥或 db_storage 路径。')
-      return
+      if (!silent) {
+        window.alert(realtimeStatusError.value || '实时模式不可用：缺少密钥或 db_storage 路径。')
+      }
+      return false
     }
     realtimeEnabled.value = true
     startRealtimeStream()
@@ -4562,7 +4763,7 @@ const toggleRealtime = async () => {
     if (selectedContact.value?.username) {
       await refreshSelectedMessages()
     }
-    return
+    return true
   }
 
   realtimeEnabled.value = false
@@ -4571,6 +4772,19 @@ const toggleRealtime = async () => {
   if (selectedContact.value?.username) {
     await refreshSelectedMessages()
   }
+  return true
+}
+
+const tryEnableRealtimeAuto = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  if (!isDesktopEnv.value) return
+  if (!desktopAutoRealtime.value) return
+  if (realtimeEnabled.value) return
+  if (!selectedAccount.value) return
+
+  try {
+    await toggleRealtime({ silent: true })
+  } catch {}
 }
 
 watch(selectedAccount, async () => {
