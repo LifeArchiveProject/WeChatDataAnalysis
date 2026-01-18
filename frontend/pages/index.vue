@@ -55,6 +55,31 @@
 </template>
 
 <script setup>
+import { onMounted } from 'vue'
+import { useApi } from '~/composables/useApi'
+
+const DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY = 'desktop.settings.defaultToChatWhenData'
+
+onMounted(async () => {
+  if (!process.client || typeof window === 'undefined') return
+  if (!window.wechatDesktop) return
+
+  let enabled = false
+  try {
+    enabled = localStorage.getItem(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY) === 'true'
+  } catch {}
+  if (!enabled) return
+
+  try {
+    const api = useApi()
+    const resp = await api.listChatAccounts()
+    const accounts = resp?.accounts || []
+    if (accounts.length) {
+      await navigateTo('/chat', { replace: true })
+    }
+  } catch {}
+})
+
 // 开始检测并跳转到结果页面
 const startDetection = async () => {
   // 直接跳转到检测结果页面，让该页面处理检测
