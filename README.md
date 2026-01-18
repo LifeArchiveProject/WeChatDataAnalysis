@@ -39,27 +39,38 @@
 
 ## 快速开始
 
-### 1. 克隆项目
+### 1. 下载并安装 EXE（Windows，推荐）
+
+1. 打开 Release 页面（最新版）：https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest
+2. 下载 `WeChatDataAnalysis.Setup.<version>.exe` 并运行安装
+3. 安装完成后启动 `WeChatDataAnalysis`
+
+> 如果 Windows 弹出“未知发布者/更多信息”等提示，请确认下载来源为本仓库 Release 后再选择“仍要运行”。
+
+### 2. 从源码运行（开发者/高级用户）
+
+#### 2.1 克隆项目
 
 ```bash
-git clone https://github.com/LifeArchiveProject/WeChatDataAnalysis
+git clone https://github.com/LifeArchiveProject/WeChatDataAnalysis.git
+cd WeChatDataAnalysis
 ```
 
-### 2. 安装后端依赖
+#### 2.2 安装后端依赖
 
 ```bash
 # 使用uv (推荐)
 uv sync
 ```
 
-### 3. 安装前端依赖
+#### 2.3 安装前端依赖
 
 ```bash
 cd frontend
 npm install
 ```
 
-### 4. 启动服务
+#### 2.4 启动服务
 
 #### 启动后端API服务
 ```bash
@@ -74,7 +85,7 @@ cd frontend
 npm run dev
 ```
 
-### 5. 访问应用
+#### 2.5 访问应用
 
 - 前端界面: http://localhost:3000
 - API服务: http://localhost:8000
