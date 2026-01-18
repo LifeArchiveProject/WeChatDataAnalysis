@@ -78,3 +78,78 @@ Function WDA_InstallDirPageLeave
 FunctionEnd
 
 !endif
+
+!ifdef BUILD_UNINSTALLER
+!include nsDialogs.nsh
+!include LogicLib.nsh
+
+Var WDA_UninstallOptionsPage
+Var WDA_UninstallDeleteDataCheckbox
+Var /GLOBAL WDA_DeleteUserData
+
+!macro customUnInit
+  ; Default: keep user data (also applies to silent uninstall / update uninstall).
+  StrCpy $WDA_DeleteUserData "0"
+!macroend
+
+!macro customUnWelcomePage
+  !insertmacro MUI_UNPAGE_WELCOME
+  ; Optional page: allow user to choose whether to delete app data.
+  UninstPage custom un.WDA_UninstallOptionsCreate un.WDA_UninstallOptionsLeave
+!macroend
+
+Function un.WDA_UninstallOptionsCreate
+  nsDialogs::Create 1018
+  Pop $WDA_UninstallOptionsPage
+
+  ${If} $WDA_UninstallOptionsPage == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0u 0u 100% 24u "卸载选项："
+  Pop $0
+
+  ${NSD_CreateCheckbox} 0u 24u 100% 12u "同时删除用户数据（导出的聊天记录、日志、配置等）"
+  Pop $WDA_UninstallDeleteDataCheckbox
+  ; Safer default: do not delete.
+  ${NSD_Uncheck} $WDA_UninstallDeleteDataCheckbox
+
+  nsDialogs::Show
+FunctionEnd
+
+Function un.WDA_UninstallOptionsLeave
+  ${NSD_GetState} $WDA_UninstallDeleteDataCheckbox $0
+  ${If} $0 == ${BST_CHECKED}
+    StrCpy $WDA_DeleteUserData "1"
+  ${Else}
+    StrCpy $WDA_DeleteUserData "0"
+  ${EndIf}
+FunctionEnd
+
+!macro customUnInstall
+  ; If this is an update uninstall, never delete user data.
+  ${ifNot} ${isUpdated}
+    ${if} $WDA_DeleteUserData == "1"
+      ; Electron always stores user data per-user. If the app was installed for all users,
+      ; switch to current user context to remove the correct AppData directory.
+      ${if} $installMode == "all"
+        SetShellVarContext current
+      ${endif}
+
+      RMDir /r "$APPDATA\${APP_FILENAME}"
+      !ifdef APP_PRODUCT_FILENAME
+        RMDir /r "$APPDATA\${APP_PRODUCT_FILENAME}"
+      !endif
+      ; Electron may use package.json "name" for some storage (cache, indexeddb, etc.).
+      !ifdef APP_PACKAGE_NAME
+        RMDir /r "$APPDATA\${APP_PACKAGE_NAME}"
+      !endif
+
+      ${if} $installMode == "all"
+        SetShellVarContext all
+      ${endif}
+    ${endif}
+  ${endif}
+!macroend
+
+!endif
