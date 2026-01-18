@@ -1,0 +1,78 @@
+name: Release (Windows)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Invalid tag: '$tag' (expected like v1.0.0)"
+          }
+          "TAG_NAME=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install uv
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install uv
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm ci
+
+      - name: Set desktop app version (electron-builder)
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          npm version $env:VERSION --no-git-tag-version
+
+      - name: Build Windows installer
+        working-directory: desktop
+        run: npm run dist
+
+      - name: Create GitHub Release and upload installer
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.TAG_NAME }}
+          generate_release_notes: true
+          files: |
+            desktop/dist/*Setup*.exe
+            desktop/dist/*Setup*.exe.blockmap
+

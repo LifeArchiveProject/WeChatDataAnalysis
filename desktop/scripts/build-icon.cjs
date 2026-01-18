@@ -6,7 +6,15 @@ const { PNG } = require("pngjs");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const srcPng = path.join(repoRoot, "frontend", "public", "logo.png");
-const dstIco = path.join(repoRoot, "desktop", "resources", "icon.ico");
+// Write the generated ICO to the locations electron-builder expects for app+installer icons.
+// Also keep a copy in desktop/resources for convenience.
+const dstIcos = [
+  path.join(repoRoot, "desktop", "resources", "icon.ico"),
+  path.join(repoRoot, "desktop", "build", "icon.ico"),
+  path.join(repoRoot, "desktop", "build", "installerIcon.ico"),
+  path.join(repoRoot, "desktop", "build", "uninstallerIcon.ico"),
+  path.join(repoRoot, "desktop", "build", "installerHeaderIcon.ico"),
+];
 
 async function main() {
   if (!fs.existsSync(srcPng)) {
@@ -35,11 +43,13 @@ async function main() {
   fs.writeFileSync(tmpPng, PNG.sync.write(square));
 
   const buf = await pngToIco(tmpPng);
-  fs.mkdirSync(path.dirname(dstIco), { recursive: true });
-  fs.writeFileSync(dstIco, buf);
+  for (const dstIco of dstIcos) {
+    fs.mkdirSync(path.dirname(dstIco), { recursive: true });
+    fs.writeFileSync(dstIco, buf);
+  }
 
   // eslint-disable-next-line no-console
-  console.log(`Generated icon: ${dstIco}`);
+  console.log(`Generated icon(s):\n${dstIcos.map((p) => `- ${p}`).join("\n")}`);
 }
 
 main().catch((err) => {

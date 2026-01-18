@@ -14,7 +14,7 @@
   "build": {
     "appId": "com.lifearchive.wechatdataanalysis",
     "productName": "WeChatDataAnalysis",
-    "icon": "resources/icon.ico",
+    "icon": "build/icon.ico",
     "asar": true,
     "directories": {
       "output": "dist"
@@ -34,15 +34,18 @@
       }
     ],
     "win": {
-      "icon": "resources/icon.ico",
+      "icon": "build/icon.ico",
       "target": [
         "nsis"
       ]
     },
     "nsis": {
-      "installerIcon": "resources/icon.ico",
-      "uninstallerIcon": "resources/icon.ico",
-      "installerHeaderIcon": "resources/icon.ico"
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "include": "scripts/installer-custom.nsh",
+      "installerIcon": "build/installerIcon.ico",
+      "uninstallerIcon": "build/uninstallerIcon.ico",
+      "installerHeaderIcon": "build/installerHeaderIcon.ico"
     }
   },
   "devDependencies": {
