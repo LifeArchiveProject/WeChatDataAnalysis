@@ -382,6 +382,33 @@ function registerWindowIpc() {
     const win = getWin(event);
     return !!win?.isMaximized();
   });
+
+  ipcMain.handle("app:getAutoLaunch", () => {
+    try {
+      const settings = app.getLoginItemSettings();
+      return !!(settings?.openAtLogin || settings?.executableWillLaunchAtLogin);
+    } catch (err) {
+      logMain(`[main] getAutoLaunch failed: ${err?.message || err}`);
+      return false;
+    }
+  });
+
+  ipcMain.handle("app:setAutoLaunch", (_event, enabled) => {
+    const on = !!enabled;
+    try {
+      app.setLoginItemSettings({ openAtLogin: on });
+    } catch (err) {
+      logMain(`[main] setAutoLaunch(${on}) failed: ${err?.message || err}`);
+      return false;
+    }
+
+    try {
+      const settings = app.getLoginItemSettings();
+      return !!(settings?.openAtLogin || settings?.executableWillLaunchAtLogin);
+    } catch {
+      return on;
+    }
+  });
 }
 
 async function main() {
