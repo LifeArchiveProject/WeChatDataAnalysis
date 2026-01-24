@@ -1894,6 +1894,7 @@ let realtimeSessionsRefreshQueued = false
 let realtimeFullSyncFuture = null
 let realtimeFullSyncQueued = false
 let realtimeFullSyncPriority = ''
+let realtimeChangeDebounceTimer = null
 
 const allMessages = ref({})
 
@@ -4644,9 +4645,9 @@ const loadMessages = async ({ username, reset }) => {
     if (messageTypeFilter.value && messageTypeFilter.value !== 'all') {
       params.render_types = messageTypeFilter.value
     }
-
-    if (reset) {
-      await queueRealtimeFullSync(username)
+    if (realtimeEnabled.value) {
+      // In realtime mode, read directly from WCDB to avoid blocking on background sync.
+      params.source = 'realtime'
     }
     const resp = await api.listChatMessages(params)
 
@@ -4747,6 +4748,12 @@ const stopRealtimeStream = () => {
     } catch {}
     realtimeEventSource = null
   }
+  if (realtimeChangeDebounceTimer) {
+    try {
+      clearTimeout(realtimeChangeDebounceTimer)
+    } catch {}
+    realtimeChangeDebounceTimer = null
+  }
 }
 
 const refreshRealtimeIncremental = async () => {
@@ -4774,8 +4781,8 @@ const refreshRealtimeIncremental = async () => {
   if (messageTypeFilter.value && messageTypeFilter.value !== 'all') {
     params.render_types = messageTypeFilter.value
   }
+  params.source = 'realtime'
 
-  await queueRealtimeFullSync(username)
   const resp = await api.listChatMessages(params)
   if (selectedContact.value?.username !== username) return
 
@@ -4820,6 +4827,19 @@ const queueRealtimeRefresh = () => {
   })
 }
 
+const queueRealtimeChange = () => {
+  if (!process.client || typeof window === 'undefined') return
+  if (!realtimeEnabled.value) return
+  if (realtimeChangeDebounceTimer) return
+
+  // Debounce noisy db_storage change events to avoid hammering the backend.
+  realtimeChangeDebounceTimer = setTimeout(() => {
+    realtimeChangeDebounceTimer = null
+    queueRealtimeRefresh()
+    queueRealtimeSessionsRefresh()
+  }, 500)
+}
+
 const startRealtimeStream = () => {
   stopRealtimeStream()
   if (!process.client || typeof window === 'undefined') return
@@ -4840,9 +4860,7 @@ const startRealtimeStream = () => {
     try {
       const data = JSON.parse(String(ev.data || '{}'))
       if (String(data?.type || '') === 'change') {
-        queueRealtimeFullSync(selectedContact.value?.username || '')
-        queueRealtimeRefresh()
-        queueRealtimeSessionsRefresh()
+        queueRealtimeChange()
       }
     } catch {}
   }
