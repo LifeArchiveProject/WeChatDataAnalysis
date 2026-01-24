@@ -3,6 +3,7 @@
 """
 
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +59,11 @@ class WeChatLogger:
     
     def setup_logging(self, log_level: str = "INFO"):
         """设置日志配置"""
+        # Allow overriding via env var for easier debugging (e.g. WECHAT_TOOL_LOG_LEVEL=DEBUG)
+        env_level = str(os.environ.get("WECHAT_TOOL_LOG_LEVEL", "") or "").strip()
+        if env_level:
+            log_level = env_level
+
         # 创建日志目录
         now = datetime.now()
         log_dir = Path("output/logs") / str(now.year) / f"{now.month:02d}" / f"{now.day:02d}"
@@ -88,46 +94,47 @@ class WeChatLogger:
         # 文件处理器
         file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
         file_handler.setFormatter(file_formatter)
-        file_handler.setLevel(getattr(logging, log_level.upper()))
+        level = getattr(logging, str(log_level or "INFO").upper(), logging.INFO)
+        file_handler.setLevel(level)
 
         # 控制台处理器
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(console_formatter)
-        console_handler.setLevel(getattr(logging, log_level.upper()))
+        console_handler.setLevel(level)
         
         # 配置根日志器
-        root_logger.setLevel(getattr(logging, log_level.upper()))
+        root_logger.setLevel(level)
         root_logger.addHandler(file_handler)
         root_logger.addHandler(console_handler)
         
         # 只为uvicorn日志器添加文件处理器，保持其原有的控制台处理器（带颜色）
         uvicorn_logger = logging.getLogger("uvicorn")
         uvicorn_logger.addHandler(file_handler)
-        uvicorn_logger.setLevel(getattr(logging, log_level.upper()))
+        uvicorn_logger.setLevel(level)
 
         # 只为uvicorn.access日志器添加文件处理器
         uvicorn_access_logger = logging.getLogger("uvicorn.access")
         uvicorn_access_logger.addHandler(file_handler)
-        uvicorn_access_logger.setLevel(getattr(logging, log_level.upper()))
+        uvicorn_access_logger.setLevel(level)
 
         # 只为uvicorn.error日志器添加文件处理器
         uvicorn_error_logger = logging.getLogger("uvicorn.error")
         uvicorn_error_logger.addHandler(file_handler)
-        uvicorn_error_logger.setLevel(getattr(logging, log_level.upper()))
+        uvicorn_error_logger.setLevel(level)
 
         # 配置FastAPI日志器
         fastapi_logger = logging.getLogger("fastapi")
         fastapi_logger.handlers = []
         fastapi_logger.addHandler(file_handler)
         fastapi_logger.addHandler(console_handler)
-        fastapi_logger.setLevel(getattr(logging, log_level.upper()))
+        fastapi_logger.setLevel(level)
         
         # 记录初始化信息
         logger = logging.getLogger(__name__)
         logger.info("=" * 60)
         logger.info("微信解密工具日志系统初始化完成")
         logger.info(f"日志文件: {self.log_file}")
-        logger.info(f"日志级别: {log_level}")
+        logger.info(f"日志级别: {logging.getLevelName(level)}")
         logger.info("=" * 60)
         
         return self.log_file
