@@ -408,6 +408,91 @@ def _detect_media_type_and_ext(data: bytes) -> tuple[bytes, str, str]:
     return payload, media_type, ext
 
 
+def _is_allowed_proxy_image_host(host: str) -> bool:
+    """Allowlist hosts for proxying images to avoid turning this into a general SSRF gadget."""
+    h = str(host or "").strip().lower()
+    if not h:
+        return False
+    # WeChat public account/article thumbnails and avatars commonly live on these CDNs.
+    return h.endswith(".qpic.cn") or h.endswith(".qlogo.cn")
+
+
+@router.get("/api/chat/media/proxy_image", summary="代理获取远程图片（解决微信公众号图片防盗链）")
+async def proxy_image(url: str):
+    u = html.unescape(str(url or "")).strip()
+    if not u:
+        raise HTTPException(status_code=400, detail="Missing url.")
+    if not _is_safe_http_url(u):
+        raise HTTPException(status_code=400, detail="Invalid url (only public http/https allowed).")
+
+    try:
+        p = urlparse(u)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid url.")
+
+    host = (p.hostname or "").strip().lower()
+    if not _is_allowed_proxy_image_host(host):
+        raise HTTPException(status_code=400, detail="Unsupported url host for proxy_image.")
+
+    def _download_bytes() -> tuple[bytes, str]:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            # qpic/qlogo often require a mp.weixin.qq.com referer (anti-hotlink)
+            "Referer": "https://mp.weixin.qq.com/",
+            "Origin": "https://mp.weixin.qq.com",
+        }
+        r = requests.get(u, headers=headers, timeout=20, stream=True)
+        try:
+            r.raise_for_status()
+            content_type = str(r.headers.get("Content-Type") or "").strip()
+            max_bytes = 10 * 1024 * 1024
+            chunks: list[bytes] = []
+            total = 0
+            for ch in r.iter_content(chunk_size=64 * 1024):
+                if not ch:
+                    continue
+                chunks.append(ch)
+                total += len(ch)
+                if total > max_bytes:
+                    raise HTTPException(status_code=400, detail="Proxy image too large (>10MB).")
+            return b"".join(chunks), content_type
+        finally:
+            try:
+                r.close()
+            except Exception:
+                pass
+
+    try:
+        data, ct = await asyncio.to_thread(_download_bytes)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"proxy_image failed: url={u} err={e}")
+        raise HTTPException(status_code=502, detail=f"Proxy image failed: {e}")
+
+    if not data:
+        raise HTTPException(status_code=502, detail="Proxy returned empty body.")
+
+    payload, media_type, _ext = _detect_media_type_and_ext(data)
+
+    # Prefer upstream Content-Type when it looks like an image (sniffing may fail for some formats).
+    if media_type == "application/octet-stream" and ct:
+        try:
+            mt = ct.split(";")[0].strip()
+            if mt.startswith("image/"):
+                media_type = mt
+        except Exception:
+            pass
+
+    if not str(media_type or "").startswith("image/"):
+        raise HTTPException(status_code=502, detail="Proxy did not return an image.")
+
+    resp = Response(content=payload, media_type=media_type)
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
 @router.post("/api/chat/media/emoji/download", summary="下载表情消息资源到本地 resource")
 async def download_chat_emoji(req: EmojiDownloadRequest):
     md5 = str(req.md5 or "").strip().lower()
