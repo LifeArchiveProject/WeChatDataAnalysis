@@ -773,7 +773,21 @@ def _parse_app_message(text: str) -> dict[str, Any]:
         app_type = 0
     title = _extract_xml_tag_text(text, "title")
     des = _extract_xml_tag_text(text, "des")
-    url = _extract_xml_tag_text(text, "url")
+    url = _normalize_xml_url(_extract_xml_tag_text(text, "url"))
+
+    # Some appmsg payloads (notably mp.weixin.qq.com link shares) include a "source" block:
+    #   <sourceusername>gh_xxx</sourceusername>
+    #   <sourcedisplayname>公众号名</sourcedisplayname>
+    # We'll surface that as `from` so the frontend can render the publisher line like WeChat.
+    source_display_name = (
+        _extract_xml_tag_text(text, "sourcedisplayname")
+        or _extract_xml_tag_text(text, "sourceDisplayName")
+        or _extract_xml_tag_text(text, "appname")
+    )
+    source_username = (
+        _extract_xml_tag_text(text, "sourceusername")
+        or _extract_xml_tag_text(text, "sourceUsername")
+    )
 
     lower = text.lower()
 
@@ -794,13 +808,15 @@ def _parse_app_message(text: str) -> dict[str, Any]:
         }
 
     if app_type in (5, 68) and url:
-        thumb_url = _extract_xml_tag_text(text, "thumburl")
+        thumb_url = _normalize_xml_url(_extract_xml_tag_text(text, "thumburl"))
         return {
             "renderType": "link",
             "content": des or title or "[链接]",
             "title": title or des or "",
             "url": url,
             "thumbUrl": thumb_url or "",
+            "from": str(source_display_name or "").strip(),
+            "fromUsername": str(source_username or "").strip(),
         }
 
     if app_type in (6, 74):
@@ -1318,6 +1334,58 @@ def _load_contact_rows(contact_db_path: Path, usernames: list[str]) -> dict[str,
         missing = [u for u in uniq if u not in result]
         query_table("stranger", missing)
         return result
+    finally:
+        conn.close()
+
+
+def _load_usernames_by_display_names(contact_db_path: Path, names: list[str]) -> dict[str, str]:
+    """Best-effort mapping from display name -> username using contact.db.
+
+    Some appmsg/link payloads only provide `sourcedisplayname` (surfaced as `from`) but not
+    `sourceusername` (`fromUsername`). We use this mapping to recover `fromUsername` so the
+    frontend can render the publisher avatar via `/api/chat/avatar`.
+    """
+
+    uniq = list(dict.fromkeys([str(n or "").strip() for n in names if str(n or "").strip()]))
+    if not uniq:
+        return {}
+
+    placeholders = ",".join(["?"] * len(uniq))
+    hits: dict[str, set[str]] = {}
+
+    conn = sqlite3.connect(str(contact_db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        def query_table(table: str) -> None:
+            for col in ("remark", "nick_name", "alias"):
+                sql = f"""
+                    SELECT username, {col} AS display_name
+                    FROM {table}
+                    WHERE {col} IN ({placeholders})
+                """
+                try:
+                    rows = conn.execute(sql, uniq).fetchall()
+                except Exception:
+                    rows = []
+                for r in rows:
+                    try:
+                        dn = str(r["display_name"] or "").strip()
+                        u = str(r["username"] or "").strip()
+                    except Exception:
+                        continue
+                    if not dn or not u:
+                        continue
+                    hits.setdefault(dn, set()).add(u)
+
+        query_table("contact")
+        query_table("stranger")
+
+        # Only return unambiguous mappings (display name -> exactly 1 username).
+        out: dict[str, str] = {}
+        for dn, users in hits.items():
+            if len(users) == 1:
+                out[dn] = next(iter(users))
+        return out
     finally:
         conn.close()
 
