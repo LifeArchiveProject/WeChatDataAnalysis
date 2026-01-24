@@ -289,7 +289,13 @@
                 <!-- 消息发送者头像 -->
                 <div class="w-[36px] h-[36px] rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="[message.isSent ? 'ml-3' : 'mr-3', { 'privacy-blur': privacyMode }]">
                   <div v-if="message.avatar" class="w-full h-full">
-                    <img :src="message.avatar" :alt="message.sender + '的头像'" class="w-full h-full object-cover">
+                    <img
+                      :src="message.avatar"
+                      :alt="message.sender + '的头像'"
+                      class="w-full h-full object-cover"
+                      referrerpolicy="no-referrer"
+                      @error="onMessageAvatarError($event, message)"
+                    >
                   </div>
                   <div v-else class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
                     :style="{ backgroundColor: message.avatarColor || (message.isSent ? '#4B5563' : '#6B7280') }">
@@ -319,7 +325,9 @@
                     :heading="message.title || message.content"
                     :abstract="message.content"
                     :preview="message.preview"
+                    :fromAvatar="message.fromAvatar"
                     :from="message.from"
+                    :isSent="message.isSent"
                   />
                   <div v-else-if="message.renderType === 'file'"
                     class="wechat-redpacket-card wechat-special-card wechat-file-card msg-radius"
@@ -3912,6 +3920,36 @@ const normalizeMessage = (msg) => {
     )
   }
 
+  // WeChat public account thumbnails (mmbiz.qpic.cn, wx.qlogo.cn...) are hotlink-protected:
+  // the browser will get a placeholder image ("此图片来自微信公众号平台").
+  // Proxy them via backend with a mp.weixin.qq.com Referer to fetch the real image.
+  const normalizedThumbUrl = (() => {
+    // Backend may provide either `thumbUrl` (appmsg) or `preview` (some exports). Use the first usable one.
+    const candidates = [msg.thumbUrl, msg.preview]
+    for (const cand of candidates) {
+      if (isUsableMediaUrl(cand)) return normalizeMaybeUrl(cand)
+    }
+    return ''
+  })()
+  const normalizedLinkPreviewUrl = (() => {
+    const u = normalizedThumbUrl
+    if (!u) return ''
+    if (/^\/api\/chat\/media\//i.test(u) || /^blob:/i.test(u) || /^data:/i.test(u)) return u
+    if (!/^https?:\/\//i.test(u)) return u
+    try {
+      const host = new URL(u).hostname.toLowerCase()
+      if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
+        return `${mediaBase}/api/chat/media/proxy_image?url=${encodeURIComponent(u)}`
+      }
+    } catch {}
+    return u
+  })()
+
+  const fromUsername = String(msg.fromUsername || '').trim()
+  const fromAvatar = fromUsername
+    ? `${mediaBase}/api/chat/avatar?account=${encodeURIComponent(selectedAccount.value || '')}&username=${encodeURIComponent(fromUsername)}`
+    : ''
+
   const localEmojiUrl = msg.emojiMd5 ? `${mediaBase}/api/chat/media/emoji?account=${encodeURIComponent(selectedAccount.value || '')}&md5=${encodeURIComponent(msg.emojiMd5)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : ''
   const localImageUrl = (() => {
     if (!msg.imageMd5 && !msg.imageFileId) return ''
@@ -4051,12 +4089,21 @@ const normalizeMessage = (msg) => {
     transferReceived: msg.paySubType === '3' || msg.transferStatus === '已收款',
     voiceUrl: normalizedVoiceUrl || '',
     voiceDuration: msg.voiceLength || msg.voiceDuration || '',
-    preview: msg.thumbUrl || '',
-    from: '',
+    preview: normalizedLinkPreviewUrl || '',
+    from: String(msg.from || '').trim(),
+    fromUsername,
+    fromAvatar,
     isGroup: !!selectedContact.value?.isGroup,
-    avatar: msg.senderAvatar || fallbackAvatar || null,
+    // Backends may use either `senderAvatar` (our API) or `avatar` (exported JSON).
+    avatar: msg.senderAvatar || msg.avatar || fallbackAvatar || null,
     avatarColor: null
   }
+}
+
+const onMessageAvatarError = (e, message) => {
+  // Make sure we fall back to the initial avatar if the URL 404s/blocks.
+  try { e?.target && (e.target.style.display = 'none') } catch {}
+  try { if (message) message.avatar = null } catch {}
 }
 
 const shouldShowEmojiDownload = (message) => {
@@ -4989,28 +5036,89 @@ const LinkCard = defineComponent({
     heading: { type: String, default: '' },
     abstract: { type: String, default: '' },
     preview: { type: String, default: '' },
-    from: { type: String, default: '' }
+    fromAvatar: { type: String, default: '' },
+    from: { type: String, default: '' },
+    isSent: { type: Boolean, default: false }
   },
   setup(props) {
-    return () => h(
-      'a',
-      {
-        href: props.href,
-        target: '_blank',
-        rel: 'noreferrer',
-        class: 'block max-w-sm w-full bg-white msg-radius border border-neutral-200 overflow-hidden hover:bg-gray-50 transition-colors'
-      },
-      [
-        props.preview ? h('div', { class: 'w-full bg-black/5' }, [
-          h('img', { src: props.preview, alt: props.heading || '链接预览', class: 'w-full max-h-40 object-cover' })
-        ]) : null,
-        h('div', { class: 'px-3 py-2' }, [
-          h('div', { class: 'text-sm font-medium text-gray-900 line-clamp-2' }, props.heading || props.href),
-          props.abstract ? h('div', { class: 'text-xs text-gray-600 mt-1 line-clamp-2' }, props.abstract) : null,
-          props.from ? h('div', { class: 'text-[10px] text-gray-400 mt-1 truncate' }, props.from) : null
-        ])
-      ].filter(Boolean)
-    )
+    const getFromText = () => {
+      const raw = String(props.from || '').trim()
+      if (raw) return raw
+      // Fallback: when the appmsg XML doesn't provide sourcedisplayname/appname,
+      // show the host so the footer row still matches WeChat's fixed card layout.
+      try {
+        const host = new URL(String(props.href || '')).hostname
+        return String(host || '').trim()
+      } catch {
+        return ''
+      }
+    }
+
+    return () => {
+      const fromText = getFromText()
+      // WeChat link cards show a small avatar next to the source text. We don't
+      // always have a real image URL, so fall back to the first glyph.
+      const fromAvatarText = (() => {
+        const t = String(fromText || '').trim()
+        return t ? (Array.from(t)[0] || '') : ''
+      })()
+      const fromAvatarUrl = String(props.fromAvatar || '').trim()
+      return h(
+        'a',
+        {
+          href: props.href,
+          target: '_blank',
+          rel: 'noreferrer',
+          class: [
+            'wechat-link-card',
+            'wechat-special-card',
+            'msg-radius',
+            props.isSent ? 'wechat-special-sent-side' : ''
+          ].filter(Boolean).join(' '),
+          // Inline size is intentional: LinkCard is a local component rendered via `h()` and
+          // does not inherit the SFC scoped CSS attribute, so relying on scoped CSS for exact
+          // sizing is fragile. Keep width in sync with the WeChat desktop card size.
+          style: {
+            width: '210px',
+            minWidth: '210px',
+            maxWidth: '210px',
+            display: 'flex',
+            flexDirection: 'column',
+            boxSizing: 'border-box',
+            flex: '0 0 auto',
+            background: '#fff',
+            border: 'none',
+            boxShadow: 'none',
+            textDecoration: 'none',
+            outline: 'none'
+          }
+        },
+        [
+          h('div', { class: 'wechat-link-content' }, [
+            h('div', { class: 'wechat-link-info' }, [
+              h('div', { class: 'wechat-link-title' }, props.heading || props.href),
+              props.abstract ? h('div', { class: 'wechat-link-desc' }, props.abstract) : null
+            ].filter(Boolean)),
+            props.preview ? h('div', { class: 'wechat-link-thumb' }, [
+              h('img', { src: props.preview, alt: props.heading || '链接预览', class: 'wechat-link-thumb-img', referrerpolicy: 'no-referrer' })
+            ]) : null
+          ].filter(Boolean)),
+          h('div', { class: 'wechat-link-from' }, [
+            h('div', { class: 'wechat-link-from-avatar', 'aria-hidden': 'true' }, [
+              fromAvatarText || '\u200B',
+              fromAvatarUrl ? h('img', {
+                src: fromAvatarUrl,
+                alt: '',
+                class: 'wechat-link-from-avatar-img',
+                referrerpolicy: 'no-referrer',
+                onError: (e) => { try { e?.target && (e.target.style.display = 'none') } catch {} }
+              }) : null
+            ].filter(Boolean)),
+            h('div', { class: 'wechat-link-from-name' }, fromText || '\u200B')
+          ])
+        ].filter(Boolean)
+      )
+    }
   }
 })
 
@@ -5324,24 +5432,24 @@ const LinkCard = defineComponent({
 }
 
 /* 统一特殊消息尾巴（红包 / 文件等） */
-.wechat-special-card {
+:deep(.wechat-special-card) {
   position: relative;
   overflow: visible;
 }
 
-.wechat-special-card::after {
+:deep(.wechat-special-card)::after {
   content: '';
   position: absolute;
-  top: 16px;
+  top: 12px;
   left: -4px;
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   background-color: inherit;
   transform: rotate(45deg);
   border-radius: 2px;
 }
 
-.wechat-special-sent-side::after {
+:deep(.wechat-special-sent-side)::after {
   left: auto;
   right: -4px;
 }
@@ -5691,6 +5799,138 @@ const LinkCard = defineComponent({
   height: 18px;
   object-fit: contain;
   margin-right: 4px;
+}
+
+/* 链接消息样式 - 微信风格 */
+:deep(.wechat-link-card) {
+  width: 210px;
+  min-width: 210px;
+  max-width: 210px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  border: none;
+  box-shadow: none;
+  outline: none;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+}
+
+:deep(.wechat-link-card:hover) {
+  background: #f5f5f5;
+}
+
+:deep(.wechat-link-content) {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  box-sizing: border-box;
+  /* Keep a small breathing room above the footer divider. */
+  padding: 8px 10px 6px;
+  flex: 1 1 auto;
+}
+
+:deep(.wechat-link-info) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+:deep(.wechat-link-title) {
+  font-size: 14px;
+  color: #1a1a1a;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+:deep(.wechat-link-desc) {
+  font-size: 12px;
+  color: #8c8c8c;
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+:deep(.wechat-link-thumb) {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 0;
+  overflow: hidden;
+  background: #f2f2f2;
+  /* Center the thumbnail in the content area (WeChat desktop style). */
+  align-self: center;
+}
+
+:deep(.wechat-link-thumb-img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+:deep(.wechat-link-from) {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  position: relative;
+  flex-shrink: 0;
+}
+
+:deep(.wechat-link-from)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 11px;
+  right: 11px;
+  height: 1.5px;
+  background: #e8e8e8;
+}
+
+:deep(.wechat-link-from-avatar) {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #111;
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+:deep(.wechat-link-from-avatar-img) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+:deep(.wechat-link-from-name) {
+  font-size: 12px;
+  color: #b2b2b2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 隐私模式模糊效果 */

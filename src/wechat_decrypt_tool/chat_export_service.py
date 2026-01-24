@@ -894,6 +894,7 @@ def _parse_message_for_export(
     content_text = raw_text
     title = ""
     url = ""
+    from_name = ""
     record_item = ""
     image_md5 = ""
     image_file_id = ""
@@ -934,6 +935,7 @@ def _parse_message_for_export(
         content_text = str(parsed.get("content") or "")
         title = str(parsed.get("title") or "")
         url = str(parsed.get("url") or "")
+        from_name = str(parsed.get("from") or "")
         record_item = str(parsed.get("recordItem") or "")
         quote_title = str(parsed.get("quoteTitle") or "")
         quote_content = str(parsed.get("quoteContent") or "")
@@ -1162,6 +1164,7 @@ def _parse_message_for_export(
         "content": content_text,
         "title": title,
         "url": url,
+        "from": from_name,
         "recordItem": record_item,
         "thumbUrl": thumb_url,
         "imageMd5": image_md5,

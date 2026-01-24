@@ -39,6 +39,7 @@ from ..chat_helpers import (
     _make_snippet,
     _match_tokens,
     _load_contact_rows,
+    _load_usernames_by_display_names,
     _load_latest_message_previews,
     _lookup_resource_md5,
     _normalize_xml_url,
@@ -1519,6 +1520,8 @@ def _append_full_messages_from_rows(
         content_text = raw_text
         title = ""
         url = ""
+        from_name = ""
+        from_username = ""
         record_item = ""
         image_md5 = ""
         emoji_md5 = ""
@@ -1561,6 +1564,8 @@ def _append_full_messages_from_rows(
             content_text = str(parsed.get("content") or "")
             title = str(parsed.get("title") or "")
             url = str(parsed.get("url") or "")
+            from_name = str(parsed.get("from") or "")
+            from_username = str(parsed.get("fromUsername") or "")
             record_item = str(parsed.get("recordItem") or "")
             quote_title = str(parsed.get("quoteTitle") or "")
             quote_content = str(parsed.get("quoteContent") or "")
@@ -1781,6 +1786,7 @@ def _append_full_messages_from_rows(
                             amount = str(parsed.get("amount") or amount)
                             cover_url = str(parsed.get("coverUrl") or cover_url)
                             thumb_url = str(parsed.get("thumbUrl") or thumb_url)
+                            from_name = str(parsed.get("from") or from_name)
                             file_size = str(parsed.get("size") or file_size)
                             pay_sub_type = str(parsed.get("paySubType") or pay_sub_type)
                             file_md5 = str(parsed.get("fileMd5") or file_md5)
@@ -1828,6 +1834,8 @@ def _append_full_messages_from_rows(
                 "content": content_text,
                 "title": title,
                 "url": url,
+                "from": from_name,
+                "fromUsername": from_username,
                 "recordItem": record_item,
                 "imageMd5": image_md5,
                 "imageFileId": image_file_id,
@@ -1949,13 +1957,42 @@ def _postprocess_full_messages(
                     is_sent = m.get("isSent", False)
                     m["transferStatus"] = "已收款" if is_sent else "已被接收"
 
+    # Some appmsg payloads provide only `from` (sourcedisplayname) but not `fromUsername` (sourceusername).
+    # Recover `fromUsername` via contact.db so the frontend can render the publisher avatar.
+    missing_from_names = [
+        str(m.get("from") or "").strip()
+        for m in merged
+        if str(m.get("renderType") or "").strip() == "link"
+        and str(m.get("from") or "").strip()
+        and not str(m.get("fromUsername") or "").strip()
+    ]
+    if missing_from_names:
+        name_to_username = _load_usernames_by_display_names(contact_db_path, missing_from_names)
+        if name_to_username:
+            for m in merged:
+                if str(m.get("fromUsername") or "").strip():
+                    continue
+                if str(m.get("renderType") or "").strip() != "link":
+                    continue
+                fn = str(m.get("from") or "").strip()
+                if fn and fn in name_to_username:
+                    m["fromUsername"] = name_to_username[fn]
+
+    from_usernames = [str(m.get("fromUsername") or "").strip() for m in merged]
     uniq_senders = list(
-        dict.fromkeys([u for u in (sender_usernames + list(pat_usernames) + quote_usernames) if u])
+        dict.fromkeys([u for u in (sender_usernames + list(pat_usernames) + quote_usernames + from_usernames) if u])
     )
     sender_contact_rows = _load_contact_rows(contact_db_path, uniq_senders)
     local_sender_avatars = _query_head_image_usernames(head_image_db_path, uniq_senders)
 
     for m in merged:
+        # If appmsg doesn't provide sourcedisplayname, try mapping sourceusername to display name.
+        if (not str(m.get("from") or "").strip()) and str(m.get("fromUsername") or "").strip():
+            fu = str(m.get("fromUsername") or "").strip()
+            frow = sender_contact_rows.get(fu)
+            if frow is not None:
+                m["from"] = _pick_display_name(frow, fu)
+
         su = str(m.get("senderUsername") or "")
         if not su:
             continue
@@ -2479,6 +2516,8 @@ def _collect_chat_messages(
                 content_text = raw_text
                 title = ""
                 url = ""
+                from_name = ""
+                from_username = ""
                 record_item = ""
                 image_md5 = ""
                 emoji_md5 = ""
@@ -2523,6 +2562,8 @@ def _collect_chat_messages(
                     content_text = str(parsed.get("content") or "")
                     title = str(parsed.get("title") or "")
                     url = str(parsed.get("url") or "")
+                    from_name = str(parsed.get("from") or "")
+                    from_username = str(parsed.get("fromUsername") or "")
                     record_item = str(parsed.get("recordItem") or "")
                     quote_title = str(parsed.get("quoteTitle") or "")
                     quote_content = str(parsed.get("quoteContent") or "")
@@ -2725,6 +2766,7 @@ def _collect_chat_messages(
                                     content_text = str(parsed.get("content") or content_text)
                                     title = str(parsed.get("title") or title)
                                     url = str(parsed.get("url") or url)
+                                    from_name = str(parsed.get("from") or from_name)
                                     record_item = str(parsed.get("recordItem") or record_item)
                                     quote_title = str(parsed.get("quoteTitle") or quote_title)
                                     quote_content = str(parsed.get("quoteContent") or quote_content)
@@ -2785,6 +2827,8 @@ def _collect_chat_messages(
                         "content": content_text,
                         "title": title,
                         "url": url,
+                        "from": from_name,
+                        "fromUsername": from_username,
                         "recordItem": record_item,
                         "imageMd5": image_md5,
                         "imageFileId": image_file_id,
@@ -3124,6 +3168,8 @@ async def list_chat_messages(
                 content_text = raw_text
                 title = ""
                 url = ""
+                from_name = ""
+                from_username = ""
                 record_item = ""
                 image_md5 = ""
                 emoji_md5 = ""
@@ -3168,6 +3214,8 @@ async def list_chat_messages(
                     content_text = str(parsed.get("content") or "")
                     title = str(parsed.get("title") or "")
                     url = str(parsed.get("url") or "")
+                    from_name = str(parsed.get("from") or "")
+                    from_username = str(parsed.get("fromUsername") or "")
                     record_item = str(parsed.get("recordItem") or "")
                     quote_title = str(parsed.get("quoteTitle") or "")
                     quote_content = str(parsed.get("quoteContent") or "")
@@ -3366,6 +3414,7 @@ async def list_chat_messages(
                                     content_text = str(parsed.get("content") or content_text)
                                     title = str(parsed.get("title") or title)
                                     url = str(parsed.get("url") or url)
+                                    from_name = str(parsed.get("from") or from_name)
                                     record_item = str(parsed.get("recordItem") or record_item)
                                     quote_title = str(parsed.get("quoteTitle") or quote_title)
                                     quote_content = str(parsed.get("quoteContent") or quote_content)
@@ -3419,6 +3468,8 @@ async def list_chat_messages(
                         "content": content_text,
                         "title": title,
                         "url": url,
+                        "from": from_name,
+                        "fromUsername": from_username,
                         "recordItem": record_item,
                         "imageMd5": image_md5,
                         "imageFileId": image_file_id,
@@ -3546,15 +3597,44 @@ async def list_chat_messages(
                     is_sent = m.get("isSent", False)
                     m["transferStatus"] = "已收款" if is_sent else "已被接收"
 
+    # Some appmsg payloads provide only `from` (sourcedisplayname) but not `fromUsername` (sourceusername).
+    # Recover `fromUsername` via contact.db so the frontend can render the publisher avatar.
+    missing_from_names = [
+        str(m.get("from") or "").strip()
+        for m in merged
+        if str(m.get("renderType") or "").strip() == "link"
+        and str(m.get("from") or "").strip()
+        and not str(m.get("fromUsername") or "").strip()
+    ]
+    if missing_from_names:
+        name_to_username = _load_usernames_by_display_names(contact_db_path, missing_from_names)
+        if name_to_username:
+            for m in merged:
+                if str(m.get("fromUsername") or "").strip():
+                    continue
+                if str(m.get("renderType") or "").strip() != "link":
+                    continue
+                fn = str(m.get("from") or "").strip()
+                if fn and fn in name_to_username:
+                    m["fromUsername"] = name_to_username[fn]
+
+    from_usernames = [str(m.get("fromUsername") or "").strip() for m in merged]
     uniq_senders = list(
         dict.fromkeys(
-            [u for u in (sender_usernames + list(pat_usernames) + quote_usernames) if u]
+            [u for u in (sender_usernames + list(pat_usernames) + quote_usernames + from_usernames) if u]
         )
     )
     sender_contact_rows = _load_contact_rows(contact_db_path, uniq_senders)
     local_sender_avatars = _query_head_image_usernames(head_image_db_path, uniq_senders)
 
     for m in merged:
+        # If appmsg doesn't provide sourcedisplayname, try mapping sourceusername to display name.
+        if (not str(m.get("from") or "").strip()) and str(m.get("fromUsername") or "").strip():
+            fu = str(m.get("fromUsername") or "").strip()
+            frow = sender_contact_rows.get(fu)
+            if frow is not None:
+                m["from"] = _pick_display_name(frow, fu)
+
         su = str(m.get("senderUsername") or "")
         if not su:
             continue
