@@ -179,6 +179,46 @@ export const useApi = () => {
     return await request(url)
   }
 
+  // 朋友圈时间线
+  const listSnsTimeline = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    if (params && params.usernames && Array.isArray(params.usernames) && params.usernames.length > 0) {
+      query.set('usernames', params.usernames.join(','))
+    } else if (params && params.usernames && typeof params.usernames === 'string') {
+      query.set('usernames', params.usernames)
+    }
+    if (params && params.keyword) query.set('keyword', params.keyword)
+    const url = '/sns/timeline' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 朋友圈图片本地缓存候选（用于错图时手动选择）
+  const listSnsMediaCandidates = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.create_time != null) query.set('create_time', String(params.create_time))
+    if (params && params.width != null) query.set('width', String(params.width))
+    if (params && params.height != null) query.set('height', String(params.height))
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    const url = '/sns/media_candidates' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 保存朋友圈图片手动匹配结果（本机）
+  const saveSnsMediaPicks = async (data = {}) => {
+    return await request('/sns/media_picks', {
+      method: 'POST',
+      body: {
+        account: data.account || null,
+        picks: (data && data.picks && typeof data.picks === 'object' && !Array.isArray(data.picks)) ? data.picks : {}
+      }
+    })
+  }
+
   const openChatMediaFolder = async (params = {}) => {
     const query = new URLSearchParams()
     if (params && params.account) query.set('account', params.account)
@@ -288,6 +328,9 @@ export const useApi = () => {
     buildChatSearchIndex,
     listChatSearchSenders,
     getChatMessagesAround,
+    listSnsTimeline,
+    listSnsMediaCandidates,
+    saveSnsMediaPicks,
     openChatMediaFolder,
     downloadChatEmoji,
     saveMediaKeys,
