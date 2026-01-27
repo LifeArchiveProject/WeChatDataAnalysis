@@ -414,7 +414,7 @@ def _is_allowed_proxy_image_host(host: str) -> bool:
     if not h:
         return False
     # WeChat public account/article thumbnails and avatars commonly live on these CDNs.
-    return h.endswith(".qpic.cn") or h.endswith(".qlogo.cn")
+    return h.endswith(".qpic.cn") or h.endswith(".qlogo.cn") or h.endswith(".tc.qq.com")
 
 
 @router.get("/api/chat/media/proxy_image", summary="代理获取远程图片（解决微信公众号图片防盗链）")
@@ -435,33 +435,52 @@ async def proxy_image(url: str):
         raise HTTPException(status_code=400, detail="Unsupported url host for proxy_image.")
 
     def _download_bytes() -> tuple[bytes, str]:
-        headers = {
+        base_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-            # qpic/qlogo often require a mp.weixin.qq.com referer (anti-hotlink)
-            "Referer": "https://mp.weixin.qq.com/",
-            "Origin": "https://mp.weixin.qq.com",
         }
-        r = requests.get(u, headers=headers, timeout=20, stream=True)
-        try:
-            r.raise_for_status()
-            content_type = str(r.headers.get("Content-Type") or "").strip()
-            max_bytes = 10 * 1024 * 1024
-            chunks: list[bytes] = []
-            total = 0
-            for ch in r.iter_content(chunk_size=64 * 1024):
-                if not ch:
-                    continue
-                chunks.append(ch)
-                total += len(ch)
-                if total > max_bytes:
-                    raise HTTPException(status_code=400, detail="Proxy image too large (>10MB).")
-            return b"".join(chunks), content_type
-        finally:
+
+        # Different Tencent CDNs enforce different anti-hotlink rules.
+        # Try a couple of safe referers so Moments(qpic) and MP(qpic) both work.
+        header_variants = [
+            {"Referer": "https://wx.qq.com/", "Origin": "https://wx.qq.com"},
+            {"Referer": "https://mp.weixin.qq.com/", "Origin": "https://mp.weixin.qq.com"},
+            {"Referer": "https://www.baidu.com/", "Origin": "https://www.baidu.com"},
+            {},
+        ]
+
+        last_err: Exception | None = None
+        for extra in header_variants:
+            headers = dict(base_headers)
+            headers.update(extra)
+            r = requests.get(u, headers=headers, timeout=20, stream=True)
             try:
-                r.close()
-            except Exception:
-                pass
+                r.raise_for_status()
+                content_type = str(r.headers.get("Content-Type") or "").strip()
+                max_bytes = 10 * 1024 * 1024
+                chunks: list[bytes] = []
+                total = 0
+                for ch in r.iter_content(chunk_size=64 * 1024):
+                    if not ch:
+                        continue
+                    chunks.append(ch)
+                    total += len(ch)
+                    if total > max_bytes:
+                        raise HTTPException(status_code=400, detail="Proxy image too large (>10MB).")
+                return b"".join(chunks), content_type
+            except HTTPException:
+                # Hard failure, don't retry with another referer.
+                raise
+            except Exception as e:
+                last_err = e
+            finally:
+                try:
+                    r.close()
+                except Exception:
+                    pass
+
+        # All variants failed.
+        raise last_err or RuntimeError("proxy_image download failed")
 
     try:
         data, ct = await asyncio.to_thread(_download_bytes)
