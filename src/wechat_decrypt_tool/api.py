@@ -18,6 +18,7 @@ from .routers.decrypt import router as _decrypt_router
 from .routers.health import router as _health_router
 from .routers.keys import router as _keys_router
 from .routers.media import router as _media_router
+from .routers.sns import router as _sns_router
 from .routers.wechat_detection import router as _wechat_detection_router
 from .wcdb_realtime import WCDB_REALTIME, shutdown as _wcdb_shutdown
 
@@ -51,6 +52,7 @@ app.include_router(_media_router)
 app.include_router(_chat_router)
 app.include_router(_chat_export_router)
 app.include_router(_chat_media_router)
+app.include_router(_sns_router)
 
 
 class _SPAStaticFiles(StaticFiles):

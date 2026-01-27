@@ -68,6 +68,13 @@ def _load_wcdb_lib() -> ctypes.CDLL:
         lib.wcdb_close_account.argtypes = [ctypes.c_int64]
         lib.wcdb_close_account.restype = ctypes.c_int
 
+        # Optional: wcdb_set_my_wxid(handle, wxid)
+        try:
+            lib.wcdb_set_my_wxid.argtypes = [ctypes.c_int64, ctypes.c_char_p]
+            lib.wcdb_set_my_wxid.restype = ctypes.c_int
+        except Exception:
+            pass
+
         lib.wcdb_get_sessions.argtypes = [ctypes.c_int64, ctypes.POINTER(ctypes.c_char_p)]
         lib.wcdb_get_sessions.restype = ctypes.c_int
 
@@ -94,6 +101,37 @@ def _load_wcdb_lib() -> ctypes.CDLL:
 
         lib.wcdb_get_group_members.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_char_p)]
         lib.wcdb_get_group_members.restype = ctypes.c_int
+
+        # Optional: execute arbitrary SQL on a selected database kind/path.
+        # Signature: wcdb_exec_query(handle, kind, path, sql, out_json)
+        try:
+            lib.wcdb_exec_query.argtypes = [
+                ctypes.c_int64,
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.POINTER(ctypes.c_char_p),
+            ]
+            lib.wcdb_exec_query.restype = ctypes.c_int
+        except Exception:
+            pass
+
+        # Optional (newer DLLs): wcdb_get_sns_timeline(handle, limit, offset, usernames_json, keyword, start_time, end_time, out_json)
+        try:
+            lib.wcdb_get_sns_timeline.argtypes = [
+                ctypes.c_int64,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.POINTER(ctypes.c_char_p),
+            ]
+            lib.wcdb_get_sns_timeline.restype = ctypes.c_int
+        except Exception:
+            # Older wcdb_api.dll may not expose this export.
+            pass
 
         lib.wcdb_get_logs.argtypes = [ctypes.POINTER(ctypes.c_char_p)]
         lib.wcdb_get_logs.restype = ctypes.c_int
@@ -195,6 +233,30 @@ def open_account(session_db_path: Path, key_hex: str) -> int:
     return int(out_handle.value)
 
 
+def set_my_wxid(handle: int, wxid: str) -> bool:
+    """Best-effort set the "my wxid" context for some WCDB APIs."""
+    try:
+        _ensure_initialized()
+    except Exception:
+        return False
+
+    lib = _load_wcdb_lib()
+    fn = getattr(lib, "wcdb_set_my_wxid", None)
+    if not fn:
+        return False
+
+    w = str(wxid or "").strip()
+    if not w:
+        return False
+
+    try:
+        rc = int(fn(ctypes.c_int64(int(handle)), w.encode("utf-8")))
+    except Exception:
+        return False
+
+    return rc == 0
+
+
 def close_account(handle: int) -> None:
     try:
         h = int(handle)
@@ -291,6 +353,93 @@ def get_avatar_urls(handle: int, usernames: list[str]) -> dict[str, str]:
     if isinstance(decoded, dict):
         return {str(k): str(v) for k, v in decoded.items()}
     return {}
+
+
+def exec_query(handle: int, *, kind: str, path: Optional[str], sql: str) -> list[dict[str, Any]]:
+    """Execute raw SQL on a specific db kind/path via WCDB.
+
+    This is primarily used for SNS/other dbs that are not directly exposed by dedicated APIs.
+    """
+    _ensure_initialized()
+    lib = _load_wcdb_lib()
+    fn = getattr(lib, "wcdb_exec_query", None)
+    if not fn:
+        raise WCDBRealtimeError("Current wcdb_api.dll does not support exec_query.")
+
+    k = str(kind or "").strip()
+    if not k:
+        raise WCDBRealtimeError("Missing kind for exec_query.")
+
+    s = str(sql or "").strip()
+    if not s:
+        return []
+
+    p = None if path is None else str(path or "").strip()
+
+    out_json = _call_out_json(
+        fn,
+        ctypes.c_int64(int(handle)),
+        k.encode("utf-8"),
+        None if p is None else p.encode("utf-8"),
+        s.encode("utf-8"),
+    )
+    decoded = _safe_load_json(out_json)
+    if isinstance(decoded, list):
+        out: list[dict[str, Any]] = []
+        for x in decoded:
+            if isinstance(x, dict):
+                out.append(x)
+        return out
+    return []
+
+
+def get_sns_timeline(
+    handle: int,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    usernames: Optional[list[str]] = None,
+    keyword: str | None = None,
+    start_time: int = 0,
+    end_time: int = 0,
+) -> list[dict[str, Any]]:
+    """Read Moments (SnsTimeLine) from the live encrypted db_storage via WCDB.
+
+    Requires a newer wcdb_api.dll export: wcdb_get_sns_timeline.
+    """
+    _ensure_initialized()
+    lib = _load_wcdb_lib()
+    fn = getattr(lib, "wcdb_get_sns_timeline", None)
+    if not fn:
+        raise WCDBRealtimeError("Current wcdb_api.dll does not support sns timeline.")
+
+    lim = max(0, int(limit or 0))
+    off = max(0, int(offset or 0))
+
+    users = [str(u or "").strip() for u in (usernames or []) if str(u or "").strip()]
+    users = list(dict.fromkeys(users))
+    users_json = json.dumps(users, ensure_ascii=False) if users else ""
+
+    kw = str(keyword or "").strip()
+
+    payload = _call_out_json(
+        fn,
+        ctypes.c_int64(int(handle)),
+        ctypes.c_int32(lim),
+        ctypes.c_int32(off),
+        users_json.encode("utf-8"),
+        kw.encode("utf-8"),
+        ctypes.c_int32(int(start_time or 0)),
+        ctypes.c_int32(int(end_time or 0)),
+    )
+    decoded = _safe_load_json(payload)
+    if isinstance(decoded, list):
+        out: list[dict[str, Any]] = []
+        for x in decoded:
+            if isinstance(x, dict):
+                out.append(x)
+        return out
+    return []
 
 
 def shutdown() -> None:
@@ -427,6 +576,11 @@ class WCDBRealtimeManager:
 
             session_db_path = _resolve_session_db_path(db_storage_dir)
             handle = open_account(session_db_path, key)
+            # Some WCDB APIs (e.g. exec_query on non-session DBs) may require this context.
+            try:
+                set_my_wxid(handle, account)
+            except Exception:
+                pass
 
             conn = WCDBRealtimeConnection(
                 account=account,
