@@ -110,6 +110,14 @@
     @apply hover:transform hover:scale-[1.02] transition-all duration-300;
   }
 
+  /* Wrapped (年度总结) 背景纹理 */
+  .wrapped-noise {
+    background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNjAiIGhlaWdodD0iMTYwIj4KICA8ZmlsdGVyIGlkPSJuIj4KICAgIDxmZVR1cmJ1bGVuY2UgdHlwZT0iZnJhY3RhbE5vaXNlIiBiYXNlRnJlcXVlbmN5PSIwLjgiIG51bU9jdGF2ZXM9IjQiIHN0aXRjaFRpbGVzPSJzdGl0Y2giLz4KICAgIDxmZUNvbG9yTWF0cml4IHR5cGU9InNhdHVyYXRlIiB2YWx1ZXM9IjAiLz4KICA8L2ZpbHRlcj4KICA8cmVjdCB3aWR0aD0iMTYwIiBoZWlnaHQ9IjE2MCIgZmlsdGVyPSJ1cmwoI24pIiBvcGFjaXR5PSIwLjQ1Ii8+Cjwvc3ZnPg==");
+    background-repeat: repeat;
+    background-size: 320px 320px;
+    mix-blend-mode: multiply;
+  }
+
   /* 输入框样式 */
   .input {
     @apply w-full px-4 py-3 bg-[#f7f8fa] border border-transparent rounded-xl focus:outline-none focus:ring-2 focus:ring-[#07c160] focus:bg-white focus:border-[#07c160] transition-all duration-200;

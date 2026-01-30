@@ -311,6 +311,16 @@ export const useApi = () => {
     if (!exportId) throw new Error('Missing exportId')
     return await request(`/chat/exports/${encodeURIComponent(String(exportId))}`, { method: 'DELETE' })
   }
+
+  // WeChat Wrapped（年度总结）
+  const getWrappedAnnual = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.year != null) query.set('year', String(params.year))
+    if (params && params.account) query.set('account', String(params.account))
+    if (params && params.refresh != null) query.set('refresh', String(!!params.refresh))
+    const url = '/wrapped/annual' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
   
   return {
     detectWechat,
@@ -339,6 +349,7 @@ export const useApi = () => {
     createChatExport,
     getChatExport,
     listChatExports,
-    cancelChatExport
+    cancelChatExport,
+    getWrappedAnnual
   }
 }
