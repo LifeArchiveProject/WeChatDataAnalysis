@@ -11,8 +11,8 @@
       class="absolute inset-0 bg-[linear-gradient(rgba(7,193,96,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(7,193,96,0.05)_1px,transparent_1px)] bg-[size:52px_52px] opacity-[0.28]"
     ></div>
 
-    <!-- Grain/noise: adds texture without changing the base color -->
-    <div class="absolute inset-0 wrapped-noise opacity-[0.06]"></div>
+    <!-- Grain/noise: enhanced with dynamic jitter for CRT feel -->
+    <div class="absolute inset-0 wrapped-noise-enhanced opacity-[0.08]"></div>
 
     <!-- Gentle vignette so typography stays readable on textured bg -->
     <div class="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-white/50 to-transparent"></div>

@@ -321,6 +321,28 @@ export const useApi = () => {
     const url = '/wrapped/annual' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
+
+  // WeChat Wrapped（年度总结）- 目录/元信息（轻量，用于按页懒加载）
+  const getWrappedAnnualMeta = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.year != null) query.set('year', String(params.year))
+    if (params && params.account) query.set('account', String(params.account))
+    if (params && params.refresh != null) query.set('refresh', String(!!params.refresh))
+    const url = '/wrapped/annual/meta' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // WeChat Wrapped（年度总结）- 单张卡片（按页加载）
+  const getWrappedAnnualCard = async (cardId, params = {}) => {
+    if (cardId == null) throw new Error('Missing cardId')
+    const query = new URLSearchParams()
+    if (params && params.year != null) query.set('year', String(params.year))
+    if (params && params.account) query.set('account', String(params.account))
+    if (params && params.refresh != null) query.set('refresh', String(!!params.refresh))
+    const safeId = encodeURIComponent(String(cardId))
+    const url = `/wrapped/annual/cards/${safeId}` + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
   
   return {
     detectWechat,
@@ -350,6 +372,8 @@ export const useApi = () => {
     getChatExport,
     listChatExports,
     cancelChatExport,
-    getWrappedAnnual
+    getWrappedAnnual,
+    getWrappedAnnualMeta,
+    getWrappedAnnualCard
   }
 }

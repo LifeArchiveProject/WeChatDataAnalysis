@@ -2,6 +2,33 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Fusion Pixel Font - 像素字体 @font-face 声明 */
+/* 下载地址: https://github.com/TakWolf/fusion-pixel-font/releases */
+
+@font-face {
+  font-family: 'Fusion Pixel 12';
+  src: url('/fonts/fusion-pixel-12px-monospaced-zh_hans.otf.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Fusion Pixel 10';
+  src: url('/fonts/fusion-pixel-10px-monospaced-zh_hans.otf.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Fusion Pixel 8';
+  src: url('/fonts/fusion-pixel-8px-monospaced-zh_hans.otf.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* 自定义全局样式 - 微信配色主题 */
 @layer base {
   :root {
@@ -10,38 +37,43 @@
     --wechat-green-hover: #06ad56;
     --wechat-green-light: #e6f7f0;
     --wechat-green-dark: #059341;
-    
+
     /* 主色调 */
     --primary-color: #07c160;
     --primary-hover: #06ad56;
     --secondary-color: #4c9e5f;
-    
+
     /* 危险色 */
     --danger-color: #fa5151;
     --danger-hover: #e94848;
-    
+
     /* 警告色 */
     --warning-color: #ffc300;
     --warning-hover: #e6ad00;
-    
+
     /* 背景色 */
     --bg-primary: #f7f8fa;
     --bg-secondary: #ffffff;
     --bg-gray: #ededed;
     --bg-dark: #191919;
-    
+
     /* 文字颜色 */
     --text-primary: #191919;
     --text-secondary: #576b95;
     --text-light: #888888;
     --text-white: #ffffff;
-    
+
     /* 边框颜色 */
     --border-color: #e7e7e7;
     --border-light: #f4f4f4;
 
     /* 统一消息圆角（聊天所有消息共用） */
     --message-radius: 4px;
+
+    /* Wrapped 年度总结 - 像素字体 */
+    --font-pixel-12: 'Fusion Pixel 12', 'Microsoft YaHei', sans-serif;
+    --font-pixel-10: 'Fusion Pixel 10', 'Microsoft YaHei', sans-serif;
+    --font-pixel-8: 'Fusion Pixel 8', 'Microsoft YaHei', sans-serif;
   }
 
   body {
@@ -80,6 +112,16 @@
   /* 统一的消息圆角工具类 */
   .msg-radius { border-radius: var(--message-radius); }
   .msg-bubble { @apply leading-normal break-words text-pretty; border-radius: var(--message-radius); }
+
+  /* 隐私模式（通用）：默认模糊，悬停显示 */
+  .privacy-blur {
+    filter: blur(9px);
+    transition: filter 0.2s ease;
+  }
+
+  .privacy-blur:hover {
+    filter: none;
+  }
   /* 按钮样式 */
   .btn {
     @apply px-6 py-3 rounded-full font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 transform active:scale-95;
@@ -116,6 +158,129 @@
     background-repeat: repeat;
     background-size: 320px 320px;
     mix-blend-mode: multiply;
+  }
+
+  /* Wrapped 增强噪点纹理（动态抖动） */
+  .wrapped-noise-enhanced {
+    background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIj4KICA8ZmlsdGVyIGlkPSJuIj4KICAgIDxmZVR1cmJ1bGVuY2UgdHlwZT0iZnJhY3RhbE5vaXNlIiBiYXNlRnJlcXVlbmN5PSIwLjkiIG51bU9jdGF2ZXM9IjUiIHN0aXRjaFRpbGVzPSJzdGl0Y2giLz4KICAgIDxmZUNvbG9yTWF0cml4IHR5cGU9InNhdHVyYXRlIiB2YWx1ZXM9IjAiLz4KICA8L2ZpbHRlcj4KICA8cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsdGVyPSJ1cmwoI24pIiBvcGFjaXR5PSIwLjUiLz4KPC9zdmc+");
+    background-repeat: repeat;
+    background-size: 200px 200px;
+    mix-blend-mode: multiply;
+    animation: noise-jitter 0.5s steps(3) infinite;
+  }
+
+  /* Wrapped 像素字体类 */
+  /* Wrapped typography: default is modern; `.wrapped-retro` enables pixel font + CRT vibe. */
+  .wrapped-title {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .wrapped-title-en {
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .wrapped-body {
+    line-height: 1.8;
+  }
+
+  .wrapped-label {
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .wrapped-number {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wrapped-retro .wrapped-title {
+    font-family: var(--font-pixel-12);
+    font-weight: normal;
+    letter-spacing: 0.05em;
+    image-rendering: pixelated;
+    -webkit-font-smoothing: none;
+  }
+
+  .wrapped-retro .wrapped-title-en {
+    font-family: var(--font-pixel-12);
+    font-weight: normal;
+    letter-spacing: 0.08em;
+    image-rendering: pixelated;
+    -webkit-font-smoothing: none;
+  }
+
+  .wrapped-retro .wrapped-body {
+    font-family: var(--font-pixel-10);
+    font-weight: normal;
+    line-height: 1.8;
+    image-rendering: pixelated;
+    -webkit-font-smoothing: none;
+  }
+
+  .wrapped-retro .wrapped-label {
+    font-family: var(--font-pixel-8);
+    font-weight: normal;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    image-rendering: pixelated;
+    -webkit-font-smoothing: none;
+  }
+
+  .wrapped-retro .wrapped-number {
+    font-family: var(--font-pixel-12);
+    font-weight: normal;
+    font-variant-numeric: tabular-nums;
+    image-rendering: pixelated;
+    -webkit-font-smoothing: none;
+  }
+
+  /* CRT 扫描线 - 水平线条（明显可见） */
+  .crt-scanlines {
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px,
+      transparent 3px,
+      rgba(0, 0, 0, 0.15) 3px,
+      rgba(0, 0, 0, 0.15) 4px
+    );
+    background-size: 100% 4px;
+    animation: scanline-scroll 12s linear infinite;
+  }
+
+  /* CRT RGB 子像素 - 垂直彩色条纹 */
+  .crt-rgb-pixels {
+    background-image: repeating-linear-gradient(
+      to right,
+      rgba(255, 0, 0, 0.06) 0px,
+      rgba(255, 0, 0, 0.06) 1px,
+      rgba(0, 255, 0, 0.06) 1px,
+      rgba(0, 255, 0, 0.06) 2px,
+      rgba(0, 0, 255, 0.06) 2px,
+      rgba(0, 0, 255, 0.06) 3px
+    );
+  }
+
+  /* CRT 闪烁 - 亮度波动 */
+  .crt-flicker {
+    background-color: rgba(255, 255, 255, 0.015);
+    animation: crt-flicker 0.08s infinite alternate;
+  }
+
+  /* CRT 暗角 - 边缘渐暗（更强） */
+  .crt-vignette {
+    box-shadow: inset 0 0 250px 80px rgba(0, 0, 0, 0.15);
+  }
+
+  /* CRT 屏幕曲率效果 */
+  .crt-curvature {
+    background: radial-gradient(
+      ellipse at center,
+      transparent 0%,
+      transparent 40%,
+      rgba(0, 0, 0, 0.1) 100%
+    );
   }
 
   /* 输入框样式 */
@@ -931,4 +1096,54 @@
     transform: translateX(0);
     opacity: 1;
   }
+}
+
+/* CRT 和 Wrapped 动画关键帧 */
+@keyframes scanline-scroll {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 0 100vh;
+  }
+}
+
+@keyframes crt-flicker {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.98;
+  }
+}
+
+@keyframes noise-jitter {
+  0% {
+    transform: translate(0, 0);
+  }
+  33% {
+    transform: translate(-1px, 1px);
+  }
+  66% {
+    transform: translate(1px, -1px);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+/* Wrapped 入场动画 */
+@keyframes wrapped-fade-in {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.wrapped-animate-in {
+  animation: wrapped-fade-in 0.6s ease-out forwards;
 }

@@ -3,13 +3,12 @@
     <div class="px-6 py-5 border-b border-[#F3F3F3]">
       <div class="flex items-start justify-between gap-4">
         <div>
-          <div class="text-xs font-semibold tracking-[0.22em] text-[#00000066]">
-            CARD {{ String(cardId).padStart(2, '0') }}
-          </div>
-          <h2 class="mt-2 text-xl font-bold text-[#000000e6]">{{ title }}</h2>
-          <p v-if="narrative" class="mt-2 text-sm text-[#7F7F7F]">
-            {{ narrative }}
-          </p>
+          <h2 class="wrapped-title text-xl text-[#000000e6]">{{ title }}</h2>
+          <slot name="narrative">
+            <p v-if="narrative" class="mt-2 wrapped-body text-sm text-[#7F7F7F] whitespace-pre-wrap">
+              {{ narrative }}
+            </p>
+          </slot>
         </div>
         <slot name="badge" />
       </div>
@@ -24,13 +23,12 @@
     <div class="relative h-full max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12 flex flex-col">
       <div class="flex items-start justify-between gap-4">
         <div>
-          <div class="text-xs font-semibold tracking-[0.22em] text-[#00000066]">
-            CARD {{ String(cardId).padStart(2, '0') }}
-          </div>
-          <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-[#000000e6]">{{ title }}</h2>
-          <p v-if="narrative" class="mt-3 text-sm sm:text-base text-[#7F7F7F] max-w-2xl">
-            {{ narrative }}
-          </p>
+          <h2 class="wrapped-title text-2xl sm:text-3xl text-[#000000e6]">{{ title }}</h2>
+          <slot name="narrative">
+            <p v-if="narrative" class="mt-3 wrapped-body text-sm sm:text-base text-[#7F7F7F] max-w-2xl whitespace-pre-wrap">
+              {{ narrative }}
+            </p>
+          </slot>
         </div>
         <slot name="badge" />
       </div>
