@@ -60,7 +60,8 @@
             <span class="dot dot-yellow"></span>
             <span class="dot dot-green"></span>
           </div>
-          <div class="keyboard-stats">{{ formatInt(totalKeyHits) }} KEYSTROKES</div>
+          <div class="keyboard-hint">键帽磨损程度反映你的打字频率</div>
+          <div class="keyboard-stats">{{ formatInt(totalKeyHits) }} 次敲击</div>
         </div>
 
         <!-- 键盘主体 -->
@@ -70,11 +71,11 @@
               v-for="key in row"
               :key="key.code + key.label"
               class="kb-key"
-              :class="[`kb-w-${key.w || 1}`, { 'kb-space': key.isSpace }]"
+              :class="[`kb-w-${key.w || 1}`, { 'kb-space': key.isSpace }, getKeyClasses(key.code)]"
               :style="getKeyStyle(key.code)"
             >
               <div class="kb-key-top" :style="getKeyTopStyle(key.code)">
-                <span v-if="key.sub" class="kb-sub">{{ key.sub }}</span>
+                <span v-if="key.sub" class="kb-sub" :style="getLabelStyle(key.code)">{{ key.sub }}</span>
                 <span v-if="key.label" class="kb-label" :class="{ 'kb-label-sm': key.isFunc }" :style="getLabelStyle(key.code)">{{ key.label }}</span>
                 <div v-if="key.isSpace" class="kb-space-bar"></div>
               </div>
@@ -83,7 +84,7 @@
         </div>
 
         <!-- 底部品牌 -->
-        <div class="keyboard-brand">WeChat Mechanical KB</div>
+        <div class="keyboard-brand">微信机械键盘</div>
       </div>
     </div>
   </div>
@@ -157,6 +158,45 @@ const getWear = (code) => {
   return Math.min(1, Math.pow(ratio, 1.6))
 }
 
+// ========== 10级磨损系统 ==========
+
+// 磨损等级阈值
+const LEVEL_THRESHOLDS = [0, 0.10, 0.20, 0.35, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00]
+
+// 获取磨损等级 (0-10)
+const getWearLevel = (wear) => {
+  if (wear === 0) return 0
+  if (wear >= 1) return 10
+  for (let i = 1; i < LEVEL_THRESHOLDS.length; i++) {
+    if (wear <= LEVEL_THRESHOLDS[i]) return i
+  }
+  return 10
+}
+
+// 获取当前等级内的进度 (0-1)，用于等级内平滑过渡
+const getWearProgress = (wear) => {
+  const level = getWearLevel(wear)
+  if (level === 0 || level === 10) return 0
+  const start = LEVEL_THRESHOLDS[level - 1]
+  const end = LEVEL_THRESHOLDS[level]
+  return (wear - start) / (end - start)
+}
+
+// 根据键码确定缺角/破碎方向 (用于 level 8-9)
+const getBrokenCorner = (code) => {
+  const hash = code.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0)
+  return ['tl', 'tr', 'bl', 'br'][hash % 4]
+}
+
+// 获取键的CSS类名
+const getKeyClasses = (code) => {
+  const level = getWearLevel(getWear(code))
+  const classes = [`kb-level-${level}`]
+  if (level === 8) classes.push(`kb-broken-${getBrokenCorner(code)}`)
+  if (level === 9) classes.push(`kb-shattered-${getBrokenCorner(code)}`)
+  return classes.join(' ')
+}
+
 // 键盘布局
 const keyboardRows = [
   [
@@ -201,40 +241,81 @@ const keyboardRows = [
   ],
 ]
 
-// 键帽样式
+// 键帽样式 - 基于10级系统
 const getKeyStyle = (code) => {
   const w = getWear(code)
-  // Light theme: clean keys are bright; wear makes keys warmer and slightly darker.
-  const baseL = 94 - w * 18
-  const sat = 8 + w * 20
+  const level = getWearLevel(w)
+  const progress = getWearProgress(w)
+
+  // 等级对应的基础亮度和饱和度
+  const levelParams = [
+    { l: 94, s: 8 },   // 0: 全新
+    { l: 92, s: 12 },  // 1: 指纹油渍
+    { l: 89, s: 16 },  // 2: 涂层初磨
+    { l: 85, s: 20 },  // 3: 涂层磨损
+    { l: 80, s: 24 },  // 4: 涂层剥落
+    { l: 76, s: 26 },  // 5: 表面凹陷
+    { l: 72, s: 28 },  // 6: 细微裂纹
+    { l: 68, s: 30 },  // 7: 网状龟裂
+    { l: 64, s: 32 },  // 8: 缺角碎裂
+    { l: 60, s: 34 },  // 9: 严重破损
+    { l: 45, s: 10 },  // 10: 完全报废（轴体底座）
+  ]
+
+  const current = levelParams[level]
+  const next = levelParams[Math.min(level + 1, 10)]
+
+  // 等级内平滑插值
+  const baseL = current.l + (next.l - current.l) * progress
+  const sat = current.s + (next.s - current.s) * progress
+
   return {
     '--key-bg': `hsl(40, ${sat}%, ${baseL}%)`,
     '--key-bg-dark': `hsl(40, ${sat}%, ${baseL - 6}%)`,
     '--key-border': `hsl(40, ${Math.max(0, sat - 2)}%, ${baseL - 18}%)`,
+    '--wear-level': level,
+    '--wear-progress': progress,
   }
 }
 
 const getKeyTopStyle = (code) => {
   const w = getWear(code)
-  const highlight = 0.55 - w * 0.35
-  const depth = 0.12 + w * 0.06
+  const level = getWearLevel(w)
+  const progress = getWearProgress(w)
+
+  // 高光和深度随等级变化
+  const highlightLevels = [0.55, 0.48, 0.40, 0.32, 0.24, 0.18, 0.12, 0.08, 0.05, 0.02, 0]
+  const depthLevels = [0.12, 0.14, 0.16, 0.18, 0.20, 0.24, 0.28, 0.32, 0.36, 0.40, 0.45]
+
+  const highlight = highlightLevels[level] + (highlightLevels[Math.min(level + 1, 10)] - highlightLevels[level]) * progress
+  const depth = depthLevels[level] + (depthLevels[Math.min(level + 1, 10)] - depthLevels[level]) * progress
+
   return {
     background: `linear-gradient(180deg, var(--key-bg) 0%, var(--key-bg-dark) 100%)`,
-    // 用连续函数替代"阈值切换"，避免出现"没到阈值就看不出变化"的感觉。
     boxShadow: `inset 0 1px 0 rgba(255,255,255,${highlight}), inset 0 -1px 2px rgba(0,0,0,${depth})`,
   }
 }
 
 const getLabelStyle = (code) => {
   const w = getWear(code)
+  const level = getWearLevel(w)
+  const progress = getWearProgress(w)
+
+  // 标签透明度和模糊度随等级变化
+  const opacityLevels = [1, 0.95, 0.88, 0.75, 0.55, 0.35, 0.18, 0.08, 0.03, 0.01, 0]
+  const blurLevels = [0, 0.2, 0.4, 0.7, 1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.5]
+
+  const opacity = opacityLevels[level] + (opacityLevels[Math.min(level + 1, 10)] - opacityLevels[level]) * progress
+  const blur = blurLevels[level] + (blurLevels[Math.min(level + 1, 10)] - blurLevels[level]) * progress
+
   return {
-    opacity: 1 - w * 0.85,
-    filter: `blur(${w * 1.8}px)`,
+    opacity: opacity,
+    filter: `blur(${blur}px)`,
   }
 }
 </script>
 
-<style scoped>
+<style>
 /* 头像 */
 .avatar-box {
   @apply w-8 h-8 rounded-lg border border-[#00000010] flex items-center justify-center flex-shrink-0;
@@ -289,7 +370,7 @@ const getLabelStyle = (code) => {
 }
 
 .keyboard-header {
-  @apply flex items-center justify-between mb-2 px-1;
+  @apply relative flex items-center justify-between mb-2 px-1;
 }
 
 .keyboard-dots {
@@ -301,6 +382,10 @@ const getLabelStyle = (code) => {
 .dot-red { background: #ff5f57; }
 .dot-yellow { background: #febc2e; }
 .dot-green { background: #28c840; }
+
+.keyboard-hint {
+  @apply absolute left-1/2 -translate-x-1/2 text-[9px] text-[#00000055];
+}
 
 .keyboard-stats {
   @apply text-[10px] text-[#00000066] tracking-wider;
@@ -410,7 +495,1188 @@ const getLabelStyle = (code) => {
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.18);
 }
 
+/* ========== 10级磨损视觉效果 ========== */
+
+/* Level 1: 指纹油渍 - 中心淡淡油光 */
+.kb-level-1 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 20%;
+  background: radial-gradient(ellipse at center, rgba(255,255,255,0.15) 0%, transparent 70%);
+  pointer-events: none;
+  border-radius: 50%;
+}
+
+/* Level 2: 涂层初磨 - 边缘变薄 */
+.kb-level-2 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(180,160,140,0.12) 100%);
+  pointer-events: none;
+  border-radius: 4px;
+}
+
+/* Level 3: 涂层磨损 - 浅色磨痕纹理 */
+.kb-level-3 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 30% 40%, rgba(160,140,120,0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 70% 60%, rgba(160,140,120,0.12) 0%, transparent 45%);
+  pointer-events: none;
+  border-radius: 4px;
+}
+
+/* Level 4: 涂层剥落 - 斑驳露底色 */
+.kb-level-4 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 25% 35%, rgba(140,120,100,0.25) 0%, transparent 40%),
+    radial-gradient(ellipse at 65% 55%, rgba(140,120,100,0.20) 0%, transparent 35%),
+    radial-gradient(ellipse at 50% 70%, rgba(140,120,100,0.18) 0%, transparent 30%);
+  pointer-events: none;
+  border-radius: 4px;
+}
+
+/* Level 5: 表面凹陷 - 中心凹陷阴影 */
+.kb-level-5 .kb-key-top {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.18),
+    inset 0 -1px 2px rgba(0,0,0,0.24),
+    inset 0 3px 6px rgba(0,0,0,0.15) !important;
+}
+.kb-level-5 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 15%;
+  background: radial-gradient(ellipse at center, rgba(0,0,0,0.12) 0%, transparent 70%);
+  pointer-events: none;
+  border-radius: 50%;
+}
+
+/* Level 6: 细微裂纹 - 边缘1-2条细裂纹 */
+.kb-level-6 .kb-key-top {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.12),
+    inset 0 -1px 2px rgba(0,0,0,0.28),
+    inset 0 3px 8px rgba(0,0,0,0.18) !important;
+}
+.kb-level-6 .kb-key-top::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    /* 主裂纹 - 从右上角延伸 */
+    linear-gradient(135deg,
+      transparent 0%, transparent 72%,
+      rgba(80,60,40,0.35) 72%, rgba(80,60,40,0.35) 73%,
+      transparent 73%, transparent 100%
+    ),
+    /* 细小分支 */
+    linear-gradient(160deg,
+      transparent 0%, transparent 78%,
+      rgba(80,60,40,0.25) 78%, rgba(80,60,40,0.25) 79%,
+      transparent 79%, transparent 100%
+    );
+  pointer-events: none;
+  border-radius: 4px;
+  z-index: 2;
+}
+.kb-level-6 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 10%;
+  background: radial-gradient(ellipse at center, rgba(0,0,0,0.15) 0%, transparent 70%);
+  pointer-events: none;
+  border-radius: 50%;
+}
+
+/* Level 7: 网状龟裂 - 多条裂纹交叉 */
+.kb-level-7 .kb-key-top {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    inset 0 -1px 2px rgba(0,0,0,0.32),
+    inset 0 4px 10px rgba(0,0,0,0.22) !important;
+}
+.kb-level-7 .kb-key-top::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    /* 主裂纹 - 对角线 */
+    linear-gradient(135deg,
+      transparent 0%, transparent 25%,
+      rgba(70,50,30,0.4) 25%, rgba(70,50,30,0.4) 26%,
+      transparent 26%, transparent 65%,
+      rgba(70,50,30,0.35) 65%, rgba(70,50,30,0.35) 66%,
+      transparent 66%, transparent 100%
+    ),
+    /* 交叉裂纹 */
+    linear-gradient(45deg,
+      transparent 0%, transparent 35%,
+      rgba(70,50,30,0.3) 35%, rgba(70,50,30,0.3) 36%,
+      transparent 36%, transparent 70%,
+      rgba(70,50,30,0.25) 70%, rgba(70,50,30,0.25) 71%,
+      transparent 71%, transparent 100%
+    ),
+    /* 横向裂纹 */
+    linear-gradient(95deg,
+      transparent 0%, transparent 40%,
+      rgba(70,50,30,0.28) 40%, rgba(70,50,30,0.28) 41%,
+      transparent 41%, transparent 100%
+    );
+  pointer-events: none;
+  border-radius: 4px;
+  z-index: 2;
+}
+.kb-level-7 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 5%;
+  background: radial-gradient(ellipse at center, rgba(0,0,0,0.18) 0%, transparent 65%);
+  pointer-events: none;
+  border-radius: 50%;
+}
+
+/* Level 8: 缺角碎裂 - clip-path切割缺角 */
+.kb-level-8 .kb-key-top {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.05),
+    inset 0 -1px 2px rgba(0,0,0,0.36),
+    inset 0 4px 12px rgba(0,0,0,0.25) !important;
+}
+.kb-level-8 .kb-key-top::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(135deg,
+      transparent 0%, transparent 20%,
+      rgba(60,40,20,0.45) 20%, rgba(60,40,20,0.45) 21%,
+      transparent 21%, transparent 55%,
+      rgba(60,40,20,0.4) 55%, rgba(60,40,20,0.4) 56%,
+      transparent 56%, transparent 100%
+    ),
+    linear-gradient(45deg,
+      transparent 0%, transparent 30%,
+      rgba(60,40,20,0.35) 30%, rgba(60,40,20,0.35) 31%,
+      transparent 31%, transparent 65%,
+      rgba(60,40,20,0.3) 65%, rgba(60,40,20,0.3) 66%,
+      transparent 66%, transparent 100%
+    );
+  pointer-events: none;
+  border-radius: 4px;
+  z-index: 2;
+}
+/* 缺角方向变体 */
+.kb-broken-tl .kb-key-top {
+  clip-path: polygon(18% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 22%);
+}
+.kb-broken-tr .kb-key-top {
+  clip-path: polygon(0% 0%, 82% 0%, 100% 20%, 100% 100%, 0% 100%);
+}
+.kb-broken-bl .kb-key-top {
+  clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 20% 100%, 0% 78%);
+}
+.kb-broken-br .kb-key-top {
+  clip-path: polygon(0% 0%, 100% 0%, 100% 80%, 82% 100%, 0% 100%);
+}
+
+/* Level 9: 严重破损 - 大面积不规则破碎 */
+.kb-level-9 .kb-key-top {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.02),
+    inset 0 -1px 2px rgba(0,0,0,0.40),
+    inset 0 5px 14px rgba(0,0,0,0.30) !important;
+}
+.kb-level-9 .kb-key-top::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(125deg,
+      transparent 0%, transparent 15%,
+      rgba(50,30,10,0.5) 15%, rgba(50,30,10,0.5) 16%,
+      transparent 16%, transparent 45%,
+      rgba(50,30,10,0.45) 45%, rgba(50,30,10,0.45) 46%,
+      transparent 46%, transparent 100%
+    ),
+    linear-gradient(55deg,
+      transparent 0%, transparent 25%,
+      rgba(50,30,10,0.4) 25%, rgba(50,30,10,0.4) 26%,
+      transparent 26%, transparent 60%,
+      rgba(50,30,10,0.35) 60%, rgba(50,30,10,0.35) 61%,
+      transparent 61%, transparent 100%
+    ),
+    linear-gradient(170deg,
+      transparent 0%, transparent 50%,
+      rgba(50,30,10,0.38) 50%, rgba(50,30,10,0.38) 51%,
+      transparent 51%, transparent 100%
+    );
+  pointer-events: none;
+  border-radius: 4px;
+  z-index: 2;
+}
+/* 严重破碎方向变体 */
+.kb-shattered-tl .kb-key-top {
+  clip-path: polygon(28% 0%, 100% 0%, 100% 100%, 0% 100%, 0% 35%, 12% 18%);
+}
+.kb-shattered-tr .kb-key-top {
+  clip-path: polygon(0% 0%, 72% 0%, 88% 15%, 100% 32%, 100% 100%, 0% 100%);
+}
+.kb-shattered-bl .kb-key-top {
+  clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 30% 100%, 10% 82%, 0% 65%);
+}
+.kb-shattered-br .kb-key-top {
+  clip-path: polygon(0% 0%, 100% 0%, 100% 68%, 90% 85%, 70% 100%, 0% 100%);
+}
+
+/* Level 10: 完全报废 - 键帽消失，显示轴体 */
+.kb-level-10 .kb-key-top {
+  opacity: 0 !important;
+}
+.kb-level-10::before {
+  /* 轴座底座 - 深灰色凹槽 */
+  background: linear-gradient(180deg, #3a3a3c 0%, #2c2c2e 100%) !important;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+}
+.kb-level-10::after {
+  content: '';
+  position: absolute;
+  /* 十字轴心居中 */
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 40%;
+  height: 40%;
+  /* Cherry MX 风格十字轴 */
+  background:
+    /* 横向 */
+    linear-gradient(90deg,
+      transparent 0%, transparent 30%,
+      #606065 30%, #707075 35%, #606065 40%,
+      #555558 45%, #555558 55%,
+      #606065 60%, #707075 65%, #606065 70%,
+      transparent 70%, transparent 100%
+    ),
+    /* 纵向 */
+    linear-gradient(0deg,
+      transparent 0%, transparent 30%,
+      #606065 30%, #707075 35%, #606065 40%,
+      #555558 45%, #555558 55%,
+      #606065 60%, #707075 65%, #606065 70%,
+      transparent 70%, transparent 100%
+    );
+  border-radius: 1px;
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.4),
+    inset 0 0 1px rgba(255,255,255,0.1);
+  z-index: 1;
+}
+
+/* 高磨损等级性能优化 */
+.kb-level-8 .kb-key-top,
+.kb-level-9 .kb-key-top {
+  will-change: clip-path;
+}
+
 .keyboard-brand {
   @apply mt-2 text-center text-[8px] text-[#00000025] tracking-[0.15em] uppercase;
+}
+
+/* ========== 复古模式 - 8-bit 像素风格键盘 ========== */
+
+/* 全局像素化渲染 */
+.wrapped-retro .keyboard-outer,
+.wrapped-retro .keyboard-outer * {
+  image-rendering: pixelated;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: unset;
+}
+
+/* 键盘外框 - 粗像素边框，Game Boy 风格 */
+.wrapped-retro .keyboard-outer {
+  border-radius: 0;
+  background: #8b956d;
+  border: none;
+  padding: 4px;
+  /* 多层像素边框效果 */
+  box-shadow:
+    0 0 0 4px #2d3320,
+    0 0 0 8px #5a6448,
+    0 0 0 10px #2d3320,
+    inset 0 0 0 2px #a5b38a;
+}
+
+.wrapped-retro .keyboard-inner {
+  border-radius: 0;
+  background: #9aa582;
+  border: none;
+  padding: 6px;
+  /* 内凹像素边框 */
+  box-shadow:
+    inset 4px 4px 0 #6b7a54,
+    inset -4px -4px 0 #c5d4a8;
+}
+
+/* 顶部装饰点 - 大像素方块 + 闪烁动画 */
+.wrapped-retro .dot {
+  border-radius: 0;
+  width: 10px;
+  height: 10px;
+  box-shadow:
+    2px 2px 0 rgba(0,0,0,0.5),
+    inset -2px -2px 0 rgba(0,0,0,0.3);
+}
+.wrapped-retro .dot-red {
+  background: #e43b44;
+  animation: pixel-blink 1s steps(2) infinite;
+}
+.wrapped-retro .dot-yellow {
+  background: #f7d51d;
+  animation: pixel-blink 1.5s steps(2) infinite 0.3s;
+}
+.wrapped-retro .dot-green {
+  background: #63c64d;
+  animation: pixel-blink 2s steps(2) infinite 0.6s;
+}
+@keyframes pixel-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* 统计文字 - 像素字体 + 阴影 */
+.wrapped-retro .keyboard-stats {
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+  font-size: 10px;
+  color: #2d3320;
+  letter-spacing: 1px;
+  text-shadow: 1px 1px 0 #c5d4a8;
+}
+
+.wrapped-retro .keyboard-hint {
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+  font-size: 9px;
+  color: #4a5a38;
+  text-shadow: 1px 1px 0 #c5d4a8;
+}
+
+/* 键盘主体 - 像素网格背景 */
+.wrapped-retro .keyboard-body {
+  border-radius: 0;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      #7a8a62 0px, #7a8a62 2px,
+      #8b9b72 2px, #8b9b72 4px
+    );
+  padding: 4px;
+  box-shadow:
+    inset 3px 3px 0 #5a6a48,
+    inset -3px -3px 0 #a5b592;
+}
+
+/* 键帽基础 - 粗像素边框 */
+.wrapped-retro .kb-key::before {
+  border-radius: 0;
+  background: #3d4a2d;
+  box-shadow: none;
+}
+
+.wrapped-retro .kb-key-top {
+  border-radius: 0;
+  border: none;
+  background: #c5d4a8 !important;
+  /* 3D 像素凸起效果 - 多层 box-shadow */
+  box-shadow:
+    inset -3px -3px 0 #7a8a62,
+    inset 3px 3px 0 #e8f4d8,
+    inset -1px -1px 0 #5a6a48,
+    inset 1px 1px 0 #f0fce0 !important;
+}
+
+/* 键帽标签 - 粗像素字体 */
+.wrapped-retro .kb-label {
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+  font-size: 8px;
+  font-weight: bold;
+  color: #2d3320;
+  text-shadow: 1px 1px 0 #e8f4d8;
+  filter: none !important;
+  letter-spacing: 0;
+}
+@media (min-width: 640px) {
+  .wrapped-retro .kb-label {
+    font-size: 10px;
+  }
+}
+
+.wrapped-retro .kb-label-sm {
+  font-size: 6px !important;
+}
+@media (min-width: 640px) {
+  .wrapped-retro .kb-label-sm {
+    font-size: 7px !important;
+  }
+}
+
+.wrapped-retro .kb-sub {
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+  font-size: 5px;
+  color: #5a6a48;
+  text-shadow: none;
+  filter: none !important;
+}
+@media (min-width: 640px) {
+  .wrapped-retro .kb-sub {
+    font-size: 6px;
+  }
+}
+
+/* 空格键凹槽 - 像素凹陷 */
+.wrapped-retro .kb-space-bar {
+  border-radius: 0;
+  background: #5a6a48;
+  box-shadow:
+    inset 2px 2px 0 #3d4a2d,
+    inset -1px -1px 0 #7a8a62;
+  height: 3px;
+}
+
+/* 品牌文字 */
+.wrapped-retro .keyboard-brand {
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+  color: #5a6a48;
+  letter-spacing: 2px;
+  text-shadow: 1px 1px 0 #c5d4a8;
+}
+
+/* ========== 复古模式 - 像素化磨损等级 ========== */
+
+/* Level 1-2: 轻微变色 + 中心模糊污渍 */
+.wrapped-retro .kb-level-1 .kb-key-top,
+.wrapped-retro .kb-level-2 .kb-key-top {
+  background: #b5c498 !important;
+}
+.wrapped-retro .kb-level-1 .kb-key-top::after,
+.wrapped-retro .kb-level-2 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 25%;
+  background: radial-gradient(ellipse at center, #8b9b72 0%, transparent 70%);
+  opacity: 0.4;
+  pointer-events: none;
+}
+.wrapped-retro .kb-level-2 .kb-key-top::after {
+  inset: 20%;
+  opacity: 0.5;
+}
+
+/* Level 3-4: 更深的模糊污渍 */
+.wrapped-retro .kb-level-3 .kb-key-top,
+.wrapped-retro .kb-level-4 .kb-key-top {
+  background: #a5b488 !important;
+}
+.wrapped-retro .kb-level-3 .kb-key-top::after,
+.wrapped-retro .kb-level-4 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 15%;
+  background: radial-gradient(ellipse at center, #6b7a54 0%, #7a8a62 40%, transparent 70%);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.wrapped-retro .kb-level-4 .kb-key-top::after {
+  inset: 10%;
+  background: radial-gradient(ellipse at center, #5a6a48 0%, #6b7a54 30%, #7a8a62 50%, transparent 75%);
+  opacity: 0.6;
+}
+
+/* Level 5-6: 凹陷效果 + 磨损渐变 + 裂纹线 */
+.wrapped-retro .kb-level-5 .kb-key-top,
+.wrapped-retro .kb-level-6 .kb-key-top {
+  background: #95a478 !important;
+  /* 反转阴影 = 凹陷效果 */
+  box-shadow:
+    inset 3px 3px 0 #6b7a54,
+    inset -3px -3px 0 #b5c498,
+    inset 1px 1px 0 #5a6a48 !important;
+}
+.wrapped-retro .kb-level-5 .kb-key-top::before,
+.wrapped-retro .kb-level-6 .kb-key-top::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 2px;
+  width: 2px;
+  height: 40%;
+  background: linear-gradient(to bottom, #3d4a2d, transparent);
+  z-index: 2;
+}
+.wrapped-retro .kb-level-5 .kb-key-top::after,
+.wrapped-retro .kb-level-6 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 10%;
+  background: radial-gradient(ellipse at center, #5a6a48 0%, #6b7a54 30%, transparent 65%);
+  opacity: 0.6;
+  pointer-events: none;
+}
+.wrapped-retro .kb-level-6 .kb-key-top::before {
+  height: 55%;
+}
+.wrapped-retro .kb-level-6 .kb-key-top::after {
+  opacity: 0.7;
+}
+
+/* Level 7-8: 严重磨损 + 裂纹 */
+.wrapped-retro .kb-level-7 .kb-key-top,
+.wrapped-retro .kb-level-8 .kb-key-top {
+  background: #859468 !important;
+  box-shadow:
+    inset 3px 3px 0 #5a6a48,
+    inset -3px -3px 0 #a5b488,
+    inset 2px 2px 0 #4a5a38 !important;
+}
+.wrapped-retro .kb-level-7 .kb-key-top::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  /* 对角裂纹 */
+  background:
+    linear-gradient(135deg,
+      transparent 0%, transparent 45%,
+      #3d4a2d 45%, #3d4a2d 48%,
+      transparent 48%, transparent 100%
+    );
+  pointer-events: none;
+  z-index: 2;
+}
+.wrapped-retro .kb-level-7 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 5%;
+  background: radial-gradient(ellipse at center, #4a5a38 0%, #5a6a48 25%, transparent 60%);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* Level 8: 缺角 + 交叉裂纹 + 深度磨损 */
+.wrapped-retro .kb-broken-tl .kb-key-top {
+  clip-path: polygon(6px 0%, 100% 0%, 100% 100%, 0% 100%, 0% 6px);
+}
+.wrapped-retro .kb-broken-tr .kb-key-top {
+  clip-path: polygon(0% 0%, calc(100% - 6px) 0%, 100% 6px, 100% 100%, 0% 100%);
+}
+.wrapped-retro .kb-broken-bl .kb-key-top {
+  clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 6px 100%, 0% calc(100% - 6px));
+}
+.wrapped-retro .kb-broken-br .kb-key-top {
+  clip-path: polygon(0% 0%, 100% 0%, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0% 100%);
+}
+.wrapped-retro .kb-level-8 .kb-key-top::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  /* 交叉裂纹 */
+  background:
+    linear-gradient(135deg, transparent 46%, #3d4a2d 46%, #3d4a2d 50%, transparent 50%),
+    linear-gradient(45deg, transparent 46%, #3d4a2d 46%, #3d4a2d 50%, transparent 50%);
+  pointer-events: none;
+  z-index: 2;
+}
+.wrapped-retro .kb-level-8 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, #3d4a2d 0%, #4a5a38 20%, transparent 55%);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+/* Level 9: 严重损坏 - 大块缺失 + 深色磨损 */
+.wrapped-retro .kb-level-9 .kb-key-top {
+  background: #758458 !important;
+  box-shadow:
+    inset 3px 3px 0 #4a5a38,
+    inset -3px -3px 0 #95a478 !important;
+}
+.wrapped-retro .kb-shattered-tl .kb-key-top {
+  clip-path: polygon(10px 0%, 100% 0%, 100% 100%, 0% 100%, 0% 10px);
+}
+.wrapped-retro .kb-shattered-tr .kb-key-top {
+  clip-path: polygon(0% 0%, calc(100% - 10px) 0%, 100% 10px, 100% 100%, 0% 100%);
+}
+.wrapped-retro .kb-shattered-bl .kb-key-top {
+  clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 10px 100%, 0% calc(100% - 10px));
+}
+.wrapped-retro .kb-shattered-br .kb-key-top {
+  clip-path: polygon(0% 0%, 100% 0%, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0% 100%);
+}
+.wrapped-retro .kb-level-9 .kb-key-top::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  /* 多条裂纹 */
+  background:
+    linear-gradient(135deg, transparent 30%, #2d3320 30%, #2d3320 33%, transparent 33%),
+    linear-gradient(135deg, transparent 60%, #2d3320 60%, #2d3320 63%, transparent 63%),
+    linear-gradient(45deg, transparent 45%, #2d3320 45%, #2d3320 48%, transparent 48%);
+  pointer-events: none;
+  z-index: 2;
+}
+.wrapped-retro .kb-level-9 .kb-key-top::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, #2d3320 0%, #3d4a2d 15%, #4a5a38 30%, transparent 55%);
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+/* Level 10: 完全报废 - 键帽脱落露出轴体 */
+.wrapped-retro .kb-level-10 .kb-key-top {
+  opacity: 0 !important;
+}
+.wrapped-retro .kb-level-10::before {
+  background: #2d3320 !important;
+  border-radius: 0;
+  box-shadow:
+    inset 2px 2px 0 #1a1f14,
+    inset -2px -2px 0 #4a5a38;
+}
+.wrapped-retro .kb-level-10::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 8px;
+  height: 8px;
+  /* 简化轴体 - 纯色方块 + 凹陷效果 */
+  background: #6b7a54;
+  border-radius: 0;
+  box-shadow:
+    inset 2px 2px 0 #8b956d,
+    inset -2px -2px 0 #4a5a38;
+  z-index: 1;
+}
+@media (min-width: 640px) {
+  .wrapped-retro .kb-level-10::after {
+    width: 10px;
+    height: 10px;
+  }
+}
+
+/* 复古模式下移除性能优化的 will-change */
+.wrapped-retro .kb-level-8 .kb-key-top,
+.wrapped-retro .kb-level-9 .kb-key-top {
+  will-change: auto;
+}
+
+/* 复古模式 - 扫描线效果（可选，增强 CRT 感） */
+.wrapped-retro .keyboard-outer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* ========== DOS 终端主题 - 黑底绿字键盘 ========== */
+
+.wrapped-theme-dos .keyboard-outer {
+  border-radius: 0;
+  background: #000000;
+  border: 2px solid #33ff33;
+  padding: 4px;
+  box-shadow:
+    0 0 10px rgba(51, 255, 51, 0.3),
+    inset 0 0 20px rgba(51, 255, 51, 0.05);
+}
+
+.wrapped-theme-dos .keyboard-inner {
+  border-radius: 0;
+  background: #0a0a0a;
+  border: 1px solid #22aa22;
+  padding: 6px;
+}
+
+.wrapped-theme-dos .keyboard-header {
+  border-bottom: 1px solid #22aa22;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+
+.wrapped-theme-dos .dot {
+  border-radius: 0;
+  width: 8px;
+  height: 8px;
+}
+.wrapped-theme-dos .dot-red { background: #ff3333; box-shadow: 0 0 5px #ff3333; }
+.wrapped-theme-dos .dot-yellow { background: #ffaa00; box-shadow: 0 0 5px #ffaa00; }
+.wrapped-theme-dos .dot-green { background: #33ff33; box-shadow: 0 0 5px #33ff33; }
+
+.wrapped-theme-dos .keyboard-stats,
+.wrapped-theme-dos .keyboard-hint {
+  font-family: 'Courier New', 'Consolas', monospace;
+  color: #33ff33;
+  text-shadow: 0 0 5px #33ff33;
+}
+
+.wrapped-theme-dos .keyboard-body {
+  border-radius: 0;
+  background: #050505;
+  box-shadow: inset 0 0 10px rgba(51, 255, 51, 0.1);
+}
+
+.wrapped-theme-dos .kb-key::before {
+  border-radius: 0;
+  background: #111111;
+}
+
+.wrapped-theme-dos .kb-key-top {
+  border-radius: 0;
+  border: 1px solid #33ff33 !important;
+  background: #0a0a0a !important;
+  box-shadow:
+    0 0 3px rgba(51, 255, 51, 0.3),
+    inset 0 0 5px rgba(51, 255, 51, 0.1) !important;
+}
+
+.wrapped-theme-dos .kb-label,
+.wrapped-theme-dos .kb-sub {
+  font-family: 'Courier New', 'Consolas', monospace;
+  color: #33ff33 !important;
+  text-shadow: 0 0 3px #33ff33;
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+.wrapped-theme-dos .kb-space-bar {
+  border-radius: 0;
+  background: #33ff33;
+  box-shadow: 0 0 5px #33ff33;
+  height: 2px;
+}
+
+.wrapped-theme-dos .keyboard-brand {
+  font-family: 'Courier New', 'Consolas', monospace;
+  color: #22aa22;
+  text-shadow: 0 0 3px #22aa22;
+}
+
+/* DOS 磨损效果 - 发光强度变化 */
+.wrapped-theme-dos .kb-level-1 .kb-key-top,
+.wrapped-theme-dos .kb-level-2 .kb-key-top {
+  box-shadow: 0 0 5px rgba(51, 255, 51, 0.4) !important;
+}
+.wrapped-theme-dos .kb-level-3 .kb-key-top,
+.wrapped-theme-dos .kb-level-4 .kb-key-top {
+  box-shadow: 0 0 8px rgba(51, 255, 51, 0.5) !important;
+}
+.wrapped-theme-dos .kb-level-5 .kb-key-top,
+.wrapped-theme-dos .kb-level-6 .kb-key-top {
+  box-shadow: 0 0 10px rgba(51, 255, 51, 0.6) !important;
+}
+.wrapped-theme-dos .kb-level-7 .kb-key-top,
+.wrapped-theme-dos .kb-level-8 .kb-key-top {
+  box-shadow: 0 0 12px rgba(51, 255, 51, 0.7) !important;
+  border-color: #44ff44 !important;
+}
+.wrapped-theme-dos .kb-level-9 .kb-key-top {
+  box-shadow: 0 0 15px rgba(51, 255, 51, 0.8) !important;
+  border-color: #55ff55 !important;
+}
+.wrapped-theme-dos .kb-level-10 .kb-key-top {
+  opacity: 0 !important;
+}
+.wrapped-theme-dos .kb-level-10::before {
+  background: #000000 !important;
+  border: 1px dashed #22aa22;
+}
+.wrapped-theme-dos .kb-level-10::after {
+  content: 'X';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: auto;
+  height: auto;
+  background: none;
+  color: #ff3333;
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  text-shadow: 0 0 5px #ff3333;
+}
+
+/* ========== VHS 录像带主题 - 复古视频风格键盘 ========== */
+
+.wrapped-theme-vhs .keyboard-outer {
+  border-radius: 4px;
+  background: linear-gradient(180deg, #2a2a4e 0%, #1a1a2e 100%);
+  border: 2px solid #0f3460;
+  padding: 4px;
+  box-shadow:
+    0 4px 20px rgba(233, 69, 96, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.wrapped-theme-vhs .keyboard-inner {
+  border-radius: 2px;
+  background: linear-gradient(180deg, #16213e 0%, #0f0f23 100%);
+  border: 1px solid #0f3460;
+  padding: 6px;
+}
+
+.wrapped-theme-vhs .keyboard-header {
+  border-bottom: 1px solid #0f3460;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+
+.wrapped-theme-vhs .dot {
+  border-radius: 50%;
+  width: 8px;
+  height: 8px;
+}
+.wrapped-theme-vhs .dot-red {
+  background: #e94560;
+  box-shadow: 0 0 8px #e94560;
+  animation: vhs-dot-flicker 0.1s infinite;
+}
+.wrapped-theme-vhs .dot-yellow { background: #f39c12; box-shadow: 0 0 5px #f39c12; }
+.wrapped-theme-vhs .dot-green { background: #27ae60; box-shadow: 0 0 5px #27ae60; }
+
+@keyframes vhs-dot-flicker {
+  0%, 90%, 100% { opacity: 1; }
+  92% { opacity: 0.7; }
+  95% { opacity: 1; }
+  97% { opacity: 0.8; }
+}
+
+.wrapped-theme-vhs .keyboard-stats,
+.wrapped-theme-vhs .keyboard-hint {
+  font-family: 'Courier New', monospace;
+  color: #eaeaea;
+  text-shadow:
+    -1px 0 #00fff7,
+    1px 0 #ff00ff;
+}
+
+.wrapped-theme-vhs .keyboard-body {
+  border-radius: 2px;
+  background: #0a0a1a;
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.wrapped-theme-vhs .kb-key::before {
+  border-radius: 2px;
+  background: #1a1a2e;
+}
+
+.wrapped-theme-vhs .kb-key-top {
+  border-radius: 2px;
+  border: 1px solid #0f3460 !important;
+  background: linear-gradient(180deg, #2a2a4e 0%, #1a1a2e 100%) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 2px 4px rgba(0, 0, 0, 0.3) !important;
+}
+
+.wrapped-theme-vhs .kb-label {
+  font-family: 'Courier New', monospace;
+  color: #eaeaea !important;
+  text-shadow:
+    -1px 0 rgba(0, 255, 247, 0.5),
+    1px 0 rgba(255, 0, 255, 0.5);
+  filter: none !important;
+}
+
+.wrapped-theme-vhs .kb-sub {
+  font-family: 'Courier New', monospace;
+  color: #a0a0a0 !important;
+  filter: none !important;
+}
+
+.wrapped-theme-vhs .kb-space-bar {
+  border-radius: 2px;
+  background: linear-gradient(90deg, #e94560 0%, #0f3460 100%);
+  height: 3px;
+}
+
+.wrapped-theme-vhs .keyboard-brand {
+  font-family: 'Courier New', monospace;
+  color: #e94560;
+  text-shadow:
+    -1px 0 #00fff7,
+    1px 0 #ff00ff;
+  letter-spacing: 3px;
+}
+
+/* VHS 磨损效果 - 色彩溢出增强 */
+.wrapped-theme-vhs .kb-level-1 .kb-label,
+.wrapped-theme-vhs .kb-level-2 .kb-label {
+  text-shadow:
+    -1px 0 rgba(0, 255, 247, 0.6),
+    1px 0 rgba(255, 0, 255, 0.6);
+}
+.wrapped-theme-vhs .kb-level-3 .kb-label,
+.wrapped-theme-vhs .kb-level-4 .kb-label {
+  text-shadow:
+    -2px 0 rgba(0, 255, 247, 0.7),
+    2px 0 rgba(255, 0, 255, 0.7);
+}
+.wrapped-theme-vhs .kb-level-5 .kb-label,
+.wrapped-theme-vhs .kb-level-6 .kb-label {
+  text-shadow:
+    -2px 0 rgba(0, 255, 247, 0.8),
+    2px 0 rgba(255, 0, 255, 0.8);
+  animation: vhs-text-glitch 3s infinite;
+}
+.wrapped-theme-vhs .kb-level-7 .kb-key-top,
+.wrapped-theme-vhs .kb-level-8 .kb-key-top {
+  animation: vhs-key-glitch 2s infinite;
+}
+.wrapped-theme-vhs .kb-level-9 .kb-key-top {
+  animation: vhs-key-glitch 1s infinite;
+  border-color: #e94560 !important;
+}
+
+@keyframes vhs-text-glitch {
+  0%, 95%, 100% { transform: translateX(0); }
+  96% { transform: translateX(-1px); }
+  97% { transform: translateX(1px); }
+  98% { transform: translateX(-1px); }
+  99% { transform: translateX(0); }
+}
+
+@keyframes vhs-key-glitch {
+  0%, 92%, 100% {
+    transform: translate(0);
+    filter: none;
+  }
+  93% {
+    transform: translate(-1px, 0);
+    filter: hue-rotate(90deg);
+  }
+  95% {
+    transform: translate(1px, 0);
+    filter: hue-rotate(-90deg);
+  }
+  97% {
+    transform: translate(0, -1px);
+    filter: saturate(1.5);
+  }
+}
+
+.wrapped-theme-vhs .kb-level-10 .kb-key-top {
+  opacity: 0 !important;
+}
+.wrapped-theme-vhs .kb-level-10::before {
+  background: linear-gradient(
+    45deg,
+    #1a1a2e 25%,
+    #0f3460 25%,
+    #0f3460 50%,
+    #1a1a2e 50%,
+    #1a1a2e 75%,
+    #0f3460 75%
+  ) !important;
+  background-size: 4px 4px;
+  animation: vhs-static 0.5s infinite;
+}
+
+@keyframes vhs-static {
+  0% { background-position: 0 0; }
+  100% { background-position: 4px 4px; }
+}
+
+.wrapped-theme-vhs .kb-level-10::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 6px;
+  height: 6px;
+  background: #e94560;
+  border-radius: 50%;
+  box-shadow: 0 0 10px #e94560;
+  animation: vhs-dot-flicker 0.2s infinite;
+}
+
+/* VHS 聊天气泡主题适配 */
+.wrapped-theme-vhs .bubble-left,
+.wrapped-theme-vhs .bubble-right {
+  background: #16213e;
+  border: 1px solid #0f3460;
+}
+.wrapped-theme-vhs .bubble-left::before {
+  border-right-color: #16213e;
+}
+.wrapped-theme-vhs .bubble-right {
+  background: linear-gradient(135deg, #e94560 0%, #0f3460 100%);
+}
+.wrapped-theme-vhs .bubble-right::after {
+  border-left-color: #0f3460;
+}
+
+/* DOS 聊天气泡主题适配 */
+.wrapped-theme-dos .bubble-left,
+.wrapped-theme-dos .bubble-right {
+  background: #0a0a0a;
+  border: 1px solid #33ff33;
+  box-shadow: 0 0 5px rgba(51, 255, 51, 0.2);
+}
+.wrapped-theme-dos .bubble-left::before {
+  border-right-color: #0a0a0a;
+  filter: drop-shadow(-1px 0 0 #33ff33);
+}
+.wrapped-theme-dos .bubble-right {
+  background: #0a0a0a;
+  border-color: #33ff33;
+}
+.wrapped-theme-dos .bubble-right::after {
+  border-left-color: #0a0a0a;
+  filter: drop-shadow(1px 0 0 #33ff33);
+}
+.wrapped-theme-dos .avatar-box {
+  background: #0a0a0a;
+  border-color: #33ff33;
+}
+.wrapped-theme-dos .avatar-box svg {
+  stroke: #33ff33;
+}
+
+/* VHS 头像适配 */
+.wrapped-theme-vhs .avatar-box {
+  background: #16213e;
+  border-color: #0f3460;
+}
+
+/* ========== Game Boy 主题 - 聊天气泡适配 ========== */
+
+/* 聊天区域背景 */
+.wrapped-theme-gameboy .rounded-2xl.border.bg-\[\#F5F5F5\] {
+  background: #9bbc0f !important;
+  border: 4px solid #306230 !important;
+  border-radius: 0 !important;
+  box-shadow:
+    inset -2px -2px 0 0 #306230,
+    inset 2px 2px 0 0 #c5d870;
+}
+
+/* 气泡 - 左侧 */
+.wrapped-theme-gameboy .bubble-left {
+  background: #8bac0f;
+  border: 3px solid #306230;
+  border-radius: 0;
+  box-shadow:
+    inset -2px -2px 0 0 #306230,
+    inset 2px 2px 0 0 #9bbc0f;
+}
+.wrapped-theme-gameboy .bubble-left::before {
+  border-right-color: #8bac0f;
+  filter: none;
+}
+
+/* 气泡 - 右侧 */
+.wrapped-theme-gameboy .bubble-right {
+  background: #9bbc0f;
+  border: 3px solid #306230;
+  border-radius: 0;
+  box-shadow:
+    inset -2px -2px 0 0 #306230,
+    inset 2px 2px 0 0 #c5d870;
+}
+.wrapped-theme-gameboy .bubble-right::after {
+  border-left-color: #9bbc0f;
+  filter: none;
+}
+
+/* 头像 */
+.wrapped-theme-gameboy .avatar-box {
+  background: #9bbc0f;
+  border: 2px solid #306230;
+  border-radius: 0;
+}
+.wrapped-theme-gameboy .avatar-box svg {
+  stroke: #0f380f;
+}
+
+/* 文字样式 */
+.wrapped-theme-gameboy .bubble-left .wrapped-label,
+.wrapped-theme-gameboy .bubble-right .wrapped-label {
+  color: #306230 !important;
+}
+
+.wrapped-theme-gameboy .bubble-left .wrapped-number,
+.wrapped-theme-gameboy .bubble-right .wrapped-number {
+  color: #0f380f !important;
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+}
+
+.wrapped-theme-gameboy .bubble-left .wrapped-body,
+.wrapped-theme-gameboy .bubble-right .wrapped-body {
+  color: #306230 !important;
+}
+
+/* ========== DOS 主题 - 聊天气泡文字适配 ========== */
+
+.wrapped-theme-dos .bubble-left .wrapped-label,
+.wrapped-theme-dos .bubble-right .wrapped-label {
+  color: #22aa22 !important;
+  text-shadow: 0 0 3px #22aa22;
+  font-family: 'Courier New', monospace;
+}
+
+.wrapped-theme-dos .bubble-left .wrapped-number,
+.wrapped-theme-dos .bubble-right .wrapped-number {
+  color: #33ff33 !important;
+  text-shadow: 0 0 5px #33ff33;
+  font-family: 'Courier New', monospace;
+}
+
+.wrapped-theme-dos .bubble-left .wrapped-body,
+.wrapped-theme-dos .bubble-right .wrapped-body {
+  color: #33ff33 !important;
+  text-shadow: 0 0 3px #33ff33;
+  font-family: 'Courier New', monospace;
+}
+
+/* ========== VHS 主题 - 聊天气泡文字适配 ========== */
+
+.wrapped-theme-vhs .bubble-left .wrapped-label,
+.wrapped-theme-vhs .bubble-right .wrapped-label {
+  color: #a0a0a0 !important;
+}
+
+.wrapped-theme-vhs .bubble-left .wrapped-number,
+.wrapped-theme-vhs .bubble-right .wrapped-number {
+  color: #eaeaea !important;
+  text-shadow:
+    -1px 0 rgba(0, 255, 247, 0.5),
+    1px 0 rgba(255, 0, 255, 0.5);
+}
+
+.wrapped-theme-vhs .bubble-left .wrapped-body,
+.wrapped-theme-vhs .bubble-right .wrapped-body {
+  color: #a0a0a0 !important;
+}
+
+.wrapped-theme-vhs .avatar-box svg {
+  stroke: #e94560;
 }
 </style>

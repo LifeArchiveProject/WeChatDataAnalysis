@@ -1,6 +1,6 @@
 <template>
   <div class="w-full">
-    <div class="rounded-2xl border border-[#00000010] bg-white/60 backdrop-blur p-4 sm:p-6">
+    <div class="overview-card">
       <div class="flex items-center justify-between gap-4">
         <div class="wrapped-label text-xs text-[#00000066]">年度聊天画像</div>
         <div class="wrapped-body text-xs text-[#00000066]">Radar</div>
@@ -16,7 +16,7 @@
                 :key="i"
                 :points="gridPolygonPoints(i / rings)"
                 fill="none"
-                stroke="rgba(0,0,0,0.08)"
+                class="overview-grid-line"
                 stroke-width="1"
               />
               <line
@@ -26,7 +26,7 @@
                 :y1="cy"
                 :x2="p.x"
                 :y2="p.y"
-                stroke="rgba(0,0,0,0.10)"
+                class="overview-axis-line"
                 stroke-width="1"
               />
             </g>
@@ -34,8 +34,7 @@
             <!-- Data polygon -->
             <polygon
               :points="dataPolygonPoints"
-              fill="rgba(7,193,96,0.18)"
-              stroke="rgba(7,193,96,0.85)"
+              class="overview-data-polygon"
               stroke-width="2"
             />
 
@@ -47,8 +46,7 @@
                 :cx="p.x"
                 :cy="p.y"
                 r="4"
-                fill="#07C160"
-                stroke="white"
+                class="overview-data-node"
                 stroke-width="1.5"
               >
                 <title>{{ p.title }}</title>
@@ -65,7 +63,7 @@
                 :text-anchor="l.anchor"
                 dominant-baseline="middle"
                 font-size="11"
-                fill="rgba(0,0,0,0.70)"
+                class="overview-label"
               >
                 {{ l.label }}
               </text>
@@ -81,8 +79,8 @@
           >
             <div class="wrapped-body text-sm text-[#00000099]">{{ m.name }}</div>
             <div class="flex items-center gap-3 min-w-[160px]">
-              <div class="h-2 flex-1 rounded-full bg-[#0000000d] overflow-hidden">
-                <div class="h-full rounded-full bg-[#07C160]" :style="{ width: Math.round(m.norm * 100) + '%' }" />
+              <div class="overview-progress-bg">
+                <div class="overview-progress-fill" :style="{ width: Math.round(m.norm * 100) + '%' }" />
               </div>
               <div
                 :class="[
@@ -234,3 +232,201 @@ const labels = computed(() => {
   return out
 })
 </script>
+
+<style>
+/* ========== 基础样式 ========== */
+.overview-card {
+  @apply rounded-2xl border border-[#00000010] bg-white/60 backdrop-blur p-4 sm:p-6;
+}
+
+.overview-grid-line {
+  stroke: rgba(0, 0, 0, 0.08);
+}
+
+.overview-axis-line {
+  stroke: rgba(0, 0, 0, 0.10);
+}
+
+.overview-data-polygon {
+  fill: rgba(7, 193, 96, 0.18);
+  stroke: rgba(7, 193, 96, 0.85);
+}
+
+.overview-data-node {
+  fill: #07C160;
+  stroke: white;
+}
+
+.overview-label {
+  fill: rgba(0, 0, 0, 0.70);
+}
+
+.overview-progress-bg {
+  @apply h-2 flex-1 rounded-full bg-[#0000000d] overflow-hidden;
+}
+
+.overview-progress-fill {
+  @apply h-full rounded-full bg-[#07C160];
+}
+
+/* ========== Game Boy 主题 ========== */
+
+.wrapped-theme-gameboy .overview-card {
+  background: #8bac0f !important;
+  border: 4px solid #306230 !important;
+  border-radius: 0 !important;
+  backdrop-filter: none;
+  box-shadow:
+    inset -2px -2px 0 0 #306230,
+    inset 2px 2px 0 0 #c5d870;
+}
+
+.wrapped-theme-gameboy .overview-progress-bg {
+  background: #306230 !important;
+  border-radius: 0 !important;
+}
+
+.wrapped-theme-gameboy .overview-progress-fill {
+  background: #0f380f !important;
+  border-radius: 0 !important;
+}
+
+.wrapped-theme-gameboy .overview-grid-line {
+  stroke: #306230;
+  stroke-opacity: 0.4;
+}
+
+.wrapped-theme-gameboy .overview-axis-line {
+  stroke: #306230;
+  stroke-opacity: 0.5;
+}
+
+.wrapped-theme-gameboy .overview-data-polygon {
+  fill: rgba(15, 56, 15, 0.3);
+  stroke: #0f380f;
+}
+
+.wrapped-theme-gameboy .overview-data-node {
+  fill: #0f380f;
+  stroke: #9bbc0f;
+}
+
+.wrapped-theme-gameboy .overview-label {
+  fill: #0f380f;
+}
+
+.wrapped-theme-gameboy .wrapped-label,
+.wrapped-theme-gameboy .wrapped-body {
+  color: #306230 !important;
+}
+
+.wrapped-theme-gameboy .wrapped-number {
+  color: #0f380f !important;
+}
+
+/* ========== DOS 主题 ========== */
+
+.wrapped-theme-dos .overview-card {
+  background: #0a0a0a !important;
+  border: 1px solid #33ff33 !important;
+  box-shadow: 0 0 10px rgba(51, 255, 51, 0.2);
+  backdrop-filter: none;
+}
+
+.wrapped-theme-dos .overview-grid-line {
+  stroke: #33ff33;
+  stroke-opacity: 0.2;
+}
+
+.wrapped-theme-dos .overview-axis-line {
+  stroke: #33ff33;
+  stroke-opacity: 0.3;
+}
+
+.wrapped-theme-dos .overview-data-polygon {
+  fill: rgba(51, 255, 51, 0.15);
+  stroke: #33ff33;
+}
+
+.wrapped-theme-dos .overview-data-node {
+  fill: #33ff33;
+  stroke: #0a0a0a;
+}
+
+.wrapped-theme-dos .overview-label {
+  fill: #33ff33;
+}
+
+.wrapped-theme-dos .overview-progress-bg {
+  background: #1a1a1a !important;
+  border: 1px solid #33ff33;
+}
+
+.wrapped-theme-dos .overview-progress-fill {
+  background: #33ff33 !important;
+  box-shadow: 0 0 5px #33ff33;
+}
+
+.wrapped-theme-dos .wrapped-label,
+.wrapped-theme-dos .wrapped-body {
+  color: #22aa22 !important;
+  text-shadow: 0 0 3px #22aa22;
+}
+
+.wrapped-theme-dos .wrapped-number {
+  color: #33ff33 !important;
+  text-shadow: 0 0 5px #33ff33;
+}
+
+/* ========== VHS 主题 ========== */
+
+.wrapped-theme-vhs .overview-card {
+  background: #16213e !important;
+  border: 1px solid #0f3460 !important;
+  backdrop-filter: none;
+}
+
+.wrapped-theme-vhs .overview-grid-line {
+  stroke: #0f3460;
+  stroke-opacity: 0.6;
+}
+
+.wrapped-theme-vhs .overview-axis-line {
+  stroke: #0f3460;
+  stroke-opacity: 0.8;
+}
+
+.wrapped-theme-vhs .overview-data-polygon {
+  fill: rgba(233, 69, 96, 0.2);
+  stroke: #e94560;
+}
+
+.wrapped-theme-vhs .overview-data-node {
+  fill: #e94560;
+  stroke: #16213e;
+}
+
+.wrapped-theme-vhs .overview-label {
+  fill: #a0a0a0;
+}
+
+.wrapped-theme-vhs .overview-progress-bg {
+  background: #0f3460 !important;
+}
+
+.wrapped-theme-vhs .overview-progress-fill {
+  background: linear-gradient(90deg, #e94560, #0f3460) !important;
+}
+
+.wrapped-theme-vhs .wrapped-label,
+.wrapped-theme-vhs .wrapped-body {
+  color: #a0a0a0 !important;
+}
+
+.wrapped-theme-vhs .wrapped-number {
+  color: #e94560 !important;
+  text-shadow:
+    -1px 0 rgba(0, 255, 247, 0.5),
+    1px 0 rgba(255, 0, 255, 0.5);
+}
+</style>
