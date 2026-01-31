@@ -18,6 +18,7 @@ dependencies = [
     "loguru>=0.7.0",
     "zstandard>=0.23.0",
     "pilk>=0.2.4",
+    "pypinyin>=0.53.0",
 ]
 
 [project.optional-dependencies]
