@@ -343,7 +343,7 @@ def build_card_01_cyber_schedule(
 
     return {
         "id": 1,
-        "title": "年度赛博作息表",
+        "title": "你是「早八人」还是「夜猫子」？",
         "scope": "global",
         "category": "A",
         "status": "ok",

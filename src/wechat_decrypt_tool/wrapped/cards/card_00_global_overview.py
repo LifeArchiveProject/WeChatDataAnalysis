@@ -734,7 +734,7 @@ def build_card_00_global_overview(
 
     return {
         "id": 0,
-        "title": "年度全局概览",
+        "title": "这一年，你的微信都经历了什么？",
         "scope": "global",
         "category": "A",
         "status": "ok",

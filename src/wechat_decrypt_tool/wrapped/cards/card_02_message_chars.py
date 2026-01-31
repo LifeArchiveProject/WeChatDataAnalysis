@@ -787,7 +787,7 @@ def build_card_02_message_chars(*, account_dir: Path, year: int) -> dict[str, An
 
     return {
         "id": 2,
-        "title": "年度消息字数",
+        "title": "你今年打了多少字？够写一本书吗？",
         "scope": "global",
         "category": "C",
         "status": "ok",

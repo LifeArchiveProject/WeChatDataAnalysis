@@ -31,21 +31,21 @@ _CACHE_VERSION = 4
 _WRAPPED_CARD_MANIFEST: tuple[dict[str, Any], ...] = (
     {
         "id": 0,
-        "title": "年度全局概览",
+        "title": "这一年，你的微信都经历了什么？",
         "scope": "global",
         "category": "A",
         "kind": "global/overview",
     },
     {
         "id": 1,
-        "title": "年度赛博作息表",
+        "title": "你是「早八人」还是「夜猫子」？",
         "scope": "global",
         "category": "A",
         "kind": "time/weekday_hour_heatmap",
     },
     {
         "id": 2,
-        "title": "年度消息字数",
+        "title": "你今年打了多少字？够写一本书吗？",
         "scope": "global",
         "category": "C",
         "kind": "text/message_chars",
