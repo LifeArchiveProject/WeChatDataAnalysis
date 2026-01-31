@@ -50,3 +50,107 @@ defineProps({
   variant: { type: String, default: 'panel' } // 'panel' | 'slide'
 })
 </script>
+
+<style>
+/* ========== Game Boy 主题 ========== */
+
+/* 卡片背景 */
+.wrapped-theme-gameboy .bg-white {
+  background: #9bbc0f !important;
+  border-color: #306230 !important;
+}
+
+/* 标题 */
+.wrapped-theme-gameboy .wrapped-title {
+  color: #0f380f !important;
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+}
+
+/* 描述文字 */
+.wrapped-theme-gameboy .wrapped-body {
+  color: #306230 !important;
+}
+
+/* 数字高亮 */
+.wrapped-theme-gameboy .wrapped-number {
+  color: #0f380f !important;
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+}
+
+/* 边框 */
+.wrapped-theme-gameboy .border-\[\#EDEDED\],
+.wrapped-theme-gameboy .border-\[\#F3F3F3\] {
+  border-color: #306230 !important;
+}
+
+/* ========== DOS 主题 ========== */
+
+/* 卡片背景 */
+.wrapped-theme-dos .bg-white {
+  background: #0a0a0a !important;
+  border-color: #33ff33 !important;
+  box-shadow: 0 0 10px rgba(51, 255, 51, 0.3);
+}
+
+/* 标题 */
+.wrapped-theme-dos .wrapped-title {
+  color: #33ff33 !important;
+  text-shadow: 0 0 5px #33ff33;
+  font-family: 'Courier New', monospace;
+}
+
+/* 描述文字 */
+.wrapped-theme-dos .wrapped-body {
+  color: #22aa22 !important;
+  text-shadow: 0 0 3px #22aa22;
+  font-family: 'Courier New', monospace;
+}
+
+/* 数字高亮 */
+.wrapped-theme-dos .wrapped-number {
+  color: #33ff33 !important;
+  text-shadow: 0 0 8px #33ff33;
+  font-family: 'Courier New', monospace;
+}
+
+/* 边框 */
+.wrapped-theme-dos .border-\[\#EDEDED\],
+.wrapped-theme-dos .border-\[\#F3F3F3\] {
+  border-color: #33ff33 !important;
+}
+
+/* ========== VHS 主题 ========== */
+
+/* 卡片背景 */
+.wrapped-theme-vhs .bg-white {
+  background: #16213e !important;
+  border-color: #0f3460 !important;
+}
+
+/* 标题 */
+.wrapped-theme-vhs .wrapped-title {
+  color: #eaeaea !important;
+  text-shadow:
+    -1px 0 rgba(0, 255, 247, 0.4),
+    1px 0 rgba(255, 0, 255, 0.4);
+}
+
+/* 描述文字 */
+.wrapped-theme-vhs .wrapped-body {
+  color: #a0a0a0 !important;
+}
+
+/* 数字高亮 */
+.wrapped-theme-vhs .wrapped-number {
+  color: #e94560 !important;
+  text-shadow:
+    -1px 0 rgba(0, 255, 247, 0.5),
+    1px 0 rgba(255, 0, 255, 0.5);
+}
+
+/* 边框 */
+.wrapped-theme-vhs .border-\[\#EDEDED\],
+.wrapped-theme-vhs .border-\[\#F3F3F3\] {
+  border-color: #0f3460 !important;
+}
+</style>

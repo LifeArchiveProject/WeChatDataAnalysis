@@ -1147,3 +1147,362 @@
 .wrapped-animate-in {
   animation: wrapped-fade-in 0.6s ease-out forwards;
 }
+
+/* ============================================
+   Wrapped 三主题系统 - Game Boy / DOS / VHS
+   ============================================ */
+
+/* 复古模式共享基础样式 */
+.wrapped-retro {
+  /* 共享 CSS 变量（各主题覆盖） */
+  --wrapped-bg: #9bbc0f;
+  --wrapped-card-bg: #8bac0f;
+  --wrapped-text: #0f380f;
+  --wrapped-text-secondary: #306230;
+  --wrapped-accent: #0f380f;
+  --wrapped-border: #306230;
+  --wrapped-warning: #0f380f;
+}
+
+/* ============================================
+   Theme 1: Game Boy - 复古绿色系
+   ============================================ */
+.wrapped-theme-gameboy {
+  /* Game Boy 4色调色板 */
+  --wrapped-bg: #9bbc0f;           /* 最亮绿 */
+  --wrapped-card-bg: #8bac0f;      /* 次亮绿 */
+  --wrapped-text: #0f380f;         /* 最深绿 */
+  --wrapped-text-secondary: #306230; /* 中深绿 */
+  --wrapped-accent: #0f380f;
+  --wrapped-border: #306230;
+  --wrapped-warning: #306230;
+
+  /* 像素化渲染 */
+  image-rendering: pixelated;
+  -webkit-font-smoothing: none;
+}
+
+/* Game Boy 像素化边框 */
+.wrapped-theme-gameboy .wrapped-card-shell,
+.wrapped-theme-gameboy [class*="rounded"] {
+  border-radius: 0 !important;
+  box-shadow:
+    inset -4px -4px 0 0 #306230,
+    inset 4px 4px 0 0 #9bbc0f,
+    0 0 0 4px #0f380f;
+}
+
+/* Game Boy 步进动画 */
+.wrapped-theme-gameboy * {
+  animation-timing-function: steps(8) !important;
+}
+
+/* Game Boy 按钮样式 */
+.wrapped-theme-gameboy button {
+  border-radius: 0 !important;
+  box-shadow:
+    inset -2px -2px 0 0 #306230,
+    inset 2px 2px 0 0 #9bbc0f;
+  transition: none !important;
+}
+
+.wrapped-theme-gameboy button:active {
+  box-shadow:
+    inset 2px 2px 0 0 #306230,
+    inset -2px -2px 0 0 #9bbc0f;
+}
+
+/* ============================================
+   Theme 2: DOS Terminal - 黑底绿字/琥珀字
+   ============================================ */
+.wrapped-theme-dos {
+  --wrapped-bg: #000000;
+  --wrapped-card-bg: #0a0a0a;
+  --wrapped-text: #33ff33;         /* 磷光绿 */
+  --wrapped-text-secondary: #22aa22;
+  --wrapped-accent: #33ff33;
+  --wrapped-border: #33ff33;
+  --wrapped-warning: #ffaa00;      /* 琥珀警告色 */
+
+  background-color: #000000 !important;
+  font-family: 'Courier New', 'Consolas', monospace !important;
+}
+
+/* DOS 文字发光效果 */
+.wrapped-theme-dos .wrapped-title,
+.wrapped-theme-dos .wrapped-body,
+.wrapped-theme-dos .wrapped-label,
+.wrapped-theme-dos .wrapped-number {
+  color: #33ff33 !important;
+  text-shadow:
+    0 0 5px #33ff33,
+    0 0 10px #33ff33,
+    0 0 20px #33ff33,
+    0 0 40px #22aa22;
+  font-family: 'Courier New', 'Consolas', monospace !important;
+  -webkit-font-smoothing: none;
+}
+
+/* DOS 闪烁光标 */
+.wrapped-theme-dos::after {
+  content: '█';
+  color: #33ff33;
+  animation: dos-cursor-blink 530ms steps(1) infinite;
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  font-size: 1.5rem;
+  text-shadow: 0 0 10px #33ff33;
+  z-index: 100;
+  pointer-events: none;
+}
+
+@keyframes dos-cursor-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* DOS ASCII 边框 */
+.wrapped-theme-dos .wrapped-card-shell,
+.wrapped-theme-dos [class*="border"] {
+  border: 2px solid #33ff33 !important;
+  border-radius: 0 !important;
+  box-shadow:
+    0 0 5px #33ff33,
+    inset 0 0 5px rgba(51, 255, 51, 0.1);
+}
+
+/* DOS 磷光残影效果 */
+.wrapped-theme-dos * {
+  transition: text-shadow 0.1s ease-out !important;
+}
+
+/* DOS 扫描线（更明显） */
+.wrapped-theme-dos .crt-scanlines {
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.4) 2px,
+    rgba(0, 0, 0, 0.4) 4px
+  ) !important;
+  opacity: 0.8;
+}
+
+/* DOS 按钮样式 */
+.wrapped-theme-dos button {
+  background-color: transparent !important;
+  border: 1px solid #33ff33 !important;
+  color: #33ff33 !important;
+  border-radius: 0 !important;
+  text-shadow: 0 0 5px #33ff33;
+  box-shadow: 0 0 5px rgba(51, 255, 51, 0.3);
+}
+
+.wrapped-theme-dos button:hover {
+  background-color: #33ff33 !important;
+  color: #000000 !important;
+  text-shadow: none;
+}
+
+/* ============================================
+   Theme 3: VHS Tape - 色彩溢出与信号干扰
+   ============================================ */
+.wrapped-theme-vhs {
+  --wrapped-bg: #1a1a2e;
+  --wrapped-card-bg: #16213e;
+  --wrapped-text: #eaeaea;
+  --wrapped-text-secondary: #a0a0a0;
+  --wrapped-accent: #e94560;
+  --wrapped-border: #0f3460;
+  --wrapped-warning: #f39c12;
+
+  background-color: #1a1a2e !important;
+}
+
+/* VHS 色彩溢出（Chromatic Aberration） */
+.wrapped-theme-vhs .wrapped-title,
+.wrapped-theme-vhs .wrapped-number {
+  position: relative;
+  color: #eaeaea !important;
+}
+
+.wrapped-theme-vhs .wrapped-title::before,
+.wrapped-theme-vhs .wrapped-number::before {
+  content: attr(data-text);
+  position: absolute;
+  left: -2px;
+  top: 0;
+  color: #00fff7;
+  opacity: 0.7;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.wrapped-theme-vhs .wrapped-title::after,
+.wrapped-theme-vhs .wrapped-number::after {
+  content: attr(data-text);
+  position: absolute;
+  left: 2px;
+  top: 0;
+  color: #ff00ff;
+  opacity: 0.7;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* VHS 水平条纹滚动 */
+.wrapped-theme-vhs::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 4px,
+    rgba(255, 255, 255, 0.03) 4px,
+    rgba(255, 255, 255, 0.03) 8px
+  );
+  animation: vhs-scanlines 8s linear infinite;
+  pointer-events: none;
+  z-index: 50;
+}
+
+@keyframes vhs-scanlines {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(100px); }
+}
+
+/* VHS 信号干扰/故障动画 */
+.wrapped-theme-vhs .wrapped-card-shell {
+  animation: vhs-glitch 3s infinite;
+}
+
+@keyframes vhs-glitch {
+  0%, 95%, 100% {
+    transform: translate(0);
+    filter: none;
+  }
+  96% {
+    transform: translate(-2px, 1px);
+    filter: hue-rotate(90deg);
+  }
+  97% {
+    transform: translate(2px, -1px);
+    filter: hue-rotate(-90deg) saturate(1.5);
+  }
+  98% {
+    transform: translate(-1px, 2px);
+    filter: brightness(1.2);
+  }
+  99% {
+    transform: translate(1px, -2px);
+    filter: contrast(1.2);
+  }
+}
+
+/* VHS 降低对比度和饱和度 */
+.wrapped-theme-vhs img,
+.wrapped-theme-vhs svg {
+  filter: saturate(0.8) contrast(0.9);
+}
+
+/* VHS 时间戳样式 */
+.wrapped-theme-vhs .vhs-timestamp {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  font-family: 'VCR OSD Mono', 'Courier New', monospace;
+  font-size: 1rem;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 4px 8px;
+  text-shadow: 2px 2px 0 #ff0000, -2px -2px 0 #00ffff;
+  z-index: 100;
+  pointer-events: none;
+}
+
+/* VHS 跟踪线效果 */
+.wrapped-theme-vhs .vhs-tracking {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(255, 255, 255, 0.8) 50%,
+    transparent 100%
+  );
+  animation: vhs-tracking 2s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 60;
+}
+
+@keyframes vhs-tracking {
+  0%, 100% {
+    top: -10px;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  95% {
+    top: calc(100vh + 10px);
+    opacity: 0;
+  }
+}
+
+/* VHS 边框样式 */
+.wrapped-theme-vhs [class*="border"] {
+  border-color: #0f3460 !important;
+}
+
+.wrapped-theme-vhs [class*="rounded"] {
+  border-radius: 2px !important;
+}
+
+/* VHS 按钮样式 */
+.wrapped-theme-vhs button {
+  background: linear-gradient(135deg, #e94560 0%, #0f3460 100%) !important;
+  border: none !important;
+  color: #ffffff !important;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 2px 10px rgba(233, 69, 96, 0.3);
+}
+
+.wrapped-theme-vhs button:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 4px 15px rgba(233, 69, 96, 0.5);
+}
+
+/* VHS REC 指示器 */
+.wrapped-theme-vhs .vhs-rec {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'VCR OSD Mono', 'Courier New', monospace;
+  font-size: 0.875rem;
+  color: #ff0000;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.wrapped-theme-vhs .vhs-rec::before {
+  content: '●';
+  animation: vhs-rec-blink 1s steps(1) infinite;
+}
+
+@keyframes vhs-rec-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}

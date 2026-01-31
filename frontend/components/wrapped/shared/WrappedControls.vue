@@ -1,12 +1,12 @@
 <template>
-  <div class="bg-white rounded-2xl border border-[#EDEDED] p-5 sm:p-6">
+  <div class="bg-white rounded-2xl border border-[#EDEDED] p-5 sm:p-6 controls-panel">
     <div class="flex flex-col gap-4">
       <div class="flex flex-col sm:flex-row gap-3 sm:items-end sm:justify-between">
         <div class="flex flex-col sm:flex-row gap-3 sm:items-end">
           <div v-if="showAccount">
-            <div class="wrapped-label text-xs text-[#00000099] mb-1">Account</div>
+            <div class="wrapped-label text-xs text-[#00000099] mb-1 controls-label">Account</div>
             <select
-              class="w-full sm:w-56 px-3 py-2 rounded-lg border border-[#EDEDED] bg-white text-sm wrapped-body focus:outline-none focus:ring-2 focus:ring-[#07C160]"
+              class="w-full sm:w-56 px-3 py-2 rounded-lg border border-[#EDEDED] bg-white text-sm wrapped-body focus:outline-none focus:ring-2 focus:ring-[#07C160] controls-select"
               :disabled="accountsLoading || accounts.length === 0"
               :value="modelAccount"
               @change="$emit('update:account', $event.target.value || '')"
@@ -17,9 +17,9 @@
           </div>
 
           <div>
-            <div class="wrapped-label text-xs text-[#00000099] mb-1">Year</div>
+            <div class="wrapped-label text-xs text-[#00000099] mb-1 controls-label">Year</div>
             <select
-              class="w-full sm:w-40 px-3 py-2 rounded-lg border border-[#EDEDED] bg-white text-sm wrapped-body focus:outline-none focus:ring-2 focus:ring-[#07C160]"
+              class="w-full sm:w-40 px-3 py-2 rounded-lg border border-[#EDEDED] bg-white text-sm wrapped-body focus:outline-none focus:ring-2 focus:ring-[#07C160] controls-select"
               :value="String(modelYear)"
               @change="$emit('update:year', Number($event.target.value))"
             >
@@ -30,17 +30,18 @@
           <label class="inline-flex items-center gap-2 select-none">
             <input
               type="checkbox"
-              class="h-4 w-4 rounded border-[#EDEDED] text-[#07C160] focus:ring-[#07C160]"
+              class="h-4 w-4 rounded border-[#EDEDED] text-[#07C160] focus:ring-[#07C160] controls-checkbox"
               :checked="modelRefresh"
               @change="$emit('update:refresh', !!$event.target.checked)"
             />
-            <span class="wrapped-body text-sm text-[#7F7F7F]">强制刷新（忽略缓存）</span>
+            <span class="wrapped-body text-sm text-[#7F7F7F] controls-hint">强制刷新（忽略缓存）</span>
           </label>
         </div>
 
-        <div class="flex gap-2">
+        <div class="flex gap-2 items-end">
+          <WrappedThemeSwitcher />
           <button
-            class="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[#07C160] text-white text-sm wrapped-label hover:bg-[#06AD56] disabled:opacity-60 disabled:cursor-not-allowed transition"
+            class="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[#07C160] text-white text-sm wrapped-label hover:bg-[#06AD56] disabled:opacity-60 disabled:cursor-not-allowed transition controls-btn"
             :disabled="loading"
             @click="$emit('reload')"
           >
@@ -50,10 +51,10 @@
         </div>
       </div>
 
-      <div v-if="accountsLoading" class="wrapped-body text-xs text-[#7F7F7F]">
+      <div v-if="accountsLoading" class="wrapped-body text-xs text-[#7F7F7F] controls-hint">
         {{ showAccount ? '正在加载账号列表...' : '正在检查数据...' }}
       </div>
-      <div v-else-if="accounts.length === 0" class="wrapped-body text-xs text-[#B37800]">
+      <div v-else-if="accounts.length === 0" class="wrapped-body text-xs text-[#B37800] controls-warning">
         {{ showAccount ? '未发现已解密账号（请先解密数据库）。' : '未发现可用数据（请先解密数据库）。' }}
       </div>
     </div>
@@ -82,3 +83,99 @@ const yearOptions = computed(() => {
   return years
 })
 </script>
+
+<style scoped>
+/* 复古模式 - 控制面板样式 */
+.wrapped-retro .controls-panel {
+  background-color: var(--wrapped-card-bg);
+  border-color: var(--wrapped-border);
+}
+
+.wrapped-retro .controls-label {
+  color: var(--wrapped-text-secondary);
+}
+
+.wrapped-retro .controls-select {
+  background-color: var(--wrapped-bg);
+  border-color: var(--wrapped-border);
+  color: var(--wrapped-text);
+}
+
+.wrapped-retro .controls-select:focus {
+  --tw-ring-color: var(--wrapped-accent);
+}
+
+.wrapped-retro .controls-checkbox {
+  border-color: var(--wrapped-border);
+  color: var(--wrapped-accent);
+}
+
+.wrapped-retro .controls-checkbox:focus {
+  --tw-ring-color: var(--wrapped-accent);
+}
+
+.wrapped-retro .controls-hint {
+  color: var(--wrapped-text-secondary);
+}
+
+.wrapped-retro .controls-warning {
+  color: var(--wrapped-warning);
+}
+
+.wrapped-retro .controls-btn {
+  background-color: var(--wrapped-accent);
+  color: var(--wrapped-bg);
+}
+
+.wrapped-retro .controls-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+/* DOS 特殊样式 */
+.wrapped-theme-dos .controls-panel {
+  border-radius: 0;
+  border: 2px solid #33ff33;
+  box-shadow: 0 0 10px rgba(51, 255, 51, 0.3);
+}
+
+.wrapped-theme-dos .controls-select {
+  border-radius: 0;
+  border: 1px solid #33ff33;
+  text-shadow: 0 0 5px #33ff33;
+}
+
+.wrapped-theme-dos .controls-btn {
+  border-radius: 0;
+  background-color: #33ff33;
+  color: #000000;
+  text-shadow: none;
+}
+
+.wrapped-theme-dos .controls-btn:hover:not(:disabled) {
+  background-color: #44ff44;
+}
+
+/* VHS 特殊样式 */
+.wrapped-theme-vhs .controls-panel {
+  border-radius: 4px;
+  background: linear-gradient(180deg, #16213e 0%, #1a1a2e 100%);
+  border-color: #0f3460;
+}
+
+.wrapped-theme-vhs .controls-select {
+  border-radius: 2px;
+  background: #1a1a2e;
+  border-color: #0f3460;
+  color: #eaeaea;
+}
+
+.wrapped-theme-vhs .controls-btn {
+  border-radius: 4px;
+  background: linear-gradient(135deg, #e94560 0%, #0f3460 100%);
+  color: #ffffff;
+}
+
+.wrapped-theme-vhs .controls-btn:hover:not(:disabled) {
+  box-shadow: 0 4px 15px rgba(233, 69, 96, 0.5);
+}
+</style>

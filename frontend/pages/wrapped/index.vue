@@ -2,12 +2,12 @@
   <div
     ref="deckEl"
     class="relative h-screen w-full overflow-hidden transition-colors duration-500"
-    :class="{ 'wrapped-retro': retro }"
+    :class="themeClass"
     :style="{ backgroundColor: currentBg }"
   >
     <!-- PPT 风格：单张卡片占据全页面，鼠标滚轮切换 -->
     <WrappedDeckBackground />
-    <WrappedCRTOverlay v-if="retro" />
+    <WrappedCRTOverlay v-if="isRetro" />
 
     <!-- 左上角：刷新 + 复古模式开关 -->
     <div class="absolute top-6 left-6 z-20 select-none">
@@ -40,16 +40,16 @@
         <button
           type="button"
           class="pointer-events-auto inline-flex items-center justify-center w-9 h-9 rounded-full bg-transparent transition disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30"
-          :class="retro ? 'text-[#07C160] hover:bg-[#07C160]/10' : 'text-[#00000055] hover:bg-[#000000]/5'"
-          :aria-pressed="retro ? 'true' : 'false'"
-          aria-label="复古模式（像素字体 + CRT 滤镜）"
-          title="复古模式：像素字体 + CRT 滤镜"
-          @click="retro = !retro"
+          :class="isRetro ? 'text-[#07C160] hover:bg-[#07C160]/10' : 'text-[#00000055] hover:bg-[#000000]/5'"
+          :aria-pressed="isRetro ? 'true' : 'false'"
+          :aria-label="`复古模式（当前：${theme === 'off' ? 'Modern' : theme.toUpperCase()}）`"
+          :title="`复古模式：${theme === 'off' ? 'Modern' : theme.toUpperCase()}（点击切换）`"
+          @click="cycleTheme"
         >
           <img
             src="/assets/images/wechat-audio-dark.png"
             class="w-4 h-4 transition"
-            :style="{ filter: retro ? 'none' : 'grayscale(1)', opacity: retro ? '1' : '0.55' }"
+            :style="{ filter: isRetro ? 'none' : 'grayscale(1)', opacity: isRetro ? '1' : '0.55' }"
             alt=""
             aria-hidden="true"
             draggable="false"
@@ -63,36 +63,19 @@
       </div>
     </div>
 
-    <!-- 右上角：年份（仅可切换有数据的年份） -->
+    <!-- 右上角：年份选择器（主题化） -->
     <div class="absolute top-6 right-6 z-20 pointer-events-auto select-none">
       <div class="relative">
-        <div class="absolute -inset-6 rounded-full bg-[#07C160]/10 blur-2xl"></div>
+        <div v-if="!isRetro" class="absolute -inset-6 rounded-full bg-[#07C160]/10 blur-2xl"></div>
         <div class="relative flex justify-end">
-          <div class="relative inline-flex items-center">
-            <select
-              class="pointer-events-auto appearance-none bg-transparent pr-5 pl-0 py-0.5 rounded-md wrapped-label text-xs text-[#00000066] text-right focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 hover:bg-[#000000]/5 transition disabled:opacity-70 disabled:cursor-default"
-              :disabled="loading || accountsLoading || yearOptions.length <= 1"
-              :value="String(year)"
-              @change="setYear($event.target.value)"
-            >
-              <option v-for="y in yearOptions" :key="y" :value="String(y)">{{ y }}年</option>
-            </select>
-            <svg
-              v-if="yearOptions.length > 1"
-              class="pointer-events-none absolute right-1 w-3 h-3 text-[#00000066]"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                fill-rule="evenodd"
-                d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 10.94l3.71-3.71a.75.75 0 1 1 1.06 1.06l-4.24 4.24a.75.75 0 0 1-1.06 0L5.21 8.29a.75.75 0 0 1 .02-1.08z"
-                clip-rule="evenodd"
-              />
-            </svg>
-          </div>
+          <WrappedYearSelector
+            v-if="yearOptions.length > 1"
+            v-model="year"
+            :years="yearOptions"
+          />
+          <div v-else class="wrapped-label text-xs text-[#00000066]">{{ year }}年</div>
         </div>
-        <div class="relative mt-1 h-[1px] w-16 ml-auto bg-gradient-to-l from-[#07C160]/40 to-transparent"></div>
+        <div v-if="!isRetro" class="relative mt-1 h-[1px] w-16 ml-auto bg-gradient-to-l from-[#07C160]/40 to-transparent"></div>
       </div>
     </div>
 
@@ -200,8 +183,8 @@ const year = ref(Number(route.query?.year) || new Date().getFullYear())
 // 分享视图不展示账号信息：默认让后端自动选择；需要指定时可用 query ?account=wxid_xxx
 const account = ref(typeof route.query?.account === 'string' ? route.query.account : '')
 
-// Retro mode: pixel font + CRT overlay.
-const retro = ref(true)
+// 主题管理：modern / gameboy / dos / vhs
+const { theme, setTheme, cycleTheme, isRetro, themeClass } = useWrappedTheme()
 
  const accounts = ref([])
  const accountsLoading = ref(true)
@@ -232,17 +215,22 @@ const navLocked = ref(false)
 const wheelAcc = ref(0)
 let navUnlockTimer = null
 
-const WRAPPED_BG = '#F3FFF8'
+// 各主题的背景颜色
+const THEME_BG = {
+  off: '#F3FFF8',       // Modern: 浅绿
+  gameboy: '#9bbc0f',   // Game Boy: 亮绿
+  dos: '#0a0a0a',       // DOS: 黑色
+  vhs: '#0a0a14'        // VHS: 深蓝黑
+}
 
 const slides = computed(() => {
   const cards = Array.isArray(report.value?.cards) ? report.value.cards : []
-  const coverBg = WRAPPED_BG
-  const out = [{ key: 'cover', bg: coverBg }]
-  for (const c of cards) out.push({ key: `card-${c?.id ?? out.length}`, bg: cardBg(c) })
+  const out = [{ key: 'cover' }]
+  for (const c of cards) out.push({ key: `card-${c?.id ?? out.length}` })
   return out
 })
 
-const currentBg = computed(() => slides.value?.[activeIndex.value]?.bg || '#ffffff')
+const currentBg = computed(() => THEME_BG[theme.value] || THEME_BG.off)
 
 const slideStyle = computed(() => (
   viewportHeight.value > 0 ? { height: `${viewportHeight.value}px` } : { height: '100%' }
@@ -252,12 +240,6 @@ const trackStyle = computed(() => {
   const dy = viewportHeight.value > 0 ? -activeIndex.value * viewportHeight.value : 0
   return { transform: `translate3d(0, ${dy}px, 0)` }
 })
-
-const cardBg = (card) => {
-  // 当前统一使用同一套背景色（后续扩展更多卡片时再按 id/kind 细分）。
-  void card
-  return WRAPPED_BG
-}
 
 const clampIndex = (i) => {
   const max = Math.max(0, slides.value.length - 1)
@@ -518,34 +500,6 @@ watch(activeIndex, (i) => {
   void ensureCardLoaded(id)
 })
 
-const setYear = async (y) => {
-  const ny = Number(y)
-  if (!Number.isFinite(ny)) return
-  if (ny === year.value) return
-  // Only allow switching to years that the backend reported as having data.
-  if (Array.isArray(availableYears.value) && availableYears.value.length > 0 && !availableYears.value.includes(ny)) return
-  year.value = ny
-  await reload()
-}
-
-onMounted(() => {
-  try {
-    const saved = localStorage.getItem('wrapped_retro')
-    if (saved === '0') retro.value = false
-    if (saved === '1') retro.value = true
-  } catch {
-    // ignore
-  }
-})
-
-watch(retro, (v) => {
-  try {
-    localStorage.setItem('wrapped_retro', v ? '1' : '0')
-  } catch {
-    // ignore
-  }
-})
-
 onMounted(async () => {
   updateViewport()
   window.addEventListener('resize', updateViewport)
@@ -578,4 +532,15 @@ watch(
     activeIndex.value = clampIndex(activeIndex.value)
   }
 )
+
+// 监听年份变化（由 WrappedYearSelector v-model 触发）
+watch(year, async (newYear, oldYear) => {
+  if (newYear === oldYear) return
+  // 仅允许切换到后端报告有数据的年份
+  if (Array.isArray(availableYears.value) && availableYears.value.length > 0 && !availableYears.value.includes(newYear)) {
+    year.value = oldYear
+    return
+  }
+  await reload()
+})
 </script>
