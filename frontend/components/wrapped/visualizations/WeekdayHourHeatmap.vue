@@ -34,7 +34,7 @@
               <div
                 v-for="(v, hi) in row"
                 :key="`${wi}-${hi}`"
-                class="aspect-square min-h-[10px] rounded-[2px] transition-transform duration-150 hover:scale-125 hover:z-10 relative"
+                class="heatmap-cell aspect-square min-h-[10px] rounded-[2px] transition-transform duration-150 hover:scale-125 hover:z-10 relative"
                 :style="{ backgroundColor: colorFor(v), transformOrigin: originFor(wi, hi) }"
                 :title="tooltipFor(wi, hi, v)"
               />
@@ -48,7 +48,7 @@
       <div class="flex items-center gap-2">
         <span class="wrapped-body">低</span>
         <div class="flex items-center gap-[2px]">
-          <span v-for="i in 6" :key="i" class="w-4 h-2 rounded-[2px]" :style="{ backgroundColor: legendColor(i) }"></span>
+          <span v-for="i in 6" :key="i" class="heatmap-legend-cell w-4 h-2 rounded-[2px]" :style="{ backgroundColor: legendColor(i) }"></span>
         </div>
         <span class="wrapped-body">高</span>
       </div>
@@ -58,7 +58,8 @@
 </template>
 
 <script setup>
-import { heatColor, maxInMatrix, formatHourRange } from '~/utils/wrapped/heatmap'
+import { themedHeatColor, maxInMatrix, formatHourRange } from '~/utils/wrapped/heatmap'
+import { useWrappedTheme } from '~/composables/useWrappedTheme'
 
 const props = defineProps({
   weekdayLabels: { type: Array, default: () => ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] },
@@ -66,6 +67,8 @@ const props = defineProps({
   matrix: { type: Array, default: () => [] },
   totalMessages: { type: Number, default: 0 }
 })
+
+const { theme } = useWrappedTheme()
 
 const matrixSafe = computed(() => {
   // Expect 7x24, but keep defensive to avoid UI crashes.
@@ -89,7 +92,7 @@ const timeLabels = computed(() => {
   return labels
 })
 
-const colorFor = (v) => heatColor(v, maxValue.value)
+const colorFor = (v) => themedHeatColor(v, maxValue.value, theme.value)
 
 const tooltipFor = (weekdayIndex, hour, v) => {
   const w = props.weekdayLabels?.[weekdayIndex] ?? `周${weekdayIndex + 1}`
@@ -100,7 +103,7 @@ const tooltipFor = (weekdayIndex, hour, v) => {
 
 const legendColor = (i) => {
   const t = i / 6
-  return heatColor(Math.max(1, t * (maxValue.value || 1)), maxValue.value || 1)
+  return themedHeatColor(Math.max(1, t * (maxValue.value || 1)), maxValue.value || 1, theme.value)
 }
 
 const originFor = (weekdayIndex, hour) => {
@@ -111,3 +114,60 @@ const originFor = (weekdayIndex, hour) => {
   return `${x} ${y}`
 }
 </script>
+
+<style>
+/* ========== Game Boy 主题 ========== */
+
+.wrapped-theme-gameboy .heatmap-cell {
+  border-radius: 0 !important;
+}
+
+.wrapped-theme-gameboy .wrapped-label,
+.wrapped-theme-gameboy .wrapped-body {
+  color: #306230 !important;
+}
+
+.wrapped-theme-gameboy .wrapped-number {
+  color: #0f380f !important;
+}
+
+.wrapped-theme-gameboy .heatmap-legend-cell {
+  border-radius: 0 !important;
+}
+
+/* ========== DOS 主题 ========== */
+
+.wrapped-theme-dos .heatmap-cell {
+  border-radius: 0 !important;
+  box-shadow: 0 0 2px rgba(51, 255, 51, 0.3);
+}
+
+.wrapped-theme-dos .wrapped-label,
+.wrapped-theme-dos .wrapped-body {
+  color: #22aa22 !important;
+  text-shadow: 0 0 3px #22aa22;
+}
+
+.wrapped-theme-dos .wrapped-number {
+  color: #33ff33 !important;
+  text-shadow: 0 0 5px #33ff33;
+}
+
+.wrapped-theme-dos .heatmap-legend-cell {
+  border-radius: 0 !important;
+}
+
+/* ========== VHS 主题 ========== */
+
+.wrapped-theme-vhs .wrapped-label,
+.wrapped-theme-vhs .wrapped-body {
+  color: #a0a0a0 !important;
+}
+
+.wrapped-theme-vhs .wrapped-number {
+  color: #e94560 !important;
+  text-shadow:
+    -1px 0 rgba(0, 255, 247, 0.5),
+    1px 0 rgba(255, 0, 255, 0.5);
+}
+</style>
