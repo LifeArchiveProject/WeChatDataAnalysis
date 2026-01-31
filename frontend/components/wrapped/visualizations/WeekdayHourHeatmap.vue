@@ -1,10 +1,10 @@
 <template>
   <div class="w-full">
     <div class="flex items-center justify-between gap-4">
-      <div class="text-sm text-[#7F7F7F]">
-        共 <span class="text-[#07C160] font-semibold">{{ totalMessages }}</span> 条消息
+      <div class="wrapped-body text-sm text-[#7F7F7F]">
+        共 <span class="wrapped-number text-[#07C160] font-semibold">{{ totalMessages }}</span> 条消息
       </div>
-      <div class="text-xs text-[#00000066]">24H × 7Days</div>
+      <div class="wrapped-label text-xs text-[#00000066]">24H x 7Days</div>
     </div>
 
     <div class="mt-4 overflow-x-auto" data-wrapped-scroll-x>
@@ -15,7 +15,7 @@
             <span
               v-for="(s, idx) in timeLabels"
               :key="idx"
-              class="col-span-4 font-mono"
+              class="col-span-4 wrapped-number"
             >
               {{ s }}
             </span>
@@ -24,7 +24,7 @@
 
         <div class="grid gap-[3px] [grid-template-columns:24px_1fr] items-stretch">
           <div class="grid gap-[3px] [grid-template-rows:repeat(7,minmax(0,1fr))] text-[11px] text-[#00000066]">
-            <div v-for="(w, wi) in weekdayLabels" :key="wi" class="flex items-center">
+            <div v-for="(w, wi) in weekdayLabels" :key="wi" class="flex items-center wrapped-body">
               {{ w }}
             </div>
           </div>
@@ -35,7 +35,7 @@
                 v-for="(v, hi) in row"
                 :key="`${wi}-${hi}`"
                 class="aspect-square min-h-[10px] rounded-[2px] transition-transform duration-150 hover:scale-125 hover:z-10 relative"
-                :style="{ backgroundColor: colorFor(v) }"
+                :style="{ backgroundColor: colorFor(v), transformOrigin: originFor(wi, hi) }"
                 :title="tooltipFor(wi, hi, v)"
               />
             </template>
@@ -46,13 +46,13 @@
 
     <div class="mt-4 flex items-center justify-between text-xs text-[#00000066]">
       <div class="flex items-center gap-2">
-        <span>低</span>
+        <span class="wrapped-body">低</span>
         <div class="flex items-center gap-[2px]">
           <span v-for="i in 6" :key="i" class="w-4 h-2 rounded-[2px]" :style="{ backgroundColor: legendColor(i) }"></span>
         </div>
-        <span>高</span>
+        <span class="wrapped-body">高</span>
       </div>
-      <div v-if="maxValue > 0">最大 {{ maxValue }}</div>
+      <div v-if="maxValue > 0" class="wrapped-number">最大 {{ maxValue }}</div>
     </div>
   </div>
 </template>
@@ -101,5 +101,13 @@ const tooltipFor = (weekdayIndex, hour, v) => {
 const legendColor = (i) => {
   const t = i / 6
   return heatColor(Math.max(1, t * (maxValue.value || 1)), maxValue.value || 1)
+}
+
+const originFor = (weekdayIndex, hour) => {
+  // Avoid hover scaling pushing scrollWidth/scrollHeight and showing scrollbars:
+  // keep the "outer" edges anchored on the first/last row/col.
+  const x = hour === 0 ? 'left' : (hour === 23 ? 'right' : 'center')
+  const y = weekdayIndex === 0 ? 'top' : (weekdayIndex === 6 ? 'bottom' : 'center')
+  return `${x} ${y}`
 }
 </script>

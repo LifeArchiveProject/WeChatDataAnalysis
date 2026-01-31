@@ -4,9 +4,9 @@
       <div class="flex flex-col sm:flex-row gap-3 sm:items-end sm:justify-between">
         <div class="flex flex-col sm:flex-row gap-3 sm:items-end">
           <div v-if="showAccount">
-            <div class="text-xs font-medium text-[#00000099] mb-1">账号</div>
+            <div class="wrapped-label text-xs text-[#00000099] mb-1">Account</div>
             <select
-              class="w-full sm:w-56 px-3 py-2 rounded-lg border border-[#EDEDED] bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160]"
+              class="w-full sm:w-56 px-3 py-2 rounded-lg border border-[#EDEDED] bg-white text-sm wrapped-body focus:outline-none focus:ring-2 focus:ring-[#07C160]"
               :disabled="accountsLoading || accounts.length === 0"
               :value="modelAccount"
               @change="$emit('update:account', $event.target.value || '')"
@@ -17,9 +17,9 @@
           </div>
 
           <div>
-            <div class="text-xs font-medium text-[#00000099] mb-1">年份</div>
+            <div class="wrapped-label text-xs text-[#00000099] mb-1">Year</div>
             <select
-              class="w-full sm:w-40 px-3 py-2 rounded-lg border border-[#EDEDED] bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160]"
+              class="w-full sm:w-40 px-3 py-2 rounded-lg border border-[#EDEDED] bg-white text-sm wrapped-body focus:outline-none focus:ring-2 focus:ring-[#07C160]"
               :value="String(modelYear)"
               @change="$emit('update:year', Number($event.target.value))"
             >
@@ -34,26 +34,26 @@
               :checked="modelRefresh"
               @change="$emit('update:refresh', !!$event.target.checked)"
             />
-            <span class="text-sm text-[#7F7F7F]">强制刷新（忽略缓存）</span>
+            <span class="wrapped-body text-sm text-[#7F7F7F]">强制刷新（忽略缓存）</span>
           </label>
         </div>
 
         <div class="flex gap-2">
           <button
-            class="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[#07C160] text-white text-sm font-medium hover:bg-[#06AD56] disabled:opacity-60 disabled:cursor-not-allowed transition"
+            class="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[#07C160] text-white text-sm wrapped-label hover:bg-[#06AD56] disabled:opacity-60 disabled:cursor-not-allowed transition"
             :disabled="loading"
             @click="$emit('reload')"
           >
-            <span v-if="!loading">生成报告</span>
-            <span v-else>生成中...</span>
+            <span v-if="!loading">Generate</span>
+            <span v-else>Loading...</span>
           </button>
         </div>
       </div>
 
-      <div v-if="accountsLoading" class="text-xs text-[#7F7F7F]">
+      <div v-if="accountsLoading" class="wrapped-body text-xs text-[#7F7F7F]">
         {{ showAccount ? '正在加载账号列表...' : '正在检查数据...' }}
       </div>
-      <div v-else-if="accounts.length === 0" class="text-xs text-[#B37800]">
+      <div v-else-if="accounts.length === 0" class="wrapped-body text-xs text-[#B37800]">
         {{ showAccount ? '未发现已解密账号（请先解密数据库）。' : '未发现可用数据（请先解密数据库）。' }}
       </div>
     </div>
