@@ -154,4 +154,26 @@ const yearOptions = computed(() => {
 .wrapped-theme-dos .controls-btn:hover:not(:disabled) {
   background-color: #44ff44;
 }
+
+/* Win98 特殊样式 */
+.wrapped-theme-win98 .controls-panel {
+  border-radius: 0;
+  border: 1px solid #808080;
+  background: #c0c0c0;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+}
+
+.wrapped-theme-win98 .controls-select {
+  border-radius: 0;
+}
+
+.wrapped-theme-win98 .controls-btn {
+  border-radius: 0;
+}
+
+.wrapped-theme-win98 .controls-warning {
+  color: #800000;
+}
 </style>

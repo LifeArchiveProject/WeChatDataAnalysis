@@ -4,7 +4,8 @@
  */
 
 const STORAGE_KEY = 'wrapped-theme'
-const VALID_THEMES = ['off', 'gameboy', 'dos']
+const VALID_THEMES = ['off', 'gameboy', 'dos', 'win98']
+const RETRO_THEMES = new Set(['gameboy', 'dos'])
 
 // 全局响应式状态（跨组件共享）
 const theme = ref('off')
@@ -54,7 +55,10 @@ export function useWrappedTheme() {
   // 计算属性：当前主题的 CSS 类名
   const themeClass = computed(() => {
     if (theme.value === 'off') return ''
-    return `wrapped-retro wrapped-theme-${theme.value}`
+    // Note: not every non-modern theme is "retro pixel/CRT".
+    // Keep wrapped-retro for themes that rely on pixel/CRT shared styles.
+    const base = RETRO_THEMES.has(theme.value) ? 'wrapped-retro ' : ''
+    return `${base}wrapped-theme-${theme.value}`
   })
 
   // 计算属性：主题显示名称
@@ -62,7 +66,8 @@ export function useWrappedTheme() {
     const names = {
       off: 'Modern',
       gameboy: 'Game Boy',
-      dos: 'DOS Terminal'
+      dos: 'DOS Terminal',
+      win98: 'Windows 98'
     }
     return names[theme.value] || 'Modern'
   })
@@ -88,6 +93,9 @@ export function useWrappedTheme() {
       } else if (e.key === 'F3') {
         e.preventDefault()
         setTheme('dos')
+      } else if (e.key === 'F4') {
+        e.preventDefault()
+        setTheme('win98')
       }
     }
 

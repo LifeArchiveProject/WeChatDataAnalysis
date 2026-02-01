@@ -38,6 +38,25 @@
       >[+]</button>
     </div>
 
+    <!-- Win98 风格 -->
+    <div v-else-if="theme === 'win98'" class="year-win98">
+      <div class="win98-year-box">
+        <button
+          class="win98-arrow"
+          :disabled="!canGoPrev"
+          @click="prevYear"
+          aria-label="Previous year"
+        >◄</button>
+        <span class="win98-year-value">{{ modelValue }}年</span>
+        <button
+          class="win98-arrow"
+          :disabled="!canGoNext"
+          @click="nextYear"
+          aria-label="Next year"
+        >►</button>
+      </div>
+    </div>
+
     <!-- Modern 风格：下拉菜单（默认） -->
     <div v-else class="year-modern">
       <div class="relative inline-flex items-center">
@@ -239,5 +258,58 @@ onBeforeUnmount(() => {
   letter-spacing: 1px;
   min-width: 50px;
   text-align: center;
+}
+
+/* ========== Win98 风格 ========== */
+.year-win98 {
+  font-family: "MS Sans Serif", Tahoma, "Microsoft Sans Serif", "Segoe UI", sans-serif;
+  font-size: 11px;
+}
+
+.win98-year-box {
+  display: inline-flex;
+  align-items: center;
+  background: #c0c0c0;
+  padding: 2px;
+  border: 1px solid #808080;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+}
+
+.win98-year-value {
+  min-width: 62px;
+  text-align: center;
+  color: #000000;
+  padding: 2px 8px;
+  background: #ffffff;
+  border: 1px solid #808080;
+  box-shadow:
+    inset 1px 1px 0 #000000,
+    inset -1px -1px 0 #ffffff;
+}
+
+.win98-arrow {
+  width: 24px;
+  height: 22px;
+  background: #c0c0c0;
+  border: 1px solid #808080;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+.win98-arrow:active:not(:disabled) {
+  box-shadow:
+    inset 1px 1px 0 #000000,
+    inset -1px -1px 0 #ffffff;
+}
+
+.win98-arrow:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

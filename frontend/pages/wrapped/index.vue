@@ -7,7 +7,8 @@
   >
     <!-- PPT 风格：单张卡片占据全页面，鼠标滚轮切换 -->
     <WrappedDeckBackground />
-    <WrappedCRTOverlay v-if="isRetro" />
+    <!-- CRT 叠加层仅用于“像素屏/终端”类主题，Win98 等桌面 GUI 主题不应开启 -->
+    <WrappedCRTOverlay v-if="theme === 'gameboy' || theme === 'dos'" />
 
     <!-- 左上角：刷新 + 复古模式开关 -->
     <div class="absolute top-6 left-6 z-20 select-none">
@@ -164,6 +165,12 @@
         </WrappedCardShell>
       </section>
     </div>
+
+    <!-- Win98：底部任务栏 -->
+    <WrappedWin98Taskbar
+      v-if="theme === 'win98'"
+      :title="taskbarTitle"
+    />
   </div>
 </template>
 
@@ -219,7 +226,8 @@ let navUnlockTimer = null
 const THEME_BG = {
   off: '#F3FFF8',       // Modern: 浅绿
   gameboy: '#9bbc0f',   // Game Boy: 亮绿
-  dos: '#0a0a0a'        // DOS: 黑色
+  dos: '#0a0a0a',       // DOS: 黑色
+  win98: '#008080'      // Win98: 经典桌面青色
 }
 
 const slides = computed(() => {
@@ -227,6 +235,14 @@ const slides = computed(() => {
   const out = [{ key: 'cover' }]
   for (const c of cards) out.push({ key: `card-${c?.id ?? out.length}` })
   return out
+})
+
+const taskbarTitle = computed(() => {
+  if (theme.value !== 'win98') return ''
+  if (activeIndex.value === 0) return `${year.value} WeChat Wrapped`
+  const idx = activeIndex.value - 1
+  const c = report.value?.cards?.[idx]
+  return String(c?.title || 'WeChat Wrapped')
 })
 
 const currentBg = computed(() => THEME_BG[theme.value] || THEME_BG.off)
@@ -356,8 +372,11 @@ const onTouchEnd = (e) => {
 const updateViewport = () => {
   const h = deckEl.value?.clientHeight || window.innerHeight || 0
   if (!h) return
+  // Reserve space for the Win98 taskbar at the bottom.
+  const offset = theme.value === 'win98' ? 40 : 0
+  const effective = Math.max(0, h - offset)
   // Avoid endless reflows from 1px rounding errors (especially in Electron).
-  if (Math.abs(viewportHeight.value - h) > 1) viewportHeight.value = h
+  if (Math.abs(viewportHeight.value - effective) > 1) viewportHeight.value = effective
 }
 
 const loadAccounts = async () => {
@@ -513,6 +532,11 @@ onMounted(async () => {
   if (accounts.value.length > 0) {
     await reload()
   }
+})
+
+// Theme switch may change reserved UI space (e.g., Win98 taskbar)
+watch(theme, () => {
+  updateViewport()
 })
 
 onBeforeUnmount(() => {

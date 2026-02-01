@@ -9,7 +9,57 @@
 
     <div :class="innerClass">
       <template v-if="variant === 'slide'">
-        <div class="h-full flex flex-col justify-between">
+        <!-- Win98：封面也做成一个“窗口” -->
+        <div v-if="isWin98" class="window h-full w-full flex flex-col overflow-hidden">
+          <div class="title-bar">
+            <div class="title-bar-text">
+              <img class="title-bar-icon" src="/assets/images/windows-0.png" alt="" aria-hidden="true" />
+              <span>WECHAT WRAPPED</span>
+            </div>
+            <div class="title-bar-controls" aria-hidden="true">
+              <button type="button" aria-label="Minimize" tabindex="-1"></button>
+              <button type="button" aria-label="Maximize" tabindex="-1"></button>
+              <button type="button" aria-label="Close" tabindex="-1"></button>
+            </div>
+          </div>
+
+          <div class="window-body flex-1 overflow-hidden">
+            <div class="h-full flex flex-col justify-between">
+              <div class="flex items-start justify-between gap-4">
+                <div class="wrapped-label text-xs text-[#00000080]">
+                  WECHAT WRAPPED
+                </div>
+                <div class="wrapped-body text-xs text-[#00000055]">
+                  年度回望
+                </div>
+              </div>
+
+              <div class="mt-10 sm:mt-14">
+                <h1 class="wrapped-title text-4xl sm:text-6xl text-[#000000e6] leading-[1.05]">
+                  {{ randomTitle.main }}
+                  <span class="block mt-3 win98-hero-highlight">
+                    {{ randomTitle.highlight }}
+                  </span>
+                </h1>
+
+                <div class="mt-7 sm:mt-9 max-w-2xl">
+                  <p class="wrapped-body text-base sm:text-lg text-[#00000080]">
+                    {{ randomSubtitle }}
+                  </p>
+                </div>
+              </div>
+
+              <div class="pb-1">
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[#00000066]">
+                  <!-- Intentionally left blank (avoid "feature bullet list" tone on the cover). -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 其他主题：保持原样 -->
+        <div v-else class="h-full flex flex-col justify-between">
           <div class="flex items-start justify-between gap-4">
             <div class="wrapped-label text-xs text-[#00000080]">
               WECHAT WRAPPED
@@ -190,6 +240,9 @@ const props = defineProps({
   variant: { type: String, default: 'panel' } // 'panel' | 'slide'
 })
 
+const { theme } = useWrappedTheme()
+const isWin98 = computed(() => theme.value === 'win98')
+
 const yearText = computed(() => `${props.year}年`)
 
 const rootClass = computed(() => {
@@ -199,9 +252,19 @@ const rootClass = computed(() => {
     : `${base} rounded-2xl border border-[#EDEDED] bg-white`
 })
 
-const innerClass = computed(() => (
-  props.variant === 'slide'
-    ? 'relative h-full max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12'
-    : 'relative px-6 py-7 sm:px-8 sm:py-9'
-))
+const innerClass = computed(() => {
+  if (props.variant !== 'slide') return 'relative px-6 py-7 sm:px-8 sm:py-9'
+  if (isWin98.value) return 'relative h-full max-w-5xl mx-auto px-6 pt-2 pb-4 sm:px-8 sm:pt-3 sm:pb-6'
+  return 'relative h-full max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12'
+})
 </script>
+
+<style scoped>
+/* Win98：封面标题的高亮句做成“选中/标题栏”感觉 */
+.win98-hero-highlight {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #000080;
+  color: #ffffff;
+}
+</style>
