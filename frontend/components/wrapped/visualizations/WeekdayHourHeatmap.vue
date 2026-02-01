@@ -8,7 +8,8 @@
     </div>
 
     <div class="mt-4 overflow-x-auto" data-wrapped-scroll-x>
-      <div class="min-w-[720px]">
+      <!-- Keep original style, but slightly shrink the overall grid width (thus shrinking cells). -->
+      <div class="min-w-[520px] max-w-[600px] mx-auto">
         <div class="grid gap-[3px] [grid-template-columns:24px_1fr] text-[11px] text-[#00000066] mb-2">
           <div></div>
           <div class="grid gap-[3px] [grid-template-columns:repeat(24,minmax(0,1fr))]">
