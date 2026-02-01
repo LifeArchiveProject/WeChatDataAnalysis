@@ -10,8 +10,7 @@ const themeSwitcherComponent = computed(() => {
   const map = {
     off: resolveComponent('WrappedThemeSwitcherModern'),
     gameboy: resolveComponent('WrappedThemeSwitcherGameboy'),
-    dos: resolveComponent('WrappedThemeSwitcherDos'),
-    vhs: resolveComponent('WrappedThemeSwitcherVhs')
+    dos: resolveComponent('WrappedThemeSwitcherDos')
   }
   return map[theme.value] || map.off
 })

@@ -183,8 +183,8 @@ const year = ref(Number(route.query?.year) || new Date().getFullYear())
 // 分享视图不展示账号信息：默认让后端自动选择；需要指定时可用 query ?account=wxid_xxx
 const account = ref(typeof route.query?.account === 'string' ? route.query.account : '')
 
-// 主题管理：modern / gameboy / dos / vhs
-const { theme, setTheme, cycleTheme, isRetro, themeClass } = useWrappedTheme()
+// 主题管理：modern / gameboy / dos
+const { theme, cycleTheme, isRetro, themeClass } = useWrappedTheme()
 
  const accounts = ref([])
  const accountsLoading = ref(true)
@@ -219,8 +219,7 @@ let navUnlockTimer = null
 const THEME_BG = {
   off: '#F3FFF8',       // Modern: 浅绿
   gameboy: '#9bbc0f',   // Game Boy: 亮绿
-  dos: '#0a0a0a',       // DOS: 黑色
-  vhs: '#0a0a14'        // VHS: 深蓝黑
+  dos: '#0a0a0a'        // DOS: 黑色
 }
 
 const slides = computed(() => {

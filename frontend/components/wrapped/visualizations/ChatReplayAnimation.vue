@@ -391,19 +391,4 @@ watch(
   font-family: 'Courier New', monospace;
   text-shadow: 0 0 3px rgba(51, 255, 51, 0.6);
 }
-
-/* ========== VHS 主题 ========== */
-.wrapped-theme-vhs .wrapped-chat-replay {
-  --wr-chat-frame-bg: #16213e;
-  --wr-chat-top-bg: #0f3460;
-  --wr-chat-chat-bg: #1a1a2e;
-  --wr-chat-border: #0f3460;
-
-  --wr-chat-bubble-bg: linear-gradient(135deg, #e94560 0%, #0f3460 100%);
-  --wr-chat-bubble-tail: #0f3460;
-  --wr-chat-bubble-text: #ffffff;
-
-  --wr-chat-typing-bg: rgba(255, 255, 255, 0.08);
-  --wr-chat-typing-dot: rgba(255, 255, 255, 0.85);
-}
 </style>

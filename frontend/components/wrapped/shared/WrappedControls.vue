@@ -154,28 +154,4 @@ const yearOptions = computed(() => {
 .wrapped-theme-dos .controls-btn:hover:not(:disabled) {
   background-color: #44ff44;
 }
-
-/* VHS 特殊样式 */
-.wrapped-theme-vhs .controls-panel {
-  border-radius: 4px;
-  background: linear-gradient(180deg, #16213e 0%, #1a1a2e 100%);
-  border-color: #0f3460;
-}
-
-.wrapped-theme-vhs .controls-select {
-  border-radius: 2px;
-  background: #1a1a2e;
-  border-color: #0f3460;
-  color: #eaeaea;
-}
-
-.wrapped-theme-vhs .controls-btn {
-  border-radius: 4px;
-  background: linear-gradient(135deg, #e94560 0%, #0f3460 100%);
-  color: #ffffff;
-}
-
-.wrapped-theme-vhs .controls-btn:hover:not(:disabled) {
-  box-shadow: 0 4px 15px rgba(233, 69, 96, 0.5);
-}
 </style>

@@ -1,62 +1,38 @@
 <template>
-  <!-- CRT/VHS 滤镜叠加层 - 根据主题切换效果 -->
+  <!-- CRT 滤镜叠加层 - 复古主题使用 -->
   <div class="absolute inset-0 pointer-events-none select-none z-30" aria-hidden="true">
-    <!-- Game Boy / DOS: 扫描线层 -->
-    <div v-if="theme !== 'vhs'" class="absolute inset-0 crt-scanlines"></div>
-
-    <!-- Game Boy / DOS: RGB 子像素层 -->
-    <div v-if="theme !== 'vhs'" class="absolute inset-0 crt-rgb-pixels"></div>
-
-    <!-- Game Boy / DOS: 闪烁层 -->
-    <div v-if="theme !== 'vhs'" class="absolute inset-0 crt-flicker"></div>
-
-    <!-- 共享: 暗角层 -->
+    <!-- 扫描线 / RGB 子像素 / 闪烁 / 暗角 / 曲率 -->
+    <div class="absolute inset-0 crt-scanlines"></div>
+    <div class="absolute inset-0 crt-rgb-pixels"></div>
+    <div class="absolute inset-0 crt-flicker"></div>
     <div class="absolute inset-0 crt-vignette"></div>
+    <div class="absolute inset-0 crt-curvature"></div>
 
-    <!-- Game Boy / DOS: 屏幕曲率层 -->
-    <div v-if="theme !== 'vhs'" class="absolute inset-0 crt-curvature"></div>
-
-    <!-- VHS: 跟踪线效果 -->
-    <div v-if="theme === 'vhs'" class="vhs-tracking"></div>
-
-    <!-- VHS: REC 指示器 -->
-    <div v-if="theme === 'vhs'" class="vhs-rec">REC</div>
-
-    <!-- VHS: 时间戳 -->
-    <div v-if="theme === 'vhs'" class="vhs-timestamp">{{ vhsTimestamp }}</div>
+    <!-- DOS: 语义化光标 -->
+    <div v-if="theme === 'dos'" class="dos-cursor">█</div>
   </div>
 </template>
 
 <script setup>
-// CRT/VHS 滤镜叠加层组件
-// 根据当前主题切换不同的视觉效果
-
 const { theme } = useWrappedTheme()
+</script>
 
-// VHS 时间戳（实时更新）
-const vhsTimestamp = ref('')
-
-const updateTimestamp = () => {
-  const now = new Date()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  const year = now.getFullYear()
-  const hours = String(now.getHours()).padStart(2, '0')
-  const minutes = String(now.getMinutes()).padStart(2, '0')
-  const seconds = String(now.getSeconds()).padStart(2, '0')
-  vhsTimestamp.value = `${month}/${day}/${year}  ${hours}:${minutes}:${seconds}`
+<style scoped>
+/* DOS 语义化光标 */
+.dos-cursor {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  color: #33ff33;
+  font-size: 1.5rem;
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+  text-shadow: 0 0 8px rgba(51, 255, 51, 0.6);
+  animation: dos-cursor-blink 530ms steps(1) infinite;
+  z-index: 100;
 }
 
-let timestampInterval = null
-
-onMounted(() => {
-  updateTimestamp()
-  timestampInterval = setInterval(updateTimestamp, 1000)
-})
-
-onUnmounted(() => {
-  if (timestampInterval) {
-    clearInterval(timestampInterval)
-  }
-})
-</script>
+@keyframes dos-cursor-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+</style>

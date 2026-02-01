@@ -118,39 +118,4 @@ defineProps({
 .wrapped-theme-dos .border-\[\#F3F3F3\] {
   border-color: #33ff33 !important;
 }
-
-/* ========== VHS 主题 ========== */
-
-/* 卡片背景 */
-.wrapped-theme-vhs .bg-white {
-  background: #16213e !important;
-  border-color: #0f3460 !important;
-}
-
-/* 标题 */
-.wrapped-theme-vhs .wrapped-title {
-  color: #eaeaea !important;
-  text-shadow:
-    -1px 0 rgba(0, 255, 247, 0.4),
-    1px 0 rgba(255, 0, 255, 0.4);
-}
-
-/* 描述文字 */
-.wrapped-theme-vhs .wrapped-body {
-  color: #a0a0a0 !important;
-}
-
-/* 数字高亮 */
-.wrapped-theme-vhs .wrapped-number {
-  color: #e94560 !important;
-  text-shadow:
-    -1px 0 rgba(0, 255, 247, 0.5),
-    1px 0 rgba(255, 0, 255, 0.5);
-}
-
-/* 边框 */
-.wrapped-theme-vhs .border-\[\#EDEDED\],
-.wrapped-theme-vhs .border-\[\#F3F3F3\] {
-  border-color: #0f3460 !important;
-}
 </style>

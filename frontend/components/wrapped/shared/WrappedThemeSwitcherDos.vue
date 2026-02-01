@@ -15,7 +15,7 @@
     </div>
     <!-- 状态提示 -->
     <div class="dos-status">
-      Press F1-F4 to switch theme
+      Press F1-F3 to switch theme
     </div>
   </div>
 </template>
@@ -26,8 +26,7 @@ const { theme, setTheme } = useWrappedTheme()
 const themes = [
   { value: 'off', label: 'Modern' },
   { value: 'gameboy', label: 'GameBoy' },
-  { value: 'dos', label: 'DOS' },
-  { value: 'vhs', label: 'VHS' }
+  { value: 'dos', label: 'DOS' }
 ]
 </script>
 

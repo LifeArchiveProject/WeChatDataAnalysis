@@ -20,12 +20,11 @@
 </template>
 
 <script setup>
-const { theme, setTheme, VALID_THEMES } = useWrappedTheme()
+const { theme, setTheme } = useWrappedTheme()
 
 const themes = [
   { value: 'off', label: 'Modern' },
   { value: 'gameboy', label: 'Game Boy' },
-  { value: 'dos', label: 'DOS' },
-  { value: 'vhs', label: 'VHS' }
+  { value: 'dos', label: 'DOS' }
 ]
 </script>

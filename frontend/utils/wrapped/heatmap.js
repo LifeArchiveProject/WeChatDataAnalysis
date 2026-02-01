@@ -58,15 +58,6 @@ export const themedHeatColor = (value, max, theme) => {
       const light = 20 + 60 * t
       return `hsl(120 100% ${light.toFixed(1)}%)`
     }
-    case 'vhs': {
-      // VHS: from dark blue to pink/magenta
-      if (t === 0) return 'rgba(15, 52, 96, 0.3)'
-      // Interpolate from #0f3460 (dark blue) to #e94560 (pink)
-      const r = Math.round(15 + (233 - 15) * t)
-      const g = Math.round(52 + (69 - 52) * t)
-      const b = Math.round(96 + (96 - 96) * t)
-      return `rgb(${r}, ${g}, ${b})`
-    }
     default:
       // Modern (off) - use original heatColor
       return heatColor(value, max)
@@ -79,4 +70,3 @@ export const formatHourRange = (hour) => {
   const hh = String(h).padStart(2, '0')
   return `${hh}:00-${hh}:59`
 }
-

@@ -25,8 +25,7 @@ const { theme, setTheme } = useWrappedTheme()
 const themes = [
   { value: 'off', label: 'MODERN' },
   { value: 'gameboy', label: 'GAME BOY' },
-  { value: 'dos', label: 'DOS' },
-  { value: 'vhs', label: 'VHS' }
+  { value: 'dos', label: 'DOS' }
 ]
 
 const selectTheme = (value) => {

@@ -157,18 +157,4 @@ const originFor = (weekdayIndex, hour) => {
 .wrapped-theme-dos .heatmap-legend-cell {
   border-radius: 0 !important;
 }
-
-/* ========== VHS 主题 ========== */
-
-.wrapped-theme-vhs .wrapped-label,
-.wrapped-theme-vhs .wrapped-body {
-  color: #a0a0a0 !important;
-}
-
-.wrapped-theme-vhs .wrapped-number {
-  color: #e94560 !important;
-  text-shadow:
-    -1px 0 rgba(0, 255, 247, 0.5),
-    1px 0 rgba(255, 0, 255, 0.5);
-}
 </style>

@@ -1,10 +1,10 @@
 /**
  * 年度总结页面主题管理 composable
- * 支持四种主题：modern（现代）、gameboy（Game Boy）、dos（DOS终端）、vhs（VHS录像带）
+ * 支持三种主题：modern（现代）、gameboy（Game Boy）、dos（DOS终端）
  */
 
 const STORAGE_KEY = 'wrapped-theme'
-const VALID_THEMES = ['off', 'gameboy', 'dos', 'vhs']
+const VALID_THEMES = ['off', 'gameboy', 'dos']
 
 // 全局响应式状态（跨组件共享）
 const theme = ref('off')
@@ -62,13 +62,12 @@ export function useWrappedTheme() {
     const names = {
       off: 'Modern',
       gameboy: 'Game Boy',
-      dos: 'DOS Terminal',
-      vhs: 'VHS Tape'
+      dos: 'DOS Terminal'
     }
     return names[theme.value] || 'Modern'
   })
 
-  // 全局 F1-F4 快捷键切换主题（仅初始化一次）
+  // 全局 F1-F3 快捷键切换主题（仅初始化一次）
   const initKeyboardShortcuts = () => {
     if (keyboardInitialized || !import.meta.client) return
     keyboardInitialized = true
@@ -89,9 +88,6 @@ export function useWrappedTheme() {
       } else if (e.key === 'F3') {
         e.preventDefault()
         setTheme('dos')
-      } else if (e.key === 'F4') {
-        e.preventDefault()
-        setTheme('vhs')
       }
     }
 
