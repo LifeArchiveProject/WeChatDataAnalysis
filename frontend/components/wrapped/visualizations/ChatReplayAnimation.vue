@@ -23,7 +23,12 @@
         </div>
       </div>
 
-      <div class="wrapped-label text-[10px] text-[#00000066]">聊天回放</div>
+      <div class="wrapped-chat-replay__top-right">
+        <div class="wrapped-label text-[10px] text-[#00000066]">聊天回放</div>
+        <div v-if="showTimestamp" class="wrapped-label text-[10px] text-[#00000055]">
+          {{ date }} {{ time }}
+        </div>
+      </div>
     </div>
 
     <!-- Chat area -->
@@ -44,9 +49,6 @@
         </transition>
       </div>
 
-      <div v-if="showTimestamp" class="wrapped-chat-replay__timestamp wrapped-label text-[10px] text-[#00000055]">
-        {{ date }} {{ time }}
-      </div>
     </div>
   </div>
 </template>
@@ -195,6 +197,15 @@ watch(
   border-bottom: none;
 }
 
+.wrapped-chat-replay__top-right {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
+}
+
 .wrapped-chat-replay__top-left {
   display: flex;
   align-items: center;
@@ -260,34 +271,12 @@ watch(
   padding: 10px 12px;
 }
 
-.wrapped-chat-replay__typing::after,
-.wrapped-chat-replay__bubble::after {
-  content: '';
-  position: absolute;
-  right: -6px;
-  top: 10px;
-  width: 0;
-  height: 0;
-  border-style: solid;
-  border-width: 6px 0 6px 6px;
-  border-color: transparent transparent transparent var(--wr-chat-bubble-tail);
-}
-
-.wrapped-chat-replay__typing::after {
-  border-color: transparent transparent transparent var(--wr-chat-typing-bg);
-}
-
 .wrapped-chat-replay__bubble-text {
   color: var(--wr-chat-bubble-text) !important;
   font-size: 13px;
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.wrapped-chat-replay__timestamp {
-  margin-top: 8px;
-  text-align: right;
 }
 
 .wrapped-chat-replay__dot {
@@ -355,6 +344,11 @@ watch(
     inset 2px 2px 0 0 #9bbc0f;
 }
 
+.wrapped-theme-gameboy .wrapped-chat-replay__top .wrapped-label,
+.wrapped-theme-gameboy .wrapped-chat-replay__top .wrapped-body {
+  color: #0f380f !important;
+}
+
 .wrapped-theme-gameboy .wrapped-chat-replay__bubble-text {
   font-family: var(--font-pixel-10), 'Courier New', monospace;
 }
@@ -382,13 +376,59 @@ watch(
   box-shadow: 0 0 6px rgba(51, 255, 51, 0.18);
 }
 
-.wrapped-theme-dos .wrapped-chat-replay__typing::after,
-.wrapped-theme-dos .wrapped-chat-replay__bubble::after {
-  box-shadow: 1px 0 0 #33ff33;
+.wrapped-theme-dos .wrapped-chat-replay__top .wrapped-label,
+.wrapped-theme-dos .wrapped-chat-replay__top .wrapped-body {
+  color: #33ff33 !important;
+  text-shadow: 0 0 3px rgba(51, 255, 51, 0.6);
 }
 
 .wrapped-theme-dos .wrapped-chat-replay__bubble-text {
   font-family: 'Courier New', monospace;
   text-shadow: 0 0 3px rgba(51, 255, 51, 0.6);
+}
+
+/* ========== Win98 主题 ========== */
+.wrapped-theme-win98 .wrapped-chat-replay {
+  --wr-chat-frame-bg: #c0c0c0;
+  --wr-chat-top-bg: linear-gradient(90deg, #000080, #1084d0);
+  --wr-chat-chat-bg: #ffffff;
+  --wr-chat-border: #808080;
+
+  --wr-chat-bubble-bg: #ffffff;
+  --wr-chat-bubble-tail: #ffffff;
+  --wr-chat-bubble-text: #000000;
+
+  --wr-chat-typing-bg: #ffffff;
+  --wr-chat-typing-dot: #000000;
+
+  border-radius: 0;
+  border: 1px solid #808080;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+}
+
+.wrapped-theme-win98 .wrapped-chat-replay__top {
+  border-bottom: 1px solid #808080;
+}
+
+.wrapped-theme-win98 .wrapped-chat-replay__top .wrapped-label,
+.wrapped-theme-win98 .wrapped-chat-replay__top .wrapped-body {
+  /* Title-bar text should be white on the Win98 blue gradient. */
+  color: #ffffff !important;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.35);
+}
+
+.wrapped-theme-win98 .wrapped-chat-replay__avatar-fallback {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.wrapped-theme-win98 .wrapped-chat-replay__typing,
+.wrapped-theme-win98 .wrapped-chat-replay__bubble {
+  border-radius: 0;
+  border: 1px solid #808080;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
 }
 </style>

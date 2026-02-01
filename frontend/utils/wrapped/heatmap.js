@@ -58,6 +58,13 @@ export const themedHeatColor = (value, max, theme) => {
       const light = 20 + 60 * t
       return `hsl(120 100% ${light.toFixed(1)}%)`
     }
+    case 'win98': {
+      // Win98-ish "system colors": gray -> blue highlight
+      if (t === 0) return '#dfdfdf'
+      if (t < 0.33) return '#c0c0c0'
+      if (t < 0.66) return '#808080'
+      return '#000080'
+    }
     default:
       // Modern (off) - use original heatColor
       return heatColor(value, max)

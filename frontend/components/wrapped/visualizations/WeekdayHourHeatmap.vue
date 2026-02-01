@@ -157,4 +157,15 @@ const originFor = (weekdayIndex, hour) => {
 .wrapped-theme-dos .heatmap-legend-cell {
   border-radius: 0 !important;
 }
+
+/* ========== Win98 主题 ========== */
+.wrapped-theme-win98 .heatmap-cell {
+  border-radius: 0 !important;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.wrapped-theme-win98 .heatmap-legend-cell {
+  border-radius: 0 !important;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
 </style>

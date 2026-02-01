@@ -377,4 +377,51 @@ const labels = computed(() => {
   color: #33ff33 !important;
   text-shadow: 0 0 5px #33ff33;
 }
+
+/* ========== Win98 主题 ========== */
+.wrapped-theme-win98 .overview-card {
+  background: #c0c0c0 !important;
+  border: 1px solid #808080 !important;
+  border-radius: 0 !important;
+  backdrop-filter: none;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+}
+
+.wrapped-theme-win98 .overview-progress-bg {
+  background: #ffffff !important;
+  border-radius: 0 !important;
+  border: 1px solid #808080;
+  box-shadow:
+    inset 1px 1px 0 #000000,
+    inset -1px -1px 0 #ffffff;
+}
+
+.wrapped-theme-win98 .overview-progress-fill {
+  background: #000080 !important;
+  border-radius: 0 !important;
+}
+
+.wrapped-theme-win98 .overview-grid-line {
+  stroke: rgba(0, 0, 0, 0.22);
+}
+
+.wrapped-theme-win98 .overview-axis-line {
+  stroke: rgba(0, 0, 0, 0.35);
+}
+
+.wrapped-theme-win98 .overview-data-polygon {
+  fill: rgba(0, 0, 128, 0.16);
+  stroke: #000080;
+}
+
+.wrapped-theme-win98 .overview-data-node {
+  fill: #000080;
+  stroke: #ffffff;
+}
+
+.wrapped-theme-win98 .overview-label {
+  fill: rgba(0, 0, 0, 0.8);
+}
 </style>

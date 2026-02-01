@@ -1321,6 +1321,96 @@ const getLabelStyle = (code) => {
   text-shadow: 0 0 5px #ff3333;
 }
 
+/* ========== Win98 主题 - 键盘外观 ========== */
+.wrapped-theme-win98 .keyboard-outer {
+  border-radius: 0;
+  background: #c0c0c0;
+  border: 1px solid #808080;
+  padding: 4px;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+}
+
+.wrapped-theme-win98 .keyboard-inner {
+  border-radius: 0;
+  background: #dfdfdf;
+  border: 1px solid #808080;
+  padding: 6px;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+}
+
+.wrapped-theme-win98 .keyboard-header {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.18);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+
+.wrapped-theme-win98 .dot {
+  border-radius: 0;
+  width: 8px;
+  height: 8px;
+  box-shadow: none;
+}
+
+.wrapped-theme-win98 .dot-red { background: #800000; }
+.wrapped-theme-win98 .dot-yellow { background: #808000; }
+.wrapped-theme-win98 .dot-green { background: #008000; }
+
+.wrapped-theme-win98 .keyboard-stats,
+.wrapped-theme-win98 .keyboard-hint {
+  font-family: inherit;
+  color: rgba(0, 0, 0, 0.72);
+  text-shadow: none;
+}
+
+.wrapped-theme-win98 .keyboard-body {
+  border-radius: 0;
+  background: #ffffff;
+  border: 1px solid #808080;
+  box-shadow:
+    inset 1px 1px 0 #000000,
+    inset -1px -1px 0 #ffffff;
+}
+
+.wrapped-theme-win98 .kb-key::before {
+  border-radius: 0;
+  background: #808080;
+}
+
+.wrapped-theme-win98 .kb-key-top {
+  border-radius: 0;
+  border: 1px solid #808080 !important;
+  background: #c0c0c0 !important;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000 !important;
+}
+
+.wrapped-theme-win98 .kb-label,
+.wrapped-theme-win98 .kb-sub {
+  font-family: inherit;
+  color: #000000 !important;
+  text-shadow: none !important;
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+.wrapped-theme-win98 .kb-space-bar {
+  border-radius: 0;
+  background: #000080;
+  box-shadow: none;
+  height: 2px;
+}
+
+.wrapped-theme-win98 .keyboard-brand {
+  font-family: inherit;
+  color: rgba(0, 0, 0, 0.35);
+  text-shadow: none;
+}
+
 /* DOS 聊天气泡主题适配 */
 .wrapped-theme-dos .bubble-left,
 .wrapped-theme-dos .bubble-right {
@@ -1413,6 +1503,75 @@ const getLabelStyle = (code) => {
 .wrapped-theme-gameboy .bubble-left .wrapped-body,
 .wrapped-theme-gameboy .bubble-right .wrapped-body {
   color: #306230 !important;
+}
+
+/* ========== Win98 主题 - 聊天气泡适配 ========== */
+
+/* 聊天区域背景 */
+.wrapped-theme-win98 .rounded-2xl.border.bg-\[\#F5F5F5\] {
+  background: #c0c0c0 !important;
+  border: 1px solid #808080 !important;
+  border-radius: 0 !important;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+}
+
+/* 气泡 - 左侧 */
+.wrapped-theme-win98 .bubble-left {
+  background: #ffffff;
+  border: 1px solid #808080;
+  border-radius: 0;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+}
+.wrapped-theme-win98 .bubble-left::before {
+  border-right-color: #ffffff;
+  filter: none;
+}
+
+/* 气泡 - 右侧 */
+.wrapped-theme-win98 .bubble-right {
+  background: #dfdfdf;
+  border: 1px solid #808080;
+  border-radius: 0;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+}
+.wrapped-theme-win98 .bubble-right::after {
+  border-left-color: #dfdfdf;
+  filter: none;
+}
+
+/* 头像 */
+.wrapped-theme-win98 .avatar-box {
+  background: #c0c0c0;
+  border-color: #808080;
+  border-radius: 0;
+  box-shadow:
+    inset 1px 1px 0 #ffffff,
+    inset -1px -1px 0 #000000;
+}
+.wrapped-theme-win98 .avatar-box svg {
+  stroke: #000080;
+}
+
+/* 文字样式（气泡内需要更“黑白”） */
+.wrapped-theme-win98 .bubble-left .wrapped-label,
+.wrapped-theme-win98 .bubble-right .wrapped-label {
+  color: rgba(0, 0, 0, 0.65) !important;
+}
+
+.wrapped-theme-win98 .bubble-left .wrapped-number,
+.wrapped-theme-win98 .bubble-right .wrapped-number {
+  color: #000080 !important;
+}
+
+.wrapped-theme-win98 .bubble-left .wrapped-body,
+.wrapped-theme-win98 .bubble-right .wrapped-body {
+  color: rgba(0, 0, 0, 0.85) !important;
 }
 
 /* ========== DOS 主题 - 聊天气泡文字适配 ========== */
