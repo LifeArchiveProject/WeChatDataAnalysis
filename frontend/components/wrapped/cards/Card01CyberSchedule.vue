@@ -62,21 +62,116 @@
             <span class="wrapped-number text-[#07C160] font-semibold">{{ pad2(mostActiveHour) }}</span>:00
             最活跃
           </template>
+
+          <!-- 最早最晚消息描述（按一天中的时刻） -->
+          <template v-if="earliestSent && latestSent && totalMessages > 0">
+            <template v-if="sameMomentTarget">
+              最先想起的是「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」，
+              最后放不下的也还是「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」。
+            </template>
+            <template v-else>
+              <template v-if="sameMomentDate">
+                在 {{ earliestDateLabel }}，最早的一条发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」，
+                最晚的一条发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」。
+              </template>
+              <template v-else-if="!hasMomentDates">
+                最早的一条发给了
+                <span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>，
+                最晚的一条发给了
+                <span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>。
+              </template>
+              <template v-else-if="momentVariant === 0">
+                最早的一条（{{ earliestDateLabel }}）发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」，
+                最晚的一条（{{ latestDateLabel }}）发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」。
+              </template>
+              <template v-else-if="momentVariant === 1">
+                最早的收件人是「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」（{{ earliestDateLabel }}），
+                最晚的收件人是「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」（{{ latestDateLabel }}）。
+              </template>
+              <template v-else-if="momentVariant === 2">
+                在 {{ earliestDateLabel }}，你把消息发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」；
+                在 {{ latestDateLabel }}，你又发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」。
+              </template>
+              <template v-else-if="momentVariant === 3">
+                最早与最晚，分别写给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」（{{ earliestDateLabel }}）
+                和「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」（{{ latestDateLabel }}）。
+              </template>
+              <template v-else>
+                最早的一条落在 {{ earliestDateLabel }}，发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」；
+                最晚的一条落在 {{ latestDateLabel }}，发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」。
+              </template>
+            </template>
+          </template>
+        </p>
+
+        <!-- 今年第一条/最后一条消息（按日期时间戳） -->
+        <p v-if="yearFirstSent && totalMessages > 0" class="mt-2">
+          今年的第一条消息（<span class="wrapped-number text-[#07C160] font-semibold">{{ yearFirstDateLabel }} {{ yearFirstSent.time }}</span>）发给了
+          <img
+            v-if="yearFirstSent.avatarUrl"
+            :src="yearFirstSent.avatarUrl"
+            :alt="yearFirstSent.displayName"
+            class="inline-block w-5 h-5 rounded align-middle mx-0.5"
+          /><span class="wrapped-number text-[#07C160] font-semibold">{{ yearFirstSent.displayName }}</span>：「{{ yearFirstSent.content || '...' }}」<template v-if="yearLastSent">；
+          最后一条消息（<span class="wrapped-number text-[#07C160] font-semibold">{{ yearLastDateLabel }} {{ yearLastSent.time }}</span>）发给了
+          <img
+            v-if="yearLastSent.avatarUrl"
+            :src="yearLastSent.avatarUrl"
+            :alt="yearLastSent.displayName"
+            class="inline-block w-5 h-5 rounded align-middle mx-0.5"
+          /><span class="wrapped-number text-[#07C160] font-semibold">{{ yearLastSent.displayName }}</span>：「{{ yearLastSent.content || '...' }}」</template>。
+          <template v-if="sameYearTarget">
+            <span class="text-[#7F7F7F]">——从年初到年末，始终如一。</span>
+          </template>
         </p>
       </div>
     </template>
 
-    <WeekdayHourHeatmap
-      :weekday-labels="card.data?.weekdayLabels"
-      :hour-labels="card.data?.hourLabels"
-      :matrix="card.data?.matrix"
-      :total-messages="card.data?.totalMessages || 0"
-    />
+    <!-- 内容区域：上下布局 -->
+    <div class="flex flex-col gap-4">
+      <!-- 上部：两个聊天回放水平排列 -->
+      <div v-if="earliestSent || latestSent" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <ChatReplayAnimation
+          v-if="earliestSent"
+          :time="earliestSent.time"
+          :date="earliestSent.date"
+          :display-name="earliestSent.displayName"
+          :masked-name="earliestSent.maskedName"
+          :avatar-url="earliestSent.avatarUrl"
+          :content="earliestSent.content"
+          label="最早的一条"
+          :delay="0"
+        />
+
+        <ChatReplayAnimation
+          v-if="latestSent"
+          :time="latestSent.time"
+          :date="latestSent.date"
+          :display-name="latestSent.displayName"
+          :masked-name="latestSent.maskedName"
+          :avatar-url="latestSent.avatarUrl"
+          :content="latestSent.content"
+          label="最晚的一条"
+          :delay="600"
+        />
+      </div>
+
+      <!-- 下部：热力图全宽 -->
+      <div class="w-full">
+        <WeekdayHourHeatmap
+          :weekday-labels="card.data?.weekdayLabels"
+          :hour-labels="card.data?.hourLabels"
+          :matrix="card.data?.matrix"
+          :total-messages="card.data?.totalMessages || 0"
+        />
+      </div>
+    </div>
   </WrappedCardShell>
 </template>
 
 <script setup>
 import { computed } from 'vue'
+import ChatReplayAnimation from '~/components/wrapped/visualizations/ChatReplayAnimation.vue'
 
 const props = defineProps({
   card: { type: Object, required: true },
@@ -97,6 +192,87 @@ const matrix = computed(() => {
 })
 
 const totalMessages = computed(() => Number(props.card?.data?.totalMessages || 0))
+
+
+const earliestSent = computed(() => {
+  const o = props.card?.data?.earliestSent
+  return o && typeof o === 'object' && typeof o.displayName === 'string' ? o : null
+})
+
+const latestSent = computed(() => {
+  const o = props.card?.data?.latestSent
+  return o && typeof o === 'object' && typeof o.displayName === 'string' ? o : null
+})
+
+const _formatDateLabel = (ymd) => {
+  const s = String(ymd || '').trim()
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!m) return s
+  const mm = String(Number(m[2]))
+  const dd = String(Number(m[3]))
+  return `${mm}月${dd}日`
+}
+
+const earliestDateLabel = computed(() => _formatDateLabel(earliestSent.value?.date))
+const latestDateLabel = computed(() => _formatDateLabel(latestSent.value?.date))
+const hasMomentDates = computed(() => Boolean(earliestDateLabel.value && latestDateLabel.value))
+const sameMomentDate = computed(() => hasMomentDates.value && earliestDateLabel.value === latestDateLabel.value)
+
+const sameMomentTarget = computed(() => {
+  const a = earliestSent.value
+  const b = latestSent.value
+  if (!a || !b) return false
+
+  const ua = String(a.username || '').trim()
+  const ub = String(b.username || '').trim()
+  if (ua && ub) return ua === ub
+
+  // Fallback: compare display names if username missing.
+  const da = String(a.displayName || '').trim()
+  const db = String(b.displayName || '').trim()
+  return !!da && !!db && da === db
+})
+
+const momentVariant = computed(() => {
+  const a = earliestSent.value
+  const b = latestSent.value
+  if (!a || !b) return 0
+
+  const t0 = Number(a.timestamp || 0)
+  const t1 = Number(b.timestamp || 0)
+  const seed = (Number.isFinite(t0) ? t0 : 0) ^ (Number.isFinite(t1) ? t1 : 0) ^ 0x9e3779b9
+  // 5 variants (0..4)
+  return Math.abs(seed) % 5
+})
+
+// 今年第一条/最后一条消息（按日期时间戳排序）
+const yearFirstSent = computed(() => {
+  const o = props.card?.data?.yearFirstSent
+  return o && typeof o === 'object' && typeof o.displayName === 'string' ? o : null
+})
+
+const yearLastSent = computed(() => {
+  const o = props.card?.data?.yearLastSent
+  return o && typeof o === 'object' && typeof o.displayName === 'string' ? o : null
+})
+
+const yearFirstDateLabel = computed(() => _formatDateLabel(yearFirstSent.value?.date))
+const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.date))
+
+const sameYearTarget = computed(() => {
+  const a = yearFirstSent.value
+  const b = yearLastSent.value
+  if (!a || !b) return false
+
+  const ua = String(a.username || '').trim()
+  const ub = String(b.username || '').trim()
+  if (ua && ub) return ua === ub
+
+  // Fallback: compare display names if username missing.
+  const da = String(a.displayName || '').trim()
+  const db = String(b.displayName || '').trim()
+  return !!da && !!db && da === db
+})
 
 const mostActiveHour = computed(() => {
   if (!matrix.value || !Array.isArray(matrix.value) || matrix.value.length < 7) return null
