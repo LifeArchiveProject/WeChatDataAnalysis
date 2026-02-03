@@ -151,6 +151,12 @@
           variant="slide"
           class="h-full w-full"
         />
+        <Card03ReplySpeed
+          v-else-if="c && (c.kind === 'chat/reply_speed' || c.id === 3)"
+          :card="c"
+          variant="slide"
+          class="h-full w-full"
+        />
         <WrappedCardShell
           v-else
           :card-id="Number(c?.id || (idx + 1))"
