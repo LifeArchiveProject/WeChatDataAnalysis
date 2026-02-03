@@ -68,6 +68,35 @@
           </div>
         </div>
 
+        <!-- 年度总结图标 -->
+        <div
+          class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+          title="年度总结"
+          @click="goWrapped"
+        >
+          <div
+            class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]"
+          >
+            <div class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isWrappedRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'">
+              <svg
+                class="w-full h-full"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="4" y="4" width="16" height="16" rx="2" />
+                <path d="M8 16v-5" />
+                <path d="M12 16v-8" />
+                <path d="M16 16v-3" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
         <!-- 隐私模式按钮 -->
         <div
           class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
@@ -98,19 +127,16 @@
 	          <div v-else-if="isLoading && posts.length === 0" class="text-sm text-gray-500 py-2">加载中…</div>
 	          <div v-else-if="posts.length === 0" class="text-sm text-gray-500 py-2">暂无朋友圈数据</div>
 
-	          <!-- 图片匹配说明（实验中，不代表最终效果） -->
+	          <!-- 图片匹配提示（实验功能） -->
 	          <div v-if="!error" class="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-	            <div class="font-medium">图片匹配说明（实验中）</div>
+	            <div class="font-medium">图片匹配（实验功能）</div>
 	            <div class="mt-1 leading-5">
-	              当前优先尝试从本地缓存（`cache/YYYY-MM/Sns/Img`）中解密读取图片，并结合动态元信息做匹配：
-	              若能拿到 totalSize（文件大小）会优先在候选中按“尺寸一致 + 文件大小最接近（时间作为次要参考）”挑选；若缺失，则回退到“时间接近度 + 图片尺寸 + 同尺寸顺序(N)”的启发式规则。
-	              该算法可能误判，不代表最终效果；若出现错图/无法查看，请点击图片进入预览，在“候选匹配”里手动选择。
-	              你的选择会保存在本机，下次会自动使用；即使已选择，仍会持续显示候选供再次切换。
+	              图片可能会出现错配或无法显示。点击图片进入预览，可在“候选匹配”中手动选择；你的选择会保存在本机并在下次优先使用。
 	            </div>
 	            <label class="mt-2 flex items-start gap-2 select-none">
 	              <input v-model="snsAvoidOtherPicked" type="checkbox" class="mt-[2px]" />
 	              <span class="leading-5">
-	                自动匹配时，避开已被你手动指定到其他动态的图片（降低重复率；仅对“手动选择过”的图片生效）
+	                自动匹配时，避开已被你手动指定到其他动态的图片（降低重复）
 	              </span>
 	            </label>
 	          </div>
@@ -385,6 +411,7 @@ const route = useRoute()
 
 const isChatRoute = computed(() => route.path?.startsWith('/chat'))
 const isSnsRoute = computed(() => route.path?.startsWith('/sns'))
+const isWrappedRoute = computed(() => route.path?.startsWith('/wrapped'))
 
 // 隐私模式（聊天/朋友圈共用本地开关）
 const PRIVACY_MODE_KEY = 'ui.privacy_mode'
@@ -1022,6 +1049,10 @@ const goChat = async () => {
 
 const goSns = async () => {
   await navigateTo('/sns')
+}
+
+const goWrapped = async () => {
+  await navigateTo('/wrapped')
 }
 
 watch(
