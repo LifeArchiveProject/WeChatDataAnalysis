@@ -71,7 +71,7 @@
               v-for="key in row"
               :key="key.code + key.label"
               class="kb-key"
-              :class="[`kb-w-${key.w || 1}`, { 'kb-space': key.isSpace }, getKeyClasses(key.code)]"
+              :class="[`kb-w-${key.w || 1}`, { 'kb-space': key.isSpace, 'kb-func': key.isFunc }, getKeyClasses(key.code)]"
               :style="getKeyStyle(key.code)"
             >
               <div class="kb-key-top" :style="getKeyTopStyle(key.code)">
@@ -358,6 +358,9 @@ const getLabelStyle = (code) => {
 /* 键盘外框 */
 .keyboard-outer {
   @apply mt-3 rounded-2xl p-1;
+  /* Needed for ::before/::after overlays (scanlines, speaker grill, etc.) */
+  position: relative;
+  isolation: isolate;
   background: linear-gradient(145deg, #ffffff, #e8e8e8);
   border: 1px solid rgba(0,0,0,0.06);
   box-shadow: 0 8px 24px rgba(0,0,0,0.12);
@@ -1192,6 +1195,123 @@ const getLabelStyle = (code) => {
   );
   pointer-events: none;
   z-index: 100;
+}
+
+/* ========== Game Boy 主题 - DMG / WorkBoy 风格外观 ========== */
+/* 设计参考：原版 Game Boy 的“灰机身 + 蓝/洋红点缀”配色，以及社区常见的 DMG 键盘配色（例如 GMK DMG 系列）。 */
+.wrapped-theme-gameboy .keyboard-outer {
+  background: #c4c1bd;
+  box-shadow:
+    0 0 0 4px #2b2b2b,
+    0 0 0 8px #e8e4e2,
+    0 0 0 10px #2b2b2b,
+    inset 0 0 0 2px rgba(255,255,255,0.35);
+}
+
+.wrapped-theme-gameboy .keyboard-inner {
+  background: #d6d2ce;
+  box-shadow:
+    inset 4px 4px 0 #a9a39f,
+    inset -4px -4px 0 #f5f2ee;
+}
+
+/* 顶部信息条做成“屏幕窗” */
+.wrapped-theme-gameboy .keyboard-header {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 2px solid #081820;
+  background: #e0f8d0;
+  box-shadow:
+    inset -2px -2px 0 #88c070,
+    inset 2px 2px 0 #f8f8f8;
+}
+
+/* 左侧指示灯：保留一个“电量灯”，其余隐藏 */
+.wrapped-theme-gameboy .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 0;
+  box-shadow:
+    0 0 0 2px #081820,
+    inset 1px 1px 0 rgba(255,255,255,0.25);
+}
+.wrapped-theme-gameboy .dot-red {
+  background: #9a2257;
+  animation: none !important;
+}
+.wrapped-theme-gameboy .dot-yellow,
+.wrapped-theme-gameboy .dot-green {
+  display: none;
+}
+.wrapped-theme-gameboy .keyboard-dots::after {
+  content: 'BATTERY';
+  margin-left: 6px;
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #081820;
+}
+
+.wrapped-theme-gameboy .keyboard-hint,
+.wrapped-theme-gameboy .keyboard-stats {
+  color: #081820;
+  text-shadow: none;
+}
+
+/* 键盘底板：偏灰，避免整块“全绿”导致像素感过强 */
+.wrapped-theme-gameboy .keyboard-body {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      #bdb8b4 0px, #bdb8b4 2px,
+      #c9c4c0 2px, #c9c4c0 4px
+    );
+  box-shadow:
+    inset 3px 3px 0 #a9a39f,
+    inset -3px -3px 0 #f5f2ee;
+}
+
+/* 功能键给一点“蓝色键帽”点缀（更像 DMG 配色键盘） */
+.wrapped-theme-gameboy .kb-func .kb-key-top {
+  background: #494786 !important;
+  box-shadow:
+    inset -3px -3px 0 #2f2d3a,
+    inset 3px 3px 0 #6a66a2,
+    inset -1px -1px 0 #1b1a22,
+    inset 1px 1px 0 #8a86d0 !important;
+}
+.wrapped-theme-gameboy .kb-func .kb-label,
+.wrapped-theme-gameboy .kb-func .kb-sub {
+  color: #e0f8d0 !important;
+  text-shadow: 1px 1px 0 rgba(0,0,0,0.35);
+}
+
+/* “音响孔”点阵 */
+.wrapped-theme-gameboy .keyboard-outer::before {
+  content: '';
+  position: absolute;
+  right: 10px;
+  bottom: 12px;
+  width: 52px;
+  height: 18px;
+  background:
+    radial-gradient(circle, rgba(8, 24, 32, 0.35) 35%, transparent 36%) 0 0 / 6px 6px;
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* 品牌文字：换成更贴近主题的“WorkBoy”梗 */
+.wrapped-theme-gameboy .keyboard-brand {
+  position: relative;
+  color: transparent;
+  text-shadow: none;
+}
+.wrapped-theme-gameboy .keyboard-brand::before {
+  content: 'WECHAT WORKBOY';
+  color: rgba(8, 24, 32, 0.7);
+  font-family: var(--font-pixel-10), 'Courier New', monospace;
+  letter-spacing: 2px;
 }
 
 /* ========== DOS 终端主题 - 黑底绿字键盘 ========== */

@@ -54,17 +54,19 @@
       <template v-else>
         <div class="flex items-start justify-between gap-4">
           <div>
-            <h2 class="wrapped-title text-2xl sm:text-3xl text-[#000000e6]">{{ title }}</h2>
-            <slot name="narrative">
-              <p v-if="narrative" class="mt-3 wrapped-body text-sm sm:text-base text-[#7F7F7F] max-w-2xl whitespace-pre-wrap">
-                {{ narrative }}
-              </p>
-            </slot>
+            <h2 class="wrapped-title text-[#000000e6]" :class="slideTitleClass">{{ title }}</h2>
+            <div :class="slideNarrativeWrapClass">
+              <slot name="narrative">
+                <p v-if="narrative" class="mt-3 wrapped-body text-sm sm:text-base text-[#7F7F7F] max-w-2xl whitespace-pre-wrap">
+                  {{ narrative }}
+                </p>
+              </slot>
+            </div>
           </div>
           <slot name="badge" />
         </div>
 
-        <div class="mt-6 sm:mt-8 flex-1 flex items-center">
+        <div class="flex-1 flex items-center" :class="slideContentWrapClass">
           <div class="w-full">
             <slot />
           </div>
@@ -84,11 +86,27 @@ defineProps({
 
 const { theme } = useWrappedTheme()
 const isWin98 = computed(() => theme.value === 'win98')
+const isGameboy = computed(() => theme.value === 'gameboy')
+const isDos = computed(() => theme.value === 'dos')
+const isCompactSlide = computed(() => isGameboy.value || isDos.value)
+
+const slideTitleClass = computed(() => (
+  isCompactSlide.value ? 'text-xl sm:text-2xl' : 'text-2xl sm:text-3xl'
+))
+
+// Keep as a computed so we can tune per-theme spacing later without touching template.
+const slideNarrativeWrapClass = computed(() => '')
+
+const slideContentWrapClass = computed(() => (
+  isCompactSlide.value ? 'mt-4 sm:mt-5' : 'mt-6 sm:mt-8'
+))
 
 const slideContainerClass = computed(() => (
   isWin98.value
     ? 'relative h-full max-w-5xl mx-auto px-6 pt-2 pb-4 sm:px-8 sm:pt-3 sm:pb-6 flex flex-col'
-    : 'relative h-full max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12 flex flex-col'
+    : (isCompactSlide.value
+      ? 'relative h-full max-w-5xl mx-auto px-6 pt-5 pb-6 sm:px-8 sm:pt-6 sm:pb-7 flex flex-col'
+      : 'relative h-full max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12 flex flex-col')
 ))
 </script>
 
