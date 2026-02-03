@@ -615,16 +615,36 @@ class WCDBRealtimeManager:
         except Exception:
             pass
 
-    def close_all(self) -> None:
+    def close_all(self, *, lock_timeout_s: float | None = None) -> bool:
+        """Close all known WCDB realtime connections.
+
+        When `lock_timeout_s` is None, this waits indefinitely for per-connection locks.
+        When provided, this will skip busy connections after the timeout and return False.
+        """
         with self._mu:
             conns = list(self._conns.values())
             self._conns.clear()
+        ok = True
         for conn in conns:
             try:
-                with conn.lock:
+                if lock_timeout_s is None:
+                    with conn.lock:
+                        close_account(conn.handle)
+                    continue
+
+                acquired = conn.lock.acquire(timeout=float(lock_timeout_s))
+                if not acquired:
+                    ok = False
+                    logger.warning("[wcdb] close_all skip busy conn account=%s", conn.account)
+                    continue
+                try:
                     close_account(conn.handle)
+                finally:
+                    conn.lock.release()
             except Exception:
+                ok = False
                 continue
+        return ok
 
 
 WCDB_REALTIME = WCDBRealtimeManager()

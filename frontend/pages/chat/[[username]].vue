@@ -59,6 +59,35 @@
             </div>
           </div>
         </div>
+
+        <!-- 年度总结图标 -->
+        <div
+          class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+          title="年度总结"
+          @click="goWrapped"
+        >
+          <div
+            class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]"
+          >
+            <div class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isWrappedRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'">
+              <svg
+                class="w-full h-full"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="4" y="4" width="16" height="16" rx="2" />
+                <path d="M8 16v-5" />
+                <path d="M12 16v-8" />
+                <path d="M16 16v-3" />
+              </svg>
+            </div>
+          </div>
+        </div>
         
         <!-- 隐私模式按钮 -->
         <div
@@ -177,7 +206,7 @@
                 <!-- 联系人头像 -->
                 <div class="w-[calc(45px/var(--dpr))] h-[calc(45px/var(--dpr))] rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
                   <div v-if="contact.avatar" class="w-full h-full">
-                    <img :src="contact.avatar" :alt="contact.name" class="w-full h-full object-cover">
+                    <img :src="contact.avatar" :alt="contact.name" class="w-full h-full object-cover" referrerpolicy="no-referrer" @error="onAvatarError($event, contact)">
                   </div>
                   <div v-else class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
                     :style="{ backgroundColor: contact.avatarColor || '#4B5563' }">
@@ -358,7 +387,7 @@
                       :alt="message.sender + '的头像'"
                       class="w-full h-full object-cover"
                       referrerpolicy="no-referrer"
-                      @error="onMessageAvatarError($event, message)"
+                      @error="onAvatarError($event, message)"
                     >
                   </div>
                   <div v-else class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
@@ -1371,7 +1400,7 @@
                   >
                     <input type="checkbox" :value="c.username" v-model="exportSelectedUsernames" />
                     <div class="w-9 h-9 rounded-md overflow-hidden bg-gray-200 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
-                      <img v-if="c.avatar" :src="c.avatar" :alt="c.name + '头像'" class="w-full h-full object-cover" />
+                      <img v-if="c.avatar" :src="c.avatar" :alt="c.name + '头像'" class="w-full h-full object-cover" referrerpolicy="no-referrer" @error="onAvatarError($event, c)" />
                       <div v-else class="w-full h-full flex items-center justify-center text-xs font-bold text-gray-600">
                         {{ (c.name || c.username || '?').charAt(0) }}
                       </div>
@@ -1779,6 +1808,7 @@ useHead({
 
 const route = useRoute()
 const isSnsRoute = computed(() => route.path?.startsWith('/sns'))
+const isWrappedRoute = computed(() => route.path?.startsWith('/wrapped'))
 
 const routeUsername = computed(() => {
   const raw = route.params.username
@@ -2096,6 +2126,10 @@ const selfAvatarUrl = computed(() => {
 
 const goSns = async () => {
   await navigateTo('/sns')
+}
+
+const goWrapped = async () => {
+  await navigateTo('/wrapped')
 }
 
 // 实时更新（WCDB DLL + db_storage watcher）
@@ -4319,10 +4353,10 @@ const normalizeMessage = (msg) => {
   }
 }
 
-const onMessageAvatarError = (e, message) => {
+const onAvatarError = (e, target) => {
   // Make sure we fall back to the initial avatar if the URL 404s/blocks.
   try { e?.target && (e.target.style.display = 'none') } catch {}
-  try { if (message) message.avatar = null } catch {}
+  try { if (target) target.avatar = null } catch {}
 }
 
 const shouldShowEmojiDownload = (message) => {
@@ -5118,14 +5152,16 @@ const toggleRealtime = async (opts = {}) => {
   try {
     const api = useApi()
     const u = String(selectedContact.value?.username || '').trim()
-    if (u) {
-      // Use a larger scan window on shutdown to reduce the chance of missing a backlog.
-      await api.syncChatRealtimeMessages({
-        account: selectedAccount.value,
-        username: u,
-        max_scan: 5000
-      })
-    }
+    // Sync all sessions once before falling back to the decrypted snapshot.
+    // This keeps the sidebar session list consistent (e.g. new friends) after a refresh.
+    await api.syncChatRealtimeAll({
+      account: selectedAccount.value,
+      max_scan: 200,
+      priority_username: u,
+      priority_max_scan: 5000,
+      include_hidden: true,
+      include_official: true
+    })
   } catch {}
   await refreshSessionsForSelectedAccount({ sourceOverride: '' })
   if (selectedContact.value?.username) {

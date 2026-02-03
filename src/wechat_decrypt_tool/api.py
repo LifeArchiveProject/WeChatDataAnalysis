@@ -11,6 +11,7 @@ from starlette.staticfiles import StaticFiles
 
 from .logging_config import setup_logging, get_logger
 from .path_fix import PathFixRoute
+from .chat_realtime_autosync import CHAT_REALTIME_AUTOSYNC
 from .routers.chat import router as _chat_router
 from .routers.chat_export import router as _chat_export_router
 from .routers.chat_media import router as _chat_media_router
@@ -121,16 +122,41 @@ def _maybe_mount_frontend() -> None:
 _maybe_mount_frontend()
 
 
+@app.on_event("startup")
+async def _startup_background_jobs() -> None:
+    try:
+        CHAT_REALTIME_AUTOSYNC.start()
+    except Exception:
+        logger.exception("Failed to start realtime autosync service")
+
+
 @app.on_event("shutdown")
 async def _shutdown_wcdb_realtime() -> None:
     try:
-        WCDB_REALTIME.close_all()
+        CHAT_REALTIME_AUTOSYNC.stop()
     except Exception:
         pass
+    close_ok = False
+    lock_timeout_s: float | None = 0.2
     try:
-        _wcdb_shutdown()
+        raw = str(os.environ.get("WECHAT_TOOL_WCDB_SHUTDOWN_LOCK_TIMEOUT_S", "0.2") or "").strip()
+        lock_timeout_s = float(raw) if raw else 0.2
+        if lock_timeout_s <= 0:
+            lock_timeout_s = None
     except Exception:
-        pass
+        lock_timeout_s = 0.2
+    try:
+        close_ok = WCDB_REALTIME.close_all(lock_timeout_s=lock_timeout_s)
+    except Exception:
+        close_ok = False
+    if close_ok:
+        try:
+            _wcdb_shutdown()
+        except Exception:
+            pass
+    else:
+        # If some conn locks were busy, other threads may still be running WCDB calls; avoid shutting down the lib.
+        logger.warning("[wcdb] close_all not fully completed; skip wcdb_shutdown")
 
 
 if __name__ == "__main__":

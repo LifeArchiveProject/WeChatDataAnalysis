@@ -99,6 +99,7 @@ export const useApi = () => {
     if (params && params.account) query.set('account', params.account)
     if (params && params.username) query.set('username', params.username)
     if (params && params.max_scan != null) query.set('max_scan', String(params.max_scan))
+    if (params && params.backfill_limit != null) query.set('backfill_limit', String(params.backfill_limit))
     const url = '/chat/realtime/sync' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url, { method: 'POST' })
   }
