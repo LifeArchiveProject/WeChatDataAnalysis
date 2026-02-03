@@ -443,6 +443,17 @@ async def proxy_image(url: str):
         # Different Tencent CDNs enforce different anti-hotlink rules.
         # Try a couple of safe referers so Moments(qpic) and MP(qpic) both work.
         header_variants = [
+            # WeFlow/Electron uses a MicroMessenger UA + servicewechat.com referer to pass some
+            # WeChat CDN anti-hotlink checks (qlogo/qpic). Browsers can't set these headers for <img>,
+            # but our backend proxy can.
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090719) XWEB/8351",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9",
+                "Referer": "https://servicewechat.com/",
+                "Origin": "https://servicewechat.com",
+                "Range": "bytes=0-",
+            },
             {"Referer": "https://wx.qq.com/", "Origin": "https://wx.qq.com"},
             {"Referer": "https://mp.weixin.qq.com/", "Origin": "https://mp.weixin.qq.com"},
             {"Referer": "https://www.baidu.com/", "Origin": "https://www.baidu.com"},
