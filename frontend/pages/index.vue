@@ -53,7 +53,10 @@
         <NuxtLink to="/wrapped" 
           class="group inline-flex items-center px-12 py-4 bg-white text-[#B37800] border border-[#F2AA00] rounded-lg text-lg font-medium hover:bg-[#F7F7F7] transform hover:scale-105 transition-all duration-200">
           <svg class="w-6 h-6 mr-3 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 3v18m9-9H3"/>
+            <rect x="4" y="4" width="16" height="16" rx="2" stroke-width="2.5" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M8 16v-5" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 16v-8" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M16 16v-3" />
           </svg>
           <span>年度总结</span>
         </NuxtLink>
