@@ -18,6 +18,11 @@
             在与你相伴的
             <span class="wrapped-number text-[#07C160] font-semibold">{{ formatInt(activeDays) }}</span>
             天里，
+            <template v-if="addedFriends > 0">
+              你总共加了
+              <span class="wrapped-number text-[#07C160] font-semibold">{{ formatInt(addedFriends) }}</span>
+              位好友，
+            </template>
             <template v-if="mostActiveHour !== null && mostActiveWeekdayName">
               你最常在 {{ mostActiveWeekdayName }} 的
               <span class="wrapped-number text-[#07C160] font-semibold">{{ mostActiveHour }}</span>
@@ -116,6 +121,7 @@ const formatFloat = (n, digits = 1) => {
 
 const totalMessages = computed(() => Number(props.card?.data?.totalMessages || 0))
 const activeDays = computed(() => Number(props.card?.data?.activeDays || 0))
+const addedFriends = computed(() => Number(props.card?.data?.addedFriends || 0))
 const messagesPerDay = computed(() => Number(props.card?.data?.messagesPerDay || 0))
 
 const mostActiveHour = computed(() => {

@@ -21,6 +21,7 @@ from ...chat_helpers import (
     _pick_display_name,
     _quote_ident,
     _should_keep_session,
+    _to_char_token_text,
 )
 from ...logging_config import get_logger
 
@@ -28,12 +29,22 @@ logger = get_logger(__name__)
 
 
 _MD5_HEX_RE = re.compile(r"(?i)[0-9a-f]{32}")
+# Best-effort heuristics for "new friends added" detection: WeChat system messages vary by version.
+_ADDED_FRIEND_PATTERNS: tuple[str, ...] = (
+    "你已添加了",
+    "你添加了",
+    "现在可以开始聊天了",
+    "以上是打招呼的消息",
+    "通过了你的朋友验证",
+    "通过你的朋友验证",
+)
 
 
 @dataclass(frozen=True)
 class GlobalOverviewStats:
     year: int
     active_days: int
+    added_friends: int
     local_type_counts: dict[int, int]
     kind_counts: dict[str, int]
     latest_ts: int
@@ -349,6 +360,37 @@ def compute_global_overview_stats(
                 top_group = pick_top(group_counts_i)
                 top_phrase = pick_top(phrase_counts_i)
 
+                # New friends added in this year (best-effort via WeChat system messages).
+                added_friend_usernames: set[str] = set()
+                try:
+                    like_patterns: list[str] = []
+                    for pat in _ADDED_FRIEND_PATTERNS:
+                        tok = _to_char_token_text(pat)
+                        if tok:
+                            like_patterns.append(f"%{tok}%")
+
+                    if like_patterns:
+                        where_added = f"{ts_expr} >= ? AND {ts_expr} < ? AND db_stem NOT LIKE 'biz_message%'"
+                        cond_added = " OR ".join(['\"text\" LIKE ?'] * len(like_patterns))
+                        rows_added = conn.execute(
+                            f"SELECT DISTINCT username FROM message_fts "
+                            f"WHERE {where_added} "
+                            "AND CAST(local_type AS INTEGER) = 10000 "
+                            f"AND ({cond_added})",
+                            (start_ts, end_ts, *like_patterns),
+                        ).fetchall()
+                        for rr in rows_added:
+                            if not rr or not rr[0]:
+                                continue
+                            u = str(rr[0] or "").strip()
+                            if not u or u.endswith("@chatroom") or (not is_keep_username(u)):
+                                continue
+                            added_friend_usernames.add(u)
+                except Exception:
+                    added_friend_usernames = set()
+
+                added_friends_i = len(added_friend_usernames)
+
                 total_messages = int(sum(local_type_counts_i.values()))
                 logger.info(
                     "Wrapped card#0 overview computed (search index): account=%s year=%s total=%s active_days=%s sender=%s db=%s elapsed=%.2fs",
@@ -364,6 +406,7 @@ def compute_global_overview_stats(
                 return GlobalOverviewStats(
                     year=year,
                     active_days=active_days_i,
+                    added_friends=added_friends_i,
                     local_type_counts={int(k): int(v) for k, v in local_type_counts_i.items()},
                     kind_counts={str(k): int(v) for k, v in kind_counts_i.items()},
                     latest_ts=latest_ts_i,
@@ -411,6 +454,8 @@ def compute_global_overview_stats(
     active_days: set[str] = set()
     per_username_counts: Counter[str] = Counter()
     phrase_counts: Counter[str] = Counter()
+    added_friend_usernames: set[str] = set()
+    added_like_patterns = [f"%{p}%" for p in _ADDED_FRIEND_PATTERNS if str(p or "").strip()]
 
     latest_ts = 0
 
@@ -425,6 +470,7 @@ def compute_global_overview_stats(
             if not tables:
                 continue
 
+            skip_sender_stats = False
             sender_rowid: int | None = None
             if sender:
                 try:
@@ -436,13 +482,38 @@ def compute_global_overview_stats(
                         sender_rowid = int(r2[0])
                 except Exception:
                     sender_rowid = None
-                # Can't reliably filter by sender for this shard; skip to avoid mixing directions.
+                # Can't reliably filter by sender for this shard; skip sender-only stats to avoid mixing directions.
                 if sender_rowid is None:
-                    continue
+                    skip_sender_stats = True
 
             for table_name in tables:
                 qt = _quote_ident(table_name)
                 username = resolve_username_from_table(table_name)
+
+                # New friends added: detect common WeChat system messages within this year.
+                if (
+                    added_like_patterns
+                    and username
+                    and (not username.endswith("@chatroom"))
+                    and _should_keep_session(username, include_official=False)
+                ):
+                    cond_added = " OR ".join(["CAST(message_content AS TEXT) LIKE ?"] * len(added_like_patterns))
+                    sql_added = (
+                        f"SELECT 1 FROM {qt} "
+                        f"WHERE local_type = 10000 "
+                        f"  AND {ts_expr} >= ? AND {ts_expr} < ? "
+                        f"  AND ({cond_added}) "
+                        "LIMIT 1"
+                    )
+                    try:
+                        r_added = conn.execute(sql_added, (start_ts, end_ts, *added_like_patterns)).fetchone()
+                    except Exception:
+                        r_added = None
+                    if r_added is not None:
+                        added_friend_usernames.add(username)
+
+                if skip_sender_stats:
+                    continue
                 sender_where = " AND real_sender_id = ?" if sender_rowid is not None else ""
                 params = (start_ts, end_ts, sender_rowid) if sender_rowid is not None else (start_ts, end_ts)
 
@@ -593,6 +664,7 @@ def compute_global_overview_stats(
     return GlobalOverviewStats(
         year=year,
         active_days=len(active_days),
+        added_friends=len(added_friend_usernames),
         local_type_counts={int(k): int(v) for k, v in local_type_counts.items()},
         kind_counts={str(k): int(v) for k, v in kind_counts.items()},
         latest_ts=int(latest_ts),
@@ -744,6 +816,7 @@ def build_card_00_global_overview(
             "year": int(year),
             "totalMessages": int(heatmap.total_messages),
             "activeDays": int(stats.active_days),
+            "addedFriends": int(stats.added_friends),
             "messagesPerDay": messages_per_day,
             "mostActiveHour": most_active_hour,
             "mostActiveWeekday": most_active_weekday,
