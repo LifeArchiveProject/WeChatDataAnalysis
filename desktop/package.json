@@ -1,7 +1,7 @@
 {
   "name": "wechat-data-analysis-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "main": "src/main.cjs",
   "scripts": {
     "dev": "concurrently -k -s first \"cd ..\\\\frontend && npm run dev\" \"cross-env ELECTRON_START_URL=http://localhost:3000 electron .\"",
