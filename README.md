@@ -10,33 +10,19 @@
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
     <img src="https://gh-down-badges.linkof.link/LifeArchiveProject/WeChatDataAnalysis" alt="Downloads" />
     <img src="https://img.shields.io/github/forks/LifeArchiveProject/WeChatDataAnalysis" alt="Forks" />
-    <img src="https://img.shields.io/github/license/LifeArchiveProject/WeChatDataAnalysis" alt="License" />
     <img src="https://img.shields.io/badge/Python-3776AB?logo=Python&logoColor=white" alt="Python" />
     <img src="https://img.shields.io/badge/FastAPI-009688?logo=FastAPI&logoColor=white" alt="FastAPI" />
     <img src="https://img.shields.io/badge/Vue.js-4FC08D?logo=Vue.js&logoColor=white" alt="Vue.js" />
     <img src="https://img.shields.io/badge/SQLite-003B57?logo=SQLite&logoColor=white" alt="SQLite" />
 </div>
 
-## 功能特性
+## 年度总结
 
-### 已实现功能
+年度总结现在支持 4 种不同风格（style1-4）。如果你对某个风格有更好的修改建议，或有新风格的点子，欢迎到 Issue 区反馈：https://github.com/LifeArchiveProject/WeChatDataAnalysis/issues
 
-- **数据库解密**: 支持微信4.x版本数据库文件的解密
-- **多账户检测**: 自动检测并处理多个微信账户的数据库文件
-- **API接口**: 提供RESTful API接口进行数据库解密操作
-- **Web界面**: 提供现代化的Web操作界面
-- **聊天记录查看**: 支持查看解密后的聊天记录、消息搜索与离线导出
-- **实时更新（SSE）**: 支持开启实时模式，监听 `db_storage` 变更，增量同步新消息并自动刷新会话/消息列表
-- **聊天图片展示**: 支持部分版本图片消息无MD5时通过 file_id 兜底定位本地资源
+> ⚠️ **提醒**：年度总结目前还不是最终版本，后续还会增加新总结或新风格。
 
-### 开发计划
 
-- **数据分析**: 对解密后的数据进行深度分析
-- **数据可视化**: 提供图表、统计报告等可视化展示
-- **聊天记录分析**: 消息频率、活跃时间、关键词分析等
-- **聊天记录优化**: 高级筛选、统计报表等功能
-
-> **项目进展**: 查看 [GitHub项目面板](https://github.com/orgs/LifeArchiveProject/projects/1/views/1) 了解当前开发状态和后续功能规划
 
 ## 快速开始
 
@@ -157,10 +143,6 @@ npm run dist
 ## 贡献
 
 欢迎提交Issue和Pull Request来改进这个项目。
-
-## 许可证
-
-本项目仅供学习和个人使用。请遵守相关法律法规。
 
 ---
 
