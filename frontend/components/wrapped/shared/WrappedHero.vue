@@ -90,6 +90,84 @@
             </div>
           </div>
         </div>
+
+        <div
+          v-if="previewQuestions.length > 0 && (isGameboy || isModern)"
+          class="pointer-events-none absolute bottom-0 right-0 hidden xl:flex items-end"
+        >
+          <div class="pointer-events-auto relative" :class="previewStageClass">
+            <div class="relative" :class="previewViewportClass">
+              <template v-if="isGameboy">
+              <BitsCardSwap
+                :width="previewCardWidth"
+                :height="previewCardHeight"
+                :delay="previewSwapDelay"
+                :card-count="previewQuestions.length"
+                :card-distance="previewCardDistance"
+                :vertical-distance="previewVerticalDistance"
+                :skew-amount="4"
+                easing="elastic"
+                :pause-on-hover="true"
+              >
+                <template
+                  v-for="(previewItem, previewIndex) in previewQuestions"
+                  :key="`preview-${previewItem.order}-${previewIndex}`"
+                  v-slot:[`card-${previewIndex}`]
+                >
+                  <WrappedCardShell
+                    :card-id="previewItem.order"
+                    :title="previewItem.title"
+                    variant="panel"
+                    class="h-full w-full"
+                  >
+                    <div
+                      class="flex h-[168px] items-center justify-center rounded-xl border border-dashed px-5"
+                      :class="previewQuestionPanelClass"
+                    >
+                      <p class="wrapped-body text-lg leading-relaxed text-center" :class="previewQuestionClass">
+                        {{ previewItem.question }}
+                      </p>
+                    </div>
+                  </WrappedCardShell>
+                </template>
+              </BitsCardSwap>
+              </template>
+
+              <template v-else>
+                <BitsGridMotion
+                  :items="modernPreviewItems"
+                  gradient-color="rgba(7, 193, 96, 0.24)"
+                  :row-count="7"
+                  :column-count="8"
+                  :scroll-speed="42"
+                  :base-offset-x="46"
+                >
+                  <template #item="{ item }">
+                    <WrappedCardShell
+                      :card-id="Number(item?.order || 0)"
+                      :title="String(item?.title || '年度卡片')"
+                      variant="panel"
+                      class="h-full w-full preview-grid-shell"
+                    >
+                      <div class="preview-grid-body">
+                        <div class="preview-grid-summary">
+                          {{ String(item?.summary || '年度线索') }}
+                        </div>
+                        <p class="preview-grid-question">
+                          {{ String(item?.question || '这一页会揭晓你的聊天答案。') }}
+                        </p>
+                        <div class="preview-grid-lines" aria-hidden="true">
+                          <span></span>
+                          <span></span>
+                        </div>
+                      </div>
+                    </WrappedCardShell>
+                  </template>
+                </BitsGridMotion>
+              </template>
+            </div>
+          </div>
+        </div>
       </template>
 
       <template v-else>
@@ -235,13 +313,126 @@ const subtitleIndex = useState('wrapped-subtitle-index', () => Math.floor(Math.r
 const randomTitle = computed(() => TITLES[titleIndex.value])
 const randomSubtitle = computed(() => SUBTITLES[subtitleIndex.value])
 
+const PREVIEW_BY_KIND = {
+  'global/overview': {
+    summary: '年度全景',
+    question: '这一年你最常把消息发给谁？'
+  },
+  'time/weekday_hour_heatmap': {
+    summary: '聊天作息',
+    question: '你是早八型还是夜猫子型聊天选手？'
+  },
+  'text/message_chars': {
+    summary: '表达强度',
+    question: '你这一年打出的字，能拼成几段故事？'
+  },
+  'chat/reply_speed': {
+    summary: '回复速度',
+    question: '谁是你愿意秒回的那个人？'
+  }
+}
+
+const PREVIEW_FALLBACK_SUMMARY = '年度线索'
+const PREVIEW_FALLBACK_QUESTION = '这一页会揭晓你的哪段聊天答案？'
+const PREVIEW_BOOTSTRAP_ITEMS = [
+  { summary: '年度全景', question: '这一年你最常把消息发给谁？' },
+  { summary: '聊天作息', question: '你是「早八人」还是「夜猫子」？' },
+  { summary: '表达强度', question: '你这一年打了多少字？' },
+  { summary: '回复速度', question: '谁是你愿意秒回的那个人？' }
+]
+
+const resolvePreviewMeta = (kind, idx) => {
+  const key = String(kind || '').trim()
+  if (PREVIEW_BY_KIND[key]) return PREVIEW_BY_KIND[key]
+  return {
+    summary: PREVIEW_FALLBACK_SUMMARY,
+    question: idx % 2 === 0
+      ? '这一页会揭晓你聊天里的哪种习惯？'
+      : '你猜这页的答案会指向谁和哪段时光？'
+  }
+}
+
 const props = defineProps({
   year: { type: Number, required: true },
-  variant: { type: String, default: 'panel' } // 'panel' | 'slide'
+  variant: { type: String, default: 'panel' }, // 'panel' | 'slide'
+  cardManifests: { type: Array, default: () => [] }
 })
 
 const { theme } = useWrappedTheme()
 const isWin98 = computed(() => theme.value === 'win98')
+const isGameboy = computed(() => theme.value === 'gameboy')
+const isModern = computed(() => theme.value === 'off')
+
+const previewQuestions = computed(() => {
+  const manifests = Array.isArray(props.cardManifests) ? props.cardManifests : []
+  if (!manifests.length) {
+    return Array.from({ length: 8 }, (_, idx) => {
+      const fallback = PREVIEW_BOOTSTRAP_ITEMS[idx % PREVIEW_BOOTSTRAP_ITEMS.length]
+      return {
+        order: idx + 1,
+        title: `第 ${idx + 1} 张卡片`,
+        summary: fallback.summary,
+        question: fallback.question
+      }
+    })
+  }
+
+  return manifests.map((item, idx) => {
+    const meta = resolvePreviewMeta(item?.kind, idx)
+    return {
+      order: idx + 1,
+      title: String(item?.title || `第 ${idx + 1} 张卡片`),
+      summary: meta.summary,
+      question: meta.question
+    }
+  })
+})
+
+const previewSwapDelay = 4200
+const previewCardWidth = 420
+const previewCardHeight = 280
+
+const modernPreviewItems = computed(() => {
+  if (!previewQuestions.value.length) return []
+  return previewQuestions.value.map((item) => ({
+    order: item.order,
+    title: item.title,
+    summary: item.summary,
+    question: item.question
+  }))
+})
+
+const previewStageClass = computed(() => (
+  isGameboy.value
+    ? 'w-[500px] h-[360px] translate-x-12 -translate-y-8'
+    : 'w-[620px] h-[420px] translate-x-20 -translate-y-10'
+))
+
+const previewViewportClass = computed(() => (
+  isGameboy.value
+    ? 'h-[340px] w-[460px]'
+    : 'h-[390px] w-[580px]'
+))
+
+const previewCardDistance = computed(() => {
+  const total = previewQuestions.value.length
+  return total >= 9 ? 9 : total >= 7 ? 11 : total >= 5 ? 13 : 18
+})
+
+const previewVerticalDistance = computed(() => {
+  const total = previewQuestions.value.length
+  return total >= 9 ? 10 : total >= 7 ? 11 : total >= 5 ? 14 : 18
+})
+
+const previewQuestionClass = computed(() => {
+  if (isWin98.value) return 'text-[#111111]'
+  return 'text-[#1F2937]'
+})
+
+const previewQuestionPanelClass = computed(() => {
+  if (isWin98.value) return 'border-[#B7B7B7] bg-[#FFFFFF]'
+  return 'border-[#07C160]/30 bg-[#F7FFFB]'
+})
 
 const yearText = computed(() => `${props.year}年`)
 
@@ -266,5 +457,65 @@ const innerClass = computed(() => {
   padding: 2px 8px;
   background: #000080;
   color: #ffffff;
+}
+
+.preview-grid-shell {
+  border-radius: 12px;
+  box-shadow: 0 10px 24px rgba(7, 193, 96, 0.14);
+  background: #f3fff8 !important;
+  border-color: rgba(7, 193, 96, 0.24) !important;
+}
+
+.preview-grid-shell :deep(.wrapped-title) {
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.preview-grid-body {
+  height: 96px;
+  border-radius: 10px;
+  border: 1px solid rgba(7, 193, 96, 0.2);
+  background: rgba(243, 255, 248, 0.88);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.preview-grid-summary {
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: #07c160;
+  font-weight: 700;
+}
+
+.preview-grid-question {
+  margin-top: 6px;
+  color: #1f2937;
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 600;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.preview-grid-lines {
+  margin-top: 6px;
+  display: grid;
+  gap: 5px;
+}
+
+.preview-grid-lines span {
+  display: block;
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(7, 193, 96, 0.18), rgba(7, 193, 96, 0.08));
+}
+
+.preview-grid-lines span:last-child {
+  width: 68%;
 }
 </style>
