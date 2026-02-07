@@ -1,0 +1,1 @@
+> 这个目录放hook的native模块，参考项目为wx_key，经过新的瘦身和优化（特征码不应该在native里面硬编码！！！），目前的项目地址：https://github.com/H3CoF6/wxkey-native
