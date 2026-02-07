@@ -1,11 +1,11 @@
 /**
  * 年度总结页面主题管理 composable
- * 支持三种主题：modern（现代）、gameboy（Game Boy）、dos（DOS终端）
+ * 支持三种主题：modern（现代）、gameboy（Game Boy）、win98（Windows 98）
  */
 
 const STORAGE_KEY = 'wrapped-theme'
-const VALID_THEMES = ['off', 'gameboy', 'dos', 'win98']
-const RETRO_THEMES = new Set(['gameboy', 'dos'])
+const VALID_THEMES = ['off', 'gameboy', 'win98']
+const RETRO_THEMES = new Set(['gameboy'])
 
 // 全局响应式状态（跨组件共享）
 const theme = ref('off')
@@ -15,19 +15,12 @@ let keyboardInitialized = false
 export function useWrappedTheme() {
   // 初始化：从 localStorage 读取（仅执行一次）
   const initTheme = () => {
-    if (initialized) return
-    if (import.meta.client) {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      if (saved && VALID_THEMES.includes(saved)) {
-        theme.value = saved
-      }
-      initialized = true
+    if (initialized || !import.meta.client) return
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved && VALID_THEMES.includes(saved)) {
+      theme.value = saved
     }
-  }
-
-  // 立即初始化（客户端）
-  if (import.meta.client) {
-    initTheme()
+    initialized = true
   }
 
   // 设置主题
@@ -66,7 +59,6 @@ export function useWrappedTheme() {
     const names = {
       off: 'Modern',
       gameboy: 'Game Boy',
-      dos: 'DOS Terminal',
       win98: 'Windows 98'
     }
     return names[theme.value] || 'Modern'
@@ -92,9 +84,6 @@ export function useWrappedTheme() {
         setTheme('gameboy')
       } else if (e.key === 'F3') {
         e.preventDefault()
-        setTheme('dos')
-      } else if (e.key === 'F4') {
-        e.preventDefault()
         setTheme('win98')
       }
     }
@@ -102,10 +91,11 @@ export function useWrappedTheme() {
     window.addEventListener('keydown', handleKeydown)
   }
 
-  // 自动初始化键盘快捷键
-  if (import.meta.client) {
+  // 客户端挂载后再初始化：避免 SSR 与首帧 hydration 不一致
+  onMounted(() => {
+    initTheme()
     initKeyboardShortcuts()
-  }
+  })
 
   return {
     theme: readonly(theme),

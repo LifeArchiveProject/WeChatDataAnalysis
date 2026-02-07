@@ -25,7 +25,6 @@ const { theme, setTheme } = useWrappedTheme()
 const themes = [
   { value: 'off', label: 'Modern' },
   { value: 'gameboy', label: 'Game Boy' },
-  { value: 'dos', label: 'DOS' },
   { value: 'win98', label: 'Win98' }
 ]
 </script>

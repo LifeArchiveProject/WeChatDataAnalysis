@@ -186,7 +186,7 @@
                 暂无可展示的排行榜数据。
               </div>
 
-              <div v-else class="race-scroll mt-4 max-h-[26rem] overflow-auto pr-1">
+              <div v-else class="race-scroll mt-4 max-h-[26rem] overflow-y-auto overflow-x-hidden pr-1">
                 <TransitionGroup
                   name="race"
                   tag="div"
@@ -258,8 +258,7 @@ const props = defineProps({
 
 const { theme } = useWrappedTheme()
 const isGameboy = computed(() => theme.value === 'gameboy')
-const isDos = computed(() => theme.value === 'dos')
-const isRetro = computed(() => isGameboy.value || isDos.value)
+const isRetro = computed(() => isGameboy.value)
 
 const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
 const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
@@ -754,6 +753,16 @@ onBeforeUnmount(() => {
   /* DOS theme sets `transition: text-shadow ... !important` on `*` (global).
      Use an explicit transition here so the rail slide stays smooth in all themes. */
   transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1) !important;
+}
+
+.race-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.race-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .race-move {

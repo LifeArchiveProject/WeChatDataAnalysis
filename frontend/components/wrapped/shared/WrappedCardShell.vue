@@ -87,8 +87,7 @@ defineProps({
 const { theme } = useWrappedTheme()
 const isWin98 = computed(() => theme.value === 'win98')
 const isGameboy = computed(() => theme.value === 'gameboy')
-const isDos = computed(() => theme.value === 'dos')
-const isCompactSlide = computed(() => isGameboy.value || isDos.value)
+const isCompactSlide = computed(() => isGameboy.value)
 
 const slideTitleClass = computed(() => (
   isCompactSlide.value ? 'text-xl sm:text-2xl' : 'text-2xl sm:text-3xl'
@@ -142,39 +141,4 @@ const slideContainerClass = computed(() => (
   border-color: #306230 !important;
 }
 
-/* ========== DOS 主题 ========== */
-
-/* 卡片背景 */
-.wrapped-theme-dos .bg-white {
-  background: #0a0a0a !important;
-  border-color: #33ff33 !important;
-  box-shadow: 0 0 10px rgba(51, 255, 51, 0.3);
-}
-
-/* 标题 */
-.wrapped-theme-dos .wrapped-title {
-  color: #33ff33 !important;
-  text-shadow: 0 0 5px #33ff33;
-  font-family: 'Courier New', monospace;
-}
-
-/* 描述文字 */
-.wrapped-theme-dos .wrapped-body {
-  color: #22aa22 !important;
-  text-shadow: 0 0 3px #22aa22;
-  font-family: 'Courier New', monospace;
-}
-
-/* 数字高亮 */
-.wrapped-theme-dos .wrapped-number {
-  color: #33ff33 !important;
-  text-shadow: 0 0 8px #33ff33;
-  font-family: 'Courier New', monospace;
-}
-
-/* 边框 */
-.wrapped-theme-dos .border-\[\#EDEDED\],
-.wrapped-theme-dos .border-\[\#F3F3F3\] {
-  border-color: #33ff33 !important;
-}
 </style>

@@ -19,25 +19,6 @@
       </div>
     </div>
 
-    <!-- DOS 风格 -->
-    <div v-else-if="theme === 'dos'" class="year-dos">
-      <span class="dos-prompt">C:\WRAPPED&gt;</span>
-      <span class="dos-label">YEAR:</span>
-      <button
-        class="dos-arrow"
-        :disabled="!canGoPrev"
-        @click="prevYear"
-        aria-label="Previous year"
-      >[-]</button>
-      <span class="dos-value">{{ modelValue }}</span>
-      <button
-        class="dos-arrow"
-        :disabled="!canGoNext"
-        @click="nextYear"
-        aria-label="Next year"
-      >[+]</button>
-    </div>
-
     <!-- Win98 风格 -->
     <div v-else-if="theme === 'win98'" class="year-win98">
       <div class="win98-year-box">
@@ -207,57 +188,6 @@ onBeforeUnmount(() => {
   min-width: 40px;
   text-align: center;
   letter-spacing: 2px;
-}
-
-/* ========== DOS 风格 ========== */
-.year-dos {
-  font-family: 'Courier New', 'Consolas', monospace;
-  font-size: 11px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: #33ff33;
-  text-shadow: 0 0 5px #33ff33;
-}
-
-.dos-prompt {
-  color: #1a5c1a;
-}
-
-.dos-label {
-  color: #33ff33;
-}
-
-.dos-arrow {
-  background: transparent;
-  border: none;
-  color: #33ff33;
-  font-family: inherit;
-  font-size: inherit;
-  cursor: pointer;
-  padding: 0 2px;
-  text-shadow: 0 0 5px #33ff33;
-  transition: color 0.1s;
-}
-
-.dos-arrow:hover:not(:disabled) {
-  color: #66ff66;
-  text-shadow: 0 0 8px #66ff66;
-}
-
-.dos-arrow:disabled {
-  color: #1a5c1a;
-  cursor: not-allowed;
-  text-shadow: none;
-}
-
-.dos-value {
-  background: #0a1a0a;
-  padding: 2px 6px;
-  border: 1px solid #1a5c1a;
-  letter-spacing: 1px;
-  min-width: 50px;
-  text-align: center;
 }
 
 /* ========== Win98 风格 ========== */

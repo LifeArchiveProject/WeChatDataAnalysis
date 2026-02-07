@@ -1,5 +1,5 @@
 <template>
-  <!-- Shared backdrop for all "Wrapped" slides (keeps cover + cards visually consistent). -->
+  <!-- Shared backdrop for modern/gameboy "Wrapped" slides (keeps cover + cards visually consistent). -->
   <div v-if="theme !== 'win98'" class="absolute inset-0 pointer-events-none select-none z-0" aria-hidden="true">
     <!-- Soft color blobs (brand + warm highlights) -->
     <div class="absolute -top-24 -left-24 w-80 h-80 bg-[#07C160] opacity-[0.08] rounded-full blur-3xl"></div>
@@ -11,8 +11,17 @@
       class="absolute inset-0 bg-[linear-gradient(rgba(7,193,96,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(7,193,96,0.05)_1px,transparent_1px)] bg-[size:52px_52px] opacity-[0.28]"
     ></div>
 
-    <!-- Grain/noise: enhanced with dynamic jitter for CRT feel -->
-    <div class="absolute inset-0 wrapped-noise-enhanced opacity-[0.08]"></div>
+    <!-- Grain/noise: gameboy 使用动态 canvas 噪点，其它主题沿用现有纹理 -->
+    <WrappedGameboyDither
+      v-if="theme === 'gameboy'"
+      class="opacity-[0.3]"
+      style="filter: contrast(1.16)"
+      :pattern-refresh-interval="1"
+      :pattern-alpha="56"
+      mix-blend-mode="overlay"
+      :pattern-size="256"
+    />
+    <div v-else class="absolute inset-0 wrapped-noise-enhanced opacity-[0.08]"></div>
 
     <!-- Gentle vignette so typography stays readable on textured bg -->
     <div class="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-white/50 to-transparent"></div>

@@ -1,14 +1,14 @@
 <template>
   <div
     ref="deckEl"
-    class="relative h-screen w-full overflow-hidden transition-colors duration-500"
+    class="wrapped-deck-root relative h-screen w-full overflow-hidden transition-colors duration-500"
     :class="themeClass"
     :style="{ backgroundColor: currentBg }"
   >
     <!-- PPT 风格：单张卡片占据全页面，鼠标滚轮切换 -->
     <WrappedDeckBackground />
-    <!-- CRT 叠加层仅用于“像素屏/终端”类主题，Win98 等桌面 GUI 主题不应开启 -->
-    <WrappedCRTOverlay v-if="theme === 'gameboy' || theme === 'dos'" />
+    <!-- CRT 叠加层仅用于“像素屏”类主题，Win98 等桌面 GUI 主题不应开启 -->
+    <WrappedCRTOverlay v-if="theme === 'gameboy'" />
 
     <!-- 左上角：刷新 + 复古模式开关 -->
     <div class="absolute top-6 left-6 z-20 select-none">
@@ -81,7 +81,8 @@
     </div>
 
     <div
-      class="relative z-10 h-full w-full will-change-transform transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
+      class="relative h-full w-full will-change-transform transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
+      :class="deckTrackClass"
       :style="trackStyle"
     >
       <!-- Cover -->
@@ -201,7 +202,7 @@ const year = ref(Number(route.query?.year) || new Date().getFullYear())
 // 分享视图不展示账号信息：默认让后端自动选择；需要指定时可用 query ?account=wxid_xxx
 const account = ref(typeof route.query?.account === 'string' ? route.query.account : '')
 
-// 主题管理：modern / gameboy / dos
+// 主题管理：modern / gameboy / win98
 const { theme, cycleTheme, isRetro, themeClass } = useWrappedTheme()
 
  const accounts = ref([])
@@ -232,12 +233,12 @@ const activeIndex = ref(0)
 const navLocked = ref(false)
 const wheelAcc = ref(0)
 let navUnlockTimer = null
+let deckResizeObserver = null
 
 // 各主题的背景颜色
 const THEME_BG = {
   off: '#F3FFF8',       // Modern: 浅绿
   gameboy: '#9bbc0f',   // Game Boy: 亮绿
-  dos: '#0a0a0a',       // DOS: 黑色
   win98: '#008080'      // Win98: 经典桌面青色
 }
 
@@ -257,6 +258,14 @@ const taskbarTitle = computed(() => {
 })
 
 const currentBg = computed(() => THEME_BG[theme.value] || THEME_BG.off)
+const deckTrackClass = computed(() => 'z-10')
+
+const applyViewportBg = () => {
+  if (!import.meta.client) return
+  const bg = currentBg.value
+  document.documentElement.style.backgroundColor = bg
+  document.body.style.backgroundColor = bg
+}
 
 const slideStyle = computed(() => (
   viewportHeight.value > 0 ? { height: `${viewportHeight.value}px` } : { height: '100%' }
@@ -381,7 +390,7 @@ const onTouchEnd = (e) => {
 }
 
 const updateViewport = () => {
-  const h = deckEl.value?.clientHeight || window.innerHeight || 0
+  const h = Math.round(deckEl.value?.getBoundingClientRect?.().height || deckEl.value?.clientHeight || window.innerHeight || 0)
   if (!h) return
   // Reserve space for the Win98 taskbar at the bottom.
   const offset = theme.value === 'win98' ? 40 : 0
@@ -530,7 +539,14 @@ watch(activeIndex, (i) => {
 })
 
 onMounted(async () => {
+  applyViewportBg()
   updateViewport()
+  if (import.meta.client && typeof ResizeObserver !== 'undefined' && deckEl.value) {
+    deckResizeObserver = new ResizeObserver(() => {
+      updateViewport()
+    })
+    deckResizeObserver.observe(deckEl.value)
+  }
   window.addEventListener('resize', updateViewport)
   // passive:false 才能 preventDefault，避免外层容器产生滚动/回弹
   deckEl.value?.addEventListener('wheel', onWheel, { passive: false })
@@ -547,10 +563,17 @@ onMounted(async () => {
 
 // Theme switch may change reserved UI space (e.g., Win98 taskbar)
 watch(theme, () => {
+  applyViewportBg()
   updateViewport()
 })
 
 onBeforeUnmount(() => {
+  if (import.meta.client) {
+    document.documentElement.style.backgroundColor = ''
+    document.body.style.backgroundColor = ''
+  }
+  deckResizeObserver?.disconnect()
+  deckResizeObserver = null
   window.removeEventListener('resize', updateViewport)
   deckEl.value?.removeEventListener('wheel', onWheel)
   window.removeEventListener('keydown', onKeydown)
@@ -578,3 +601,15 @@ watch(year, async (newYear, oldYear) => {
   await reload()
 })
 </script>
+
+<style>
+.wrapped-deck-root {
+  height: 100dvh;
+  min-height: 100dvh;
+}
+
+.wechat-desktop .wechat-desktop-content > .wrapped-deck-root {
+  height: 100%;
+  min-height: 100%;
+}
+</style>
