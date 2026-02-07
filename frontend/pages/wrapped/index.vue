@@ -87,7 +87,12 @@
       <!-- Cover -->
       <section class="w-full" :style="slideStyle">
         <div class="h-full w-full relative">
-          <WrappedHero :year="year" variant="slide" class="h-full w-full" />
+          <WrappedHero
+            :year="year"
+            :card-manifests="report?.cards || []"
+            variant="slide"
+            class="h-full w-full"
+          />
         </div>
       </section>
 
