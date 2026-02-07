@@ -35,7 +35,7 @@
               </div>
 
               <div class="mt-10 sm:mt-14">
-                <h1 class="wrapped-title text-4xl sm:text-6xl text-[#000000e6] leading-[1.05]">
+                <h1 class="wrapped-title text-3xl sm:text-5xl text-[#000000e6] leading-[1.05]">
                   {{ randomTitle.main }}
                   <span class="block mt-3 win98-hero-highlight">
                     {{ randomTitle.highlight }}
@@ -70,7 +70,7 @@
           </div>
 
           <div class="mt-10 sm:mt-14">
-            <h1 class="wrapped-title text-4xl sm:text-6xl text-[#000000e6] leading-[1.05]">
+            <h1 class="wrapped-title text-3xl sm:text-5xl text-[#000000e6] leading-[1.05]">
               {{ randomTitle.main }}
               <span class="block mt-3 text-[#07C160]">
                 {{ randomTitle.highlight }}
@@ -404,8 +404,8 @@ const modernPreviewItems = computed(() => {
 
 const previewStageClass = computed(() => (
   isGameboy.value
-    ? 'w-[500px] h-[360px] translate-x-12 -translate-y-8'
-    : 'w-[620px] h-[420px] translate-x-20 -translate-y-10'
+    ? 'w-[500px] h-[360px] translate-x-24 -translate-y-8'
+    : 'w-[620px] h-[420px] translate-x-32 -translate-y-10'
 ))
 
 const previewViewportClass = computed(() => (

@@ -131,30 +131,6 @@ const yearOptions = computed(() => {
   filter: brightness(1.1);
 }
 
-/* DOS 特殊样式 */
-.wrapped-theme-dos .controls-panel {
-  border-radius: 0;
-  border: 2px solid #33ff33;
-  box-shadow: 0 0 10px rgba(51, 255, 51, 0.3);
-}
-
-.wrapped-theme-dos .controls-select {
-  border-radius: 0;
-  border: 1px solid #33ff33;
-  text-shadow: 0 0 5px #33ff33;
-}
-
-.wrapped-theme-dos .controls-btn {
-  border-radius: 0;
-  background-color: #33ff33;
-  color: #000000;
-  text-shadow: none;
-}
-
-.wrapped-theme-dos .controls-btn:hover:not(:disabled) {
-  background-color: #44ff44;
-}
-
 /* Win98 特殊样式 */
 .wrapped-theme-win98 .controls-panel {
   border-radius: 0;
