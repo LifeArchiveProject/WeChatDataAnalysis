@@ -14,7 +14,7 @@ import logging
 from typing import Optional, List
 from dataclasses import dataclass
 from packaging import version as pkg_version  # 建议使用 packaging 库处理版本比较
-from wechat_detection import detect_wechat_installation
+from .wechat_detection import detect_wechat_installation
 
 logger = logging.getLogger(__name__)
 

@@ -514,15 +514,8 @@ const handleGetDbKey = async () => {
   formErrors.key = ''
 
   try {
-    const { data: statusData, error: statusError } = await getWxStatus()
-
-    if (statusError.value) {
-      error.value = '无法获取微信状态: ' + statusError.value.message
-      isGettingDbKey.value = false
-      return
-    }
-
-    const wxStatus = statusData.value?.wx_status
+    const statusRes = await getWxStatus() // pid不是主进程，但是没关系
+    const wxStatus = statusRes?.wx_status
 
     if (wxStatus?.is_running) {
       warning.value = '检测到微信正在运行，5秒后将终止进程并重启以获取密钥！！'
@@ -530,17 +523,10 @@ const handleGetDbKey = async () => {
     } else {
       // 没有逻辑
     }
-    
+
     warning.value = '正在启动微信以获取密钥，请确保微信未开启“自动登录”，并在启动后 1 分钟内完成登录操作。'
 
-    const { data, error: fetchError } = await getDbKey()
-
-    if (fetchError.value) {
-      error.value = '请求失败: ' + fetchError.value.message
-      return
-    }
-
-    const res = data.value
+    const res = await getDbKey()
 
     if (res && res.status === 0) {
       if (res.data?.db_key) {
@@ -572,14 +558,8 @@ const handleGetImageKey = async () => {
   warning.value = ''
 
   try {
-    const { data, fetchError } = await getImageKey()
+    const res = await getImageKey()
 
-    if (fetchError && fetchError.value) {
-      error.value = '请求失败: ' + fetchError.value.message
-      return
-    }
-
-    const res = data.value
     if (res && res.status === 0) {
       if (res.data?.aes_key) {
         manualKeys.aes_key = res.data.aes_key

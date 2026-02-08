@@ -345,24 +345,19 @@ export const useApi = () => {
     return await request(url)
   }
 
-  // 获取数据库解密密钥
-  const getDbKey = () => {
-    return useFetch('/api/get_db_key', {
-      method: 'GET',
-    })
+  // 获取微信进程状态
+  const getWxStatus = async () => {
+    return await request('/wechat/status')
   }
 
-  // 获取图片解密密钥
-  const getImageKey = () => {
-    return useFetch('/api/get_image_key', {
-      method: 'GET',
-    })
+  // 获取数据库密钥
+  const getDbKey = async () => {
+    return await request('/get_db_key')
   }
 
-  const getWxStatus = () => {
-    return useFetch('/api/wechat/status', {
-      method: 'GET',
-    })
+  // 获取图片密钥
+  const getImageKey = async () => {
+    return await request('/get_image_key')
   }
 
   return {
