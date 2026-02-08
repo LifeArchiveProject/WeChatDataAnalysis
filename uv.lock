@@ -845,6 +845,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "loguru" },
+    { name = "packaging" },
     { name = "pilk" },
     { name = "psutil" },
     { name = "pycryptodome" },
@@ -869,6 +870,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=41.0.0" },
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "loguru", specifier = ">=0.7.0" },
+    { name = "packaging" },
     { name = "pilk", specifier = ">=0.2.4" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pycryptodome", specifier = ">=3.23.0" },
@@ -901,6 +903,7 @@ wheels = [
     { path = "wx_key-1.0.0-cp311-cp311-win_amd64.whl" },
     { path = "wx_key-1.0.0-cp312-cp312-win_amd64.whl" },
     { path = "wx_key-1.0.0-cp313-cp313-win_amd64.whl" },
+    { path = "wx_key-1.0.0-cp314-cp314-win_amd64.whl" },
 ]
 
 [[package]]
