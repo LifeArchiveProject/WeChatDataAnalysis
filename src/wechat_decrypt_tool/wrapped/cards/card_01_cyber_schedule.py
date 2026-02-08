@@ -14,7 +14,6 @@ from ...chat_helpers import (
     _build_avatar_url,
     _iter_message_db_paths,
     _load_contact_rows,
-    _pick_avatar_url,
     _pick_display_name,
     _quote_ident,
     _row_to_search_hit,
@@ -713,7 +712,7 @@ def _fetch_message_moment_payload(
 
         contact_row = contact_rows.get(username)
         display = _pick_display_name(contact_row, username)
-        avatar = _pick_avatar_url(contact_row) or (_build_avatar_url(str(account_dir.name or ""), username) if username else "")
+        avatar = _build_avatar_url(str(account_dir.name or ""), username) if username else ""
 
         return {
             "timestamp": int(ref.ts),
