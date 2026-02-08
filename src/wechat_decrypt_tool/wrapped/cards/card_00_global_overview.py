@@ -17,7 +17,6 @@ from ...chat_helpers import (
     _decode_sqlite_text,
     _iter_message_db_paths,
     _load_contact_rows,
-    _pick_avatar_url,
     _pick_display_name,
     _quote_ident,
     _should_keep_session,
@@ -701,7 +700,7 @@ def build_card_00_global_overview(
         u, cnt = stats.top_contact
         row = contact_rows.get(u)
         display = _pick_display_name(row, u)
-        avatar = _pick_avatar_url(row) or (_build_avatar_url(str(account_dir.name or ""), u) if u else "")
+        avatar = _build_avatar_url(str(account_dir.name or ""), u) if u else ""
         top_contact_obj = {
             "username": u,
             "displayName": display,
@@ -716,7 +715,7 @@ def build_card_00_global_overview(
         u, cnt = stats.top_group
         row = contact_rows.get(u)
         display = _pick_display_name(row, u)
-        avatar = _pick_avatar_url(row) or (_build_avatar_url(str(account_dir.name or ""), u) if u else "")
+        avatar = _build_avatar_url(str(account_dir.name or ""), u) if u else ""
         top_group_obj = {
             "username": u,
             "displayName": display,

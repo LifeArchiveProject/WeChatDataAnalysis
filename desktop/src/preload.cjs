@@ -11,4 +11,6 @@ contextBridge.exposeInMainWorld("wechatDesktop", {
 
   getCloseBehavior: () => ipcRenderer.invoke("app:getCloseBehavior"),
   setCloseBehavior: (behavior) => ipcRenderer.invoke("app:setCloseBehavior", String(behavior || "")),
+
+  chooseDirectory: (options = {}) => ipcRenderer.invoke("dialog:chooseDirectory", options),
 });

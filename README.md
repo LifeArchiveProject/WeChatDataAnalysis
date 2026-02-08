@@ -5,7 +5,7 @@
 <div align="center">
     <h1>WeChatDataAnalysis - 微信数据库解密与分析工具</h1>
     <p>一个专门用于微信4.x版本数据库解密的工具（支持聊天记录实时更新）</p>
-    <p><b>特别致谢</b>：<a href="https://github.com/ycccccccy/echotrace">echotrace</a>（本项目大量功能参考其实现，提供了重要技术支持）</p>
+    <p><b>特别致谢</b>：<a href="https://github.com/ycccccccy/echotrace">echotrace</a>、<a href="https://github.com/hicccc77/WeFlow">WeFlow</a>（本项目大量功能参考其实现，提供了重要技术支持）</p>
     <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
     <img src="https://gh-down-badges.linkof.link/LifeArchiveProject/WeChatDataAnalysis" alt="Downloads" />
@@ -66,7 +66,7 @@
 
 ## 年度总结
 
-年度总结现在支持 4 种不同风格（style1-4）。如果你对某个风格有更好的修改建议，或有新风格的点子，欢迎到 Issue 区反馈：https://github.com/LifeArchiveProject/WeChatDataAnalysis/issues
+年度总结现在支持 3 种不同风格（style1、style2、style3）。如果你对某个风格有更好的修改建议，或有新风格的点子，欢迎到 Issue 区反馈：https://github.com/LifeArchiveProject/WeChatDataAnalysis/issues
 
 > ⚠️ **提醒**：年度总结目前还不是最终版本，后续还会增加新总结或新风格。
 
@@ -82,12 +82,10 @@
     <td><img src="frontend/public/style2.png" alt="年度总结 Style 2" width="400"/></td>
   </tr>
   <tr>
-    <td align="center"><b>Style 3</b></td>
-    <td align="center"><b>Style 4</b></td>
+    <td align="center" colspan="2"><b>Style 3</b></td>
   </tr>
   <tr>
-    <td><img src="frontend/public/style3.png" alt="年度总结 Style 3" width="400"/></td>
-    <td><img src="frontend/public/style4.png" alt="年度总结 Style 4" width="400"/></td>
+    <td align="center" colspan="2"><img src="frontend/public/style3.png" alt="年度总结 Style 3" width="400"/></td>
   </tr>
 </table>
 
@@ -196,19 +194,22 @@ npm run dist
 1. **[echotrace](https://github.com/ycccccccy/echotrace)** - 微信数据解析/取证工具
    - 本项目大量功能参考并复用其实现思路，提供了重要技术支持
 
-2. **[wx_key](https://github.com/ycccccccy/wx_key)** - 微信数据库与图片密钥提取工具
+2. **[WeFlow](https://github.com/hicccc77/WeFlow)** - 微信数据分析工具
+   - 提供了重要的功能参考和技术支持
+
+3. **[wx_key](https://github.com/ycccccccy/wx_key)** - 微信数据库与图片密钥提取工具
    - 支持获取微信 4.x 数据库密钥与缓存图片密钥
    - 本项目推荐使用此工具获取密钥
 
-3. **[wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs)** - Rust实现的微信数据库解密工具
+4. **[wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs)** - Rust实现的微信数据库解密工具
    - 提供了SQLCipher 4.0解密的正确实现参考
    - 本项目的HMAC验证和页面处理逻辑基于此项目的实现
 
-4. **[oh-my-wechat](https://github.com/chclt/oh-my-wechat)** - 微信聊天记录查看工具
+5. **[oh-my-wechat](https://github.com/chclt/oh-my-wechat)** - 微信聊天记录查看工具
    - 提供了优秀的聊天记录界面设计参考
    - 本项目的聊天界面风格参考了此项目的实现
 
-5. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)** - 微信聊天记录工具（Vue3）
+6. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)** - 微信聊天记录工具（Vue3）
    - 提供了聊天记录展示与交互的实现参考
 
 ## Star History
@@ -222,3 +223,4 @@ npm run dist
 ---
 
 **免责声明**: 本工具仅供学习研究使用，使用者需自行承担使用风险。开发者不对因使用本工具造成的任何损失负责。
+

@@ -8,7 +8,7 @@ import os
 import sqlite3
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -16,6 +16,21 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
+from ..avatar_cache import (
+    AVATAR_CACHE_TTL_SECONDS,
+    avatar_cache_entry_file_exists,
+    avatar_cache_entry_is_fresh,
+    build_avatar_cache_response_headers,
+    cache_key_for_avatar_user,
+    cache_key_for_avatar_url,
+    get_avatar_cache_url_entry,
+    get_avatar_cache_user_entry,
+    is_avatar_cache_enabled,
+    normalize_avatar_source_url,
+    touch_avatar_cache_entry,
+    upsert_avatar_cache_entry,
+    write_avatar_cache_payload,
+)
 from ..logging_config import get_logger
 from ..media_helpers import (
     _convert_silk_to_wav,
@@ -43,12 +58,54 @@ from ..media_helpers import (
     _try_find_decrypted_resource,
     _try_strip_media_prefix,
 )
-from ..chat_helpers import _extract_md5_from_packed_info
+from ..chat_helpers import _extract_md5_from_packed_info, _load_contact_rows, _pick_avatar_url
 from ..path_fix import PathFixRoute
+from ..wcdb_realtime import WCDB_REALTIME, get_avatar_urls as _wcdb_get_avatar_urls
 
 logger = get_logger(__name__)
 
 router = APIRouter(route_class=PathFixRoute)
+
+
+def _resolve_avatar_remote_url(*, account_dir: Path, username: str) -> str:
+    u = str(username or "").strip()
+    if not u:
+        return ""
+
+    # 1) contact.db first (cheap local lookup)
+    try:
+        rows = _load_contact_rows(account_dir / "contact.db", [u])
+        row = rows.get(u)
+        raw = str(_pick_avatar_url(row) or "").strip()
+        if raw.lower().startswith(("http://", "https://")):
+            return normalize_avatar_source_url(raw)
+    except Exception:
+        pass
+
+    # 2) WCDB fallback (more complete on enterprise/openim IDs)
+    try:
+        wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
+        with wcdb_conn.lock:
+            mp = _wcdb_get_avatar_urls(wcdb_conn.handle, [u])
+        wa = str(mp.get(u) or "").strip()
+        if wa.lower().startswith(("http://", "https://")):
+            return normalize_avatar_source_url(wa)
+    except Exception:
+        pass
+
+    return ""
+
+
+def _parse_304_headers(headers: Any) -> tuple[str, str]:
+    try:
+        etag = str((headers or {}).get("ETag") or "").strip()
+    except Exception:
+        etag = ""
+    try:
+        last_modified = str((headers or {}).get("Last-Modified") or "").strip()
+    except Exception:
+        last_modified = ""
+    return etag, last_modified
 
 
 @lru_cache(maxsize=4096)
@@ -267,27 +324,309 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
     if not username:
         raise HTTPException(status_code=400, detail="Missing username.")
     account_dir = _resolve_account_dir(account)
+    account_name = str(account_dir.name or "").strip()
+    user_key = str(username or "").strip()
+
+    # 1) Try on-disk cache first (fast path)
+    user_entry = None
+    cached_file = None
+    if is_avatar_cache_enabled() and account_name and user_key:
+        try:
+            user_entry = get_avatar_cache_user_entry(account_name, user_key)
+            cached_file = avatar_cache_entry_file_exists(account_name, user_entry)
+            if cached_file is not None:
+                logger.info(f"[avatar_cache_hit] kind=user account={account_name} username={user_key}")
+        except Exception as e:
+            logger.warning(f"[avatar_cache_error] read user cache failed account={account_name} username={user_key} err={e}")
+
     head_image_db_path = account_dir / "head_image.db"
     if not head_image_db_path.exists():
+        # No local head_image.db: allow fallback from cached/remote URL path.
+        if cached_file is not None and user_entry:
+            headers = build_avatar_cache_response_headers(user_entry)
+            return FileResponse(
+                str(cached_file),
+                media_type=str(user_entry.get("media_type") or "application/octet-stream"),
+                headers=headers,
+            )
         raise HTTPException(status_code=404, detail="head_image.db not found.")
 
     conn = sqlite3.connect(str(head_image_db_path))
     try:
-        row = conn.execute(
-            "SELECT image_buffer FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1",
+        meta = conn.execute(
+            "SELECT md5, update_time FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1",
             (username,),
         ).fetchone()
+        if meta and meta[0] is not None:
+            db_md5 = str(meta[0] or "").strip().lower()
+            try:
+                db_update_time = int(meta[1] or 0)
+            except Exception:
+                db_update_time = 0
+
+            # Cache still valid against head_image metadata.
+            if cached_file is not None and user_entry:
+                cached_md5 = str(user_entry.get("source_md5") or "").strip().lower()
+                try:
+                    cached_update = int(user_entry.get("source_update_time") or 0)
+                except Exception:
+                    cached_update = 0
+                if cached_md5 == db_md5 and cached_update == db_update_time:
+                    touch_avatar_cache_entry(account_name, str(user_entry.get("cache_key") or ""))
+                    headers = build_avatar_cache_response_headers(user_entry)
+                    return FileResponse(
+                        str(cached_file),
+                        media_type=str(user_entry.get("media_type") or "application/octet-stream"),
+                        headers=headers,
+                    )
+
+            # Refresh from blob (changed or first-load)
+            row = conn.execute(
+                "SELECT image_buffer FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1",
+                (username,),
+            ).fetchone()
+            if row and row[0] is not None:
+                data = bytes(row[0]) if isinstance(row[0], (memoryview, bytearray)) else row[0]
+                if not isinstance(data, (bytes, bytearray)):
+                    data = bytes(data)
+                if data:
+                    media_type = _detect_image_media_type(data)
+                    media_type = media_type if media_type.startswith("image/") else "application/octet-stream"
+                    entry, out_path = write_avatar_cache_payload(
+                        account_name,
+                        source_kind="user",
+                        username=user_key,
+                        payload=bytes(data),
+                        media_type=media_type,
+                        source_md5=db_md5,
+                        source_update_time=db_update_time,
+                        ttl_seconds=AVATAR_CACHE_TTL_SECONDS,
+                    )
+                    if entry and out_path:
+                        logger.info(
+                            f"[avatar_cache_download] kind=user account={account_name} username={user_key} src=head_image"
+                        )
+                        headers = build_avatar_cache_response_headers(entry)
+                        return FileResponse(str(out_path), media_type=media_type, headers=headers)
+
+                    # cache write failed: fallback to response bytes
+                    logger.warning(
+                        f"[avatar_cache_error] kind=user account={account_name} username={user_key} action=write_fallback"
+                    )
+                    return Response(content=bytes(data), media_type=media_type)
+
+        # meta not found (no local avatar blob)
+        row = None
     finally:
         conn.close()
 
-    if not row or row[0] is None:
-        raise HTTPException(status_code=404, detail="Avatar not found.")
+    # 2) Fallback: remote avatar URL (contact/WCDB), cache by URL.
+    remote_url = _resolve_avatar_remote_url(account_dir=account_dir, username=user_key)
+    if remote_url and is_avatar_cache_enabled():
+        url_entry = get_avatar_cache_url_entry(account_name, remote_url)
+        url_file = avatar_cache_entry_file_exists(account_name, url_entry)
+        if url_entry and url_file and avatar_cache_entry_is_fresh(url_entry):
+            logger.info(f"[avatar_cache_hit] kind=url account={account_name} username={user_key}")
+            touch_avatar_cache_entry(account_name, str(url_entry.get("cache_key") or ""))
+            # Keep user-key mapping aligned, so next user lookup is direct.
+            try:
+                upsert_avatar_cache_entry(
+                    account_name,
+                    cache_key=cache_key_for_avatar_user(user_key),
+                    source_kind="user",
+                    username=user_key,
+                    source_url=remote_url,
+                    source_md5=str(url_entry.get("source_md5") or ""),
+                    source_update_time=int(url_entry.get("source_update_time") or 0),
+                    rel_path=str(url_entry.get("rel_path") or ""),
+                    media_type=str(url_entry.get("media_type") or "application/octet-stream"),
+                    size_bytes=int(url_entry.get("size_bytes") or 0),
+                    etag=str(url_entry.get("etag") or ""),
+                    last_modified=str(url_entry.get("last_modified") or ""),
+                    fetched_at=int(url_entry.get("fetched_at") or 0),
+                    checked_at=int(url_entry.get("checked_at") or 0),
+                    expires_at=int(url_entry.get("expires_at") or 0),
+                )
+            except Exception:
+                pass
+            headers = build_avatar_cache_response_headers(url_entry)
+            return FileResponse(
+                str(url_file),
+                media_type=str(url_entry.get("media_type") or "application/octet-stream"),
+                headers=headers,
+            )
 
-    data = bytes(row[0]) if isinstance(row[0], (memoryview, bytearray)) else row[0]
-    if not isinstance(data, (bytes, bytearray)):
-        data = bytes(data)
-    media_type = _detect_image_media_type(data)
-    return Response(content=data, media_type=media_type)
+        # Revalidate / download remote avatar
+        def _download_remote_avatar(
+            source_url: str,
+            *,
+            etag: str,
+            last_modified: str,
+        ) -> tuple[bytes, str, str, str, bool]:
+            base_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            }
+
+            header_variants = [
+                {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090719) XWEB/8351",
+                    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
+                    "Referer": "https://servicewechat.com/",
+                    "Origin": "https://servicewechat.com",
+                    "Range": "bytes=0-",
+                },
+                {"Referer": "https://wx.qq.com/", "Origin": "https://wx.qq.com"},
+                {"Referer": "https://mp.weixin.qq.com/", "Origin": "https://mp.weixin.qq.com"},
+                {"Referer": "https://www.baidu.com/", "Origin": "https://www.baidu.com"},
+                {},
+            ]
+
+            last_err: Exception | None = None
+            for extra in header_variants:
+                headers = dict(base_headers)
+                headers.update(extra)
+                if etag:
+                    headers["If-None-Match"] = etag
+                if last_modified:
+                    headers["If-Modified-Since"] = last_modified
+
+                r = requests.get(source_url, headers=headers, timeout=20, stream=True)
+                try:
+                    if r.status_code == 304:
+                        e2, lm2 = _parse_304_headers(r.headers)
+                        return b"", "", (e2 or etag), (lm2 or last_modified), True
+                    r.raise_for_status()
+                    content_type = str(r.headers.get("Content-Type") or "").strip()
+                    e2, lm2 = _parse_304_headers(r.headers)
+                    max_bytes = 10 * 1024 * 1024
+                    chunks: list[bytes] = []
+                    total = 0
+                    for ch in r.iter_content(chunk_size=64 * 1024):
+                        if not ch:
+                            continue
+                        chunks.append(ch)
+                        total += len(ch)
+                        if total > max_bytes:
+                            raise HTTPException(status_code=400, detail="Avatar too large (>10MB).")
+                    return b"".join(chunks), content_type, e2, lm2, False
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    last_err = e
+                finally:
+                    try:
+                        r.close()
+                    except Exception:
+                        pass
+
+            raise last_err or RuntimeError("avatar remote download failed")
+
+        etag0 = str((url_entry or {}).get("etag") or "").strip()
+        lm0 = str((url_entry or {}).get("last_modified") or "").strip()
+        try:
+            payload, ct, etag_new, lm_new, not_modified = await asyncio.to_thread(
+                _download_remote_avatar,
+                remote_url,
+                etag=etag0,
+                last_modified=lm0,
+            )
+        except Exception as e:
+            logger.warning(f"[avatar_cache_error] kind=url account={account_name} username={user_key} err={e}")
+            if url_entry and url_file:
+                headers = build_avatar_cache_response_headers(url_entry)
+                return FileResponse(
+                    str(url_file),
+                    media_type=str(url_entry.get("media_type") or "application/octet-stream"),
+                    headers=headers,
+                )
+            raise HTTPException(status_code=404, detail="Avatar not found.")
+
+        if not_modified and url_entry and url_file:
+            touch_avatar_cache_entry(account_name, cache_key_for_avatar_url(remote_url))
+            if etag_new or lm_new:
+                try:
+                    upsert_avatar_cache_entry(
+                        account_name,
+                        cache_key=cache_key_for_avatar_url(remote_url),
+                        source_kind="url",
+                        username=user_key,
+                        source_url=remote_url,
+                        source_md5=str(url_entry.get("source_md5") or ""),
+                        source_update_time=int(url_entry.get("source_update_time") or 0),
+                        rel_path=str(url_entry.get("rel_path") or ""),
+                        media_type=str(url_entry.get("media_type") or "application/octet-stream"),
+                        size_bytes=int(url_entry.get("size_bytes") or 0),
+                        etag=etag_new or etag0,
+                        last_modified=lm_new or lm0,
+                    )
+                except Exception:
+                    pass
+            logger.info(f"[avatar_cache_revalidate] kind=url account={account_name} username={user_key} status=304")
+            headers = build_avatar_cache_response_headers(url_entry)
+            return FileResponse(
+                str(url_file),
+                media_type=str(url_entry.get("media_type") or "application/octet-stream"),
+                headers=headers,
+            )
+
+        if payload:
+            payload2, media_type, _ext = _detect_media_type_and_ext(payload)
+            if media_type == "application/octet-stream" and ct:
+                try:
+                    mt = ct.split(";")[0].strip()
+                    if mt.startswith("image/"):
+                        media_type = mt
+                except Exception:
+                    pass
+            if str(media_type or "").startswith("image/"):
+                entry, out_path = write_avatar_cache_payload(
+                    account_name,
+                    source_kind="url",
+                    username=user_key,
+                    source_url=remote_url,
+                    payload=payload2,
+                    media_type=media_type,
+                    etag=etag_new,
+                    last_modified=lm_new,
+                    ttl_seconds=AVATAR_CACHE_TTL_SECONDS,
+                )
+                if entry and out_path:
+                    # bind user-key record to same file for quicker next access
+                    try:
+                        upsert_avatar_cache_entry(
+                            account_name,
+                            cache_key=cache_key_for_avatar_user(user_key),
+                            source_kind="user",
+                            username=user_key,
+                            source_url=remote_url,
+                            source_md5=str(entry.get("source_md5") or ""),
+                            source_update_time=int(entry.get("source_update_time") or 0),
+                            rel_path=str(entry.get("rel_path") or ""),
+                            media_type=str(entry.get("media_type") or "application/octet-stream"),
+                            size_bytes=int(entry.get("size_bytes") or 0),
+                            etag=str(entry.get("etag") or ""),
+                            last_modified=str(entry.get("last_modified") or ""),
+                            fetched_at=int(entry.get("fetched_at") or 0),
+                            checked_at=int(entry.get("checked_at") or 0),
+                            expires_at=int(entry.get("expires_at") or 0),
+                        )
+                    except Exception:
+                        pass
+                    logger.info(f"[avatar_cache_download] kind=url account={account_name} username={user_key}")
+                    headers = build_avatar_cache_response_headers(entry)
+                    return FileResponse(str(out_path), media_type=media_type, headers=headers)
+
+    if cached_file is not None and user_entry:
+        headers = build_avatar_cache_response_headers(user_entry)
+        return FileResponse(
+            str(cached_file),
+            media_type=str(user_entry.get("media_type") or "application/octet-stream"),
+            headers=headers,
+        )
+
+    raise HTTPException(status_code=404, detail="Avatar not found.")
 
 
 class EmojiDownloadRequest(BaseModel):
@@ -434,7 +773,25 @@ async def proxy_image(url: str):
     if not _is_allowed_proxy_image_host(host):
         raise HTTPException(status_code=400, detail="Unsupported url host for proxy_image.")
 
-    def _download_bytes() -> tuple[bytes, str]:
+    source_url = normalize_avatar_source_url(u)
+    proxy_account = "_proxy"
+    cache_entry = get_avatar_cache_url_entry(proxy_account, source_url) if is_avatar_cache_enabled() else None
+    cache_file = avatar_cache_entry_file_exists(proxy_account, cache_entry)
+    if cache_entry and cache_file and avatar_cache_entry_is_fresh(cache_entry):
+        logger.info(f"[avatar_cache_hit] kind=proxy_url account={proxy_account}")
+        touch_avatar_cache_entry(proxy_account, cache_key_for_avatar_url(source_url))
+        headers = build_avatar_cache_response_headers(cache_entry)
+        return FileResponse(
+            str(cache_file),
+            media_type=str(cache_entry.get("media_type") or "application/octet-stream"),
+            headers=headers,
+        )
+
+    def _download_bytes(
+        *,
+        if_none_match: str = "",
+        if_modified_since: str = "",
+    ) -> tuple[bytes, str, str, str, bool]:
         base_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
@@ -464,10 +821,20 @@ async def proxy_image(url: str):
         for extra in header_variants:
             headers = dict(base_headers)
             headers.update(extra)
+            if if_none_match:
+                headers["If-None-Match"] = if_none_match
+            if if_modified_since:
+                headers["If-Modified-Since"] = if_modified_since
             r = requests.get(u, headers=headers, timeout=20, stream=True)
             try:
+                if r.status_code == 304:
+                    etag0 = str(r.headers.get("ETag") or "").strip()
+                    lm0 = str(r.headers.get("Last-Modified") or "").strip()
+                    return b"", "", etag0, lm0, True
                 r.raise_for_status()
                 content_type = str(r.headers.get("Content-Type") or "").strip()
+                etag0 = str(r.headers.get("ETag") or "").strip()
+                lm0 = str(r.headers.get("Last-Modified") or "").strip()
                 max_bytes = 10 * 1024 * 1024
                 chunks: list[bytes] = []
                 total = 0
@@ -478,7 +845,7 @@ async def proxy_image(url: str):
                     total += len(ch)
                     if total > max_bytes:
                         raise HTTPException(status_code=400, detail="Proxy image too large (>10MB).")
-                return b"".join(chunks), content_type
+                return b"".join(chunks), content_type, etag0, lm0, False
             except HTTPException:
                 # Hard failure, don't retry with another referer.
                 raise
@@ -493,13 +860,49 @@ async def proxy_image(url: str):
         # All variants failed.
         raise last_err or RuntimeError("proxy_image download failed")
 
+    etag0 = str((cache_entry or {}).get("etag") or "").strip()
+    lm0 = str((cache_entry or {}).get("last_modified") or "").strip()
     try:
-        data, ct = await asyncio.to_thread(_download_bytes)
+        data, ct, etag_new, lm_new, not_modified = await asyncio.to_thread(
+            _download_bytes,
+            if_none_match=etag0,
+            if_modified_since=lm0,
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.warning(f"proxy_image failed: url={u} err={e}")
+        if cache_entry and cache_file:
+            headers = build_avatar_cache_response_headers(cache_entry)
+            return FileResponse(
+                str(cache_file),
+                media_type=str(cache_entry.get("media_type") or "application/octet-stream"),
+                headers=headers,
+            )
         raise HTTPException(status_code=502, detail=f"Proxy image failed: {e}")
+
+    if not_modified and cache_entry and cache_file:
+        logger.info(f"[avatar_cache_revalidate] kind=proxy_url account={proxy_account} status=304")
+        upsert_avatar_cache_entry(
+            proxy_account,
+            cache_key=cache_key_for_avatar_url(source_url),
+            source_kind="url",
+            source_url=source_url,
+            username="",
+            source_md5=str(cache_entry.get("source_md5") or ""),
+            source_update_time=int(cache_entry.get("source_update_time") or 0),
+            rel_path=str(cache_entry.get("rel_path") or ""),
+            media_type=str(cache_entry.get("media_type") or "application/octet-stream"),
+            size_bytes=int(cache_entry.get("size_bytes") or 0),
+            etag=etag_new or etag0,
+            last_modified=lm_new or lm0,
+        )
+        headers = build_avatar_cache_response_headers(cache_entry)
+        return FileResponse(
+            str(cache_file),
+            media_type=str(cache_entry.get("media_type") or "application/octet-stream"),
+            headers=headers,
+        )
 
     if not data:
         raise HTTPException(status_code=502, detail="Proxy returned empty body.")
@@ -518,8 +921,24 @@ async def proxy_image(url: str):
     if not str(media_type or "").startswith("image/"):
         raise HTTPException(status_code=502, detail="Proxy did not return an image.")
 
+    if is_avatar_cache_enabled():
+        entry, out_path = write_avatar_cache_payload(
+            proxy_account,
+            source_kind="url",
+            source_url=source_url,
+            payload=payload,
+            media_type=media_type,
+            etag=etag_new,
+            last_modified=lm_new,
+            ttl_seconds=AVATAR_CACHE_TTL_SECONDS,
+        )
+        if entry and out_path:
+            logger.info(f"[avatar_cache_download] kind=proxy_url account={proxy_account}")
+            headers = build_avatar_cache_response_headers(entry)
+            return FileResponse(str(out_path), media_type=media_type, headers=headers)
+
     resp = Response(content=payload, media_type=media_type)
-    resp.headers["Cache-Control"] = "public, max-age=86400"
+    resp.headers["Cache-Control"] = f"public, max-age={AVATAR_CACHE_TTL_SECONDS}"
     return resp
 
 

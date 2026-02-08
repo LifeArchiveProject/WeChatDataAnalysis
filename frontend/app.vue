@@ -30,7 +30,7 @@ onBeforeUnmount(() => {
 })
 
 const route = useRoute()
-const isChatRoute = computed(() => route.path?.startsWith('/chat') || route.path?.startsWith('/sns'))
+const isChatRoute = computed(() => route.path?.startsWith('/chat') || route.path?.startsWith('/sns') || route.path?.startsWith('/contacts'))
 
 const rootClass = computed(() => {
   const base = 'bg-gradient-to-br from-green-50 via-emerald-50 to-green-100'

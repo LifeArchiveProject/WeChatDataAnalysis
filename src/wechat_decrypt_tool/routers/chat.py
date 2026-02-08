@@ -45,7 +45,6 @@ from ..chat_helpers import (
     _normalize_xml_url,
     _parse_app_message,
     _parse_pat_message,
-    _pick_avatar_url,
     _pick_display_name,
     _query_head_image_usernames,
     _quote_ident,
@@ -83,6 +82,19 @@ router = APIRouter(route_class=PathFixRoute)
 _REALTIME_SYNC_MU = threading.Lock()
 _REALTIME_SYNC_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 _REALTIME_SYNC_ALL_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _avatar_url_unified(
+    *,
+    account_dir: Path,
+    username: str,
+    local_avatar_usernames: set[str] | None = None,
+) -> str:
+    u = str(username or "").strip()
+    if not u:
+        return ""
+    # Unified avatar entrypoint: backend decides local db vs remote fallback + cache.
+    return _build_avatar_url(str(account_dir.name or ""), u)
 
 
 def _realtime_sync_lock(account: str, username: str) -> threading.Lock:
@@ -1946,9 +1958,11 @@ async def chat_search_index_senders(
             continue
         cnt = int(r["c"] or 0)
         row = contact_rows.get(su)
-        avatar_url = _pick_avatar_url(row)
-        if (not avatar_url) and (su in local_sender_avatars):
-            avatar_url = _build_avatar_url(account_dir.name, su)
+        avatar_url = _avatar_url_unified(
+            account_dir=account_dir,
+            username=su,
+            local_avatar_usernames=local_sender_avatars,
+        )
         senders.append(
             {
                 "username": su,
@@ -2568,7 +2582,7 @@ def _postprocess_full_messages(
             row = sender_contact_rows.get(u)
             if _pick_display_name(row, u) == u:
                 need_display.append(u)
-            if (not _pick_avatar_url(row)) and (u not in local_sender_avatars):
+            if u not in local_sender_avatars:
                 need_avatar.append(u)
 
         need_display = list(dict.fromkeys(need_display))
@@ -2606,13 +2620,11 @@ def _postprocess_full_messages(
             if wd and wd != su:
                 display_name = wd
         m["senderDisplayName"] = display_name
-        avatar_url = _pick_avatar_url(row)
-        if not avatar_url and su in local_sender_avatars:
-            avatar_url = base_url + _build_avatar_url(account_dir.name, su)
-        if not avatar_url:
-            wa = str(wcdb_avatar_urls.get(su) or "").strip()
-            if wa.lower().startswith(("http://", "https://")):
-                avatar_url = wa
+        avatar_url = base_url + _avatar_url_unified(
+            account_dir=account_dir,
+            username=su,
+            local_avatar_usernames=local_sender_avatars,
+        )
         m["senderAvatar"] = avatar_url
 
         qu = str(m.get("quoteUsername") or "").strip()
@@ -2922,7 +2934,7 @@ def list_chat_sessions(
                 if u not in local_avatar_usernames:
                     need_avatar.append(u)
             else:
-                if (not _pick_avatar_url(row)) and (u not in local_avatar_usernames):
+                if u not in local_avatar_usernames:
                     need_avatar.append(u)
 
         need_display = list(dict.fromkeys(need_display))
@@ -2984,15 +2996,11 @@ def list_chat_sessions(
 
         # Prefer local head_image avatars when available: decrypted contact.db URLs can be stale
         # (or hotlink-protected for browsers). WCDB realtime (when available) is the next best.
-        avatar_url = ""
-        if username in local_avatar_usernames:
-            avatar_url = base_url + _build_avatar_url(account_dir.name, username)
-        if not avatar_url:
-            wa = str(wcdb_avatar_urls.get(username) or "").strip()
-            if wa.lower().startswith(("http://", "https://")):
-                avatar_url = wa
-        if not avatar_url:
-            avatar_url = _pick_avatar_url(c_row) or ""
+        avatar_url = base_url + _avatar_url_unified(
+            account_dir=account_dir,
+            username=username,
+            local_avatar_usernames=local_avatar_usernames,
+        )
 
         last_message = ""
         if preview_mode == "session":
@@ -4388,7 +4396,7 @@ def list_chat_messages(
             row = sender_contact_rows.get(u)
             if _pick_display_name(row, u) == u:
                 need_display.append(u)
-            if (not _pick_avatar_url(row)) and (u not in local_sender_avatars):
+            if u not in local_sender_avatars:
                 need_avatar.append(u)
 
         need_display = list(dict.fromkeys(need_display))
@@ -4426,13 +4434,11 @@ def list_chat_messages(
             if wd and wd != su:
                 display_name = wd
         m["senderDisplayName"] = display_name
-        avatar_url = _pick_avatar_url(row)
-        if not avatar_url and su in local_sender_avatars:
-            avatar_url = base_url + _build_avatar_url(account_dir.name, su)
-        if not avatar_url:
-            wa = str(wcdb_avatar_urls.get(su) or "").strip()
-            if wa.lower().startswith(("http://", "https://")):
-                avatar_url = wa
+        avatar_url = base_url + _avatar_url_unified(
+            account_dir=account_dir,
+            username=su,
+            local_avatar_usernames=local_sender_avatars,
+        )
         m["senderAvatar"] = avatar_url
 
         qu = str(m.get("quoteUsername") or "").strip()
@@ -4897,7 +4903,7 @@ async def _search_chat_messages_via_fts(
                 row = contact_rows.get(uu)
                 if _pick_display_name(row, uu) == uu:
                     need_display.append(uu)
-                if (not _pick_avatar_url(row)) and (uu not in local_avatar_usernames):
+                if uu not in local_avatar_usernames:
                     need_avatar.append(uu)
 
             need_display = list(dict.fromkeys(need_display))
@@ -4919,13 +4925,11 @@ async def _search_chat_messages_via_fts(
             wd = str(wcdb_display_names.get(username) or "").strip()
             if wd and wd != username:
                 conv_name = wd
-        conv_avatar = _pick_avatar_url(conv_row)
-        if (not conv_avatar) and (username in local_avatar_usernames):
-            conv_avatar = base_url + _build_avatar_url(account_dir.name, username)
-        if not conv_avatar:
-            wa = str(wcdb_avatar_urls.get(username) or "").strip()
-            if wa.lower().startswith(("http://", "https://")):
-                conv_avatar = wa
+        conv_avatar = base_url + _avatar_url_unified(
+            account_dir=account_dir,
+            username=username,
+            local_avatar_usernames=local_avatar_usernames,
+        )
 
         for h in hits:
             su = str(h.get("senderUsername") or "").strip()
@@ -4939,13 +4943,11 @@ async def _search_chat_messages_via_fts(
                     if wd and wd != su:
                         display_name = wd
                 h["senderDisplayName"] = display_name
-                avatar_url = _pick_avatar_url(row)
-                if (not avatar_url) and (su in local_avatar_usernames):
-                    avatar_url = base_url + _build_avatar_url(account_dir.name, su)
-                if not avatar_url:
-                    wa = str(wcdb_avatar_urls.get(su) or "").strip()
-                    if wa.lower().startswith(("http://", "https://")):
-                        avatar_url = wa
+                avatar_url = base_url + _avatar_url_unified(
+                    account_dir=account_dir,
+                    username=su,
+                    local_avatar_usernames=local_avatar_usernames,
+                )
                 h["senderAvatar"] = avatar_url
     else:
         uniq_contacts = list(
@@ -4968,7 +4970,7 @@ async def _search_chat_messages_via_fts(
                 row = contact_rows.get(uu)
                 if _pick_display_name(row, uu) == uu:
                     need_display.append(uu)
-                if (not _pick_avatar_url(row)) and (uu not in local_avatar_usernames):
+                if uu not in local_avatar_usernames:
                     need_avatar.append(uu)
 
             need_display = list(dict.fromkeys(need_display))
@@ -4994,13 +4996,11 @@ async def _search_chat_messages_via_fts(
                 if wd and wd != cu:
                     conv_name = wd
             h["conversationName"] = conv_name or cu
-            conv_avatar = _pick_avatar_url(crow)
-            if (not conv_avatar) and cu and (cu in local_avatar_usernames):
-                conv_avatar = base_url + _build_avatar_url(account_dir.name, cu)
-            if not conv_avatar and cu:
-                wa = str(wcdb_avatar_urls.get(cu) or "").strip()
-                if wa.lower().startswith(("http://", "https://")):
-                    conv_avatar = wa
+            conv_avatar = base_url + _avatar_url_unified(
+                account_dir=account_dir,
+                username=cu,
+                local_avatar_usernames=local_avatar_usernames,
+            )
             h["conversationAvatar"] = conv_avatar
             if su:
                 row = contact_rows.get(su)
@@ -5010,13 +5010,11 @@ async def _search_chat_messages_via_fts(
                     if wd and wd != su:
                         display_name = wd
                 h["senderDisplayName"] = display_name
-                avatar_url = _pick_avatar_url(row)
-                if (not avatar_url) and (su in local_avatar_usernames):
-                    avatar_url = base_url + _build_avatar_url(account_dir.name, su)
-                if not avatar_url:
-                    wa = str(wcdb_avatar_urls.get(su) or "").strip()
-                    if wa.lower().startswith(("http://", "https://")):
-                        avatar_url = wa
+                avatar_url = base_url + _avatar_url_unified(
+                    account_dir=account_dir,
+                    username=su,
+                    local_avatar_usernames=local_avatar_usernames,
+                )
                 h["senderAvatar"] = avatar_url
 
     return {
