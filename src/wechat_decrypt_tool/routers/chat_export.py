@@ -27,15 +27,16 @@ class ChatExportCreateRequest(BaseModel):
     end_time: Optional[int] = Field(None, description="结束时间（Unix 秒，含）")
     include_hidden: bool = Field(False, description="是否包含隐藏会话（scope!=selected 时）")
     include_official: bool = Field(False, description="是否包含公众号/官方账号会话（scope!=selected 时）")
-    include_media: bool = Field(True, description="是否打包离线媒体（图片/表情/视频/语音/文件）")
+    include_media: bool = Field(True, description="是否允许打包离线媒体（最终仍受 message_types 与 privacy_mode 约束）")
     media_kinds: list[MediaKind] = Field(
         default_factory=lambda: ["image", "emoji", "video", "video_thumb", "voice", "file"],
-        description="打包的媒体类型",
+        description="允许打包的媒体类型（最终仍受 message_types 勾选约束）",
     )
     message_types: list[MessageType] = Field(
         default_factory=list,
-        description="导出消息类型（renderType）过滤：为空=导出全部消息；可多选（如仅 voice / 仅 transfer / 仅 redPacket 等）",
+        description="导出消息类型（renderType）过滤：为空=导出全部类型；不为空时，仅导出勾选类型",
     )
+    output_dir: Optional[str] = Field(None, description="导出目录绝对路径（可选；不填时使用默认目录）")
     allow_process_key_extract: bool = Field(
         False,
         description="预留字段：本项目不从微信进程提取媒体密钥，请使用 wx_key 获取并保存/批量解密",
@@ -61,6 +62,7 @@ async def create_chat_export(req: ChatExportCreateRequest):
         include_media=req.include_media,
         media_kinds=req.media_kinds,
         message_types=req.message_types,
+        output_dir=req.output_dir,
         allow_process_key_extract=req.allow_process_key_extract,
         privacy_mode=req.privacy_mode,
         file_name=req.file_name,
