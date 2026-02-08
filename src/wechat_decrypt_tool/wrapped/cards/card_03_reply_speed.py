@@ -12,7 +12,6 @@ from typing import Any, Optional
 from ...chat_helpers import (
     _build_avatar_url,
     _load_contact_rows,
-    _pick_avatar_url,
     _pick_display_name,
     _should_keep_session,
 )
@@ -385,7 +384,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
     def conv_to_obj(score: float | None, agg: _ConvAgg) -> dict[str, Any]:
         row = contact_rows.get(agg.username)
         display = _pick_display_name(row, agg.username)
-        avatar = _pick_avatar_url(row) or (_build_avatar_url(str(account_dir.name or ""), agg.username) if agg.username else "")
+        avatar = _build_avatar_url(str(account_dir.name or ""), agg.username) if agg.username else ""
         avg_s = agg.avg_gap()
         out: dict[str, Any] = {
             "username": agg.username,
@@ -420,7 +419,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
         else:
             row = contact_rows.get(global_fastest_u)
             display = _pick_display_name(row, global_fastest_u)
-            avatar = _pick_avatar_url(row) or (_build_avatar_url(str(account_dir.name or ""), global_fastest_u) if global_fastest_u else "")
+            avatar = _build_avatar_url(str(account_dir.name or ""), global_fastest_u) if global_fastest_u else ""
             fastest_obj = {
                 "username": global_fastest_u,
                 "displayName": display,
@@ -440,7 +439,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
         else:
             row = contact_rows.get(global_slowest_u)
             display = _pick_display_name(row, global_slowest_u)
-            avatar = _pick_avatar_url(row) or (_build_avatar_url(str(account_dir.name or ""), global_slowest_u) if global_slowest_u else "")
+            avatar = _build_avatar_url(str(account_dir.name or ""), global_slowest_u) if global_slowest_u else ""
             slowest_obj = {
                 "username": global_slowest_u,
                 "displayName": display,
@@ -547,7 +546,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
 
                 row = contact_rows.get(u)
                 display = _pick_display_name(row, u)
-                avatar = _pick_avatar_url(row) or (_build_avatar_url(str(account_dir.name or ""), u) if u else "")
+                avatar = _build_avatar_url(str(account_dir.name or ""), u) if u else ""
                 series.append(
                     {
                         "username": u,
@@ -595,7 +594,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
                     if not u:
                         continue
                     display = _pick_display_name(r, u)
-                    avatar = _pick_avatar_url(r) or (_build_avatar_url(str(account_dir.name or ""), u) if u else "")
+                    avatar = _build_avatar_url(str(account_dir.name or ""), u) if u else ""
                     all_contacts_list.append({
                         "username": u,
                         "displayName": display,
