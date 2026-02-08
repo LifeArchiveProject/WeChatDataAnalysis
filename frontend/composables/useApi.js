@@ -292,6 +292,7 @@ export const useApi = () => {
         message_types: Array.isArray(data.message_types) ? data.message_types : [],
         include_media: data.include_media == null ? true : !!data.include_media,
         media_kinds: Array.isArray(data.media_kinds) ? data.media_kinds : ['image', 'emoji', 'video', 'video_thumb', 'voice', 'file'],
+        output_dir: data.output_dir == null ? null : String(data.output_dir || '').trim(),
         allow_process_key_extract: !!data.allow_process_key_extract,
         privacy_mode: !!data.privacy_mode,
         file_name: data.file_name || null
@@ -311,6 +312,36 @@ export const useApi = () => {
   const cancelChatExport = async (exportId) => {
     if (!exportId) throw new Error('Missing exportId')
     return await request(`/chat/exports/${encodeURIComponent(String(exportId))}`, { method: 'DELETE' })
+  }
+
+  // 联系人
+  const listChatContacts = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.keyword) query.set('keyword', params.keyword)
+    if (params && params.include_friends != null) query.set('include_friends', String(!!params.include_friends))
+    if (params && params.include_groups != null) query.set('include_groups', String(!!params.include_groups))
+    if (params && params.include_officials != null) query.set('include_officials', String(!!params.include_officials))
+    const url = '/chat/contacts' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const exportChatContacts = async (payload = {}) => {
+    return await request('/chat/contacts/export', {
+      method: 'POST',
+      body: {
+        account: payload.account || null,
+        output_dir: payload.output_dir || '',
+        format: payload.format || 'json',
+        include_avatar_link: payload.include_avatar_link == null ? true : !!payload.include_avatar_link,
+        keyword: payload.keyword || null,
+        contact_types: {
+          friends: payload?.contact_types?.friends == null ? true : !!payload.contact_types.friends,
+          groups: payload?.contact_types?.groups == null ? true : !!payload.contact_types.groups,
+          officials: payload?.contact_types?.officials == null ? true : !!payload.contact_types.officials,
+        }
+      }
+    })
   }
 
   // WeChat Wrapped（年度总结）
@@ -373,6 +404,8 @@ export const useApi = () => {
     getChatExport,
     listChatExports,
     cancelChatExport,
+    listChatContacts,
+    exportChatContacts,
     getWrappedAnnual,
     getWrappedAnnualMeta,
     getWrappedAnnualCard
