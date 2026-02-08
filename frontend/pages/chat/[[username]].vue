@@ -60,6 +60,26 @@
           </div>
         </div>
 
+        <!-- 联系人图标 -->
+        <div
+          class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+          title="联系人"
+          @click="goContacts"
+        >
+          <div
+            class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]"
+          >
+            <div class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isContactsRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'">
+              <svg class="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
+                <circle cx="10" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
         <!-- 年度总结图标 -->
         <div
           class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
@@ -80,12 +100,30 @@
                 stroke-linejoin="round"
                 aria-hidden="true"
               >
-                <rect x="4" y="4" width="16" height="16" rx="2" />
-                <path d="M8 16v-5" />
-                <path d="M12 16v-8" />
-                <path d="M16 16v-3" />
+                <rect x="4" y="5" width="16" height="15" rx="2" />
+                <path d="M8 3v4" />
+                <path d="M16 3v4" />
+                <path d="M4 9h16" />
+                <path d="M8.5 15l2-2 1.5 1.5 3-3" />
               </svg>
             </div>
+          </div>
+        </div>
+
+        <!-- 实时模式按钮（全局） -->
+        <div
+          class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center group"
+          :class="realtimeChecking ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'"
+          :title="realtimeEnabled ? '关闭实时更新（全局）' : (realtimeAvailable ? '开启实时更新（全局）' : (realtimeStatusError || '实时模式不可用'))"
+          @click="toggleRealtimeFromSidebar"
+        >
+          <div
+            class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors"
+            :class="realtimeEnabled ? 'bg-[#DFF5E7]' : 'bg-transparent group-hover:bg-[#E1E1E1]'"
+          >
+            <svg class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="realtimeEnabled ? 'text-[#07b75b]' : 'text-[#5d5d5d]'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M13 2L4 14h7l-1 8 9-12h-7z" />
+            </svg>
           </div>
         </div>
         
@@ -183,7 +221,7 @@
         <!-- 联系人列表 -->
         <div class="flex-1 overflow-y-auto min-h-0">
           <div v-if="isLoadingContacts" class="px-3 py-4 h-full overflow-hidden">
-            <div v-for="i in 15" :key="i" class="flex items-center space-x-3 h-[calc(85px/var(--dpr))]">
+            <div v-for="i in 15" :key="i" class="flex items-center space-x-3 h-[calc(80px/var(--dpr))]">
               <div class="w-[calc(45px/var(--dpr))] h-[calc(45px/var(--dpr))] rounded-md bg-gray-200 skeleton-pulse"></div>
               <div class="flex-1 space-y-2">
                 <div class="h-3.5 bg-gray-200 rounded skeleton-pulse" :style="{ width: (60 + (i % 4) * 15) + 'px' }"></div>
@@ -199,7 +237,7 @@
           </div>
           <template v-else>
             <div v-for="contact in filteredContacts" :key="contact.id"
-              class="px-3 cursor-pointer transition-colors duration-150 border-b border-gray-100 h-[calc(85px/var(--dpr))] flex items-center"
+              class="px-3 cursor-pointer transition-colors duration-150 border-b border-gray-100 h-[calc(80px/var(--dpr))] flex items-center"
               :class="selectedContact?.id === contact.id ? 'bg-[#DEDEDE] hover:bg-[#d3d3d3]' : 'hover:bg-[#eaeaea]'"
               @click="selectContact(contact)">
               <div class="flex items-center space-x-3 w-full">
@@ -253,7 +291,7 @@
             </div>
             <div class="ml-auto flex items-center gap-2">
               <button
-                class="header-btn"
+                class="header-btn-icon"
                 @click="refreshSelectedMessages"
                 :disabled="isLoadingMessages"
                 title="刷新消息"
@@ -261,22 +299,9 @@
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                 </svg>
-                <span>刷新</span>
               </button>
               <button
-                class="header-btn"
-                :class="realtimeEnabled ? 'bg-emerald-100 border-emerald-200' : ''"
-                @click="toggleRealtime"
-                :disabled="realtimeChecking"
-                :title="realtimeEnabled ? '关闭实时更新' : (realtimeAvailable ? '开启实时更新' : (realtimeStatusError || '实时模式不可用'))"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                <span>{{ realtimeEnabled ? '实时开' : '实时关' }}</span>
-              </button>
-              <button
-                class="header-btn"
+                class="header-btn-icon"
                 @click="openExportModal"
                 :disabled="isExportCreating"
                 title="导出聊天记录"
@@ -284,18 +309,7 @@
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                 </svg>
-                <span>导出</span>
               </button>
-              <select
-                v-model="messageTypeFilter"
-                class="message-filter-select"
-                :disabled="isLoadingMessages || searchContext.active"
-                :title="searchContext.active ? '上下文模式下暂不可筛选' : '筛选消息类型'"
-              >
-                <option v-for="opt in messageTypeFilterOptions" :key="opt.value" :value="opt.value">
-                  {{ opt.label }}
-                </option>
-              </select>
               <button
                 class="header-btn-icon"
                 :class="{ 'header-btn-icon-active': messageSearchOpen }"
@@ -307,6 +321,16 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14 14L11.1 11.1" />
                 </svg>
               </button>
+              <select
+                v-model="messageTypeFilter"
+                class="message-filter-select"
+                :disabled="isLoadingMessages || searchContext.active"
+                :title="searchContext.active ? '上下文模式下暂不可筛选' : '筛选消息类型'"
+              >
+                <option v-for="opt in messageTypeFilterOptions" :key="opt.value" :value="opt.value">
+                  {{ opt.label }}
+                </option>
+              </select>
             </div>
           </div>
 
@@ -380,19 +404,74 @@
             <div v-else class="flex items-center" :class="message.isSent ? 'justify-end' : 'justify-start'">
               <div class="flex items-start max-w-md" :class="message.isSent ? 'flex-row-reverse' : ''">
                 <!-- 消息发送者头像 -->
-                <div class="w-[calc(42px/var(--dpr))] h-[calc(42px/var(--dpr))] rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="[message.isSent ? 'ml-3' : 'mr-3', { 'privacy-blur': privacyMode }]">
-                  <div v-if="message.avatar" class="w-full h-full">
-                    <img
-                      :src="message.avatar"
-                      :alt="message.sender + '的头像'"
-                      class="w-full h-full object-cover"
-                      referrerpolicy="no-referrer"
-                      @error="onAvatarError($event, message)"
-                    >
+                <div
+                  class="relative"
+                  @mouseenter="onMessageAvatarMouseEnter(message)"
+                  @mouseleave="onMessageAvatarMouseLeave"
+                >
+                  <div class="w-[calc(42px/var(--dpr))] h-[calc(42px/var(--dpr))] rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="[message.isSent ? 'ml-3' : 'mr-3', { 'privacy-blur': privacyMode }]">
+                    <div v-if="message.avatar" class="w-full h-full">
+                      <img
+                        :src="message.avatar"
+                        :alt="message.sender + '的头像'"
+                        class="w-full h-full object-cover"
+                        referrerpolicy="no-referrer"
+                        @error="onAvatarError($event, message)"
+                      >
+                    </div>
+                    <div v-else class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
+                      :style="{ backgroundColor: message.avatarColor || (message.isSent ? '#4B5563' : '#6B7280') }">
+                      {{ message.sender.charAt(0) }}
+                    </div>
                   </div>
-                  <div v-else class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
-                    :style="{ backgroundColor: message.avatarColor || (message.isSent ? '#4B5563' : '#6B7280') }">
-                    {{ message.sender.charAt(0) }}
+
+                  <div
+                    v-if="contactProfileCardOpen && contactProfileCardMessageId === String(message.id ?? '')"
+                    class="absolute z-40 w-[360px] max-w-[88vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden"
+                    :class="message.isSent ? 'right-0 top-[calc(100%+8px)]' : 'left-0 top-[calc(100%+8px)]'"
+                    @mouseenter="onContactCardMouseEnter"
+                    @mouseleave="onMessageAvatarMouseLeave"
+                  >
+                    <div class="px-3 py-2 border-b border-gray-200 text-sm font-medium text-gray-900">联系人资料</div>
+                    <div class="p-3 space-y-3 bg-[#F6F6F6]">
+                      <div v-if="contactProfileLoading" class="text-sm text-gray-500 text-center py-4">资料加载中...</div>
+                      <div v-else-if="contactProfileError" class="text-sm text-red-500 whitespace-pre-wrap">{{ contactProfileError }}</div>
+                      <div v-else class="bg-white rounded-md border border-gray-100 overflow-hidden">
+                        <div class="p-3 flex items-center gap-3 border-b border-gray-100">
+                          <div class="w-12 h-12 rounded-md overflow-hidden bg-gray-200 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
+                            <img v-if="contactProfileResolvedAvatar" :src="contactProfileResolvedAvatar" alt="头像" class="w-full h-full object-cover" referrerpolicy="no-referrer" />
+                            <div v-else class="w-full h-full flex items-center justify-center text-white text-sm font-bold" style="background-color:#4B5563">{{ contactProfileResolvedName.charAt(0) || '?' }}</div>
+                          </div>
+                          <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
+                            <div class="text-sm text-gray-900 truncate">{{ contactProfileResolvedName || '未知联系人' }}</div>
+                            <div class="text-xs text-gray-500 truncate">{{ contactProfileResolvedUsername }}</div>
+                          </div>
+                        </div>
+
+                        <div class="text-sm">
+                          <div class="px-3 py-2.5 flex items-start gap-3 border-b border-gray-100">
+                            <div class="w-12 text-gray-500 shrink-0">昵称</div>
+                            <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedNickname || '-' }}</div>
+                          </div>
+                          <div class="px-3 py-2.5 flex items-start gap-3 border-b border-gray-100">
+                            <div class="w-12 text-gray-500 shrink-0">微信号</div>
+                            <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedAlias || '-' }}</div>
+                          </div>
+                          <div class="px-3 py-2.5 flex items-start gap-3 border-b border-gray-100">
+                            <div class="w-12 text-gray-500 shrink-0">地区</div>
+                            <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedRegion || '-' }}</div>
+                          </div>
+                          <div class="px-3 py-2.5 flex items-start gap-3 border-b border-gray-100">
+                            <div class="w-12 text-gray-500 shrink-0">备注</div>
+                            <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedRemark || '-' }}</div>
+                          </div>
+                          <div class="px-3 py-2.5 flex items-start gap-3" :title="contactProfileResolvedSourceScene != null ? `来源场景码：${contactProfileResolvedSourceScene}` : ''">
+                            <div class="w-12 text-gray-500 shrink-0">来源</div>
+                            <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedSource || '-' }}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 
@@ -1313,7 +1392,7 @@
     <!-- 导出弹窗 -->
     <div v-if="exportModalOpen" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/40" @click="closeExportModal"></div>
-      <div class="relative w-[780px] max-w-[92vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
+      <div class="relative w-[960px] max-w-[95vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
         <div class="px-5 py-4 border-b border-gray-200 flex items-center">
           <div class="text-base font-medium text-gray-900">导出聊天记录（离线 ZIP）</div>
           <button class="ml-auto text-gray-400 hover:text-gray-700" type="button" @click="closeExportModal">
@@ -1323,238 +1402,174 @@
           </button>
         </div>
 
-        <div class="p-5 max-h-[75vh] overflow-y-auto space-y-4">
+        <div class="p-5 max-h-[75vh] overflow-y-auto space-y-5">
           <div v-if="exportError" class="text-sm text-red-600 whitespace-pre-wrap">{{ exportError }}</div>
           <div v-if="privacyMode" class="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-md px-3 py-2">
             已开启隐私模式：导出将隐藏会话/用户名/内容，并且不会打包头像与媒体。
           </div>
 
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <div class="text-sm font-medium text-gray-800 mb-2">范围</div>
-              <div class="space-y-2 text-sm text-gray-700">
-                <label class="flex items-center gap-2">
-                  <input type="radio" value="current" v-model="exportScope" />
-                  <span>当前会话</span>
-                </label>
-                <label class="flex items-center gap-2">
-                  <input type="radio" value="selected" v-model="exportScope" />
-                  <span>选择会话（批量）</span>
-                </label>
-                <label class="flex items-center gap-2">
-                  <input type="radio" value="all" v-model="exportScope" />
-                  <span>全部会话</span>
-                </label>
-                <label class="flex items-center gap-2">
-                  <input type="radio" value="groups" v-model="exportScope" />
-                  <span>仅群聊</span>
-                </label>
-                <label class="flex items-center gap-2">
-                  <input type="radio" value="singles" v-model="exportScope" />
-                  <span>仅单聊</span>
-                </label>
-              </div>
-
-              <div v-if="exportScope === 'selected'" class="mt-3">
-                <div class="flex items-center gap-2 mb-2">
-                  <button
-                    type="button"
-                    class="text-xs px-2 py-1 rounded border border-gray-200"
-                    :class="exportListTab === 'all' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white hover:bg-gray-50 text-gray-700'"
-                    @click="exportListTab = 'all'"
-                  >
-                    全部 {{ exportContactCounts.total }}
-                  </button>
-                  <button
-                    type="button"
-                    class="text-xs px-2 py-1 rounded border border-gray-200"
-                    :class="exportListTab === 'groups' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white hover:bg-gray-50 text-gray-700'"
-                    @click="exportListTab = 'groups'"
-                  >
-                    群聊 {{ exportContactCounts.groups }}
-                  </button>
-                  <button
-                    type="button"
-                    class="text-xs px-2 py-1 rounded border border-gray-200"
-                    :class="exportListTab === 'singles' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white hover:bg-gray-50 text-gray-700'"
-                    @click="exportListTab = 'singles'"
-                  >
-                    单聊 {{ exportContactCounts.singles }}
-                  </button>
-                  <div class="ml-auto text-xs text-gray-500">点击 tab 筛选</div>
-                </div>
-                <div class="flex items-center gap-2 mb-2">
-                  <input
-                    v-model="exportSearchQuery"
-                    type="text"
-                    placeholder="搜索会话（名称/username）"
-                    class="w-full px-3 py-2 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
-                    :class="{ 'privacy-blur': privacyMode }"
-                  />
-                </div>
-                <div class="border border-gray-200 rounded-md max-h-56 overflow-y-auto">
-                  <div
-                    v-for="c in exportFilteredContacts"
-                    :key="c.username"
-                    class="px-3 py-2 border-b border-gray-100 flex items-center gap-2 hover:bg-gray-50"
-                  >
-                    <input type="checkbox" :value="c.username" v-model="exportSelectedUsernames" />
-                    <div class="w-9 h-9 rounded-md overflow-hidden bg-gray-200 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
-                      <img v-if="c.avatar" :src="c.avatar" :alt="c.name + '头像'" class="w-full h-full object-cover" referrerpolicy="no-referrer" @error="onAvatarError($event, c)" />
-                      <div v-else class="w-full h-full flex items-center justify-center text-xs font-bold text-gray-600">
-                        {{ (c.name || c.username || '?').charAt(0) }}
-                      </div>
-                    </div>
-                    <div class="min-w-0" :class="{ 'privacy-blur': privacyMode }">
-                      <div class="text-sm text-gray-800 truncate">
-                        {{ c.name }}
-                        <span class="text-xs text-gray-500">{{ c.isGroup ? '（群）' : '' }}</span>
-                      </div>
-                      <div class="text-xs text-gray-500 truncate">{{ c.username }}</div>
-                    </div>
-                  </div>
-                  <div v-if="exportFilteredContacts.length === 0" class="px-3 py-3 text-sm text-gray-500">
-                    无匹配会话
-                  </div>
-                </div>
-                <div class="mt-2 text-xs text-gray-500">
-                  已选 {{ exportSelectedUsernames.length }} 个会话
+          <div class="space-y-5">
+            <div class="flex flex-wrap items-end gap-6">
+              <div>
+                <div class="text-sm font-medium text-gray-800 mb-2">范围</div>
+                <div class="flex flex-wrap gap-2 text-sm text-gray-700">
+                  <label class="flex items-center gap-1.5 px-3 py-1.5 rounded-md border cursor-pointer transition-colors" :class="exportScope === 'current' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'">
+                    <input type="radio" value="current" v-model="exportScope" class="hidden" />
+                    <span>当前会话</span>
+                  </label>
+                  <label class="flex items-center gap-1.5 px-3 py-1.5 rounded-md border cursor-pointer transition-colors" :class="exportScope === 'selected' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'">
+                    <input type="radio" value="selected" v-model="exportScope" class="hidden" />
+                    <span>选择会话（批量）</span>
+                  </label>
                 </div>
               </div>
-            </div>
 
-            <div class="space-y-4">
               <div>
                 <div class="text-sm font-medium text-gray-800 mb-2">格式</div>
-                <div class="flex items-center gap-4 text-sm text-gray-700">
-                  <label class="flex items-center gap-2">
-                    <input type="radio" value="json" v-model="exportFormat" />
+                <div class="flex items-center gap-2 text-sm text-gray-700">
+                  <label class="flex items-center gap-1.5 px-3 py-1.5 rounded-md border cursor-pointer transition-colors" :class="exportFormat === 'json' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'">
+                    <input type="radio" value="json" v-model="exportFormat" class="hidden" />
                     <span>JSON</span>
                   </label>
-                  <label class="flex items-center gap-2">
-                    <input type="radio" value="txt" v-model="exportFormat" />
+                  <label class="flex items-center gap-1.5 px-3 py-1.5 rounded-md border cursor-pointer transition-colors" :class="exportFormat === 'txt' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'">
+                    <input type="radio" value="txt" v-model="exportFormat" class="hidden" />
                     <span>TXT</span>
                   </label>
                 </div>
               </div>
 
-              <div>
+              <div class="flex-1 min-w-[320px]">
                 <div class="text-sm font-medium text-gray-800 mb-2">时间范围（可选）</div>
-                <div class="grid grid-cols-2 gap-2">
+                <div class="flex items-center gap-2 flex-wrap">
                   <input
                     v-model="exportStartLocal"
                     type="datetime-local"
-                    class="px-3 py-2 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
+                    class="px-2.5 py-1.5 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
                   />
+                  <span class="text-gray-400">-</span>
                   <input
                     v-model="exportEndLocal"
                     type="datetime-local"
-                    class="px-3 py-2 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
+                    class="px-2.5 py-1.5 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
                   />
                 </div>
-                <div class="flex items-center gap-2 mt-2">
-                  <button type="button" class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50" @click="exportStartLocal=''; exportEndLocal=''">全部</button>
-                  <button type="button" class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50" @click="applyExportQuickRangeDays(7)">最近7天</button>
-                  <button type="button" class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50" @click="applyExportQuickRangeDays(30)">最近30天</button>
+              </div>
+            </div>
+
+            <div v-if="exportScope === 'selected'" class="mt-3">
+              <div class="flex items-center gap-2 mb-2">
+                <button
+                  type="button"
+                  class="text-xs px-2 py-1 rounded border border-gray-200"
+                  :class="exportListTab === 'all' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white hover:bg-gray-50 text-gray-700'"
+                  @click="exportListTab = 'all'"
+                >
+                  全部 {{ exportContactCounts.total }}
+                </button>
+                <button
+                  type="button"
+                  class="text-xs px-2 py-1 rounded border border-gray-200"
+                  :class="exportListTab === 'groups' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white hover:bg-gray-50 text-gray-700'"
+                  @click="exportListTab = 'groups'"
+                >
+                  群聊 {{ exportContactCounts.groups }}
+                </button>
+                <button
+                  type="button"
+                  class="text-xs px-2 py-1 rounded border border-gray-200"
+                  :class="exportListTab === 'singles' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white hover:bg-gray-50 text-gray-700'"
+                  @click="exportListTab = 'singles'"
+                >
+                  单聊 {{ exportContactCounts.singles }}
+                </button>
+                <div class="ml-auto text-xs text-gray-500">点击 tab 筛选</div>
+              </div>
+              <div class="flex items-center gap-2 mb-2">
+                <input
+                  v-model="exportSearchQuery"
+                  type="text"
+                  placeholder="搜索会话（名称/username）"
+                  class="w-full px-3 py-2 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
+                  :class="{ 'privacy-blur': privacyMode }"
+                />
+              </div>
+              <div class="border border-gray-200 rounded-md max-h-56 overflow-y-auto">
+                <div
+                  v-for="c in exportFilteredContacts"
+                  :key="c.username"
+                  class="px-3 py-2 border-b border-gray-100 flex items-center gap-2 hover:bg-gray-50"
+                >
+                  <input type="checkbox" :value="c.username" v-model="exportSelectedUsernames" />
+                  <div class="w-9 h-9 rounded-md overflow-hidden bg-gray-200 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
+                    <img v-if="c.avatar" :src="c.avatar" :alt="c.name + '头像'" class="w-full h-full object-cover" referrerpolicy="no-referrer" @error="onAvatarError($event, c)" />
+                    <div v-else class="w-full h-full flex items-center justify-center text-xs font-bold text-gray-600">
+                      {{ (c.name || c.username || '?').charAt(0) }}
+                    </div>
+                  </div>
+                  <div class="min-w-0" :class="{ 'privacy-blur': privacyMode }">
+                    <div class="text-sm text-gray-800 truncate">
+                      {{ c.name }}
+                      <span class="text-xs text-gray-500">{{ c.isGroup ? '（群）' : '' }}</span>
+                    </div>
+                    <div class="text-xs text-gray-500 truncate">{{ c.username }}</div>
+                  </div>
+                </div>
+                <div v-if="exportFilteredContacts.length === 0" class="px-3 py-3 text-sm text-gray-500">
+                  无匹配会话
                 </div>
               </div>
-
-              <div>
-                <div class="text-sm font-medium text-gray-800 mb-2">消息类型（导出内容）</div>
-                <div class="space-y-2 text-sm text-gray-700">
-                  <label class="flex items-center gap-2">
-                    <input type="radio" value="all" v-model="exportMessageTypeMode" />
-                    <span>全部消息（不筛选）</span>
-                  </label>
-                  <label class="flex items-center gap-2">
-                    <input type="radio" value="filter" v-model="exportMessageTypeMode" />
-                    <span>按类型筛选（可多选）</span>
-                  </label>
-                </div>
-                <div v-if="exportMessageTypeMode === 'filter'" class="mt-2">
-                  <div class="flex items-center gap-2 mb-2">
-                    <button
-                      type="button"
-                      class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
-                      @click="exportMessageTypes = exportMessageTypeOptions.map((x) => x.value)"
-                    >
-                      全选
-                    </button>
-                    <button
-                      type="button"
-                      class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
-                      @click="exportMessageTypes = ['voice']"
-                    >
-                      只语音
-                    </button>
-                    <button
-                      type="button"
-                      class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
-                      @click="exportMessageTypes = ['transfer']"
-                    >
-                      只转账
-                    </button>
-                    <button
-                      type="button"
-                      class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50"
-                      @click="exportMessageTypes = ['redPacket']"
-                    >
-                      只红包
-                    </button>
-                    <div class="ml-auto text-xs text-gray-500">已选 {{ exportMessageTypes.length }} 项</div>
-                  </div>
-                  <div class="grid grid-cols-2 gap-2 text-sm text-gray-700">
-                    <label v-for="opt in exportMessageTypeOptions" :key="opt.value" class="flex items-center gap-2">
-                      <input type="checkbox" :value="opt.value" v-model="exportMessageTypes" />
-                      <span>{{ opt.label }}</span>
-                    </label>
-                  </div>
-                  <div class="mt-1 text-xs text-gray-500">
-                    仅导出所选类型的消息（影响导出消息条数与进度统计）。
-                  </div>
-                </div>
-                <div v-else class="mt-1 text-xs text-gray-500">
-                  默认导出会话内全部消息；如需只导出语音/转账/红包等，请选择“按类型筛选”。
-                </div>
+              <div class="mt-2 text-xs text-gray-500">
+                已选 {{ exportSelectedUsernames.length }} 个会话
               </div>
+            </div>
 
-              <div>
-                <div class="text-sm font-medium text-gray-800 mb-2">离线媒体文件（可选）</div>
-                <label class="flex items-center gap-2 text-sm text-gray-700">
-                  <input type="checkbox" v-model="exportIncludeMedia" :disabled="privacyMode" />
-                  <span>打包媒体文件到 ZIP（图片/表情/视频/语音/文件）</span>
-                </label>
-                <div class="mt-1 text-xs text-gray-500">
-                  仅影响 ZIP 是否包含媒体文件；消息条数由“消息类型（导出内容）”决定。
+            <div>
+              <div class="text-sm font-medium text-gray-800 mb-2">消息类型（导出内容）</div>
+              <div class="mt-2 p-3 bg-gray-50 rounded-md border border-gray-200">
+                <div class="flex items-center gap-2 mb-2">
+                  <button
+                    type="button"
+                    class="text-xs px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50"
+                    @click="exportMessageTypes = exportMessageTypeOptions.map((x) => x.value)"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    class="text-xs px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50"
+                    @click="exportMessageTypes = ['voice']"
+                  >
+                    只语音
+                  </button>
+                  <button
+                    type="button"
+                    class="text-xs px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50"
+                    @click="exportMessageTypes = ['transfer']"
+                  >
+                    只转账
+                  </button>
+                  <button
+                    type="button"
+                    class="text-xs px-2 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50"
+                    @click="exportMessageTypes = ['redPacket']"
+                  >
+                    只红包
+                  </button>
+                  <div class="ml-auto text-xs text-gray-500">已选 {{ exportMessageTypes.length }} 项</div>
                 </div>
-                <div class="grid grid-cols-2 gap-2 mt-2 text-sm text-gray-700">
-                  <label class="flex items-center gap-2" :class="(exportIncludeMedia && !privacyMode) ? '' : 'opacity-50'">
-                    <input type="checkbox" value="image" v-model="exportMediaKinds" :disabled="!exportIncludeMedia || privacyMode" />
-                    <span>图片</span>
-                  </label>
-                  <label class="flex items-center gap-2" :class="(exportIncludeMedia && !privacyMode) ? '' : 'opacity-50'">
-                    <input type="checkbox" value="emoji" v-model="exportMediaKinds" :disabled="!exportIncludeMedia || privacyMode" />
-                    <span>表情</span>
-                  </label>
-                  <label class="flex items-center gap-2" :class="(exportIncludeMedia && !privacyMode) ? '' : 'opacity-50'">
-                    <input type="checkbox" value="video" v-model="exportMediaKinds" :disabled="!exportIncludeMedia || privacyMode" />
-                    <span>视频</span>
-                  </label>
-                  <label class="flex items-center gap-2" :class="(exportIncludeMedia && !privacyMode) ? '' : 'opacity-50'">
-                    <input type="checkbox" value="voice" v-model="exportMediaKinds" :disabled="!exportIncludeMedia || privacyMode" />
-                    <span>语音</span>
-                  </label>
-                  <label class="flex items-center gap-2" :class="(exportIncludeMedia && !privacyMode) ? '' : 'opacity-50'">
-                    <input type="checkbox" value="file" v-model="exportMediaKinds" :disabled="!exportIncludeMedia || privacyMode" />
-                    <span>文件</span>
-                  </label>
-                  <label class="flex items-center gap-2" :class="(exportIncludeMedia && !privacyMode) ? '' : 'opacity-50'">
-                    <input type="checkbox" value="video_thumb" v-model="exportMediaKinds" :disabled="!exportIncludeMedia || privacyMode" />
-                    <span>视频缩略图</span>
+                <div class="grid grid-cols-3 md:grid-cols-4 gap-2 text-sm text-gray-700">
+                  <label v-for="opt in exportMessageTypeOptions" :key="opt.value" class="flex items-center gap-2">
+                    <input type="checkbox" :value="opt.value" v-model="exportMessageTypes" />
+                    <span>{{ opt.label }}</span>
                   </label>
                 </div>
               </div>
+              <div class="mt-1 text-xs text-gray-500">
+                仅导出已勾选的消息类型；勾选图片/表情/视频/语音/文件时，会导出对应多媒体文件。
+              </div>
+            </div>
 
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <div class="text-sm font-medium text-gray-800 mb-2">文件名（可选）</div>
                 <input
@@ -1563,18 +1578,32 @@
                   placeholder="例如：我的微信导出_2025-12-23.zip"
                   class="w-full px-3 py-2 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
                 />
-                <div class="mt-1 text-xs text-gray-500">不填则自动生成（输出位置：output/exports/{账号}/）。</div>
+                <div class="mt-1 text-xs text-gray-500">不填则自动生成</div>
               </div>
 
-              <div class="space-y-2">
-                <label class="flex items-center gap-2 text-sm text-gray-700">
-                  <input type="checkbox" v-model="exportIncludeHidden" />
-                  <span>包含隐藏会话（仅对“全部/群/单”有效）</span>
-                </label>
-                <label class="flex items-center gap-2 text-sm text-gray-700">
-                  <input type="checkbox" v-model="exportIncludeOfficial" />
-                  <span>包含公众号/官方会话（仅对“全部/群/单”有效）</span>
-                </label>
+              <div>
+                <div class="text-sm font-medium text-gray-800 mb-2">导出目录</div>
+                <div class="flex items-center gap-2">
+                  <div class="px-3 py-2 rounded-md border border-gray-200 bg-gray-50 text-xs break-all min-h-[38px] min-w-0 flex-1">
+                    {{ exportFolder || '未选择' }}
+                  </div>
+                  <button
+                    type="button"
+                    class="text-sm px-3 py-2 rounded-md bg-white border border-gray-200 hover:bg-gray-50"
+                    @click="chooseExportFolder"
+                  >
+                    选择文件夹
+                  </button>
+                  <button
+                    v-if="exportFolder"
+                    type="button"
+                    class="text-sm px-3 py-2 rounded-md bg-white border border-gray-200 hover:bg-gray-50"
+                    @click="exportFolder = ''; exportFolderHandle = null; exportSaveMsg = ''"
+                  >
+                    清空
+                  </button>
+                </div>
+                <div class="mt-1 text-xs text-gray-500">桌面端与支持 File System Access API 的浏览器均可选择目录。</div>
               </div>
             </div>
           </div>
@@ -1596,7 +1625,7 @@
                 ></div>
               </div>
 
-              <div v-if="exportJob.progress?.currentConversationUsername" class="space-y-1">
+              <div v-if="exportJob.status === 'running' && exportJob.progress?.currentConversationUsername" class="space-y-1">
                 <div class="flex items-center justify-between gap-2">
                   <div class="truncate">
                     当前：{{ exportJob.progress?.currentConversationName || exportJob.progress?.currentConversationUsername }}
@@ -1621,8 +1650,17 @@
             </div>
 
             <div class="mt-3 flex items-center gap-2">
+              <button
+                v-if="exportJob.status === 'done' && hasWebExportFolder"
+                class="text-sm px-3 py-2 rounded-md bg-[#03C160] text-white hover:bg-[#02a650] disabled:opacity-60"
+                type="button"
+                :disabled="exportSaveBusy"
+                @click="saveExportToSelectedFolder"
+              >
+                {{ exportSaveBusy ? '保存中...' : '保存到已选目录' }}
+              </button>
               <a
-                v-if="exportJob.status === 'done'"
+                v-if="exportJob.status === 'done' && !hasWebExportFolder"
                 class="text-sm px-3 py-2 rounded-md bg-[#03C160] text-white hover:bg-[#02a650]"
                 :href="getExportDownloadUrl(exportJob.exportId)"
                 target="_blank"
@@ -1638,6 +1676,7 @@
                 取消任务
               </button>
             </div>
+            <div v-if="exportSaveMsg" class="mt-2 text-xs text-green-600 whitespace-pre-wrap">{{ exportSaveMsg }}</div>
 
             <div v-if="exportJob.status === 'error'" class="mt-2 text-sm text-red-600 whitespace-pre-wrap">
               {{ exportJob.error || '导出失败' }}
@@ -1808,6 +1847,7 @@ useHead({
 
 const route = useRoute()
 const isSnsRoute = computed(() => route.path?.startsWith('/sns'))
+const isContactsRoute = computed(() => route.path?.startsWith('/contacts'))
 const isWrappedRoute = computed(() => route.path?.startsWith('/wrapped'))
 
 const routeUsername = computed(() => {
@@ -1821,6 +1861,12 @@ const buildChatPath = (username) => {
 
 // 响应式数据
 const selectedContact = ref(null)
+const contactProfileCardOpen = ref(false)
+const contactProfileCardMessageId = ref('')
+const contactProfileLoading = ref(false)
+const contactProfileError = ref('')
+const contactProfileData = ref(null)
+let contactProfileHoverHideTimer = null
 
 // 隐私模式
 const privacyMode = ref(false)
@@ -2126,6 +2172,10 @@ const selfAvatarUrl = computed(() => {
 
 const goSns = async () => {
   await navigateTo('/sns')
+}
+
+const goContacts = async () => {
+  await navigateTo('/contacts')
 }
 
 const goWrapped = async () => {
@@ -2642,7 +2692,6 @@ const exportError = ref('')
 // current: 当前会话（映射为 selected + 单个 username）
 const exportScope = ref('current') // current | selected | all | groups | singles
 const exportFormat = ref('json') // json | txt
-const exportMessageTypeMode = ref('all') // all | filter
 const exportMessageTypeOptions = [
   { value: 'text', label: '文本' },
   { value: 'image', label: '图片' },
@@ -2658,14 +2707,15 @@ const exportMessageTypeOptions = [
   { value: 'voip', label: '通话' }
 ]
 const exportMessageTypes = ref(exportMessageTypeOptions.map((x) => x.value))
-const exportIncludeMedia = ref(true)
-const exportMediaKinds = ref(['image', 'emoji', 'video', 'video_thumb', 'voice', 'file'])
-const exportIncludeHidden = ref(false)
-const exportIncludeOfficial = ref(false)
 
 const exportStartLocal = ref('') // datetime-local
 const exportEndLocal = ref('') // datetime-local
 const exportFileName = ref('')
+const exportFolder = ref('')
+const exportFolderHandle = ref(null)
+const exportSaveBusy = ref(false)
+const exportSaveMsg = ref('')
+const exportAutoSavedFor = ref('')
 
 const exportSearchQuery = ref('')
 const exportListTab = ref('all') // all | groups | singles
@@ -2718,6 +2768,153 @@ const exportFilteredContacts = computed(() => {
     return name.includes(q) || username.includes(q)
   })
 })
+
+const contactProfileResolvedName = computed(() => {
+  const profile = contactProfileData.value || {}
+  const displayName = String(profile?.displayName || '').trim()
+  if (displayName) return displayName
+  const contactName = String(selectedContact.value?.name || '').trim()
+  if (contactName) return contactName
+  return String(profile?.username || selectedContact.value?.username || '').trim()
+})
+
+const contactProfileResolvedUsername = computed(() => {
+  const profile = contactProfileData.value || {}
+  return String(profile?.username || selectedContact.value?.username || '').trim()
+})
+
+const contactProfileResolvedNickname = computed(() => {
+  return String(contactProfileData.value?.nickname || '').trim()
+})
+
+const contactProfileResolvedAlias = computed(() => {
+  return String(contactProfileData.value?.alias || '').trim()
+})
+
+const contactProfileResolvedRegion = computed(() => {
+  return String(contactProfileData.value?.region || '').trim()
+})
+
+const contactProfileResolvedRemark = computed(() => {
+  return String(contactProfileData.value?.remark || '').trim()
+})
+
+const contactProfileResolvedSource = computed(() => {
+  return String(contactProfileData.value?.source || '').trim()
+})
+
+const contactProfileResolvedSourceScene = computed(() => {
+  const value = contactProfileData.value?.sourceScene
+  if (value == null || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+})
+
+const contactProfileResolvedAvatar = computed(() => {
+  const profileAvatar = String(contactProfileData.value?.avatar || '').trim()
+  if (profileAvatar) return profileAvatar
+  return String(selectedContact.value?.avatar || '').trim()
+})
+
+const isDesktopExportRuntime = () => {
+  return !!(process.client && window?.wechatDesktop?.chooseDirectory)
+}
+
+const isWebDirectoryPickerSupported = () => {
+  return !!(process.client && typeof window.showDirectoryPicker === 'function')
+}
+
+const hasWebExportFolder = computed(() => {
+  return !!(isWebDirectoryPickerSupported() && exportFolderHandle.value)
+})
+
+const chooseExportFolder = async () => {
+  exportError.value = ''
+  exportSaveMsg.value = ''
+  try {
+    if (!process.client) {
+      exportError.value = '当前环境不支持选择导出目录'
+      return
+    }
+
+    if (isDesktopExportRuntime()) {
+      const result = await window.wechatDesktop.chooseDirectory({ title: '选择导出目录' })
+      if (result && !result.canceled && Array.isArray(result.filePaths) && result.filePaths.length > 0) {
+        exportFolder.value = String(result.filePaths[0] || '').trim()
+        exportFolderHandle.value = null
+      }
+      return
+    }
+
+    if (isWebDirectoryPickerSupported()) {
+      const handle = await window.showDirectoryPicker()
+      if (handle) {
+        exportFolderHandle.value = handle
+        exportFolder.value = `浏览器目录：${String(handle.name || '已选择')}`
+      }
+      return
+    }
+
+    exportError.value = '当前浏览器不支持目录选择，请使用桌面端或 Chromium 新版浏览器'
+  } catch (e) {
+    exportError.value = e?.message || '选择导出目录失败'
+  }
+}
+
+const guessExportZipName = (job) => {
+  const raw = String(job?.zipPath || '').trim()
+  if (raw) {
+    const name = raw.replace(/\\/g, '/').split('/').pop()
+    if (name && name.toLowerCase().endsWith('.zip')) {
+      return name
+    }
+  }
+  const exportId = String(job?.exportId || '').trim() || 'export'
+  return `wechat_chat_export_${exportId}.zip`
+}
+
+const saveExportToSelectedFolder = async (options = {}) => {
+  const autoSave = !!options?.auto
+  exportError.value = ''
+  exportSaveMsg.value = ''
+  if (!process.client || !isWebDirectoryPickerSupported()) {
+    exportError.value = '当前环境不支持保存到浏览器目录'
+    return
+  }
+  const handle = exportFolderHandle.value
+  if (!handle || typeof handle.getFileHandle !== 'function') {
+    exportError.value = '请先选择浏览器导出目录'
+    return
+  }
+
+  const exportId = exportJob.value?.exportId
+  if (!exportId || String(exportJob.value?.status || '') !== 'done') {
+    exportError.value = '导出任务尚未完成'
+    return
+  }
+
+  exportSaveBusy.value = true
+  try {
+    const resp = await fetch(getExportDownloadUrl(exportId))
+    if (!resp.ok) {
+      throw new Error(`下载导出文件失败（${resp.status}）`)
+    }
+    const blob = await resp.blob()
+    const fileName = guessExportZipName(exportJob.value)
+    const fileHandle = await handle.getFileHandle(fileName, { create: true })
+    const writable = await fileHandle.createWritable()
+    await writable.write(blob)
+    await writable.close()
+    exportAutoSavedFor.value = String(exportId)
+    exportSaveMsg.value = autoSave
+      ? `已自动保存到已选目录：${fileName}`
+      : `已保存到已选目录：${fileName}`
+  } catch (e) {
+    exportError.value = e?.message || '保存到浏览器目录失败'
+  } finally {
+    exportSaveBusy.value = false
+  }
+}
 
 const exportContactCounts = computed(() => {
   const list = Array.isArray(contacts.value) ? contacts.value : []
@@ -2826,11 +3023,12 @@ const startExportPolling = (exportId) => {
 const openExportModal = () => {
   exportModalOpen.value = true
   exportError.value = ''
+  exportSaveMsg.value = ''
   exportListTab.value = 'all'
-
-  if (privacyMode.value) {
-    exportIncludeMedia.value = false
-  }
+  exportStartLocal.value = ''
+  exportEndLocal.value = ''
+  exportMessageTypes.value = exportMessageTypeOptions.map((x) => x.value)
+  exportAutoSavedFor.value = ''
 
   if (selectedContact.value?.username) {
     exportScope.value = 'current'
@@ -2842,6 +3040,136 @@ const openExportModal = () => {
 const closeExportModal = () => {
   exportModalOpen.value = false
   exportError.value = ''
+}
+
+const fetchContactProfile = async (options = {}) => {
+  const username = String(options?.username || contactProfileData.value?.username || selectedContact.value?.username || '').trim()
+  const displayNameFallback = String(options?.displayName || '').trim()
+  const avatarFallback = String(options?.avatar || '').trim()
+  const account = String(selectedAccount.value || '').trim()
+  if (!username || !account) {
+    contactProfileData.value = null
+    return
+  }
+
+  contactProfileLoading.value = true
+  contactProfileError.value = ''
+  try {
+    const api = useApi()
+    const resp = await api.listChatContacts({
+      account,
+      include_friends: true,
+      include_groups: true,
+      include_officials: true,
+    })
+    const list = Array.isArray(resp?.contacts) ? resp.contacts : []
+    const matched = list.find((item) => String(item?.username || '').trim() === username)
+    if (matched) {
+      const normalized = {
+        ...matched,
+        username,
+      }
+      if (!String(normalized.displayName || '').trim() && displayNameFallback) {
+        normalized.displayName = displayNameFallback
+      }
+      if (!String(normalized.avatar || '').trim() && avatarFallback) {
+        normalized.avatar = avatarFallback
+      }
+      contactProfileData.value = normalized
+    } else {
+      contactProfileData.value = {
+        username,
+        displayName: displayNameFallback || selectedContact.value?.name || username,
+        avatar: avatarFallback || selectedContact.value?.avatar || '',
+        nickname: '',
+        alias: '',
+        region: '',
+        remark: '',
+        source: '',
+        sourceScene: null,
+      }
+    }
+  } catch (e) {
+    contactProfileData.value = {
+      username,
+      displayName: displayNameFallback || selectedContact.value?.name || username,
+      avatar: avatarFallback || selectedContact.value?.avatar || '',
+      nickname: '',
+      alias: '',
+      region: '',
+      remark: '',
+      source: '',
+      sourceScene: null,
+    }
+    contactProfileError.value = e?.message || '加载联系人资料失败'
+  } finally {
+    contactProfileLoading.value = false
+  }
+}
+
+const clearContactProfileHoverHideTimer = () => {
+  if (contactProfileHoverHideTimer) {
+    clearTimeout(contactProfileHoverHideTimer)
+    contactProfileHoverHideTimer = null
+  }
+}
+
+const closeContactProfileCard = () => {
+  contactProfileCardOpen.value = false
+  contactProfileCardMessageId.value = ''
+}
+
+const onMessageAvatarMouseEnter = async (message) => {
+  const isSent = !!message?.isSent
+  if (isSent) return
+  const messageId = String(message?.id ?? '').trim()
+  if (!messageId) return
+  const username = String(message?.senderUsername || '').trim()
+  if (!username || username === 'self') return
+
+  const senderName = String(message?.senderDisplayName || message?.sender || '').trim()
+  const senderAvatar = String(message?.avatar || '').trim()
+  if (!contactProfileData.value || String(contactProfileData.value?.username || '').trim() !== username) {
+    contactProfileData.value = {
+      username,
+      displayName: senderName || username,
+      avatar: senderAvatar,
+      nickname: '',
+      alias: '',
+      region: '',
+      remark: '',
+      source: '',
+      sourceScene: null,
+    }
+  } else {
+    if (!String(contactProfileData.value?.displayName || '').trim() && senderName) {
+      contactProfileData.value.displayName = senderName
+    }
+    if (!String(contactProfileData.value?.avatar || '').trim() && senderAvatar) {
+      contactProfileData.value.avatar = senderAvatar
+    }
+  }
+
+  clearContactProfileHoverHideTimer()
+  contactProfileCardMessageId.value = messageId
+  contactProfileCardOpen.value = true
+  await fetchContactProfile({ username, displayName: senderName, avatar: senderAvatar })
+}
+
+const onMessageAvatarMouseLeave = () => {
+  clearContactProfileHoverHideTimer()
+  contactProfileHoverHideTimer = setTimeout(() => {
+    closeContactProfileCard()
+  }, 120)
+}
+
+const onContactCardMouseEnter = () => {
+  clearContactProfileHoverHideTimer()
+}
+
+const toggleRealtimeFromSidebar = async () => {
+  if (realtimeChecking.value) return
+  await toggleRealtime()
 }
 
 watch(exportModalOpen, (open) => {
@@ -2858,6 +3186,40 @@ watch(exportModalOpen, (open) => {
   }
 })
 
+watch(
+  () => selectedContact.value?.username,
+  () => {
+    clearContactProfileHoverHideTimer()
+    closeContactProfileCard()
+    contactProfileError.value = ''
+    contactProfileData.value = null
+  }
+)
+
+watch(
+  () => selectedAccount.value,
+  () => {
+    clearContactProfileHoverHideTimer()
+    closeContactProfileCard()
+    contactProfileError.value = ''
+    contactProfileData.value = null
+  }
+)
+
+watch(
+  () => ({
+    exportId: String(exportJob.value?.exportId || ''),
+    status: String(exportJob.value?.status || '')
+  }),
+  async ({ exportId, status }) => {
+    if (!process.client || status !== 'done' || !exportId) return
+    if (!hasWebExportFolder.value) return
+    if (exportAutoSavedFor.value === exportId) return
+    if (exportSaveBusy.value) return
+    await saveExportToSelectedFolder({ auto: true })
+  }
+)
+
 const getExportDownloadUrl = (exportId) => {
   const base = process.client ? 'http://localhost:8000' : ''
   return `${base}/api/chat/exports/${encodeURIComponent(String(exportId || ''))}/download`
@@ -2865,6 +3227,7 @@ const getExportDownloadUrl = (exportId) => {
 
 const startChatExport = async () => {
   exportError.value = ''
+  exportSaveMsg.value = ''
   if (!selectedAccount.value) {
     exportError.value = '未选择账号'
     return
@@ -2886,6 +3249,13 @@ const startChatExport = async () => {
     return
   }
 
+  const hasDesktopFolder = isDesktopExportRuntime() && !!String(exportFolder.value || '').trim()
+  const hasWebFolder = !isDesktopExportRuntime() && !!exportFolderHandle.value
+  if (!hasDesktopFolder && !hasWebFolder) {
+    exportError.value = '请先选择导出目录'
+    return
+  }
+
   const startTime = toUnixSeconds(exportStartLocal.value)
   const endTime = toUnixSeconds(exportEndLocal.value)
   if (startTime && endTime && startTime > endTime) {
@@ -2893,15 +3263,28 @@ const startChatExport = async () => {
     return
   }
 
-  const messageTypes = exportMessageTypeMode.value === 'filter'
-    ? (Array.isArray(exportMessageTypes.value) ? exportMessageTypes.value.filter(Boolean) : [])
-    : []
-  if (exportMessageTypeMode.value === 'filter' && messageTypes.length === 0) {
-    exportError.value = '请选择至少一个消息类型'
+  const messageTypes = Array.isArray(exportMessageTypes.value) ? exportMessageTypes.value.filter(Boolean) : []
+  if (messageTypes.length === 0) {
+    exportError.value = '请至少勾选一个消息类型'
     return
   }
 
+  const selectedTypeSet = new Set(messageTypes.map((t) => String(t || '').trim()))
+  const mediaKindSet = new Set()
+  if (selectedTypeSet.has('image')) mediaKindSet.add('image')
+  if (selectedTypeSet.has('emoji')) mediaKindSet.add('emoji')
+  if (selectedTypeSet.has('video')) {
+    mediaKindSet.add('video')
+    mediaKindSet.add('video_thumb')
+  }
+  if (selectedTypeSet.has('voice')) mediaKindSet.add('voice')
+  if (selectedTypeSet.has('file')) mediaKindSet.add('file')
+
+  const mediaKinds = Array.from(mediaKindSet)
+  const includeMedia = !privacyMode.value && mediaKinds.length > 0
+
   isExportCreating.value = true
+  exportAutoSavedFor.value = ''
   try {
     const api = useApi()
     const resp = await api.createChatExport({
@@ -2911,11 +3294,12 @@ const startChatExport = async () => {
       format: exportFormat.value,
       start_time: startTime,
       end_time: endTime,
-      include_hidden: exportIncludeHidden.value,
-      include_official: exportIncludeOfficial.value,
+      include_hidden: false,
+      include_official: false,
       message_types: messageTypes,
-      include_media: exportIncludeMedia.value && !privacyMode.value,
-      media_kinds: (exportIncludeMedia.value && !privacyMode.value) ? exportMediaKinds.value : [],
+      include_media: includeMedia,
+      media_kinds: mediaKinds,
+      output_dir: isDesktopExportRuntime() ? String(exportFolder.value || '').trim() : null,
       privacy_mode: !!privacyMode.value,
       file_name: exportFileName.value || null
     })
@@ -2942,16 +3326,6 @@ const cancelCurrentExport = async () => {
   } catch (e) {
     exportError.value = e?.message || '取消导出失败'
   }
-}
-
-const applyExportQuickRangeDays = (days) => {
-  const now = new Date()
-  const end = new Date(now.getTime())
-  const start = new Date(now.getTime() - Number(days) * 24 * 3600 * 1000)
-  const pad = (n) => String(n).padStart(2, '0')
-  const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-  exportStartLocal.value = fmt(start)
-  exportEndLocal.value = fmt(end)
 }
 
 const messagePageSize = 50
@@ -4829,6 +5203,10 @@ const onGlobalKeyDown = (e) => {
     if (contextMenu.value.visible) closeContextMenu()
     if (previewImageUrl.value) closeImagePreview()
     if (chatHistoryModalVisible.value) closeChatHistoryModal()
+    if (contactProfileCardOpen.value) {
+      clearContactProfileHoverHideTimer()
+      closeContactProfileCard()
+    }
     if (messageSearchSenderDropdownOpen.value) closeMessageSearchSenderDropdown()
     if (messageSearchOpen.value) closeMessageSearch()
     if (searchContext.value?.active) exitSearchContext()
@@ -4845,6 +5223,7 @@ onUnmounted(() => {
   if (!process.client) return
   document.removeEventListener('click', onGlobalClick)
   document.removeEventListener('keydown', onGlobalKeyDown)
+  clearContactProfileHoverHideTimer()
   stopSessionListResize()
   if (messageSearchDebounceTimer) clearTimeout(messageSearchDebounceTimer)
   messageSearchDebounceTimer = null

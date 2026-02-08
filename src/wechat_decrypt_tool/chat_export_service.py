@@ -74,6 +74,25 @@ def _safe_name(s: str, max_len: int = 80) -> str:
     return t
 
 
+def _resolve_export_output_dir(account_dir: Path, output_dir_raw: Any) -> Path:
+    text = str(output_dir_raw or "").strip()
+    if not text:
+        default_dir = account_dir.parents[1] / "exports" / account_dir.name
+        default_dir.mkdir(parents=True, exist_ok=True)
+        return default_dir
+
+    out_dir = Path(text).expanduser()
+    if not out_dir.is_absolute():
+        raise ValueError("output_dir must be an absolute path.")
+
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        raise ValueError(f"Failed to prepare output_dir: {e}") from e
+
+    return out_dir.resolve()
+
+
 def _format_ts(ts: int) -> str:
     if not ts:
         return ""
@@ -99,43 +118,54 @@ def _normalize_render_type_key(value: Any) -> str:
     return lower
 
 
-def _render_types_to_local_types(render_types: set[str]) -> Optional[set[int]]:
-    rt = {str(x or "").strip() for x in (render_types or set())}
-    rt = {x for x in rt if x}
-    if not rt:
+def _is_render_type_selected(render_type: Any, selected_render_types: Optional[set[str]]) -> bool:
+    if selected_render_types is None:
+        return True
+    rt = _normalize_render_type_key(render_type) or "text"
+    return rt in selected_render_types
+
+
+def _media_kinds_from_selected_types(selected_render_types: Optional[set[str]]) -> Optional[set[MediaKind]]:
+    if selected_render_types is None:
         return None
 
-    out: set[int] = set()
-    for k in rt:
-        if k == "text":
-            out.add(1)
-        elif k == "image":
-            out.add(3)
-        elif k == "voice":
-            out.add(34)
-        elif k == "video":
-            out.update({43, 62})
-        elif k == "emoji":
-            out.add(47)
-        elif k == "voip":
-            out.add(50)
-        elif k == "system":
-            out.update({10000, 266287972401})
-        elif k == "quote":
-            out.add(244813135921)
-            out.add(49)  # Some quote messages are embedded as appmsg (local_type=49).
-        elif k in {"link", "file", "transfer", "redpacket"}:
-            out.add(49)
-        else:
-            # Unknown type: cannot safely prefilter by local_type.
-            return None
+    out: set[MediaKind] = set()
+    if "image" in selected_render_types:
+        out.add("image")
+    if "emoji" in selected_render_types:
+        out.add("emoji")
+    if "video" in selected_render_types:
+        out.add("video")
+        out.add("video_thumb")
+    if "voice" in selected_render_types:
+        out.add("voice")
+    if "file" in selected_render_types:
+        out.add("file")
     return out
 
 
-def _should_estimate_by_local_type(render_types: set[str]) -> bool:
-    # Only estimate counts when every requested type maps 1:1 to local_type.
-    # App messages (local_type=49) are heterogeneous and cannot be counted accurately without parsing.
-    return not bool(render_types & {"link", "file", "transfer", "redpacket", "quote"})
+def _resolve_effective_media_kinds(
+    *,
+    include_media: bool,
+    media_kinds: list[MediaKind],
+    selected_render_types: Optional[set[str]],
+    privacy_mode: bool,
+) -> tuple[bool, list[MediaKind]]:
+    if privacy_mode or (not include_media):
+        return False, []
+
+    kinds = [k for k in media_kinds if k in {"image", "emoji", "video", "video_thumb", "voice", "file"}]
+    if not kinds:
+        return False, []
+
+    selected_media_kinds = _media_kinds_from_selected_types(selected_render_types)
+    if selected_media_kinds is not None:
+        kinds = [k for k in kinds if k in selected_media_kinds]
+
+    kinds = list(dict.fromkeys(kinds))
+    if not kinds:
+        return False, []
+    return True, kinds
 
 
 @dataclass
@@ -235,6 +265,7 @@ class ChatExportManager:
         include_media: bool,
         media_kinds: list[MediaKind],
         message_types: list[str],
+        output_dir: Optional[str],
         allow_process_key_extract: bool,
         privacy_mode: bool,
         file_name: Optional[str],
@@ -257,6 +288,7 @@ class ChatExportManager:
                 "includeMedia": bool(include_media),
                 "mediaKinds": media_kinds,
                 "messageTypes": list(dict.fromkeys([str(t or "").strip() for t in (message_types or []) if str(t or "").strip()])),
+                "outputDir": str(output_dir or "").strip(),
                 "allowProcessKeyExtract": bool(allow_process_key_extract),
                 "privacyMode": bool(privacy_mode),
                 "fileName": str(file_name or "").strip(),
@@ -313,10 +345,6 @@ class ChatExportManager:
             if ks in {"image", "emoji", "video", "video_thumb", "voice", "file"}:
                 media_kinds.append(ks)  # type: ignore[arg-type]
 
-        if privacy_mode:
-            include_media = False
-            media_kinds = []
-
         st = int(opts.get("startTime") or 0) or None
         et = int(opts.get("endTime") or 0) or None
 
@@ -328,9 +356,15 @@ class ChatExportManager:
             if want:
                 want_types = want
 
-        local_types = _render_types_to_local_types(want_types) if want_types else None
-        can_estimate = (want_types is None) or _should_estimate_by_local_type(want_types)
-        estimate_local_types = local_types if (want_types and can_estimate) else None
+        include_media, media_kinds = _resolve_effective_media_kinds(
+            include_media=include_media,
+            media_kinds=media_kinds,
+            selected_render_types=want_types,
+            privacy_mode=privacy_mode,
+        )
+
+        local_types = None
+        estimate_local_types = None
 
         target_usernames = _resolve_export_targets(
             account_dir=account_dir,
@@ -342,8 +376,7 @@ class ChatExportManager:
         if not target_usernames:
             raise ValueError("No target conversations to export.")
 
-        exports_root = account_dir.parents[1] / "exports" / account_dir.name
-        exports_root.mkdir(parents=True, exist_ok=True)
+        exports_root = _resolve_export_output_dir(account_dir, opts.get("outputDir"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         base_name = str(opts.get("fileName") or "").strip()
@@ -456,16 +489,13 @@ class ChatExportManager:
                         job.progress.current_conversation_messages_total = 0
 
                     try:
-                        if not can_estimate:
-                            estimated_total = 0
-                        else:
-                            estimated_total = _estimate_conversation_message_count(
-                                account_dir=account_dir,
-                                conv_username=conv_username,
-                                start_time=st,
-                                end_time=et,
-                                local_types=estimate_local_types,
-                            )
+                        estimated_total = _estimate_conversation_message_count(
+                            account_dir=account_dir,
+                            conv_username=conv_username,
+                            start_time=st,
+                            end_time=et,
+                            local_types=estimate_local_types,
+                        )
                     except Exception:
                         estimated_total = 0
 
@@ -557,6 +587,8 @@ class ChatExportManager:
                     zf.writestr(f"{conv_dir}/meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
 
                     with self._lock:
+                        job.progress.current_conversation_messages_exported = int(exported_count)
+                        job.progress.current_conversation_messages_total = int(exported_count)
                         job.progress.conversations_done += 1
 
                 manifest = {
@@ -1325,12 +1357,8 @@ def _write_conversation_json(
                     resource_chat_id=resource_chat_id,
                     sender_alias=sender_alias,
                 )
-                if want_types:
-                    rt_key = _normalize_render_type_key(msg.get("renderType"))
-                    if rt_key not in want_types:
-                        if scanned % 500 == 0 and job.cancel_requested:
-                            raise _JobCancelled()
-                        continue
+                if not _is_render_type_selected(msg.get("renderType"), want_types):
+                    continue
 
                 su = str(msg.get("senderUsername") or "").strip()
                 if privacy_mode:
@@ -1506,12 +1534,8 @@ def _write_conversation_txt(
                     resource_chat_id=resource_chat_id,
                     sender_alias=sender_alias,
                 )
-                if want_types:
-                    rt_key = _normalize_render_type_key(msg.get("renderType"))
-                    if rt_key not in want_types:
-                        if scanned % 500 == 0 and job.cancel_requested:
-                            raise _JobCancelled()
-                        continue
+                if not _is_render_type_selected(msg.get("renderType"), want_types):
+                    continue
 
                 su = str(msg.get("senderUsername") or "").strip()
                 if privacy_mode:

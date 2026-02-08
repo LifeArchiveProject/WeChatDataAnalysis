@@ -611,6 +611,25 @@ function registerWindowIpc() {
       return getCloseBehavior();
     }
   });
+
+  ipcMain.handle("dialog:chooseDirectory", async (_event, options) => {
+    try {
+      const result = await dialog.showOpenDialog({
+        title: String(options?.title || "选择文件夹"),
+        properties: ["openDirectory", "createDirectory"],
+      });
+      return {
+        canceled: !!result?.canceled,
+        filePaths: Array.isArray(result?.filePaths) ? result.filePaths : [],
+      };
+    } catch (err) {
+      logMain(`[main] dialog:chooseDirectory failed: ${err?.message || err}`);
+      return {
+        canceled: true,
+        filePaths: [],
+      };
+    }
+  });
 }
 
 async function main() {
