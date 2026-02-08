@@ -13,6 +13,7 @@ from .logging_config import setup_logging, get_logger
 from .path_fix import PathFixRoute
 from .chat_realtime_autosync import CHAT_REALTIME_AUTOSYNC
 from .routers.chat import router as _chat_router
+from .routers.chat_contacts import router as _chat_contacts_router
 from .routers.chat_export import router as _chat_export_router
 from .routers.chat_media import router as _chat_media_router
 from .routers.decrypt import router as _decrypt_router
@@ -52,6 +53,7 @@ app.include_router(_decrypt_router)
 app.include_router(_keys_router)
 app.include_router(_media_router)
 app.include_router(_chat_router)
+app.include_router(_chat_contacts_router)
 app.include_router(_chat_export_router)
 app.include_router(_chat_media_router)
 app.include_router(_sns_router)

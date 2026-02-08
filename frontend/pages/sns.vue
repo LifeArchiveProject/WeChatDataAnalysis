@@ -68,6 +68,26 @@
           </div>
         </div>
 
+        <!-- 联系人图标 -->
+        <div
+          class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+          title="联系人"
+          @click="goContacts"
+        >
+          <div
+            class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]"
+          >
+            <div class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isContactsRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'">
+              <svg class="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
+                <circle cx="10" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
         <!-- 年度总结图标 -->
         <div
           class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
@@ -411,6 +431,7 @@ const route = useRoute()
 
 const isChatRoute = computed(() => route.path?.startsWith('/chat'))
 const isSnsRoute = computed(() => route.path?.startsWith('/sns'))
+const isContactsRoute = computed(() => route.path?.startsWith('/contacts'))
 const isWrappedRoute = computed(() => route.path?.startsWith('/wrapped'))
 
 // 隐私模式（聊天/朋友圈共用本地开关）
@@ -1049,6 +1070,10 @@ const goChat = async () => {
 
 const goSns = async () => {
   await navigateTo('/sns')
+}
+
+const goContacts = async () => {
+  await navigateTo('/contacts')
 }
 
 const goWrapped = async () => {
