@@ -139,6 +139,15 @@ npm run dist
 6. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)** - 微信聊天记录工具（Vue3）
    - 提供了聊天记录展示与交互的实现参考
 
+7. **[wx-dat](https://github.com/waaaaashi/wx-dat)** - 微信图片密钥获取工具
+   - 实现真正的无头获取图片密钥，不再依赖扫描微信内存与点击朋友圈大图
+
+8. **PR #24 贡献者 [H3CoF6](https://github.com/H3CoF6)** - 微信密钥获取能力增强
+   - 无第三方工具依赖实现微信密钥获取能力
+   - 实现数据库密钥获取：实现形式参考 [wx_key](https://github.com/ycccccccy/wx_key) 项目，完成 Python 预编译 wheel 封装，详情见 [py_wx_key](https://github.com/H3CoF6/py_wx_key)
+   - 特征码不在 C++ 内硬编码，而由 Python 模块传入，减少 wheel 更新次数
+   - 实现真正的无头获取图片密钥，不再依赖扫描微信内存（以及点击朋友圈大图），感谢项目 [wx-dat](https://github.com/waaaaashi/wx-dat)
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=LifeArchiveProject/WeChatDataAnalysis&type=Date)](https://www.star-history.com/#LifeArchiveProject/WeChatDataAnalysis&Date)
