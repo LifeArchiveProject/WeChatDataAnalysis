@@ -26,24 +26,40 @@
             <!-- 密钥输入 -->
             <div>
               <label for="key" class="block text-sm font-medium text-[#000000e6] mb-2">
-                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
-                </svg>
                 解密密钥 <span class="text-red-500">*</span>
               </label>
-              <div class="relative">
-                <input
-                  id="key"
-                  v-model="formData.key"
-                  type="text"
-                  placeholder="请输入64位十六进制密钥"
-                  class="w-full px-4 py-3 bg-white border border-[#EDEDED] rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
-                  :class="{ 'border-red-500': formErrors.key }"
-                  required
-                />
-                <div v-if="formData.key" class="absolute right-3 top-1/2 transform -translate-y-1/2">
-                  <span class="text-xs text-[#7F7F7F]">{{ formData.key.length }}/64</span>
+
+              <div class="flex gap-3">
+                <div class="relative flex-1">
+                  <input
+                      id="key"
+                      v-model="formData.key"
+                      type="text"
+                      placeholder="请输入64位十六进制密钥"
+                      class="w-full px-4 py-3 bg-white border border-[#EDEDED] rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
+                      :class="{ 'border-red-500': formErrors.key }"
+                      required
+                  />
+                  <div v-if="formData.key" class="absolute right-3 top-1/2 transform -translate-y-1/2">
+                    <span class="text-xs text-[#7F7F7F]">{{ formData.key.length }}/64</span>
+                  </div>
                 </div>
+
+                <button
+                    type="button"
+                    @click="handleGetDbKey"
+                    :disabled="isGettingDbKey"
+                    class="flex-none inline-flex items-center px-4 py-3 bg-[#07C160] text-white rounded-lg text-sm font-medium hover:bg-[#06AD56] transition-all duration-200 disabled:opacity-50 disabled:cursor-wait whitespace-nowrap"
+                >
+                  <svg v-if="isGettingDbKey" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                  </svg>
+                  <svg v-else class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  {{ isGettingDbKey ? '获取中...' : '自动获取' }}
+                </button>
               </div>
               <p v-if="formErrors.key" class="mt-1 text-sm text-red-600 flex items-center">
                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -55,7 +71,7 @@
                 <svg class="w-4 h-4 mr-1 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
-                使用 <a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a> 等工具获取的64位十六进制字符串
+                尝试自动获取，或者使用 <a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a> 等工具获取的64位十六进制字符串
               </p>
             </div>
             
@@ -131,6 +147,26 @@
           <!-- 填写密钥 -->
           <div class="mb-6">
             <div class="bg-gray-50 rounded-lg p-4">
+
+              <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-200">
+                <span class="text-sm font-medium text-gray-500">手动输入或通过微信获取</span>
+                <button
+                    type="button"
+                    @click="handleGetImageKey"
+                    :disabled="isGettingImageKey"
+                    class="flex-none inline-flex items-center px-4 py-3 bg-[#07C160] text-white rounded-lg text-sm font-medium hover:bg-[#06AD56] transition-all duration-200 disabled:opacity-50 disabled:cursor-wait whitespace-nowrap"
+                >
+                  <svg v-if="isGettingImageKey" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                  </svg>
+                  <svg v-else class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  {{ isGettingImageKey ? '正在获取...' : '自动获取' }}
+                </button>
+              </div>
+
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label class="block text-sm font-medium text-[#000000e6] mb-2">XOR（必填）</label>
@@ -158,7 +194,7 @@
                 <svg class="w-4 h-4 mr-1 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
-                使用 <a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a> 获取图片密钥；AES 可选（V4-V2 需要）
+                尝试自动获取，或使用 <a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a> 获取图片密钥；AES 可选（V4-V2 需要）
               </p>
             </div>
           </div>
@@ -325,6 +361,19 @@
           </div>
         </div>
       </div>
+
+      <!-- 警告渲染 -->
+      <transition name="fade">
+        <div v-if="warning" class="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-6 flex items-start">
+          <svg class="h-5 w-5 mr-2 flex-shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          <div>
+            <p class="font-semibold text-amber-800">温馨提示</p>
+            <p class="text-sm mt-1 text-amber-700">{{ warning }}</p>
+          </div>
+        </div>
+      </transition>
     
       <!-- 错误提示 -->
       <transition name="fade">
@@ -367,12 +416,15 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useApi } from '~/composables/useApi'
 
-const { decryptDatabase, saveMediaKeys, getSavedKeys } = useApi()
+const { decryptDatabase, saveMediaKeys, getSavedKeys, getDbKey, getImageKey, getWxStatus } = useApi()
 
 const loading = ref(false)
 const error = ref('')
+const warning = ref('') // 警告，用于密钥提示
 const currentStep = ref(0)
 const mediaAccount = ref('')
+const isGettingDbKey = ref(false)
+const isGettingImageKey = ref(false)
 
 // 步骤定义
 const steps = [
@@ -453,10 +505,89 @@ const prefillKeysForAccount = async (account) => {
   }
 }
 
+const handleGetDbKey = async () => {
+  if (isGettingDbKey.value) return
+  isGettingDbKey.value = true
+
+  error.value = ''
+  warning.value = ''
+  formErrors.key = ''
+
+  try {
+    const statusRes = await getWxStatus() // pid不是主进程，但是没关系
+    const wxStatus = statusRes?.wx_status
+
+    if (wxStatus?.is_running) {
+      warning.value = '检测到微信正在运行，5秒后将终止进程并重启以获取密钥！！'
+      await new Promise(resolve => setTimeout(resolve, 5000))
+    } else {
+      // 没有逻辑
+    }
+
+    warning.value = '正在启动微信以获取密钥，请确保微信未开启“自动登录”，并在启动后 1 分钟内完成登录操作。'
+
+    const res = await getDbKey()
+
+    if (res && res.status === 0) {
+      if (res.data?.db_key) {
+        formData.key = res.data.db_key
+        warning.value = ''
+      }
+
+      if (res.errmsg && res.errmsg !== 'ok') {
+        warning.value = res.errmsg
+      }
+    } else {
+      error.value = '获取失败: ' + (res?.errmsg || '未知错误')
+    }
+  } catch (e) {
+    console.error(e)
+    error.value = '系统错误: ' + e.message
+  } finally {
+    isGettingDbKey.value = false
+  }
+}
+
+const handleGetImageKey = async () => {
+  if (isGettingImageKey.value) return
+  isGettingImageKey.value = true
+  manualKeyErrors.xor_key = ''
+  manualKeyErrors.aes_key = ''
+
+  error.value = ''
+  warning.value = ''
+
+  try {
+    const res = await getImageKey()
+
+    if (res && res.status === 0) {
+      if (res.data?.aes_key) {
+        manualKeys.aes_key = res.data.aes_key
+      }
+      if (res.data?.xor_key) {
+        // 后端记得处理为16进制再返回！！！
+        manualKeys.xor_key = res.data.xor_key
+      }
+
+      if (res.errmsg && res.errmsg !== 'ok') {
+        error.value = res.errmsg
+      }
+    } else {
+      error.value = '获取失败: ' + (res?.errmsg || '未知错误')
+    }
+  } catch (e) {
+    console.error(e)
+    error.value = '系统错误: ' + e.message
+  } finally {
+    isGettingImageKey.value = false
+  }
+}
+
 const applyManualKeys = () => {
   manualKeyErrors.xor_key = ''
   manualKeyErrors.aes_key = ''
   error.value = ''
+  warning.value = ''
 
   const aes = normalizeAesKey(manualKeys.aes_key)
   if (!aes.ok) {
@@ -550,6 +681,7 @@ const handleDecrypt = async () => {
   
   loading.value = true
   error.value = ''
+  warning.value = ''
   
   try {
     const result = await decryptDatabase({
@@ -596,6 +728,7 @@ const decryptAllImages = async () => {
   mediaDecrypting.value = true
   mediaDecryptResult.value = null
   error.value = ''
+  warning.value = ''
   
   // 重置进度
   decryptProgress.current = 0
@@ -671,6 +804,7 @@ const decryptAllImages = async () => {
 // 从密钥步骤进入图片解密步骤
 const goToMediaDecryptStep = async () => {
   error.value = ''
+  warning.value = ''
   // 校验并应用（未填写则允许直接进入，后端会使用已保存密钥或报错提示）
   const ok = applyManualKeys()
   if (!ok || manualKeyErrors.xor_key || manualKeyErrors.aes_key) return

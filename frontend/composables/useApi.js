@@ -375,7 +375,22 @@ export const useApi = () => {
     const url = `/wrapped/annual/cards/${safeId}` + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
-  
+
+  // 获取微信进程状态
+  const getWxStatus = async () => {
+    return await request('/wechat/status')
+  }
+
+  // 获取数据库密钥
+  const getDbKey = async () => {
+    return await request('/get_db_key')
+  }
+
+  // 获取图片密钥
+  const getImageKey = async () => {
+    return await request('/get_image_key')
+  }
+
   return {
     detectWechat,
     detectCurrentAccount,
@@ -408,6 +423,9 @@ export const useApi = () => {
     exportChatContacts,
     getWrappedAnnual,
     getWrappedAnnualMeta,
-    getWrappedAnnualCard
+    getWrappedAnnualCard,
+    getDbKey,
+    getImageKey,
+    getWxStatus,
   }
 }
