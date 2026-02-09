@@ -122,6 +122,16 @@ class TestChatExportMessageTypesSemantics(unittest.TestCase):
                 (3, 1003, 49, 3, 2, 1735689603, '<msg><appmsg><type>2000</type><des>收到转账0.01元</des></appmsg></msg>', None),
                 (4, 1004, 1, 4, 2, 1735689604, '普通文本消息', None),
                 (5, 1005, 10000, 5, 2, 1735689605, '系统提示消息', None),
+                (
+                    6,
+                    1006,
+                    10000,
+                    6,
+                    2,
+                    1735689606,
+                    '<sysmsg type="revokemsg"><revokemsg><replacemsg><![CDATA[“测试好友”撤回了一条消息]]></replacemsg></revokemsg></sysmsg>',
+                    None,
+                ),
             ]
             conn.executemany(
                 f"INSERT INTO {table_name} (local_id, server_id, local_type, sort_seq, real_sender_id, create_time, message_content, compress_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -407,6 +417,37 @@ class TestChatExportMessageTypesSemantics(unittest.TestCase):
                 self.assertEqual(len(messages), 1)
                 self.assertTrue(all(str(m.get("renderType") or "") == "transfer" for m in messages))
                 self.assertEqual(manifest.get("filters", {}).get("messageTypes"), ["transfer"])
+            finally:
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_system_revoke_exports_readable_revoker_content(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            self._prepare_account(root, account=account, username=username)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+                job = self._create_job(
+                    svc.CHAT_EXPORT_MANAGER,
+                    account=account,
+                    username=username,
+                    message_types=["system"],
+                    include_media=False,
+                )
+                self.assertEqual(job.status, "done", msg=job.error)
+
+                payload, _, _ = self._load_export_payload(job.zip_path)
+                revoke_msg = next((m for m in payload.get("messages", []) if int(m.get("serverId") or 0) == 1006), None)
+                self.assertIsNotNone(revoke_msg)
+                self.assertEqual(str(revoke_msg.get("renderType") or ""), "system")
+                self.assertEqual(str(revoke_msg.get("content") or ""), "“测试好友”撤回了一条消息")
             finally:
                 if prev_data is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
