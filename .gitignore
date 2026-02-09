@@ -17,6 +17,7 @@ wheels/
 # Local config templates
 /wechat_db_config_template.json
 .ace-tool/
+pnpm-lock.yaml
 
 # Local dev repos and data
 /WxDatDecrypt/

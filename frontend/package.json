@@ -19,5 +19,8 @@
     "ogl": "^1.0.11",
     "vue": "^3.5.17",
     "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
   }
 }
