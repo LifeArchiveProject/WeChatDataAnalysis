@@ -23,17 +23,17 @@ logger = get_logger(__name__)
 
 
 # 运行时输出目录（桌面端可通过 WECHAT_TOOL_DATA_DIR 指向可写目录）
-_OUTPUT_DATABASES_DIR = get_output_databases_dir()
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 
 
 def _list_decrypted_accounts() -> list[str]:
     """列出已解密输出的账号目录名（仅保留包含 session.db + contact.db 的账号）"""
-    if not _OUTPUT_DATABASES_DIR.exists():
+    output_db_dir = get_output_databases_dir()
+    if not output_db_dir.exists():
         return []
 
     accounts: list[str] = []
-    for p in _OUTPUT_DATABASES_DIR.iterdir():
+    for p in output_db_dir.iterdir():
         if not p.is_dir():
             continue
         if (p / "session.db").exists() and (p / "contact.db").exists():
@@ -45,6 +45,7 @@ def _list_decrypted_accounts() -> list[str]:
 
 def _resolve_account_dir(account: Optional[str]) -> Path:
     """解析账号目录，并进行路径安全校验（防止路径穿越）"""
+    output_db_dir = get_output_databases_dir()
     accounts = _list_decrypted_accounts()
     if not accounts:
         raise HTTPException(
@@ -53,8 +54,8 @@ def _resolve_account_dir(account: Optional[str]) -> Path:
         )
 
     selected = account or accounts[0]
-    base = _OUTPUT_DATABASES_DIR.resolve()
-    candidate = (_OUTPUT_DATABASES_DIR / selected).resolve()
+    base = output_db_dir.resolve()
+    candidate = (output_db_dir / selected).resolve()
 
     if candidate != base and base not in candidate.parents:
         raise HTTPException(status_code=400, detail="Invalid account path.")

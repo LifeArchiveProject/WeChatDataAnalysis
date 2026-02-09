@@ -645,6 +645,43 @@ def _extract_xml_tag_or_attr(xml_text: str, name: str) -> str:
     return _extract_xml_attr(xml_text, name)
 
 
+def _parse_system_message_content(raw_text: str) -> str:
+    text = str(raw_text or "").strip()
+    if not text:
+        return "[系统消息]"
+
+    def _clean_system_text(value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            return ""
+
+        nested_content = _extract_xml_tag_text(candidate, "content")
+        if nested_content:
+            candidate = nested_content
+
+        candidate = re.sub(r"<!\[CDATA\[", "", candidate, flags=re.IGNORECASE)
+        candidate = re.sub(r"\]\]>", "", candidate)
+        candidate = re.sub(r"</?[_a-zA-Z0-9]+[^>]*>", "", candidate)
+        candidate = re.sub(r"\s+", " ", candidate).strip()
+        return candidate
+
+    if "revokemsg" in text.lower():
+        replace_msg = _extract_xml_tag_text(text, "replacemsg")
+        cleaned_replace_msg = _clean_system_text(replace_msg)
+        if cleaned_replace_msg:
+            return cleaned_replace_msg
+
+        revoke_msg = _extract_xml_tag_text(text, "revokemsg")
+        cleaned_revoke_msg = _clean_system_text(revoke_msg)
+        if cleaned_revoke_msg:
+            return cleaned_revoke_msg
+
+        return "撤回了一条消息"
+
+    content_text = _clean_system_text(text)
+    return content_text or "[系统消息]"
+
+
 def _extract_refermsg_block(xml_text: str) -> str:
     if not xml_text:
         return ""
@@ -1053,11 +1090,7 @@ def _build_latest_message_preview(
 
     content_text = ""
     if local_type == 10000:
-        if "revokemsg" in raw_text:
-            content_text = "撤回了一条消息"
-        else:
-            content_text = re.sub(r"</?[_a-zA-Z0-9]+[^>]*>", "", raw_text)
-            content_text = re.sub(r"\s+", " ", content_text).strip() or "[系统消息]"
+        content_text = _parse_system_message_content(raw_text)
     elif local_type == 244813135921:
         parsed = _parse_app_message(raw_text)
         qt = str(parsed.get("quoteTitle") or "").strip()
@@ -1093,7 +1126,7 @@ def _build_latest_message_preview(
     elif local_type == 43 or local_type == 62:
         content_text = "[视频]"
     elif local_type == 47:
-        content_text = "[表情]"
+        content_text = "[动画表情]"
     else:
         if raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
             content_text = raw_text
@@ -1105,6 +1138,101 @@ def _build_latest_message_preview(
     if sender_prefix and content_text:
         return f"{sender_prefix}: {content_text}"
     return content_text
+
+
+def _extract_group_preview_sender_username(preview_text: str) -> str:
+    text = str(preview_text or "").strip()
+    if not text:
+        return ""
+
+    match = re.match(r"^([^:\s]{1,128}):\s*.+$", text)
+    if not match:
+        return ""
+
+    sender = str(match.group(1) or "").strip()
+    if not sender:
+        return ""
+
+    if sender.startswith("wxid_") or sender.endswith("@chatroom") or ("@" in sender):
+        return sender
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{1,127}", sender):
+        return sender
+    return ""
+
+
+def _normalize_session_preview_text(
+    preview_text: str,
+    *,
+    is_group: bool,
+    sender_display_names: Optional[dict[str, str]] = None,
+) -> str:
+    text = re.sub(r"\s+", " ", str(preview_text or "").strip()).strip()
+    if not text:
+        return ""
+
+    text = text.replace("[表情]", "[动画表情]")
+    if (not is_group) or text.startswith("[草稿]"):
+        return text
+
+    match = re.match(r"^([^:\s]{1,128}):\s*(.+)$", text)
+    if not match:
+        return text
+
+    sender_username = str(match.group(1) or "").strip()
+    body = str(match.group(2) or "").strip()
+    if (not sender_username) or (not body):
+        return text
+
+    display_name = str((sender_display_names or {}).get(sender_username) or "").strip()
+    if display_name and display_name != sender_username:
+        return f"{display_name}: {body}"
+    return text
+
+
+def _replace_preview_sender_prefix(preview_text: str, sender_display_name: str) -> str:
+    text = re.sub(r"\s+", " ", str(preview_text or "").strip()).strip()
+    if not text:
+        return ""
+
+    display_name = str(sender_display_name or "").strip()
+    if (not display_name) or text.startswith("[草稿]"):
+        return text
+
+    match = re.match(r"^([^:\n]{1,128}):\s*(.+)$", text)
+    if not match:
+        return text
+
+    body = re.sub(r"\s+", " ", str(match.group(2) or "").strip()).strip()
+    if not body:
+        return text
+    return f"{display_name}: {body}"
+
+
+def _build_group_sender_display_name_map(
+    contact_db_path: Path,
+    previews: dict[str, str],
+) -> dict[str, str]:
+    group_sender_usernames: set[str] = set()
+    for conv_username, preview_text in previews.items():
+        if not str(conv_username or "").endswith("@chatroom"):
+            continue
+        sender_username = _extract_group_preview_sender_username(preview_text)
+        if sender_username:
+            group_sender_usernames.add(sender_username)
+
+    if not group_sender_usernames:
+        return {}
+
+    display_names: dict[str, str] = {}
+    sender_contact_rows = _load_contact_rows(contact_db_path, list(group_sender_usernames))
+    for sender_username in group_sender_usernames:
+        row = sender_contact_rows.get(sender_username)
+        if row is None:
+            continue
+        display_name = _pick_display_name(row, sender_username)
+        if display_name and display_name != sender_username:
+            display_names[sender_username] = display_name
+    return display_names
 
 
 def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> dict[str, str]:
@@ -1338,6 +1466,208 @@ def _load_contact_rows(contact_db_path: Path, usernames: list[str]) -> dict[str,
         conn.close()
 
 
+def _load_group_nickname_map_from_contact_db(
+    contact_db_path: Path,
+    chatroom_id: str,
+    sender_usernames: list[str],
+) -> dict[str, str]:
+    """Best-effort mapping for group member nickname (aka group card) from contact.db.
+
+    WeChat stores per-chatroom member nicknames in `contact.db.chat_room.ext_buffer` as a protobuf-like blob.
+    This helper parses that blob and returns { sender_username -> group_nickname } for the requested senders.
+
+    Notes:
+    - Best-effort: never raises; returns {} on any failure.
+    - Only resolves usernames included in `sender_usernames` to keep parsing cheap.
+    """
+
+    chatroom = str(chatroom_id or "").strip()
+    if not chatroom.endswith("@chatroom"):
+        return {}
+
+    targets = list(dict.fromkeys([str(x or "").strip() for x in sender_usernames if str(x or "").strip()]))
+    if not targets:
+        return {}
+    target_set = set(targets)
+
+    def decode_varint(raw: bytes, offset: int) -> tuple[Optional[int], int]:
+        value = 0
+        shift = 0
+        pos = int(offset)
+        n = len(raw)
+        while pos < n:
+            byte = raw[pos]
+            pos += 1
+            value |= (byte & 0x7F) << shift
+            if (byte & 0x80) == 0:
+                return value, pos
+            shift += 7
+            if shift > 63:
+                return None, n
+        return None, n
+
+    def iter_fields(raw: bytes):
+        idx = 0
+        n = len(raw)
+        while idx < n:
+            tag, idx_next = decode_varint(raw, idx)
+            if tag is None or idx_next <= idx:
+                break
+            idx = idx_next
+            field_no = int(tag) >> 3
+            wire_type = int(tag) & 0x7
+
+            if wire_type == 0:
+                _, idx_next = decode_varint(raw, idx)
+                if idx_next <= idx:
+                    break
+                idx = idx_next
+                continue
+
+            if wire_type == 2:
+                size, idx_next = decode_varint(raw, idx)
+                if size is None or idx_next <= idx:
+                    break
+                idx = idx_next
+                end = idx + int(size)
+                if end > n:
+                    break
+                chunk = raw[idx:end]
+                idx = end
+                yield field_no, wire_type, chunk
+                continue
+
+            if wire_type == 1:
+                idx += 8
+                continue
+            if wire_type == 5:
+                idx += 4
+                continue
+            break
+
+    def is_strong_username_hint(s: str) -> bool:
+        v = str(s or "").strip()
+        return v.startswith("wxid_") or v.endswith("@chatroom") or v.startswith("gh_") or ("@" in v)
+
+    def looks_like_username(s: str) -> bool:
+        v = str(s or "").strip()
+        if not v:
+            return False
+        if is_strong_username_hint(v):
+            return True
+        # Common alias-style WeChat IDs are ASCII-ish and do not contain whitespace.
+        if len(v) < 6 or len(v) > 32:
+            return False
+        if re.search(r"\s", v):
+            return False
+        if not re.match(r"^[A-Za-z][A-Za-z0-9_-]+$", v):
+            return False
+        if v.isdigit():
+            return False
+        return True
+
+    def pick_display(strings: list[tuple[int, str]], target: str) -> str:
+        best_score = -1
+        best = ""
+        for i, (fno, value) in enumerate(strings):
+            v = str(value or "").strip()
+            if (not v) or v == target:
+                continue
+            if is_strong_username_hint(v):
+                continue
+            if "\n" in v or "\r" in v:
+                continue
+            if len(v) > 64:
+                continue
+
+            score = 0
+            if int(fno) == 2:
+                score += 100
+            if not looks_like_username(v):
+                score += 20
+            score += max(0, 32 - len(v))
+            # Stable tie-breaker: prefer earlier appearance.
+            score = score * 1000 - i
+            if score > best_score:
+                best_score = score
+                best = v
+        return best
+
+    try:
+        conn = sqlite3.connect(str(contact_db_path))
+    except Exception:
+        return {}
+
+    try:
+        row = conn.execute(
+            "SELECT ext_buffer FROM chat_room WHERE username = ? LIMIT 1",
+            (chatroom,),
+        ).fetchone()
+        if row is None:
+            return {}
+
+        ext = row[0]
+        if ext is None:
+            return {}
+        if isinstance(ext, memoryview):
+            ext_buf = ext.tobytes()
+        elif isinstance(ext, (bytes, bytearray)):
+            ext_buf = bytes(ext)
+        else:
+            return {}
+        if not ext_buf:
+            return {}
+
+        out: dict[str, str] = {}
+        for _, wire_type, chunk in iter_fields(ext_buf):
+            if wire_type != 2 or (not chunk):
+                continue
+
+            # Parse submessage and collect UTF-8 strings.
+            strings: list[tuple[int, str]] = []
+            try:
+                for sfno, swire, sval in iter_fields(chunk):
+                    if swire != 2:
+                        continue
+                    if not sval:
+                        continue
+                    if len(sval) > 256:
+                        continue
+                    try:
+                        txt = bytes(sval).decode("utf-8", errors="strict")
+                    except Exception:
+                        continue
+                    txt = txt.strip()
+                    if not txt:
+                        continue
+                    strings.append((int(sfno), txt))
+            except Exception:
+                continue
+
+            if not strings:
+                continue
+
+            present = [v for _, v in strings if v in target_set and v not in out]
+            if not present:
+                continue
+
+            for target in present:
+                disp = pick_display(strings, target)
+                if disp:
+                    out[target] = disp
+            if len(out) >= len(target_set):
+                break
+
+        return out
+    except Exception:
+        return {}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _load_usernames_by_display_names(contact_db_path: Path, names: list[str]) -> dict[str, str]:
     """Best-effort mapping from display name -> username using contact.db.
 
@@ -1515,11 +1845,7 @@ def _row_to_search_hit(
 
     if local_type == 10000:
         render_type = "system"
-        if "revokemsg" in raw_text:
-            content_text = "撤回了一条消息"
-        else:
-            content_text = re.sub(r"</?[_a-zA-Z0-9]+[^>]*>", "", raw_text)
-            content_text = re.sub(r"\s+", " ", content_text).strip() or "[系统消息]"
+        content_text = _parse_system_message_content(raw_text)
     elif local_type == 49:
         parsed = _parse_app_message(raw_text)
         render_type = str(parsed.get("renderType") or "text")
