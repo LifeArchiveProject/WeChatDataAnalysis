@@ -242,14 +242,20 @@
               @click="selectContact(contact)">
               <div class="flex items-center space-x-3 w-full">
                 <!-- 联系人头像 -->
-                <div class="w-[calc(45px/var(--dpr))] h-[calc(45px/var(--dpr))] rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
-                  <div v-if="contact.avatar" class="w-full h-full">
-                    <img :src="contact.avatar" :alt="contact.name" class="w-full h-full object-cover" referrerpolicy="no-referrer" @error="onAvatarError($event, contact)">
+                <div class="relative flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
+                  <div class="w-[calc(45px/var(--dpr))] h-[calc(45px/var(--dpr))] rounded-md overflow-hidden bg-gray-300">
+                    <div v-if="contact.avatar" class="w-full h-full">
+                      <img :src="contact.avatar" :alt="contact.name" class="w-full h-full object-cover" referrerpolicy="no-referrer" @error="onAvatarError($event, contact)">
+                    </div>
+                    <div v-else class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
+                      :style="{ backgroundColor: contact.avatarColor || '#4B5563' }">
+                      {{ contact.name.charAt(0) }}
+                    </div>
                   </div>
-                  <div v-else class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
-                    :style="{ backgroundColor: contact.avatarColor || '#4B5563' }">
-                    {{ contact.name.charAt(0) }}
-                  </div>
+                  <span
+                    v-if="contact.unreadCount > 0"
+                    class="absolute z-10 -top-[calc(4px/var(--dpr))] -right-[calc(4px/var(--dpr))] w-[calc(10px/var(--dpr))] h-[calc(10px/var(--dpr))] bg-[#ed4d4d] rounded-full"
+                  ></span>
                 </div>
                 
                 <!-- 联系人信息 -->
@@ -257,13 +263,12 @@
                   <div class="flex items-center justify-between">
                     <h3 class="text-sm font-medium text-gray-900 truncate" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</h3>
                     <div class="flex items-center flex-shrink-0 ml-2">
-                      <span v-if="contact.unreadCount > 0" class="text-[10px] text-white bg-red-500 rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center mr-2">
-                        {{ contact.unreadCount > 99 ? '99+' : contact.unreadCount }}
-                      </span>
                       <span class="text-xs text-gray-500">{{ contact.lastMessageTime }}</span>
                     </div>
                   </div>
-                  <p class="text-xs text-gray-500 truncate mt-0.5 leading-tight" :class="{ 'privacy-blur': privacyMode }">{{ contact.lastMessage }}</p>
+                  <p class="text-xs text-gray-500 truncate mt-0.5 leading-tight" :class="{ 'privacy-blur': privacyMode }">
+                    {{ contact.unreadCount > 0 ? `[${contact.unreadCount > 99 ? '99+' : contact.unreadCount}条] ` : '' }}{{ contact.lastMessage }}
+                  </p>
                 </div>
               </div>
             </div>
@@ -616,15 +621,15 @@
                         <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px">
                       </span>
                     </div>
-                    <div
-                      v-if="message.quoteTitle || message.quoteContent"
-                      class="mt-[5px] px-2 text-xs text-neutral-600 rounded max-w-[404px] max-h-[61px] flex items-center bg-[#e1e1e1]">
-                      <div class="py-2 min-w-0 w-full">
-                        <div v-if="isQuotedVoice(message)" class="flex items-center gap-1 min-w-0">
-                          <span v-if="message.quoteTitle" class="truncate flex-shrink-0">{{ message.quoteTitle }}:</span>
-                          <button
-                            type="button"
-                            class="flex items-center gap-1 min-w-0 hover:opacity-80"
+                      <div
+                        v-if="message.quoteTitle || message.quoteContent"
+                       class="mt-[5px] px-2 text-xs text-neutral-600 rounded max-w-[404px] max-h-[65px] overflow-hidden flex items-start bg-[#e1e1e1]">
+                       <div class="py-2 min-w-0 flex-1">
+                         <div v-if="isQuotedVoice(message)" class="flex items-center gap-1 min-w-0">
+                           <span v-if="message.quoteTitle" class="truncate flex-shrink-0">{{ message.quoteTitle }}:</span>
+                           <button
+                             type="button"
+                             class="flex items-center gap-1 min-w-0 hover:opacity-80"
                             :disabled="!message.quoteVoiceUrl"
                             :class="!message.quoteVoiceUrl ? 'opacity-60 cursor-not-allowed' : ''"
                             @click.stop="message.quoteVoiceUrl && playQuoteVoice(message)"
@@ -647,13 +652,35 @@
                             :ref="el => setVoiceRef(getQuoteVoiceId(message), el)"
                             :src="message.quoteVoiceUrl"
                             preload="none"
-                            class="hidden"
-                          ></audio>
-                        </div>
-                        <div v-else class="line-clamp-2">{{ message.quoteTitle ? (message.quoteTitle + ': ') : '' }}{{ message.quoteContent }}</div>
-                      </div>
-                    </div>
-                  </template>
+                             class="hidden"
+                           ></audio>
+                         </div>
+                         <div v-else class="line-clamp-2">
+                           <span v-if="message.quoteTitle">{{ message.quoteTitle }}:</span>
+                           <span
+                             v-if="message.quoteContent && !(isQuotedImage(message) && message.quoteTitle && message.quoteImageUrl && !message._quoteImageError)"
+                             :class="message.quoteTitle ? 'ml-1' : ''"
+                           >
+                             {{ message.quoteContent }}
+                           </span>
+                         </div>
+                       </div>
+                       <div
+                         v-if="isQuotedImage(message) && message.quoteImageUrl && !message._quoteImageError"
+                         class="ml-2 my-2 flex-shrink-0 w-[45px] h-[45px] rounded overflow-hidden cursor-pointer"
+                         @click.stop="openImagePreview(message.quoteImageUrl)"
+                       >
+                         <img
+                           :src="message.quoteImageUrl"
+                           alt="引用图片"
+                           class="w-full h-full object-contain"
+                           loading="lazy"
+                           decoding="async"
+                           @error="onQuoteImageError(message)"
+                         />
+                       </div>
+                     </div>
+                   </template>
                   <!-- 合并转发聊天记录（Chat History） -->
                   <div
                     v-else-if="message.renderType === 'chatHistory'"
@@ -3464,6 +3491,19 @@ const isQuotedVoice = (message) => {
   return false
 }
 
+const isQuotedImage = (message) => {
+  const t = String(message?.quoteType || '').trim()
+  if (t === '3') return true
+  if (String(message?.quoteContent || '').trim() === '[图片]' && String(message?.quoteServerId || '').trim()) return true
+  return false
+}
+
+const onQuoteImageError = (message) => {
+  try {
+    if (message) message._quoteImageError = true
+  } catch {}
+}
+
 const playQuoteVoice = (message) => {
   playVoice({ id: getQuoteVoiceId(message) })
 }
@@ -4665,6 +4705,23 @@ const normalizeMessage = (msg) => {
     }
   }
 
+  const quoteServerIdStr = String(msg.quoteServerId || '').trim()
+  const quoteTypeStr = String(msg.quoteType || '').trim()
+  const quoteVoiceUrl = quoteServerIdStr
+    ? `${mediaBase}/api/chat/media/voice?account=${encodeURIComponent(selectedAccount.value || '')}&server_id=${encodeURIComponent(quoteServerIdStr)}`
+    : ''
+  const quoteImageUrl = (() => {
+    if (!quoteServerIdStr) return ''
+    if (quoteTypeStr !== '3' && String(msg.quoteContent || '').trim() !== '[图片]') return ''
+    const convUsername = String(selectedContact.value?.username || '').trim()
+    const parts = [
+      `account=${encodeURIComponent(selectedAccount.value || '')}`,
+      `server_id=${encodeURIComponent(quoteServerIdStr)}`,
+      convUsername ? `username=${encodeURIComponent(convUsername)}` : ''
+    ].filter(Boolean)
+    return parts.length ? `${mediaBase}/api/chat/media/image?${parts.join('&')}` : ''
+  })()
+
   return {
     id: msg.id,
     serverId: msg.serverId || 0,
@@ -4701,12 +4758,12 @@ const normalizeMessage = (msg) => {
     quoteTitle: msg.quoteTitle || '',
     quoteContent,
     quoteUsername: msg.quoteUsername || '',
-    quoteServerId: String(msg.quoteServerId || '').trim(),
-    quoteType: String(msg.quoteType || '').trim(),
+    quoteServerId: quoteServerIdStr,
+    quoteType: quoteTypeStr,
     quoteVoiceLength: msg.quoteVoiceLength || '',
-    quoteVoiceUrl: String(msg.quoteServerId || '').trim()
-      ? `${mediaBase}/api/chat/media/voice?account=${encodeURIComponent(selectedAccount.value || '')}&server_id=${encodeURIComponent(String(msg.quoteServerId || '').trim())}`
-      : '',
+    quoteVoiceUrl,
+    quoteImageUrl: quoteImageUrl || '',
+    _quoteImageError: false,
     amount: msg.amount || '',
     coverUrl: msg.coverUrl || '',
     fileSize: msg.fileSize || '',
