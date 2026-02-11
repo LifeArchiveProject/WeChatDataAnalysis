@@ -236,7 +236,13 @@
           <template v-else>
             <div v-for="contact in filteredContacts" :key="contact.id"
               class="px-3 cursor-pointer transition-colors duration-150 border-b border-gray-100 h-[calc(80px/var(--dpr))] flex items-center"
-              :class="selectedContact?.id === contact.id ? 'bg-[#DEDEDE] hover:bg-[#d3d3d3]' : 'hover:bg-[#eaeaea]'"
+              :class="contact.isTop
+                ? (selectedContact?.id === contact.id
+                    ? 'bg-[#D2D2D2] hover:bg-[#C7C7C7]'
+                    : 'bg-[#EAEAEA] hover:bg-[#DEDEDE]')
+                : (selectedContact?.id === contact.id
+                    ? 'bg-[#DEDEDE] hover:bg-[#d3d3d3]'
+                    : 'hover:bg-[#eaeaea]')"
               @click="selectContact(contact)">
               <div class="flex items-center space-x-3 w-full">
                 <!-- 联系人头像 -->
@@ -501,6 +507,7 @@
                     :fromAvatar="message.fromAvatar"
                     :from="message.from"
                     :isSent="message.isSent"
+                    :variant="message.linkCardVariant || 'default'"
                   />
                   <div v-else-if="message.renderType === 'file'"
                     class="wechat-redpacket-card wechat-special-card wechat-file-card msg-radius"
@@ -651,25 +658,55 @@
                              class="hidden"
                            ></audio>
                          </div>
-                         <div v-else class="line-clamp-2">
-                           <span v-if="message.quoteTitle">{{ message.quoteTitle }}:</span>
-                           <span
-                             v-if="message.quoteContent && !(isQuotedImage(message) && message.quoteTitle && message.quoteImageUrl && !message._quoteImageError)"
-                             :class="message.quoteTitle ? 'ml-1' : ''"
-                           >
-                             {{ message.quoteContent }}
-                           </span>
+                         <div v-else class="min-w-0 flex items-start">
+                           <template v-if="isQuotedLink(message)">
+                             <div class="line-clamp-2 min-w-0 flex-1">
+                               <span v-if="message.quoteTitle">{{ message.quoteTitle }}:</span>
+                               <span
+                                 v-if="getQuotedLinkText(message)"
+                                 :class="message.quoteTitle ? 'ml-1' : ''"
+                               >
+                                 🔗 {{ getQuotedLinkText(message) }}
+                               </span>
+                             </div>
+                           </template>
+                           <template v-else>
+                             <div class="line-clamp-2 min-w-0 flex-1">
+                               <span v-if="message.quoteTitle">{{ message.quoteTitle }}:</span>
+                               <span
+                                 v-if="message.quoteContent && !(isQuotedImage(message) && message.quoteTitle && message.quoteImageUrl && !message._quoteImageError)"
+                                 :class="message.quoteTitle ? 'ml-1' : ''"
+                               >
+                                 {{ message.quoteContent }}
+                               </span>
+                             </div>
+                           </template>
                          </div>
                        </div>
                        <div
-                         v-if="isQuotedImage(message) && message.quoteImageUrl && !message._quoteImageError"
-                         class="ml-2 my-2 flex-shrink-0 w-[45px] h-[45px] rounded overflow-hidden cursor-pointer"
+                         v-if="isQuotedLink(message) && message.quoteThumbUrl && !message._quoteThumbError"
+                         class="ml-2 my-2 flex-shrink-0 max-w-[98px] max-h-[49px] overflow-hidden flex items-center justify-center cursor-pointer"
+                         @click.stop="openImagePreview(message.quoteThumbUrl)"
+                       >
+                         <img
+                           :src="message.quoteThumbUrl"
+                           alt="引用链接缩略图"
+                           class="max-h-[49px] w-auto max-w-[98px] object-contain"
+                           loading="lazy"
+                           decoding="async"
+                           referrerpolicy="no-referrer"
+                           @error="onQuoteThumbError(message)"
+                         />
+                       </div>
+                       <div
+                         v-if="!isQuotedLink(message) && isQuotedImage(message) && message.quoteImageUrl && !message._quoteImageError"
+                         class="ml-2 my-2 flex-shrink-0 max-w-[98px] max-h-[49px] overflow-hidden flex items-center justify-center cursor-pointer"
                          @click.stop="openImagePreview(message.quoteImageUrl)"
                        >
                          <img
                            :src="message.quoteImageUrl"
                            alt="引用图片"
-                           class="w-full h-full object-contain"
+                           class="max-h-[49px] w-auto max-w-[98px] object-contain"
                            loading="lazy"
                            decoding="async"
                            @error="onQuoteImageError(message)"
@@ -3226,9 +3263,28 @@ const isQuotedImage = (message) => {
   return false
 }
 
+const isQuotedLink = (message) => {
+  const t = String(message?.quoteType || '').trim()
+  if (t === '49') return true
+  return /^\[链接\]\s*/.test(String(message?.quoteContent || '').trim())
+}
+
+const getQuotedLinkText = (message) => {
+  const raw = String(message?.quoteContent || '').trim()
+  if (!raw) return ''
+  const stripped = raw.replace(/^\[链接\]\s*/u, '').trim()
+  return stripped || raw
+}
+
 const onQuoteImageError = (message) => {
   try {
     if (message) message._quoteImageError = true
+  } catch {}
+}
+
+const onQuoteThumbError = (message) => {
+  try {
+    if (message) message._quoteThumbError = true
   } catch {}
 }
 
@@ -3969,7 +4025,7 @@ const getTransferTitle = (message) => {
   if (message.transferStatus) return message.transferStatus
   switch (paySubType) {
     case '1': return '转账'
-    case '3': return message.isSent ? '已收款' : '已被接收'
+    case '3': return message.isSent ? '已被接收' : '已收款'
     case '8': return '发起转账'
     case '4': return '已退还'
     case '9': return '已被退还'
@@ -4136,6 +4192,7 @@ const loadSessionsForSelectedAccount = async () => {
     lastMessageTime: s.lastMessageTime || '',
     unreadCount: s.unreadCount || 0,
     isGroup: !!s.isGroup,
+    isTop: !!s.isTop,
     username: s.username
   }))
 
@@ -4209,6 +4266,7 @@ const refreshSessionsForSelectedAccount = async ({ sourceOverride } = {}) => {
     lastMessageTime: s.lastMessageTime || '',
     unreadCount: s.unreadCount || 0,
     isGroup: !!s.isGroup,
+    isTop: !!s.isTop,
     username: s.username
   }))
 
@@ -4401,6 +4459,19 @@ const normalizeMessage = (msg) => {
     ].filter(Boolean)
     return parts.length ? `${mediaBase}/api/chat/media/image?${parts.join('&')}` : ''
   })()
+  const quoteThumbUrl = (() => {
+    const raw = isUsableMediaUrl(msg.quoteThumbUrl) ? normalizeMaybeUrl(msg.quoteThumbUrl) : ''
+    if (!raw) return ''
+    if (/^\/api\/chat\/media\//i.test(raw) || /^blob:/i.test(raw) || /^data:/i.test(raw)) return raw
+    if (!/^https?:\/\//i.test(raw)) return raw
+    try {
+      const host = new URL(raw).hostname.toLowerCase()
+      if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
+        return `${mediaBase}/api/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
+      }
+    } catch {}
+    return raw
+  })()
 
   return {
     id: msg.id,
@@ -4443,17 +4514,22 @@ const normalizeMessage = (msg) => {
     quoteVoiceLength: msg.quoteVoiceLength || '',
     quoteVoiceUrl,
     quoteImageUrl: quoteImageUrl || '',
+    quoteThumbUrl: quoteThumbUrl || '',
     _quoteImageError: false,
+    _quoteThumbError: false,
     amount: msg.amount || '',
     coverUrl: msg.coverUrl || '',
     fileSize: msg.fileSize || '',
     fileMd5: msg.fileMd5 || '',
     paySubType: msg.paySubType || '',
     transferStatus: msg.transferStatus || '',
-    transferReceived: msg.paySubType === '3' || msg.transferStatus === '已收款',
+    transferReceived: msg.paySubType === '3' || msg.transferStatus === '已收款' || msg.transferStatus === '已被接收',
     voiceUrl: normalizedVoiceUrl || '',
     voiceDuration: msg.voiceLength || msg.voiceDuration || '',
     preview: normalizedLinkPreviewUrl || '',
+    linkType: String(msg.linkType || '').trim(),
+    linkStyle: String(msg.linkStyle || '').trim(),
+    linkCardVariant: String(msg.linkStyle || '').trim() === 'cover' ? 'cover' : 'default',
     from: String(msg.from || '').trim(),
     fromUsername,
     fromAvatar,
@@ -5331,7 +5407,8 @@ const LinkCard = defineComponent({
     preview: { type: String, default: '' },
     fromAvatar: { type: String, default: '' },
     from: { type: String, default: '' },
-    isSent: { type: Boolean, default: false }
+    isSent: { type: Boolean, default: false },
+    variant: { type: String, default: 'default' }
   },
   setup(props) {
     const getFromText = () => {
@@ -5356,6 +5433,65 @@ const LinkCard = defineComponent({
         return t ? (Array.from(t)[0] || '') : ''
       })()
       const fromAvatarUrl = String(props.fromAvatar || '').trim()
+      const isCoverVariant = String(props.variant || '').trim() === 'cover'
+
+      if (isCoverVariant) {
+        const fromRow = h('div', { class: 'wechat-link-cover-from' }, [
+          h('div', { class: 'wechat-link-cover-from-avatar', 'aria-hidden': 'true' }, [
+            fromAvatarText || '\u200B',
+            fromAvatarUrl ? h('img', {
+              src: fromAvatarUrl,
+              alt: '',
+              class: 'wechat-link-cover-from-avatar-img',
+              referrerpolicy: 'no-referrer',
+              onError: (e) => { try { e?.target && (e.target.style.display = 'none') } catch {} }
+            }) : null
+          ].filter(Boolean)),
+          h('div', { class: 'wechat-link-cover-from-name' }, fromText || '\u200B')
+        ])
+
+        return h(
+          'a',
+          {
+            href: props.href,
+            target: '_blank',
+            rel: 'noreferrer',
+            class: [
+              'wechat-link-card-cover',
+              'wechat-special-card',
+              'msg-radius',
+              props.isSent ? 'wechat-special-sent-side' : ''
+            ].filter(Boolean).join(' '),
+            style: {
+              width: '137px',
+              minWidth: '137px',
+              maxWidth: '137px',
+              display: 'flex',
+              flexDirection: 'column',
+              boxSizing: 'border-box',
+              flex: '0 0 auto',
+              background: '#fff',
+              border: 'none',
+              boxShadow: 'none',
+              textDecoration: 'none',
+              outline: 'none'
+            }
+          },
+          [
+            props.preview ? h('div', { class: 'wechat-link-cover-image-wrap' }, [
+              h('img', {
+                src: props.preview,
+                alt: props.heading || '链接封面',
+                class: 'wechat-link-cover-image',
+                referrerpolicy: 'no-referrer'
+              }),
+              fromRow,
+            ]) : fromRow,
+            h('div', { class: 'wechat-link-cover-title' }, props.heading || props.href)
+          ].filter(Boolean)
+        )
+      }
+
       return h(
         'a',
         {
@@ -5930,11 +6066,11 @@ const LinkCard = defineComponent({
 
 /* 已领取的转账样式 */
 .wechat-transfer-received {
-  background: #f8e2c6;
+  background: #FDCE9D;
 }
 
 .wechat-transfer-received::after {
-  background: #f8e2c6;
+  background: #FDCE9D;
 }
 
 .wechat-transfer-received .wechat-transfer-amount,
@@ -6256,6 +6392,111 @@ const LinkCard = defineComponent({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 链接封面卡片（170x230 图 + 60 底栏） */
+:deep(.wechat-link-card-cover) {
+  width: 137px;
+  min-width: 137px;
+  max-width: 137px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  border: none;
+  box-shadow: none;
+  outline: none;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+}
+
+:deep(.wechat-link-card-cover:hover) {
+  background: #f5f5f5;
+}
+
+:deep(.wechat-link-cover-image-wrap) {
+  width: 137px;
+  height: 180px;
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px 4px 0 0;
+  background: #f2f2f2;
+  flex-shrink: 0;
+}
+
+:deep(.wechat-link-cover-image) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+
+/* 仅公众号封面卡片去掉菱形尖角，其它消息保持原样 */
+:deep(.wechat-link-card-cover.wechat-special-card)::after {
+  content: none !important;
+}
+
+:deep(.wechat-link-cover-from) {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: transparent;
+  flex-shrink: 0;
+}
+
+:deep(.wechat-link-cover-from-avatar) {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #111;
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+:deep(.wechat-link-cover-from-avatar-img) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+:deep(.wechat-link-cover-from-name) {
+  font-size: 12px;
+  color: #f3f3f3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:deep(.wechat-link-cover-title) {
+  height: 50px;
+  padding: 7px 10px 0;
+  box-sizing: border-box;
+  font-size: 12px;
+  line-height: 1.24;
+  color: #1a1a1a;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  flex-shrink: 0;
 }
 
 /* 隐私模式模糊效果 */

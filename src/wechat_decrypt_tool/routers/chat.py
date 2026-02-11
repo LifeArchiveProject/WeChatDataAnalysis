@@ -92,6 +92,11 @@ _REALTIME_SYNC_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 _REALTIME_SYNC_ALL_LOCKS: dict[str, threading.Lock] = {}
 
 
+def _is_hex_md5(value: Any) -> bool:
+    s = str(value or "").strip().lower()
+    return len(s) == 32 and all(c in "0123456789abcdef" for c in s)
+
+
 def _avatar_url_unified(
     *,
     account_dir: Path,
@@ -785,6 +790,82 @@ def _load_session_last_message_times(conn: sqlite3.Connection, usernames: list[s
                 ts = 0
             out[u] = int(ts or 0)
     return out
+
+
+def _session_row_get(row: Any, key: str, default: Any = None) -> Any:
+    try:
+        if isinstance(row, sqlite3.Row):
+            return row[key]
+    except Exception:
+        return default
+    try:
+        return row.get(key, default)
+    except Exception:
+        return default
+
+
+def _contact_flag_is_top(flag_value: Any) -> bool:
+    try:
+        flag_int = int(flag_value)
+    except Exception:
+        return False
+    if flag_int < 0:
+        flag_int &= (1 << 64) - 1
+    return bool((flag_int >> 11) & 1)
+
+
+def _load_contact_top_flags(contact_db_path: Path, usernames: list[str]) -> dict[str, bool]:
+    uniq = list(dict.fromkeys([str(u or "").strip() for u in usernames if str(u or "").strip()]))
+    if not uniq:
+        return {}
+    if not contact_db_path.exists():
+        return {}
+
+    out: dict[str, bool] = {}
+    conn = sqlite3.connect(str(contact_db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        def has_flag_column(table: str) -> bool:
+            try:
+                rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            except Exception:
+                return False
+            cols: set[str] = set()
+            for r in rows:
+                try:
+                    cols.add(str(r["name"] if isinstance(r, sqlite3.Row) else r[1]).strip().lower())
+                except Exception:
+                    continue
+            return ("username" in cols) and ("flag" in cols)
+
+        chunk_size = 900
+        for table in ("contact", "stranger"):
+            if not has_flag_column(table):
+                continue
+
+            for i in range(0, len(uniq), chunk_size):
+                chunk = uniq[i : i + chunk_size]
+                placeholders = ",".join(["?"] * len(chunk))
+                try:
+                    rows = conn.execute(
+                        f"SELECT username, flag FROM {table} WHERE username IN ({placeholders})",
+                        chunk,
+                    ).fetchall()
+                except Exception:
+                    continue
+
+                for r in rows:
+                    username = str(_session_row_get(r, "username", "") or "").strip()
+                    if not username:
+                        continue
+                    is_top = _contact_flag_is_top(_session_row_get(r, "flag", 0))
+                    if is_top:
+                        out[username] = True
+                    else:
+                        out.setdefault(username, False)
+        return out
+    finally:
+        conn.close()
 
 
 @router.post("/api/chat/realtime/sync", summary="实时消息同步到解密库（按会话增量）")
@@ -2251,7 +2332,7 @@ def _append_full_messages_from_rows(
         if is_group and sender_prefix and (not sender_username):
             sender_username = sender_prefix
 
-        if is_group and (raw_text.startswith("<") or raw_text.startswith('"<')):
+        if is_group and (not sender_username) and (raw_text.startswith("<") or raw_text.startswith('"<')):
             xml_sender = _extract_sender_from_group_xml(raw_text)
             if xml_sender:
                 sender_username = xml_sender
@@ -2287,6 +2368,9 @@ def _append_full_messages_from_rows(
         quote_username = ""
         quote_title = ""
         quote_content = ""
+        quote_thumb_url = ""
+        link_type = ""
+        link_style = ""
         quote_server_id = ""
         quote_type = ""
         quote_voice_length = ""
@@ -2313,6 +2397,9 @@ def _append_full_messages_from_rows(
             record_item = str(parsed.get("recordItem") or "")
             quote_title = str(parsed.get("quoteTitle") or "")
             quote_content = str(parsed.get("quoteContent") or "")
+            quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
+            link_type = str(parsed.get("linkType") or "")
+            link_style = str(parsed.get("linkStyle") or "")
             quote_username = str(parsed.get("quoteUsername") or "")
             quote_server_id = str(parsed.get("quoteServerId") or "")
             quote_type = str(parsed.get("quoteType") or "")
@@ -2356,6 +2443,9 @@ def _append_full_messages_from_rows(
             content_text = str(parsed.get("content") or "[引用消息]")
             quote_title = str(parsed.get("quoteTitle") or "")
             quote_content = str(parsed.get("quoteContent") or "")
+            quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
+            link_type = str(parsed.get("linkType") or "")
+            link_style = str(parsed.get("linkStyle") or "")
             quote_username = str(parsed.get("quoteUsername") or "")
             quote_server_id = str(parsed.get("quoteServerId") or "")
             quote_type = str(parsed.get("quoteType") or "")
@@ -2468,6 +2558,20 @@ def _append_full_messages_from_rows(
                     local_id=local_id,
                     create_time=create_time,
                 )
+
+            # Some WeChat builds store the on-disk thumbnail basename (32-hex) in packed_info_data (protobuf),
+            # while the message XML only carries a long cdnthumburl file_id. Prefer packed_info_data when present.
+            if not _is_hex_md5(video_thumb_md5):
+                try:
+                    packed_val = r["packed_info_data"]
+                except Exception:
+                    try:
+                        packed_val = r.get("packed_info_data")  # type: ignore[attr-defined]
+                    except Exception:
+                        packed_val = None
+                packed_md5 = _extract_md5_from_packed_info(packed_val)
+                if packed_md5:
+                    video_thumb_md5 = packed_md5
             content_text = "[视频]"
         elif local_type == 47:
             render_type = "emoji"
@@ -2527,6 +2631,9 @@ def _append_full_messages_from_rows(
                             record_item = str(parsed.get("recordItem") or record_item)
                             quote_title = str(parsed.get("quoteTitle") or quote_title)
                             quote_content = str(parsed.get("quoteContent") or quote_content)
+                            quote_thumb_url = str(parsed.get("quoteThumbUrl") or quote_thumb_url)
+                            link_type = str(parsed.get("linkType") or link_type)
+                            link_style = str(parsed.get("linkStyle") or link_style)
                             amount = str(parsed.get("amount") or amount)
                             cover_url = str(parsed.get("coverUrl") or cover_url)
                             thumb_url = str(parsed.get("thumbUrl") or thumb_url)
@@ -2578,6 +2685,8 @@ def _append_full_messages_from_rows(
                 "content": content_text,
                 "title": title,
                 "url": url,
+                "linkType": link_type,
+                "linkStyle": link_style,
                 "from": from_name,
                 "fromUsername": from_username,
                 "recordItem": record_item,
@@ -2601,6 +2710,7 @@ def _append_full_messages_from_rows(
                 "quoteVoiceLength": str(quote_voice_length).strip(),
                 "quoteTitle": quote_title,
                 "quoteContent": quote_content,
+                "quoteThumbUrl": quote_thumb_url,
                 "amount": amount,
                 "coverUrl": cover_url,
                 "fileSize": file_size,
@@ -2619,6 +2729,111 @@ def _append_full_messages_from_rows(
             pass
 
 
+def _postprocess_transfer_messages(merged: list[dict[str, Any]]) -> None:
+    # 后处理：关联转账消息的最终状态
+    # 策略：优先使用 transferId 精确匹配，回退到金额+时间窗口匹配
+    # paysubtype 含义：1=不明确 3=已收款 4=对方退回给你 8=发起转账 9=被对方退回 10=已过期
+    #
+    # Windows 微信在部分场景会为同一笔转账记录两条消息：
+    # - paysubtype=1/8：发起/待收款（这里回填为“已被接收”）
+    # - paysubtype=3：收款确认（展示为“已收款”）
+    #
+    # 这两条消息的 isSent 并不能稳定表示“付款方/收款方视角”，因此这里以 transferId 关联结果为准：
+    # - 将原始转账消息（1/8）回填为“已被接收”
+    # - 若同一 transferId 同时存在原始消息与 paysubtype=3 消息，则将 paysubtype=3 的那条校正为“已收款”
+
+    returned_transfer_ids: set[str] = set()  # 退还状态的 transferId
+    received_transfer_ids: set[str] = set()  # 已收款状态的 transferId
+    returned_amounts_with_time: list[tuple[str, int]] = []  # (金额, 时间戳) 用于退还回退匹配
+    received_amounts_with_time: list[tuple[str, int]] = []  # (金额, 时间戳) 用于收款回退匹配
+    pending_transfer_ids: set[str] = set()  # (paysubtype=1/8) 的 transferId，用于识别“收款确认”消息
+
+    for m in merged:
+        if m.get("renderType") != "transfer":
+            continue
+
+        pst = str(m.get("paySubType") or "")
+        tid = str(m.get("transferId") or "").strip()
+        amt = str(m.get("amount") or "")
+        ts = int(m.get("createTime") or 0)
+
+        if tid and pst in ("1", "8"):
+            pending_transfer_ids.add(tid)
+
+        if pst in ("4", "9"):  # 退还状态
+            if tid:
+                returned_transfer_ids.add(tid)
+            if amt:
+                returned_amounts_with_time.append((amt, ts))
+        elif pst == "3":  # 已收款状态
+            if tid:
+                received_transfer_ids.add(tid)
+            if amt:
+                received_amounts_with_time.append((amt, ts))
+
+    backfilled_message_ids: set[str] = set()
+
+    for m in merged:
+        if m.get("renderType") != "transfer":
+            continue
+
+        pst = str(m.get("paySubType") or "")
+        if pst not in ("1", "8"):
+            continue
+
+        tid = str(m.get("transferId") or "").strip()
+        amt = str(m.get("amount") or "")
+        ts = int(m.get("createTime") or 0)
+
+        should_mark_returned = False
+        should_mark_received = False
+
+        # 策略1：精确 transferId 匹配
+        if tid:
+            if tid in returned_transfer_ids:
+                should_mark_returned = True
+            elif tid in received_transfer_ids:
+                should_mark_received = True
+
+        # 策略2：回退到金额+时间窗口匹配（24小时内同金额）
+        if not should_mark_returned and not should_mark_received and amt:
+            for ret_amt, ret_ts in returned_amounts_with_time:
+                if ret_amt == amt and abs(ret_ts - ts) <= 86400:
+                    should_mark_returned = True
+                    break
+            if not should_mark_returned:
+                for rec_amt, rec_ts in received_amounts_with_time:
+                    if rec_amt == amt and abs(rec_ts - ts) <= 86400:
+                        should_mark_received = True
+                        break
+
+        if should_mark_returned:
+            m["paySubType"] = "9"
+            m["transferStatus"] = "已被退还"
+        elif should_mark_received:
+            m["paySubType"] = "3"
+            m["transferStatus"] = "已被接收"
+            mid = str(m.get("id") or "").strip()
+            if mid:
+                backfilled_message_ids.add(mid)
+
+    # 修正收款确认消息：当同一 transferId 同时存在原始转账消息（1/8）与收款消息（3）时，
+    # paysubtype=3 的那条通常是收款确认消息，状态文案应为“已收款”。
+    for m in merged:
+        if m.get("renderType") != "transfer":
+            continue
+        pst = str(m.get("paySubType") or "")
+        if pst != "3":
+            continue
+        tid = str(m.get("transferId") or "").strip()
+        if not tid or tid not in pending_transfer_ids:
+            continue
+        mid = str(m.get("id") or "").strip()
+        if mid and mid in backfilled_message_ids:
+            continue
+        m["transferStatus"] = "已收款"
+
+
 def _postprocess_full_messages(
     *,
     merged: list[dict[str, Any]],
@@ -2631,75 +2846,7 @@ def _postprocess_full_messages(
     contact_db_path: Path,
     head_image_db_path: Path,
 ) -> None:
-    # 后处理：关联转账消息的最终状态
-    # 策略：优先使用 transferId 精确匹配，回退到金额+时间窗口匹配
-    # paysubtype 含义：1=不明确 3=已收款 4=对方退回给你 8=发起转账 9=被对方退回 10=已过期
-
-    # 收集已退还和已收款的转账ID和金额
-    returned_transfer_ids: set[str] = set()  # 退还状态的 transferId
-    received_transfer_ids: set[str] = set()  # 已收款状态的 transferId
-    returned_amounts_with_time: list[tuple[str, int]] = []  # (金额, 时间戳) 用于退还回退匹配
-    received_amounts_with_time: list[tuple[str, int]] = []  # (金额, 时间戳) 用于收款回退匹配
-
-    for m in merged:
-        if m.get("renderType") == "transfer":
-            pst = str(m.get("paySubType") or "")
-            tid = str(m.get("transferId") or "").strip()
-            amt = str(m.get("amount") or "")
-            ts = int(m.get("createTime") or 0)
-
-            if pst in ("4", "9"):  # 退还状态
-                if tid:
-                    returned_transfer_ids.add(tid)
-                if amt:
-                    returned_amounts_with_time.append((amt, ts))
-            elif pst == "3":  # 已收款状态
-                if tid:
-                    received_transfer_ids.add(tid)
-                if amt:
-                    received_amounts_with_time.append((amt, ts))
-
-    # 更新原始转账消息的状态
-    for m in merged:
-        if m.get("renderType") == "transfer":
-            pst = str(m.get("paySubType") or "")
-            # 只更新未确定状态的原始转账消息（paysubtype=1 或 8）
-            if pst in ("1", "8"):
-                tid = str(m.get("transferId") or "").strip()
-                amt = str(m.get("amount") or "")
-                ts = int(m.get("createTime") or 0)
-
-                # 优先检查退还状态（退还优先于收款）
-                should_mark_returned = False
-                should_mark_received = False
-
-                # 策略1：精确 transferId 匹配
-                if tid:
-                    if tid in returned_transfer_ids:
-                        should_mark_returned = True
-                    elif tid in received_transfer_ids:
-                        should_mark_received = True
-
-                # 策略2：回退到金额+时间窗口匹配（24小时内同金额）
-                if not should_mark_returned and not should_mark_received and amt:
-                    for ret_amt, ret_ts in returned_amounts_with_time:
-                        if ret_amt == amt and abs(ret_ts - ts) <= 86400:
-                            should_mark_returned = True
-                            break
-                    if not should_mark_returned:
-                        for rec_amt, rec_ts in received_amounts_with_time:
-                            if rec_amt == amt and abs(rec_ts - ts) <= 86400:
-                                should_mark_received = True
-                                break
-
-                if should_mark_returned:
-                    m["paySubType"] = "9"
-                    m["transferStatus"] = "已被退还"
-                elif should_mark_received:
-                    m["paySubType"] = "3"
-                    # 根据 isSent 判断：发起方显示"已收款"，收款方显示"已被接收"
-                    is_sent = m.get("isSent", False)
-                    m["transferStatus"] = "已收款" if is_sent else "已被接收"
+    _postprocess_transfer_messages(merged)
 
     # Some appmsg payloads provide only `from` (sourcedisplayname) but not `fromUsername` (sourceusername).
     # Recover `fromUsername` via contact.db so the frontend can render the publisher avatar.
@@ -3074,20 +3221,45 @@ def list_chat_sessions(
         finally:
             sconn.close()
 
-    filtered: list[sqlite3.Row] = []
-    usernames: list[str] = []
+    filtered: list[Any] = []
     for r in rows:
-        username = r["username"] or ""
+        username = _session_row_get(r, "username", "") or ""
         if not username:
             continue
-        if not include_hidden and int(r["is_hidden"] or 0) == 1:
+        if not include_hidden and int((_session_row_get(r, "is_hidden", 0) or 0)) == 1:
             continue
         if not _should_keep_session(username, include_official=include_official):
             continue
         filtered.append(r)
-        usernames.append(username)
-        if len(filtered) >= int(limit):
-            break
+
+    raw_usernames = [str(_session_row_get(r, "username", "") or "").strip() for r in filtered]
+    top_flags = _load_contact_top_flags(contact_db_path, raw_usernames)
+
+    def _to_int(v: Any) -> int:
+        try:
+            return int(v or 0)
+        except Exception:
+            return 0
+
+    def _session_sort_key(row: Any) -> tuple[int, int, int]:
+        username = str(_session_row_get(row, "username", "") or "").strip()
+        sort_ts = _to_int(_session_row_get(row, "sort_timestamp", 0))
+        last_ts = _to_int(_session_row_get(row, "last_timestamp", 0))
+        return (
+            1 if bool(top_flags.get(username, False)) else 0,
+            sort_ts,
+            last_ts,
+        )
+
+    filtered.sort(key=_session_sort_key, reverse=True)
+    if len(filtered) > int(limit):
+        filtered = filtered[: int(limit)]
+
+    usernames: list[str] = []
+    for r in filtered:
+        username = str(_session_row_get(r, "username", "") or "").strip()
+        if username:
+            usernames.append(username)
 
     contact_rows = _load_contact_rows(contact_db_path, usernames)
     local_avatar_usernames = _query_head_image_usernames(head_image_db_path, usernames)
@@ -3121,12 +3293,20 @@ def list_chat_sessions(
         need_display = list(dict.fromkeys(need_display))
         need_avatar = list(dict.fromkeys(need_avatar))
         if need_display or need_avatar:
-            wcdb_conn = rt_conn or WCDB_REALTIME.ensure_connected(account_dir)
-            with wcdb_conn.lock:
-                if need_display:
-                    wcdb_display_names = _wcdb_get_display_names(wcdb_conn.handle, need_display)
-                if need_avatar:
-                    wcdb_avatar_urls = _wcdb_get_avatar_urls(wcdb_conn.handle, need_avatar)
+            wcdb_conn = rt_conn
+            if wcdb_conn is None:
+                status = WCDB_REALTIME.get_status(account_dir)
+                can_connect = bool(status.get("dll_present")) and bool(status.get("key_present")) and bool(
+                    status.get("session_db_path")
+                )
+                if can_connect:
+                    wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
+            if wcdb_conn is not None:
+                with wcdb_conn.lock:
+                    if need_display:
+                        wcdb_display_names = _wcdb_get_display_names(wcdb_conn.handle, need_display)
+                    if need_avatar:
+                        wcdb_avatar_urls = _wcdb_get_avatar_urls(wcdb_conn.handle, need_avatar)
     except Exception:
         wcdb_display_names = {}
         wcdb_avatar_urls = {}
@@ -3296,6 +3476,7 @@ def list_chat_sessions(
                 "lastMessageTime": last_time,
                 "unreadCount": int(r["unread_count"] or 0),
                 "isGroup": bool(username.endswith("@chatroom")),
+                "isTop": bool(top_flags.get(str(username or "").strip(), False)),
             }
         )
 
@@ -3439,7 +3620,7 @@ def _collect_chat_messages(
                 if is_group and sender_prefix and (not sender_username):
                     sender_username = sender_prefix
 
-                if is_group and (raw_text.startswith("<") or raw_text.startswith('"<')):
+                if is_group and (not sender_username) and (raw_text.startswith("<") or raw_text.startswith('"<')):
                     xml_sender = _extract_sender_from_group_xml(raw_text)
                     if xml_sender:
                         sender_username = xml_sender
@@ -3472,6 +3653,9 @@ def _collect_chat_messages(
                 quote_username = ""
                 quote_title = ""
                 quote_content = ""
+                quote_thumb_url = ""
+                link_type = ""
+                link_style = ""
                 quote_server_id = ""
                 quote_type = ""
                 quote_voice_length = ""
@@ -3498,6 +3682,9 @@ def _collect_chat_messages(
                     record_item = str(parsed.get("recordItem") or "")
                     quote_title = str(parsed.get("quoteTitle") or "")
                     quote_content = str(parsed.get("quoteContent") or "")
+                    quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
+                    link_type = str(parsed.get("linkType") or "")
+                    link_style = str(parsed.get("linkStyle") or "")
                     quote_username = str(parsed.get("quoteUsername") or "")
                     quote_server_id = str(parsed.get("quoteServerId") or "")
                     quote_type = str(parsed.get("quoteType") or "")
@@ -3541,6 +3728,9 @@ def _collect_chat_messages(
                     content_text = str(parsed.get("content") or "[引用消息]")
                     quote_title = str(parsed.get("quoteTitle") or "")
                     quote_content = str(parsed.get("quoteContent") or "")
+                    quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
+                    link_type = str(parsed.get("linkType") or "")
+                    link_style = str(parsed.get("linkStyle") or "")
                     quote_username = str(parsed.get("quoteUsername") or "")
                     quote_server_id = str(parsed.get("quoteServerId") or "")
                     quote_type = str(parsed.get("quoteType") or "")
@@ -3640,6 +3830,11 @@ def _collect_chat_messages(
                             local_id=local_id,
                             create_time=create_time,
                         )
+
+                    if not _is_hex_md5(video_thumb_md5):
+                        packed_md5 = _extract_md5_from_packed_info(r["packed_info_data"])
+                        if packed_md5:
+                            video_thumb_md5 = packed_md5
                     content_text = "[视频]"
                 elif local_type == 47:
                     render_type = "emoji"
@@ -3701,6 +3896,9 @@ def _collect_chat_messages(
                                     record_item = str(parsed.get("recordItem") or record_item)
                                     quote_title = str(parsed.get("quoteTitle") or quote_title)
                                     quote_content = str(parsed.get("quoteContent") or quote_content)
+                                    quote_thumb_url = str(parsed.get("quoteThumbUrl") or quote_thumb_url)
+                                    link_type = str(parsed.get("linkType") or link_type)
+                                    link_style = str(parsed.get("linkStyle") or link_style)
                                     amount = str(parsed.get("amount") or amount)
                                     cover_url = str(parsed.get("coverUrl") or cover_url)
                                     thumb_url = str(parsed.get("thumbUrl") or thumb_url)
@@ -3758,6 +3956,8 @@ def _collect_chat_messages(
                         "content": content_text,
                         "title": title,
                         "url": url,
+                        "linkType": link_type,
+                        "linkStyle": link_style,
                         "from": from_name,
                         "fromUsername": from_username,
                         "recordItem": record_item,
@@ -3781,6 +3981,7 @@ def _collect_chat_messages(
                         "quoteVoiceLength": str(quote_voice_length).strip(),
                         "quoteTitle": quote_title,
                         "quoteContent": quote_content,
+                        "quoteThumbUrl": quote_thumb_url,
                         "amount": amount,
                         "coverUrl": cover_url,
                         "fileSize": file_size,
@@ -4139,7 +4340,7 @@ def list_chat_messages(
                 if is_group and sender_prefix:
                     sender_username = sender_prefix
 
-                if is_group and (raw_text.startswith("<") or raw_text.startswith('"<')):
+                if is_group and (not sender_username) and (raw_text.startswith("<") or raw_text.startswith('"<')):
                     xml_sender = _extract_sender_from_group_xml(raw_text)
                     if xml_sender:
                         sender_username = xml_sender
@@ -4175,6 +4376,9 @@ def list_chat_messages(
                 quote_username = ""
                 quote_title = ""
                 quote_content = ""
+                quote_thumb_url = ""
+                link_type = ""
+                link_style = ""
                 quote_server_id = ""
                 quote_type = ""
                 quote_voice_length = ""
@@ -4201,6 +4405,9 @@ def list_chat_messages(
                     record_item = str(parsed.get("recordItem") or "")
                     quote_title = str(parsed.get("quoteTitle") or "")
                     quote_content = str(parsed.get("quoteContent") or "")
+                    quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
+                    link_type = str(parsed.get("linkType") or "")
+                    link_style = str(parsed.get("linkStyle") or "")
                     quote_username = str(parsed.get("quoteUsername") or "")
                     quote_server_id = str(parsed.get("quoteServerId") or "")
                     quote_type = str(parsed.get("quoteType") or "")
@@ -4244,6 +4451,9 @@ def list_chat_messages(
                     content_text = str(parsed.get("content") or "[引用消息]")
                     quote_title = str(parsed.get("quoteTitle") or "")
                     quote_content = str(parsed.get("quoteContent") or "")
+                    quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
+                    link_type = str(parsed.get("linkType") or "")
+                    link_style = str(parsed.get("linkStyle") or "")
                     quote_username = str(parsed.get("quoteUsername") or "")
                     quote_server_id = str(parsed.get("quoteServerId") or "")
                     quote_type = str(parsed.get("quoteType") or "")
@@ -4400,6 +4610,9 @@ def list_chat_messages(
                                     record_item = str(parsed.get("recordItem") or record_item)
                                     quote_title = str(parsed.get("quoteTitle") or quote_title)
                                     quote_content = str(parsed.get("quoteContent") or quote_content)
+                                    quote_thumb_url = str(parsed.get("quoteThumbUrl") or quote_thumb_url)
+                                    link_type = str(parsed.get("linkType") or link_type)
+                                    link_style = str(parsed.get("linkStyle") or link_style)
                                     amount = str(parsed.get("amount") or amount)
                                     cover_url = str(parsed.get("coverUrl") or cover_url)
                                     thumb_url = str(parsed.get("thumbUrl") or thumb_url)
@@ -4450,6 +4663,8 @@ def list_chat_messages(
                         "content": content_text,
                         "title": title,
                         "url": url,
+                        "linkType": link_type,
+                        "linkStyle": link_style,
                         "from": from_name,
                         "fromUsername": from_username,
                         "recordItem": record_item,
@@ -4473,6 +4688,7 @@ def list_chat_messages(
                         "quoteVoiceLength": str(quote_voice_length).strip(),
                         "quoteTitle": quote_title,
                         "quoteContent": quote_content,
+                        "quoteThumbUrl": quote_thumb_url,
                         "amount": amount,
                         "coverUrl": cover_url,
                         "fileSize": file_size,
@@ -4509,81 +4725,38 @@ def list_chat_messages(
             deduped.append(m)
         merged = deduped
 
-    # 后处理：关联转账消息的最终状态
-    # 策略：优先使用 transferId 精确匹配，回退到金额+时间窗口匹配
-    # paysubtype 含义：1=不明确 3=已收款 4=对方退回给你 8=发起转账 9=被对方退回 10=已过期
+    _postprocess_transfer_messages(merged)
 
-    # 收集已退还和已收款的转账ID和金额
-    returned_transfer_ids: set[str] = set()  # 退还状态的 transferId
-    received_transfer_ids: set[str] = set()  # 已收款状态的 transferId
-    returned_amounts_with_time: list[tuple[str, int]] = []  # (金额, 时间戳) 用于退还回退匹配
-    received_amounts_with_time: list[tuple[str, int]] = []  # (金额, 时间戳) 用于收款回退匹配
+    def sort_key(m: dict[str, Any]) -> tuple[int, int, int]:
+        sseq = int(m.get("sortSeq") or 0)
+        cts = int(m.get("createTime") or 0)
+        lid = int(m.get("localId") or 0)
+        return (cts, sseq, lid)
 
-    for m in merged:
-        if m.get("renderType") == "transfer":
-            pst = str(m.get("paySubType") or "")
-            tid = str(m.get("transferId") or "").strip()
-            amt = str(m.get("amount") or "")
-            ts = int(m.get("createTime") or 0)
+    merged.sort(key=sort_key, reverse=True)
+    has_more_global = bool(has_more_any or (len(merged) > (int(offset) + int(limit))))
+    page = merged[int(offset) : int(offset) + int(limit)]
+    if want_asc:
+        page = list(reversed(page))
 
-            if pst in ("4", "9"):  # 退还状态
-                if tid:
-                    returned_transfer_ids.add(tid)
-                if amt:
-                    returned_amounts_with_time.append((amt, ts))
-            elif pst == "3":  # 已收款状态
-                if tid:
-                    received_transfer_ids.add(tid)
-                if amt:
-                    received_amounts_with_time.append((amt, ts))
+    # Hot path optimization: only enrich the page we return.
+    if not page:
+        return {
+            "status": "success",
+            "account": account_dir.name,
+            "username": username,
+            "total": int(offset) + (1 if has_more_global else 0),
+            "hasMore": bool(has_more_global),
+            "messages": [],
+        }
 
-    # 更新原始转账消息的状态
-    for m in merged:
-        if m.get("renderType") == "transfer":
-            pst = str(m.get("paySubType") or "")
-            # 只更新未确定状态的原始转账消息（paysubtype=1 或 8）
-            if pst in ("1", "8"):
-                tid = str(m.get("transferId") or "").strip()
-                amt = str(m.get("amount") or "")
-                ts = int(m.get("createTime") or 0)
-
-                # 优先检查退还状态（退还优先于收款）
-                should_mark_returned = False
-                should_mark_received = False
-
-                # 策略1：精确 transferId 匹配
-                if tid:
-                    if tid in returned_transfer_ids:
-                        should_mark_returned = True
-                    elif tid in received_transfer_ids:
-                        should_mark_received = True
-
-                # 策略2：回退到金额+时间窗口匹配（24小时内同金额）
-                if not should_mark_returned and not should_mark_received and amt:
-                    for ret_amt, ret_ts in returned_amounts_with_time:
-                        if ret_amt == amt and abs(ret_ts - ts) <= 86400:
-                            should_mark_returned = True
-                            break
-                    if not should_mark_returned:
-                        for rec_amt, rec_ts in received_amounts_with_time:
-                            if rec_amt == amt and abs(rec_ts - ts) <= 86400:
-                                should_mark_received = True
-                                break
-
-                if should_mark_returned:
-                    m["paySubType"] = "9"
-                    m["transferStatus"] = "已被退还"
-                elif should_mark_received:
-                    m["paySubType"] = "3"
-                    # 根据 isSent 判断：发起方显示"已收款"，收款方显示"已被接收"
-                    is_sent = m.get("isSent", False)
-                    m["transferStatus"] = "已收款" if is_sent else "已被接收"
+    messages_window = page
 
     # Some appmsg payloads provide only `from` (sourcedisplayname) but not `fromUsername` (sourceusername).
     # Recover `fromUsername` via contact.db so the frontend can render the publisher avatar.
     missing_from_names = [
         str(m.get("from") or "").strip()
-        for m in merged
+        for m in messages_window
         if str(m.get("renderType") or "").strip() == "link"
         and str(m.get("from") or "").strip()
         and not str(m.get("fromUsername") or "").strip()
@@ -4591,7 +4764,7 @@ def list_chat_messages(
     if missing_from_names:
         name_to_username = _load_usernames_by_display_names(contact_db_path, missing_from_names)
         if name_to_username:
-            for m in merged:
+            for m in messages_window:
                 if str(m.get("fromUsername") or "").strip():
                     continue
                 if str(m.get("renderType") or "").strip() != "link":
@@ -4600,10 +4773,33 @@ def list_chat_messages(
                 if fn and fn in name_to_username:
                     m["fromUsername"] = name_to_username[fn]
 
-    from_usernames = [str(m.get("fromUsername") or "").strip() for m in merged]
+    pat_usernames_in_page: set[str] = set()
+    for m in messages_window:
+        if int(m.get("type") or 0) != 266287972401:
+            continue
+        raw = str(m.get("_rawText") or "")
+        if not raw:
+            continue
+        template = _extract_xml_tag_text(raw, "template")
+        if not template:
+            continue
+        pat_usernames_in_page.update({mm.group(1) for mm in re.finditer(r"\$\{([^}]+)\}", template) if mm.group(1)})
+
+    from_usernames = [str(m.get("fromUsername") or "").strip() for m in messages_window]
+    sender_usernames_in_page = [str(m.get("senderUsername") or "").strip() for m in messages_window]
+    quote_usernames_in_page = [str(m.get("quoteUsername") or "").strip() for m in messages_window]
     uniq_senders = list(
         dict.fromkeys(
-            [u for u in (sender_usernames + list(pat_usernames) + quote_usernames + from_usernames) if u]
+            [
+                u
+                for u in (
+                    sender_usernames_in_page
+                    + list(pat_usernames_in_page)
+                    + quote_usernames_in_page
+                    + from_usernames
+                )
+                if u
+            ]
         )
     )
     sender_contact_rows = _load_contact_rows(contact_db_path, uniq_senders)
@@ -4645,7 +4841,7 @@ def list_chat_messages(
         sender_usernames=uniq_senders,
     )
 
-    for m in merged:
+    for m in messages_window:
         # If appmsg doesn't provide sourcedisplayname, try mapping sourceusername to display name.
         if (not str(m.get("from") or "").strip()) and str(m.get("fromUsername") or "").strip():
             fu = str(m.get("fromUsername") or "").strip()
@@ -4788,18 +4984,6 @@ def list_chat_messages(
 
         if "_rawText" in m:
             m.pop("_rawText", None)
-
-    def sort_key(m: dict[str, Any]) -> tuple[int, int, int]:
-        sseq = int(m.get("sortSeq") or 0)
-        cts = int(m.get("createTime") or 0)
-        lid = int(m.get("localId") or 0)
-        return (cts, sseq, lid)
-
-    merged.sort(key=sort_key, reverse=True)
-    has_more_global = bool(has_more_any or (len(merged) > (int(offset) + int(limit))))
-    page = merged[int(offset) : int(offset) + int(limit)]
-    if want_asc:
-        page = list(reversed(page))
 
     return {
         "status": "success",
@@ -5762,10 +5946,21 @@ async def get_chat_messages_around(
             my_rowid = None
 
         quoted_table = _quote_ident(table_name)
+        has_packed_info_data = False
+        try:
+            cols = conn.execute(f"PRAGMA table_info({quoted_table})").fetchall()
+            has_packed_info_data = any(str(c[1] or "").strip().lower() == "packed_info_data" for c in cols)
+        except Exception:
+            has_packed_info_data = False
+        packed_select = (
+            "m.packed_info_data AS packed_info_data, " if has_packed_info_data else "NULL AS packed_info_data, "
+        )
         sql_anchor_with_join = (
             "SELECT "
             "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
-            "m.message_content, m.compress_content, n.user_name AS sender_username "
+            "m.message_content, m.compress_content, "
+            + packed_select
+            + "n.user_name AS sender_username "
             f"FROM {quoted_table} m "
             "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
             "WHERE m.local_id = ? "
@@ -5774,7 +5969,9 @@ async def get_chat_messages_around(
         sql_anchor_no_join = (
             "SELECT "
             "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
-            "m.message_content, m.compress_content, '' AS sender_username "
+            "m.message_content, m.compress_content, "
+            + packed_select
+            + "'' AS sender_username "
             f"FROM {quoted_table} m "
             "WHERE m.local_id = ? "
             "LIMIT 1"
@@ -5811,7 +6008,9 @@ async def get_chat_messages_around(
         sql_before_with_join = (
             "SELECT "
             "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
-            "m.message_content, m.compress_content, n.user_name AS sender_username "
+            "m.message_content, m.compress_content, "
+            + packed_select
+            + "n.user_name AS sender_username "
             f"FROM {quoted_table} m "
             "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
             f"{where_before} "
@@ -5821,7 +6020,9 @@ async def get_chat_messages_around(
         sql_before_no_join = (
             "SELECT "
             "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
-            "m.message_content, m.compress_content, '' AS sender_username "
+            "m.message_content, m.compress_content, "
+            + packed_select
+            + "'' AS sender_username "
             f"FROM {quoted_table} m "
             f"{where_before} "
             "ORDER BY m.create_time DESC, COALESCE(m.sort_seq, 0) DESC, m.local_id DESC "
@@ -5831,7 +6032,9 @@ async def get_chat_messages_around(
         sql_after_with_join = (
             "SELECT "
             "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
-            "m.message_content, m.compress_content, n.user_name AS sender_username "
+            "m.message_content, m.compress_content, "
+            + packed_select
+            + "n.user_name AS sender_username "
             f"FROM {quoted_table} m "
             "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
             f"{where_after} "
@@ -5841,7 +6044,9 @@ async def get_chat_messages_around(
         sql_after_no_join = (
             "SELECT "
             "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
-            "m.message_content, m.compress_content, '' AS sender_username "
+            "m.message_content, m.compress_content, "
+            + packed_select
+            + "'' AS sender_username "
             f"FROM {quoted_table} m "
             f"{where_after} "
             "ORDER BY m.create_time ASC, COALESCE(m.sort_seq, 0) ASC, m.local_id ASC "
