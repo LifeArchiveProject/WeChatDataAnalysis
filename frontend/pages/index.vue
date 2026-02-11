@@ -68,17 +68,12 @@
 <script setup>
 import { onMounted } from 'vue'
 import { useApi } from '~/composables/useApi'
-
-const DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY = 'desktop.settings.defaultToChatWhenData'
+import { DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, readLocalBoolSetting } from '~/utils/desktop-settings'
 
 onMounted(async () => {
   if (!process.client || typeof window === 'undefined') return
-  if (!window.wechatDesktop) return
 
-  let enabled = false
-  try {
-    enabled = localStorage.getItem(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY) === 'true'
-  } catch {}
+  const enabled = readLocalBoolSetting(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, false)
   if (!enabled) return
 
   try {
