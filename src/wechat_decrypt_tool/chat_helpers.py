@@ -8,7 +8,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import HTTPException
 
@@ -618,6 +618,39 @@ def _normalize_xml_url(url: str) -> str:
         return u.replace("&amp;", "&").strip()
 
 
+def _is_mp_weixin_article_url(url: str) -> bool:
+    u = str(url or "").strip()
+    if not u:
+        return False
+
+    try:
+        host = str(urlparse(u).hostname or "").strip().lower()
+        if host == "mp.weixin.qq.com" or host.endswith(".mp.weixin.qq.com"):
+            return True
+    except Exception:
+        pass
+
+    lu = u.lower()
+    return "mp.weixin.qq.com/" in lu
+
+
+def _classify_link_share(*, app_type: int, url: str, source_username: str, desc: str) -> tuple[str, str]:
+    src = str(source_username or "").strip().lower()
+    is_official_article = bool(
+        app_type in (5, 68)
+        and (_is_mp_weixin_article_url(url) or src.startswith("gh_"))
+    )
+
+    link_type = "official_article" if is_official_article else "web_link"
+
+    d = str(desc or "").strip()
+    hashtag_count = len(re.findall(r"#[^#\s]+", d))
+
+    # 公众号文章中「封面图 + 底栏标题」卡片特征：摘要以 #话题# 风格为主。
+    link_style = "cover" if (is_official_article and (d.startswith("#") or hashtag_count >= 2)) else "default"
+    return link_type, link_style
+
+
 def _extract_xml_tag_text(xml_text: str, tag: str) -> str:
     if not xml_text or not tag:
         return ""
@@ -689,6 +722,65 @@ def _extract_refermsg_block(xml_text: str) -> str:
     return (m.group(1) or "").strip() if m else ""
 
 
+def _extract_refermsg_content(refer_block: str) -> str:
+    if not refer_block:
+        return ""
+
+    cdata_match = re.search(
+        r"<content\b[^>]*>\s*<!\[CDATA\[(.*?)\]\]>\s*</content>",
+        refer_block,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if cdata_match:
+        return str(cdata_match.group(1) or "").strip()
+
+    return _extract_xml_tag_text(refer_block, "content")
+
+
+def _summarize_nested_quote_content(raw_content: str) -> str:
+    candidate = str(raw_content or "").strip()
+    if not candidate:
+        return ""
+
+    lower = candidate.lower()
+    if "<msg" not in lower and "<appmsg" not in lower:
+        return candidate
+
+    for tag in ("title", "des"):
+        value = _extract_xml_tag_text(candidate, tag)
+        if value:
+            return value
+
+    content_value = _extract_xml_tag_text(candidate, "content")
+    if content_value and (not str(content_value).lstrip().startswith("<")):
+        return content_value
+
+    return ""
+
+
+def _extract_nested_quote_thumb_url(raw_content: str) -> str:
+    candidate = str(raw_content or "").strip()
+    if not candidate:
+        return ""
+
+    probes = [candidate]
+
+    if candidate.startswith("wxid_"):
+        colon = candidate.find(":")
+        if 0 < colon <= 64:
+            rest = candidate[colon + 1 :].strip()
+            if rest:
+                probes.append(rest)
+
+    for probe in probes:
+        for key in ("thumburl", "cdnthumburl", "cdnthumurl", "coverurl", "cover"):
+            value = _normalize_xml_url(_extract_xml_tag_or_attr(probe, key))
+            if value:
+                return value
+
+    return ""
+
+
 def _infer_transfer_status_text(
     is_sent: bool,
     paysubtype: str,
@@ -702,7 +794,7 @@ def _infer_transfer_status_text(
     rs = str(receivestatus or "").strip()
 
     if rs == "1":
-        return "已收款"
+        return "已被接收" if is_sent else "已收款"
     if rs == "2":
         return "已退还"
     if rs == "3":
@@ -718,7 +810,7 @@ def _infer_transfer_status_text(
     if t == "8":
         return "发起转账"
     if t == "3":
-        return "已收款" if is_sent else "已被接收"
+        return "已被接收" if is_sent else "已收款"
     if t == "1":
         return "转账"
 
@@ -770,10 +862,22 @@ def _extract_sender_from_group_xml(xml_text: str) -> str:
     if not xml_text:
         return ""
 
-    v = _extract_xml_tag_text(xml_text, "fromusername")
+    probe_text = xml_text
+    try:
+        # Avoid picking nested quoted-message sender from <refermsg>.
+        probe_text = re.sub(
+            r"(<refermsg[^>]*>.*?</refermsg>)",
+            "",
+            xml_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    except Exception:
+        probe_text = xml_text
+
+    v = _extract_xml_tag_text(probe_text, "fromusername")
     if v:
         return v
-    v = _extract_xml_attr(xml_text, "fromusername")
+    v = _extract_xml_attr(probe_text, "fromusername")
     if v:
         return v
     return ""
@@ -846,6 +950,12 @@ def _parse_app_message(text: str) -> dict[str, Any]:
 
     if app_type in (5, 68) and url:
         thumb_url = _normalize_xml_url(_extract_xml_tag_text(text, "thumburl"))
+        link_type, link_style = _classify_link_share(
+            app_type=app_type,
+            url=url,
+            source_username=str(source_username or "").strip(),
+            desc=str(des or "").strip(),
+        )
         return {
             "renderType": "link",
             "content": des or title or "[链接]",
@@ -854,6 +964,8 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             "thumbUrl": thumb_url or "",
             "from": str(source_display_name or "").strip(),
             "fromUsername": str(source_username or "").strip(),
+            "linkType": link_type,
+            "linkStyle": link_style,
         }
 
     if app_type in (6, 74):
@@ -907,7 +1019,7 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             or ""
         )
         refer_svrid = _extract_xml_tag_or_attr(refer_block, "svrid")
-        refer_content = _extract_xml_tag_text(refer_block, "content")
+        refer_content = _extract_refermsg_content(refer_block)
         refer_type = _extract_xml_tag_or_attr(refer_block, "type")
 
         rt = (reply_text or "").strip()
@@ -924,6 +1036,7 @@ def _parse_app_message(text: str) -> dict[str, Any]:
                     refer_content = rest
 
         t = str(refer_type or "").strip()
+        quote_thumb_url = ""
         quote_voice_length = ""
         if t == "3":
             refer_content = "[图片]"
@@ -944,8 +1057,29 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             except Exception:
                 quote_voice_length = ""
             refer_content = "[语音]"
-        elif t == "49" and refer_content:
-            refer_content = f"[链接] {refer_content}".strip()
+        elif t == "57":
+            summarized = _summarize_nested_quote_content(str(refer_content or ""))
+            if summarized:
+                refer_content = summarized
+            elif str(refer_content or "").lstrip().startswith("<"):
+                refer_content = "[引用消息]"
+        elif t in {"49", "5", "68"}:
+            raw_link_content = str(refer_content or "").strip()
+            summarized = _summarize_nested_quote_content(raw_link_content)
+            link_text = str(summarized or raw_link_content).strip()
+            quote_thumb_url = _extract_nested_quote_thumb_url(raw_link_content)
+
+            if link_text.startswith("wxid_"):
+                colon = link_text.find(":")
+                if 0 < colon <= 64:
+                    maybe_rest = link_text[colon + 1 :].strip()
+                    if maybe_rest:
+                        second_try = _summarize_nested_quote_content(maybe_rest)
+                        link_text = str(second_try or maybe_rest).strip()
+                    if not quote_thumb_url:
+                        quote_thumb_url = _extract_nested_quote_thumb_url(maybe_rest)
+
+            refer_content = f"[链接] {link_text}".strip() if link_text else "[链接]"
 
         return {
             "renderType": "quote",
@@ -954,6 +1088,7 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             "quoteTitle": refer_displayname or "",
             "quoteContent": refer_content or "",
             "quoteType": t,
+            "quoteThumbUrl": quote_thumb_url,
             "quoteServerId": str(refer_svrid or "").strip(),
             "quoteVoiceLength": quote_voice_length,
         }
@@ -1818,10 +1953,10 @@ def _row_to_search_hit(
     if is_group and raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
         sender_prefix, raw_text = _split_group_sender_prefix(raw_text, sender_username)
 
-    if is_group and sender_prefix:
+    if is_group and sender_prefix and (not sender_username):
         sender_username = sender_prefix
 
-    if is_group and raw_text and (raw_text.startswith("<") or raw_text.startswith('"<')):
+    if is_group and (not sender_username) and raw_text and (raw_text.startswith("<") or raw_text.startswith('"<')):
         xml_sender = _extract_sender_from_group_xml(raw_text)
         if xml_sender:
             sender_username = xml_sender
@@ -1838,6 +1973,9 @@ def _row_to_search_hit(
     quote_username = ""
     quote_title = ""
     quote_content = ""
+    quote_thumb_url = ""
+    link_type = ""
+    link_style = ""
     amount = ""
     pay_sub_type = ""
     transfer_status = ""
@@ -1854,6 +1992,9 @@ def _row_to_search_hit(
         url = str(parsed.get("url") or "")
         quote_title = str(parsed.get("quoteTitle") or "")
         quote_content = str(parsed.get("quoteContent") or "")
+        quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
+        link_type = str(parsed.get("linkType") or "")
+        link_style = str(parsed.get("linkStyle") or "")
         quote_username = str(parsed.get("quoteUsername") or "")
         amount = str(parsed.get("amount") or "")
         pay_sub_type = str(parsed.get("paySubType") or "")
@@ -1878,6 +2019,7 @@ def _row_to_search_hit(
         content_text = str(parsed.get("content") or "[引用消息]")
         quote_title = str(parsed.get("quoteTitle") or "")
         quote_content = str(parsed.get("quoteContent") or "")
+        quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
         quote_username = str(parsed.get("quoteUsername") or "")
     elif local_type == 3:
         render_type = "image"
@@ -1927,6 +2069,9 @@ def _row_to_search_hit(
                         url = str(parsed.get("url") or url)
                         quote_title = str(parsed.get("quoteTitle") or quote_title)
                         quote_content = str(parsed.get("quoteContent") or quote_content)
+                        quote_thumb_url = str(parsed.get("quoteThumbUrl") or quote_thumb_url)
+                        link_type = str(parsed.get("linkType") or link_type)
+                        link_style = str(parsed.get("linkStyle") or link_style)
                         amount = str(parsed.get("amount") or amount)
                         pay_sub_type = str(parsed.get("paySubType") or pay_sub_type)
                         quote_username = str(parsed.get("quoteUsername") or quote_username)
@@ -1966,9 +2111,12 @@ def _row_to_search_hit(
         "content": content_text,
         "title": title,
         "url": url,
+        "linkType": link_type,
+        "linkStyle": link_style,
         "quoteUsername": quote_username,
         "quoteTitle": quote_title,
         "quoteContent": quote_content,
+        "quoteThumbUrl": quote_thumb_url,
         "amount": amount,
         "paySubType": pay_sub_type,
         "transferStatus": transfer_status,
