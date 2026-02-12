@@ -221,35 +221,6 @@ def get_wechat_internal_global_config(wx_dir: Path, file_name1) -> bytes:
     return Path(target_path).read_bytes()
 
 
-# def get_local_config_sha3_224() -> bytes:
-#     """
-#     不要在意，抽象的实现 哈哈哈
-#     """
-#     content = json.dumps({
-#         "wxfile_dir": "C:\\Users\\17078\\xwechat_files",
-#         "weixin_id_folder": "wxid_lnyf4hdo9csb12_f1c4",
-#         "cache_dir": "C:\\Users\\17078\\Desktop\\wxDBHook\\test\\wx-dat\\wx-dat\\.cache",
-#         "db_key": "",
-#         "port": 8001
-#     }, indent=4).encode("utf-8")
-#
-#     # 计算 SHA3-224
-#     digest = hashlib.sha3_224(content).digest()
-#     return digest
-
-# async def log_request(request):
-#     print(f"--- Request Raw ---")
-#     print(f"{request.method} {request.url} {request.extensions.get('http_version', b'HTTP/1.1').decode()}")
-#     for name, value in request.headers.items():
-#         print(f"{name}: {value}")
-#
-#     print()
-#
-#     body = request.read()
-#     if body:
-#         print(body.decode(errors='replace'))
-#     print(f"-------------------\n")
-
 
 async def fetch_and_save_remote_keys(account: Optional[str] = None) -> Dict[str, Any]:
     account_dir = _resolve_account_dir(account)
