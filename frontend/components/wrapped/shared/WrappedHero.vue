@@ -329,6 +329,10 @@ const PREVIEW_BY_KIND = {
   'chat/reply_speed': {
     summary: '回复速度',
     question: '谁是你愿意秒回的那个人？'
+  },
+  'emoji/annual_universe': {
+    summary: '梗图年鉴',
+    question: '你这一年最常丢出的表情包是哪张？'
   }
 }
 

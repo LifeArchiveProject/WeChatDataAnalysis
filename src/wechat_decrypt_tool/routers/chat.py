@@ -2742,6 +2742,90 @@ def _postprocess_transfer_messages(merged: list[dict[str, Any]]) -> None:
     # - 将原始转账消息（1/8）回填为“已被接收”
     # - 若同一 transferId 同时存在原始消息与 paysubtype=3 消息，则将 paysubtype=3 的那条校正为“已收款”
 
+    def _is_transfer_expired_system_message(text: Any) -> bool:
+        content = str(text or "").strip()
+        if not content:
+            return False
+        if "转账" not in content or "过期" not in content:
+            return False
+        if "未接收" in content and ("24小时" in content or "二十四小时" in content):
+            return True
+        return "已过期" in content and ("收款方" in content or "转账" in content)
+
+    def _mark_pending_transfers_expired_by_system_messages() -> set[str]:
+        expired_system_times: list[int] = []
+        pending_candidates: list[tuple[int, int]] = []  # (index, createTime)
+
+        for idx, msg in enumerate(merged):
+            rt = str(msg.get("renderType") or "").strip()
+            if rt == "system":
+                if _is_transfer_expired_system_message(msg.get("content")):
+                    try:
+                        ts = int(msg.get("createTime") or 0)
+                    except Exception:
+                        ts = 0
+                    if ts > 0:
+                        expired_system_times.append(ts)
+                continue
+
+            if rt != "transfer":
+                continue
+
+            pst = str(msg.get("paySubType") or "").strip()
+            if pst not in ("1", "8"):
+                continue
+
+            try:
+                ts = int(msg.get("createTime") or 0)
+            except Exception:
+                ts = 0
+            if ts <= 0:
+                continue
+
+            pending_candidates.append((idx, ts))
+
+        if not expired_system_times or not pending_candidates:
+            return set()
+
+        used_pending_indexes: set[int] = set()
+        expired_transfer_ids: set[str] = set()
+
+        # 过期系统提示通常出现在转账发起约 24 小时后。
+        # 为避免误匹配，要求时间差落在 [22h, 26h] 范围内，并选择最接近 24h 的待收款消息。
+        for sys_ts in sorted(expired_system_times):
+            best_index = -1
+            best_distance = 10**9
+
+            for idx, transfer_ts in pending_candidates:
+                if idx in used_pending_indexes:
+                    continue
+                delta = sys_ts - transfer_ts
+                if delta < 0:
+                    continue
+                if delta < 22 * 3600 or delta > 26 * 3600:
+                    continue
+
+                distance = abs(delta - 24 * 3600)
+                if distance < best_distance:
+                    best_distance = distance
+                    best_index = idx
+
+            if best_index < 0:
+                continue
+
+            used_pending_indexes.add(best_index)
+            transfer_msg = merged[best_index]
+            transfer_msg["paySubType"] = "10"
+            transfer_msg["transferStatus"] = "已过期"
+
+            tid = str(transfer_msg.get("transferId") or "").strip()
+            if tid:
+                expired_transfer_ids.add(tid)
+
+        return expired_transfer_ids
+
+    expired_transfer_ids = _mark_pending_transfers_expired_by_system_messages()
+
     returned_transfer_ids: set[str] = set()  # 退还状态的 transferId
     received_transfer_ids: set[str] = set()  # 已收款状态的 transferId
     returned_amounts_with_time: list[tuple[str, int]] = []  # (金额, 时间戳) 用于退还回退匹配
@@ -2827,6 +2911,8 @@ def _postprocess_transfer_messages(merged: list[dict[str, Any]]) -> None:
             continue
         tid = str(m.get("transferId") or "").strip()
         if not tid or tid not in pending_transfer_ids:
+            continue
+        if tid in expired_transfer_ids:
             continue
         mid = str(m.get("id") or "").strip()
         if mid and mid in backfilled_message_ids:
