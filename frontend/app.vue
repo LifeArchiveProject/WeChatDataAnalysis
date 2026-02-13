@@ -57,7 +57,12 @@ const contentClass = computed(() =>
     : 'flex-1 overflow-auto min-h-0'
 )
 
-const showSidebar = computed(() => !String(route.path || '').startsWith('/wrapped'))
+const showSidebar = computed(() => {
+  const path = String(route.path || '')
+  if (path === '/') return false
+  if (path === '/decrypt' || path === '/detection-result' || path === '/decrypt-result') return false
+  return !(path === '/wrapped' || path.startsWith('/wrapped/'))
+})
 </script>
 
 <style>
