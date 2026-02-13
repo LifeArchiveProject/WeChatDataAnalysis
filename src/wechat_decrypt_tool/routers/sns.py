@@ -1144,8 +1144,8 @@ async def get_sns_media(
         avoid_picked: int = 0,
         post_id: Optional[str] = None,
         media_id: Optional[str] = None,
-        # media_type: int = 2,
-        post_type: int = 1,
+        post_type: int = 1,   # <--- 接收前端传来的 post_type
+        media_type: int = 2,  # <--- 接收前端传来的 media_type
         pick: Optional[str] = None,
         md5: Optional[str] = None,
         url: Optional[str] = None,
@@ -1154,27 +1154,46 @@ async def get_sns_media(
     wxid_dir = _resolve_account_wxid_dir(account_dir)
 
     if wxid_dir and post_id and media_id:
-        deterministic_key = _generate_sns_cache_key(post_id, media_id, post_type)
+        exact_match_path = None
+        hit_type = ""
 
+        # 尝试 1: 使用 post_type 计算 MD5
+        key_post = _generate_sns_cache_key(post_id, media_id, post_type)
         exact_match_path = _resolve_sns_cached_image_path_by_cache_key(
             wxid_dir=wxid_dir,
-            cache_key=deterministic_key,
+            cache_key=key_post,
             create_time=0
         )
-
         if exact_match_path:
-            print(f"=====exact_match_path======={exact_match_path}=============")
+            hit_type = "post_type"
+
+        # 尝试 2: 如果没找到，并且 media_type 和 post_type 不一样，再试一次
+        if not exact_match_path and post_type != media_type:
+            key_media = _generate_sns_cache_key(post_id, media_id, media_type)
+            exact_match_path = _resolve_sns_cached_image_path_by_cache_key(
+                wxid_dir=wxid_dir,
+                cache_key=key_media,
+                create_time=0
+            )
+            if exact_match_path:
+                hit_type = "media_type"
+
+        # 如果通过这两种精确定位找到了文件，直接返回
+        if exact_match_path:
+            print(f"=====exact_match_path======={exact_match_path}============= (Hit: {hit_type})")
             try:
                 payload, mtype = _read_and_maybe_decrypt_media(Path(exact_match_path), account_dir)
                 if payload and str(mtype or "").startswith("image/"):
                     resp = Response(content=payload, media_type=str(mtype or "image/jpeg"))
-                    resp.headers["Cache-Control"] = "public, max-age=31536000"  # 确定性缓存可以设置很久
+                    resp.headers["Cache-Control"] = "public, max-age=31536000"
                     resp.headers["X-SNS-Source"] = "deterministic-hash"
+                    # 在 Header 里塞入到底是哪个 type 命中的，方便 F12 调试
+                    resp.headers["X-SNS-Hit-Type"] = hit_type
                     return resp
             except Exception:
                 pass
 
-        print("no exact match path")
+        print("no exact match path, falling back...")
 
     # 0) User-picked cache key override (stable across candidate ordering).
     pick_key = _normalize_hex32(pick)
