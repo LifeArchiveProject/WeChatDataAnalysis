@@ -8,7 +8,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import HTTPException
 
@@ -634,6 +634,32 @@ def _is_mp_weixin_article_url(url: str) -> bool:
     return "mp.weixin.qq.com/" in lu
 
 
+def _is_mp_weixin_feed_article_url(url: str) -> bool:
+    """Detect WeChat's PC feed/recommendation mp.weixin.qq.com share URLs.
+
+    These links often carry an `exptype` like:
+      masonry_feed_brief_content_elite_for_pcfeeds_u2i
+
+    WeChat desktop tends to render them in a cover-card style (image + bottom title),
+    so we use this as a hint to choose the 'cover' linkStyle.
+    """
+
+    u = str(url or "").strip()
+    if not u:
+        return False
+
+    try:
+        parsed = urlparse(u)
+        q = parse_qs(parsed.query or "")
+        for v in (q.get("exptype") or []):
+            if "masonry_feed" in str(v or "").lower():
+                return True
+    except Exception:
+        pass
+
+    return "exptype=masonry_feed" in u.lower()
+
+
 def _classify_link_share(*, app_type: int, url: str, source_username: str, desc: str) -> tuple[str, str]:
     src = str(source_username or "").strip().lower()
     is_official_article = bool(
@@ -647,7 +673,15 @@ def _classify_link_share(*, app_type: int, url: str, source_username: str, desc:
     hashtag_count = len(re.findall(r"#[^#\s]+", d))
 
     # 公众号文章中「封面图 + 底栏标题」卡片特征：摘要以 #话题# 风格为主。
-    link_style = "cover" if (is_official_article and (d.startswith("#") or hashtag_count >= 2)) else "default"
+    cover_like = bool(
+        is_official_article
+        and (
+            d.startswith("#")
+            or hashtag_count >= 2
+            or _is_mp_weixin_feed_article_url(url)
+        )
+    )
+    link_style = "cover" if cover_like else "default"
     return link_type, link_style
 
 
@@ -948,8 +982,12 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             "recordItem": record_item or "",
         }
 
-    if app_type in (5, 68) and url:
-        thumb_url = _normalize_xml_url(_extract_xml_tag_text(text, "thumburl"))
+    if app_type in (4, 5, 68) and url:
+        # Many appmsg link cards (notably Bilibili shares with <type>4</type>) include a <patMsg> metadata block.
+        # DO NOT treat "<patmsg" presence as a pat message: it would misclassify normal link cards as "[拍一拍]".
+        thumb_url = _normalize_xml_url(
+            _extract_xml_tag_text(text, "thumburl") or _extract_xml_tag_text(text, "cdnthumburl")
+        )
         link_type, link_style = _classify_link_share(
             app_type=app_type,
             url=url,
@@ -1093,7 +1131,10 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             "quoteVoiceLength": quote_voice_length,
         }
 
-    if app_type == 62 or "<patmsg" in lower or 'type="patmsg"' in lower or "type='patmsg'" in lower:
+    # Some versions may mark pat messages via sysmsg/appmsg tag attribute: <sysmsg type="patmsg">...</sysmsg>.
+    # Be strict here: lots of non-pat appmsg payloads still carry a nested <patMsg>...</patMsg> metadata block.
+    patmsg_attr = bool(re.search(r"<(sysmsg|appmsg)\b[^>]*\btype=['\"]patmsg['\"]", lower))
+    if app_type == 62 or patmsg_attr:
         return {"renderType": "system", "content": "[拍一拍]"}
 
     if app_type == 2000 or (

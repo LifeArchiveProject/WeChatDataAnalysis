@@ -163,6 +163,12 @@
           variant="slide"
           class="h-full w-full"
         />
+        <Card04EmojiUniverse
+          v-else-if="c && (c.kind === 'emoji/annual_universe' || c.id === 4)"
+          :card="c"
+          variant="slide"
+          class="h-full w-full"
+        />
         <WrappedCardShell
           v-else
           :card-id="Number(c?.id || (idx + 1))"
