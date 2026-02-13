@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse  # 返回视频文件
 from pydantic import BaseModel, Field
 
 from ..chat_helpers import _load_contact_rows, _pick_display_name, _resolve_account_dir
@@ -447,6 +447,58 @@ def _sns_img_roots(wxid_dir_str: str) -> tuple[str, ...]:
     # Keep it stable (helps debugging and caching predictability).
     roots.sort()
     return tuple(roots)
+
+@lru_cache(maxsize=16)
+def _sns_video_roots(wxid_dir_str: str) -> tuple[str, ...]:
+    """List all month cache roots that contain `Sns/Video`."""
+    wxid_dir = Path(str(wxid_dir_str or "").strip())
+    cache_root = wxid_dir / "cache"
+    try:
+        month_dirs = [p for p in cache_root.iterdir() if p.is_dir()]
+    except Exception:
+        month_dirs = []
+
+    roots: list[str] = []
+    for mdir in month_dirs:
+        video_root = mdir / "Sns" / "Video"
+        try:
+            if video_root.exists() and video_root.is_dir():
+                roots.append(str(video_root))
+        except Exception:
+            continue
+    roots.sort()
+    return tuple(roots)
+
+def _resolve_sns_cached_video_path(
+    wxid_dir: Path,
+    post_id: str,
+    media_id: str
+) -> Optional[str]:
+    """基于逆向出的固定盐值 3，解析朋友圈视频的本地缓存路径"""
+    if not post_id or not media_id:
+        return None
+
+    raw_key = f"{post_id}_{media_id}_3"  # 暂时硬编码，大概率是对的
+    try:
+        key32 = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+    except Exception:
+        return None
+
+    sub = key32[:2]
+    rest = key32[2:]
+
+    roots = _sns_video_roots(str(wxid_dir))
+    for root_str in roots:
+        try:
+            base_path = Path(root_str) / sub / rest
+            for ext in [".mp4", ".tmp"]:
+                p = base_path.with_suffix(ext)
+                if p.exists() and p.is_file():
+                    return str(p)
+        except Exception:
+            continue
+
+    return None
 
 
 def _resolve_sns_cached_image_path_by_md5(
@@ -1185,3 +1237,26 @@ async def proxy_article_thumb(url: str):
     except Exception as e:
         logger.warning(f"[sns] 提取公众号封面失败 url={u[:50]}... : {e}")
         raise HTTPException(status_code=404, detail="无法获取文章封面")
+
+
+@router.get("/api/sns/video", summary="获取朋友圈本地缓存视频")
+async def get_sns_video(
+        account: Optional[str] = None,
+        post_id: Optional[str] = None,
+        media_id: Optional[str] = None,
+):
+    if not post_id or not media_id:
+        raise HTTPException(status_code=400, detail="Missing post_id or media_id")
+
+    account_dir = _resolve_account_dir(account)
+    wxid_dir = _resolve_account_wxid_dir(account_dir)
+
+    if not wxid_dir:
+        raise HTTPException(status_code=404, detail="WXID dir not found")
+
+    video_path = _resolve_sns_cached_video_path(wxid_dir, post_id, media_id)
+
+    if not video_path:
+        raise HTTPException(status_code=404, detail="Local video cache not found")
+
+    return FileResponse(video_path, media_type="video/mp4")

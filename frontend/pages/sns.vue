@@ -111,7 +111,21 @@
                         class="inline-block cursor-pointer relative"
                         @click.stop="onMediaClick(post, post.media[0], 0)"
                     >
+                      <video
+                          v-if="Number(post.media[0]?.type || 0) === 6"
+                          :src="getSnsVideoUrl(post.id, post.media[0].id)"
+                          :poster="getMediaThumbSrc(post, post.media[0], 0)"
+                          class="rounded-sm max-h-[360px] max-w-full object-cover"
+                          autoplay
+                          loop
+                          muted
+                          playsinline
+                          @loadeddata="onLocalVideoLoaded(post.id, post.media[0].id)"
+                          @error="onLocalVideoError(post.id, post.media[0].id)"
+                      ></video>
+
                       <img
+                          v-else
                           :src="getMediaThumbSrc(post, post.media[0], 0)"
                           class="rounded-sm max-h-[360px] object-cover"
                           alt=""
@@ -120,7 +134,7 @@
                           @error="onMediaError(post.id, 0)"
                       />
                       <div
-                          v-if="Number(post.media[0]?.type || 0) === 6"
+                          v-if="Number(post.media[0]?.type || 0) === 6 && !isLocalVideoLoaded(post.id, post.media[0].id)"
                           class="absolute inset-0 flex items-center justify-center pointer-events-none"
                       >
                         <div class="w-12 h-12 rounded-full bg-black/45 flex items-center justify-center">
@@ -146,8 +160,20 @@
                         class="w-[116px] h-[116px] rounded-[2px] overflow-hidden bg-gray-100 border border-gray-200 flex items-center justify-center cursor-pointer relative"
                         @click.stop="onMediaClick(post, m, idx)"
                     >
+                      <video
+                          v-if="!hasMediaError(post.id, idx) && Number(m?.type || 0) === 6"
+                          :src="getSnsVideoUrl(post.id, m.id)"
+                          :poster="getMediaThumbSrc(post, m, idx)"
+                          class="w-full h-full object-cover"
+                          autoplay
+                          loop
+                          muted
+                          playsinline
+                          @loadeddata="onLocalVideoLoaded(post.id, m.id)"
+                          @error="onLocalVideoError(post.id, m.id)"
+                      ></video>
                       <img
-                          v-if="!hasMediaError(post.id, idx) && getMediaThumbSrc(post, m, idx)"
+                          v-else-if="!hasMediaError(post.id, idx) && getMediaThumbSrc(post, m, idx)"
                           :src="getMediaThumbSrc(post, m, idx)"
                           class="w-full h-full object-cover"
                           alt=""
@@ -155,9 +181,13 @@
                           referrerpolicy="no-referrer"
                           @error="onMediaError(post.id, idx)"
                       />
+                      <!-- 不知道微信朋友圈可不可以发多视频，先这样写吧-->
                       <span v-else class="text-[10px] text-gray-400">图片失败</span>
 
-                      <div v-if="Number(m?.type || 0) === 6" class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div
+                          v-if="Number(m?.type || 0) === 6 && !isLocalVideoLoaded(post.id, m.id)"
+                          class="absolute inset-0 flex items-center justify-center pointer-events-none"
+                      >
                         <div class="w-10 h-10 rounded-full bg-black/45 flex items-center justify-center">
                           <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                         </div>
@@ -707,6 +737,31 @@ const getMediaPreviewSrc = (post, m, idx = 0) => {
   return getSnsMediaUrl(post, m, idx, m?.url || m?.thumb)
 }
 
+
+const getSnsVideoUrl = (postId, mediaId) => {
+  // 本地缓存视频
+  const acc = String(selectedAccount.value || '').trim()
+  if (!acc || !postId || !mediaId) return ''
+  return `${mediaBase}/api/sns/video?account=${encodeURIComponent(acc)}&post_id=${encodeURIComponent(postId)}&media_id=${encodeURIComponent(mediaId)}`
+}
+
+const localVideoStatus = ref({})
+
+const videoStatusKey = (postId, mediaId) => `${String(postId)}:${String(mediaId)}`
+
+const onLocalVideoLoaded = (postId, mediaId) => {
+  localVideoStatus.value[videoStatusKey(postId, mediaId)] = 'loaded'
+}
+
+const onLocalVideoError = (postId, mediaId) => {
+  localVideoStatus.value[videoStatusKey(postId, mediaId)] = 'error'
+}
+
+
+const isLocalVideoLoaded = (postId, mediaId) => {
+  return localVideoStatus.value[videoStatusKey(postId, mediaId)] === 'loaded'
+}
+
 // 图片预览 + 候选匹配选择
 const previewCtx = ref(null) // { post, media, idx }
 const previewCandidatesOpen = ref(false)
@@ -902,13 +957,23 @@ const loadMorePreviewCandidates = async () => {
 const onMediaClick = (post, m, idx = 0) => {
   if (!process.client) return
   const mt = Number(m?.type || 0)
-  // 视频：打开视频链接（新窗口），图片：打开预览
+
+  // 视频点击逻辑
   if (mt === 6) {
+    // 1. 如果本地缓存加载成功，永远不请求 CDN！直接在新标签页打开本地的高清完整视频
+    if (isLocalVideoLoaded(post.id, m.id)) {
+      const localUrl = getSnsVideoUrl(post.id, m.id)
+      window.open(localUrl, '_blank', 'noopener,noreferrer')
+      return
+    }
+
+    // 2. 如果本地没有缓存，按原逻辑 fallback 到 CDN
     const u = String(m?.url || '').trim()
-     if (u) window.open(u, '_blank', 'noopener,noreferrer')
-     return
-   }
-  // Open preview overlay; it also loads local candidates for manual selection.
+    if (u) window.open(u, '_blank', 'noopener,noreferrer')
+    return
+  }
+
+  // 图片：打开预览
   void openImagePreview(post, m, idx)
 }
 
