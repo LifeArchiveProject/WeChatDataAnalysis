@@ -2,25 +2,41 @@
   <div class="h-screen flex overflow-hidden" style="background-color: #EDEDED">
     <!-- 右侧朋友圈区域 -->
     <div class="flex-1 flex flex-col min-h-0" style="background-color: #EDEDED">
-	      <div class="flex-1 overflow-auto min-h-0">
+      <div class="flex-1 overflow-auto min-h-0 bg-white" @scroll="onScroll">
 	        <div class="max-w-2xl mx-auto px-4 py-4">
+            <div class="relative w-full mb-12 -mt-4 bg-white">
+              <div class="h-64 w-full bg-[#333333] object-cover"></div>
+
+              <div class="absolute right-4 -bottom-6 flex items-end gap-4">
+                <div class="text-white font-bold text-xl mb-7 drop-shadow-md">
+                  H3CoF6
+                </div>
+                <div class="w-[72px] h-[72px] rounded-lg bg-white p-[2px] shadow-sm">
+                  <img
+                      src="https://api.dicebear.com/7.x/shapes/svg?seed=H3CoF6"
+                      class="w-full h-full rounded-md object-cover bg-gray-100"
+                      alt="H3CoF6"
+                  />
+                </div>
+              </div>
+            </div>
 	          <div v-if="error" class="text-sm text-red-500 whitespace-pre-wrap py-2">{{ error }}</div>
 	          <div v-else-if="isLoading && posts.length === 0" class="text-sm text-gray-500 py-2">加载中…</div>
 	          <div v-else-if="posts.length === 0" class="text-sm text-gray-500 py-2">暂无朋友圈数据</div>
 
 	          <!-- 图片匹配提示（实验功能） -->
-	          <div v-if="!error" class="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-	            <div class="font-medium">图片匹配（实验功能）</div>
-	            <div class="mt-1 leading-5">
-	              图片可能会出现错配或无法显示。点击图片进入预览，可在“候选匹配”中手动选择；你的选择会保存在本机并在下次优先使用。
-	            </div>
-	            <label class="mt-2 flex items-start gap-2 select-none">
-	              <input v-model="snsAvoidOtherPicked" type="checkbox" class="mt-[2px]" />
-	              <span class="leading-5">
-	                自动匹配时，避开已被你手动指定到其他动态的图片（降低重复）
-	              </span>
-	            </label>
-	          </div>
+<!--	          <div v-if="!error" class="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">-->
+<!--	            <div class="font-medium">图片匹配（实验功能）</div>-->
+<!--	            <div class="mt-1 leading-5">-->
+<!--	              图片可能会出现错配或无法显示。点击图片进入预览，可在“候选匹配”中手动选择；你的选择会保存在本机并在下次优先使用。-->
+<!--	            </div>-->
+<!--	            <label class="mt-2 flex items-start gap-2 select-none">-->
+<!--	              <input v-model="snsAvoidOtherPicked" type="checkbox" class="mt-[2px]" />-->
+<!--	              <span class="leading-5">-->
+<!--	                自动匹配时，避开已被你手动指定到其他动态的图片（降低重复）-->
+<!--	              </span>-->
+<!--	            </label>-->
+<!--	          </div>-->
 
 	          <div v-for="post in posts" :key="post.id" class="bg-white rounded-sm px-4 py-4 mb-3">
 	            <div class="flex items-start gap-3" @contextmenu.prevent="openPostContextMenu($event, post)">
@@ -250,16 +266,22 @@
             </div>
           </div>
 
-          <div v-if="hasMore" class="py-2">
-            <button
-              type="button"
-              class="w-full text-sm text-gray-600 py-2 rounded bg-white hover:bg-gray-50 border border-gray-200"
-              :disabled="isLoading"
-              @click="loadPosts({ reset: false })"
-            >
-              {{ isLoading ? '加载中…' : '加载更多' }}
-            </button>
-          </div>
+<!--          <div v-if="hasMore" class="py-2">-->
+<!--            <button-->
+<!--              type="button"-->
+<!--              class="w-full text-sm text-gray-600 py-2 rounded bg-white hover:bg-gray-50 border border-gray-200"-->
+<!--              :disabled="isLoading"-->
+<!--              @click="loadPosts({ reset: false })"-->
+<!--            >-->
+<!--              {{ isLoading ? '加载中…' : '加载更多' }}-->
+<!--            </button>-->
+<!--          </div>-->
+            <div v-if="isLoading && posts.length > 0" class="py-4 flex justify-center items-center">
+              <div class="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+            <div v-if="!hasMore && posts.length > 0" class="py-6 text-center text-xs text-gray-400">
+              —— 到底了 ——
+            </div>
         </div>
       </div>
     </div>
@@ -289,67 +311,67 @@
 	        <img :src="previewSrc" alt="预览" class="max-w-[90vw] max-h-[70vh] object-contain" />
 
 	        <!-- 候选匹配面板（仅在本地缓存匹配时有意义） -->
-	        <div class="mt-3 w-full max-w-[90vw] rounded bg-black/35 text-white text-xs px-3 py-2">
-	          <div class="flex items-center justify-between gap-2">
-	            <div class="truncate">
-	              候选匹配：
-	              <span v-if="previewCandidates.loading">加载中…</span>
-	              <span v-else-if="previewCandidates.count > 0">共 {{ previewCandidates.count }} 个</span>
-	              <span v-else>未找到本地候选（可能仅能显示占位图）</span>
-	              <span v-if="previewEffectiveIdx != null" class="ml-2 text-white/80">当前：#{{ Number(previewEffectiveIdx) + 1 }}</span>
-	              <span v-if="previewHasUserOverride" class="ml-2 text-emerald-200">(已保存)</span>
-	            </div>
-	            <div class="flex items-center gap-2 flex-shrink-0">
-	              <button
-	                type="button"
-	                class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors"
-	                @click="toggleCandidatePanel"
-	              >
-	                {{ previewCandidatesOpen ? '收起' : '展开' }}
-	              </button>
-	              <button
-	                v-if="previewHasUserOverride"
-	                type="button"
-	                class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors"
-	                @click="clearUserOverrideForPreview"
-	              >
-	                恢复自动
-	              </button>
-	            </div>
-	          </div>
+<!--	        <div class="mt-3 w-full max-w-[90vw] rounded bg-black/35 text-white text-xs px-3 py-2">-->
+<!--	          <div class="flex items-center justify-between gap-2">-->
+<!--	            <div class="truncate">-->
+<!--	              候选匹配：-->
+<!--	              <span v-if="previewCandidates.loading">加载中…</span>-->
+<!--	              <span v-else-if="previewCandidates.count > 0">共 {{ previewCandidates.count }} 个</span>-->
+<!--	              <span v-else>未找到本地候选（可能仅能显示占位图）</span>-->
+<!--	              <span v-if="previewEffectiveIdx != null" class="ml-2 text-white/80">当前：#{{ Number(previewEffectiveIdx) + 1 }}</span>-->
+<!--	              <span v-if="previewHasUserOverride" class="ml-2 text-emerald-200">(已保存)</span>-->
+<!--	            </div>-->
+<!--	            <div class="flex items-center gap-2 flex-shrink-0">-->
+<!--	              <button-->
+<!--	                type="button"-->
+<!--	                class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors"-->
+<!--	                @click="toggleCandidatePanel"-->
+<!--	              >-->
+<!--	                {{ previewCandidatesOpen ? '收起' : '展开' }}-->
+<!--	              </button>-->
+<!--	              <button-->
+<!--	                v-if="previewHasUserOverride"-->
+<!--	                type="button"-->
+<!--	                class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors"-->
+<!--	                @click="clearUserOverrideForPreview"-->
+<!--	              >-->
+<!--	                恢复自动-->
+<!--	              </button>-->
+<!--	            </div>-->
+<!--	          </div>-->
 
-	          <div v-if="previewCandidates.error" class="mt-2 text-red-200 whitespace-pre-wrap">
-	            {{ previewCandidates.error }}
-	          </div>
+<!--	          <div v-if="previewCandidates.error" class="mt-2 text-red-200 whitespace-pre-wrap">-->
+<!--	            {{ previewCandidates.error }}-->
+<!--	          </div>-->
 
-	          <div v-if="previewCandidatesOpen && previewCandidates.count > 0" class="mt-2">
-	            <div class="flex gap-2 overflow-x-auto pb-1">
-	              <button
-	                v-for="cand in previewCandidates.items"
-	                :key="cand.idx"
-	                type="button"
-	                class="flex-shrink-0 w-24"
-	                @click="selectCandidateForPreview(cand.idx)"
-	              >
-	                <div class="w-24 h-24 rounded bg-black/20 overflow-hidden border border-white/10">
-	                  <img :src="getPreviewCandidateSrc(cand.idx)" class="w-full h-full object-cover" alt="" />
-	                </div>
-	                <div class="mt-1 text-[11px] text-white/80">#{{ Number(cand.idx) + 1 }}</div>
-	              </button>
-	            </div>
+<!--	          <div v-if="previewCandidatesOpen && previewCandidates.count > 0" class="mt-2">-->
+<!--	            <div class="flex gap-2 overflow-x-auto pb-1">-->
+<!--	              <button-->
+<!--	                v-for="cand in previewCandidates.items"-->
+<!--	                :key="cand.idx"-->
+<!--	                type="button"-->
+<!--	                class="flex-shrink-0 w-24"-->
+<!--	                @click="selectCandidateForPreview(cand.idx)"-->
+<!--	              >-->
+<!--	                <div class="w-24 h-24 rounded bg-black/20 overflow-hidden border border-white/10">-->
+<!--	                  <img :src="getPreviewCandidateSrc(cand.idx)" class="w-full h-full object-cover" alt="" />-->
+<!--	                </div>-->
+<!--	                <div class="mt-1 text-[11px] text-white/80">#{{ Number(cand.idx) + 1 }}</div>-->
+<!--	              </button>-->
+<!--	            </div>-->
 
-	            <div v-if="previewCandidates.hasMore" class="mt-2">
-	              <button
-	                type="button"
-	                class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors"
-	                :disabled="previewCandidates.loadingMore"
-	                @click="loadMorePreviewCandidates"
-	              >
-	                {{ previewCandidates.loadingMore ? '加载中…' : '加载更多候选' }}
-	              </button>
-	            </div>
-	          </div>
-	        </div>
+<!--	            <div v-if="previewCandidates.hasMore" class="mt-2">-->
+<!--	              <button-->
+<!--	                type="button"-->
+<!--	                class="px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors"-->
+<!--	                :disabled="previewCandidates.loadingMore"-->
+<!--	                @click="loadMorePreviewCandidates"-->
+<!--	              >-->
+<!--	                {{ previewCandidates.loadingMore ? '加载中…' : '加载更多候选' }}-->
+<!--	              </button>-->
+<!--	            </div>-->
+<!--	          </div>-->
+<!--	        </div>-->
 	      </div>
 
 	      <button
@@ -374,7 +396,7 @@ useHead({ title: '朋友圈 - 微信数据分析助手' })
 const api = useApi()
 
 const chatAccounts = useChatAccountsStore()
-const { selectedAccount, accounts: availableAccounts } = storeToRefs(chatAccounts)
+const { selectedAccount } = storeToRefs(chatAccounts)
 
 const privacyStore = usePrivacyStore()
 const { privacyMode } = storeToRefs(privacyStore)
@@ -389,108 +411,108 @@ const pageSize = 20
 const mediaBase = process.client ? 'http://localhost:8000' : ''
 
 // User overrides for SNS image matching (account-local, stored in localStorage).
-const SNS_MEDIA_OVERRIDE_PREFIX = 'sns_media_override:v1:'
-const SNS_MEDIA_OVERRIDE_REV_PREFIX = 'sns_media_override_rev:v1:'
-const snsMediaOverrides = ref({})
-const snsMediaOverrideRev = ref('0')
+// const SNS_MEDIA_OVERRIDE_PREFIX = 'sns_media_override:v1:'
+// const SNS_MEDIA_OVERRIDE_REV_PREFIX = 'sns_media_override_rev:v1:'
+// const snsMediaOverrides = ref({})
+// const snsMediaOverrideRev = ref('0')
 
-const snsOverrideStorageKey = (account) => `${SNS_MEDIA_OVERRIDE_PREFIX}${String(account || '').trim()}`
-const snsOverrideRevStorageKey = (account) => `${SNS_MEDIA_OVERRIDE_REV_PREFIX}${String(account || '').trim()}`
-const snsOverrideMediaKey = (postId, idx) => `${String(postId || '')}:${String(Number(idx) || 0)}`
+// const snsOverrideStorageKey = (account) => `${SNS_MEDIA_OVERRIDE_PREFIX}${String(account || '').trim()}`
+// const snsOverrideRevStorageKey = (account) => `${SNS_MEDIA_OVERRIDE_REV_PREFIX}${String(account || '').trim()}`
+// const snsOverrideMediaKey = (postId, idx) => `${String(postId || '')}:${String(Number(idx) || 0)}`
 
-const loadSnsMediaOverrides = () => {
-  if (!process.client) return
-  const acc = String(selectedAccount.value || '').trim()
-  if (!acc) {
-    snsMediaOverrides.value = {}
-    snsMediaOverrideRev.value = '0'
-    return
-  }
-  try {
-    const raw = localStorage.getItem(snsOverrideStorageKey(acc))
-    const parsed = raw ? JSON.parse(raw) : {}
-    snsMediaOverrides.value = parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    snsMediaOverrides.value = {}
-  }
-  try {
-    const rev = localStorage.getItem(snsOverrideRevStorageKey(acc))
-    snsMediaOverrideRev.value = String(rev || '0')
-  } catch {
-    snsMediaOverrideRev.value = '0'
-  }
-}
-
-const saveSnsMediaOverrides = () => {
-  if (!process.client) return
-  const acc = String(selectedAccount.value || '').trim()
-  if (!acc) return
-  try {
-    localStorage.setItem(snsOverrideStorageKey(acc), JSON.stringify(snsMediaOverrides.value || {}))
-  } catch {}
-  try {
-    localStorage.setItem(snsOverrideRevStorageKey(acc), String(snsMediaOverrideRev.value || '0'))
-  } catch {}
-}
+// const loadSnsMediaOverrides = () => {
+//   if (!process.client) return
+//   const acc = String(selectedAccount.value || '').trim()
+//   if (!acc) {
+//     snsMediaOverrides.value = {}
+//     snsMediaOverrideRev.value = '0'
+//     return
+//   }
+//   try {
+//     const raw = localStorage.getItem(snsOverrideStorageKey(acc))
+//     const parsed = raw ? JSON.parse(raw) : {}
+//     snsMediaOverrides.value = parsed && typeof parsed === 'object' ? parsed : {}
+//   } catch {
+//     snsMediaOverrides.value = {}
+//   }
+//   try {
+//     const rev = localStorage.getItem(snsOverrideRevStorageKey(acc))
+//     snsMediaOverrideRev.value = String(rev || '0')
+//   } catch {
+//     snsMediaOverrideRev.value = '0'
+//   }
+// }
+//
+// const saveSnsMediaOverrides = () => {
+//   if (!process.client) return
+//   const acc = String(selectedAccount.value || '').trim()
+//   if (!acc) return
+//   try {
+//     localStorage.setItem(snsOverrideStorageKey(acc), JSON.stringify(snsMediaOverrides.value || {}))
+//   } catch {}
+//   try {
+//     localStorage.setItem(snsOverrideRevStorageKey(acc), String(snsMediaOverrideRev.value || '0'))
+//   } catch {}
+// }
 
 // Settings: avoid auto-using an image that was manually pinned to another SNS post.
-const SNS_SNS_SETTINGS_PREFIX = 'sns_settings:v1:'
-const snsAvoidOtherPicked = ref(true)
-const snsAvoidOtherPickedStorageKey = (account) => `${SNS_SNS_SETTINGS_PREFIX}${String(account || '').trim()}:avoid_other_picked`
-
-const loadSnsSettings = () => {
-  if (!process.client) return
-  const acc = String(selectedAccount.value || '').trim()
-  if (!acc) return
-  try {
-    const raw = localStorage.getItem(snsAvoidOtherPickedStorageKey(acc))
-    if (raw == null || raw === '') return
-    snsAvoidOtherPicked.value = raw === '1' || raw === 'true'
-  } catch {}
-}
-
-const saveSnsSettings = () => {
-  if (!process.client) return
-  const acc = String(selectedAccount.value || '').trim()
-  if (!acc) return
-  try {
-    localStorage.setItem(snsAvoidOtherPickedStorageKey(acc), snsAvoidOtherPicked.value ? '1' : '0')
-  } catch {}
-}
-
-const syncSnsMediaPicksToBackend = async () => {
-  const acc = String(selectedAccount.value || '').trim()
-  if (!acc) return
-  try {
-    await api.saveSnsMediaPicks({ account: acc, picks: snsMediaOverrides.value || {} })
-  } catch {}
-}
-
-const getSnsMediaOverridePick = (postId, idx) => {
-  const key = snsOverrideMediaKey(postId, idx)
-  const v = snsMediaOverrides.value?.[key]
-  return String(v || '').trim()
-}
-
-const setSnsMediaOverridePick = (postId, idx, pick) => {
-  if (!process.client) return
-  const key = snsOverrideMediaKey(postId, idx)
-  const v = String(pick || '').trim()
-  if (!v) {
-    if (snsMediaOverrides.value && Object.prototype.hasOwnProperty.call(snsMediaOverrides.value, key)) {
-      delete snsMediaOverrides.value[key]
-    }
-  } else {
-    snsMediaOverrides.value[key] = v
-  }
-  saveSnsMediaOverrides()
-  // Keep backend in sync so it can apply duplicate-avoidance logic.
-  // Then bump `pv` so other auto-matched images reload using the updated picks.
-  void syncSnsMediaPicksToBackend().finally(() => {
-    snsMediaOverrideRev.value = String(Date.now())
-    saveSnsMediaOverrides()
-  })
-}
+// const SNS_SNS_SETTINGS_PREFIX = 'sns_settings:v1:'
+// const snsAvoidOtherPicked = ref(true)
+// const snsAvoidOtherPickedStorageKey = (account) => `${SNS_SNS_SETTINGS_PREFIX}${String(account || '').trim()}:avoid_other_picked`
+//
+// const loadSnsSettings = () => {
+//   if (!process.client) return
+//   const acc = String(selectedAccount.value || '').trim()
+//   if (!acc) return
+//   try {
+//     const raw = localStorage.getItem(snsAvoidOtherPickedStorageKey(acc))
+//     if (raw == null || raw === '') return
+//     snsAvoidOtherPicked.value = raw === '1' || raw === 'true'
+//   } catch {}
+// }
+//
+// const saveSnsSettings = () => {
+//   if (!process.client) return
+//   const acc = String(selectedAccount.value || '').trim()
+//   if (!acc) return
+//   try {
+//     localStorage.setItem(snsAvoidOtherPickedStorageKey(acc), snsAvoidOtherPicked.value ? '1' : '0')
+//   } catch {}
+// }
+//
+// const syncSnsMediaPicksToBackend = async () => {
+//   const acc = String(selectedAccount.value || '').trim()
+//   if (!acc) return
+//   try {
+//     await api.saveSnsMediaPicks({ account: acc, picks: snsMediaOverrides.value || {} })
+//   } catch {}
+// }
+//
+// const getSnsMediaOverridePick = (postId, idx) => {
+//   const key = snsOverrideMediaKey(postId, idx)
+//   const v = snsMediaOverrides.value?.[key]
+//   return String(v || '').trim()
+// }
+//
+// const setSnsMediaOverridePick = (postId, idx, pick) => {
+//   if (!process.client) return
+//   const key = snsOverrideMediaKey(postId, idx)
+//   const v = String(pick || '').trim()
+//   if (!v) {
+//     if (snsMediaOverrides.value && Object.prototype.hasOwnProperty.call(snsMediaOverrides.value, key)) {
+//       delete snsMediaOverrides.value[key]
+//     }
+//   } else {
+//     snsMediaOverrides.value[key] = v
+//   }
+//   saveSnsMediaOverrides()
+//   // Keep backend in sync so it can apply duplicate-avoidance logic.
+//   // Then bump `pv` so other auto-matched images reload using the updated picks.
+//   void syncSnsMediaPicksToBackend().finally(() => {
+//     snsMediaOverrideRev.value = String(Date.now())
+//     saveSnsMediaOverrides()
+//   })
+// }
 
 // Track failed images per-post, per-index to render placeholders instead of broken <img>.
 const mediaErrors = ref({})
@@ -600,6 +622,15 @@ const onCopyPostJsonClick = async () => {
   }
 }
 
+const onScroll = (e) => {
+  const { scrollTop, clientHeight, scrollHeight } = e.target
+  if (scrollTop + clientHeight >= scrollHeight - 200) {
+    if (hasMore.value && !isLoading.value) {
+      loadPosts({ reset: false })
+    }
+  }
+}
+
 const postAvatarUrl = (username) => {
   const acc = String(selectedAccount.value || '').trim()
   const u = String(username || '').trim()
@@ -690,7 +721,7 @@ const getSnsMediaUrl = (post, m, idx, rawUrl) => {
         const h = String(m?.size?.height || m?.size?.h || '').trim()
         const ts = String(m?.size?.totalSize || m?.size?.total_size || m?.size?.total || '').trim()
         const sizeIdx = mediaSizeGroupIndex(post, m, idx)
-        const pick = getSnsMediaOverridePick(post?.id, idx)
+        // const pick = getSnsMediaOverridePick(post?.id, idx)
         let md5 = normalizeHex32(m?.urlAttrs?.md5 || m?.thumbAttrs?.md5 || m?.urlAttrs?.MD5 || m?.thumbAttrs?.MD5)
         if (!md5) {
           const match = /[?&]md5=([0-9a-fA-F]{16,32})/.exec(raw)
@@ -712,11 +743,11 @@ const getSnsMediaUrl = (post, m, idx, rawUrl) => {
         const mtype = String(m?.type || '').trim()
         if (mtype) parts.set('media_type', mtype)
 
-        if (pick) parts.set('pick', pick)
-        if (!pick && snsAvoidOtherPicked.value) {
-          parts.set('avoid_picked', '1')
-          parts.set('pv', String(snsMediaOverrideRev.value || '0'))
-        }
+        // if (pick) parts.set('pick', pick)
+        // if (!pick && snsAvoidOtherPicked.value) {
+        //   parts.set('avoid_picked', '1')
+        //   parts.set('pv', String(snsMediaOverrideRev.value || '0'))
+        // }
         if (md5) parts.set('md5', md5)
         // Bump this when changing backend matching logic to avoid stale cached wrong images.
         parts.set('v', '7')
@@ -789,52 +820,52 @@ const previewSrc = computed(() => {
   return getMediaPreviewSrc(ctx.post, ctx.media, ctx.idx)
 })
 
-const previewHasUserOverride = computed(() => {
-  const ctx = previewCtx.value
-  if (!ctx) return false
-  return !!getSnsMediaOverridePick(ctx.post?.id, ctx.idx)
-})
+// const previewHasUserOverride = computed(() => {
+//   const ctx = previewCtx.value
+//   if (!ctx) return false
+//   return !!getSnsMediaOverridePick(ctx.post?.id, ctx.idx)
+// })
 
-const previewEffectiveIdx = computed(() => {
-  const ctx = previewCtx.value
-  if (!ctx) return null
-  const pick = getSnsMediaOverridePick(ctx.post?.id, ctx.idx)
-  if (pick) {
-    const found = (previewCandidates.items || []).find((c) => String(c?.key || '') === pick)
-    if (found) return Number(found.idx)
-    return null
-  }
-  const baseIdx = mediaSizeGroupIndex(ctx.post, ctx.media, ctx.idx)
-  if (!snsAvoidOtherPicked.value) return baseIdx
-  const curPid = String(ctx.post?.id || '').trim()
-  if (!curPid) return baseIdx
+// const previewEffectiveIdx = computed(() => {
+//   const ctx = previewCtx.value
+//   if (!ctx) return null
+//   const pick = getSnsMediaOverridePick(ctx.post?.id, ctx.idx)
+//   if (pick) {
+//     const found = (previewCandidates.items || []).find((c) => String(c?.key || '') === pick)
+//     if (found) return Number(found.idx)
+//     return null
+//   }
+//   const baseIdx = mediaSizeGroupIndex(ctx.post, ctx.media, ctx.idx)
+//   if (!snsAvoidOtherPicked.value) return baseIdx
+//   const curPid = String(ctx.post?.id || '').trim()
+//   if (!curPid) return baseIdx
+//
+//   // Mirror backend logic: skip candidates that were manually pinned to other posts.
+//   const reserved = new Set()
+//   try {
+//     for (const [k, v] of Object.entries(snsMediaOverrides.value || {})) {
+//       const pid = String(k || '').split(':', 1)[0].trim()
+//       if (!pid || pid === curPid) continue
+//       const key = String(v || '').trim()
+//       if (key) reserved.add(key)
+//     }
+//   } catch {}
+//
+//   const items = Array.isArray(previewCandidates.items) ? [...previewCandidates.items] : []
+//   items.sort((a, b) => Number(a?.idx || 0) - Number(b?.idx || 0))
+//   for (const c of items) {
+//     const i = Number(c?.idx)
+//     const key = String(c?.key || '').trim()
+//     if (!Number.isFinite(i) || i < baseIdx) continue
+//     if (!key) continue
+//     if (!reserved.has(key)) return i
+//   }
+//   return baseIdx
+// })
 
-  // Mirror backend logic: skip candidates that were manually pinned to other posts.
-  const reserved = new Set()
-  try {
-    for (const [k, v] of Object.entries(snsMediaOverrides.value || {})) {
-      const pid = String(k || '').split(':', 1)[0].trim()
-      if (!pid || pid === curPid) continue
-      const key = String(v || '').trim()
-      if (key) reserved.add(key)
-    }
-  } catch {}
-
-  const items = Array.isArray(previewCandidates.items) ? [...previewCandidates.items] : []
-  items.sort((a, b) => Number(a?.idx || 0) - Number(b?.idx || 0))
-  for (const c of items) {
-    const i = Number(c?.idx)
-    const key = String(c?.key || '').trim()
-    if (!Number.isFinite(i) || i < baseIdx) continue
-    if (!key) continue
-    if (!reserved.has(key)) return i
-  }
-  return baseIdx
-})
-
-const toggleCandidatePanel = () => {
-  previewCandidatesOpen.value = !previewCandidatesOpen.value
-}
+// const toggleCandidatePanel = () => {
+//   previewCandidatesOpen.value = !previewCandidatesOpen.value
+// }
 
 const loadPreviewCandidates = async ({ reset }) => {
   const ctx = previewCtx.value
@@ -906,53 +937,53 @@ const closeImagePreview = () => {
   document.body.style.overflow = ''
 }
 
-const getPreviewCandidateSrc = (candIdx) => {
-  const ctx = previewCtx.value
-  const acc = String(selectedAccount.value || '').trim()
-  if (!ctx || !acc) return ''
+// const getPreviewCandidateSrc = (candIdx) => {
+//   const ctx = previewCtx.value
+//   const acc = String(selectedAccount.value || '').trim()
+//   if (!ctx || !acc) return ''
+//
+//   const idxNum = Number(candIdx)
+//   const cand = (previewCandidates.items || []).find((c) => Number(c?.idx) === idxNum)
+//   const key = String(cand?.key || '').trim()
+//   if (!key) return ''
+//
+//   const parts = new URLSearchParams()
+//   parts.set('account', acc)
+//   parts.set('pick', key)
+//   const ct = String(ctx.post?.createTime || '').trim()
+//   if (ct) parts.set('create_time', ct)
+//   parts.set('v', '7')
+//   return `${mediaBase}/api/sns/media?${parts.toString()}`
+// }
 
-  const idxNum = Number(candIdx)
-  const cand = (previewCandidates.items || []).find((c) => Number(c?.idx) === idxNum)
-  const key = String(cand?.key || '').trim()
-  if (!key) return ''
-
-  const parts = new URLSearchParams()
-  parts.set('account', acc)
-  parts.set('pick', key)
-  const ct = String(ctx.post?.createTime || '').trim()
-  if (ct) parts.set('create_time', ct)
-  parts.set('v', '7')
-  return `${mediaBase}/api/sns/media?${parts.toString()}`
-}
-
-const selectCandidateForPreview = (candIdx) => {
-  const ctx = previewCtx.value
-  if (!ctx) return
-  const idxNum = Number(candIdx)
-  const cand = (previewCandidates.items || []).find((c) => Number(c?.idx) === idxNum)
-  const key = String(cand?.key || '').trim()
-  if (!key) return
-  setSnsMediaOverridePick(ctx.post?.id, ctx.idx, key)
-  // Allow <img> to retry after user switches candidates.
-  try {
-    delete mediaErrors.value[mediaErrorKey(ctx.post?.id, ctx.idx)]
-  } catch {}
-}
-
-const clearUserOverrideForPreview = () => {
-  const ctx = previewCtx.value
-  if (!ctx) return
-  setSnsMediaOverridePick(ctx.post?.id, ctx.idx, '')
-  try {
-    delete mediaErrors.value[mediaErrorKey(ctx.post?.id, ctx.idx)]
-  } catch {}
-}
-
-const loadMorePreviewCandidates = async () => {
-  if (previewCandidates.loading || previewCandidates.loadingMore) return
-  if (!previewCandidates.hasMore) return
-  await loadPreviewCandidates({ reset: false })
-}
+// const selectCandidateForPreview = (candIdx) => {
+//   const ctx = previewCtx.value
+//   if (!ctx) return
+//   const idxNum = Number(candIdx)
+//   const cand = (previewCandidates.items || []).find((c) => Number(c?.idx) === idxNum)
+//   const key = String(cand?.key || '').trim()
+//   if (!key) return
+//   setSnsMediaOverridePick(ctx.post?.id, ctx.idx, key)
+//   // Allow <img> to retry after user switches candidates.
+//   try {
+//     delete mediaErrors.value[mediaErrorKey(ctx.post?.id, ctx.idx)]
+//   } catch {}
+// }
+//
+// const clearUserOverrideForPreview = () => {
+//   const ctx = previewCtx.value
+//   if (!ctx) return
+//   setSnsMediaOverridePick(ctx.post?.id, ctx.idx, '')
+//   try {
+//     delete mediaErrors.value[mediaErrorKey(ctx.post?.id, ctx.idx)]
+//   } catch {}
+// }
+//
+// const loadMorePreviewCandidates = async () => {
+//   if (previewCandidates.loading || previewCandidates.loadingMore) return
+//   if (!previewCandidates.hasMore) return
+//   await loadPreviewCandidates({ reset: false })
+// }
 
 const onMediaClick = (post, m, idx = 0) => {
   if (!process.client) return
@@ -1029,35 +1060,52 @@ const loadPosts = async ({ reset }) => {
   }
 }
 
-watch(
-  () => selectedAccount.value,
-  async (v, oldV) => {
-    if (v && v !== oldV) {
-      // Account switch: reload overrides and reset preview state.
-      loadSnsMediaOverrides()
-      loadSnsSettings()
-      void syncSnsMediaPicksToBackend()
-      if (previewCtx.value) closeImagePreview()
-      await loadPosts({ reset: true })
-    } else if (!v) {
-      snsMediaOverrides.value = {}
-    }
-  }
-)
+// watch(
+//   () => selectedAccount.value,
+//   async (v, oldV) => {
+//     if (v && v !== oldV) {
+//       // Account switch: reload overrides and reset preview state.
+//       loadSnsMediaOverrides()
+//       loadSnsSettings()
+//       void syncSnsMediaPicksToBackend()
+//       if (previewCtx.value) closeImagePreview()
+//       await loadPosts({ reset: true })
+//     } else if (!v) {
+//       snsMediaOverrides.value = {}
+//     }
+//   }
+// )
+
+// watch(
+//   () => snsAvoidOtherPicked.value,
+//   () => {
+//     saveSnsSettings()
+//   }
+// )
+
+// onMounted(async () => {
+//   privacyStore.init()
+//   await loadAccounts()
+//   loadSnsMediaOverrides()
+//   loadSnsSettings()
+//   void syncSnsMediaPicksToBackend()
+// })
 
 watch(
-  () => snsAvoidOtherPicked.value,
-  () => {
-    saveSnsSettings()
-  }
+    () => selectedAccount.value,
+    async (v, oldV) => {
+      if (v && v !== oldV) {
+        if (previewCtx.value) closeImagePreview()
+        await loadPosts({ reset: true })
+      }
+    },
+    { immediate: true }
 )
+
 
 onMounted(async () => {
   privacyStore.init()
   await loadAccounts()
-  loadSnsMediaOverrides()
-  loadSnsSettings()
-  void syncSnsMediaPicksToBackend()
 })
 
 const onGlobalClick = () => {
