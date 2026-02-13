@@ -1,6 +1,7 @@
 from bisect import bisect_left, bisect_right
 from functools import lru_cache
 from pathlib import Path
+import hashlib
 import json
 import re
 import sqlite3
@@ -470,6 +471,21 @@ def _sns_cache_key_from_path(p: Path) -> str:
         return ""
     return _normalize_hex32(key)
 
+
+def _generate_sns_cache_key(tid: str, media_id: str, media_type: int = 2) -> str:
+    """
+    公式: md5(tid_mediaId_type)
+    Example: 14852422213384352392_14852422213963625090_2 -> 6d479249ca5a090fab5c42c79bc56b89
+    """
+    if not tid or not media_id:
+        return ""
+
+    raw_key = f"{tid}_{media_id}_{media_type}"
+
+    try:
+        return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+    except Exception:
+        return ""
 
 def _resolve_sns_cached_image_path_by_cache_key(
     *,
@@ -944,19 +960,42 @@ def list_sns_media_candidates(
 
 @router.get("/api/sns/media", summary="获取朋友圈图片（本地缓存优先）")
 async def get_sns_media(
-    account: Optional[str] = None,
-    create_time: int = 0,
-    width: int = 0,
-    height: int = 0,
-    total_size: int = 0,
-    idx: int = 0,
-    avoid_picked: int = 0,
-    post_id: Optional[str] = None,
-    pick: Optional[str] = None,
-    md5: Optional[str] = None,
-    url: Optional[str] = None,
+        account: Optional[str] = None,
+        create_time: int = 0,
+        width: int = 0,
+        height: int = 0,
+        total_size: int = 0,
+        idx: int = 0,
+        avoid_picked: int = 0,
+        post_id: Optional[str] = None,
+        media_id: Optional[str] = None,
+        media_type: int = 2,
+        pick: Optional[str] = None,
+        md5: Optional[str] = None,
+        url: Optional[str] = None,
 ):
     account_dir = _resolve_account_dir(account)
+    wxid_dir = _resolve_account_wxid_dir(account_dir)
+
+    if wxid_dir and post_id and media_id:
+        deterministic_key = _generate_sns_cache_key(post_id, media_id, media_type)
+
+        exact_match_path = _resolve_sns_cached_image_path_by_cache_key(
+            wxid_dir=wxid_dir,
+            cache_key=deterministic_key,
+            create_time=0
+        )
+
+        if exact_match_path:
+            try:
+                payload, mtype = _read_and_maybe_decrypt_media(Path(exact_match_path), account_dir)
+                if payload and str(mtype or "").startswith("image/"):
+                    resp = Response(content=payload, media_type=str(mtype or "image/jpeg"))
+                    resp.headers["Cache-Control"] = "public, max-age=31536000"  # 确定性缓存可以设置很久
+                    resp.headers["X-SNS-Source"] = "deterministic-hash"
+                    return resp
+            except Exception:
+                pass
 
     # 0) User-picked cache key override (stable across candidate ordering).
     pick_key = _normalize_hex32(pick)

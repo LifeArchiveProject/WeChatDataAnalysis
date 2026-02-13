@@ -609,10 +609,17 @@ const getSnsMediaUrl = (post, m, idx, rawUrl) => {
         if (h) parts.set('height', h)
         if (/^\d+$/.test(ts)) parts.set('total_size', ts)
         parts.set('idx', String(Number(sizeIdx) || 0))
+        const pid = String(post?.id || '').trim()
+        if (pid) parts.set('post_id', pid)
+
+        const mid = String(m?.id || '').trim()
+        if (mid) parts.set('media_id', mid)
+
+        const mtype = String(m?.type || '').trim()
+        if (mtype) parts.set('media_type', mtype)
+
         if (pick) parts.set('pick', pick)
         if (!pick && snsAvoidOtherPicked.value) {
-          const pid = String(post?.id || '').trim()
-          if (pid) parts.set('post_id', pid)
           parts.set('avoid_picked', '1')
           parts.set('pv', String(snsMediaOverrideRev.value || '0'))
         }
