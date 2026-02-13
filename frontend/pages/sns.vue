@@ -9,21 +9,27 @@
 
               <div class="absolute right-4 -bottom-6 flex items-end gap-4">
                 <div class="text-white font-bold text-xl mb-7 drop-shadow-md">
-                  H3CoF6
+                  {{ selfInfo.nickname || '获取中...' }}
                 </div>
+
                 <div class="w-[72px] h-[72px] rounded-lg bg-white p-[2px] shadow-sm">
                   <img
-                      src="https://api.dicebear.com/7.x/shapes/svg?seed=H3CoF6"
+                      v-if="selfInfo.wxid"
+                      :src="postAvatarUrl(selfInfo.wxid)"
                       class="w-full h-full rounded-md object-cover bg-gray-100"
-                      alt="H3CoF6"
+                      :alt="selfInfo.nickname"
+                      referrerpolicy="no-referrer"
                   />
+                  <div v-else class="w-full h-full rounded-md bg-gray-300 flex items-center justify-center text-gray-500 text-xs">
+                    ...
+                  </div>
                 </div>
               </div>
             </div>
 	          <div v-if="error" class="text-sm text-red-500 whitespace-pre-wrap py-2">{{ error }}</div>
 	          <div v-else-if="isLoading && posts.length === 0" class="text-sm text-gray-500 py-2">加载中…</div>
 	          <div v-else-if="posts.length === 0" class="text-sm text-gray-500 py-2">暂无朋友圈数据</div>
-            
+
 
 	          <div v-for="post in posts" :key="post.id" class="bg-white rounded-sm px-4 py-4 mb-3">
 	            <div class="flex items-start gap-3" @contextmenu.prevent="openPostContextMenu($event, post)">
@@ -342,7 +348,20 @@ const onArticleThumbError = (postId) => {
   articleThumbErrors.value[postId] = true
 }
 
-// （原有的函数保持不变）
+const selfInfo = ref({ wxid: '', nickname: '' })
+
+const loadSelfInfo = async () => {
+  if (!selectedAccount.value) return
+  try {
+    const resp = await $fetch(`${mediaBase}/api/sns/self_info?account=${encodeURIComponent(selectedAccount.value)}`)
+    if (resp && resp.wxid) {
+      selfInfo.value = resp
+    }
+  } catch (e) {
+    console.error('获取个人信息失败', e)
+  }
+}
+
 const getArticleThumbProxyUrl = (contentUrl) => {
   const u = String(contentUrl || '').trim()
   if (!u) return ''
@@ -783,6 +802,7 @@ watch(
     async (v, oldV) => {
       if (v && v !== oldV) {
         if (previewCtx.value) closeImagePreview()
+        await loadSelfInfo()
         await loadPosts({ reset: true })
       }
     },

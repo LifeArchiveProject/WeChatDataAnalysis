@@ -763,6 +763,85 @@ def _list_sns_cached_image_candidate_keys(
     return tuple(out)
 
 
+@router.get("/api/sns/self_info", summary="获取个人信息（wxid和nickname）")
+def api_sns_self_info(account: Optional[str] = None):
+
+    account_dir = _resolve_account_dir(account)
+    wxid = account_dir.name
+
+    logger.info(f"[self_info] 开始获取账号信息, 预设 wxid: {wxid}")
+
+    nickname = wxid
+    source = "wxid_dir"
+
+    try:
+        status = WCDB_REALTIME.get_status(account_dir)
+        if status.get("dll_present") and status.get("key_present"):
+            rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
+            with rt_conn.lock:
+
+                names_map = _wcdb_get_display_names(rt_conn.handle, [wxid])
+                if names_map and names_map.get(wxid):
+                    nickname = names_map[wxid]
+                    source = "wcdb_realtime"
+                    logger.info(f"[self_info] 从 WCDB 实时连接获取成功: {nickname}")
+                    return {"wxid": wxid, "nickname": nickname, "source": source}
+    except Exception as e:
+        logger.debug(f"[self_info] WCDB 路径跳过或失败: {e}")
+
+    contact_db_path = account_dir / "contact.db"
+    if contact_db_path.exists():
+        conn = None
+        try:
+            db_uri = f"file:{contact_db_path}?mode=ro"
+            conn = sqlite3.connect(db_uri, uri=True, timeout=5)
+            conn.row_factory = sqlite3.Row
+
+            cursor = conn.execute("PRAGMA table_info(contact)")
+            cols = {row["name"].lower() for row in cursor.fetchall()}
+            logger.debug(f"[self_info] contact 表现有字段: {cols}")
+
+            target_nick_col = "nick_name" if "nick_name" in cols else ("nickname" if "nickname" in cols else None)
+
+            if target_nick_col:
+                sql = f"SELECT remark, {target_nick_col} as nickname_val, alias FROM contact WHERE username = ? LIMIT 1"
+                row = conn.execute(sql, (wxid,)).fetchone()
+
+
+                if row:
+                    raw_remark = str(row["remark"] or "").strip() if "remark" in row.keys() else ""
+                    raw_nick = str(row["nickname_val"] or "").strip()
+                    raw_alias = str(row["alias"] or "").strip() if "alias" in row.keys() else ""
+
+                    if raw_remark:
+                        nickname = raw_remark
+                        source = "contact_db_remark"
+                    elif raw_nick:
+                        nickname = raw_nick
+                        source = "contact_db_nickname"
+                    elif raw_alias:
+                        nickname = raw_alias
+                        source = "contact_db_alias"
+
+                    logger.info(f"[self_info] 从数据库提取成功: {nickname} (src: {source})")
+            else:
+                logger.warning("[self_info] contact 表中找不到任何昵称相关字段")
+
+        except sqlite3.OperationalError as e:
+            logger.error(f"[self_info] 数据库繁忙或锁定: {e}")
+        except Exception as e:
+            logger.exception(f"[self_info] 查询异常: {e}")
+        finally:
+            if conn: conn.close()
+    else:
+        logger.warning(f"[self_info] 找不到 contact.db: {contact_db_path}")
+
+    return {
+        "wxid": wxid,
+        "nickname": nickname,
+        "source": source
+    }
+
 @router.get("/api/sns/timeline", summary="获取朋友圈时间线")
 def list_sns_timeline(
     account: Optional[str] = None,
