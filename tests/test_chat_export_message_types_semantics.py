@@ -198,6 +198,7 @@ class TestChatExportMessageTypesSemantics(unittest.TestCase):
             message_types=message_types,
             output_dir=None,
             allow_process_key_extract=False,
+            download_remote_media=False,
             privacy_mode=privacy_mode,
             file_name=None,
         )

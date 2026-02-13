@@ -62,7 +62,68 @@ class TestTransferPostprocess(unittest.TestCase):
 
         self.assertEqual(merged[0].get("transferStatus"), "已被接收")
 
+    def test_pending_transfer_marked_expired_by_system_message(self):
+        merged = [
+            {
+                "id": "message_0:Msg_x:100",
+                "renderType": "transfer",
+                "paySubType": "1",
+                "transferId": "t-expired-1",
+                "amount": "￥500.00",
+                "createTime": 1770742598,
+                "isSent": True,
+                "transferStatus": "转账",
+            },
+            {
+                "id": "message_0:Msg_x:101",
+                "renderType": "system",
+                "type": 10000,
+                "createTime": 1770829000,
+                "content": "收款方24小时内未接收你的转账，已过期",
+            },
+        ]
+
+        chat_router._postprocess_transfer_messages(merged)
+
+        self.assertEqual(merged[0].get("paySubType"), "10")
+        self.assertEqual(merged[0].get("transferStatus"), "已过期")
+
+    def test_expired_matching_wins_over_amount_time_received_fallback(self):
+        merged = [
+            {
+                "id": "message_0:Msg_x:200",
+                "renderType": "transfer",
+                "paySubType": "1",
+                "transferId": "t-expired-2",
+                "amount": "￥500.00",
+                "createTime": 1770742598,
+                "isSent": True,
+                "transferStatus": "",
+            },
+            {
+                "id": "message_0:Msg_x:201",
+                "renderType": "transfer",
+                "paySubType": "3",
+                "transferId": "t-other",
+                "amount": "￥500.00",
+                "createTime": 1770828800,
+                "isSent": False,
+                "transferStatus": "已收款",
+            },
+            {
+                "id": "message_0:Msg_x:202",
+                "renderType": "system",
+                "type": 10000,
+                "createTime": 1770829000,
+                "content": "收款方24小时内未接收你的转账，已过期",
+            },
+        ]
+
+        chat_router._postprocess_transfer_messages(merged)
+
+        self.assertEqual(merged[0].get("paySubType"), "10")
+        self.assertEqual(merged[0].get("transferStatus"), "已过期")
+
 
 if __name__ == "__main__":
     unittest.main()
-

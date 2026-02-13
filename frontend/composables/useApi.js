@@ -294,6 +294,7 @@ export const useApi = () => {
         media_kinds: Array.isArray(data.media_kinds) ? data.media_kinds : ['image', 'emoji', 'video', 'video_thumb', 'voice', 'file'],
         output_dir: data.output_dir == null ? null : String(data.output_dir || '').trim(),
         allow_process_key_extract: !!data.allow_process_key_extract,
+        download_remote_media: !!data.download_remote_media,
         privacy_mode: !!data.privacy_mode,
         file_name: data.file_name || null
       }

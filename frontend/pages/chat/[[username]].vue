@@ -722,7 +722,7 @@
                     @click.stop="openChatHistoryModal(message)"
                   >
                     <div class="wechat-chat-history-body">
-                      <div class="wechat-chat-history-title">{{ message.title || '聊天记录' }}</div>
+                      <div class="wechat-chat-history-title">{{ message.title || '合并消息' }}</div>
                       <div class="wechat-chat-history-preview" v-if="getChatHistoryPreviewLines(message).length">
                         <div
                           v-for="(line, idx) in getChatHistoryPreviewLines(message)"
@@ -734,14 +734,15 @@
                       </div>
                     </div>
                     <div class="wechat-chat-history-bottom">
-                      <span>聊天记录</span>
+                      <span>合并消息</span>
                     </div>
                   </div>
                   <div v-else-if="message.renderType === 'transfer'"
                     class="wechat-transfer-card msg-radius"
-                    :class="[{ 'wechat-transfer-received': message.transferReceived, 'wechat-transfer-returned': isTransferReturned(message) }, message.isSent ? 'wechat-transfer-sent-side' : 'wechat-transfer-received-side']">
+                    :class="[{ 'wechat-transfer-received': message.transferReceived, 'wechat-transfer-returned': isTransferReturned(message), 'wechat-transfer-overdue': isTransferOverdue(message) }, message.isSent ? 'wechat-transfer-sent-side' : 'wechat-transfer-received-side']">
                     <div class="wechat-transfer-content">
                       <img src="/assets/images/wechat/wechat-returned.png" v-if="isTransferReturned(message)" class="wechat-transfer-icon" alt="">
+                      <img src="/assets/images/wechat/overdue.png" v-else-if="isTransferOverdue(message)" class="wechat-transfer-icon" alt="">
                       <img src="/assets/images/wechat/wechat-trans-icon2.png" v-else-if="message.transferReceived" class="wechat-transfer-icon" alt="">
                       <img src="/assets/images/wechat/wechat-trans-icon1.png" v-else class="wechat-transfer-icon" alt="">
                       <div class="wechat-transfer-info">
@@ -1233,7 +1234,7 @@
         @click.stop
       >
         <div class="px-4 py-3 bg-neutral-100 border-b border-gray-200 flex items-center justify-between">
-          <div class="text-sm text-[#161616] truncate">{{ chatHistoryModalTitle || '聊天记录' }}</div>
+          <div class="text-sm text-[#161616] truncate">{{ chatHistoryModalTitle || '合并消息' }}</div>
           <button
             type="button"
             class="p-2 rounded hover:bg-black/5"
@@ -1495,6 +1496,10 @@
                     <input type="radio" value="txt" v-model="exportFormat" class="hidden" />
                     <span>TXT</span>
                   </label>
+                  <label class="flex items-center gap-1.5 px-3 py-1.5 rounded-md border cursor-pointer transition-colors" :class="exportFormat === 'html' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'">
+                    <input type="radio" value="html" v-model="exportFormat" class="hidden" />
+                    <span>HTML</span>
+                  </label>
                 </div>
               </div>
 
@@ -1512,6 +1517,19 @@
                     type="datetime-local"
                     class="px-2.5 py-1.5 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
                   />
+                </div>
+              </div>
+            </div>
+
+            <div v-if="exportFormat === 'html'" class="mt-3">
+              <div class="text-sm font-medium text-gray-800 mb-2">HTML 选项</div>
+              <div class="p-3 bg-gray-50 rounded-md border border-gray-200">
+                <label class="flex items-start gap-2 text-sm text-gray-700">
+                  <input type="checkbox" v-model="exportDownloadRemoteMedia" :disabled="privacyMode" />
+                  <span>允许联网下载链接/引用缩略图（提高离线完整性）</span>
+                </label>
+                <div class="mt-1 text-xs text-gray-500">
+                  仅 HTML 生效；会在导出时尝试下载远程缩略图并写入 ZIP（已做安全限制）。隐私模式下自动忽略。
                 </div>
               </div>
             </div>
@@ -2010,6 +2028,7 @@ const messageTypeFilterOptions = [
   { value: 'emoji', label: '表情' },
   { value: 'video', label: '视频' },
   { value: 'voice', label: '语音' },
+  { value: 'chatHistory', label: '合并消息' },
   { value: 'transfer', label: '转账' },
   { value: 'redPacket', label: '红包' },
   { value: 'file', label: '文件' },
@@ -2488,13 +2507,15 @@ const exportError = ref('')
 
 // current: 当前会话（映射为 selected + 单个 username）
 const exportScope = ref('current') // current | selected | all | groups | singles
-const exportFormat = ref('json') // json | txt
+const exportFormat = ref('json') // json | txt | html
+const exportDownloadRemoteMedia = ref(true)
 const exportMessageTypeOptions = [
   { value: 'text', label: '文本' },
   { value: 'image', label: '图片' },
   { value: 'emoji', label: '表情' },
   { value: 'video', label: '视频' },
   { value: 'voice', label: '语音' },
+  { value: 'chatHistory', label: '合并消息' },
   { value: 'transfer', label: '转账' },
   { value: 'redPacket', label: '红包' },
   { value: 'file', label: '文件' },
@@ -3063,6 +3084,15 @@ const startChatExport = async () => {
 
   const selectedTypeSet = new Set(messageTypes.map((t) => String(t || '').trim()))
   const mediaKindSet = new Set()
+  if (selectedTypeSet.has('chatHistory')) {
+    // 合并消息内部可能包含任意媒体类型；即使只勾选了 chatHistory，也需要打包媒体才可离线查看。
+    mediaKindSet.add('image')
+    mediaKindSet.add('emoji')
+    mediaKindSet.add('video')
+    mediaKindSet.add('video_thumb')
+    mediaKindSet.add('voice')
+    mediaKindSet.add('file')
+  }
   if (selectedTypeSet.has('image')) mediaKindSet.add('image')
   if (selectedTypeSet.has('emoji')) mediaKindSet.add('emoji')
   if (selectedTypeSet.has('video')) {
@@ -3091,6 +3121,7 @@ const startChatExport = async () => {
       message_types: messageTypes,
       include_media: includeMedia,
       media_kinds: mediaKinds,
+      download_remote_media: exportFormat.value === 'html' && !!exportDownloadRemoteMedia.value,
       output_dir: isDesktopExportRuntime() ? String(exportFolder.value || '').trim() : null,
       privacy_mode: !!privacyMode.value,
       file_name: exportFileName.value || null
@@ -4015,6 +4046,16 @@ const isTransferReturned = (message) => {
   const text = `${s} ${c}`.trim()
   if (!text) return false
   return text.includes('退回') || text.includes('退还')
+}
+
+const isTransferOverdue = (message) => {
+  const paySubType = String(message?.paySubType || '').trim()
+  if (paySubType === '10') return true
+  const s = String(message?.transferStatus || '').trim()
+  const c = String(message?.content || '').trim()
+  const text = `${s} ${c}`.trim()
+  if (!text) return false
+  return text.includes('过期')
 }
 
 const getTransferTitle = (message) => {
@@ -4952,7 +4993,7 @@ const openChatHistoryQuote = (rec) => {
 
 const openChatHistoryModal = (message) => {
   if (!process.client) return
-  chatHistoryModalTitle.value = String(message?.title || '聊天记录')
+  chatHistoryModalTitle.value = String(message?.title || '合并消息')
 
   const recordItem = String(message?.recordItem || '').trim()
   const parsed = parseChatHistoryRecord(recordItem)
@@ -6097,6 +6138,24 @@ const LinkCard = defineComponent({
 }
 
 .wechat-transfer-returned .wechat-transfer-bottom span {
+  color: #fff;
+}
+
+/* 过期的转账样式 */
+.wechat-transfer-overdue {
+  background: #E9CFB3;
+}
+
+.wechat-transfer-overdue::after {
+  background: #E9CFB3;
+}
+
+.wechat-transfer-overdue .wechat-transfer-amount,
+.wechat-transfer-overdue .wechat-transfer-status {
+  color: #fff;
+}
+
+.wechat-transfer-overdue .wechat-transfer-bottom span {
   color: #fff;
 }
 
