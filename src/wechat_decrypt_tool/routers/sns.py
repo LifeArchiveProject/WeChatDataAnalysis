@@ -105,6 +105,7 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
     if not xml_str:
         return out
 
+
     try:
         root = ET.fromstring(xml_str)
     except Exception:
@@ -1143,7 +1144,8 @@ async def get_sns_media(
         avoid_picked: int = 0,
         post_id: Optional[str] = None,
         media_id: Optional[str] = None,
-        media_type: int = 2,
+        # media_type: int = 2,
+        post_type: int = 1,
         pick: Optional[str] = None,
         md5: Optional[str] = None,
         url: Optional[str] = None,
@@ -1152,7 +1154,7 @@ async def get_sns_media(
     wxid_dir = _resolve_account_wxid_dir(account_dir)
 
     if wxid_dir and post_id and media_id:
-        deterministic_key = _generate_sns_cache_key(post_id, media_id, media_type)
+        deterministic_key = _generate_sns_cache_key(post_id, media_id, post_type)
 
         exact_match_path = _resolve_sns_cached_image_path_by_cache_key(
             wxid_dir=wxid_dir,
