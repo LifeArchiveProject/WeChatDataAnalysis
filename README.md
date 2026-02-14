@@ -5,14 +5,13 @@
 <div align="center">
     <h1>WeChatDataAnalysis - 微信数据库解密与分析工具</h1>
     <p>一个专门用于微信4.x版本数据库解密的工具（支持聊天记录实时更新）</p>
-    <p><b>特别致谢</b>：<a href="https://github.com/ycccccccy/echotrace">echotrace</a>、<a href="https://github.com/hicccc77/WeFlow">WeFlow</a>（本项目大量功能参考其实现，提供了重要技术支持）</p>
+    <p><b>特别致谢</b>：<a href="https://github.com/H3CoF6">H3CoF6</a>（密钥与朋友圈等核心内容的技术支持）、<a href="https://github.com/ycccccccy/echotrace">echotrace</a>、<a href="https://github.com/hicccc77/WeFlow">WeFlow</a>（本项目大量功能参考其实现）</p>
     <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
     <img src="https://gh-down-badges.linkof.link/LifeArchiveProject/WeChatDataAnalysis" alt="Downloads" />
     <img src="https://img.shields.io/github/forks/LifeArchiveProject/WeChatDataAnalysis" alt="Forks" />
     <a href="https://qm.qq.com/q/VQEQ7PcGkk"><img src="https://img.shields.io/badge/QQ%20Group-WeChatDataAnalysis-12B7F5?logo=tencentqq&logoColor=white" alt="QQ Group" /></a>
     <img src="https://img.shields.io/badge/Python-3776AB?logo=Python&logoColor=white" alt="Python" />
-    <img src="https://img.shields.io/badge/FastAPI-009688?logo=FastAPI&logoColor=white" alt="FastAPI" />
     <img src="https://img.shields.io/badge/Vue.js-4FC08D?logo=Vue.js&logoColor=white" alt="Vue.js" />
     <img src="https://img.shields.io/badge/SQLite-003B57?logo=SQLite&logoColor=white" alt="SQLite" />
 </div>
@@ -189,8 +188,6 @@ npm run dist
 
 本项目的开发过程中参考了以下优秀的开源项目和资源：
 
-### 主要参考项目
-
 1. **[echotrace](https://github.com/ycccccccy/echotrace)** - 微信数据解析/取证工具
    - 本项目大量功能参考并复用其实现思路，提供了重要技术支持
 
@@ -214,12 +211,6 @@ npm run dist
 
 7. **[wx-dat](https://github.com/waaaaashi/wx-dat)** - 微信图片密钥获取工具
    - 实现真正的无头获取图片密钥，不再依赖扫描微信内存与点击朋友圈大图
-
-8. **PR #24 贡献者 [H3CoF6](https://github.com/H3CoF6)** - 微信密钥获取能力增强
-   - 无第三方工具依赖实现微信密钥获取能力
-   - 实现数据库密钥获取：实现形式参考 [wx_key](https://github.com/ycccccccy/wx_key) 项目，完成 Python 预编译 wheel 封装，详情见 [py_wx_key](https://github.com/H3CoF6/py_wx_key)
-   - 特征码不在 C++ 内硬编码，而由 Python 模块传入，减少 wheel 更新次数
-   - 实现真正的无头获取图片密钥，不再依赖扫描微信内存（以及点击朋友圈大图），感谢项目 [wx-dat](https://github.com/waaaaashi/wx-dat)
 
 ## Star History
 
