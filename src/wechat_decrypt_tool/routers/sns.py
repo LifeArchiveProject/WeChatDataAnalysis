@@ -4,13 +4,15 @@ from pathlib import Path
 import hashlib
 import json
 import re
+import httpx
+import html # 修复&amp;转义的问题！！！
 import sqlite3
 import time
 import xml.etree.ElementTree as ET
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse  # 返回视频文件
 from pydantic import BaseModel, Field
 
 from ..chat_helpers import _load_contact_rows, _pick_display_name, _resolve_account_dir
@@ -93,11 +95,16 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
         "media": [],
         "likes": [],
         "comments": [],
+        "type": 1,  # 默认类型
+        "title": "",
+        "contentUrl": "",
+        "finderFeed": {}
     }
 
     xml_str = str(xml_text or "").strip()
     if not xml_str:
         return out
+
 
     try:
         root = ET.fromstring(xml_str)
@@ -113,54 +120,72 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
             if isinstance(v, str) and v.strip():
                 return v.strip()
         return ""
+    # &amp转义！！
+    def _clean_url(u: str) -> str:
+        if not u:
+            return ""
 
-    out["username"] = (
-        _find_text(".//TimelineObject/username", ".//TimelineObject/user_name", ".//TimelineObject/userName", ".//username")
-        or fallback_username
-    )
+        cleaned = html.unescape(u)
+        cleaned = cleaned.replace("&amp;", "&")
+        return cleaned.strip()
+
+    out["username"] = _find_text(".//TimelineObject/username", ".//TimelineObject/user_name",
+                                 ".//username") or fallback_username
     out["createTime"] = _safe_int(_find_text(".//TimelineObject/createTime", ".//createTime"))
     out["contentDesc"] = _find_text(".//TimelineObject/contentDesc", ".//contentDesc")
     out["location"] = _build_location_text(root.find(".//location"))
+
+    # --- 提取内容类型 ---
+    post_type = _safe_int(_find_text(".//ContentObject/type", ".//type"))
+    out["type"] = post_type
+
+    # --- 如果是公众号文章 (Type 3) ---
+    if post_type == 3:
+        out["title"] = _find_text(".//ContentObject/title")
+        out["contentUrl"] = _clean_url(_find_text(".//ContentObject/contentUrl"))
+
+    # --- 如果是视频号 (Type 28) ---
+    if post_type == 28:
+        out["title"] = _find_text(".//ContentObject/title")
+        out["contentUrl"] = _clean_url(_find_text(".//ContentObject/contentUrl"))
+        out["finderFeed"] = {
+            "nickname": _find_text(".//finderFeed/nickname"),
+            "desc": _find_text(".//finderFeed/desc"),
+            "thumbUrl": _clean_url(
+                _find_text(".//finderFeed/mediaList/media/thumbUrl", ".//finderFeed/mediaList/media/coverUrl")),
+            "url": _clean_url(_find_text(".//finderFeed/mediaList/media/url"))
+        }
 
     media: list[dict[str, Any]] = []
     try:
         for m in root.findall(".//mediaList//media"):
             mt = _safe_int(m.findtext("type"))
+            url_el = m.find("url") if m.find("url") is not None else m.find("urlV")
+            thumb_el = m.find("thumb") if m.find("thumb") is not None else m.find("thumbV")
 
-            # WeChat stores important download/auth hints in attributes (key/enc_idx/token/md5...).
-            # NOTE: xml.etree.ElementTree.Element is falsy when it has no children.
-            # So we must check `is None` instead of using `or`, otherwise `<url>` would be treated as missing.
-            url_el = m.find("url")
-            if url_el is None:
-                url_el = m.find("urlV")
-            thumb_el = m.find("thumb")
-            if thumb_el is None:
-                thumb_el = m.find("thumbV")
-
-            url = str((url_el.text if url_el is not None else "") or "").strip()
-            thumb = str((thumb_el.text if thumb_el is not None else "") or "").strip()
+            url = _clean_url(url_el.text if url_el is not None else "")
+            thumb = _clean_url(thumb_el.text if thumb_el is not None else "")
 
             url_attrs = dict(url_el.attrib) if url_el is not None and url_el.attrib else {}
             thumb_attrs = dict(thumb_el.attrib) if thumb_el is not None and thumb_el.attrib else {}
-
             media_id = str(m.findtext("id") or "").strip()
             size_el = m.find("size")
             size = dict(size_el.attrib) if size_el is not None and size_el.attrib else {}
+
             if not url and not thumb:
                 continue
-            media.append(
-                {
-                    "type": mt,
-                    "id": media_id,
-                    "url": url,
-                    "thumb": thumb,
-                    "urlAttrs": url_attrs,
-                    "thumbAttrs": thumb_attrs,
-                    "size": size,
-                }
-            )
+
+            media.append({
+                "type": mt,
+                "id": media_id,
+                "url": url,
+                "thumb": thumb,
+                "urlAttrs": url_attrs,
+                "thumbAttrs": thumb_attrs,
+                "size": size,
+            })
     except Exception:
-        media = []
+        pass
     out["media"] = media
 
     likes: list[str] = []
@@ -424,6 +449,58 @@ def _sns_img_roots(wxid_dir_str: str) -> tuple[str, ...]:
     roots.sort()
     return tuple(roots)
 
+@lru_cache(maxsize=16)
+def _sns_video_roots(wxid_dir_str: str) -> tuple[str, ...]:
+    """List all month cache roots that contain `Sns/Video`."""
+    wxid_dir = Path(str(wxid_dir_str or "").strip())
+    cache_root = wxid_dir / "cache"
+    try:
+        month_dirs = [p for p in cache_root.iterdir() if p.is_dir()]
+    except Exception:
+        month_dirs = []
+
+    roots: list[str] = []
+    for mdir in month_dirs:
+        video_root = mdir / "Sns" / "Video"
+        try:
+            if video_root.exists() and video_root.is_dir():
+                roots.append(str(video_root))
+        except Exception:
+            continue
+    roots.sort()
+    return tuple(roots)
+
+def _resolve_sns_cached_video_path(
+    wxid_dir: Path,
+    post_id: str,
+    media_id: str
+) -> Optional[str]:
+    """基于逆向出的固定盐值 3，解析朋友圈视频的本地缓存路径"""
+    if not post_id or not media_id:
+        return None
+
+    raw_key = f"{post_id}_{media_id}_3"  # 暂时硬编码，大概率是对的
+    try:
+        key32 = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+    except Exception:
+        return None
+
+    sub = key32[:2]
+    rest = key32[2:]
+
+    roots = _sns_video_roots(str(wxid_dir))
+    for root_str in roots:
+        try:
+            base_path = Path(root_str) / sub / rest
+            for ext in [".mp4", ".tmp"]:
+                p = base_path.with_suffix(ext)
+                if p.exists() and p.is_file():
+                    return str(p)
+        except Exception:
+            continue
+
+    return None
+
 
 def _resolve_sns_cached_image_path_by_md5(
     *,
@@ -686,6 +763,133 @@ def _list_sns_cached_image_candidate_keys(
 
     return tuple(out)
 
+def _get_sns_cover(account_dir: Path, target_wxid: str) -> Optional[dict[str, Any]]:
+    """无论多古老，强行揪出用户最近的一次朋友圈封面 (type=7)"""
+    cover_sql = f"SELECT tid, content FROM SnsTimeLine WHERE user_name = '{target_wxid}' AND content LIKE '%<type>7</type>%' ORDER BY tid DESC LIMIT 1"
+    cover_xml = None
+    cover_tid = None
+
+    try:
+        if WCDB_REALTIME.is_connected(account_dir.name):
+            conn = WCDB_REALTIME.ensure_connected(account_dir)
+            with conn.lock:
+                sns_db_path = conn.db_storage_dir / "sns" / "sns.db"
+                if not sns_db_path.exists():
+                    sns_db_path = conn.db_storage_dir / "sns.db"
+                # 利用 exec_query 强行查
+                rows = _wcdb_exec_query(conn.handle, kind="media", path=str(sns_db_path), sql=cover_sql)
+                if rows:
+                    cover_xml = rows[0].get("content")
+                    cover_tid = rows[0].get("tid")
+    except Exception as e:
+        logger.warning(f"[sns] WCDB cover fetch failed: {e}")
+
+    # 2. 如果没查到，降级从本地解密的 sns.db 查
+    if not cover_xml:
+        sns_db_path = account_dir / "sns.db"
+        if sns_db_path.exists():
+            try:
+                # 只读模式防止锁死
+                conn_sq = sqlite3.connect(f"file:{sns_db_path}?mode=ro", uri=True)
+                conn_sq.row_factory = sqlite3.Row
+                row = conn_sq.execute(cover_sql).fetchone()
+                if row:
+                    cover_xml = str(row["content"] or "")
+                    cover_tid = row["tid"]
+                conn_sq.close()
+            except Exception as e:
+                logger.warning(f"[sns] SQLite cover fetch failed: {e}")
+
+    if cover_xml:
+        parsed = _parse_timeline_xml(cover_xml, target_wxid)
+        return {
+            "id": str(cover_tid or ""),
+            "media": parsed.get("media", []),
+            "type": 7
+        }
+    return None
+
+
+
+
+@router.get("/api/sns/self_info", summary="获取个人信息（wxid和nickname）")
+def api_sns_self_info(account: Optional[str] = None):
+
+    account_dir = _resolve_account_dir(account)
+    wxid = account_dir.name
+
+    logger.info(f"[self_info] 开始获取账号信息, 预设 wxid: {wxid}")
+
+    nickname = wxid
+    source = "wxid_dir"
+
+    try:
+        status = WCDB_REALTIME.get_status(account_dir)
+        if status.get("dll_present") and status.get("key_present"):
+            rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
+            with rt_conn.lock:
+
+                names_map = _wcdb_get_display_names(rt_conn.handle, [wxid])
+                if names_map and names_map.get(wxid):
+                    nickname = names_map[wxid]
+                    source = "wcdb_realtime"
+                    logger.info(f"[self_info] 从 WCDB 实时连接获取成功: {nickname}")
+                    return {"wxid": wxid, "nickname": nickname, "source": source}
+    except Exception as e:
+        logger.debug(f"[self_info] WCDB 路径跳过或失败: {e}")
+
+    contact_db_path = account_dir / "contact.db"
+    if contact_db_path.exists():
+        conn = None
+        try:
+            db_uri = f"file:{contact_db_path}?mode=ro"
+            conn = sqlite3.connect(db_uri, uri=True, timeout=5)
+            conn.row_factory = sqlite3.Row
+
+            cursor = conn.execute("PRAGMA table_info(contact)")
+            cols = {row["name"].lower() for row in cursor.fetchall()}
+            logger.debug(f"[self_info] contact 表现有字段: {cols}")
+
+            target_nick_col = "nick_name" if "nick_name" in cols else ("nickname" if "nickname" in cols else None)
+
+            if target_nick_col:
+                sql = f"SELECT remark, {target_nick_col} as nickname_val, alias FROM contact WHERE username = ? LIMIT 1"
+                row = conn.execute(sql, (wxid,)).fetchone()
+
+
+                if row:
+                    raw_remark = str(row["remark"] or "").strip() if "remark" in row.keys() else ""
+                    raw_nick = str(row["nickname_val"] or "").strip()
+                    raw_alias = str(row["alias"] or "").strip() if "alias" in row.keys() else ""
+
+                    if raw_remark:
+                        nickname = raw_remark
+                        source = "contact_db_remark"
+                    elif raw_nick:
+                        nickname = raw_nick
+                        source = "contact_db_nickname"
+                    elif raw_alias:
+                        nickname = raw_alias
+                        source = "contact_db_alias"
+
+                    logger.info(f"[self_info] 从数据库提取成功: {nickname} (src: {source})")
+            else:
+                logger.warning("[self_info] contact 表中找不到任何昵称相关字段")
+
+        except sqlite3.OperationalError as e:
+            logger.error(f"[self_info] 数据库繁忙或锁定: {e}")
+        except Exception as e:
+            logger.exception(f"[self_info] 查询异常: {e}")
+        finally:
+            if conn: conn.close()
+    else:
+        logger.warning(f"[self_info] 找不到 contact.db: {contact_db_path}")
+
+    return {
+        "wxid": wxid,
+        "nickname": nickname,
+        "source": source
+    }
 
 @router.get("/api/sns/timeline", summary="获取朋友圈时间线")
 def list_sns_timeline(
@@ -707,6 +911,11 @@ def list_sns_timeline(
 
     users = _parse_csv_list(usernames)
     kw = str(keyword or "").strip()
+
+    cover_data = None
+    if offset == 0:
+        target_wxid = users[0] if users else account_dir.name
+        cover_data = _get_sns_cover(account_dir, target_wxid)
 
     # Prefer real-time WCDB access (reads the latest encrypted db_storage/sns/sns.db).
     # Fallback to the decrypted sqlite copy in output/{account}/sns.db.
@@ -789,6 +998,11 @@ def list_sns_timeline(
 
             # Enrich with parsed XML when available.
             location = str(r.get("location") or "")
+
+            post_type = 1
+            title = ""
+            content_url = ""
+            finder_feed = {}
             try:
                 tid_u = int(r.get("id") or 0)
                 tid_s = (tid_u & 0xFFFFFFFFFFFFFFFF)
@@ -799,6 +1013,16 @@ def list_sns_timeline(
                     parsed = _parse_timeline_xml(xml, uname)
                     if parsed.get("location"):
                         location = str(parsed.get("location") or "")
+
+                    post_type = parsed.get("type", 1)
+
+                    if post_type == 7:  #  朋友圈封面
+                        continue
+
+                    title = parsed.get("title", "")
+                    content_url = parsed.get("contentUrl", "")
+                    finder_feed = parsed.get("finderFeed", {})
+
                     pmedia = parsed.get("media") or []
                     if isinstance(pmedia, list) and isinstance(media, list) and pmedia:
                         # Merge by index (best-effort).
@@ -835,10 +1059,21 @@ def list_sns_timeline(
                     "media": media,
                     "likes": likes,
                     "comments": comments,
+                    "type": post_type,
+                    "title": title,
+                    "contentUrl": content_url,
+                    "finderFeed": finder_feed,
                 }
             )
 
-        return {"timeline": timeline, "hasMore": has_more, "limit": limit, "offset": offset, "source": "wcdb"}
+        return {
+            "timeline": timeline,
+            "hasMore": has_more,
+            "limit": limit,
+            "offset": offset,
+            "source": "wcdb",
+            "cover": cover_data,
+        }
     except WCDBRealtimeError as e:
         logger.info("[sns] wcdb realtime unavailable: %s", e)
     except Exception as e:
@@ -911,10 +1146,20 @@ def list_sns_timeline(
                 "media": parsed.get("media") or [],
                 "likes": parsed.get("likes") or [],
                 "comments": parsed.get("comments") or [],
+                "type": parsed.get("type", 1),
+                "title": parsed.get("title", ""),
+                "contentUrl": parsed.get("contentUrl", ""),
+                "finderFeed": parsed.get("finderFeed", {}),
             }
         )
 
-    return {"timeline": timeline, "hasMore": has_more, "limit": limit, "offset": offset}
+    return {
+        "timeline": timeline,
+        "hasMore": has_more,
+        "limit": limit,
+        "offset": offset,
+        "cover": cover_data,
+    }
 
 
 class SnsMediaPicksSaveRequest(BaseModel):
@@ -969,6 +1214,7 @@ async def get_sns_media(
         avoid_picked: int = 0,
         post_id: Optional[str] = None,
         media_id: Optional[str] = None,
+        post_type: int = 1,
         media_type: int = 2,
         pick: Optional[str] = None,
         md5: Optional[str] = None,
@@ -978,24 +1224,57 @@ async def get_sns_media(
     wxid_dir = _resolve_account_wxid_dir(account_dir)
 
     if wxid_dir and post_id and media_id:
-        deterministic_key = _generate_sns_cache_key(post_id, media_id, media_type)
+        if int(post_type) == 7:
+            raw_key = f"{post_id}_{media_id}_4"  # 硬编码
 
+            md5_str = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+            bkg_path = wxid_dir / "business" / "sns" / "bkg" / md5_str[:2] / md5_str
+
+            if bkg_path.exists() and bkg_path.is_file():
+                print(f"===== Hit Bkg Cover ======= {bkg_path}")
+
+                return FileResponse(bkg_path, media_type="image/jpeg",
+                                    headers={"Cache-Control": "public, max-age=31536000"})
+        exact_match_path = None
+        hit_type = ""
+
+        # 尝试 1: 使用 post_type 计算 MD5
+        key_post = _generate_sns_cache_key(post_id, media_id, post_type)
         exact_match_path = _resolve_sns_cached_image_path_by_cache_key(
             wxid_dir=wxid_dir,
-            cache_key=deterministic_key,
+            cache_key=key_post,
             create_time=0
         )
-
         if exact_match_path:
+            hit_type = "post_type"
+
+        # 尝试 2: 如果没找到，并且 media_type 和 post_type 不一样，再试一次
+        if not exact_match_path and post_type != media_type:
+            key_media = _generate_sns_cache_key(post_id, media_id, media_type)
+            exact_match_path = _resolve_sns_cached_image_path_by_cache_key(
+                wxid_dir=wxid_dir,
+                cache_key=key_media,
+                create_time=0
+            )
+            if exact_match_path:
+                hit_type = "media_type"
+
+        # 如果通过这两种精确定位找到了文件，直接返回
+        if exact_match_path:
+            print(f"=====exact_match_path======={exact_match_path}============= (Hit: {hit_type})")
             try:
                 payload, mtype = _read_and_maybe_decrypt_media(Path(exact_match_path), account_dir)
                 if payload and str(mtype or "").startswith("image/"):
                     resp = Response(content=payload, media_type=str(mtype or "image/jpeg"))
-                    resp.headers["Cache-Control"] = "public, max-age=31536000"  # 确定性缓存可以设置很久
+                    resp.headers["Cache-Control"] = "public, max-age=31536000"
                     resp.headers["X-SNS-Source"] = "deterministic-hash"
+                    # 在 Header 里塞入到底是哪个 type 命中的，方便 F12 调试
+                    resp.headers["X-SNS-Hit-Type"] = hit_type
                     return resp
             except Exception:
                 pass
+
+        print("no exact match path, falling back...")
 
     # 0) User-picked cache key override (stable across candidate ordering).
     pick_key = _normalize_hex32(pick)
@@ -1105,3 +1384,60 @@ async def get_sns_media(
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Fetch sns media failed: {e}")
+
+
+@router.get("/api/sns/article_thumb", summary="提取公众号文章封面图")
+async def proxy_article_thumb(url: str):
+    u = str(url or "").strip()
+    if not u.startswith("http"):
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            resp = await client.get(u, headers=headers)
+            resp.raise_for_status()
+            html_text = resp.text
+
+            match = re.search(r'["\'](https?://[^"\']*?mmbiz_[a-zA-Z]+[^"\']*?)["\']', html_text)
+
+            if not match:
+                raise HTTPException(status_code=404, detail="未在 HTML 中找到图片 URL")
+
+            img_url = match.group(1)
+            img_url = html.unescape(img_url).replace("&amp;", "&")
+
+            img_resp = await client.get(img_url, headers=headers)
+            img_resp.raise_for_status()
+
+            return Response(
+                content=img_resp.content,
+                media_type=img_resp.headers.get("Content-Type", "image/jpeg")
+            )
+
+    except Exception as e:
+        logger.warning(f"[sns] 提取公众号封面失败 url={u[:50]}... : {e}")
+        raise HTTPException(status_code=404, detail="无法获取文章封面")
+
+
+@router.get("/api/sns/video", summary="获取朋友圈本地缓存视频")
+async def get_sns_video(
+        account: Optional[str] = None,
+        post_id: Optional[str] = None,
+        media_id: Optional[str] = None,
+):
+    if not post_id or not media_id:
+        raise HTTPException(status_code=400, detail="Missing post_id or media_id")
+
+    account_dir = _resolve_account_dir(account)
+    wxid_dir = _resolve_account_wxid_dir(account_dir)
+
+    if not wxid_dir:
+        raise HTTPException(status_code=404, detail="WXID dir not found")
+
+    video_path = _resolve_sns_cached_video_path(wxid_dir, post_id, media_id)
+
+    if not video_path:
+        raise HTTPException(status_code=404, detail="Local video cache not found")
+
+    return FileResponse(video_path, media_type="video/mp4")
