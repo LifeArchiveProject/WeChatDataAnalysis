@@ -15,6 +15,27 @@
       <div class="flex items-center gap-3">
         <button
           type="button"
+          class="pointer-events-auto inline-flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-[#07C160] hover:bg-[#07C160]/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 transition"
+          aria-label="返回上一级"
+          title="返回上一级"
+          @click="goBack"
+        >
+          <svg
+            class="w-4 h-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+        </button>
+
+        <button
+          type="button"
           class="pointer-events-auto inline-flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-[#07C160] hover:bg-[#07C160]/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 disabled:opacity-60 disabled:cursor-not-allowed transition"
           :disabled="loading || accountsLoading || accounts.length === 0"
           aria-label="强制刷新（忽略缓存）"
@@ -289,6 +310,10 @@ const clampIndex = (i) => {
 
 const goTo = (i) => {
   activeIndex.value = clampIndex(i)
+}
+
+const goBack = async () => {
+  await router.push('/chat')
 }
 
 const next = () => goTo(activeIndex.value + 1)
