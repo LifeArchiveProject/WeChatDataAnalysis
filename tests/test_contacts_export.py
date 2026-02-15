@@ -39,9 +39,20 @@ class TestContactsExport(unittest.TestCase):
         return cls._encode_varint(tag) + cls._encode_varint(int(value))
 
     @classmethod
-    def _build_extra_buffer(cls, *, country: str, province: str, city: str, source_scene: int) -> bytes:
+    def _build_extra_buffer(
+        cls,
+        *,
+        country: str,
+        province: str,
+        city: str,
+        source_scene: int,
+        gender: int = 0,
+        signature: str = "",
+    ) -> bytes:
         return b"".join(
             [
+                cls._encode_field_varint(2, gender),
+                cls._encode_field_len(4, signature.encode("utf-8")),
                 cls._encode_field_len(5, country.encode("utf-8")),
                 cls._encode_field_len(6, province.encode("utf-8")),
                 cls._encode_field_len(7, city.encode("utf-8")),
@@ -88,6 +99,8 @@ class TestContactsExport(unittest.TestCase):
                 province="Sichuan",
                 city="Chengdu",
                 source_scene=14,
+                gender=1,
+                signature="自助者天助！！！",
             )
 
             conn.execute(
@@ -320,6 +333,8 @@ class TestContactsExport(unittest.TestCase):
                 self.assertEqual(friend_contact.get("province"), "Sichuan")
                 self.assertEqual(friend_contact.get("city"), "Chengdu")
                 self.assertEqual(friend_contact.get("region"), "中国大陆·Sichuan·Chengdu")
+                self.assertEqual(friend_contact.get("gender"), 1)
+                self.assertEqual(friend_contact.get("signature"), "自助者天助！！！")
                 self.assertEqual(friend_contact.get("sourceScene"), 14)
                 self.assertEqual(friend_contact.get("source"), "通过群聊添加")
 

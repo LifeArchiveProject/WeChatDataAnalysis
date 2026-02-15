@@ -3,10 +3,12 @@ import json
 import re
 import sqlite3
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from pypinyin import Style, lazy_pinyin
 from pydantic import BaseModel, Field
 
 from ..chat_helpers import (
@@ -96,6 +98,76 @@ def _to_optional_int(v: Any) -> Optional[int]:
         return None
 
 
+_PINYIN_CLEAN_RE = re.compile(r"[^a-z0-9]+")
+_PINYIN_ALPHA_RE = re.compile(r"[A-Za-z]")
+
+# 多音字姓氏：pypinyin 对单字默认读音不一定是姓氏读音（例如：曾= ceng / zeng）。
+# 这里在“姓名首字”场景优先采用常见姓氏读音，用于联系人列表的分组/排序。
+_SURNAME_PINYIN_OVERRIDES: dict[str, str] = {
+    "曾": "zeng",
+    "区": "ou",
+    "仇": "qiu",
+    "解": "xie",
+    "单": "shan",
+    "查": "zha",
+    "乐": "yue",
+    "朴": "piao",
+    "盖": "ge",
+    "缪": "miao",
+}
+
+
+@lru_cache(maxsize=4096)
+def _build_contact_pinyin_key(name: str) -> str:
+    text = _normalize_text(name)
+    if not text:
+        return ""
+
+    # Keep non-CJK segments so English names can be sorted/grouped as expected.
+    first = text[0]
+    override = _SURNAME_PINYIN_OVERRIDES.get(first)
+    if override:
+        rest = text[1:]
+        parts = [override]
+        if rest:
+            parts.extend(lazy_pinyin(rest, style=Style.NORMAL, errors="default"))
+    else:
+        parts = lazy_pinyin(text, style=Style.NORMAL, errors="default")
+    out: list[str] = []
+    for part in parts:
+        cleaned = _PINYIN_CLEAN_RE.sub("", _normalize_text(part).lower())
+        if cleaned:
+            out.append(cleaned)
+    return "".join(out)
+
+
+@lru_cache(maxsize=4096)
+def _build_contact_pinyin_initial(name: str) -> str:
+    text = _normalize_text(name).lstrip()
+    if not text:
+        return "#"
+
+    first = text[0]
+    if "A" <= first <= "Z":
+        return first
+    if "a" <= first <= "z":
+        return first.upper()
+
+    override = _SURNAME_PINYIN_OVERRIDES.get(first)
+    if override:
+        return override[0].upper()
+
+    # For CJK, try to convert the first character to pinyin initial.
+    parts = lazy_pinyin(first, style=Style.NORMAL, errors="ignore")
+    if parts:
+        m = _PINYIN_ALPHA_RE.search(parts[0])
+        if m:
+            return m.group(0).upper()
+
+    # Emoji / digits / symbols, etc.
+    return "#"
+
+
 def _decode_varint(raw: bytes, offset: int) -> tuple[Optional[int], int]:
     value = 0
     shift = 0
@@ -125,6 +197,7 @@ def _decode_proto_text(raw: bytes) -> str:
 
 def _parse_contact_extra_buffer(extra_buffer: Any) -> dict[str, Any]:
     out = {
+        "gender": 0,
         "signature": "",
         "country": "",
         "province": "",
@@ -160,6 +233,9 @@ def _parse_contact_extra_buffer(extra_buffer: Any) -> dict[str, Any]:
             if val is None:
                 break
             idx = idx_next
+            if field_no == 2:
+                # 性别: 1=男, 2=女, 0=未知
+                out["gender"] = int(val)
             if field_no == 8:
                 out["source_scene"] = int(val)
             continue
@@ -327,6 +403,8 @@ def _load_contact_rows_map(contact_db_path: Path) -> dict[str, dict[str, Any]]:
                     "verify_flag": _to_int(row["verify_flag"] if "verify_flag" in row.keys() else 0),
                     "big_head_url": _normalize_text(row["big_head_url"] if "big_head_url" in row.keys() else ""),
                     "small_head_url": _normalize_text(row["small_head_url"] if "small_head_url" in row.keys() else ""),
+                    "gender": _to_int(extra_info.get("gender")),
+                    "signature": _normalize_text(extra_info.get("signature")),
                     "country": _normalize_text(extra_info.get("country")),
                     "province": _normalize_text(extra_info.get("province")),
                     "city": _normalize_text(extra_info.get("city")),
@@ -481,6 +559,8 @@ def _collect_contacts_for_account(
         province = _normalize_text(row.get("province"))
         city = _normalize_text(row.get("city"))
         source_scene = _to_optional_int(row.get("source_scene"))
+        gender = _to_int(row.get("gender"))
+        signature = _normalize_text(row.get("signature"))
 
         item = {
             "username": username,
@@ -488,6 +568,8 @@ def _collect_contacts_for_account(
             "remark": _normalize_text(row.get("remark")),
             "nickname": _normalize_text(row.get("nick_name")),
             "alias": _normalize_text(row.get("alias")),
+            "gender": gender,
+            "signature": signature,
             "type": contact_type,
             "country": country,
             "province": province,
@@ -520,6 +602,8 @@ def _collect_contacts_for_account(
                 "remark": "",
                 "nickname": "",
                 "alias": "",
+                "gender": 0,
+                "signature": "",
                 "type": "group",
                 "country": "",
                 "province": "",
@@ -545,6 +629,9 @@ def _collect_contacts_for_account(
     )
     for item in contacts:
         item.pop("_sortTs", None)
+        name_for_pinyin = _normalize_text(item.get("displayName")) or _normalize_text(item.get("username"))
+        item["pinyinKey"] = _build_contact_pinyin_key(name_for_pinyin)
+        item["pinyinInitial"] = _build_contact_pinyin_initial(name_for_pinyin)
     return contacts
 
 
