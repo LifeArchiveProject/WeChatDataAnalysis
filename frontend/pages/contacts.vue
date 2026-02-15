@@ -46,29 +46,34 @@
               <div v-else-if="error" class="p-4 text-sm text-red-500 whitespace-pre-wrap">{{ error }}</div>
               <div v-else-if="contacts.length === 0" class="p-4 text-sm text-gray-500">暂无联系人</div>
               <div v-else>
-                <div
-                  v-for="contact in contacts"
-                  :key="contact.username"
-                  class="px-3 py-2 border-b border-gray-100 flex items-center gap-3"
-                >
-                  <div class="w-10 h-10 rounded-md overflow-hidden bg-gray-300 shrink-0" :class="{ 'privacy-blur': privacyMode }">
-                    <img v-if="contact.avatar" :src="contact.avatar" :alt="contact.displayName" class="w-full h-full object-cover" referrerpolicy="no-referrer" />
-                    <div v-else class="w-full h-full flex items-center justify-center text-white text-xs font-bold" style="background-color:#4B5563">{{ contact.displayName?.charAt(0) || '?' }}</div>
+                <div v-for="group in groupedContacts" :key="group.key">
+                  <div class="px-3 py-1 text-xs font-semibold text-gray-500 bg-gray-50 border-b border-gray-100">
+                    {{ group.key }}
                   </div>
-                  <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
-                    <div class="text-sm text-gray-900 truncate">{{ contact.displayName }}</div>
-                    <div class="text-xs text-gray-500 truncate">{{ contact.username }}</div>
-                    <div class="text-[11px] text-gray-500 truncate" v-if="contact.type !== 'group' && (contact.region || contact.source)">
-                      <span v-if="contact.region">地区：{{ contact.region }}</span>
-                      <span v-if="contact.region && contact.source"> · </span>
-                      <span
-                        v-if="contact.source"
-                        :title="contact.sourceScene != null ? `来源场景码：${contact.sourceScene}` : ''"
-                      >来源：{{ contact.source }}</span>
+                  <div
+                    v-for="contact in group.items"
+                    :key="contact.username"
+                    class="px-3 py-2 border-b border-gray-100 flex items-center gap-3"
+                  >
+                    <div class="w-10 h-10 rounded-md overflow-hidden bg-gray-300 shrink-0" :class="{ 'privacy-blur': privacyMode }">
+                      <img v-if="contact.avatar" :src="contact.avatar" :alt="contact.displayName" class="w-full h-full object-cover" referrerpolicy="no-referrer" />
+                      <div v-else class="w-full h-full flex items-center justify-center text-white text-xs font-bold" style="background-color:#4B5563">{{ contact.displayName?.charAt(0) || '?' }}</div>
                     </div>
-                  </div>
-                  <div class="text-xs px-2 py-0.5 rounded" :class="typeBadgeClass(contact.type)">
-                    {{ typeLabel(contact.type) }}
+                    <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
+                      <div class="text-sm text-gray-900 truncate">{{ contact.displayName }}</div>
+                      <div class="text-xs text-gray-500 truncate">{{ contact.username }}</div>
+                      <div class="text-[11px] text-gray-500 truncate" v-if="contact.type !== 'group' && (contact.region || contact.source)">
+                        <span v-if="contact.region">地区：{{ contact.region }}</span>
+                        <span v-if="contact.region && contact.source"> · </span>
+                        <span
+                          v-if="contact.source"
+                          :title="contact.sourceScene != null ? `来源场景码：${contact.sourceScene}` : ''"
+                        >来源：{{ contact.source }}</span>
+                      </div>
+                    </div>
+                    <div class="text-xs px-2 py-0.5 rounded" :class="typeBadgeClass(contact.type)">
+                      {{ typeLabel(contact.type) }}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -183,6 +188,54 @@ const typeBadgeClass = (type) => {
   if (type === 'official') return 'bg-orange-100 text-orange-700'
   return 'bg-gray-100 text-gray-600'
 }
+
+const normalizeContactGroupKey = (value) => {
+  const key = String(value || '').trim().toUpperCase()
+  if (key.length === 1 && key >= 'A' && key <= 'Z') return key
+  return '#'
+}
+
+const buildContactSortKey = (contact) => {
+  const pinyinKey = String(contact?.pinyinKey || '').trim().toLowerCase()
+  if (pinyinKey) return pinyinKey
+  const nameKey = String(contact?.displayName || '').trim().toLowerCase()
+  if (nameKey) return nameKey
+  return String(contact?.username || '').trim().toLowerCase()
+}
+
+const groupedContacts = computed(() => {
+  const list = Array.isArray(contacts.value) ? contacts.value : []
+  const rows = list.map((contact) => {
+    return {
+      contact,
+      groupKey: normalizeContactGroupKey(contact?.pinyinInitial),
+      sortKey: buildContactSortKey(contact),
+      usernameKey: String(contact?.username || '').trim().toLowerCase(),
+    }
+  })
+
+  rows.sort((a, b) => {
+    if (a.groupKey !== b.groupKey) {
+      if (a.groupKey === '#') return 1
+      if (b.groupKey === '#') return -1
+      return a.groupKey.localeCompare(b.groupKey)
+    }
+    const cmpKey = a.sortKey.localeCompare(b.sortKey)
+    if (cmpKey !== 0) return cmpKey
+    return a.usernameKey.localeCompare(b.usernameKey)
+  })
+
+  const groups = []
+  for (const row of rows) {
+    const last = groups[groups.length - 1]
+    if (!last || last.key !== row.groupKey) {
+      groups.push({ key: row.groupKey, items: [row.contact] })
+    } else {
+      last.items.push(row.contact)
+    }
+  }
+  return groups
+})
 
 const isDesktopExportRuntime = () => {
   return !!(process.client && window?.wechatDesktop?.chooseDirectory)
