@@ -6,6 +6,7 @@
 
 import sqlite3
 import json
+import argparse
 from pathlib import Path
 from typing import Dict, List, Any
 from collections import defaultdict
@@ -127,6 +128,82 @@ class ConfigTemplateGenerator:
         
         try:
             cursor = conn.cursor()
+
+            def parse_columns_from_create_sql(create_sql: str) -> list[tuple[str, str]]:
+                """
+                从建表 SQL 中尽力解析列名（用于 FTS5/缺失 tokenizer 扩展导致 PRAGMA 失败的情况）。
+                返回 (name, type)；类型缺失时默认 TEXT。
+                """
+                out: list[tuple[str, str]] = []
+                if not create_sql:
+                    return out
+                try:
+                    start = create_sql.find("(")
+                    end = create_sql.rfind(")")
+                    if start == -1 or end == -1 or end <= start:
+                        return out
+                    inner = create_sql[start + 1:end]
+
+                    parts: list[str] = []
+                    buf = ""
+                    depth = 0
+                    for ch in inner:
+                        if ch == "(":
+                            depth += 1
+                        elif ch == ")":
+                            depth -= 1
+                        if ch == "," and depth == 0:
+                            parts.append(buf.strip())
+                            buf = ""
+                        else:
+                            buf += ch
+                    if buf.strip():
+                        parts.append(buf.strip())
+
+                    for part in parts:
+                        token = part.strip()
+                        if not token:
+                            continue
+                        low = token.lower()
+                        # 跳过约束/外键等
+                        if low.startswith(("constraint", "primary", "unique", "foreign", "check")):
+                            continue
+                        # fts5 选项（tokenize/prefix/content/content_rowid 等）
+                        if "=" in token:
+                            key = token.split("=", 1)[0].strip().lower()
+                            if key in ("tokenize", "prefix", "content", "content_rowid", "compress", "uncompress"):
+                                continue
+                        tokens = token.split()
+                        if not tokens:
+                            continue
+                        name = tokens[0].strip("`\"[]")
+                        typ = tokens[1].upper() if len(tokens) > 1 and "=" not in tokens[1] else "TEXT"
+                        out.append((name, typ))
+                except Exception:
+                    return out
+                return out
+
+            def get_table_columns(table_name: str) -> list[tuple[str, str]]:
+                # 先尝试 PRAGMA
+                try:
+                    cursor.execute(f"PRAGMA table_info({table_name})")
+                    columns = cursor.fetchall()
+                    if columns:
+                        return [(col[1], col[2]) for col in columns]
+                except Exception:
+                    pass
+
+                # 兜底：从 sqlite_master.sql 解析
+                try:
+                    cursor.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                        (table_name,),
+                    )
+                    row = cursor.fetchone()
+                    create_sql = row[0] if row and len(row) > 0 else ""
+                    return parse_columns_from_create_sql(create_sql or "")
+                except Exception:
+                    return []
             
             # 获取所有表名
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -152,13 +229,10 @@ class ConfigTemplateGenerator:
                     table_key = f"{prefix}_*"  # 使用模式名
                     
                     # 获取代表表的字段信息
-                    cursor.execute(f"PRAGMA table_info({representative_table})")
-                    columns = cursor.fetchall()
+                    columns = get_table_columns(representative_table)
                     
                     fields = {}
-                    for col in columns:
-                        field_name = col[1]
-                        field_type = col[2]
+                    for field_name, field_type in columns:
                         fields[field_name] = {
                             "type": field_type,
                             "meaning": "",  # 留空供用户填写
@@ -188,13 +262,10 @@ class ConfigTemplateGenerator:
                 
                 try:
                     # 获取表字段信息
-                    cursor.execute(f"PRAGMA table_info({table_name})")
-                    columns = cursor.fetchall()
+                    columns = get_table_columns(table_name)
                     
                     fields = {}
-                    for col in columns:
-                        field_name = col[1]
-                        field_type = col[2]
+                    for field_name, field_type in columns:
                         fields[field_name] = {
                             "type": field_type,
                             "meaning": "",  # 留空供用户填写
@@ -219,16 +290,23 @@ class ConfigTemplateGenerator:
         finally:
             conn.close()
     
-    def generate_template(self, output_file: str = "wechat_db_config_template.json"):
+    def generate_template(
+        self,
+        output_file: str = "wechat_db_config_template.json",
+        *,
+        include_excluded: bool = False,
+        include_message_shards: bool = False,
+        exclude_db_stems: set[str] | None = None,
+    ):
         """生成配置模板"""
         print("开始生成微信数据库配置模板...")
         
         # 定义要排除的数据库模式和描述
-        excluded_patterns = {
-            r'biz_message_\d+\.db$': '企业微信聊天记录数据库',
-            r'bizchat\.db$': '企业微信联系人数据库',
-            r'contact_fts\.db$': '搜索联系人数据库',
-            r'favorite_fts\.db$': '搜索收藏数据库'
+        excluded_patterns = {} if include_excluded else {
+            r'biz_message_\d+\.db$': '公众号/企业微信聊天记录数据库（通常不参与个人聊天分析）',
+            r'bizchat\.db$': '企业微信联系人/会话数据库（通常不参与个人聊天分析）',
+            r'contact_fts\.db$': '联系人搜索索引数据库（FTS）',
+            r'favorite_fts\.db$': '收藏搜索索引数据库（FTS）'
         }
         
         # 查找所有数据库文件
@@ -263,29 +341,38 @@ class ConfigTemplateGenerator:
             for excluded_file, description in excluded_files:
                 print(f"  - {excluded_file.name} ({description})")
         
+        # 显式排除指定 stem（不含 .db）
+        if exclude_db_stems:
+            before = len(db_files)
+            db_files = [p for p in db_files if p.stem not in exclude_db_stems]
+            after = len(db_files)
+            if before != after:
+                print(f"\n按 --exclude-db-stem 排除 {before - after} 个数据库: {sorted(exclude_db_stems)}")
+
         print(f"\n实际处理 {len(db_files)} 个数据库文件")
         
         # 过滤message数据库，只保留倒数第二个（与主脚本逻辑一致）
-        message_numbered_dbs = []
-        message_other_dbs = []
-        
-        for db in db_files:
-            if re.match(r'message_\d+$', db.stem):  # message_{数字}.db
-                message_numbered_dbs.append(db)
-            elif db.stem.startswith('message_'):  # message_fts.db, message_resource.db等
-                message_other_dbs.append(db)
-        
-        if len(message_numbered_dbs) > 1:
-            # 按数字编号排序（提取数字进行排序）
-            message_numbered_dbs.sort(key=lambda x: int(re.search(r'message_(\d+)', x.stem).group(1)))
-            # 选择倒数第二个（按编号排序）
-            selected_message_db = message_numbered_dbs[-2]  # 倒数第二个
-            print(f"检测到 {len(message_numbered_dbs)} 个message_{{数字}}.db数据库")
-            print(f"选择倒数第二个: {selected_message_db.name}")
-            
-            # 从db_files中移除其他message_{数字}.db数据库，但保留message_fts.db等
-            db_files = [db for db in db_files if not re.match(r'message_\d+$', db.stem)]
-            db_files.append(selected_message_db)
+        if not include_message_shards:
+            message_numbered_dbs = []
+            message_other_dbs = []
+
+            for db in db_files:
+                if re.match(r'message_\d+$', db.stem):  # message_{数字}.db
+                    message_numbered_dbs.append(db)
+                elif db.stem.startswith('message_'):  # message_fts.db, message_resource.db等
+                    message_other_dbs.append(db)
+
+            if len(message_numbered_dbs) > 1:
+                # 按数字编号排序（提取数字进行排序）
+                message_numbered_dbs.sort(key=lambda x: int(re.search(r'message_(\d+)', x.stem).group(1)))
+                # 选择倒数第二个（按编号排序）
+                selected_message_db = message_numbered_dbs[-2]  # 倒数第二个
+                print(f"检测到 {len(message_numbered_dbs)} 个message_{{数字}}.db数据库")
+                print(f"选择倒数第二个: {selected_message_db.name}")
+
+                # 从db_files中移除其他message_{数字}.db数据库，但保留message_fts.db等
+                db_files = [db for db in db_files if not re.match(r'message_\d+$', db.stem)]
+                db_files.append(selected_message_db)
         
         print(f"实际分析 {len(db_files)} 个数据库文件")
         
@@ -370,11 +457,24 @@ class ConfigTemplateGenerator:
 
 def main():
     """主函数"""
+    parser = argparse.ArgumentParser(description="微信数据库字段配置模板生成器")
+    parser.add_argument("--databases-path", default="output/databases", help="解密后的数据库根目录（按账号分目录）")
+    parser.add_argument("--output", default="wechat_db_config_template.json", help="输出 JSON 模板路径")
+    parser.add_argument("--include-excluded", action="store_true", help="包含默认会被排除的数据库（如 bizchat/contact_fts/favorite_fts 等）")
+    parser.add_argument("--include-message-shards", action="store_true", help="包含所有 message_{n}.db（否则仅保留倒数第二个作代表）")
+    parser.add_argument("--exclude-db-stem", action="append", default=[], help="按 stem（不含 .db）排除数据库，可重复，例如: --exclude-db-stem digital_twin")
+    args = parser.parse_args()
+
     print("微信数据库配置模板生成器")
     print("=" * 50)
-    
-    generator = ConfigTemplateGenerator()
-    generator.generate_template()
+
+    generator = ConfigTemplateGenerator(databases_path=args.databases_path)
+    generator.generate_template(
+        output_file=args.output,
+        include_excluded=bool(args.include_excluded),
+        include_message_shards=bool(args.include_message_shards),
+        exclude_db_stems=set(args.exclude_db_stem or []),
+    )
 
 if __name__ == "__main__":
     main()
