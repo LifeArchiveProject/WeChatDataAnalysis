@@ -786,6 +786,128 @@
     @apply px-3 py-3 border-b border-gray-100;
   }
 
+  /* 时间侧边栏（按日期定位） */
+  .time-sidebar {
+    @apply w-[420px] h-full flex flex-col bg-white border-l border-gray-200 flex-shrink-0;
+  }
+
+  .time-sidebar-header {
+    @apply flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50;
+  }
+
+  .time-sidebar-title {
+    @apply flex items-center gap-2 text-sm font-medium text-gray-800;
+  }
+
+  .time-sidebar-close {
+    @apply p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-md transition-colors;
+  }
+
+  .time-sidebar-body {
+    @apply flex-1 overflow-y-auto min-h-0;
+  }
+
+  .time-sidebar-status {
+    @apply px-4 py-2 text-xs text-gray-600 border-b border-gray-100;
+  }
+
+  .time-sidebar-status-error {
+    @apply text-red-600;
+  }
+
+  .calendar-header {
+    @apply flex items-center justify-between px-4 py-3;
+  }
+
+  .calendar-nav-btn {
+    @apply p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .calendar-month-label {
+    @apply text-sm font-medium text-gray-800;
+  }
+
+  .calendar-month-label-selects {
+    @apply flex items-center gap-2;
+  }
+
+  .calendar-ym-select {
+    @apply text-xs px-2 py-1 rounded-md border border-gray-200 bg-white text-gray-800 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#03C160]/20 disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
+  .calendar-weekdays {
+    @apply grid grid-cols-7 gap-1 px-4 pt-1;
+  }
+
+  .calendar-weekday {
+    @apply text-[11px] text-gray-400 text-center py-1;
+  }
+
+  .calendar-grid {
+    @apply grid grid-cols-7 gap-1 px-4 pb-4;
+  }
+
+  .calendar-day {
+    @apply h-9 rounded-md flex items-center justify-center text-xs font-medium transition-colors border border-gray-200 bg-white disabled:cursor-not-allowed;
+  }
+
+  .calendar-day-outside {
+    @apply bg-transparent border-transparent;
+  }
+
+  .calendar-day-empty {
+    @apply bg-gray-100 text-gray-400 border-gray-100;
+  }
+
+  .calendar-day-selected {
+    /* Keep background as-is (heatmap), but emphasize with a ring/outline. */
+    box-shadow: 0 0 0 2px rgba(3, 193, 96, 0.85);
+    border-color: rgba(3, 193, 96, 0.95) !important;
+  }
+
+  .calendar-day-l1 {
+    background: rgba(3, 193, 96, 0.12);
+    border-color: rgba(3, 193, 96, 0.18);
+    color: #065f46;
+  }
+
+  .calendar-day-l2 {
+    background: rgba(3, 193, 96, 0.24);
+    border-color: rgba(3, 193, 96, 0.28);
+    color: #065f46;
+  }
+
+  .calendar-day-l3 {
+    background: rgba(3, 193, 96, 0.38);
+    border-color: rgba(3, 193, 96, 0.40);
+    color: #064e3b;
+  }
+
+  .calendar-day-l4 {
+    background: rgba(3, 193, 96, 0.55);
+    border-color: rgba(3, 193, 96, 0.55);
+    color: #053d2e;
+  }
+
+  .calendar-day-l1:hover,
+  .calendar-day-l2:hover,
+  .calendar-day-l3:hover,
+  .calendar-day-l4:hover {
+    filter: brightness(0.98);
+  }
+
+  .calendar-day-number {
+    @apply select-none;
+  }
+
+  .time-sidebar-actions {
+    @apply px-4 pb-4;
+  }
+
+  .time-sidebar-action-btn {
+    @apply w-full text-xs px-3 py-2 rounded-md bg-[#03C160] text-white hover:bg-[#02a650] transition-colors disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
   /* 整合搜索框样式 */
   .search-input-combined {
     @apply flex items-center bg-white border-2 border-gray-200 rounded-lg overflow-hidden transition-all duration-200;

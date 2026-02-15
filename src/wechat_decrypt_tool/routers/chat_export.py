@@ -59,6 +59,10 @@ class ChatExportCreateRequest(BaseModel):
         False,
         description="HTML 导出时允许联网下载链接/引用缩略图等远程媒体（提高离线完整性）",
     )
+    html_page_size: int = Field(
+        1000,
+        description="HTML 导出分页大小（每页消息数）；<=0 表示禁用分页（单文件，打开大聊天可能很卡）",
+    )
     privacy_mode: bool = Field(
         False,
         description="隐私模式导出：隐藏会话/用户名/内容，不打包头像与媒体",
@@ -83,6 +87,7 @@ async def create_chat_export(req: ChatExportCreateRequest):
         output_dir=req.output_dir,
         allow_process_key_extract=req.allow_process_key_extract,
         download_remote_media=req.download_remote_media,
+        html_page_size=req.html_page_size,
         privacy_mode=req.privacy_mode,
         file_name=req.file_name,
     )
