@@ -89,6 +89,26 @@
                   </div>
                 </div>
               </div>
+
+              <div class="rounded-lg border border-gray-200">
+                <div class="px-4 py-3 border-b border-gray-200 bg-gray-50">
+                  <div class="text-sm font-medium text-gray-900">朋友圈</div>
+                </div>
+                <div class="px-4 py-3 space-y-4">
+                  <div class="flex items-center justify-between gap-4">
+                    <div class="min-w-0">
+                      <div class="text-sm font-medium text-gray-900">朋友圈图片使用缓存</div>
+                      <div class="text-xs text-gray-500">开启：下载解密失败时回退本地缓存（默认开启）；关闭：每次都走下载+解密</div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      class="h-4 w-4"
+                      :checked="snsUseCache"
+                      @change="onSnsUseCacheToggle"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -98,7 +118,7 @@
 </template>
 
 <script setup>
-import { DESKTOP_SETTING_AUTO_REALTIME_KEY, DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, readLocalBoolSetting, writeLocalBoolSetting } from '~/utils/desktop-settings'
+import { DESKTOP_SETTING_AUTO_REALTIME_KEY, DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting, writeLocalBoolSetting } from '~/utils/desktop-settings'
 
 useHead({ title: '设置 - 微信数据分析助手' })
 
@@ -106,6 +126,7 @@ const isDesktopEnv = ref(false)
 
 const desktopAutoRealtime = ref(false)
 const desktopDefaultToChatWhenData = ref(false)
+const snsUseCache = ref(true)
 
 const desktopAutoLaunch = ref(false)
 const desktopAutoLaunchLoading = ref(false)
@@ -198,6 +219,12 @@ const onDesktopDefaultToChatToggle = (ev) => {
   writeLocalBoolSetting(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, checked)
 }
 
+const onSnsUseCacheToggle = (ev) => {
+  const checked = !!ev?.target?.checked
+  snsUseCache.value = checked
+  writeLocalBoolSetting(SNS_SETTING_USE_CACHE_KEY, checked)
+}
+
 onMounted(async () => {
   if (process.client && typeof window !== 'undefined') {
     isDesktopEnv.value = !!window.wechatDesktop
@@ -205,6 +232,7 @@ onMounted(async () => {
 
   desktopAutoRealtime.value = readLocalBoolSetting(DESKTOP_SETTING_AUTO_REALTIME_KEY, false)
   desktopDefaultToChatWhenData.value = readLocalBoolSetting(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, false)
+  snsUseCache.value = readLocalBoolSetting(SNS_SETTING_USE_CACHE_KEY, true)
 
   if (isDesktopEnv.value) {
     await refreshDesktopAutoLaunch()
