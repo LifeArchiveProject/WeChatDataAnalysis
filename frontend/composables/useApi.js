@@ -236,6 +236,16 @@ export const useApi = () => {
     return await request(url)
   }
 
+  // 朋友圈联系人列表（按发圈数统计）
+  const listSnsUsers = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.keyword) query.set('keyword', String(params.keyword))
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    const url = '/sns/users' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
   // 朋友圈图片本地缓存候选（用于错图时手动选择）
   const listSnsMediaCandidates = async (params = {}) => {
     const query = new URLSearchParams()
@@ -356,6 +366,31 @@ export const useApi = () => {
     return await request(`/chat/exports/${encodeURIComponent(String(exportId))}`, { method: 'DELETE' })
   }
 
+  // 朋友圈导出（离线 HTML zip）
+  const createSnsExport = async (data = {}) => {
+    return await request('/sns/exports', {
+      method: 'POST',
+      body: {
+        account: data.account || null,
+        scope: data.scope || 'selected',
+        usernames: Array.isArray(data.usernames) ? data.usernames : [],
+        use_cache: data.use_cache == null ? true : !!data.use_cache,
+        output_dir: data.output_dir == null ? null : String(data.output_dir || '').trim(),
+        file_name: data.file_name || null
+      }
+    })
+  }
+
+  const getSnsExport = async (exportId) => {
+    if (!exportId) throw new Error('Missing exportId')
+    return await request(`/sns/exports/${encodeURIComponent(String(exportId))}`)
+  }
+
+  const cancelSnsExport = async (exportId) => {
+    if (!exportId) throw new Error('Missing exportId')
+    return await request(`/sns/exports/${encodeURIComponent(String(exportId))}`, { method: 'DELETE' })
+  }
+
   // 联系人
   const listChatContacts = async (params = {}) => {
     const query = new URLSearchParams()
@@ -454,6 +489,7 @@ export const useApi = () => {
     resolveNestedChatHistory,
     resolveAppMsg,
     listSnsTimeline,
+    listSnsUsers,
     listSnsMediaCandidates,
     saveSnsMediaPicks,
     openChatMediaFolder,
@@ -465,6 +501,9 @@ export const useApi = () => {
     getChatExport,
     listChatExports,
     cancelChatExport,
+    createSnsExport,
+    getSnsExport,
+    cancelSnsExport,
     listChatContacts,
     exportChatContacts,
     getWrappedAnnual,
