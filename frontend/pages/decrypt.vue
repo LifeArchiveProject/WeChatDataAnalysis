@@ -125,6 +125,40 @@
                 </button>
               </div>
             </div>
+
+            <!-- 解密进度 -->
+            <div v-if="loading || dbDecryptProgress.total > 0" class="mt-6">
+              <div class="flex items-center justify-between mb-2">
+                <div class="text-sm text-[#7F7F7F]">
+                  {{ dbDecryptProgress.message || (loading ? '解密中...' : '') }}
+                </div>
+                <div v-if="dbDecryptProgress.total > 0" class="text-sm font-mono text-[#000000e6]">
+                  {{ dbDecryptProgress.current }} / {{ dbDecryptProgress.total }}
+                </div>
+              </div>
+
+              <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div
+                  class="h-full bg-[#07C160] transition-all duration-300"
+                  :style="{ width: dbProgressPercent + '%' }"
+                ></div>
+              </div>
+
+              <div v-if="dbDecryptProgress.current_file" class="mt-2 text-xs text-[#7F7F7F] truncate font-mono">
+                {{ dbDecryptProgress.current_file }}
+              </div>
+
+              <div v-if="dbDecryptProgress.total > 0" class="mt-3 grid grid-cols-2 gap-4 text-center">
+                <div class="bg-gray-50 rounded-lg p-3">
+                  <div class="text-lg font-bold text-[#07C160]">{{ dbDecryptProgress.success_count }}</div>
+                  <div class="text-xs text-[#7F7F7F]">成功</div>
+                </div>
+                <div class="bg-gray-50 rounded-lg p-3">
+                  <div class="text-lg font-bold text-[#FA5151]">{{ dbDecryptProgress.fail_count }}</div>
+                  <div class="text-xs text-[#7F7F7F]">失败</div>
+                </div>
+              </div>
+            </div>
           </form>
         </div>
       </div>
@@ -413,7 +447,7 @@
 </style>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '~/composables/useApi'
 
 const { decryptDatabase, saveMediaKeys, getSavedKeys, getDbKey, getImageKey, getWxStatus } = useApi()
@@ -625,6 +659,22 @@ const clearManualKeys = () => {
 const mediaDecryptResult = ref(null)
 const mediaDecrypting = ref(false)
 
+// 数据库解密进度（SSE）
+const dbDecryptProgress = reactive({
+  current: 0,
+  total: 0,
+  success_count: 0,
+  fail_count: 0,
+  current_file: '',
+  status: '',
+  message: ''
+})
+
+const dbProgressPercent = computed(() => {
+  if (dbDecryptProgress.total === 0) return 0
+  return Math.round((dbDecryptProgress.current / dbDecryptProgress.total) * 100)
+})
+
 // 实时解密进度
 const decryptProgress = reactive({
   current: 0,
@@ -673,6 +723,27 @@ const validateForm = () => {
   return isValid
 }
 
+let dbDecryptEventSource = null
+onBeforeUnmount(() => {
+  try {
+    if (dbDecryptEventSource) dbDecryptEventSource.close()
+  } catch (e) {
+    // ignore
+  } finally {
+    dbDecryptEventSource = null
+  }
+})
+
+const resetDbDecryptProgress = () => {
+  dbDecryptProgress.current = 0
+  dbDecryptProgress.total = 0
+  dbDecryptProgress.success_count = 0
+  dbDecryptProgress.fail_count = 0
+  dbDecryptProgress.current_file = ''
+  dbDecryptProgress.status = ''
+  dbDecryptProgress.message = ''
+}
+
 // 处理解密
 const handleDecrypt = async () => {
   if (!validateForm()) {
@@ -682,43 +753,142 @@ const handleDecrypt = async () => {
   loading.value = true
   error.value = ''
   warning.value = ''
+
+  resetDbDecryptProgress()
   
   try {
-    const result = await decryptDatabase({
-      key: formData.key,
-      db_storage_path: formData.db_storage_path
-    })
-    
-    if (result.status === 'completed') {
-      // 解密成功，保存结果并进入下一步
-      decryptResult.value = result
-      if (process.client && typeof window !== 'undefined') {
-        sessionStorage.setItem('decryptResult', JSON.stringify(result))
-      }
-      // 记录当前账号（用于图片解密/密钥保存）
-      try {
-        const accounts = Object.keys(result.account_results || {})
-        if (accounts.length > 0) mediaAccount.value = accounts[0]
-      } catch (e) {
-        // ignore
+    const canSse = process.client && typeof window !== 'undefined' && typeof EventSource !== 'undefined'
+
+    // Fallback: 如果环境不支持 SSE，则使用普通 POST（无进度）。
+    if (!canSse) {
+      const result = await decryptDatabase({
+        key: formData.key,
+        db_storage_path: formData.db_storage_path
+      })
+
+      if (result.status === 'completed') {
+        decryptResult.value = result
+        if (process.client && typeof window !== 'undefined') {
+          sessionStorage.setItem('decryptResult', JSON.stringify(result))
+        }
+        try {
+          const accounts = Object.keys(result.account_results || {})
+          if (accounts.length > 0) mediaAccount.value = accounts[0]
+        } catch (e) {}
+
+        clearManualKeys()
+        currentStep.value = 1
+        await prefillKeysForAccount(mediaAccount.value)
+      } else if (result.status === 'failed') {
+        if (result.failure_count > 0 && result.success_count === 0) {
+          error.value = result.message || '所有文件解密失败'
+        } else {
+          error.value = '部分文件解密失败，请检查密钥是否正确'
+        }
+      } else {
+        error.value = result.message || '解密失败，请检查输入信息'
       }
 
-      // 进入图片密钥填写步骤
-      clearManualKeys()
-      currentStep.value = 1
-      await prefillKeysForAccount(mediaAccount.value)
-    } else if (result.status === 'failed') {
-      if (result.failure_count > 0 && result.success_count === 0) {
-        error.value = result.message || '所有文件解密失败'
-      } else {
-        error.value = '部分文件解密失败，请检查密钥是否正确'
+      loading.value = false
+      return
+    }
+
+    // SSE: 解密过程实时推送进度
+    if (dbDecryptEventSource) {
+      try {
+        dbDecryptEventSource.close()
+      } catch (e) {}
+      dbDecryptEventSource = null
+    }
+
+    const params = new URLSearchParams()
+    params.set('key', formData.key)
+    params.set('db_storage_path', formData.db_storage_path)
+    const url = `http://localhost:8000/api/decrypt_stream?${params.toString()}`
+
+    dbDecryptProgress.message = '连接中...'
+    const eventSource = new EventSource(url)
+    dbDecryptEventSource = eventSource
+
+    eventSource.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data)
+
+        if (data.type === 'scanning') {
+          dbDecryptProgress.message = data.message || '正在扫描数据库文件...'
+        } else if (data.type === 'start') {
+          dbDecryptProgress.total = data.total || 0
+          dbDecryptProgress.message = data.message || '开始解密...'
+        } else if (data.type === 'progress') {
+          dbDecryptProgress.current = data.current || 0
+          dbDecryptProgress.total = data.total || 0
+          dbDecryptProgress.success_count = data.success_count || 0
+          dbDecryptProgress.fail_count = data.fail_count || 0
+          dbDecryptProgress.current_file = data.current_file || ''
+          dbDecryptProgress.status = data.status || ''
+          dbDecryptProgress.message = data.message || ''
+        } else if (data.type === 'phase') {
+          // e.g. building cache
+          dbDecryptProgress.message = data.message || ''
+        } else if (data.type === 'complete') {
+          dbDecryptProgress.status = 'complete'
+          dbDecryptProgress.current = data.total_databases || dbDecryptProgress.total
+          dbDecryptProgress.total = data.total_databases || dbDecryptProgress.total
+          dbDecryptProgress.success_count = data.success_count || 0
+          dbDecryptProgress.fail_count = data.failure_count || 0
+          dbDecryptProgress.message = data.message || '解密完成'
+
+          decryptResult.value = data
+          if (process.client && typeof window !== 'undefined') {
+            sessionStorage.setItem('decryptResult', JSON.stringify(data))
+          }
+
+          try {
+            const accounts = Object.keys(data.account_results || {})
+            if (accounts.length > 0) mediaAccount.value = accounts[0]
+          } catch (e) {}
+
+          try {
+            eventSource.close()
+          } catch (e) {}
+          dbDecryptEventSource = null
+          loading.value = false
+
+          if (data.status === 'completed') {
+            clearManualKeys()
+            currentStep.value = 1
+            await prefillKeysForAccount(mediaAccount.value)
+          } else if (data.status === 'failed') {
+            error.value = data.message || '所有文件解密失败'
+          } else {
+            error.value = data.message || '解密失败，请检查输入信息'
+          }
+        } else if (data.type === 'error') {
+          error.value = data.message || '解密失败，请检查输入信息'
+          try {
+            eventSource.close()
+          } catch (e) {}
+          dbDecryptEventSource = null
+          loading.value = false
+        }
+      } catch (e) {
+        console.error('解析SSE消息失败:', e)
       }
-    } else {
-      error.value = result.message || '解密失败，请检查输入信息'
+    }
+
+    eventSource.onerror = (e) => {
+      console.error('SSE连接错误:', e)
+      try {
+        eventSource.close()
+      } catch (err) {}
+      dbDecryptEventSource = null
+      if (loading.value) {
+        error.value = 'SSE连接中断，请重试'
+        loading.value = false
+      }
     }
   } catch (err) {
     error.value = err.message || '解密过程中发生错误'
-  } finally {
     loading.value = false
   }
 }
