@@ -16,8 +16,11 @@ wheels/
 
 # Local config templates
 /wechat_db_config_template.json
+/wechat_db_config.json
 .ace-tool/
 pnpm-lock.yaml
+/tools/tmp_isaac64_compare.js
+/.claude/settings.local.json
 
 # Local dev repos and data
 /WxDatDecrypt/
@@ -26,10 +29,15 @@ pnpm-lock.yaml
 /vue3-wechat-tool/
 /wechatDataBackup/
 /wx_key/
+/refs/
+/WeFlow/
+/win95/
+/py_wx_key/
 
 # Electron desktop app
 /desktop/node_modules/
 /desktop/dist/
+/desktop/dist-updater-test/
 /desktop/build/
 /desktop/resources/ui/*
 !/desktop/resources/ui/.gitkeep
