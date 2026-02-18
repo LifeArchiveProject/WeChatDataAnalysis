@@ -11,12 +11,12 @@
 
     <ClientOnly v-if="isDesktopUpdater">
       <DesktopUpdateDialog
-        :open="desktopUpdate.open"
-        :info="desktopUpdate.info"
-        :is-downloading="desktopUpdate.isDownloading"
-        :ready-to-install="desktopUpdate.readyToInstall"
-        :progress="desktopUpdate.progress"
-        :error="desktopUpdate.error"
+        :open="desktopUpdate.open.value"
+        :info="desktopUpdate.info.value"
+        :is-downloading="desktopUpdate.isDownloading.value"
+        :ready-to-install="desktopUpdate.readyToInstall.value"
+        :progress="desktopUpdate.progress.value"
+        :error="desktopUpdate.error.value"
         :has-ignore="true"
         @close="desktopUpdate.dismiss"
         @update="desktopUpdate.startUpdate"
