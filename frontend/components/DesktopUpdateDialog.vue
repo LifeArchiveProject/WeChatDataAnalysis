@@ -44,7 +44,7 @@
               <span v-if="remainingText">剩余 {{ remainingText }}</span>
             </div>
             <div class="mt-2 h-2 w-full rounded bg-gray-200 overflow-hidden">
-              <div class="h-2 bg-emerald-500" :style="{ width: `${percent}%` }" />
+              <div class="h-2 bg-wechat-green" :style="{ width: `${percent}%` }" />
             </div>
           </div>
 
@@ -69,7 +69,7 @@
 
             <button
               v-if="readyToInstall"
-              class="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm hover:bg-emerald-700"
+              class="px-3 py-1.5 rounded-md bg-wechat-green text-white text-sm hover:bg-wechat-green-hover"
               type="button"
               @click="emitInstall"
             >
@@ -86,7 +86,7 @@
                 忽略此版本
               </button>
               <button
-                class="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm hover:bg-emerald-700"
+                class="px-3 py-1.5 rounded-md bg-wechat-green text-white text-sm hover:bg-wechat-green-hover"
                 type="button"
                 @click="emitUpdate"
               >
