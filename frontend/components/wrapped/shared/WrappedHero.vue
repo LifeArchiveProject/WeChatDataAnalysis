@@ -9,57 +9,7 @@
 
     <div :class="innerClass">
       <template v-if="variant === 'slide'">
-        <!-- Win98：封面也做成一个“窗口” -->
-        <div v-if="isWin98" class="window h-full w-full flex flex-col overflow-hidden">
-          <div class="title-bar">
-            <div class="title-bar-text">
-              <img class="title-bar-icon" src="/assets/images/windows-0.png" alt="" aria-hidden="true" />
-              <span>WECHAT WRAPPED</span>
-            </div>
-            <div class="title-bar-controls" aria-hidden="true">
-              <button type="button" aria-label="Minimize" tabindex="-1"></button>
-              <button type="button" aria-label="Maximize" tabindex="-1"></button>
-              <button type="button" aria-label="Close" tabindex="-1"></button>
-            </div>
-          </div>
-
-          <div class="window-body flex-1 overflow-hidden">
-            <div class="h-full flex flex-col justify-between">
-              <div class="flex items-start justify-between gap-4">
-                <div class="wrapped-label text-xs text-[#00000080]">
-                  WECHAT WRAPPED
-                </div>
-                <div class="wrapped-body text-xs text-[#00000055]">
-                  年度回望
-                </div>
-              </div>
-
-              <div class="mt-10 sm:mt-14">
-                <h1 class="wrapped-title text-3xl sm:text-5xl text-[#000000e6] leading-[1.05]">
-                  {{ randomTitle.main }}
-                  <span class="block mt-3 win98-hero-highlight">
-                    {{ randomTitle.highlight }}
-                  </span>
-                </h1>
-
-                <div class="mt-7 sm:mt-9 max-w-2xl">
-                  <p class="wrapped-body text-base sm:text-lg text-[#00000080]">
-                    {{ randomSubtitle }}
-                  </p>
-                </div>
-              </div>
-
-              <div class="pb-1">
-                <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[#00000066]">
-                  <!-- Intentionally left blank (avoid "feature bullet list" tone on the cover). -->
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 其他主题：保持原样 -->
-        <div v-else class="h-full flex flex-col justify-between">
+        <div class="h-full flex flex-col justify-between">
           <div class="flex items-start justify-between gap-4">
             <div class="wrapped-label text-xs text-[#00000080]">
               WECHAT WRAPPED
@@ -92,79 +42,41 @@
         </div>
 
         <div
-          v-if="previewQuestions.length > 0 && (isGameboy || isModern)"
+          v-if="previewQuestions.length > 0"
           class="pointer-events-none absolute bottom-0 right-0 hidden xl:flex items-end"
         >
           <div class="pointer-events-auto relative" :class="previewStageClass">
             <div class="relative" :class="previewViewportClass">
-              <template v-if="isGameboy">
-              <BitsCardSwap
-                :width="previewCardWidth"
-                :height="previewCardHeight"
-                :delay="previewSwapDelay"
-                :card-count="previewQuestions.length"
-                :card-distance="previewCardDistance"
-                :vertical-distance="previewVerticalDistance"
-                :skew-amount="4"
-                easing="elastic"
-                :pause-on-hover="true"
+              <BitsGridMotion
+                :items="modernPreviewItems"
+                gradient-color="rgba(7, 193, 96, 0.24)"
+                :row-count="7"
+                :column-count="8"
+                :scroll-speed="42"
+                :base-offset-x="46"
               >
-                <template
-                  v-for="(previewItem, previewIndex) in previewQuestions"
-                  :key="`preview-${previewItem.order}-${previewIndex}`"
-                  v-slot:[`card-${previewIndex}`]
-                >
+                <template #item="{ item }">
                   <WrappedCardShell
-                    :card-id="previewItem.order"
-                    :title="previewItem.title"
+                    :card-id="Number(item?.order || 0)"
+                    :title="String(item?.title || '年度卡片')"
                     variant="panel"
-                    class="h-full w-full"
+                    class="h-full w-full preview-grid-shell"
                   >
-                    <div
-                      class="flex h-[168px] items-center justify-center rounded-xl border border-dashed px-5"
-                      :class="previewQuestionPanelClass"
-                    >
-                      <p class="wrapped-body text-lg leading-relaxed text-center" :class="previewQuestionClass">
-                        {{ previewItem.question }}
+                    <div class="preview-grid-body">
+                      <div class="preview-grid-summary">
+                        {{ String(item?.summary || '年度线索') }}
+                      </div>
+                      <p class="preview-grid-question">
+                        {{ String(item?.question || '这一页会揭晓你的聊天答案。') }}
                       </p>
+                      <div class="preview-grid-lines" aria-hidden="true">
+                        <span></span>
+                        <span></span>
+                      </div>
                     </div>
                   </WrappedCardShell>
                 </template>
-              </BitsCardSwap>
-              </template>
-
-              <template v-else>
-                <BitsGridMotion
-                  :items="modernPreviewItems"
-                  gradient-color="rgba(7, 193, 96, 0.24)"
-                  :row-count="7"
-                  :column-count="8"
-                  :scroll-speed="42"
-                  :base-offset-x="46"
-                >
-                  <template #item="{ item }">
-                    <WrappedCardShell
-                      :card-id="Number(item?.order || 0)"
-                      :title="String(item?.title || '年度卡片')"
-                      variant="panel"
-                      class="h-full w-full preview-grid-shell"
-                    >
-                      <div class="preview-grid-body">
-                        <div class="preview-grid-summary">
-                          {{ String(item?.summary || '年度线索') }}
-                        </div>
-                        <p class="preview-grid-question">
-                          {{ String(item?.question || '这一页会揭晓你的聊天答案。') }}
-                        </p>
-                        <div class="preview-grid-lines" aria-hidden="true">
-                          <span></span>
-                          <span></span>
-                        </div>
-                      </div>
-                    </WrappedCardShell>
-                  </template>
-                </BitsGridMotion>
-              </template>
+              </BitsGridMotion>
             </div>
           </div>
         </div>
@@ -362,11 +274,6 @@ const props = defineProps({
   cardManifests: { type: Array, default: () => [] }
 })
 
-const { theme } = useWrappedTheme()
-const isWin98 = computed(() => theme.value === 'win98')
-const isGameboy = computed(() => theme.value === 'gameboy')
-const isModern = computed(() => theme.value === 'off')
-
 const previewQuestions = computed(() => {
   const manifests = Array.isArray(props.cardManifests) ? props.cardManifests : []
   if (!manifests.length) {
@@ -392,10 +299,6 @@ const previewQuestions = computed(() => {
   })
 })
 
-const previewSwapDelay = 4200
-const previewCardWidth = 420
-const previewCardHeight = 280
-
 const modernPreviewItems = computed(() => {
   if (!previewQuestions.value.length) return []
   return previewQuestions.value.map((item) => ({
@@ -407,15 +310,11 @@ const modernPreviewItems = computed(() => {
 })
 
 const previewStageClass = computed(() => (
-  isGameboy.value
-    ? 'w-[500px] h-[360px] translate-x-24 -translate-y-8'
-    : 'w-[620px] h-[420px] translate-x-32 -translate-y-10'
+  'w-[620px] h-[420px] translate-x-32 -translate-y-10'
 ))
 
 const previewViewportClass = computed(() => (
-  isGameboy.value
-    ? 'h-[340px] w-[460px]'
-    : 'h-[390px] w-[580px]'
+  'h-[390px] w-[580px]'
 ))
 
 const previewCardDistance = computed(() => {
@@ -426,16 +325,6 @@ const previewCardDistance = computed(() => {
 const previewVerticalDistance = computed(() => {
   const total = previewQuestions.value.length
   return total >= 9 ? 10 : total >= 7 ? 11 : total >= 5 ? 14 : 18
-})
-
-const previewQuestionClass = computed(() => {
-  if (isWin98.value) return 'text-[#111111]'
-  return 'text-[#1F2937]'
-})
-
-const previewQuestionPanelClass = computed(() => {
-  if (isWin98.value) return 'border-[#B7B7B7] bg-[#FFFFFF]'
-  return 'border-[#07C160]/30 bg-[#F7FFFB]'
 })
 
 const yearText = computed(() => `${props.year}年`)
@@ -449,20 +338,11 @@ const rootClass = computed(() => {
 
 const innerClass = computed(() => {
   if (props.variant !== 'slide') return 'relative px-6 py-7 sm:px-8 sm:py-9'
-  if (isWin98.value) return 'relative h-full max-w-5xl mx-auto px-6 pt-2 pb-4 sm:px-8 sm:pt-3 sm:pb-6'
   return 'relative h-full max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12'
 })
 </script>
 
 <style scoped>
-/* Win98：封面标题的高亮句做成“选中/标题栏”感觉 */
-.win98-hero-highlight {
-  display: inline-block;
-  padding: 2px 8px;
-  background: #000080;
-  color: #ffffff;
-}
-
 .preview-grid-shell {
   border-radius: 12px;
   box-shadow: 0 10px 24px rgba(7, 193, 96, 0.14);

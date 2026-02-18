@@ -59,8 +59,7 @@
 </template>
 
 <script setup>
-import { themedHeatColor, maxInMatrix, formatHourRange } from '~/utils/wrapped/heatmap'
-import { useWrappedTheme } from '~/composables/useWrappedTheme'
+import { heatColor, maxInMatrix, formatHourRange } from '~/utils/wrapped/heatmap'
 
 const props = defineProps({
   weekdayLabels: { type: Array, default: () => ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] },
@@ -68,8 +67,6 @@ const props = defineProps({
   matrix: { type: Array, default: () => [] },
   totalMessages: { type: Number, default: 0 }
 })
-
-const { theme } = useWrappedTheme()
 
 const matrixSafe = computed(() => {
   // Expect 7x24, but keep defensive to avoid UI crashes.
@@ -93,7 +90,7 @@ const timeLabels = computed(() => {
   return labels
 })
 
-const colorFor = (v) => themedHeatColor(v, maxValue.value, theme.value)
+const colorFor = (v) => heatColor(v, maxValue.value)
 
 const tooltipFor = (weekdayIndex, hour, v) => {
   const w = props.weekdayLabels?.[weekdayIndex] ?? `周${weekdayIndex + 1}`
@@ -104,7 +101,7 @@ const tooltipFor = (weekdayIndex, hour, v) => {
 
 const legendColor = (i) => {
   const t = i / 6
-  return themedHeatColor(Math.max(1, t * (maxValue.value || 1)), maxValue.value || 1, theme.value)
+  return heatColor(Math.max(1, t * (maxValue.value || 1)), maxValue.value || 1)
 }
 
 const originFor = (weekdayIndex, hour) => {
@@ -115,57 +112,3 @@ const originFor = (weekdayIndex, hour) => {
   return `${x} ${y}`
 }
 </script>
-
-<style>
-/* ========== Game Boy 主题 ========== */
-
-.wrapped-theme-gameboy .heatmap-cell {
-  border-radius: 0 !important;
-}
-
-.wrapped-theme-gameboy .wrapped-label,
-.wrapped-theme-gameboy .wrapped-body {
-  color: #306230 !important;
-}
-
-.wrapped-theme-gameboy .wrapped-number {
-  color: #0f380f !important;
-}
-
-.wrapped-theme-gameboy .heatmap-legend-cell {
-  border-radius: 0 !important;
-}
-
-/* ========== DOS 主题 ========== */
-
-.wrapped-theme-dos .heatmap-cell {
-  border-radius: 0 !important;
-  box-shadow: 0 0 2px rgba(51, 255, 51, 0.3);
-}
-
-.wrapped-theme-dos .wrapped-label,
-.wrapped-theme-dos .wrapped-body {
-  color: #22aa22 !important;
-  text-shadow: 0 0 3px #22aa22;
-}
-
-.wrapped-theme-dos .wrapped-number {
-  color: #33ff33 !important;
-  text-shadow: 0 0 5px #33ff33;
-}
-
-.wrapped-theme-dos .heatmap-legend-cell {
-  border-radius: 0 !important;
-}
-
-/* ========== Win98 主题 ========== */
-.wrapped-theme-win98 .heatmap-cell {
-  border-radius: 0 !important;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-}
-
-.wrapped-theme-win98 .heatmap-legend-cell {
-  border-radius: 0 !important;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-}
-</style>

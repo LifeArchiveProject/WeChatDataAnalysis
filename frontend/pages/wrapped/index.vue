@@ -2,7 +2,6 @@
   <div
     ref="deckEl"
     class="wrapped-deck-root relative h-screen w-full overflow-hidden transition-colors duration-500"
-    :class="themeClass"
     :style="{ backgroundColor: currentBg }"
   >
     <!-- PPT 风格：单张卡片占据全页面，鼠标滚轮切换 -->
@@ -68,7 +67,7 @@
     <!-- 右上角：年份选择器（主题化） -->
     <div class="absolute top-6 right-6 z-20 pointer-events-auto select-none">
       <div class="relative">
-        <div v-if="!isRetro" class="absolute -inset-6 rounded-full bg-[#07C160]/10 blur-2xl"></div>
+        <div class="absolute -inset-6 rounded-full bg-[#07C160]/10 blur-2xl"></div>
         <div class="relative flex justify-end">
           <WrappedYearSelector
             v-if="yearOptions.length > 1"
@@ -77,7 +76,7 @@
           />
           <div v-else class="wrapped-label text-xs text-[#00000066]">{{ year }}年</div>
         </div>
-        <div v-if="!isRetro" class="relative mt-1 h-[1px] w-16 ml-auto bg-gradient-to-l from-[#07C160]/40 to-transparent"></div>
+        <div class="relative mt-1 h-[1px] w-16 ml-auto bg-gradient-to-l from-[#07C160]/40 to-transparent"></div>
       </div>
     </div>
 
@@ -203,9 +202,6 @@ const router = useRouter()
 const year = ref(Number(route.query?.year) || new Date().getFullYear())
 // 分享视图不展示账号信息：默认让后端自动选择；需要指定时可用 query ?account=wxid_xxx
 const account = ref(typeof route.query?.account === 'string' ? route.query.account : '')
-
-// 主题：仅保留 Modern
-const { isRetro, themeClass } = useWrappedTheme()
 
  const accounts = ref([])
  const accountsLoading = ref(true)
