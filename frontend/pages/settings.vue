@@ -92,6 +92,33 @@
 
               <div class="rounded-lg border border-gray-200">
                 <div class="px-4 py-3 border-b border-gray-200 bg-gray-50">
+                  <div class="text-sm font-medium text-gray-900">更新</div>
+                </div>
+                <div class="px-4 py-3 space-y-3">
+                  <div class="flex items-center justify-between gap-4">
+                    <div class="min-w-0">
+                      <div class="text-sm font-medium text-gray-900">当前版本</div>
+                      <div class="text-xs text-gray-500">
+                        {{ desktopVersionText }}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      class="text-sm px-3 py-1.5 rounded-md border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50"
+                      :disabled="!isDesktopEnv || desktopUpdate.manualCheckLoading"
+                      @click="onDesktopCheckUpdates"
+                    >
+                      {{ desktopUpdate.manualCheckLoading ? '检查中...' : '检查更新' }}
+                    </button>
+                  </div>
+                  <div v-if="desktopUpdate.lastCheckMessage" class="text-xs text-gray-600 whitespace-pre-wrap break-words">
+                    {{ desktopUpdate.lastCheckMessage }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="rounded-lg border border-gray-200">
+                <div class="px-4 py-3 border-b border-gray-200 bg-gray-50">
                   <div class="text-sm font-medium text-gray-900">朋友圈</div>
                 </div>
                 <div class="px-4 py-3 space-y-4">
@@ -123,6 +150,13 @@ import { DESKTOP_SETTING_AUTO_REALTIME_KEY, DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY,
 useHead({ title: '设置 - 微信数据分析助手' })
 
 const isDesktopEnv = ref(false)
+const desktopUpdate = useDesktopUpdate()
+
+const desktopVersionText = computed(() => {
+  if (!isDesktopEnv.value) return '仅桌面端可用'
+  const v = String(desktopUpdate.currentVersion.value || '').trim()
+  return v || '—'
+})
 
 const desktopAutoRealtime = ref(false)
 const desktopDefaultToChatWhenData = ref(false)
@@ -225,9 +259,14 @@ const onSnsUseCacheToggle = (ev) => {
   writeLocalBoolSetting(SNS_SETTING_USE_CACHE_KEY, checked)
 }
 
+const onDesktopCheckUpdates = async () => {
+  await desktopUpdate.manualCheck()
+}
+
 onMounted(async () => {
   if (process.client && typeof window !== 'undefined') {
-    isDesktopEnv.value = !!window.wechatDesktop
+    const isElectron = /electron/i.test(String(navigator.userAgent || ''))
+    isDesktopEnv.value = isElectron && !!window.wechatDesktop
   }
 
   desktopAutoRealtime.value = readLocalBoolSetting(DESKTOP_SETTING_AUTO_REALTIME_KEY, false)
@@ -235,6 +274,7 @@ onMounted(async () => {
   snsUseCache.value = readLocalBoolSetting(SNS_SETTING_USE_CACHE_KEY, true)
 
   if (isDesktopEnv.value) {
+    void desktopUpdate.initListeners()
     await refreshDesktopAutoLaunch()
     await refreshDesktopCloseBehavior()
   }
