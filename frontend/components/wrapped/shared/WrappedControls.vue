@@ -39,7 +39,6 @@
         </div>
 
         <div class="flex gap-2 items-end">
-          <WrappedThemeSwitcher />
           <button
             class="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[#07C160] text-white text-sm wrapped-label hover:bg-[#06AD56] disabled:opacity-60 disabled:cursor-not-allowed transition controls-btn"
             :disabled="loading"
@@ -83,73 +82,3 @@ const yearOptions = computed(() => {
   return years
 })
 </script>
-
-<style scoped>
-/* 复古模式 - 控制面板样式 */
-.wrapped-retro .controls-panel {
-  background-color: var(--wrapped-card-bg);
-  border-color: var(--wrapped-border);
-}
-
-.wrapped-retro .controls-label {
-  color: var(--wrapped-text-secondary);
-}
-
-.wrapped-retro .controls-select {
-  background-color: var(--wrapped-bg);
-  border-color: var(--wrapped-border);
-  color: var(--wrapped-text);
-}
-
-.wrapped-retro .controls-select:focus {
-  --tw-ring-color: var(--wrapped-accent);
-}
-
-.wrapped-retro .controls-checkbox {
-  border-color: var(--wrapped-border);
-  color: var(--wrapped-accent);
-}
-
-.wrapped-retro .controls-checkbox:focus {
-  --tw-ring-color: var(--wrapped-accent);
-}
-
-.wrapped-retro .controls-hint {
-  color: var(--wrapped-text-secondary);
-}
-
-.wrapped-retro .controls-warning {
-  color: var(--wrapped-warning);
-}
-
-.wrapped-retro .controls-btn {
-  background-color: var(--wrapped-accent);
-  color: var(--wrapped-bg);
-}
-
-.wrapped-retro .controls-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
-
-/* Win98 特殊样式 */
-.wrapped-theme-win98 .controls-panel {
-  border-radius: 0;
-  border: 1px solid #808080;
-  background: #c0c0c0;
-  box-shadow:
-    inset 1px 1px 0 #ffffff,
-    inset -1px -1px 0 #000000;
-}
-
-.wrapped-theme-win98 .controls-select {
-  border-radius: 0;
-}
-
-.wrapped-theme-win98 .controls-btn {
-  border-radius: 0;
-}
-
-.wrapped-theme-win98 .controls-warning {
-  color: #800000;
-}
-</style>

@@ -7,10 +7,8 @@
   >
     <!-- PPT 风格：单张卡片占据全页面，鼠标滚轮切换 -->
     <WrappedDeckBackground />
-    <!-- CRT 叠加层仅用于“像素屏”类主题，Win98 等桌面 GUI 主题不应开启 -->
-    <WrappedCRTOverlay v-if="theme === 'gameboy'" />
 
-    <!-- 左上角：刷新 + 复古模式开关 -->
+    <!-- 左上角：返回 + 刷新 -->
     <div class="absolute top-6 left-6 z-20 select-none">
       <div class="flex items-center gap-3">
         <button
@@ -59,24 +57,6 @@
           </svg>
         </button>
 
-        <button
-          type="button"
-          class="pointer-events-auto inline-flex items-center justify-center w-9 h-9 rounded-full bg-transparent transition disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30"
-          :class="isRetro ? 'text-[#07C160] hover:bg-[#07C160]/10' : 'text-[#00000055] hover:bg-[#000000]/5'"
-          :aria-pressed="isRetro ? 'true' : 'false'"
-          :aria-label="`复古模式（当前：${theme === 'off' ? 'Modern' : theme.toUpperCase()}）`"
-          :title="`复古模式：${theme === 'off' ? 'Modern' : theme.toUpperCase()}（点击切换）`"
-          @click="cycleTheme"
-        >
-          <img
-            src="/assets/images/wechat-audio-dark.png"
-            class="w-4 h-4 transition"
-            :style="{ filter: isRetro ? 'none' : 'grayscale(1)', opacity: isRetro ? '1' : '0.55' }"
-            alt=""
-            aria-hidden="true"
-            draggable="false"
-          />
-        </button>
       </div>
 
       <div v-if="error" class="mt-2 pointer-events-auto bg-white/90 backdrop-blur rounded-xl border border-red-200 px-3 py-2">
@@ -205,11 +185,6 @@
       </section>
     </div>
 
-    <!-- Win98：底部任务栏 -->
-    <WrappedWin98Taskbar
-      v-if="theme === 'win98'"
-      :title="taskbarTitle"
-    />
   </div>
 </template>
 
@@ -229,8 +204,8 @@ const year = ref(Number(route.query?.year) || new Date().getFullYear())
 // 分享视图不展示账号信息：默认让后端自动选择；需要指定时可用 query ?account=wxid_xxx
 const account = ref(typeof route.query?.account === 'string' ? route.query.account : '')
 
-// 主题管理：modern / gameboy / win98
-const { theme, cycleTheme, isRetro, themeClass } = useWrappedTheme()
+// 主题：仅保留 Modern
+const { isRetro, themeClass } = useWrappedTheme()
 
  const accounts = ref([])
  const accountsLoading = ref(true)
@@ -262,13 +237,6 @@ const wheelAcc = ref(0)
 let navUnlockTimer = null
 let deckResizeObserver = null
 
-// 各主题的背景颜色
-const THEME_BG = {
-  off: '#F3FFF8',       // Modern: 浅绿
-  gameboy: '#9bbc0f',   // Game Boy: 亮绿
-  win98: '#008080'      // Win98: 经典桌面青色
-}
-
 const slides = computed(() => {
   const cards = Array.isArray(report.value?.cards) ? report.value.cards : []
   const out = [{ key: 'cover' }]
@@ -276,15 +244,7 @@ const slides = computed(() => {
   return out
 })
 
-const taskbarTitle = computed(() => {
-  if (theme.value !== 'win98') return ''
-  if (activeIndex.value === 0) return `${year.value} WeChat Wrapped`
-  const idx = activeIndex.value - 1
-  const c = report.value?.cards?.[idx]
-  return String(c?.title || 'WeChat Wrapped')
-})
-
-const currentBg = computed(() => THEME_BG[theme.value] || THEME_BG.off)
+const currentBg = computed(() => '#F3FFF8')
 const deckTrackClass = computed(() => 'z-10')
 
 const applyViewportBg = () => {
@@ -423,11 +383,8 @@ const onTouchEnd = (e) => {
 const updateViewport = () => {
   const h = Math.round(deckEl.value?.getBoundingClientRect?.().height || deckEl.value?.clientHeight || window.innerHeight || 0)
   if (!h) return
-  // Reserve space for the Win98 taskbar at the bottom.
-  const offset = theme.value === 'win98' ? 40 : 0
-  const effective = Math.max(0, h - offset)
   // Avoid endless reflows from 1px rounding errors (especially in Electron).
-  if (Math.abs(viewportHeight.value - effective) > 1) viewportHeight.value = effective
+  if (Math.abs(viewportHeight.value - h) > 1) viewportHeight.value = h
 }
 
 const loadAccounts = async () => {
@@ -590,12 +547,6 @@ onMounted(async () => {
   if (accounts.value.length > 0) {
     await reload()
   }
-})
-
-// Theme switch may change reserved UI space (e.g., Win98 taskbar)
-watch(theme, () => {
-  applyViewportBg()
-  updateViewport()
 })
 
 onBeforeUnmount(() => {

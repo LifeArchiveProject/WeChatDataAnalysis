@@ -17,9 +17,9 @@
 
 ## 年度总结
 
-年度总结现在支持 3 种不同风格（style1、style2、style3）。如果你对某个风格有更好的修改建议，或有新风格的点子，欢迎到 Issue 区反馈：https://github.com/LifeArchiveProject/WeChatDataAnalysis/issues
+年度总结目前只保留「现代（Modern）」风格。如果你对年度总结有更好的修改建议，欢迎到 Issue 区反馈：https://github.com/LifeArchiveProject/WeChatDataAnalysis/issues
 
-> ⚠️ **提醒**：年度总结目前还不是最终版本，后续还会增加新总结或新风格。
+> ⚠️ **提醒**：年度总结目前还不是最终版本，后续还会增加新总结或新内容。
 
 
 

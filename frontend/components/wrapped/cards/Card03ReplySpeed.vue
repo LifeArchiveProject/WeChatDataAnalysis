@@ -115,7 +115,7 @@
               @error="onShownAvatarError"
             />
             <img
-              v-else-if="isGameboy && phase === 'idle'"
+              v-else-if="(isGameboy || isModern) && phase === 'idle'"
               src="/assets/images/LuckyBlock.png"
               class="w-full h-full object-contain"
               alt="Lucky Block"
@@ -258,6 +258,7 @@ const props = defineProps({
 
 const { theme } = useWrappedTheme()
 const isGameboy = computed(() => theme.value === 'gameboy')
+const isModern = computed(() => theme.value === 'off')
 const isRetro = computed(() => isGameboy.value)
 
 const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
