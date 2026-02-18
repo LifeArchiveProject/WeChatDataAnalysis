@@ -105,14 +105,14 @@
                     <button
                       type="button"
                       class="text-sm px-3 py-1.5 rounded-md border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50"
-                      :disabled="!isDesktopEnv || desktopUpdate.manualCheckLoading"
+                      :disabled="!isDesktopEnv || desktopUpdate.manualCheckLoading.value"
                       @click="onDesktopCheckUpdates"
                     >
-                      {{ desktopUpdate.manualCheckLoading ? '检查中...' : '检查更新' }}
+                      {{ desktopUpdate.manualCheckLoading.value ? '检查中...' : '检查更新' }}
                     </button>
                   </div>
-                  <div v-if="desktopUpdate.lastCheckMessage" class="text-xs text-gray-600 whitespace-pre-wrap break-words">
-                    {{ desktopUpdate.lastCheckMessage }}
+                  <div v-if="desktopUpdate.lastCheckMessage.value" class="text-xs text-gray-600 whitespace-pre-wrap break-words">
+                    {{ desktopUpdate.lastCheckMessage.value }}
                   </div>
                 </div>
               </div>
