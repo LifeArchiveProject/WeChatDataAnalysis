@@ -65,18 +65,13 @@
 
 ## 年度总结
 
-年度总结目前只保留「现代（Modern）」风格。如果你对年度总结有更好的修改建议，欢迎到 Issue 区反馈：https://github.com/LifeArchiveProject/WeChatDataAnalysis/issues
-
 > ⚠️ **提醒**：年度总结目前还不是最终版本，后续还会增加新总结或新内容。
 
 也欢迎加入下方 QQ 群一起讨论。
 
 <table>
   <tr>
-    <td align="center"><b>Modern</b></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="frontend/public/style1.png" alt="年度总结 Modern" width="400"/></td>
+    <td align="center"><img src="frontend/public/style1.png" alt="年度总结 Modern"/></td>
   </tr>
 </table>
 
