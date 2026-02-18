@@ -31,17 +31,21 @@ from .chat_export_service import (  # pylint: disable=protected-access
     _zip_write_tree,
 )
 
-# Reuse WeFlow-compatible SNS remote download/decrypt helpers.
+# Reuse SNS timeline/local cache helpers.
 from .routers.sns import (  # pylint: disable=protected-access
-    _fix_sns_cdn_url,
     _generate_sns_cache_key,
-    _materialize_sns_remote_video,
     _resolve_sns_cached_image_path,
     _resolve_sns_cached_image_path_by_cache_key,
     _resolve_sns_cached_image_path_by_md5,
     _resolve_sns_cached_video_path,
-    _try_fetch_and_decrypt_sns_remote,
     list_sns_timeline,
+)
+
+# SNS remote download+decrypt helpers (shared with API endpoints).
+from .sns_media import (  # pylint: disable=protected-access
+    fix_sns_cdn_url as _fix_sns_cdn_url,
+    materialize_sns_remote_video as _materialize_sns_remote_video,
+    try_fetch_and_decrypt_sns_image_remote as _try_fetch_and_decrypt_sns_image_remote,
 )
 
 logger = get_logger(__name__)
@@ -624,8 +628,8 @@ class SnsExportManager:
             # 0) Prefer WeFlow-style remote download+decrypt (accurate when keys are present).
             if fixed:
                 should_cancel()
-                resp = run_async(
-                    _try_fetch_and_decrypt_sns_remote(
+                res = run_async(
+                    _try_fetch_and_decrypt_sns_image_remote(
                         account_dir=account_dir,
                         url=fixed,
                         key=str(key or ""),
@@ -633,8 +637,9 @@ class SnsExportManager:
                         use_cache=use_cache,
                     )
                 )
-                if resp is not None:
-                    payload, mt = _response_bytes(resp)
+                if res is not None:
+                    payload = bytes(res.payload or b"")
+                    mt = str(res.media_type or "")
 
             # 1) Local cache fallback (only when cache is enabled; mirrors `/api/sns/media` semantics).
             if (not payload) and use_cache:

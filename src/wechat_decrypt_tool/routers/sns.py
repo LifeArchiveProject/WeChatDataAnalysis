@@ -26,6 +26,7 @@ from ..chat_helpers import _load_contact_rows, _pick_display_name, _resolve_acco
 from ..logging_config import get_logger
 from ..media_helpers import _read_and_maybe_decrypt_media, _resolve_account_wxid_dir
 from ..path_fix import PathFixRoute
+from .. import sns_media as _sns_media
 from ..wcdb_realtime import (
     WCDBRealtimeError,
     WCDB_REALTIME,
@@ -2387,62 +2388,11 @@ def list_sns_media_candidates(
 
 
 def _is_allowed_sns_media_host(host: str) -> bool:
-    h = str(host or "").strip().lower()
-    if not h:
-        return False
-    # Images: qpic/qlogo. Thumbs: *.tc.qq.com. Videos/live photos: *.video.qq.com.
-    return (
-        h.endswith(".qpic.cn")
-        or h.endswith(".qlogo.cn")
-        or h.endswith(".tc.qq.com")
-        or h.endswith(".video.qq.com")
-    )
+    return _sns_media.is_allowed_sns_media_host(host)
 
 
 def _fix_sns_cdn_url(url: str, *, token: str = "", is_video: bool = False) -> str:
-    """WeFlow-compatible SNS CDN URL normalization.
-
-    - Force https for Tencent CDNs.
-    - For images, replace `/150` with `/0` to request the original.
-    - If token is provided and url doesn't contain it, append `token=<token>&idx=1`.
-    """
-    u = html.unescape(str(url or "")).strip()
-    if not u:
-        return ""
-
-    # Only touch Tencent CDNs; keep other URLs intact.
-    try:
-        p = urlparse(u)
-        host = str(p.hostname or "").lower()
-        if not _is_allowed_sns_media_host(host):
-            return u
-    except Exception:
-        return u
-
-    # http -> https
-    u = re.sub(r"^http://", "https://", u, flags=re.I)
-
-    # /150 -> /0 (image only)
-    if not is_video:
-        u = re.sub(r"/150(?=($|\\?))", "/0", u)
-
-    tok = str(token or "").strip()
-    if tok and ("token=" not in u):
-        if is_video:
-            # Match WeFlow: place `token&idx=1` in front of existing query params.
-            base, sep, qs = u.partition("?")
-            if sep:
-                qs = qs.lstrip("&")
-                u = f"{base}?token={tok}&idx=1"
-                if qs:
-                    u = f"{u}&{qs}"
-            else:
-                u = f"{u}?token={tok}&idx=1"
-        else:
-            connector = "&" if "?" in u else "?"
-            u = f"{u}{connector}token={tok}&idx=1"
-
-    return u
+    return _sns_media.fix_sns_cdn_url(url, token=token, is_video=is_video)
 
 
 def _detect_mp4_ftyp(head: bytes) -> bool:
@@ -2461,40 +2411,7 @@ def _weflow_wxisaac64_script_path() -> str:
 
 @lru_cache(maxsize=64)
 def _weflow_wxisaac64_keystream(key: str, size: int) -> bytes:
-    """Generate keystream via WeFlow's WASM (preferred; matches real decryption)."""
-    key_text = str(key or "").strip()
-    if not key_text or size <= 0:
-        return b""
-
-    # WeFlow is the source-of-truth; use its WASM first, then fall back to our pure-python ISAAC64.
-    script = _weflow_wxisaac64_script_path()
-    if not script:
-        script = ""
-
-    if script:
-        try:
-            # The JS helper prints ONLY base64 bytes to stdout; keep stderr for debugging.
-            proc = subprocess.run(
-                ["node", script, key_text, str(int(size))],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=30,
-                check=False,
-            )
-            if proc.returncode == 0:
-                out_b64 = (proc.stdout or b"").strip()
-                if out_b64:
-                    return base64.b64decode(out_b64, validate=False)
-        except Exception:
-            pass
-
-    # Fallback: pure python ISAAC64 (WeFlow-compatible reverse).
-    from ..isaac64 import Isaac64  # pylint: disable=import-outside-toplevel
-
-    want = int(size)
-    # ISAAC64 generates 8-byte words; generate enough and slice.
-    size8 = ((want + 7) // 8) * 8
-    return Isaac64(key_text).generate_keystream(size8)[:want]
+    return _sns_media.weflow_wxisaac64_keystream(key, size)
 
 
 _SNS_REMOTE_VIDEO_CACHE_EXTS = [
@@ -2595,55 +2512,7 @@ async def _download_sns_remote_to_file(url: str, dest_path: Path, *, max_bytes: 
 
 
 def _maybe_decrypt_sns_video_file(path: Path, key: str) -> bool:
-    """Decrypt the first 128KB of an encrypted mp4 file in-place (WeFlow/Isaac64).
-
-    Returns True if decryption was performed, False otherwise.
-    """
-    key_text = str(key or "").strip()
-    if not key_text:
-        return False
-
-    try:
-        size = int(path.stat().st_size)
-    except Exception:
-        return False
-
-    if size <= 8:
-        return False
-
-    decrypt_size = min(131072, size)
-    if decrypt_size <= 0:
-        return False
-
-    try:
-        with path.open("r+b") as f:
-            head = f.read(8)
-            if _detect_mp4_ftyp(head):
-                return False
-
-            f.seek(0)
-            buf = bytearray(f.read(decrypt_size))
-            if not buf:
-                return False
-
-            # Prefer WeFlow's real keystream generator (WASM) to ensure compatibility.
-            ks = _weflow_wxisaac64_keystream(key_text, decrypt_size)
-            n = min(len(buf), len(ks))
-            for i in range(n):
-                buf[i] ^= ks[i]
-
-            f.seek(0)
-            f.write(buf)
-            f.flush()
-
-            f.seek(0)
-            head2 = f.read(8)
-            if _detect_mp4_ftyp(head2):
-                return True
-            # Still return True to indicate we mutated bytes; caller may treat as failure if desired.
-            return True
-    except Exception:
-        return False
+    return _sns_media.maybe_decrypt_sns_video_file(path, key)
 
 
 async def _materialize_sns_remote_video(
@@ -2654,124 +2523,21 @@ async def _materialize_sns_remote_video(
     token: str,
     use_cache: bool,
 ) -> Optional[Path]:
-    """Download SNS video from CDN, decrypt (if needed), and return a local mp4 path."""
-    fixed_url = _fix_sns_cdn_url(str(url or ""), token=str(token or ""), is_video=True)
-    if not fixed_url:
-        return None
-
-    cache_dir, cache_stem = _sns_remote_video_cache_dir_and_stem(account_dir, url=fixed_url, key=str(key or ""))
-
-    if use_cache:
-        existing = _sns_remote_video_cache_existing_path(cache_dir, cache_stem)
-        if existing is not None:
-            # Best-effort migrate legacy `.bin` -> `.mp4` when it's already decrypted.
-            try:
-                if existing.suffix.lower() == ".bin":
-                    with existing.open("rb") as f:
-                        head = f.read(8)
-                    if _detect_mp4_ftyp(head):
-                        target = cache_dir / f"{cache_stem}.mp4"
-                        cache_dir.mkdir(parents=True, exist_ok=True)
-                        os.replace(str(existing), str(target))
-                        existing = target
-            except Exception:
-                pass
-            return existing
-
-    # Download to a temp file first.
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    tmp_path = cache_dir / f"{cache_stem}.mp4.{time.time_ns()}.tmp"
-    try:
-        await _download_sns_remote_to_file(fixed_url, tmp_path, max_bytes=200 * 1024 * 1024)
-    except Exception:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        return None
-
-    # Decrypt in-place (WeFlow ISAAC64) if the file isn't already a mp4.
-    _maybe_decrypt_sns_video_file(tmp_path, str(key or ""))
-
-    # Validate: mp4 must have `ftyp` at offset 4.
-    ok_mp4 = False
-    try:
-        with tmp_path.open("rb") as f:
-            head = f.read(8)
-        ok_mp4 = _detect_mp4_ftyp(head)
-    except Exception:
-        ok_mp4 = False
-
-    if not ok_mp4:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        return None
-
-    if use_cache:
-        final_path = cache_dir / f"{cache_stem}.mp4"
-        try:
-            os.replace(str(tmp_path), str(final_path))
-        except Exception:
-            # If rename fails, keep tmp_path as fallback.
-            final_path = tmp_path
-
-        # Remove other extensions for the same cache key.
-        for other_ext in _SNS_REMOTE_VIDEO_CACHE_EXTS:
-            if other_ext.lower() == ".mp4":
-                continue
-            other = cache_dir / f"{cache_stem}{other_ext}"
-            try:
-                if other.exists() and other.is_file():
-                    other.unlink(missing_ok=True)
-            except Exception:
-                continue
-
-        return final_path
-
-    # Cache disabled: keep the decrypted tmp_path (caller should delete it).
-    return tmp_path
+    return await _sns_media.materialize_sns_remote_video(
+        account_dir=account_dir,
+        url=url,
+        key=key,
+        token=token,
+        use_cache=use_cache,
+    )
 
 
 def _best_effort_unlink(path: str) -> None:
-    try:
-        Path(path).unlink(missing_ok=True)
-    except Exception:
-        pass
+    _sns_media.best_effort_unlink(path)
 
 
 def _detect_image_mime(data: bytes) -> str:
-    """Sniff image mime type by magic bytes.
-
-    IMPORTANT: Do NOT trust HTTP Content-Type as a fallback here. We use this for
-    validating decrypted bytes. If we blindly trust `image/*`, a failed decrypt
-    would poison the disk cache and the frontend would keep showing broken images.
-    """
-    if not data:
-        return ""
-
-    if data.startswith(b"\xFF\xD8\xFF"):
-        return "image/jpeg"
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if len(data) >= 6 and data[:6] in (b"GIF87a", b"GIF89a"):
-        return "image/gif"
-    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    if len(data) >= 12 and data[4:8] == b"ftyp":
-        # ISO BMFF based image formats (HEIF/HEIC/AVIF).
-        brand = data[8:12]
-        if brand == b"avif":
-            return "image/avif"
-        if brand in (b"heic", b"heix", b"hevc", b"hevx"):
-            return "image/heic"
-        if brand in (b"heif", b"mif1", b"msf1"):
-            return "image/heif"
-    if data.startswith(b"BM"):
-        return "image/bmp"
-
-    return ""
+    return _sns_media.detect_image_mime(data)
 
 
 _SNS_REMOTE_CACHE_EXTS = [
@@ -2907,146 +2673,25 @@ async def _try_fetch_and_decrypt_sns_remote(
     token: str,
     use_cache: bool,
 ) -> Optional[Response]:
-    """Try WeFlow-style: download from CDN -> decrypt via wcdb_decrypt_sns_image -> return bytes.
+    """Try remote download+decrypt first (accurate when keys are present).
 
     Returns a Response on success, or None on failure so caller can fall back to local cache matching.
     """
-    u_fixed = _fix_sns_cdn_url(url, token=token, is_video=False)
-    if not u_fixed:
+    res = await _sns_media.try_fetch_and_decrypt_sns_image_remote(
+        account_dir=account_dir,
+        url=str(url or ""),
+        key=str(key or ""),
+        token=str(token or ""),
+        use_cache=bool(use_cache),
+    )
+    if res is None:
         return None
 
-    try:
-        p = urlparse(u_fixed)
-        host = str(p.hostname or "").strip().lower()
-    except Exception:
-        return None
-    if not _is_allowed_sns_media_host(host):
-        return None
-
-    cache_dir, cache_stem = _sns_remote_cache_dir_and_stem(account_dir, url=u_fixed, key=str(key or ""))
-    if use_cache:
-        try:
-            existing = _sns_remote_cache_existing_path(cache_dir, cache_stem)
-            if existing is not None:
-                mt = _ext_to_mime(existing.suffix)
-
-                # Upgrade legacy `.bin` cache to a proper image extension once.
-                if (existing.suffix or "").lower() == ".bin" or (not mt):
-                    mt2 = _sniff_image_mime_from_file(existing)
-                    if not mt2:
-                        try:
-                            existing.unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                        existing = None
-                    else:
-                        ext2 = _mime_to_ext(mt2)
-                        if ext2 != ".bin":
-                            try:
-                                cache_dir.mkdir(parents=True, exist_ok=True)
-                                desired = cache_dir / f"{cache_stem}{ext2}"
-                                if desired.exists():
-                                    # Another process/version already wrote the real file; drop legacy bin.
-                                    existing.unlink(missing_ok=True)
-                                    existing = desired
-                                else:
-                                    os.replace(str(existing), str(desired))
-                                    existing = desired
-                            except Exception:
-                                pass
-                        mt = mt2
-
-                if existing is not None and mt:
-                    return FileResponse(
-                        existing,
-                        media_type=mt,
-                        headers={
-                            "Cache-Control": "public, max-age=86400",
-                            "X-SNS-Source": "remote-cache",
-                        },
-                    )
-        except Exception:
-            pass
-
-    try:
-        raw, content_type, x_enc = await _download_sns_remote_bytes(u_fixed)
-    except Exception as e:
-        logger.info("[sns] remote download failed: %s", e)
-        return None
-
-    if not raw:
-        return None
-
-    # First, validate whether the CDN already returned a real image.
-    mt_raw = _detect_image_mime(raw)
-
-    decoded = raw
-    mt = mt_raw
-    decrypted = False
-    k = str(key or "").strip()
-
-    # Only attempt decryption when bytes do NOT look like an image, or when CDN explicitly
-    # signals encryption (x-enc). Some endpoints return already-decoded PNG/JPEG even when
-    # urlAttrs.enc_idx == 1, and decrypting those would corrupt the bytes.
-    need_decrypt = bool(k) and (not mt_raw) and bool(raw)
-    if k and x_enc and str(x_enc).strip() not in ("0", "false", "False"):
-        need_decrypt = True
-
-    if need_decrypt:
-        try:
-            decoded2 = _wcdb_decrypt_sns_image(raw, k)
-            mt2 = _detect_image_mime(decoded2)
-            if mt2:
-                decoded = decoded2
-                mt = mt2
-                decrypted = decoded2 != raw
-            else:
-                # Decrypt failed; if raw is a real image, keep it. Otherwise treat as failure.
-                if mt_raw:
-                    decoded = raw
-                    mt = mt_raw
-                    decrypted = False
-                else:
-                    return None
-        except Exception as e:
-            logger.info("[sns] remote decrypt failed: %s", e)
-            if not mt_raw:
-                return None
-            decoded = raw
-            mt = mt_raw
-            decrypted = False
-
-    if not mt:
-        return None
-
-    if use_cache:
-        try:
-            ext = _mime_to_ext(mt)
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_path = cache_dir / f"{cache_stem}{ext}"
-
-            tmp = cache_path.with_suffix(cache_path.suffix + f".{time.time_ns()}.tmp")
-            tmp.write_bytes(decoded)
-            os.replace(str(tmp), str(cache_path))
-
-            # Remove other extensions for the same cache key to avoid stale duplicates.
-            for other_ext in _SNS_REMOTE_CACHE_EXTS:
-                if other_ext.lower() == ext.lower():
-                    continue
-                other = cache_dir / f"{cache_stem}{other_ext}"
-                try:
-                    if other.exists() and other.is_file():
-                        other.unlink(missing_ok=True)
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-    resp = Response(content=decoded, media_type=mt)
+    resp = Response(content=res.payload, media_type=res.media_type)
     resp.headers["Cache-Control"] = "public, max-age=86400" if use_cache else "no-store"
-    resp.headers["X-SNS-Source"] = "remote-decrypt" if decrypted else "remote"
-    if x_enc:
-        resp.headers["X-SNS-X-Enc"] = x_enc
+    resp.headers["X-SNS-Source"] = str(res.source or "remote")
+    if res.x_enc:
+        resp.headers["X-SNS-X-Enc"] = str(res.x_enc)
     return resp
 
 
