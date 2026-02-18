@@ -95,7 +95,7 @@
 
     <!-- 主内容：抽奖揭晓 + 右侧年度 Top10 总消息 bar race -->
     <div v-else class="w-full">
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center" :class="isRetro ? 'lg:items-start' : ''">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
         <!-- Left: 抽奖区 -->
         <div
           class="reply-buddy-rail flex flex-col items-center justify-center transition-transform duration-500 will-change-transform"
@@ -104,8 +104,7 @@
           <div class="wrapped-label text-xs text-[#00000066]">最佳聊天搭子</div>
 
           <div
-            class="mt-4 w-28 h-28 sm:w-32 sm:h-32 rounded-2xl border border-[#EDEDED] overflow-hidden flex items-center justify-center"
-            :class="isRetro ? 'bg-transparent' : 'bg-white/60'"
+            class="mt-4 w-28 h-28 sm:w-32 sm:h-32 rounded-2xl border border-[#EDEDED] bg-white/60 overflow-hidden flex items-center justify-center"
           >
             <img
               v-if="shownAvatarUrl && shownAvatarOk"
@@ -115,7 +114,7 @@
               @error="onShownAvatarError"
             />
             <img
-              v-else-if="(isGameboy || isModern) && phase === 'idle'"
+              v-else-if="phase === 'idle'"
               src="/assets/images/LuckyBlock.png"
               class="w-full h-full object-contain"
               alt="Lucky Block"
@@ -167,15 +166,14 @@
 
         <!-- Right: bar race（揭晓后出现） -->
         <Transition name="chart-fade">
-          <div v-if="showChart" class="w-full" :class="isRetro ? 'lg:self-start' : ''">
+          <div v-if="showChart" class="w-full">
             <div
-              class="rounded-2xl border border-[#EDEDED] bg-white/60"
-              :class="isRetro ? 'p-3 sm:p-4' : 'p-4 sm:p-5'"
+              class="rounded-2xl border border-[#EDEDED] bg-white/60 p-4 sm:p-5"
             >
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <div class="wrapped-label text-xs text-[#00000066]">年度聊天排行（总消息数）</div>
-                  <div class="wrapped-body text-sm text-[#000000e6]" :class="isRetro ? 'mt-0.5' : 'mt-1'">
+                  <div class="wrapped-body text-sm text-[#000000e6] mt-1">
                     <span class="wrapped-number text-[#07C160] font-semibold">{{ raceDate }}</span>
                     <span class="text-[#00000055]"> · 0.1秒/天</span>
                   </div>
@@ -190,21 +188,19 @@
                 <TransitionGroup
                   name="race"
                   tag="div"
-                  :class="isRetro ? 'space-y-1.5' : 'space-y-2'"
+                  class="space-y-2"
                 >
                   <div
                     v-for="item in raceItems"
                     :key="item.username"
-                    class="race-row flex items-center"
-                    :class="isRetro ? 'gap-3' : 'gap-3'"
+                    class="race-row flex items-center gap-3"
                   >
                   <div class="w-6 text-right wrapped-label text-[11px] text-[#00000055]">
                     {{ item.rank }}
                   </div>
 
                   <div
-                    class="rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0"
-                    :class="isRetro ? 'w-6 h-6' : 'w-7 h-7'"
+                    class="w-7 h-7 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0"
                   >
                     <img
                       v-if="item.avatarUrl && avatarOk[item.username] !== false"
@@ -221,7 +217,7 @@
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center justify-between gap-3">
                       <div class="min-w-0">
-                        <div class="wrapped-body text-[#000000e6] truncate" :class="isRetro ? 'text-xs' : 'text-sm'" :title="item.displayName">
+                        <div class="wrapped-body text-[#000000e6] text-sm truncate" :title="item.displayName">
                           {{ item.displayName }}
                         </div>
                       </div>
@@ -229,7 +225,7 @@
                         {{ formatInt(item.value) }}
                       </div>
                     </div>
-                    <div class="mt-1 rounded-full bg-[#00000008] overflow-hidden" :class="isRetro ? 'h-1.5' : 'h-2'">
+                    <div class="mt-1 h-2 rounded-full bg-[#00000008] overflow-hidden">
                       <div
                         class="race-bar h-full rounded-full bg-[#07C160]"
                         :style="{ width: `${item.pct}%` }"
@@ -249,17 +245,11 @@
 
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { useWrappedTheme } from '~/composables/useWrappedTheme'
 
 const props = defineProps({
   card: { type: Object, required: true },
   variant: { type: String, default: 'panel' } // 'panel' | 'slide'
 })
-
-const { theme } = useWrappedTheme()
-const isGameboy = computed(() => theme.value === 'gameboy')
-const isModern = computed(() => theme.value === 'off')
-const isRetro = computed(() => isGameboy.value)
 
 const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
 const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
