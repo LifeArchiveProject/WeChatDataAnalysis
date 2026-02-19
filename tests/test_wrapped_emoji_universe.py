@@ -659,7 +659,7 @@ class TestWrappedEmojiUniverse(unittest.TestCase):
             self._seed_session_db(account_dir / "session.db", usernames=[])
 
             card = build_card_04_emoji_universe(account_dir=account_dir, year=2025)
-            self.assertEqual(card["id"], 4)
+            self.assertEqual(card["id"], 5)
             self.assertEqual(card["status"], "ok")
             self.assertEqual(card["data"]["sentStickerCount"], 0)
             self.assertIn("几乎没用表情表达", card["narrative"])

@@ -20,7 +20,12 @@
 
   <!-- Slide 模式：单张卡片占据全页面，背景由外层（年度总结）统一控制 -->
   <section v-else class="relative h-full w-full overflow-hidden">
-    <div class="relative h-full max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12 flex flex-col">
+    <div
+      class="relative h-full flex flex-col"
+      :class="wide
+        ? 'px-10 pt-20 pb-12 sm:px-14 sm:pt-24 sm:pb-14 lg:px-20 xl:px-20 2xl:px-40'
+        : 'max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12'"
+    >
         <div class="flex items-start justify-between gap-4">
           <div>
             <h2 class="wrapped-title text-2xl sm:text-3xl text-[#000000e6]">{{ title }}</h2>
@@ -47,6 +52,9 @@ defineProps({
   cardId: { type: Number, required: true },
   title: { type: String, required: true },
   narrative: { type: String, default: '' },
-  variant: { type: String, default: 'panel' } // 'panel' | 'slide'
+  variant: { type: String, default: 'panel' }, // 'panel' | 'slide'
+  // Slide 模式下是否取消 max-width 限制（让内容直接铺满页面宽度）。
+  // 用于需要横向展示的可视化（如年度日历热力图）。
+  wide: { type: Boolean, default: false }
 })
 </script>

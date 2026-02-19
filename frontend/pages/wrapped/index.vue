@@ -163,8 +163,14 @@
           variant="slide"
           class="h-full w-full"
         />
+        <Card04MonthlyBestFriendsWall
+          v-else-if="c && (c.kind === 'chat/monthly_best_friends_wall' || c.id === 4)"
+          :card="c"
+          variant="slide"
+          class="h-full w-full"
+        />
         <Card04EmojiUniverse
-          v-else-if="c && (c.kind === 'emoji/annual_universe' || c.id === 4)"
+          v-else-if="c && (c.kind === 'emoji/annual_universe' || c.id === 5)"
           :card="c"
           variant="slide"
           class="h-full w-full"
@@ -199,7 +205,9 @@ const api = useApi()
 const route = useRoute()
 const router = useRouter()
 
-const year = ref(Number(route.query?.year) || new Date().getFullYear())
+const queryYear = Number(route.query?.year)
+const defaultYear = new Date().getFullYear() - 1
+const year = ref(Number.isFinite(queryYear) ? queryYear : defaultYear)
 // 分享视图不展示账号信息：默认让后端自动选择；需要指定时可用 query ?account=wxid_xxx
 const account = ref(typeof route.query?.account === 'string' ? route.query.account : '')
 
@@ -459,9 +467,10 @@ const retryCard = async (cardId) => {
   await ensureCardLoaded(cardId)
 }
 
-const reload = async (forceRefresh = false) => {
+const reload = async (forceRefresh = false, preserveIndex = false) => {
   const token = ++reportToken
-  activeIndex.value = 0
+  const keepIndex = preserveIndex ? activeIndex.value : 0
+  if (!preserveIndex) activeIndex.value = 0
   error.value = ''
   loading.value = true
   refreshCards.value = !!forceRefresh
@@ -502,6 +511,15 @@ const reload = async (forceRefresh = false) => {
     }
 
     availableYears.value = Array.isArray(resp?.availableYears) ? resp.availableYears : []
+
+    if (preserveIndex) {
+      activeIndex.value = clampIndex(keepIndex)
+      const cardIdx = Number(activeIndex.value) - 1
+      if (cardIdx >= 0) {
+        const id = Number(report.value?.cards?.[cardIdx]?.id)
+        if (Number.isFinite(id)) void ensureCardLoaded(id)
+      }
+    }
   } catch (e) {
     if (token !== reportToken) return
     report.value = null
@@ -576,7 +594,7 @@ watch(year, async (newYear, oldYear) => {
     year.value = oldYear
     return
   }
-  await reload()
+  await reload(false, true)
 })
 </script>
 

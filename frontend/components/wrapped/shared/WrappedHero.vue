@@ -242,6 +242,10 @@ const PREVIEW_BY_KIND = {
     summary: '回复速度',
     question: '谁是你愿意秒回的那个人？'
   },
+  'chat/monthly_best_friends_wall': {
+    summary: '月度好友墙',
+    question: '每个月谁是你最有默契的聊天搭子？'
+  },
   'emoji/annual_universe': {
     summary: '梗图年鉴',
     question: '你这一年最常丢出的表情包是哪张？'
