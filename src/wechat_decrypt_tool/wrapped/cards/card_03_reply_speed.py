@@ -483,17 +483,20 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
             sql_daily = (
                 "SELECT username, "
                 "CAST(strftime('%j', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) - 1 AS doy, "
+                "sender_username, "
                 "COUNT(1) AS cnt "
                 "FROM ("
-                f"  SELECT username, {ts_expr} AS ts "
+                f"  SELECT username, sender_username, {ts_expr} AS ts "
                 "  FROM message_fts "
                 f"  WHERE {base_where}"
                 ") sub "
-                "GROUP BY username, doy"
+                "GROUP BY username, doy, sender_username"
             )
 
             u_set = set(u_list)
-            per_user_daily: dict[str, list[int]] = {}
+            per_user_daily_total: dict[str, list[int]] = {}
+            per_user_daily_outgoing: dict[str, list[int]] = {}
+            per_user_daily_incoming: dict[str, list[int]] = {}
             try:
                 conn2 = sqlite3.connect(str(index_path))
                 try:
@@ -511,16 +514,30 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
                     continue
                 try:
                     doy = int(r[1] if r[1] is not None else -1)
-                    cnt = int(r[2] or 0)
+                    sender = str(r[2] or "").strip()
+                    cnt = int(r[3] or 0)
                 except Exception:
                     continue
                 if cnt <= 0 or doy < 0 or doy >= days_in_year:
                     continue
-                daily = per_user_daily.get(u)
-                if daily is None:
-                    daily = [0] * days_in_year
-                    per_user_daily[u] = daily
-                daily[doy] += cnt
+                daily_total = per_user_daily_total.get(u)
+                if daily_total is None:
+                    daily_total = [0] * days_in_year
+                    per_user_daily_total[u] = daily_total
+                daily_total[doy] += cnt
+
+                if sender == my_username:
+                    daily_outgoing = per_user_daily_outgoing.get(u)
+                    if daily_outgoing is None:
+                        daily_outgoing = [0] * days_in_year
+                        per_user_daily_outgoing[u] = daily_outgoing
+                    daily_outgoing[doy] += cnt
+                else:
+                    daily_incoming = per_user_daily_incoming.get(u)
+                    if daily_incoming is None:
+                        daily_incoming = [0] * days_in_year
+                        per_user_daily_incoming[u] = daily_incoming
+                    daily_incoming[doy] += cnt
 
             # Ensure we can render display names/avatars for the whole race list.
             extra_usernames = [u for u in u_list if u and u not in contact_rows]
@@ -535,14 +552,28 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
 
             series: list[dict[str, Any]] = []
             for u in u_list:
-                daily = per_user_daily.get(u)
-                if not daily:
+                daily_total = per_user_daily_total.get(u)
+                if not daily_total:
                     continue
-                cum: list[int] = []
-                running = 0
-                for x in daily:
-                    running += int(x or 0)
-                    cum.append(int(running))
+                daily_outgoing = per_user_daily_outgoing.get(u) or [0] * days_in_year
+                daily_incoming = per_user_daily_incoming.get(u) or [0] * days_in_year
+                cum_total: list[int] = []
+                cum_outgoing: list[int] = []
+                cum_incoming: list[int] = []
+                running_total = 0
+                running_outgoing = 0
+                running_incoming = 0
+                for i in range(days_in_year):
+                    running_total += int(daily_total[i] or 0)
+                    running_outgoing += int(daily_outgoing[i] or 0)
+                    running_incoming += int(daily_incoming[i] or 0)
+                    cum_total.append(int(running_total))
+                    cum_outgoing.append(int(running_outgoing))
+                    cum_incoming.append(int(running_incoming))
+
+                total_messages = int(cum_total[-1]) if cum_total else int(all_totals.get(u) or 0)
+                outgoing_messages = int(cum_outgoing[-1]) if cum_outgoing else 0
+                incoming_messages = int(cum_incoming[-1]) if cum_incoming else 0
 
                 row = contact_rows.get(u)
                 display = _pick_display_name(row, u)
@@ -553,8 +584,12 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
                         "displayName": display,
                         "maskedName": _mask_name(display),
                         "avatarUrl": avatar,
-                        "totalMessages": int(all_totals.get(u) or 0),
-                        "cumulativeCounts": cum,
+                        "totalMessages": int(total_messages),
+                        "outgoingMessages": int(outgoing_messages),
+                        "incomingMessages": int(incoming_messages),
+                        "cumulativeCounts": cum_total,
+                        "cumulativeOutgoingCounts": cum_outgoing,
+                        "cumulativeIncomingCounts": cum_incoming,
                     }
                 )
 
