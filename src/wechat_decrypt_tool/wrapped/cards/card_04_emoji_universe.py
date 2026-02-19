@@ -1254,7 +1254,7 @@ def build_card_04_emoji_universe(*, account_dir: Path, year: int) -> dict[str, A
         narrative = "".join(parts)
 
     return {
-        "id": 4,
+        "id": 5,
         "title": "这一年，你的表情包里藏了多少心情？",
         "scope": "global",
         "category": "B",

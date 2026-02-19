@@ -16,6 +16,7 @@ from .cards.card_00_global_overview import build_card_00_global_overview
 from .cards.card_01_cyber_schedule import WeekdayHourHeatmap, build_card_01_cyber_schedule, compute_weekday_hour_heatmap
 from .cards.card_02_message_chars import build_card_02_message_chars
 from .cards.card_03_reply_speed import build_card_03_reply_speed
+from .cards.card_04_monthly_best_friends_wall import build_card_04_monthly_best_friends_wall
 from .cards.card_04_emoji_universe import build_card_04_emoji_universe
 
 logger = get_logger(__name__)
@@ -23,9 +24,9 @@ logger = get_logger(__name__)
 
 # We use this number to version the cache filename so adding more cards won't accidentally serve
 # an older partial cache.
-_IMPLEMENTED_UPTO_ID = 4
+_IMPLEMENTED_UPTO_ID = 5
 # Bump this when we change card payloads/ordering while keeping the same implemented_upto.
-_CACHE_VERSION = 15
+_CACHE_VERSION = 18
 
 
 # "Manifest" is used by the frontend to render the deck quickly, then lazily fetch each card.
@@ -61,6 +62,13 @@ _WRAPPED_CARD_MANIFEST: tuple[dict[str, Any], ...] = (
     },
     {
         "id": 4,
+        "title": "这一年，每个月谁最懂你？",
+        "scope": "global",
+        "category": "B",
+        "kind": "chat/monthly_best_friends_wall",
+    },
+    {
+        "id": 5,
         "title": "这一年，你的表情包里藏了多少心情？",
         "scope": "global",
         "category": "B",
@@ -282,7 +290,7 @@ def build_wrapped_annual_response(
 ) -> dict[str, Any]:
     """Build annual wrapped response for the given account/year.
 
-    For now we implement cards up to id=4 (plus a meta overview card id=0).
+    For now we implement cards up to id=5 (plus a meta overview card id=0).
     """
 
     account_dir = _resolve_account_dir(account)
@@ -325,7 +333,9 @@ def build_wrapped_annual_response(
     cards.append(build_card_02_message_chars(account_dir=account_dir, year=y))
     # Page 5: reply speed / best chat buddy.
     cards.append(build_card_03_reply_speed(account_dir=account_dir, year=y))
-    # Page 6: annual emoji universe / meme almanac.
+    # Page 6: monthly best friends wall (photo wall).
+    cards.append(build_card_04_monthly_best_friends_wall(account_dir=account_dir, year=y))
+    # Page 7: annual emoji universe / meme almanac.
     cards.append(build_card_04_emoji_universe(account_dir=account_dir, year=y))
 
     obj: dict[str, Any] = {
@@ -519,6 +529,8 @@ def build_wrapped_annual_card(
         elif cid == 3:
             card = build_card_03_reply_speed(account_dir=account_dir, year=y)
         elif cid == 4:
+            card = build_card_04_monthly_best_friends_wall(account_dir=account_dir, year=y)
+        elif cid == 5:
             card = build_card_04_emoji_universe(account_dir=account_dir, year=y)
         else:
             # Should be unreachable due to _WRAPPED_CARD_ID_SET check.
