@@ -179,9 +179,7 @@
             <div v-else-if="posts.length === 0" class="text-sm text-gray-400 py-16 text-center">暂无朋友圈数据</div>
 
             <div v-if="!error && posts.length > 0" class="text-[11px] text-gray-500 mb-2 flex flex-wrap gap-x-3 gap-y-1">
-              <span>已显示：{{ posts.length }}</span>
               <span v-if="selectedSnsUserInfo">缓存统计：{{ selectedSnsUserInfo.postCount || 0 }}</span>
-              <span v-if="timelineSource">source: {{ timelineSource }}</span>
               <span v-if="!hasMore && !isLoading">（已到末尾）</span>
             </div>
             <div v-if="showSnsCountMismatchHint" class="text-[11px] text-amber-700 mb-3">
@@ -247,30 +245,23 @@
                   </a>
                 </div>
 
-                <div v-else-if="post.type === 28 && post.finderFeed && Object.keys(post.finderFeed).length > 0" class="mt-2 w-full" :class="{ 'privacy-blur': privacyMode }">
-                  <!-- 浏览器没有看微信视频号的环境，暂时不进行跳转！！ -->
-                  <div class="block w-full bg-[#F7F7F7] p-2 rounded-sm">
-                    <div class="flex items-center gap-3">
-                      <div class="flex-1 min-w-0 flex items-center overflow-hidden h-12">
-                        <div class="text-[13px] text-gray-900 leading-tight line-clamp-2">{{ formatFinderFeedCardText(post) }}</div>
-                      </div>
-                      <div class="relative w-12 h-12 rounded-sm overflow-hidden flex-shrink-0 bg-white">
-                        <img
-                            v-if="getFinderFeedThumbSrc(post)"
-                            :src="getFinderFeedThumbSrc(post)"
-                            class="w-full h-full object-cover"
-                            alt=""
-                            loading="lazy"
-                            referrerpolicy="no-referrer"
-                        />
-                        <div v-else class="w-full h-full flex items-center justify-center bg-gray-200 text-gray-400 text-xs">
-                          视频
-                        </div>
-                        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div class="w-8 h-8 rounded-full bg-black/45 flex items-center justify-center">
-                            <svg class="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                          </div>
-                        </div>
+                <div v-else-if="post.type === 28 && post.finderFeed && Object.keys(post.finderFeed).length > 0" class="mt-2 w-full max-w-[304px]" :class="{ 'privacy-blur': privacyMode }">
+                  <!-- 浏览器没有看微信视频号的环境，暂时不进行跳转 -->
+                  <div class="relative w-full overflow-hidden rounded-sm bg-[#F7F7F7]">
+                    <img
+                        v-if="getFinderFeedThumbSrc(post)"
+                        :src="getFinderFeedThumbSrc(post)"
+                        class="block w-full aspect-square object-cover"
+                        alt=""
+                        loading="lazy"
+                        referrerpolicy="no-referrer"
+                    />
+                    <div v-else class="w-full aspect-square flex items-center justify-center bg-gray-200">
+                      <span class="line-clamp-3 px-4 text-center text-[13px] leading-5 text-gray-500">{{ formatFinderFeedCardText(post) }}</span>
+                    </div>
+                    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div class="w-12 h-12 rounded-full bg-black/45 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                       </div>
                     </div>
                   </div>
@@ -622,7 +613,6 @@ const seenPostIds = new Set()
 // NOTE: Backend `/api/sns/timeline` uses SQL OFFSET on the raw timeline rows.
 // The UI filters out some rows (e.g. type=7 cover), so `posts.length` must NOT be used as the next OFFSET.
 const timelineOffset = ref(0)
-const timelineSource = ref('')
 const hasMore = ref(true)
 // When timeline API reports `hasMore=false` but cached sidebar count indicates more, keep paging.
 // If we hit an empty page, stop trying to avoid infinite requests.
@@ -1615,7 +1605,6 @@ const loadPosts = async ({ reset }) => {
   try {
     if (reset) {
       timelineOffset.value = 0
-      timelineSource.value = ''
       hasMore.value = true
       cachePagingExhausted.value = false
       seenPostIds.clear()
@@ -1633,7 +1622,6 @@ const loadPosts = async ({ reset }) => {
       offset,
       usernames: selectedSnsUser.value ? [String(selectedSnsUser.value).trim()] : []
     })
-    timelineSource.value = String(resp?.source || '').trim()
     const items = Array.isArray(resp?.timeline) ? resp.timeline : []
     // Advance offset by the number of rows consumed by the backend.
     // When `hasMore` is true, the backend definitely scanned at least `limit` raw rows (even if it filtered some out).
