@@ -4,14 +4,14 @@
     <div class="rounded-2xl border border-[#00000010] bg-[#F5F5F5] p-3 sm:p-4">
       <div class="flex flex-col gap-3">
         <!-- Received (left) -->
-        <div class="flex items-end gap-2">
+        <div class="flex items-start gap-2">
           <div class="avatar-box bg-white">
             <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="#07C160" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M8 3h10a2 2 0 0 1 2 2v14H6V5a2 2 0 0 1 2-2z" />
               <path d="M6 7H4a2 2 0 0 0-2 2v10h4" />
             </svg>
           </div>
-          <div class="bubble-left">
+          <div class="px-3 py-2 text-sm max-w-[85%] relative msg-bubble whitespace-pre-wrap break-words leading-relaxed bg-white text-gray-800 bubble-tail-l">
             <div class="wrapped-label text-xs text-[#00000066]">你收到的字</div>
             <div class="mt-0.5 wrapped-number text-xl sm:text-2xl text-[#000000e6]">
               {{ formatInt(receivedChars) }}
@@ -28,8 +28,8 @@
         </div>
 
         <!-- Sent (right) -->
-        <div class="flex items-end gap-2 justify-end">
-          <div class="bubble-right">
+        <div class="flex items-start gap-2 justify-end">
+          <div class="px-3 py-2 text-sm max-w-[85%] relative msg-bubble whitespace-pre-wrap break-words leading-relaxed bg-[#95EC69] text-black bubble-tail-r">
             <div class="wrapped-label text-xs text-[#00000080] text-right">你发送的字</div>
             <div class="mt-0.5 wrapped-number text-xl sm:text-2xl text-[#000000e6] text-right">
               {{ formatInt(sentChars) }}
@@ -319,40 +319,6 @@ const getLabelStyle = (code) => {
 /* 头像 */
 .avatar-box {
   @apply w-8 h-8 rounded-lg border border-[#00000010] flex items-center justify-center flex-shrink-0;
-}
-
-/* 气泡 - 左侧 */
-.bubble-left {
-  @apply relative max-w-[85%] bg-white shadow-sm rounded-xl px-3 py-2;
-}
-.bubble-left::before {
-  content: '';
-  position: absolute;
-  left: -6px;
-  bottom: 8px;
-  width: 0;
-  height: 0;
-  border-top: 6px solid transparent;
-  border-bottom: 6px solid transparent;
-  border-right: 6px solid #fff;
-  filter: drop-shadow(-1px 0 0 rgba(0,0,0,0.05));
-}
-
-/* 气泡 - 右侧 */
-.bubble-right {
-  @apply relative max-w-[85%] bg-[#95EC69] shadow-sm rounded-xl px-3 py-2;
-}
-.bubble-right::after {
-  content: '';
-  position: absolute;
-  right: -6px;
-  bottom: 8px;
-  width: 0;
-  height: 0;
-  border-top: 6px solid transparent;
-  border-bottom: 6px solid transparent;
-  border-left: 6px solid #95EC69;
-  filter: drop-shadow(1px 0 0 rgba(0,0,0,0.05));
 }
 
 /* 键盘外框 */
