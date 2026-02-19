@@ -98,7 +98,9 @@
       </div>
     </template>
 
-    <GlobalOverviewChart :data="card.data || {}" />
+    <div :class="variant === 'slide' ? 'w-full -mt-2 sm:-mt-4' : 'w-full'">
+      <GlobalOverviewChart :data="card.data || {}" />
+    </div>
   </WrappedCardShell>
 </template>
 
