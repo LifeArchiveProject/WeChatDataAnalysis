@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 # an older partial cache.
 _IMPLEMENTED_UPTO_ID = 6
 # Bump this when we change card payloads/ordering while keeping the same implemented_upto.
-_CACHE_VERSION = 23
+_CACHE_VERSION = 24
 
 
 # "Manifest" is used by the frontend to render the deck quickly, then lazily fetch each card.
