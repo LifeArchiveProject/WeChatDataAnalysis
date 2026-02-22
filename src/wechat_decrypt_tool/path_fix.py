@@ -32,10 +32,8 @@ class PathFixRequest(Request):
     def _validate_paths_in_json(self, json_data: dict) -> Optional[str]:
         """验证JSON中的路径，返回错误信息（如果有）"""
         logger.info(f"开始验证路径，JSON数据: {json_data}")
-        # 检查db_storage_path字段（现在是必需的）
-        if 'db_storage_path' not in json_data:
-            return "缺少必需的db_storage_path参数，请提供具体的数据库存储路径。"
-
+        # 仅在提供 db_storage_path 时进行校验（例如 /api/decrypt）。
+        # 其它 API 的 JSON payload 不一定包含路径字段，不应强制要求。
         if 'db_storage_path' in json_data:
             path = json_data['db_storage_path']
 
@@ -115,11 +113,16 @@ class PathFixRequest(Request):
 
     async def body(self) -> bytes:
         """重写body方法，预处理JSON中的路径问题"""
+        cached = getattr(self.state, "_pathfix_body_bytes", None)
+        if isinstance(cached, (bytes, bytearray)):
+            return bytes(cached)
+
         body = await super().body()
 
         # 只处理JSON请求
         content_type = self.headers.get("content-type", "")
         if "application/json" not in content_type:
+            self.state._pathfix_body_bytes = body
             return body
 
         try:
@@ -134,6 +137,7 @@ class PathFixRequest(Request):
                     logger.info(f"检测到路径错误: {path_error}")
                     # 我们将错误信息存储在请求中，稍后在路由处理器中检查
                     self.state.path_validation_error = path_error
+                    self.state._pathfix_body_bytes = body
                     return body
             except json.JSONDecodeError as e:
                 # JSON格式错误，继续尝试修复
@@ -169,17 +173,30 @@ class PathFixRequest(Request):
                 if path_error:
                     logger.info(f"修复后检测到路径错误: {path_error}")
                     self.state.path_validation_error = path_error
-                    return fixed_body_str.encode('utf-8')
+                    fixed_bytes = fixed_body_str.encode('utf-8')
+                    self.state._pathfix_body_bytes = fixed_bytes
+                    try:
+                        self._body = fixed_bytes  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    return fixed_bytes
                 else:
                     logger.info(f"修复后路径验证通过")
             except json.JSONDecodeError as e:
                 logger.warning(f"修复后JSON仍然解析失败: {e}")
 
-            return fixed_body_str.encode('utf-8')
+            fixed_bytes = fixed_body_str.encode('utf-8')
+            self.state._pathfix_body_bytes = fixed_bytes
+            try:
+                self._body = fixed_bytes  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            return fixed_bytes
 
         except Exception as e:
             # 如果处理失败，返回原始body
             logger.warning(f"JSON路径修复失败，使用原始请求体: {e}")
+            self.state._pathfix_body_bytes = body
             return body
 
 
@@ -193,12 +210,17 @@ class PathFixRoute(APIRoute):
             # 将Request替换为我们的自定义Request
             custom_request = PathFixRequest(request.scope, request.receive)
 
-            # 检查是否有路径验证错误
-            if hasattr(custom_request.state, 'path_validation_error'):
-                raise HTTPException(
-                    status_code=400,
-                    detail=custom_request.state.path_validation_error,
-                )
+            # 仅对 JSON 请求预读 body，以触发路径修复/校验逻辑，并在发现错误时提前返回 400。
+            try:
+                content_type = (custom_request.headers.get("content-type", "") or "").lower()
+                if "application/json" in content_type:
+                    await custom_request.body()
+            except Exception:
+                pass
+
+            path_err = getattr(custom_request.state, "path_validation_error", None)
+            if path_err:
+                raise HTTPException(status_code=400, detail=path_err)
 
             return await original_route_handler(custom_request)
 
