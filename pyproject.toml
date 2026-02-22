@@ -19,6 +19,7 @@ dependencies = [
     "zstandard>=0.23.0",
     "pilk>=0.2.4",
     "pypinyin>=0.53.0",
+    "jieba>=0.42.1",
     "wx_key",
     "packaging",
     "httpx",
