@@ -5,8 +5,10 @@ export const useApi = () => {
   // 基础请求函数
   const request = async (url, options = {}) => {
     try {
-      // 在客户端使用完整的API路径
-      const baseURL = process.client ? 'http://localhost:8000/api' : '/api'
+      // Default to same-origin `/api` so Nuxt devProxy / backend-mounted UI both work.
+      // Override via `NUXT_PUBLIC_API_BASE`, e.g. `http://127.0.0.1:8000/api`.
+      const apiBase = String(config?.public?.apiBase || '').trim()
+      const baseURL = (apiBase ? apiBase : '/api').replace(/\/$/, '')
       
       const response = await $fetch(url, {
         baseURL,
@@ -85,6 +87,75 @@ export const useApi = () => {
     if (params && params.source) query.set('source', params.source)
     const url = '/chat/messages' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
+  }
+
+  const getChatMessageRaw = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.message_id) query.set('message_id', params.message_id)
+    const url = '/chat/messages/raw' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const editChatMessage = async (payload = {}) => {
+    return await request('/chat/messages/edit', {
+      method: 'POST',
+      body: payload
+    })
+  }
+
+  const repairChatMessageSender = async (payload = {}) => {
+    return await request('/chat/messages/repair_sender', {
+      method: 'POST',
+      body: payload
+    })
+  }
+
+  // Flip message direction in the WeChat client by swapping packed_info_data (unsafe, but undoable via reset).
+  const flipChatMessageDirection = async (payload = {}) => {
+    return await request('/chat/messages/flip_direction', {
+      method: 'POST',
+      body: payload
+    })
+  }
+
+  const listChatEditedSessions = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/chat/edits/sessions' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const listChatEditedMessages = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    const url = '/chat/edits/messages' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const getChatEditStatus = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.message_id) query.set('message_id', params.message_id)
+    const url = '/chat/edits/message_status' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const resetChatEditedMessage = async (payload = {}) => {
+    return await request('/chat/edits/reset_message', {
+      method: 'POST',
+      body: payload
+    })
+  }
+
+  const resetChatEditedSession = async (payload = {}) => {
+    return await request('/chat/edits/reset_session', {
+      method: 'POST',
+      body: payload
+    })
   }
 
   const getChatRealtimeStatus = async (params = {}) => {
@@ -476,6 +547,15 @@ export const useApi = () => {
     listChatAccounts,
     listChatSessions,
     listChatMessages,
+    getChatMessageRaw,
+    editChatMessage,
+    repairChatMessageSender,
+    flipChatMessageDirection,
+    listChatEditedSessions,
+    listChatEditedMessages,
+    getChatEditStatus,
+    resetChatEditedMessage,
+    resetChatEditedSession,
     getChatRealtimeStatus,
     syncChatRealtimeMessages,
     syncChatRealtimeAll,

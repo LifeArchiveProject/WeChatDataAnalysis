@@ -33,6 +33,22 @@
         </div>
       </div>
 
+      <!-- Edits -->
+      <div
+        class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        title="修改记录"
+        @click="goEdits"
+      >
+        <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
+          <div class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isEditsRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'">
+            <svg class="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
       <!-- Moments -->
       <div
         class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
@@ -199,6 +215,7 @@ const selfAvatarUrl = computed(() => {
 })
 
 const isChatRoute = computed(() => route.path?.startsWith('/chat'))
+const isEditsRoute = computed(() => route.path?.startsWith('/edits'))
 const isSnsRoute = computed(() => route.path?.startsWith('/sns'))
 const isContactsRoute = computed(() => route.path?.startsWith('/contacts'))
 const isWrappedRoute = computed(() => route.path?.startsWith('/wrapped'))
@@ -206,6 +223,10 @@ const isSettingsRoute = computed(() => route.path?.startsWith('/settings'))
 
 const goChat = async () => {
   await navigateTo('/chat')
+}
+
+const goEdits = async () => {
+  await navigateTo('/edits')
 }
 
 const goSns = async () => {
@@ -237,4 +258,3 @@ const toggleRealtime = async () => {
   await realtimeStore.toggle({ silent: false })
 }
 </script>
-

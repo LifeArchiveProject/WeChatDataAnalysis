@@ -328,6 +328,20 @@
               </button>
               <button
                 class="header-btn-icon"
+                :class="{ 'header-btn-icon-active': reverseMessageSides }"
+                @click="toggleReverseMessageSides"
+                :disabled="!selectedContact"
+                :title="reverseMessageSides ? '取消反转消息位置' : '反转消息位置'"
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 7h14" />
+                  <path d="M14 3l4 4-4 4" />
+                  <path d="M20 17H6" />
+                  <path d="M10 13l-4 4 4 4" />
+                </svg>
+              </button>
+              <button
+                class="header-btn-icon"
                 :class="{ 'header-btn-icon-active': messageSearchOpen }"
                 @click="toggleMessageSearch"
                 :title="messageSearchOpen ? '关闭搜索 (Esc)' : '搜索聊天记录 (Ctrl+F)'"
@@ -1943,6 +1957,152 @@
       >
         打开文件夹
       </button>
+
+      <div class="border-t border-gray-200"></div>
+
+      <button
+        v-if="contextMenu.message?.id"
+        class="block w-full text-left px-3 py-2 hover:bg-gray-100"
+        type="button"
+        @click="onEditMessageClick"
+      >
+        {{ isLikelyTextMessage(contextMenu.message) ? '修改消息' : '编辑源码' }}
+      </button>
+      <button
+        v-if="contextMenu.message?.id"
+        class="block w-full text-left px-3 py-2 hover:bg-gray-100"
+        type="button"
+        @click="onEditMessageFieldsClick"
+      >
+        字段编辑
+      </button>
+      <button
+        v-if="contextMenu.editStatus?.modified"
+        class="block w-full text-left px-3 py-2 hover:bg-gray-100 text-red-600"
+        type="button"
+        @click="onResetEditedMessageClick"
+      >
+        恢复原消息
+      </button>
+      <button
+        v-if="contextMenu.message?.id"
+        class="block w-full text-left px-3 py-2 hover:bg-gray-100"
+        type="button"
+        @click="onRepairMessageSenderAsMeClick"
+      >
+        修复为我发送
+      </button>
+      <button
+        v-if="contextMenu.message?.id"
+        class="block w-full text-left px-3 py-2 hover:bg-gray-100 text-orange-600"
+        type="button"
+        @click="onFlipWechatMessageDirectionClick"
+      >
+        反转微信气泡位置
+      </button>
+      <div v-if="contextMenu.editStatusLoading" class="px-3 py-2 text-xs text-gray-400">检查修改状态…</div>
+    </div>
+
+    <!-- 修改消息弹窗 -->
+    <div v-if="messageEditModal.open" class="fixed inset-0 z-[11000] flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/40" @click="closeMessageEditModal"></div>
+      <div class="relative w-[860px] max-w-[95vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-200 flex items-center">
+          <div class="text-base font-medium text-gray-900">{{ messageEditModal.mode === 'content' ? '修改消息' : '编辑源码' }}</div>
+          <button class="ml-auto text-gray-400 hover:text-gray-600" type="button" @click="closeMessageEditModal">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="p-5 max-h-[75vh] overflow-y-auto space-y-3">
+          <div v-if="messageEditModal.error" class="text-sm text-red-600 whitespace-pre-wrap">{{ messageEditModal.error }}</div>
+          <div v-if="messageEditModal.loading" class="text-sm text-gray-500">加载中…</div>
+
+          <textarea
+            v-model="messageEditModal.draft"
+            class="w-full min-h-[240px] rounded-md border border-gray-200 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#03C160]/20"
+            :disabled="messageEditModal.loading || messageEditModal.saving"
+            :placeholder="messageEditModal.mode === 'content' ? '请输入新的消息内容' : '请输入新的 message_content（可输入 0x... 写入 BLOB）'"
+          ></textarea>
+
+          <details v-if="messageEditModal.rawRow" class="text-xs">
+            <summary class="cursor-pointer select-none text-gray-700 hover:text-gray-900">查看源消息（raw）</summary>
+            <div class="mt-2 rounded border border-gray-200 bg-gray-50 p-2 overflow-auto">
+              <pre class="text-[11px] leading-snug whitespace-pre-wrap break-words">{{ prettyJson(messageEditModal.rawRow) }}</pre>
+            </div>
+          </details>
+        </div>
+
+        <div class="px-5 py-3 border-t border-gray-200 flex items-center justify-end gap-2">
+          <button class="text-sm px-4 py-2 rounded border border-gray-200 hover:bg-gray-50" type="button" @click="closeMessageEditModal">取消</button>
+          <button
+            class="text-sm px-4 py-2 rounded bg-[#03C160] text-white hover:bg-[#02ad55]"
+            type="button"
+            :disabled="messageEditModal.loading || messageEditModal.saving"
+            :class="messageEditModal.loading || messageEditModal.saving ? 'opacity-60 cursor-not-allowed' : ''"
+            @click="saveMessageEditModal"
+          >
+            保存
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 字段编辑弹窗 -->
+    <div v-if="messageFieldsModal.open" class="fixed inset-0 z-[11000] flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/40" @click="closeMessageFieldsModal"></div>
+      <div class="relative w-[920px] max-w-[95vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-200 flex items-center">
+          <div class="text-base font-medium text-gray-900">字段编辑</div>
+          <button class="ml-auto text-gray-400 hover:text-gray-600" type="button" @click="closeMessageFieldsModal">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="p-5 max-h-[75vh] overflow-y-auto space-y-3">
+          <div v-if="messageFieldsModal.error" class="text-sm text-red-600 whitespace-pre-wrap">{{ messageFieldsModal.error }}</div>
+          <div v-if="messageFieldsModal.loading" class="text-sm text-gray-500">加载中…</div>
+
+          <div class="flex items-center gap-3">
+            <label class="flex items-center gap-2 text-sm text-gray-700">
+              <input v-model="messageFieldsModal.unsafe" type="checkbox" class="rounded border-gray-300" />
+              <span>我已知风险（允许修改 local_id / WCDB_CT / BLOB 等）</span>
+            </label>
+            <div class="text-xs text-gray-500">修改时间/类型会自动同步 message_resource 关键字段</div>
+          </div>
+
+          <textarea
+            v-model="messageFieldsModal.editsJson"
+            class="w-full min-h-[320px] rounded-md border border-gray-200 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#03C160]/20"
+            :disabled="messageFieldsModal.loading || messageFieldsModal.saving"
+            placeholder='{ "message_content": "...", "create_time": 123 }'
+          ></textarea>
+
+          <details v-if="messageFieldsModal.rawRow" class="text-xs">
+            <summary class="cursor-pointer select-none text-gray-700 hover:text-gray-900">查看源消息（raw）</summary>
+            <div class="mt-2 rounded border border-gray-200 bg-gray-50 p-2 overflow-auto">
+              <pre class="text-[11px] leading-snug whitespace-pre-wrap break-words">{{ prettyJson(messageFieldsModal.rawRow) }}</pre>
+            </div>
+          </details>
+        </div>
+
+        <div class="px-5 py-3 border-t border-gray-200 flex items-center justify-end gap-2">
+          <button class="text-sm px-4 py-2 rounded border border-gray-200 hover:bg-gray-50" type="button" @click="closeMessageFieldsModal">取消</button>
+          <button
+            class="text-sm px-4 py-2 rounded bg-[#03C160] text-white hover:bg-[#02ad55]"
+            type="button"
+            :disabled="messageFieldsModal.loading || messageFieldsModal.saving"
+            :class="messageFieldsModal.loading || messageFieldsModal.saving ? 'opacity-60 cursor-not-allowed' : ''"
+            @click="saveMessageFieldsModal"
+          >
+            保存
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- 导出弹窗 -->
@@ -4019,10 +4179,10 @@ const playQuoteVoice = (message) => {
   playVoice({ id: getQuoteVoiceId(message) })
 }
 
-const contextMenu = ref({ visible: false, x: 0, y: 0, message: null, kind: '', disabled: false })
+const contextMenu = ref({ visible: false, x: 0, y: 0, message: null, kind: '', disabled: false, editStatus: null, editStatusLoading: false })
 
 const closeContextMenu = () => {
-  contextMenu.value = { visible: false, x: 0, y: 0, message: null, kind: '', disabled: false }
+  contextMenu.value = { visible: false, x: 0, y: 0, message: null, kind: '', disabled: false, editStatus: null, editStatusLoading: false }
 }
 
 const openMediaContextMenu = (e, message, kind) => {
@@ -4059,7 +4219,382 @@ const openMediaContextMenu = (e, message, kind) => {
     y: e.clientY,
     message,
     kind: actualKind,
-    disabled
+    disabled,
+    editStatus: null,
+    editStatusLoading: false
+  }
+
+  try {
+    const account = String(selectedAccount.value || '').trim()
+    const username = String(selectedContact.value?.username || '').trim()
+    const messageId = String(message?.id || '').trim()
+    if (account && username && messageId) {
+      contextMenu.value.editStatusLoading = true
+      void loadContextMenuEditStatus({ account, username, message_id: messageId })
+    }
+  } catch {}
+}
+
+const loadContextMenuEditStatus = async (params) => {
+  if (!process.client) return
+  const account = String(params?.account || '').trim()
+  const username = String(params?.username || '').trim()
+  const messageId = String(params?.message_id || '').trim()
+  if (!account || !username || !messageId) {
+    contextMenu.value.editStatusLoading = false
+    return
+  }
+
+  try {
+    const api = useApi()
+    const resp = await api.getChatEditStatus({ account, username, message_id: messageId })
+    const cur = String(contextMenu.value?.message?.id || '').trim()
+    if (contextMenu.value.visible && cur === messageId) {
+      contextMenu.value.editStatus = resp || { modified: false }
+    }
+  } catch {
+    const cur = String(contextMenu.value?.message?.id || '').trim()
+    if (contextMenu.value.visible && cur === messageId) {
+      contextMenu.value.editStatus = null
+    }
+  } finally {
+    const cur = String(contextMenu.value?.message?.id || '').trim()
+    if (contextMenu.value.visible && cur === messageId) {
+      contextMenu.value.editStatusLoading = false
+    }
+  }
+}
+
+const prettyJson = (obj) => {
+  try {
+    return JSON.stringify(obj ?? null, null, 2)
+  } catch {
+    return String(obj ?? '')
+  }
+}
+
+const isLikelyTextMessage = (m) => {
+  if (!m) return false
+  const rt = String(m?.renderType || '').trim()
+  if (rt && rt !== 'text') return false
+  if (m?.imageUrl || m?.emojiUrl || m?.videoUrl || m?.voiceUrl) return false
+  return true
+}
+
+const messageEditModal = ref({
+  open: false,
+  loading: false,
+  saving: false,
+  error: '',
+  mode: 'content',
+  sessionId: '',
+  messageId: '',
+  draft: '',
+  rawRow: null,
+})
+
+const closeMessageEditModal = () => {
+  messageEditModal.value = {
+    open: false,
+    loading: false,
+    saving: false,
+    error: '',
+    mode: 'content',
+    sessionId: '',
+    messageId: '',
+    draft: '',
+    rawRow: null,
+  }
+}
+
+const openMessageEditModal = async ({ message, mode }) => {
+  if (!process.client) return
+  const account = String(selectedAccount.value || '').trim()
+  const sessionId = String(selectedContact.value?.username || '').trim()
+  const messageId = String(message?.id || '').trim()
+  if (!account || !sessionId || !messageId) return
+  const resolvedMode = mode === 'raw' ? 'raw' : 'content'
+  const initialDraft = resolvedMode === 'content'
+    ? (typeof message?.content === 'string' ? message.content : String(message?.content ?? ''))
+    : ''
+
+  messageEditModal.value = {
+    open: true,
+    loading: true,
+    saving: false,
+    error: '',
+    mode: resolvedMode,
+    sessionId,
+    messageId,
+    draft: initialDraft,
+    rawRow: null,
+  }
+
+  try {
+    const api = useApi()
+    const resp = await api.getChatMessageRaw({ account, username: sessionId, message_id: messageId })
+    const row = resp?.row || null
+    const rawContent = row?.message_content
+    const rawDraft = typeof rawContent === 'string' ? rawContent : String(rawContent ?? '')
+    const draft = resolvedMode === 'raw' ? rawDraft : messageEditModal.value.draft
+    messageEditModal.value = { ...messageEditModal.value, loading: false, rawRow: row, draft }
+  } catch (e) {
+    messageEditModal.value = { ...messageEditModal.value, loading: false, error: e?.message || '加载失败' }
+  }
+}
+
+const saveMessageEditModal = async () => {
+  if (!process.client) return
+  if (messageEditModal.value.saving || messageEditModal.value.loading) return
+
+  const account = String(selectedAccount.value || '').trim()
+  if (!account) return
+
+  const sessionId = String(messageEditModal.value.sessionId || '').trim()
+  const messageId = String(messageEditModal.value.messageId || '').trim()
+  if (!sessionId || !messageId) return
+
+  messageEditModal.value = { ...messageEditModal.value, saving: true, error: '' }
+  try {
+    const api = useApi()
+    const resp = await api.editChatMessage({
+      account,
+      session_id: sessionId,
+      message_id: messageId,
+      edits: {
+        message_content: String(messageEditModal.value.draft ?? ''),
+      },
+      unsafe: false,
+    })
+
+    if (resp?.updated_message) {
+      try {
+        const u = normalizeMessage(resp.updated_message)
+        const uname = String(selectedContact.value?.username || '').trim()
+        const list = allMessages.value[uname] || []
+        const idx = list.findIndex((m) => String(m?.id || '') === String(u?.id || ''))
+        if (idx >= 0) {
+          const next = [...list]
+          next[idx] = u
+          allMessages.value = { ...allMessages.value, [uname]: next }
+        } else {
+          await refreshSelectedMessages()
+        }
+      } catch {
+        await refreshSelectedMessages()
+      }
+    } else {
+      await refreshSelectedMessages()
+    }
+
+    closeMessageEditModal()
+  } catch (e) {
+    messageEditModal.value = { ...messageEditModal.value, saving: false, error: e?.message || '保存失败' }
+    return
+  } finally {
+    messageEditModal.value = { ...messageEditModal.value, saving: false }
+  }
+}
+
+const messageFieldsModal = ref({
+  open: false,
+  loading: false,
+  saving: false,
+  error: '',
+  sessionId: '',
+  messageId: '',
+  unsafe: false,
+  editsJson: '',
+  rawRow: null,
+})
+
+const closeMessageFieldsModal = () => {
+  messageFieldsModal.value = {
+    open: false,
+    loading: false,
+    saving: false,
+    error: '',
+    sessionId: '',
+    messageId: '',
+    unsafe: false,
+    editsJson: '',
+    rawRow: null,
+  }
+}
+
+const openMessageFieldsModal = async (message) => {
+  if (!process.client) return
+  const account = String(selectedAccount.value || '').trim()
+  const sessionId = String(selectedContact.value?.username || '').trim()
+  const messageId = String(message?.id || '').trim()
+  if (!account || !sessionId || !messageId) return
+
+  messageFieldsModal.value = {
+    open: true,
+    loading: true,
+    saving: false,
+    error: '',
+    sessionId,
+    messageId,
+    unsafe: false,
+    editsJson: '',
+    rawRow: null,
+  }
+
+  try {
+    const api = useApi()
+    const resp = await api.getChatMessageRaw({ account, username: sessionId, message_id: messageId })
+    const row = resp?.row || null
+    const seed = {}
+    for (const k of ['message_content', 'local_type', 'create_time', 'server_id', 'origin_source', 'source']) {
+      if (row && Object.prototype.hasOwnProperty.call(row, k)) seed[k] = row[k]
+    }
+    messageFieldsModal.value = {
+      ...messageFieldsModal.value,
+      loading: false,
+      rawRow: row,
+      editsJson: JSON.stringify(seed, null, 2),
+    }
+  } catch (e) {
+    messageFieldsModal.value = { ...messageFieldsModal.value, loading: false, error: e?.message || '加载失败' }
+  }
+}
+
+const saveMessageFieldsModal = async () => {
+  if (!process.client) return
+  if (messageFieldsModal.value.saving || messageFieldsModal.value.loading) return
+
+  const account = String(selectedAccount.value || '').trim()
+  if (!account) return
+
+  const sessionId = String(messageFieldsModal.value.sessionId || '').trim()
+  const messageId = String(messageFieldsModal.value.messageId || '').trim()
+  if (!sessionId || !messageId) return
+
+  let edits = null
+  try {
+    edits = JSON.parse(String(messageFieldsModal.value.editsJson || '').trim() || 'null')
+  } catch {
+    messageFieldsModal.value = { ...messageFieldsModal.value, error: 'JSON 格式错误' }
+    return
+  }
+  if (!edits || typeof edits !== 'object' || Array.isArray(edits)) {
+    messageFieldsModal.value = { ...messageFieldsModal.value, error: 'edits 必须是 JSON 对象' }
+    return
+  }
+  if (!Object.keys(edits).length) {
+    messageFieldsModal.value = { ...messageFieldsModal.value, error: 'edits 不能为空' }
+    return
+  }
+
+  messageFieldsModal.value = { ...messageFieldsModal.value, saving: true, error: '' }
+  try {
+    const api = useApi()
+    await api.editChatMessage({
+      account,
+      session_id: sessionId,
+      message_id: messageId,
+      edits,
+      unsafe: !!messageFieldsModal.value.unsafe,
+    })
+    await refreshSelectedMessages()
+    closeMessageFieldsModal()
+  } catch (e) {
+    messageFieldsModal.value = { ...messageFieldsModal.value, saving: false, error: e?.message || '保存失败' }
+    return
+  } finally {
+    messageFieldsModal.value = { ...messageFieldsModal.value, saving: false }
+  }
+}
+
+const onEditMessageClick = async () => {
+  if (!process.client) return
+  const m = contextMenu.value.message
+  if (!m) return
+  const mode = isLikelyTextMessage(m) ? 'content' : 'raw'
+  closeContextMenu()
+  await openMessageEditModal({ message: m, mode })
+}
+
+const onEditMessageFieldsClick = async () => {
+  if (!process.client) return
+  const m = contextMenu.value.message
+  if (!m) return
+  closeContextMenu()
+  await openMessageFieldsModal(m)
+}
+
+const onResetEditedMessageClick = async () => {
+  if (!process.client) return
+  const m = contextMenu.value.message
+  if (!m) return
+  const account = String(selectedAccount.value || '').trim()
+  const sessionId = String(selectedContact.value?.username || '').trim()
+  const messageId = String(m?.id || '').trim()
+  if (!account || !sessionId || !messageId) return
+
+  const ok = window.confirm('确认恢复该条消息到首次快照吗？')
+  if (!ok) return
+
+  try {
+    const api = useApi()
+    await api.resetChatEditedMessage({ account, session_id: sessionId, message_id: messageId })
+    closeContextMenu()
+    await refreshSelectedMessages()
+  } catch (e) {
+    window.alert(e?.message || '恢复失败')
+  } finally {
+    closeContextMenu()
+  }
+}
+
+const onRepairMessageSenderAsMeClick = async () => {
+  if (!process.client) return
+  const m = contextMenu.value.message
+  if (!m) return
+  const account = String(selectedAccount.value || '').trim()
+  const sessionId = String(selectedContact.value?.username || '').trim()
+  const messageId = String(m?.id || '').trim()
+  if (!account || !sessionId || !messageId) return
+
+  const ok = window.confirm('确认将该消息修复为“我发送”吗？这会修改 real_sender_id 字段。')
+  if (!ok) return
+
+  try {
+    const api = useApi()
+    await api.repairChatMessageSender({ account, session_id: sessionId, message_id: messageId, mode: 'me' })
+    closeContextMenu()
+    await refreshSelectedMessages()
+  } catch (e) {
+    window.alert(e?.message || '修复失败')
+  } finally {
+    closeContextMenu()
+  }
+}
+
+const onFlipWechatMessageDirectionClick = async () => {
+  if (!process.client) return
+  const m = contextMenu.value.message
+  if (!m) return
+  const account = String(selectedAccount.value || '').trim()
+  const sessionId = String(selectedContact.value?.username || '').trim()
+  const messageId = String(m?.id || '').trim()
+  if (!account || !sessionId || !messageId) return
+
+  const ok = window.confirm(
+    '确认反转该消息在微信客户端的左右气泡位置吗？\\n\\n这会修改 packed_info_data 字段（有风险）。\\n可通过“恢复原消息”撤销。'
+  )
+  if (!ok) return
+
+  try {
+    const api = useApi()
+    await api.flipChatMessageDirection({ account, session_id: sessionId, message_id: messageId })
+    closeContextMenu()
+    await refreshSelectedMessages()
+  } catch (e) {
+    window.alert(e?.message || '反转失败')
+  } finally {
+    closeContextMenu()
   }
 }
 
@@ -5237,15 +5772,45 @@ const getTransferTitle = (message) => {
   return '转账'
 }
 
+// 反转消息位置（仅影响本工具显示，不建议通过写坏 BLOB 字段来实现）
+const reverseMessageSides = ref(false)
+const reverseSidesStorageKey = computed(() => {
+  const a = String(selectedAccount.value || '').trim()
+  const sid = String(selectedContact.value?.username || '').trim()
+  if (a && sid) return `wechatda:reverse_message_sides:${a}:${sid}`
+  return 'wechatda:reverse_message_sides:global'
+})
+const loadReverseMessageSides = () => {
+  if (!process.client) return
+  try {
+    const v = localStorage.getItem(reverseSidesStorageKey.value)
+    reverseMessageSides.value = v === '1'
+  } catch {}
+}
+watch(reverseSidesStorageKey, () => loadReverseMessageSides(), { immediate: true })
+watch(reverseMessageSides, (v) => {
+  if (!process.client) return
+  try {
+    localStorage.setItem(reverseSidesStorageKey.value, v ? '1' : '0')
+  } catch {}
+})
+const toggleReverseMessageSides = () => {
+  reverseMessageSides.value = !reverseMessageSides.value
+}
+
 const renderMessages = computed(() => {
   const list = messages.value || []
+  const reverseSides = !!reverseMessageSides.value
   let prevTs = 0
   return list.map((m) => {
     const ts = Number(m.createTime || 0)
     const show = !prevTs || (ts && Math.abs(ts - prevTs) >= 300)
     if (ts) prevTs = ts
+    const origIsSent = !!m?.isSent
     return {
       ...m,
+      _originalIsSent: origIsSent,
+      isSent: reverseSides ? !origIsSent : origIsSent,
       showTimeDivider: !!show,
       timeDivider: formatTimeDivider(ts)
     }
