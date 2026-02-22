@@ -12,6 +12,7 @@ from typing import Any, Optional
 from ...chat_search_index import get_chat_search_index_db_path
 from ...chat_helpers import (
     _build_avatar_url,
+    _decode_sqlite_text,
     _iter_message_db_paths,
     _load_contact_rows,
     _pick_display_name,
@@ -745,7 +746,9 @@ def _list_message_tables(conn: sqlite3.Connection) -> list[str]:
     for r in rows:
         if not r or not r[0]:
             continue
-        name = str(r[0])
+        name = _decode_sqlite_text(r[0]).strip()
+        if not name:
+            continue
         ln = name.lower()
         if ln.startswith(("msg_", "chat_")):
             names.append(name)
