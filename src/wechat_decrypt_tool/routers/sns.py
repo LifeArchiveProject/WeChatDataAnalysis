@@ -2749,7 +2749,7 @@ async def get_sns_media(
                 print(f"===== Hit Bkg Cover ======= {bkg_path}")
 
                 return FileResponse(bkg_path, media_type="image/jpeg",
-                                    headers={"Cache-Control": "public, max-age=31536000"})
+                                    headers={"Cache-Control": "public, max-age=31536000", "X-SNS-Source": "bkg-cover"})
         exact_match_path = None
         hit_type = ""
 
@@ -2807,6 +2807,7 @@ async def get_sns_media(
                     if payload and str(media_type or "").startswith("image/"):
                         resp = Response(content=payload, media_type=str(media_type or "image/jpeg"))
                         resp.headers["Cache-Control"] = "public, max-age=86400"
+                        resp.headers["X-SNS-Source"] = "manual-pick"
                         return resp
                 except Exception:
                     pass
@@ -2850,6 +2851,7 @@ async def get_sns_media(
             if payload and str(media_type or "").startswith("image/"):
                 resp = Response(content=payload, media_type=str(media_type or "image/jpeg"))
                 resp.headers["Cache-Control"] = "public, max-age=86400"
+                resp.headers["X-SNS-Source"] = "local-heuristic"
                 return resp
         except Exception:
             pass
@@ -2881,6 +2883,7 @@ async def get_sns_media(
                     if payload and str(media_type or "").startswith("image/"):
                         resp = Response(content=payload, media_type=str(media_type or "image/jpeg"))
                         resp.headers["Cache-Control"] = "public, max-age=86400"
+                        resp.headers["X-SNS-Source"] = "local-heuristic-next"
                         return resp
                 except Exception:
                     continue
@@ -2894,7 +2897,12 @@ async def get_sns_media(
     from .chat_media import proxy_image  # pylint: disable=import-outside-toplevel
 
     try:
-        return await proxy_image(u)
+        resp0 = await proxy_image(u)
+        try:
+            resp0.headers["X-SNS-Source"] = "proxy"
+        except Exception:
+            pass
+        return resp0
     except HTTPException:
         raise
     except Exception as e:
