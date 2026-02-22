@@ -9,27 +9,13 @@
         :style="{ zIndex: 9999 }"
         @pointerdown="onStagePointerDown"
       >
-        <!-- 控制按钮 -->
-        <div class="absolute top-3 right-3 z-40 flex items-center gap-2" data-no-accel>
-          <button
-            type="button"
-            class="kw-chip"
-            :class="privacyMode ? 'kw-chip--on' : ''"
-            @click="privacyMode = !privacyMode"
-          >
-            {{ privacyMode ? '隐私：开' : '隐私：关' }}
-          </button>
-          <button type="button" class="kw-chip" @click="skipToCloud">跳过</button>
-          <button type="button" class="kw-chip" @click="replay">重播</button>
-        </div>
-
         <!-- 提示（accelerated 默认开启，此提示基本不显示） -->
         <div
           v-if="showHint"
           class="absolute bottom-3 right-3 z-30 wrapped-label text-[10px] text-[#00000055] bg-white/55 backdrop-blur rounded-lg px-2 py-1 border border-[#0000000a]"
           data-no-accel
         >
-          点击空白处加速 · 右上角可重播
+          点击空白处加速
         </div>
 
         <!-- 气泡层 -->
@@ -44,7 +30,6 @@
           >
             <div
               class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed bg-[#95EC69] text-black bubble-tail-r"
-              :class="privacyMode ? 'privacy-blur' : ''"
             >
               <span v-if="Array.isArray(b.segments) && b.segments.length > 0">
                 <span v-for="(seg, idx) in b.segments" :key="`${b.id}-${idx}`">
@@ -57,12 +42,6 @@
           </div>
         </div>
 
-        <!-- 粒子 (burst) -->
-        <canvas
-          v-show="showParticles"
-          ref="particleCanvas"
-          class="absolute inset-0 z-20 pointer-events-none"
-        />
       </div>
     </Teleport>
 
@@ -75,7 +54,11 @@
               你的话，正在涌来。
             </template>
             <template v-else>
-              每一句话都是一个气泡，最终爆开成你的年度关键词词云。点击关键词，回看它出现的瞬间。
+              这一年，你一共发出了 <span class="font-medium text-[#07C160]">{{ card.data?.meta?.matchedCandidates || 0 }}</span> 句简短的表达，其中 <span class="font-medium text-[#07C160]">{{ card.data?.meta?.uniquePhrases || 0 }}</span> 句话成了你的专属口头禅。
+              <template v-if="card.data?.topKeyword">
+                「<span class="font-medium text-[#07C160]">{{ card.data.topKeyword.word }}</span>」是你最常说的话，足足被你重复了 <span class="font-medium text-[#07C160]">{{ card.data.topKeyword.count }}</span> 次。
+              </template>
+              点击气泡，找回当时的心情。
             </template>
           </p>
         </div>
@@ -87,31 +70,21 @@
           class="kw-stage relative w-full h-[56vh] min-h-[360px] max-h-[680px] rounded-[28px] overflow-hidden"
         >
 
-          <!-- cloud 阶段的控制按钮 -->
-          <div v-if="phase === 'cloud'" class="absolute top-3 right-3 z-40 flex items-center gap-2">
-            <button
-              type="button"
-              class="kw-chip"
-              :class="privacyMode ? 'kw-chip--on' : ''"
-              @click="privacyMode = !privacyMode"
-            >
-              {{ privacyMode ? '隐私：开' : '隐私：关' }}
-            </button>
-            <button type="button" class="kw-chip" @click="replay">重播</button>
-          </div>
-
           <!-- 词云 -->
           <transition name="cloud-fade">
             <div v-if="phase === 'cloud'" class="absolute inset-0 z-30 p-3 sm:p-5">
               <KeywordWordCloud
                 :keywords="keywords"
                 :examples="examples"
-                :privacy-mode="privacyMode"
                 :animate="true"
                 :reduced-motion="reducedMotion"
               />
             </div>
           </transition>
+        </div>
+
+        <div v-if="phase === 'cloud'" class="mt-3 flex justify-center">
+          <button type="button" class="kw-chip" @click="replay">再看一遍</button>
         </div>
       </div>
     </WrappedCardShell>
@@ -132,13 +105,10 @@ const props = defineProps({
 const cardRoot = ref(null)
 const stageEl = ref(null)
 const overlayEl = ref(null)
-const particleCanvas = ref(null)
 
 const phase = ref('idle') // 'idle' | 'storm' | 'packed' | 'merge' | 'burst' | 'cloud'
 const hasPlayed = ref(false)
-const privacyMode = ref(false)
 const accelerated = ref(true) // 默认加速
-const showParticles = ref(false)
 
 // 通知父级 deck 隐藏顶部 UI
 const deckChromeHidden = inject('deckChromeHidden', ref(false))
@@ -271,7 +241,6 @@ const bubbleSizeForText = (text, compact = false) => {
 let stormTimer = null
 let packedTimer = null
 let mainTl = null
-let particleRaf = null
 let hardStopTimer = null
 let animationStartedAt = 0
 let animationDeadlineAt = 0
@@ -299,18 +268,7 @@ const armHardStop = () => {
   }, remain + 8)
 }
 
-const stopParticles = () => {
-  showParticles.value = false
-  if (particleRaf) cancelAnimationFrame(particleRaf)
-  particleRaf = null
-  const c = particleCanvas.value
-  if (c) {
-    try {
-      const ctx = c.getContext('2d')
-      ctx?.clearRect?.(0, 0, c.width, c.height)
-    } catch {}
-  }
-}
+const stopParticles = () => {}
 
 const killTimeline = () => {
   if (mainTl) {
@@ -361,71 +319,6 @@ const onStagePointerDown = (e) => {
 const isVisible = ref(false)
 let io = null
 const updateVisibility = (v) => { isVisible.value = !!v }
-
-const startParticles = (rng, centerX, centerY) => {
-  if (!import.meta.client) return
-  const canvas = particleCanvas.value
-  if (!canvas || !curViewW || !curViewH) return
-
-  const dpr = Math.max(1, Math.min(3, Number(window.devicePixelRatio || 1)))
-  canvas.width = Math.max(1, Math.round(curViewW * dpr))
-  canvas.height = Math.max(1, Math.round(curViewH * dpr))
-  canvas.style.width = `${curViewW}px`
-  canvas.style.height = `${curViewH}px`
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-
-  const N = 80
-  const particles = []
-  for (let i = 0; i < N; i += 1) {
-    const ang = rng() * Math.PI * 2
-    const sp = 120 + rng() * 320
-    particles.push({
-      x: centerX,
-      y: centerY,
-      vx: Math.cos(ang) * sp,
-      vy: Math.sin(ang) * sp,
-      size: 0.8 + rng() * 2.4,
-      life: 1,
-      color: rng() < 0.66 ? 'rgba(7,193,96,0.65)' : (rng() < 0.5 ? 'rgba(242,170,0,0.55)' : 'rgba(14,165,233,0.55)')
-    })
-  }
-
-  showParticles.value = true
-  const duration = 600
-  let last = 0
-  const started = performance.now()
-
-  const tick = (now) => {
-    const t = now - started
-    const dt = last > 0 ? Math.min((now - last) / 1000, 0.05) : 0.016
-    last = now
-
-    ctx.clearRect(0, 0, curViewW, curViewH)
-    const p = clamp(t / duration, 0, 1)
-    const alpha = 1 - p
-    for (const it of particles) {
-      it.x += it.vx * dt
-      it.y += it.vy * dt
-      it.vx *= 0.86
-      it.vy *= 0.86
-      const a = alpha * 0.9
-      ctx.fillStyle = it.color.replace(/[\d.]+\)$/g, `${a})`)
-      ctx.beginPath()
-      ctx.arc(it.x, it.y, it.size, 0, Math.PI * 2)
-      ctx.fill()
-    }
-
-    if (t < duration) {
-      particleRaf = requestAnimationFrame(tick)
-    } else {
-      stopParticles()
-    }
-  }
-
-  particleRaf = requestAnimationFrame(tick)
-}
 
 const maybeStart = () => {
   if (!import.meta.client) return
@@ -849,10 +742,7 @@ const runMergeBurst = (rng, centerX, centerY) => {
     opacity: 0,
     scale: 0.92,
     ease: 'power3.out',
-    stagger: staggerBurst,
-    onStart: () => {
-      startParticles(rng, centerX, centerY)
-    }
+    stagger: staggerBurst
   })
 
   const tlTotal = mainTl.totalDuration()
@@ -939,12 +829,6 @@ onBeforeUnmount(() => {
 .kw-chip:hover {
   background: rgba(255, 255, 255, 0.72);
   transform: translateY(-1px);
-}
-
-.kw-chip--on {
-  background: rgba(7, 193, 96, 0.12);
-  border-color: rgba(7, 193, 96, 0.22);
-  color: rgba(0, 0, 0, 0.75);
 }
 
 .kw-bubble {
