@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from pypinyin import lazy_pinyin, Style
 
-from ...chat_helpers import _decode_message_content, _iter_message_db_paths, _quote_ident
+from ...chat_helpers import _decode_message_content, _decode_sqlite_text, _iter_message_db_paths, _quote_ident
 from ...chat_search_index import get_chat_search_index_db_path
 from ...logging_config import get_logger
 
@@ -467,7 +467,9 @@ def _list_message_tables(conn: sqlite3.Connection) -> list[str]:
     for r in rows:
         if not r or not r[0]:
             continue
-        name = str(r[0])
+        name = _decode_sqlite_text(r[0]).strip()
+        if not name:
+            continue
         ln = name.lower()
         if ln.startswith(("msg_", "chat_")):
             names.append(name)

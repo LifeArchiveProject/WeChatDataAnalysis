@@ -8,13 +8,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from ..chat_helpers import _iter_message_db_paths, _quote_ident, _resolve_account_dir
+from ..chat_helpers import _decode_sqlite_text, _iter_message_db_paths, _quote_ident, _resolve_account_dir
 from ..chat_search_index import get_chat_search_index_db_path
 from ..logging_config import get_logger
 from .storage import wrapped_cache_dir, wrapped_cache_path
 from .cards.card_00_global_overview import build_card_00_global_overview
 from .cards.card_01_cyber_schedule import WeekdayHourHeatmap, build_card_01_cyber_schedule, compute_weekday_hour_heatmap
 from .cards.card_02_message_chars import build_card_02_message_chars
+from .cards.card_05_keywords_wordcloud import build_card_05_keywords_wordcloud
 from .cards.card_03_reply_speed import build_card_03_reply_speed
 from .cards.card_04_monthly_best_friends_wall import build_card_04_monthly_best_friends_wall
 from .cards.card_04_emoji_universe import build_card_04_emoji_universe
@@ -24,9 +25,9 @@ logger = get_logger(__name__)
 
 # We use this number to version the cache filename so adding more cards won't accidentally serve
 # an older partial cache.
-_IMPLEMENTED_UPTO_ID = 5
+_IMPLEMENTED_UPTO_ID = 6
 # Bump this when we change card payloads/ordering while keeping the same implemented_upto.
-_CACHE_VERSION = 18
+_CACHE_VERSION = 23
 
 
 # "Manifest" is used by the frontend to render the deck quickly, then lazily fetch each card.
@@ -52,6 +53,13 @@ _WRAPPED_CARD_MANIFEST: tuple[dict[str, Any], ...] = (
         "scope": "global",
         "category": "C",
         "kind": "text/message_chars",
+    },
+    {
+        "id": 6,
+        "title": "这一年，你把哪些词说了一遍又一遍？",
+        "scope": "global",
+        "category": "C",
+        "kind": "text/keywords_wordcloud",
     },
     {
         "id": 3,
@@ -105,7 +113,9 @@ def _list_message_tables(conn: sqlite3.Connection) -> list[str]:
     for r in rows:
         if not r or not r[0]:
             continue
-        name = str(r[0])
+        name = _decode_sqlite_text(r[0]).strip()
+        if not name:
+            continue
         ln = name.lower()
         if ln.startswith(("msg_", "chat_")):
             names.append(name)
@@ -290,7 +300,7 @@ def build_wrapped_annual_response(
 ) -> dict[str, Any]:
     """Build annual wrapped response for the given account/year.
 
-    For now we implement cards up to id=5 (plus a meta overview card id=0).
+    For now we implement cards up to id=6 (plus a meta overview card id=0).
     """
 
     account_dir = _resolve_account_dir(account)
@@ -315,6 +325,15 @@ def build_wrapped_annual_response(
         try:
             cached_obj = json.loads(cache_path.read_text(encoding="utf-8"))
             if isinstance(cached_obj, dict) and isinstance(cached_obj.get("cards"), list):
+                # Card#6（关键词词云）要求每次请求返回随机消息批次，不复用旧卡片内容。
+                for idx, c in enumerate(cached_obj.get("cards") or []):
+                    try:
+                        if int((c or {}).get("id") or -1) != 6:
+                            continue
+                    except Exception:
+                        continue
+                    cached_obj["cards"][idx] = build_card_05_keywords_wordcloud(account_dir=account_dir, year=y)
+                    break
                 cached_obj["cached"] = True
                 cached_obj["availableYears"] = available_years
                 return cached_obj
@@ -331,11 +350,13 @@ def build_wrapped_annual_response(
     cards.append(build_card_01_cyber_schedule(account_dir=account_dir, year=y, heatmap=heatmap_sent))
     # Page 4: message char counts (sent vs received).
     cards.append(build_card_02_message_chars(account_dir=account_dir, year=y))
-    # Page 5: reply speed / best chat buddy.
+    # Page 5: annual keywords (bubble storm -> word cloud).
+    cards.append(build_card_05_keywords_wordcloud(account_dir=account_dir, year=y))
+    # Page 6: reply speed / best chat buddy.
     cards.append(build_card_03_reply_speed(account_dir=account_dir, year=y))
-    # Page 6: monthly best friends wall (photo wall).
+    # Page 7: monthly best friends wall (photo wall).
     cards.append(build_card_04_monthly_best_friends_wall(account_dir=account_dir, year=y))
-    # Page 7: annual emoji universe / meme almanac.
+    # Page 8: annual emoji universe / meme almanac.
     cards.append(build_card_04_emoji_universe(account_dir=account_dir, year=y))
 
     obj: dict[str, Any] = {
@@ -505,10 +526,12 @@ def build_wrapped_annual_card(
 
     scope = "global"
     cache_path = _wrapped_card_cache_path(account_dir=account_dir, scope=scope, year=y, card_id=cid)
+    # Card#6 需要每次随机抽样，不使用按卡片缓存。
+    cacheable = cid != 6
 
     lock = _get_lock(str(cache_path))
     with lock:
-        if (not refresh) and cache_path.exists():
+        if cacheable and (not refresh) and cache_path.exists():
             try:
                 cached_obj = json.loads(cache_path.read_text(encoding="utf-8"))
                 if isinstance(cached_obj, dict) and int(cached_obj.get("id") or -1) == cid:
@@ -526,6 +549,8 @@ def build_wrapped_annual_card(
             card = build_card_01_cyber_schedule(account_dir=account_dir, year=y, heatmap=heatmap_sent)
         elif cid == 2:
             card = build_card_02_message_chars(account_dir=account_dir, year=y)
+        elif cid == 6:
+            card = build_card_05_keywords_wordcloud(account_dir=account_dir, year=y)
         elif cid == 3:
             card = build_card_03_reply_speed(account_dir=account_dir, year=y)
         elif cid == 4:
@@ -536,9 +561,10 @@ def build_wrapped_annual_card(
             # Should be unreachable due to _WRAPPED_CARD_ID_SET check.
             raise ValueError(f"Unknown Wrapped card id: {cid}")
 
-        try:
-            cache_path.write_text(json.dumps(card, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            logger.exception("Failed to write wrapped card cache: %s", cache_path)
+        if cacheable:
+            try:
+                cache_path.write_text(json.dumps(card, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                logger.exception("Failed to write wrapped card cache: %s", cache_path)
 
         return card

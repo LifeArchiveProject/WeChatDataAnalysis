@@ -8,7 +8,7 @@
     <WrappedDeckBackground />
 
     <!-- 左上角：返回 + 刷新 -->
-    <div class="absolute top-6 left-6 z-20 select-none">
+    <div v-show="!deckChromeHidden" class="absolute top-6 left-6 z-20 select-none transition-opacity duration-300">
       <div class="flex items-center gap-3">
         <button
           type="button"
@@ -65,7 +65,7 @@
     </div>
 
     <!-- 右上角：年份选择器（主题化） -->
-    <div class="absolute top-6 right-6 z-20 pointer-events-auto select-none">
+    <div v-show="!deckChromeHidden" class="absolute top-6 right-6 z-20 pointer-events-auto select-none transition-opacity duration-300">
       <div class="relative">
         <div class="absolute -inset-6 rounded-full bg-[#07C160]/10 blur-2xl"></div>
         <div class="relative flex justify-end">
@@ -157,6 +157,12 @@
           variant="slide"
           class="h-full w-full"
         />
+        <Card06KeywordsWordCloud
+          v-else-if="c && (c.kind === 'text/keywords_wordcloud' || c.id === 6)"
+          :card="c"
+          variant="slide"
+          class="h-full w-full"
+        />
         <Card03ReplySpeed
           v-else-if="c && (c.kind === 'chat/reply_speed' || c.id === 3)"
           :card="c"
@@ -238,6 +244,11 @@ const viewportHeight = ref(0)
 const activeIndex = ref(0)
 const navLocked = ref(false)
 const wheelAcc = ref(0)
+
+// 允许子卡片隐藏 deck 顶部 UI（如关键词卡片 storm 阶段）
+const deckChromeHidden = ref(false)
+provide('deckChromeHidden', deckChromeHidden)
+
 let navUnlockTimer = null
 let deckResizeObserver = null
 

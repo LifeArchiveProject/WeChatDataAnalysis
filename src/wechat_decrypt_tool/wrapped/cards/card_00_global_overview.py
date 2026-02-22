@@ -77,7 +77,9 @@ def _list_message_tables(conn: sqlite3.Connection) -> list[str]:
     for r in rows:
         if not r or not r[0]:
             continue
-        name = str(r[0])
+        name = _decode_sqlite_text(r[0]).strip()
+        if not name:
+            continue
         ln = name.lower()
         if ln.startswith(("msg_", "chat_")):
             names.append(name)
