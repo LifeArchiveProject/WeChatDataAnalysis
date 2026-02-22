@@ -27,8 +27,26 @@
 
           <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-3">
             <div class="text-xs font-medium text-gray-700">更新内容</div>
-            <div class="mt-2 text-xs text-gray-700 whitespace-pre-wrap break-words">
-              {{ info.releaseNotes || '修复了一些已知问题，提升了稳定性。' }}
+            <div
+              ref="notesViewportRef"
+              class="mt-2 max-h-48 overflow-y-auto pr-1 text-xs text-gray-700"
+              @scroll="onNotesScroll"
+            >
+              <div class="relative" :style="{ height: `${virtualTotalHeight}px` }">
+                <div
+                  class="absolute left-0 right-0 top-0"
+                  :style="{ transform: `translateY(${virtualOffsetTop}px)` }"
+                >
+                  <div
+                    v-for="item in virtualVisibleItems"
+                    :key="item.key"
+                    class="h-6 leading-6 truncate"
+                    :title="item.text"
+                  >
+                    {{ item.text }}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -112,6 +130,79 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["close", "update", "install", "ignore"]);
+
+const DEFAULT_RELEASE_NOTE = "修复了一些已知问题，提升了稳定性。";
+const NOTE_ROW_HEIGHT = 24;
+const NOTE_OVERSCAN = 6;
+const NOTE_FALLBACK_VIEWPORT_HEIGHT = 192; // 8 rows * 24px
+
+const notesViewportRef = ref(null);
+const notesScrollTop = ref(0);
+
+const sanitizeReleaseNotes = (input) => {
+  const raw = String(input || "").replace(/\r\n?/g, "\n");
+  if (!raw.trim()) return "";
+  return raw
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi, "$1")
+    .replace(/\s*\((https?:\/\/[^)]+)\)/gi, "")
+    .replace(/<https?:\/\/[^>]+>/gi, "")
+    .replace(/https?:\/\/\S+/gi, "")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+};
+
+const releaseNoteLines = computed(() => {
+  const sanitized = sanitizeReleaseNotes(props.info?.releaseNotes || "");
+  const lines = sanitized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^更新内容\s*(\(|（)/.test(line))
+    .filter((line) => !/^完整变更[:：]?\s*$/.test(line));
+  if (!lines.length) return [DEFAULT_RELEASE_NOTE];
+  return lines;
+});
+
+const viewportHeight = computed(() => {
+  const h = Number(notesViewportRef.value?.clientHeight || 0);
+  return h > 0 ? h : NOTE_FALLBACK_VIEWPORT_HEIGHT;
+});
+
+const virtualStartIndex = computed(() => {
+  const start = Math.floor(notesScrollTop.value / NOTE_ROW_HEIGHT) - NOTE_OVERSCAN;
+  return Math.max(0, start);
+});
+
+const virtualEndIndex = computed(() => {
+  const count = Math.ceil(viewportHeight.value / NOTE_ROW_HEIGHT) + NOTE_OVERSCAN * 2;
+  return Math.min(releaseNoteLines.value.length, virtualStartIndex.value + count);
+});
+
+const virtualVisibleItems = computed(() => {
+  const start = virtualStartIndex.value;
+  return releaseNoteLines.value.slice(start, virtualEndIndex.value).map((text, idx) => ({
+    key: `${start + idx}-${text}`,
+    text,
+  }));
+});
+
+const virtualOffsetTop = computed(() => virtualStartIndex.value * NOTE_ROW_HEIGHT);
+const virtualTotalHeight = computed(() => releaseNoteLines.value.length * NOTE_ROW_HEIGHT);
+
+const onNotesScroll = (event) => {
+  notesScrollTop.value = Number(event?.target?.scrollTop || 0);
+};
+
+watch(
+  () => [props.open, props.info?.version, props.info?.releaseNotes],
+  () => {
+    notesScrollTop.value = 0;
+    if (notesViewportRef.value) {
+      notesViewportRef.value.scrollTop = 0;
+    }
+  }
+);
 
 const safeProgress = computed(() => {
   if (typeof props.progress === "number") return { percent: props.progress };
