@@ -35,6 +35,11 @@ from ..wcdb_realtime import (
     get_sns_timeline as _wcdb_get_sns_timeline,
 )
 
+try:
+    import zstandard as zstd  # type: ignore
+except Exception:
+    zstd = None
+
 logger = get_logger(__name__)
 
 router = APIRouter(route_class=PathFixRoute)
@@ -43,6 +48,11 @@ SNS_MEDIA_PICKS_FILE = "_sns_media_picks.json"
 
 _SNS_VIDEO_KEY_RE = re.compile(r'<enc\s+key="(\d+)"', flags=re.IGNORECASE)
 _MP_BIZ_RE = re.compile(r"__biz=([A-Za-z0-9_=+-]+)")
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+_SNS_APP_NAME_RE = re.compile(r"<appname[^>]*>([\s\S]*?)</appname>", flags=re.IGNORECASE)
+_SNS_XML_CDATA_BLOCK_RE = re.compile(r"<!\[CDATA\[[\s\S]*?\]\]>", flags=re.IGNORECASE)
+_SNS_XML_BARE_AMP_RE = re.compile(r"&(?!(?:[a-zA-Z]+|#\d+|#x[0-9a-fA-F]+);)")
+_SNS_XML_INVALID_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 _SNS_REALTIME_SYNC_STATE_FILE = "_sns_realtime_sync_state.json"
 _SNS_DECRYPTED_DB_LOCKS: dict[str, threading.Lock] = {}
@@ -456,14 +466,154 @@ def _get_biz_to_official_index(contact_db_path: Path) -> dict[str, dict[str, Any
 
 def _extract_sns_video_key(raw_xml: Any) -> str:
     """Extract Isaac64 video key from raw XML, e.g. `<enc key="1578806206" ...>`."""
+    text = _decode_sns_text_blob(raw_xml)
+    m = _SNS_VIDEO_KEY_RE.search(text or "")
+    return str(m.group(1) or "").strip() if m else ""
+
+
+def _looks_like_xml_text(s: str) -> bool:
+    if not s:
+        return False
+    t = str(s).lstrip()
+    if t.startswith('"') and t.endswith('"'):
+        t = t.strip('"').lstrip()
+    return t.startswith("<")
+
+
+def _sanitize_wechat_xml_for_et(xml_text: str) -> str:
+    """Best-effort sanitize for ElementTree parsing.
+
+    WeChat Moments "XML" is sometimes not well-formed XML (commonly: raw `&` inside URLs),
+    which breaks `xml.etree.ElementTree.fromstring`. We keep CDATA blocks intact and:
+    - strip invalid control chars
+    - escape bare `&` outside CDATA blocks
+    """
+
+    s = str(xml_text or "")
+    if not s:
+        return ""
+
+    s = _SNS_XML_INVALID_CHARS_RE.sub("", s)
+
+    parts: list[str] = []
+    last = 0
+    for m in _SNS_XML_CDATA_BLOCK_RE.finditer(s):
+        head = s[last : m.start()]
+        if head:
+            parts.append(_SNS_XML_BARE_AMP_RE.sub("&amp;", head))
+        parts.append(m.group(0))
+        last = m.end()
+
+    tail = s[last:]
+    if tail:
+        parts.append(_SNS_XML_BARE_AMP_RE.sub("&amp;", tail))
+
+    return "".join(parts)
+
+
+def _decode_sns_text_blob(value: Any) -> str:
+    """Decode text/blob values that may be hex/base64 encoded and/or zstd-compressed.
+
+    WeChat WCDB realtime can return TEXT/BLOB fields as:
+    - plain XML string
+    - hex string (often a zstd frame starting with 28b52ffd...)
+    - base64 string (same)
+    """
+
+    if value is None:
+        return ""
+
+    if isinstance(value, memoryview):
+        raw = bytes(value)
+        if raw and zstd is not None and raw.startswith(_ZSTD_MAGIC):
+            try:
+                raw = zstd.decompress(raw)
+            except Exception:
+                pass
+        try:
+            s = raw.decode("utf-8", errors="ignore")
+        except Exception:
+            s = ""
+        s = html.unescape(str(s or "").strip())
+        return s if _looks_like_xml_text(s) else (str(s or "").strip())
+
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+        if raw and zstd is not None and raw.startswith(_ZSTD_MAGIC):
+            try:
+                raw = zstd.decompress(raw)
+            except Exception:
+                pass
+        try:
+            s = raw.decode("utf-8", errors="ignore")
+        except Exception:
+            s = ""
+        s = html.unescape(str(s or "").strip())
+        return s if _looks_like_xml_text(s) else (str(s or "").strip())
+
     try:
-        text = str(raw_xml or "")
+        text = str(value or "")
     except Exception:
         return ""
+
+    text = html.unescape(text.strip())
     if not text:
         return ""
-    m = _SNS_VIDEO_KEY_RE.search(text)
-    return str(m.group(1) or "").strip() if m else ""
+
+    if _looks_like_xml_text(text):
+        return text
+
+    def _accept_xml(decoded: str) -> str:
+        s2 = html.unescape(str(decoded or "").strip())
+        return s2 if _looks_like_xml_text(s2) else ""
+
+    # Hex string (optionally prefixed with 0x)
+    t_hex = text[2:] if text.lower().startswith("0x") else text
+    if len(t_hex) >= 16 and len(t_hex) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]+", t_hex):
+        try:
+            raw = bytes.fromhex(t_hex)
+            if raw and zstd is not None and raw.startswith(_ZSTD_MAGIC):
+                try:
+                    raw = zstd.decompress(raw)
+                except Exception:
+                    raw = b""
+            if raw:
+                s2 = _accept_xml(raw.decode("utf-8", errors="ignore"))
+                if s2:
+                    return s2
+        except Exception:
+            pass
+
+    # Base64 string
+    if len(text) >= 24 and len(text) % 4 == 0 and re.fullmatch(r"[A-Za-z0-9+/=]+", text):
+        try:
+            raw = base64.b64decode(text)
+            if raw and zstd is not None and raw.startswith(_ZSTD_MAGIC):
+                try:
+                    raw = zstd.decompress(raw)
+                except Exception:
+                    raw = b""
+            if raw:
+                s2 = _accept_xml(raw.decode("utf-8", errors="ignore"))
+                if s2:
+                    return s2
+        except Exception:
+            pass
+
+    return text
+
+
+def _extract_sns_source_name(raw_xml: Any) -> str:
+    text = _decode_sns_text_blob(raw_xml)
+    if not text:
+        return ""
+    m = _SNS_APP_NAME_RE.search(text)
+    if not m:
+        return ""
+    v = str(m.group(1) or "")
+    v = v.replace("<![CDATA[", "").replace("]]>", "")
+    v = re.sub(r"<[^>]+>", "", v)
+    return html.unescape(v.strip())
 
 
 def _build_location_text(node: Optional[ET.Element]) -> str:
@@ -508,6 +658,7 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
         "createTime": 0,
         "contentDesc": "",
         "location": "",
+        "sourceName": "",
         "media": [],
         "likes": [],
         "comments": [],
@@ -517,15 +668,42 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
         "finderFeed": {}
     }
 
-    xml_str = str(xml_text or "").strip()
+    xml_str = _decode_sns_text_blob(xml_text)
     if not xml_str:
         return out
 
 
     try:
-        root = ET.fromstring(xml_str)
+        root = ET.fromstring(_sanitize_wechat_xml_for_et(xml_str))
     except Exception:
         return out
+
+    # External share source label (e.g. QQ音乐 / 哔哩哔哩) is usually stored in `<appInfo><appName>...`.
+    try:
+        for el in root.iter():
+            try:
+                tag = str(el.tag or "").lower()
+            except Exception:
+                continue
+            if tag in {"appname", "sourcename"}:
+                v = str(el.text or "").strip()
+                if v:
+                    out["sourceName"] = html.unescape(v).strip()
+                    break
+            try:
+                attrs = el.attrib or {}
+            except Exception:
+                attrs = {}
+            for k, v in attrs.items():
+                if str(k or "").lower() in {"appname", "sourcename"}:
+                    vv = str(v or "").strip()
+                    if vv:
+                        out["sourceName"] = html.unescape(vv).strip()
+                        break
+            if out["sourceName"]:
+                break
+    except Exception:
+        pass
 
     def _find_text(*paths: str) -> str:
         for p in paths:
@@ -559,6 +737,42 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
     if post_type == 3:
         out["title"] = _find_text(".//ContentObject/title")
         out["contentUrl"] = _clean_url(_find_text(".//ContentObject/contentUrl"))
+
+    # --- 如果是外部分享链接 (Type 5) ---
+    if post_type == 5:
+        out["title"] = _find_text(
+            ".//ContentObject/title",
+            ".//ContentObject/linkTitle",
+            ".//ContentObject/name",
+            ".//ContentObject/desc",
+            ".//ContentObject/description",
+        )
+        out["contentUrl"] = _clean_url(
+            _find_text(
+                ".//ContentObject/contentUrl",
+                ".//ContentObject/linkUrl",
+                ".//ContentObject/url",
+                ".//ContentObject/jumpUrl",
+            )
+        )
+
+    # --- 如果是音乐分享/链接卡片 (Type 42) ---
+    if post_type == 42:
+        # WeChat sometimes stores link/music share metadata under ContentObject fields.
+        out["title"] = _find_text(
+            ".//ContentObject/title",
+            ".//ContentObject/linkTitle",
+            ".//ContentObject/name",
+            ".//ContentObject/desc",
+        )
+        out["contentUrl"] = _clean_url(
+            _find_text(
+                ".//ContentObject/contentUrl",
+                ".//ContentObject/linkUrl",
+                ".//ContentObject/url",
+                ".//ContentObject/jumpUrl",
+            )
+        )
 
     # --- 如果是视频号 (Type 28) ---
     if post_type == 28:
@@ -603,6 +817,14 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
     except Exception:
         pass
     out["media"] = media
+
+    # Fallback: some type=42 shares only expose the jump URL via media[0].url.
+    if post_type in (5, 42):
+        if (not str(out.get("contentUrl") or "").strip()) and media:
+            m0 = media[0] if isinstance(media[0], dict) else {}
+            u0 = str(m0.get("url") or "").strip()
+            if u0:
+                out["contentUrl"] = u0
 
     likes: list[str] = []
     try:
@@ -1500,7 +1722,7 @@ def sync_sns_realtime_timeline_latest(
                     tid_val = int(rr.get("tid") or 0)
                 except Exception:
                     continue
-                content_xml = str(rr.get("content") or "")
+                content_xml = _decode_sns_text_blob(rr.get("content"))
                 if not content_xml:
                     continue
                 uname = str(rr.get("user_name") or rr.get("username") or "").strip()
@@ -1675,6 +1897,7 @@ def list_sns_timeline(
                     "createTime": int(parsed2.get("createTime") or 0),
                     "contentDesc": str(parsed2.get("contentDesc") or ""),
                     "location": str(parsed2.get("location") or ""),
+                    "sourceName": str(parsed2.get("sourceName") or ""),
                     "media": parsed2.get("media") or [],
                     "likes": parsed2.get("likes") or [],
                     "comments": parsed2.get("comments") or [],
@@ -1819,7 +2042,7 @@ def list_sns_timeline(
             if not uname3:
                 continue
 
-            content_xml3 = str(rr.get("content") or "")
+            content_xml3 = _decode_sns_text_blob(rr.get("content"))
             if not content_xml3:
                 continue
 
@@ -1871,6 +2094,7 @@ def list_sns_timeline(
                     "createTime": int(parsed3.get("createTime") or 0),
                     "contentDesc": str(parsed3.get("contentDesc") or ""),
                     "location": str(parsed3.get("location") or ""),
+                    "sourceName": str(parsed3.get("sourceName") or ""),
                     "media": parsed3.get("media") or [],
                     "likes": parsed3.get("likes") or [],
                     "comments": parsed3.get("comments") or [],
@@ -2020,7 +2244,7 @@ def list_sns_timeline(
                             tid_val = int(rr.get("tid"))
                         except Exception:
                             continue
-                        content_xml = str(rr.get("content") or "")
+                        content_xml = _decode_sns_text_blob(rr.get("content"))
                         if content_xml:
                             content_by_tid[tid_val] = content_xml
                         uname1 = str(rr.get("user_name") or rr.get("username") or "").strip()
@@ -2083,6 +2307,7 @@ def list_sns_timeline(
 
             # Enrich with parsed XML when available.
             location = str(r.get("location") or "")
+            source_name = _extract_sns_source_name(r.get("rawXml"))
 
             post_type = 1
             title = ""
@@ -2098,6 +2323,9 @@ def list_sns_timeline(
                     parsed = _parse_timeline_xml(xml, uname)
                     if parsed.get("location"):
                         location = str(parsed.get("location") or "")
+                    sn0 = str(parsed.get("sourceName") or "").strip()
+                    if sn0:
+                        source_name = sn0
 
                     post_type = parsed.get("type", 1)
 
@@ -2171,6 +2399,7 @@ def list_sns_timeline(
                     "createTime": create_time,
                     "contentDesc": content_desc,
                     "location": str(location or ""),
+                    "sourceName": str(source_name or ""),
                     "media": media,
                     "likes": likes,
                     "comments": comments,
