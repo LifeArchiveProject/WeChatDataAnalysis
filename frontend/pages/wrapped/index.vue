@@ -105,7 +105,7 @@
         :style="slideStyle"
       >
         <WrappedCardShell
-          v-if="!c || c.status !== 'ok'"
+          v-if="!c || (c.status !== 'ok' && !(c.kind === 'global/bento_summary' || c.id === 7))"
           :card-id="Number(c?.id || (idx + 1))"
           :title="c?.title || '正在生成…'"
           :narrative="c?.status === 'error' ? '生成失败' : (c?.status === 'loading' ? '正在生成本页数据…' : '进入该页后将开始生成')"

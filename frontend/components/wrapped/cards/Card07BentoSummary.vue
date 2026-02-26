@@ -515,16 +515,26 @@
                 >👍</span
               >
 
-              <span
-                class="text-5xl sm:text-6xl filter drop-shadow-[0_4px_12px_rgba(250,204,21,0.5)] group-hover:scale-[1.25] group-hover:-rotate-12 transition-all duration-300 cursor-pointer z-10 relative"
-              >
-                {{ topUnicodeEmoji }}
-              </span>
+              <template v-if="topEmojiKind === 'wechat' && topEmojiAssetPath && !broken.topEmoji">
+                <img
+                  :src="topEmojiAssetPath"
+                  :alt="topEmojiLabel"
+                  class="w-16 h-16 sm:w-20 sm:h-20 object-contain filter drop-shadow-[0_4px_12px_rgba(250,204,21,0.35)] group-hover:scale-[1.12] group-hover:-rotate-6 transition-all duration-300 cursor-pointer z-10 relative"
+                  @error="markBroken('topEmoji')"
+                />
+              </template>
+              <template v-else>
+                <span
+                  class="text-5xl sm:text-6xl filter drop-shadow-[0_4px_12px_rgba(250,204,21,0.5)] group-hover:scale-[1.25] group-hover:-rotate-12 transition-all duration-300 cursor-pointer z-10 relative"
+                >
+                  {{ topEmojiLabel }}
+                </span>
+              </template>
             </div>
             <div
               class="text-[9px] sm:text-[10px] font-semibold text-yellow-700/80 bg-yellow-500/10 border border-yellow-500/15 px-2.5 py-0.5 rounded-full whitespace-nowrap shrink-0"
             >
-              使用了 <span class="font-black">{{ formatInt(topUnicodeEmojiCount) }}</span> 次
+              使用了 <span class="font-black">{{ formatInt(topEmojiCount) }}</span> 次
             </div>
             <div class="bento-watermark text-yellow-500">☺</div>
           </div>
@@ -1068,6 +1078,42 @@ watch(
 
 const topUnicodeEmoji = computed(() => String(snapshot.value?.topUnicodeEmoji || '😀'))
 const topUnicodeEmojiCount = computed(() => Number(snapshot.value?.topUnicodeEmojiCount || 0))
+
+const topEmoji = computed(() => {
+  const o = snapshot.value?.topEmoji
+  return o && typeof o === 'object' ? o : null
+})
+const topEmojiKind = computed(() => String(topEmoji.value?.kind || '').trim())
+const topEmojiLabel = computed(() => {
+  if (topEmoji.value) {
+    if (topEmojiKind.value === 'wechat') {
+      const key = String(topEmoji.value?.key || '').trim()
+      if (key) return key
+    } else if (topEmojiKind.value === 'unicode') {
+      const emo = String(topEmoji.value?.emoji || '').trim()
+      if (emo) return emo
+    }
+  }
+  return topUnicodeEmoji.value
+})
+const topEmojiCount = computed(() => {
+  if (topEmoji.value) {
+    const n = Number(topEmoji.value?.count || 0)
+    return Number.isFinite(n) ? n : 0
+  }
+  return topUnicodeEmojiCount.value
+})
+const topEmojiAssetPath = computed(() => {
+  if (!topEmoji.value || topEmojiKind.value !== 'wechat') return ''
+  return resolveMediaUrl(topEmoji.value?.assetPath || '')
+})
+watch(
+  topEmojiAssetPath,
+  () => {
+    broken.topEmoji = false
+  },
+  { immediate: true }
+)
 
 const rawMonthly = computed(() => (Array.isArray(snapshot.value?.monthlyBestBuddies) ? snapshot.value.monthlyBestBuddies : []))
 const monthlyNormalized = computed(() => {
