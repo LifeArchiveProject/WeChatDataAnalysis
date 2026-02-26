@@ -181,6 +181,12 @@
           variant="slide"
           class="h-full w-full"
         />
+        <Card07BentoSummary
+          v-else-if="c && (c.kind === 'global/bento_summary' || c.id === 7)"
+          :card="c"
+          variant="slide"
+          class="h-full w-full"
+        />
         <WrappedCardShell
           v-else
           :card-id="Number(c?.id || (idx + 1))"
@@ -477,6 +483,8 @@ const ensureCardLoaded = async (cardId) => {
 const retryCard = async (cardId) => {
   await ensureCardLoaded(cardId)
 }
+
+provide('wrappedRetryCard', retryCard)
 
 const reload = async (forceRefresh = false, preserveIndex = false) => {
   const token = ++reportToken
