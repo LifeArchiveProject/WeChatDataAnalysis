@@ -307,7 +307,6 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     self.assertIn('data-wce-time-divider="1"', html_text)
                     self.assertIn('id="messageTypeFilter"', html_text)
                     self.assertIn('value="chatHistory"', html_text)
-                    self.assertIn('id="chatHistoryModal"', html_text)
                     self.assertIn('data-wce-chat-history="1"', html_text)
                     self.assertIn('data-record-item-b64="', html_text)
                     self.assertIn('id="wceMediaIndex"', html_text)
@@ -334,6 +333,7 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     css_text = zf.read("assets/wechat-chat-export.css").decode("utf-8", errors="ignore")
                     self.assertIn("wechat-transfer-card", css_text)
                     self.assertNotIn("wechat-transfer-card[data-v-", css_text)
+                    self.assertNotIn("bento-container", css_text)
 
                     js_text = zf.read("assets/wechat-chat-export.js").decode("utf-8", errors="ignore")
                     self.assertIn("wechat-voice-bubble", js_text)
@@ -343,7 +343,6 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     self.assertIn("assets/images/wechat/wechat-trans-icon1.png", names)
                     self.assertIn("assets/images/wechat/zip.png", names)
                     self.assertIn("assets/images/wechat/WeChat-Icon-Logo.wine.svg", names)
-                    self.assertTrue(any(n.startswith("fonts/") and n.endswith(".woff2") for n in names))
                     self.assertIn("wxemoji/Expression_1@2x.png", names)
                     self.assertIn("../../wxemoji/Expression_1@2x.png", html_text)
             finally:

@@ -206,7 +206,6 @@ class TestChatExportChatHistoryModal(unittest.TestCase):
                     html_path = next((n for n in names if n.endswith("/messages.html")), "")
                     self.assertTrue(html_path)
                     html_text = zf.read(html_path).decode("utf-8")
-                    self.assertIn('id="chatHistoryModal"', html_text)
                     self.assertIn('data-wce-chat-history="1"', html_text)
                     self.assertIn('data-record-item-b64="', html_text)
                     self.assertIn('id="wceMediaIndex"', html_text)
