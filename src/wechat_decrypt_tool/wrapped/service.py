@@ -19,13 +19,14 @@ from .cards.card_05_keywords_wordcloud import build_card_05_keywords_wordcloud
 from .cards.card_03_reply_speed import build_card_03_reply_speed
 from .cards.card_04_monthly_best_friends_wall import build_card_04_monthly_best_friends_wall
 from .cards.card_04_emoji_universe import build_card_04_emoji_universe
+from .cards.card_07_bento_summary import build_card_07_bento_summary_from_sources
 
 logger = get_logger(__name__)
 
 
 # We use this number to version the cache filename so adding more cards won't accidentally serve
 # an older partial cache.
-_IMPLEMENTED_UPTO_ID = 6
+_IMPLEMENTED_UPTO_ID = 7
 # Bump this when we change card payloads/ordering while keeping the same implemented_upto.
 _CACHE_VERSION = 24
 
@@ -81,6 +82,13 @@ _WRAPPED_CARD_MANIFEST: tuple[dict[str, Any], ...] = (
         "scope": "global",
         "category": "B",
         "kind": "emoji/annual_universe",
+    },
+    {
+        "id": 7,
+        "title": "便当总览：一屏看完这一年",
+        "scope": "global",
+        "category": "A",
+        "kind": "global/bento_summary",
     },
 )
 _WRAPPED_CARD_ID_SET = {int(c["id"]) for c in _WRAPPED_CARD_MANIFEST}
@@ -300,7 +308,7 @@ def build_wrapped_annual_response(
 ) -> dict[str, Any]:
     """Build annual wrapped response for the given account/year.
 
-    For now we implement cards up to id=6 (plus a meta overview card id=0).
+    For now we implement cards up to id=7 (plus a meta overview card id=0).
     """
 
     account_dir = _resolve_account_dir(account)
@@ -345,19 +353,37 @@ def build_wrapped_annual_response(
     # in first-person narratives like "你最常...".
     heatmap_sent = _get_or_compute_heatmap_sent(account_dir=account_dir, scope=scope, year=y, refresh=refresh)
     # Page 2: global overview (page 1 is the frontend cover slide).
-    cards.append(build_card_00_global_overview(account_dir=account_dir, year=y, heatmap=heatmap_sent))
+    card_overview = build_card_00_global_overview(account_dir=account_dir, year=y, heatmap=heatmap_sent)
+    cards.append(card_overview)
     # Page 3: cyber schedule heatmap.
-    cards.append(build_card_01_cyber_schedule(account_dir=account_dir, year=y, heatmap=heatmap_sent))
+    card_heatmap = build_card_01_cyber_schedule(account_dir=account_dir, year=y, heatmap=heatmap_sent)
+    cards.append(card_heatmap)
     # Page 4: message char counts (sent vs received).
-    cards.append(build_card_02_message_chars(account_dir=account_dir, year=y))
+    card_message_chars = build_card_02_message_chars(account_dir=account_dir, year=y)
+    cards.append(card_message_chars)
     # Page 5: annual keywords (bubble storm -> word cloud).
     cards.append(build_card_05_keywords_wordcloud(account_dir=account_dir, year=y))
     # Page 6: reply speed / best chat buddy.
-    cards.append(build_card_03_reply_speed(account_dir=account_dir, year=y))
+    card_reply_speed = build_card_03_reply_speed(account_dir=account_dir, year=y)
+    cards.append(card_reply_speed)
     # Page 7: monthly best friends wall (photo wall).
-    cards.append(build_card_04_monthly_best_friends_wall(account_dir=account_dir, year=y))
+    card_monthly = build_card_04_monthly_best_friends_wall(account_dir=account_dir, year=y)
+    cards.append(card_monthly)
     # Page 8: annual emoji universe / meme almanac.
-    cards.append(build_card_04_emoji_universe(account_dir=account_dir, year=y))
+    card_emoji = build_card_04_emoji_universe(account_dir=account_dir, year=y)
+    cards.append(card_emoji)
+    # Page 9: bento summary (prototype). Build from prior cards for consistency.
+    cards.append(
+        build_card_07_bento_summary_from_sources(
+            year=y,
+            overview=card_overview,
+            heatmap=card_heatmap,
+            message_chars=card_message_chars,
+            reply_speed=card_reply_speed,
+            monthly=card_monthly,
+            emoji=card_emoji,
+        )
+    )
 
     obj: dict[str, Any] = {
         "account": account_dir.name,
@@ -557,6 +583,23 @@ def build_wrapped_annual_card(
             card = build_card_04_monthly_best_friends_wall(account_dir=account_dir, year=y)
         elif cid == 5:
             card = build_card_04_emoji_universe(account_dir=account_dir, year=y)
+        elif cid == 7:
+            # Build from already-implemented cards so we can reuse their caches if available.
+            overview = build_wrapped_annual_card(account=account_dir.name, year=y, card_id=0, refresh=refresh)
+            heatmap = build_wrapped_annual_card(account=account_dir.name, year=y, card_id=1, refresh=refresh)
+            message_chars = build_wrapped_annual_card(account=account_dir.name, year=y, card_id=2, refresh=refresh)
+            reply_speed = build_wrapped_annual_card(account=account_dir.name, year=y, card_id=3, refresh=refresh)
+            monthly = build_wrapped_annual_card(account=account_dir.name, year=y, card_id=4, refresh=refresh)
+            emoji = build_wrapped_annual_card(account=account_dir.name, year=y, card_id=5, refresh=refresh)
+            card = build_card_07_bento_summary_from_sources(
+                year=y,
+                overview=overview,
+                heatmap=heatmap,
+                message_chars=message_chars,
+                reply_speed=reply_speed,
+                monthly=monthly,
+                emoji=emoji,
+            )
         else:
             # Should be unreachable due to _WRAPPED_CARD_ID_SET check.
             raise ValueError(f"Unknown Wrapped card id: {cid}")
