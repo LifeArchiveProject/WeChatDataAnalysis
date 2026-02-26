@@ -147,6 +147,77 @@ def build_card_07_bento_summary_from_sources(
             top_unicode_emoji = _pick_str(x0.get("emoji"), "")
             top_unicode_emoji_count = _pick_int(x0.get("count"), 0)
 
+    # "Top emoji" should be picked across both unicode emoji and WeChat built-in emoji.
+    # The deck has a separate "sticker" card; here we focus on emoji-like items.
+    top_emoji: dict[str, Any] | None = None
+    emoji_candidates: list[dict[str, Any]] = []
+
+    top_wechat_emojis = emoji_d.get("topWechatEmojis")
+    if isinstance(top_wechat_emojis, list) and top_wechat_emojis:
+        for item in top_wechat_emojis:
+            if not isinstance(item, dict):
+                continue
+            key = _pick_str(item.get("key"), "")
+            cnt = _pick_int(item.get("count"), 0)
+            if key and cnt > 0:
+                emoji_candidates.append(
+                    {
+                        "kind": "wechat",
+                        "key": key,
+                        "count": cnt,
+                        "assetPath": _pick_str(item.get("assetPath"), ""),
+                    }
+                )
+
+    top_text_emojis = emoji_d.get("topTextEmojis")
+    if isinstance(top_text_emojis, list) and top_text_emojis:
+        for item in top_text_emojis:
+            if not isinstance(item, dict):
+                continue
+            key = _pick_str(item.get("key"), "")
+            cnt = _pick_int(item.get("count"), 0)
+            if key and cnt > 0:
+                emoji_candidates.append(
+                    {
+                        "kind": "wechat",
+                        "key": key,
+                        "count": cnt,
+                        "assetPath": _pick_str(item.get("assetPath"), ""),
+                    }
+                )
+
+    if isinstance(top_unicode_emojis, list) and top_unicode_emojis:
+        for item in top_unicode_emojis:
+            if not isinstance(item, dict):
+                continue
+            emo = _pick_str(item.get("emoji"), "")
+            cnt = _pick_int(item.get("count"), 0)
+            if emo and cnt > 0:
+                emoji_candidates.append({"kind": "unicode", "emoji": emo, "count": cnt})
+
+    if emoji_candidates:
+        best = max(
+            emoji_candidates,
+            key=lambda x: (
+                _pick_int(x.get("count"), 0),
+                1 if str(x.get("kind")) == "wechat" else 0,
+                _pick_str(x.get("key") or x.get("emoji"), ""),
+            ),
+        )
+        if str(best.get("kind")) == "wechat":
+            top_emoji = {
+                "kind": "wechat",
+                "key": _pick_str(best.get("key"), ""),
+                "count": _pick_int(best.get("count"), 0),
+                "assetPath": _pick_str(best.get("assetPath"), ""),
+            }
+        else:
+            top_emoji = {
+                "kind": "unicode",
+                "emoji": _pick_str(best.get("emoji"), ""),
+                "count": _pick_int(best.get("count"), 0),
+            }
+
     monthly_best_buddies: list[dict[str, Any]] = []
     months = monthly_d.get("months")
     if isinstance(months, list) and months:
@@ -200,6 +271,7 @@ def build_card_07_bento_summary_from_sources(
         "topPhrase": top_phrase,
         "sentStickerCount": int(sent_sticker_count),
         "topSticker": top_sticker,
+        "topEmoji": top_emoji,
         "topUnicodeEmoji": top_unicode_emoji,
         "topUnicodeEmojiCount": int(top_unicode_emoji_count),
         "monthlyBestBuddies": monthly_best_buddies,
