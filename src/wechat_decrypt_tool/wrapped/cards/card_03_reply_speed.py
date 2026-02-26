@@ -65,6 +65,136 @@ def _format_duration_zh(seconds: int | None) -> str:
     return f"{d}天{hh}小时" if hh else f"{d}天"
 
 
+def _compute_streak_days(doys: list[int]) -> int:
+    if not doys:
+        return 0
+    doys_sorted = sorted({int(x) for x in doys if int(x) > 0})
+    if not doys_sorted:
+        return 0
+
+    best = 1
+    cur = 1
+    prev = doys_sorted[0]
+    for d in doys_sorted[1:]:
+        if d == prev + 1:
+            cur += 1
+        else:
+            cur = 1
+        if cur > best:
+            best = cur
+        prev = d
+    return int(best)
+
+
+def _compute_best_buddy_extras_from_index(*, account_dir: Path, year: int, buddy_username: str) -> dict[str, Any]:
+    """Compute a few extra fields for Card07 Bento summary.
+
+    - longestStreakDays: longest consecutive days with any interaction
+    - peakHour/peakHourLabel: most active hour of day with this buddy
+
+    Best-effort: returns empty dict on any failure.
+    """
+
+    buddy = str(buddy_username or "").strip()
+    if not buddy:
+        return {}
+
+    index_path = get_chat_search_index_db_path(account_dir)
+    if not index_path.exists():
+        return {}
+
+    start_ts, end_ts = _year_range_epoch_seconds(int(year))
+
+    ts_expr = (
+        "CASE "
+        "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+        "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+        "ELSE CAST(create_time AS INTEGER) "
+        "END"
+    )
+    where = (
+        f"{ts_expr} >= ? AND {ts_expr} < ? "
+        "AND db_stem NOT LIKE 'biz_message%' "
+        "AND CAST(local_type AS INTEGER) != 10000 "
+        "AND username = ? "
+        "AND username NOT LIKE '%@chatroom'"
+    )
+
+    sql_days = (
+        "SELECT DISTINCT "
+        "CAST(strftime('%j', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS doy "
+        "FROM ("
+        f"  SELECT {ts_expr} AS ts "
+        "  FROM message_fts "
+        f"  WHERE {where}"
+        ") sub "
+        "WHERE ts > 0 "
+        "ORDER BY doy ASC"
+    )
+
+    sql_peak_hour = (
+        "SELECT "
+        "CAST(strftime('%H', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS h, "
+        "COUNT(1) AS cnt "
+        "FROM ("
+        f"  SELECT {ts_expr} AS ts "
+        "  FROM message_fts "
+        f"  WHERE {where}"
+        ") sub "
+        "WHERE ts > 0 "
+        "GROUP BY h "
+        "ORDER BY cnt DESC, h ASC "
+        "LIMIT 1"
+    )
+
+    conn = sqlite3.connect(str(index_path))
+    try:
+        has_fts = (
+            conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_fts' LIMIT 1").fetchone()
+            is not None
+        )
+        if not has_fts:
+            return {}
+
+        params = (start_ts, end_ts, buddy)
+
+        doys: list[int] = []
+        try:
+            rows = conn.execute(sql_days, params).fetchall()
+        except Exception:
+            rows = []
+        for r in rows:
+            if not r or r[0] is None:
+                continue
+            try:
+                doys.append(int(r[0]))
+            except Exception:
+                continue
+
+        longest_streak_days = _compute_streak_days(doys)
+
+        peak_hour: int | None = None
+        try:
+            row = conn.execute(sql_peak_hour, params).fetchone()
+            if row and row[0] is not None:
+                peak_hour = int(row[0])
+        except Exception:
+            peak_hour = None
+
+        out: dict[str, Any] = {"longestStreakDays": int(longest_streak_days)}
+        if peak_hour is not None and 0 <= peak_hour <= 23:
+            out["peakHour"] = int(peak_hour)
+            out["peakHourLabel"] = f"{int(peak_hour):02d}:00"
+        return out
+    except Exception:
+        return {}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 @dataclass
 class _ConvAgg:
     username: str
@@ -124,6 +254,9 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
     global_fastest_u: str | None = None
     global_slowest: int | None = None
     global_slowest_u: str | None = None
+
+    reply_gaps: list[int] = []
+    reply_stats: dict[str, Any] | None = None
 
     best_score = -1.0
     best_agg: _ConvAgg | None = None
@@ -287,6 +420,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
                             total_replies += 1
                             sum_gap += gap
                             sum_gap_capped += min(gap, gap_cap_seconds)
+                            reply_gaps.append(int(gap))
 
                             if replies == 1 or gap < min_gap:
                                 min_gap = gap
@@ -322,6 +456,20 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
                 conn.close()
             except Exception:
                 pass
+
+    if reply_gaps:
+        try:
+            reply_gaps.sort()
+            n = int(len(reply_gaps))
+            # Nearest-rank quantiles (deterministic, integer seconds).
+            p50_idx = max(0, min(n - 1, int(math.ceil(0.50 * n) - 1)))
+            p90_idx = max(0, min(n - 1, int(math.ceil(0.90 * n) - 1)))
+            reply_stats = {
+                "p50Seconds": int(reply_gaps[p50_idx]),
+                "p90Seconds": int(reply_gaps[p90_idx]),
+            }
+        except Exception:
+            reply_stats = None
 
     # -------- Fallback path: no index --------
     # Best-effort: if the index doesn't exist / isn't ready, auto-start building it (async) so user can
@@ -406,6 +554,14 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
     best_buddy_obj = None
     if best_agg is not None:
         best_buddy_obj = conv_to_obj(best_score, best_agg)
+        if used_index and isinstance(best_buddy_obj, dict) and best_buddy_obj.get("username"):
+            extras = _compute_best_buddy_extras_from_index(
+                account_dir=account_dir,
+                year=int(year),
+                buddy_username=str(best_buddy_obj.get("username") or ""),
+            )
+            if extras:
+                best_buddy_obj.update(extras)
 
     fastest_obj = None
     if global_fastest is not None and global_fastest_u:
@@ -645,6 +801,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
         "year": int(year),
         "sentToContacts": int(len(sent_to_contacts)),
         "replyEvents": int(total_replies),
+        "replyStats": reply_stats,
         "fastestReplySeconds": int(global_fastest) if global_fastest is not None else None,
         "longestReplySeconds": int(global_slowest) if global_slowest is not None else None,
         "bestBuddy": best_buddy_obj,
