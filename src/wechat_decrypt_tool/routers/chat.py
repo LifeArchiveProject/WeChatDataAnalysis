@@ -5232,7 +5232,6 @@ def list_chat_messages(
                     if existing_local:
                         try:
                             import re
-
                             cur = str(m.get("emojiUrl") or "")
                             if cur and re.match(r"^https?://", cur, flags=re.I) and ("/api/chat/media/emoji" not in cur):
                                 m["emojiRemoteUrl"] = cur
