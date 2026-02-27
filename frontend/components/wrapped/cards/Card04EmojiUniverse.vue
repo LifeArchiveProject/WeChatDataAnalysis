@@ -58,7 +58,7 @@
                     class="mt-0.5 inline-flex items-center gap-1.5 rounded-md bg-[#00000008] px-1.5 py-1 max-w-full"
                     :title="heroStickerOwnerName ? `常发送给 ${heroStickerOwnerName}` : '常发送给：未知'"
                   >
-                    <span class="w-4 h-4 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0">
+                    <span class="w-4 h-4 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0 wrapped-privacy-avatar">
                       <img
                         v-if="heroStickerOwnerAvatarUrl && avatarOk.topStickerOwner"
                         :src="heroStickerOwnerAvatarUrl"
@@ -71,7 +71,7 @@
                       </span>
                     </span>
                     <span class="wrapped-body text-[11px] text-[#00000080] truncate">
-                      常发送给 <span class="text-[#07C160] font-semibold">{{ heroStickerOwnerName || '未知' }}</span>
+                      常发送给 <span class="text-[#07C160] font-semibold wrapped-privacy-name">{{ heroStickerOwnerName || '未知' }}</span>
                     </span>
                   </div>
 

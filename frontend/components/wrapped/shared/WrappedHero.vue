@@ -11,12 +11,6 @@
       <template v-if="variant === 'slide'">
         <div class="h-full flex flex-col justify-between">
           <div class="flex items-start justify-between gap-4">
-            <div class="wrapped-label text-xs text-[#00000080]">
-              WECHAT WRAPPED
-            </div>
-            <div class="wrapped-body text-xs text-[#00000055]">
-              年度回望
-            </div>
           </div>
 
           <div class="mt-10 sm:mt-14">

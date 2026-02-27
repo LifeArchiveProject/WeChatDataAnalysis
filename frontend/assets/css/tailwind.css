@@ -90,6 +90,46 @@
   .privacy-blur:hover {
     filter: none;
   }
+
+  /* Wrapped 隐私模式：仅模糊“用户名文本”，头像不模糊（避免把头像也 blur 掉） */
+  .wrapped-privacy .wrapped-privacy-name {
+    filter: blur(9px);
+    transition: filter 0.2s ease;
+  }
+
+  .wrapped-privacy .wrapped-privacy-name:hover {
+    filter: none;
+  }
+
+  /* Wrapped 隐私模式：模糊“消息内容文本”（仅在被标记为 message 的节点上生效） */
+  .wrapped-privacy .wrapped-privacy-message {
+    filter: blur(9px);
+    transition: filter 0.2s ease;
+  }
+
+  .wrapped-privacy .wrapped-privacy-message:hover {
+    filter: none;
+  }
+
+  /* Wrapped 隐私模式：模糊“词云关键词” */
+  .wrapped-privacy .wrapped-privacy-keyword {
+    filter: blur(9px);
+    transition: filter 0.2s ease;
+  }
+
+  .wrapped-privacy .wrapped-privacy-keyword:hover {
+    filter: none;
+  }
+
+  /* Wrapped 隐私模式：模糊头像（含 fallback 字符） */
+  .wrapped-privacy .wrapped-privacy-avatar {
+    filter: blur(9px);
+    transition: filter 0.2s ease;
+  }
+
+  .wrapped-privacy .wrapped-privacy-avatar:hover {
+    filter: none;
+  }
   /* 按钮样式 */
   .btn {
     @apply px-6 py-3 rounded-full font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 transform active:scale-95;

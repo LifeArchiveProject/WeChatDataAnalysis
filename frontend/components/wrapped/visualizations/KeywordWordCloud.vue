@@ -18,7 +18,7 @@
             :title="`${w.word} · ${formatInt(w.count)} 次`"
             @pointerdown.stop="selectWord(w.word, $event)"
           >
-            {{ w.word }}
+            <span class="wrapped-privacy-keyword">{{ w.word }}</span>
           </button>
         </div>
       </div>
@@ -37,6 +37,7 @@
           <div
             v-if="selectedInfo"
             class="kw-panel fixed z-[100] w-[min(92%,420px)] rounded-2xl border border-[#EDEDED] bg-white/80 backdrop-blur shadow-[0_16px_40px_rgba(0,0,0,0.14)] overflow-hidden"
+            :class="{ 'wrapped-privacy': privacyMode }"
             :style="panelStyle"
             data-no-accel
             @pointerdown.stop
@@ -44,7 +45,7 @@
             <div class="flex items-start justify-between gap-3 px-4 pt-4 pb-2 border-b border-[#F3F3F3]">
               <div class="min-w-0">
                 <div class="wrapped-title text-base text-[#000000e6] truncate">
-                  {{ selectedInfo.word }}
+                  <span class="wrapped-privacy-keyword">{{ selectedInfo.word }}</span>
                   <span class="wrapped-number text-sm text-[#07C160] font-semibold">· {{ formatInt(selectedInfo.count) }} 次</span>
                 </div>
                 <div class="mt-0.5 wrapped-body text-xs text-[#7F7F7F]">
@@ -77,7 +78,7 @@
                   class="flex justify-end"
                 >
                   <div class="relative bubble-tail-r bg-[#95EC69] msg-radius px-3 py-2 shadow-[0_6px_16px_rgba(0,0,0,0.12)] max-w-[92%]">
-                    <div class="wrapped-body text-sm text-[#000000e6] leading-snug whitespace-pre-wrap break-words">
+                    <div class="wrapped-body text-sm text-[#000000e6] leading-snug whitespace-pre-wrap break-words wrapped-privacy-message">
                       <span v-if="Array.isArray(m.segments) && m.segments.length > 0">
                         <span v-for="(seg, sidx) in m.segments" :key="`${selectedInfo.word}-${i}-${sidx}`">
                           <span v-if="seg.type === 'text'">{{ seg.content }}</span>
@@ -98,7 +99,9 @@
 
   <script setup>
   import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+  import { storeToRefs } from 'pinia'
   import { parseTextWithEmoji } from '~/utils/wechat-emojis'
+  import { usePrivacyStore } from '~/stores/privacy'
 
 const props = defineProps({
   keywords: { type: Array, default: () => [] }, // [{word,count,weight}]
@@ -106,6 +109,9 @@ const props = defineProps({
   animate: { type: Boolean, default: true },
   reducedMotion: { type: Boolean, default: false }
 })
+
+const privacyStore = usePrivacyStore()
+const { privacyMode } = storeToRefs(privacyStore)
 
 const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
 const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
@@ -369,6 +375,7 @@ watch(
 )
 
 onMounted(() => {
+  privacyStore.init()
   if (!import.meta.client) return
   updateSize()
   if (typeof ResizeObserver !== 'undefined' && rootEl.value) {

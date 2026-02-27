@@ -172,14 +172,14 @@
                   <template v-if="bestBuddyAvatarUrl && !broken.bestBuddy">
                     <img
                       :src="bestBuddyAvatarUrl"
-                      class="w-full h-full rounded-full border-[3px] border-white object-cover relative z-10 shadow-lg bg-gray-50 filter drop-shadow-[0_4px_12px_rgba(244,114,182,0.3)] transition-transform duration-500 hover:scale-105"
+                      class="w-full h-full rounded-full border-[3px] border-white object-cover relative z-10 shadow-lg bg-gray-50 filter drop-shadow-[0_4px_12px_rgba(244,114,182,0.3)] transition-transform duration-500 hover:scale-105 wrapped-privacy-avatar"
                       :alt="bestBuddyName"
                       @error="markBroken('bestBuddy')"
                     />
                   </template>
                   <template v-else>
                     <div
-                      class="w-full h-full rounded-full border-[3px] border-white relative z-10 shadow-lg bg-gray-50 flex items-center justify-center font-black text-xl text-pink-600"
+                      class="w-full h-full rounded-full border-[3px] border-white relative z-10 shadow-lg bg-gray-50 flex items-center justify-center font-black text-xl text-pink-600 wrapped-privacy-avatar"
                     >
                       {{ avatarFallback(bestBuddyName) }}
                     </div>
@@ -192,7 +192,7 @@
                   </div>
                 </div>
 
-                <div class="text-lg sm:text-xl font-black tracking-tight text-gray-800 text-center truncate w-full px-1">
+                <div class="text-lg sm:text-xl font-black tracking-tight text-gray-800 text-center truncate w-full px-1 wrapped-privacy-name">
                   {{ bestBuddyName }}
                 </div>
               </div>
@@ -267,7 +267,7 @@
               <div class="shrink-0">
                 <template v-if="topGroupAvatarUrl && !broken.topGroup">
                   <img
-                    class="w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-white shadow-sm ring-1 ring-sky-500/20 bg-gray-50 object-cover"
+                    class="w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-white shadow-sm ring-1 ring-sky-500/20 bg-gray-50 object-cover wrapped-privacy-avatar"
                     :src="topGroupAvatarUrl"
                     :alt="topGroupName"
                     @error="markBroken('topGroup')"
@@ -275,7 +275,7 @@
                 </template>
                 <template v-else>
                   <div
-                    class="w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-white shadow-sm ring-1 ring-sky-500/20 bg-sky-100 flex items-center justify-center font-black text-sky-700"
+                    class="w-16 h-16 sm:w-20 sm:h-20 rounded-full border-2 border-white shadow-sm ring-1 ring-sky-500/20 bg-sky-100 flex items-center justify-center font-black text-sky-700 wrapped-privacy-avatar"
                   >
                     {{ avatarFallback(topGroupName) }}
                   </div>
@@ -283,7 +283,7 @@
               </div>
 
               <div class="flex flex-col min-w-0 flex-1">
-                <div class="text-base sm:text-lg font-black tracking-tight text-gray-800 w-full truncate">{{ topGroupName }}</div>
+                <div class="text-base sm:text-lg font-black tracking-tight text-gray-800 w-full truncate wrapped-privacy-name">{{ topGroupName }}</div>
                 <div
                   class="mt-1 text-[10px] sm:text-xs font-semibold text-sky-600 bg-sky-500/10 px-3 py-1 rounded-full border border-sky-500/10 inline-flex items-center gap-1.5 max-w-full truncate self-start"
                 >
@@ -344,7 +344,7 @@
                   <div class="ml-auto shrink-0" :title="fastestContactName">
                     <template v-if="fastestAvatarUrl && !broken.fastestAvatar">
                       <img
-                        class="w-7 h-7 rounded-full bg-white border border-emerald-500/20 shadow-sm object-cover"
+                        class="w-7 h-7 rounded-full bg-white border border-emerald-500/20 shadow-sm object-cover wrapped-privacy-avatar"
                         :src="fastestAvatarUrl"
                         :alt="fastestContactName"
                         @error="markBroken('fastestAvatar')"
@@ -352,7 +352,7 @@
                     </template>
                     <template v-else>
                       <div
-                        class="w-7 h-7 rounded-full bg-emerald-50 border border-emerald-500/15 shadow-sm flex items-center justify-center text-[11px] font-black text-emerald-700"
+                        class="w-7 h-7 rounded-full bg-emerald-50 border border-emerald-500/15 shadow-sm flex items-center justify-center text-[11px] font-black text-emerald-700 wrapped-privacy-avatar"
                       >
                         {{ avatarFallback(fastestContactName) }}
                       </div>
@@ -372,7 +372,7 @@
                   <div class="ml-auto shrink-0" :title="slowestContactName">
                     <template v-if="slowestAvatarUrl && !broken.slowestAvatar">
                       <img
-                        class="w-7 h-7 rounded-full bg-white border border-rose-500/20 shadow-sm object-cover"
+                        class="w-7 h-7 rounded-full bg-white border border-rose-500/20 shadow-sm object-cover wrapped-privacy-avatar"
                         :src="slowestAvatarUrl"
                         :alt="slowestContactName"
                         @error="markBroken('slowestAvatar')"
@@ -380,7 +380,7 @@
                     </template>
                     <template v-else>
                       <div
-                        class="w-7 h-7 rounded-full bg-rose-50 border border-rose-500/15 shadow-sm flex items-center justify-center text-[11px] font-black text-rose-700"
+                        class="w-7 h-7 rounded-full bg-rose-50 border border-rose-500/15 shadow-sm flex items-center justify-center text-[11px] font-black text-rose-700 wrapped-privacy-avatar"
                       >
                         {{ avatarFallback(slowestContactName) }}
                       </div>
@@ -552,16 +552,16 @@
             <div v-if="showMonthlyHero" class="monthly-hero">
               <div class="monthly-avatar-lg">
                 <template v-if="monthlyMvpAvatarUrl && !broken.monthlyMvp">
-                  <img :src="monthlyMvpAvatarUrl" alt="MVP" @error="markBroken('monthlyMvp')" />
+                  <img :src="monthlyMvpAvatarUrl" class="wrapped-privacy-avatar" alt="MVP" @error="markBroken('monthlyMvp')" />
                 </template>
                 <template v-else>
-                  <div class="monthly-avatar-fallback-lg">{{ avatarFallback(monthlyMvpName) }}</div>
+                  <div class="monthly-avatar-fallback-lg wrapped-privacy-avatar">{{ avatarFallback(monthlyMvpName) }}</div>
                 </template>
               </div>
 
               <div class="monthly-hero-info">
                 <span
-                  class="text-2xl sm:text-3xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-teal-600 to-emerald-500 leading-none truncate"
+                  class="text-2xl sm:text-3xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-teal-600 to-emerald-500 leading-none truncate wrapped-privacy-name"
                 >
                   {{ monthlyMvpName }}
                 </span>
@@ -596,19 +596,19 @@
               >
                 <template v-if="item._avatarUrl && !broken['m-' + item.month]">
                   <img
-                    class="monthly-avatar-sm"
+                    class="monthly-avatar-sm wrapped-privacy-avatar"
                     :src="item._avatarUrl"
                     :alt="item._nameLabel"
                     @error="markBroken('m-' + item.month)"
                   />
                 </template>
                 <template v-else>
-                  <div class="monthly-avatar-fallback-sm" :style="{ background: item._avatarFallbackBg }">
+                  <div class="monthly-avatar-fallback-sm wrapped-privacy-avatar" :style="{ background: item._avatarFallbackBg }">
                     {{ avatarFallback(item._nameLabel) }}
                   </div>
                 </template>
                 <div class="monthly-cell-month">{{ item.month }}月</div>
-                <div v-if="!showMonthlyHero" class="monthly-cell-name">{{ item._nameLabel }}</div>
+                <div v-if="!showMonthlyHero" class="monthly-cell-name wrapped-privacy-name">{{ item._nameLabel }}</div>
               </div>
             </div>
             <div class="bento-watermark text-teal-600">📅</div>

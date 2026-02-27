@@ -30,7 +30,7 @@
             <template v-if="item.winner">
               <div class="flex items-start gap-1.5 pt-0.5 px-0.5">
                 <!-- 头像 -->
-                <div class="polaroid-photo flex-shrink-0">
+                <div class="polaroid-photo flex-shrink-0 wrapped-privacy-avatar">
                   <img
                     v-if="winnerAvatar(item) && avatarOk[item.winner.username] !== false"
                     :src="winnerAvatar(item)"
@@ -46,7 +46,7 @@
                 <div class="flex-1 min-w-0 pt-0.5 flex flex-col justify-between" style="height:70px">
                   <div>
                     <div class="flex items-center justify-between gap-1 min-w-0">
-                      <div class="wrapped-body text-[10px] text-[#000000cc] truncate flex-1 leading-tight" :title="item.winner.displayName">
+                      <div class="wrapped-body text-[10px] text-[#000000cc] truncate flex-1 leading-tight wrapped-privacy-name" :title="item.winner.displayName">
                         {{ item.winner.displayName }}
                       </div>
                       <!-- 月份徽章 -->
