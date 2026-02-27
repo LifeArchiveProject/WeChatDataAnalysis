@@ -911,7 +911,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.4" },
     { name = "typing-extensions", specifier = ">=4.8.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
-    { name = "wx-key" },
+    { name = "wx-key", specifier = ">=1.1.0" },
     { name = "zstandard", specifier = ">=0.23.0" },
 ]
 provides-extras = ["build"]
@@ -927,13 +927,13 @@ wheels = [
 
 [[package]]
 name = "wx-key"
-version = "1.0.0"
+version = "1.1.0"
 source = { registry = "tools/key_wheels" }
 wheels = [
-    { path = "wx_key-1.0.0-cp311-cp311-win_amd64.whl" },
-    { path = "wx_key-1.0.0-cp312-cp312-win_amd64.whl" },
-    { path = "wx_key-1.0.0-cp313-cp313-win_amd64.whl" },
-    { path = "wx_key-1.0.0-cp314-cp314-win_amd64.whl" },
+    { path = "wx_key-1.1.0-cp311-cp311-win_amd64.whl" },
+    { path = "wx_key-1.1.0-cp312-cp312-win_amd64.whl" },
+    { path = "wx_key-1.1.0-cp313-cp313-win_amd64.whl" },
+    { path = "wx_key-1.1.0-cp314-cp314-win_amd64.whl" },
 ]
 
 [[package]]
