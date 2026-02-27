@@ -35,10 +35,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class HookConfig:
     min_version: str
-    pattern: str  # 用 00 不要用 ?  !!!!  否则C++内存会炸
+    pattern: str
     mask: str
     offset: int
-
+    md5_pattern: str = ""
+    md5_mask: str = ""
+    md5_offset: int = 0
 
 class WeChatKeyFetcher:
     def __init__(self):
@@ -50,12 +52,12 @@ class WeChatKeyFetcher:
         return " ".join([f"{b:02X}" for b in hex_array])
 
     def _get_hook_config(self, version_str: str) -> Optional[HookConfig]:
-        """搬运自wx_key代码，未来用ida脚本直接获取即可"""
         try:
             v_curr = pkg_version.parse(version_str)
         except Exception as e:
             logger.error(f"版本号解析失败: {version_str} || {e}")
             return None
+
 
         if v_curr > pkg_version.parse("4.1.6.14"):
             return HookConfig(
@@ -66,7 +68,10 @@ class WeChatKeyFetcher:
                     0x89, 0xCE, 0x48, 0x89
                 ]),
                 mask="xxxxxxxxxxxxxxxxxxxxxxxx",
-                offset=-3
+                offset=-3,
+                md5_pattern="48 8D 4D 00 48 89 4D B0 48 89 45 B8 48 8D 7D 00 48 8D 55 B0 48 89 F9",
+                md5_mask="xxx?xxxxxxxxxxx?xxxxxxx",
+                md5_offset=4
             )
 
         if pkg_version.parse("4.1.4") <= v_curr <= pkg_version.parse("4.1.6.14"):
@@ -78,10 +83,14 @@ class WeChatKeyFetcher:
                     0x83, 0xec, 0x50, 0x41
                 ]),
                 mask="xxxxxxxxxx?xxxx?xxxxxxxx",
-                offset=-3
+                offset=-3,
+                md5_pattern="48 8D 4D 00 48 89 4D B0 48 89 45 B8 48 8D 7D 00 48 8D 55 B0 48 89 F9",
+                md5_mask="xxx?xxxxxxxxxxx?xxxxxxx",
+                md5_offset=4
             )
 
         if v_curr < pkg_version.parse("4.1.4"):
+            """图片密钥可能是错的，版本过低没有测试"""
             return HookConfig(
                 min_version="<4.1.4",
                 pattern=self._hex_array_to_str([
@@ -90,7 +99,10 @@ class WeChatKeyFetcher:
                     0x89, 0xce, 0x48, 0x89
                 ]),
                 mask="xxxxxxxxxxxxxxxxxxxxxxxx",
-                offset=-15  # -0xf
+                offset=-15,  # -0xf
+                md5_pattern="48 8D 4D 00 48 89 4D B0 48 89 45 B8 48 8D 7D 00 48 8D 55 B0 48 89 F9",
+                md5_mask="xxx?xxxxxxxxxxx?xxxxxxx",
+                md5_offset=4
             )
 
         return None
@@ -134,13 +146,12 @@ class WeChatKeyFetcher:
             logger.error(f"启动微信失败: {e}")
             raise RuntimeError(f"无法启动微信: {e}")
 
-    def fetch_key(self) -> str:
-        """没有wx_key模块无法自动获取密钥"""
+    def fetch_key(self) -> dict:
+        """调用 wx_key 获取双密钥"""
         if wx_key is None:
             raise RuntimeError("wx_key 模块未安装或加载失败")
 
         install_info = detect_wechat_installation()
-
         exe_path = install_info.get('wechat_exe_path')
         version = install_info.get('wechat_version')
 
@@ -151,30 +162,34 @@ class WeChatKeyFetcher:
 
         config = self._get_hook_config(version)
         if not config:
-            raise RuntimeError(f"不支持的微信版本: {version}")
+            raise RuntimeError(f"原生获取失败：当前微信版本 ({version}) 过低，为保证稳定性，仅支持 4.1.5 及以上版本使用原生获取。")
 
         self.kill_wechat()
-
         pid = self.launch_wechat(exe_path)
         logger.info(f"WeChat launched, PID: {pid}")
 
-        logger.info(f"Initializing Hook with pattern: {config.pattern[:20]}... Offset: {config.offset}")
-
-        if not wx_key.initialize_hook(pid, "", config.pattern, config.mask, config.offset):
+        if not wx_key.initialize_hook(pid, "", config.pattern, config.mask, config.offset,
+                                      config.md5_pattern, config.md5_mask, config.md5_offset):
             err = wx_key.get_last_error_msg()
             raise RuntimeError(f"Hook初始化失败: {err}")
 
         start_time = time.time()
-
+        found_db_key = None
+        found_md5_data = None
 
         try:
             while True:
                 if time.time() - start_time > self.timeout_seconds:
-                    raise TimeoutError("获取密钥超时 (60s)")
+                    raise TimeoutError("获取密钥超时 (60s)，请确保在弹出的微信中完成登录。")
 
-                key = wx_key.poll_key_data()
-                if key:
-                    found_key = key
+                key_data = wx_key.poll_key_data()
+                if key_data:
+                    if 'key' in key_data:
+                        found_db_key = key_data['key']
+                    if 'md5' in key_data:
+                        found_md5_data = key_data['md5']
+
+                if found_db_key and found_md5_data:
                     break
 
                 while True:
@@ -185,15 +200,22 @@ class WeChatKeyFetcher:
                         logger.error(f"[Hook Error] {msg}")
 
                 time.sleep(0.1)
-
         finally:
             logger.info("Cleaning up hook...")
             wx_key.cleanup_hook()
 
-        if found_key:
-            return found_key
-        else:
-            raise RuntimeError("未知错误，未获取到密钥")
+        aes_key = None  # gemini !!! ???
+        xor_key = None
+
+        if found_md5_data and "|" in found_md5_data:
+            aes_key, xor_key_dec = found_md5_data.split("|")
+            xor_key = f"0x{int(xor_key_dec):02X}"
+
+        return {
+            "db_key": found_db_key,
+            "aes_key": aes_key,
+            "xor_key": xor_key
+        }
 
 def get_db_key_workflow():
     fetcher = WeChatKeyFetcher()
@@ -202,73 +224,11 @@ def get_db_key_workflow():
 
 # ==============================   以下是图片密钥逻辑  =====================================
 
-
-# 远程 API 配置
-REMOTE_URL = "https://view.free.c3o.re/dashboard"
-BASE_URL = "https://view.free.c3o.re"  # 用于拼接js
-
-# NEXT_ACTION_ID = "7c8f99280c70626ccf5960cc4a68f368197e15f8e9"  # 不可以硬编码
-
-
-async def fetch_js_and_scan(client: httpx.AsyncClient, js_path: str) -> Optional[str]:
-    """
-    异步下载单个 JS 文件并匹配 Action ID
-    """
-    full_url = f"{BASE_URL}{js_path}" if js_path.startswith("/") else js_path
-    try:
-        response = await client.get(full_url)
-        if response.status_code != 200:
-            return None
-
-        content = response.text
-
-        action_id_pattern = re.compile(r'createServerReference.*?["\']([a-f0-9]{42})["\'].*?["\']getUserConfigFromBytes["\']')
-
-        match = action_id_pattern.search(content)
-        if match:
-            found_id = match.group(1)
-            return found_id
-
-    except Exception as e:
-        logger.error(f"Error fetching {js_path}: {e}")
-    return None
-
-
-async def _get_next_action_id_async() -> str:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-
-        resp = await client.get(REMOTE_URL)
-        html = resp.text
-
-        js_file_pattern = re.compile(r'src="(/_next/static/chunks/[^"]+\.js)"')
-        js_files = set(js_file_pattern.findall(html))
-
-        if not js_files:
-            raise Exception("未找到任何 Next.js chunk 文件，可能页面结构已变动。")
-
-        tasks = [fetch_js_and_scan(client, js_path) for js_path in js_files]
-
-        results = await asyncio.gather(*tasks)
-
-        for res in results:
-            if res:
-                return res
-
-        raise Exception("遍历了所有 JS 文件，但未找到匹配的 createServerReference ID。")
-
-
 def get_wechat_internal_global_config(wx_dir: Path, file_name1) -> bytes:
-    """
-    读微信目录下的主配置文件
-    """
     xwechat_files_root = wx_dir.parent
-
     target_path = os.path.join(xwechat_files_root, "all_users", "config", file_name1)
-
     if not os.path.exists(target_path):
-        logger.error(f"未找到微信内部 global_config: {target_path}")
-        raise FileNotFoundError(f"找不到文件: {target_path}，请确认微信数据目录结构是否完整")
-
+        raise FileNotFoundError(f"找不到配置文件: {target_path}，请确认微信数据目录结构是否完整")
     return Path(target_path).read_bytes()
 
 
@@ -278,90 +238,36 @@ async def fetch_and_save_remote_keys(account: Optional[str] = None) -> Dict[str,
     wx_id_dir = _resolve_account_wxid_dir(account_dir)
     wxid = wx_id_dir.name
 
-    logger.info("尝试获取next_action_id")
-    try:
-        next_action_id = await _get_next_action_id_async()
-        logger.info(f"获取next_action_id成功: {next_action_id}")
-    except Exception as e:
-        raise RuntimeError(f"获取next_action_id失败：{e}")
+    url = "https://view.free.c3o.re/api/key"
+    data = {"weixinIDFolder": wxid}
 
-
-    logger.info(f"正在为账号 {wxid} 获取密钥...")
+    logger.info(f"正在为账号 {wxid} 获取云端备选图片密钥...")
 
     try:
-        blob1_bytes = get_wechat_internal_global_config(wx_id_dir, file_name1= "global_config") # 估计这是唯一有效的数据！！
-        logger.info(f"获取微信内部配置成功，大小: {len(blob1_bytes)} bytes")
+        blob1_bytes = get_wechat_internal_global_config(wx_id_dir, file_name1="global_config")
+        blob2_bytes = get_wechat_internal_global_config(wx_id_dir, file_name1="global_config.crc")
     except Exception as e:
         raise RuntimeError(f"读取微信内部文件失败: {e}")
-
-    try:
-        blob2_bytes = get_wechat_internal_global_config(wx_id_dir, file_name1= "global_config.crc")
-        logger.info(f"获取微信内部配置成功，大小: {len(blob2_bytes)} bytes")
-    except Exception as e:
-        raise RuntimeError(f"读取微信内部文件失败: {e}")
-
-    blob3_bytes = b""
-
-    headers = {
-        "Accept": "text/x-component",
-        "Next-Action": next_action_id,
-        "Next-Router-State-Tree": "%5B%22%22%2C%7B%22children%22%3A%5B%22dashboard%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D",
-        "Origin": "https://view.free.c3o.re",
-        "Referer": "https://view.free.c3o.re/dashboard",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    }
 
     files = {
-        '1': ('blob', blob1_bytes, 'application/octet-stream'),
-        '2': ('blob', blob2_bytes, 'application/octet-stream'),
-        '3': ('blob', blob3_bytes, 'application/octet-stream'),
-        '0': (None, json.dumps([wxid, "$A1", "$A2", "$A3", 0],separators=(",",":")).encode('utf-8')),
+        'fileBytes': ('file', blob1_bytes, 'application/octet-stream'),
+        'crcBytes': ('file.crc', blob2_bytes, 'application/octet-stream'),
     }
 
-
     async with httpx.AsyncClient(timeout=30) as client:
-        logger.info("向远程服务器发送请求...")
-        response = await client.post(REMOTE_URL, headers=headers, files=files)
+        logger.info("向云端 API 发送请求...")
+        response = await client.post(url, data=data, files=files)
 
     if response.status_code != 200:
-        raise RuntimeError(f"远程服务器错误: {response.status_code} - {response.text[:100]}")
+        raise RuntimeError(f"云端服务器错误: {response.status_code} - {response.text[:100]}")
 
+    config = response.json()
+    if not config:
+        raise RuntimeError("云端解析失败: 返回数据为空")
 
-    result_data = {}
-    lines = response.text.split('\n')
-
-    found_config = False
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        if line.startswith('1:'):
-            try:
-                json_part = line[2:]  # 去掉 "1:"
-                data_obj = json.loads(json_part)
-
-                if "config" in data_obj:
-                    config = data_obj["config"]
-                    result_data = {
-                        "xor_key": config.get("xor_key", ""),
-                        "aes_key": config.get("aes_key", ""),
-                        "nick_name": config.get("nick_name", ""),
-                        "avatar_url": config.get("avatar_url", "")
-                    }
-                    found_config = True
-                    break
-            except Exception as e:
-                logger.warning(f"解析响应行失败: {e}")
-                continue
-
-    if not found_config or not result_data.get("aes_key"):
-        logger.error(f"响应中未找到密钥信息。Full Response: {response.text[:500]}")
-        raise RuntimeError("解析失败: 服务器未返回 config 数据")
-
-    # 6. 处理并保存密钥
-    xor_raw = str(result_data["xor_key"])
-    aes_val = str(result_data["aes_key"])
+    # 新 API 的字段兼容处理
+    xor_raw = str(config.get("xorKey", config.get("xor_key", "")))
+    aes_val = str(config.get("aesKey", config.get("aes_key", "")))
 
     try:
         if xor_raw.startswith("0x"):
@@ -382,6 +288,5 @@ async def fetch_and_save_remote_keys(account: Optional[str] = None) -> Dict[str,
         "wxid": wxid,
         "xor_key": xor_hex_str,
         "aes_key": aes_val,
-        "nick_name": result_data["nick_name"]
+        "nick_name": config.get("nickName", config.get("nick_name", ""))
     }
-

@@ -530,8 +530,8 @@ export const useApi = () => {
   }
 
   // 获取数据库密钥
-  const getDbKey = async () => {
-    return await request('/get_db_key')
+  const getKeys = async () => {
+    return await request('/get_keys')
   }
 
   // 获取图片密钥
@@ -589,7 +589,7 @@ export const useApi = () => {
     getWrappedAnnual,
     getWrappedAnnualMeta,
     getWrappedAnnualCard,
-    getDbKey,
+    getKeys,
     getImageKey,
     getWxStatus,
   }
