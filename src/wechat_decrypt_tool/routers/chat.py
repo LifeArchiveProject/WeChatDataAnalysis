@@ -4114,8 +4114,7 @@ def _collect_chat_messages(
                     render_type = "system"
                     template = _extract_xml_tag_text(raw_text, "template")
                     if template:
-                        import re
-
+                        # import re
                         pat_usernames.update({m.group(1) for m in re.finditer(r"\$\{([^}]+)\}", template) if m.group(1)})
                         content_text = "[拍一拍]"
                     else:
@@ -4255,8 +4254,7 @@ def _collect_chat_messages(
                 elif local_type == 50:
                     render_type = "voip"
                     try:
-                        import re
-
+                        # import re
                         block = raw_text
                         m_voip = re.search(
                             r"(<VoIPBubbleMsg[^>]*>.*?</VoIPBubbleMsg>)",
@@ -5013,7 +5011,7 @@ def list_chat_messages(
                     render_type = "system"
                     template = _extract_xml_tag_text(raw_text, "template")
                     if template:
-                        import re
+                        # import re
 
                         pat_usernames.update({m.group(1) for m in re.finditer(r"\$\{([^}]+)\}", template) if m.group(1)})
                         content_text = "[拍一拍]"
@@ -5145,7 +5143,7 @@ def list_chat_messages(
                 elif local_type == 50:
                     render_type = "voip"
                     try:
-                        import re
+                        # import re
 
                         block = raw_text
                         m_voip = re.search(
@@ -5494,6 +5492,7 @@ def list_chat_messages(
 
                     if existing_local:
                         try:
+                            # import re
                             cur = str(m.get("emojiUrl") or "")
                             if cur and re.match(r"^https?://", cur, flags=re.I) and ("/api/chat/media/emoji" not in cur):
                                 m["emojiRemoteUrl"] = cur

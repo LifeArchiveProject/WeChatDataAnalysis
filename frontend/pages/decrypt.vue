@@ -58,7 +58,7 @@
                   <svg v-else class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
-                  {{ isGettingDbKey ? '获取中...' : '自动获取' }}
+                  {{ isGettingDbKey ? '获取中...' : '一键获取全部密钥' }}
                 </button>
               </div>
               <p v-if="formErrors.key" class="mt-1 text-sm text-red-600 flex items-center">
@@ -71,7 +71,7 @@
                 <svg class="w-4 h-4 mr-1 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
-                尝试自动获取，或者使用 <a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a> 等工具获取的64位十六进制字符串
+                点击按钮将自动获取【数据库】与【图片】双重密钥。您也可以手动输入已知的64位密钥（使用<a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a>等工具获取）。
               </p>
             </div>
             
@@ -183,53 +183,37 @@
             <div class="bg-gray-50 rounded-lg p-4">
 
               <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-200">
-                <span class="text-sm font-medium text-gray-500">手动输入或通过微信获取</span>
-                <button
-                    type="button"
-                    @click="handleGetImageKey"
-                    :disabled="isGettingImageKey"
-                    class="flex-none inline-flex items-center px-4 py-3 bg-[#07C160] text-white rounded-lg text-sm font-medium hover:bg-[#06AD56] transition-all duration-200 disabled:opacity-50 disabled:cursor-wait whitespace-nowrap"
-                >
-                  <svg v-if="isGettingImageKey" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                  </svg>
-                  <svg v-else class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  {{ isGettingImageKey ? '正在获取...' : '自动获取' }}
-                </button>
+                <span class="text-sm font-medium text-gray-500">此步骤将为您解密微信聊天中的图片</span>
               </div>
+              <p class="mt-3 mb-4 text-xs text-[#7F7F7F] flex items-center">
+                <svg class="w-4 h-4 mr-1 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                如果您在第一步使用了“一键获取”或触发了云端解析，下方输入框已被自动填充。您也可可以使用<a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a>等工具手动获取。
+              </p>
 
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label class="block text-sm font-medium text-[#000000e6] mb-2">XOR（必填）</label>
                   <input
-                    v-model="manualKeys.xor_key"
-                    type="text"
-                    placeholder="例如：0xA5"
-                    class="w-full px-4 py-2 border border-[#EDEDED] rounded-lg focus:ring-2 focus:ring-[#10AEEF] focus:border-transparent font-mono"
+                      v-model="manualKeys.xor_key"
+                      type="text"
+                      placeholder="例如：0xA5"
+                      class="w-full px-4 py-2 border border-[#EDEDED] rounded-lg focus:ring-2 focus:ring-[#10AEEF] focus:border-transparent font-mono"
                   />
                   <p v-if="manualKeyErrors.xor_key" class="text-xs text-red-500 mt-1">{{ manualKeyErrors.xor_key }}</p>
                 </div>
                 <div>
                   <label class="block text-sm font-medium text-[#000000e6] mb-2">AES（可选）</label>
                   <input
-                    v-model="manualKeys.aes_key"
-                    type="text"
-                    placeholder="16 个字符（V4-V2 需要）"
-                    class="w-full px-4 py-2 border border-[#EDEDED] rounded-lg focus:ring-2 focus:ring-[#10AEEF] focus:border-transparent font-mono"
+                      v-model="manualKeys.aes_key"
+                      type="text"
+                      placeholder="16 个字符（V4-V2 需要）"
+                      class="w-full px-4 py-2 border border-[#EDEDED] rounded-lg focus:ring-2 focus:ring-[#10AEEF] focus:border-transparent font-mono"
                   />
                   <p v-if="manualKeyErrors.aes_key" class="text-xs text-red-500 mt-1">{{ manualKeyErrors.aes_key }}</p>
                 </div>
               </div>
-
-              <p class="mt-3 text-xs text-[#7F7F7F] flex items-center">
-                <svg class="w-4 h-4 mr-1 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                尝试自动获取，或使用 <a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a> 获取图片密钥；AES 可选（V4-V2 需要）
-              </p>
             </div>
           </div>
 
@@ -450,7 +434,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '~/composables/useApi'
 
-const { decryptDatabase, saveMediaKeys, getSavedKeys, getDbKey, getImageKey, getWxStatus } = useApi()
+const { decryptDatabase, saveMediaKeys, getSavedKeys, getKeys, getImageKey, getWxStatus } = useApi()
 
 const loading = ref(false)
 const error = ref('')
@@ -458,7 +442,6 @@ const warning = ref('') // 警告，用于密钥提示
 const currentStep = ref(0)
 const mediaAccount = ref('')
 const isGettingDbKey = ref(false)
-const isGettingImageKey = ref(false)
 
 // 步骤定义
 const steps = [
@@ -548,74 +531,45 @@ const handleGetDbKey = async () => {
   formErrors.key = ''
 
   try {
-    const statusRes = await getWxStatus() // pid不是主进程，但是没关系
+    const statusRes = await getWxStatus()
     const wxStatus = statusRes?.wx_status
 
     if (wxStatus?.is_running) {
-      warning.value = '检测到微信正在运行，5秒后将终止进程并重启以获取密钥！！'
+      warning.value = '检测到微信正在运行，5秒后将终止进程并重启以获取全套密钥！'
       await new Promise(resolve => setTimeout(resolve, 5000))
-    } else {
-      // 没有逻辑
     }
 
-    warning.value = '正在启动微信以获取密钥，请确保微信未开启“自动登录”，并在启动后 1 分钟内完成登录操作。'
+    warning.value = '正在启动微信，请确保微信未开启“自动登录”，并在弹窗中正常登录。'
 
-    const res = await getDbKey()
+    const res = await getKeys()
 
     if (res && res.status === 0) {
       if (res.data?.db_key) {
         formData.key = res.data.db_key
-        warning.value = ''
       }
-
-      if (res.errmsg && res.errmsg !== 'ok') {
-        warning.value = res.errmsg
+      // 直接把图片密钥也存好
+      if (res.data?.xor_key) {
+        manualKeys.xor_key = res.data.xor_key
       }
+      if (res.data?.aes_key) {
+        manualKeys.aes_key = res.data.aes_key
+      }
+      warning.value = '🎉 数据库与图片密钥均已获取成功！'
+      // 3秒后清除成功提示，保持 UI 干净
+      setTimeout(() => { if(warning.value.includes('获取成功')) warning.value = '' }, 3000)
     } else {
       error.value = '获取失败: ' + (res?.errmsg || '未知错误')
+      warning.value = ''
     }
   } catch (e) {
     console.error(e)
     error.value = '系统错误: ' + e.message
+    warning.value = ''
   } finally {
     isGettingDbKey.value = false
   }
 }
 
-const handleGetImageKey = async () => {
-  if (isGettingImageKey.value) return
-  isGettingImageKey.value = true
-  manualKeyErrors.xor_key = ''
-  manualKeyErrors.aes_key = ''
-
-  error.value = ''
-  warning.value = ''
-
-  try {
-    const res = await getImageKey()
-
-    if (res && res.status === 0) {
-      if (res.data?.aes_key) {
-        manualKeys.aes_key = res.data.aes_key
-      }
-      if (res.data?.xor_key) {
-        // 后端记得处理为16进制再返回！！！
-        manualKeys.xor_key = res.data.xor_key
-      }
-
-      if (res.errmsg && res.errmsg !== 'ok') {
-        error.value = res.errmsg
-      }
-    } else {
-      error.value = '获取失败: ' + (res?.errmsg || '未知错误')
-    }
-  } catch (e) {
-    console.error(e)
-    error.value = '系统错误: ' + e.message
-  } finally {
-    isGettingImageKey.value = false
-  }
-}
 
 const applyManualKeys = () => {
   manualKeyErrors.xor_key = ''
@@ -749,13 +703,13 @@ const handleDecrypt = async () => {
   if (!validateForm()) {
     return
   }
-  
+
   loading.value = true
   error.value = ''
   warning.value = ''
 
   resetDbDecryptProgress()
-  
+
   try {
     const canSse = process.client && typeof window !== 'undefined' && typeof EventSource !== 'undefined'
 
@@ -776,9 +730,26 @@ const handleDecrypt = async () => {
           if (accounts.length > 0) mediaAccount.value = accounts[0]
         } catch (e) {}
 
-        clearManualKeys()
         currentStep.value = 1
         await prefillKeysForAccount(mediaAccount.value)
+
+        if (!manualKeys.xor_key && !manualKeys.aes_key) {
+          warning.value = '正在通过云端备选方案自动获取图片密钥，请稍候...'
+          try {
+            const imgRes = await getImageKey({ account: mediaAccount.value })
+            if (imgRes && imgRes.status === 0) {
+              if (imgRes.data?.xor_key) manualKeys.xor_key = imgRes.data.xor_key
+              if (imgRes.data?.aes_key) manualKeys.aes_key = imgRes.data.aes_key
+              warning.value = '已通过云端成功获取图片密钥！'
+              setTimeout(() => { if(warning.value.includes('成功获取')) warning.value = '' }, 3000)
+            } else {
+              warning.value = '云端获取图片密钥失败，您可以尝试手动填写。'
+            }
+          } catch (e) {
+            warning.value = '网络请求失败，请手动填写图片密钥。'
+          }
+        }
+
       } else if (result.status === 'failed') {
         if (result.failure_count > 0 && result.success_count === 0) {
           error.value = result.message || '所有文件解密失败'
@@ -855,9 +826,26 @@ const handleDecrypt = async () => {
           loading.value = false
 
           if (data.status === 'completed') {
-            clearManualKeys()
             currentStep.value = 1
             await prefillKeysForAccount(mediaAccount.value)
+
+            // 【重点】如果刚才没有通过双 Hook 拿到图片密钥，触发云端 API 备用方案自动获取
+            if (!manualKeys.xor_key && !manualKeys.aes_key) {
+              warning.value = '正在通过云端备选方案自动获取图片密钥，请稍候...'
+              try {
+                const imgRes = await getImageKey({ account: mediaAccount.value })
+                if (imgRes && imgRes.status === 0) {
+                  if (imgRes.data?.xor_key) manualKeys.xor_key = imgRes.data.xor_key
+                  if (imgRes.data?.aes_key) manualKeys.aes_key = imgRes.data.aes_key
+                  warning.value = '已通过云端成功获取图片密钥！'
+                  setTimeout(() => { if(warning.value.includes('成功获取')) warning.value = '' }, 3000)
+                } else {
+                  warning.value = '云端获取图片密钥失败，您可以尝试手动填写。'
+                }
+              } catch (e) {
+                warning.value = '网络请求失败，请手动填写图片密钥。'
+              }
+            }
           } else if (data.status === 'failed') {
             error.value = data.message || '所有文件解密失败'
           } else {

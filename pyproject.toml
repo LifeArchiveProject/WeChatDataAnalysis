@@ -20,7 +20,7 @@ dependencies = [
     "pilk>=0.2.4",
     "pypinyin>=0.53.0",
     "jieba>=0.42.1",
-    "wx_key",
+    "wx_key>=1.1.0",
     "packaging",
     "httpx",
 ]
