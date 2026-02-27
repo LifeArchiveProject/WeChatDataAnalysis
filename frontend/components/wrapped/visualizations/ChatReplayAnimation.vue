@@ -3,7 +3,7 @@
     <!-- Top bar -->
     <div class="wrapped-chat-replay__top">
       <div class="wrapped-chat-replay__top-left">
-        <div :class="['wrapped-chat-replay__avatar', { 'privacy-blur': privacyMode }]">
+        <div class="wrapped-chat-replay__avatar wrapped-privacy-avatar">
           <img
             v-if="resolvedAvatarUrl && avatarOk"
             :src="resolvedAvatarUrl"
@@ -17,7 +17,7 @@
 
         <div class="min-w-0">
           <div class="wrapped-label text-[10px] text-[#00000066]">{{ label }}</div>
-          <div class="wrapped-body text-sm text-[#000000e6] truncate" :title="displayName">
+          <div class="wrapped-body text-sm text-[#000000e6] truncate wrapped-privacy-name" :title="displayName">
             {{ displayNameShown }}
           </div>
         </div>
@@ -42,7 +42,7 @@
 
         <transition name="wrapped-chat-replay-slide">
           <div v-if="showBubble" class="wrapped-chat-replay__bubble">
-            <div :class="['wrapped-chat-replay__bubble-text', { 'privacy-blur': privacyMode }]" :title="content">
+            <div class="wrapped-chat-replay__bubble-text wrapped-privacy-message" :title="content">
               {{ typedText }}
             </div>
           </div>

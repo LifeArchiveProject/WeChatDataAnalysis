@@ -6,6 +6,7 @@
         v-if="showOverlay"
         ref="overlayEl"
         class="kw-overlay fixed inset-0 overflow-hidden"
+        :class="{ 'wrapped-privacy': privacyMode }"
         :style="{ zIndex: 9999 }"
         @pointerdown="onStagePointerDown"
       >
@@ -31,13 +32,15 @@
             <div
               class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed bg-[#95EC69] text-black bubble-tail-r"
             >
-              <span v-if="Array.isArray(b.segments) && b.segments.length > 0">
-                <span v-for="(seg, idx) in b.segments" :key="`${b.id}-${idx}`">
-                  <span v-if="seg.type === 'text'">{{ seg.content }}</span>
-                  <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px" />
+              <span class="wrapped-privacy-message">
+                <span v-if="Array.isArray(b.segments) && b.segments.length > 0">
+                  <span v-for="(seg, idx) in b.segments" :key="`${b.id}-${idx}`">
+                    <span v-if="seg.type === 'text'">{{ seg.content }}</span>
+                    <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px" />
+                  </span>
                 </span>
+                <span v-else>{{ b.text }}</span>
               </span>
-              <span v-else>{{ b.text }}</span>
             </div>
           </div>
         </div>
@@ -56,7 +59,7 @@
             <template v-else>
               这一年，你一共发出了 <span class="font-medium text-[#07C160]">{{ card.data?.meta?.matchedCandidates || 0 }}</span> 句简短的表达，其中 <span class="font-medium text-[#07C160]">{{ card.data?.meta?.uniquePhrases || 0 }}</span> 句话成了你的专属口头禅。
               <template v-if="card.data?.topKeyword">
-                「<span class="font-medium text-[#07C160]">{{ card.data.topKeyword.word }}</span>」是你最常说的话，足足被你重复了 <span class="font-medium text-[#07C160]">{{ card.data.topKeyword.count }}</span> 次。
+                「<span class="font-medium text-[#07C160] wrapped-privacy-keyword">{{ card.data.topKeyword.word }}</span>」是你最常说的话，足足被你重复了 <span class="font-medium text-[#07C160]">{{ card.data.topKeyword.count }}</span> 次。
               </template>
               点击气泡，找回当时的心情。
             </template>
@@ -93,14 +96,19 @@
 
 <script setup>
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { gsap } from 'gsap'
 import KeywordWordCloud from '~/components/wrapped/visualizations/KeywordWordCloud.vue'
 import { parseTextWithEmoji } from '~/utils/wechat-emojis'
+import { usePrivacyStore } from '~/stores/privacy'
 
 const props = defineProps({
   card: { type: Object, required: true },
   variant: { type: String, default: 'panel' } // 'panel' | 'slide'
 })
+
+const privacyStore = usePrivacyStore()
+const { privacyMode } = storeToRefs(privacyStore)
 
 const cardRoot = ref(null)
 const stageEl = ref(null)
@@ -770,6 +778,7 @@ watch(
 )
 
 onMounted(() => {
+  privacyStore.init()
   if (!import.meta.client) return
   detectReducedMotion()
 

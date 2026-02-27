@@ -11,7 +11,7 @@
                 class="inline-flex items-center gap-2 align-bottom px-1.5 py-0.5 rounded-lg bg-[#00000008]"
                 :title="bestBuddy?.displayName || ''"
               >
-                <span class="w-5 h-5 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0">
+                <span class="w-5 h-5 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0 wrapped-privacy-avatar">
                   <img
                     v-if="bestBuddyAvatarUrl && avatarOk.best"
                     :src="bestBuddyAvatarUrl"
@@ -23,7 +23,7 @@
                     {{ avatarFallback(bestBuddy?.displayName) }}
                   </span>
                 </span>
-                <span class="wrapped-body text-sm text-[#000000e6] max-w-[12rem] truncate">
+                <span class="wrapped-body text-sm text-[#000000e6] max-w-[12rem] truncate wrapped-privacy-name">
                   {{ bestBuddy?.displayName || '' }}
                 </span>
               </span>
@@ -35,7 +35,7 @@
                 class="inline-flex items-center gap-1.5 align-bottom px-1.5 py-0.5 rounded-lg bg-[#00000008]"
                 :title="seg.contact?.displayName || ''"
               >
-                <span class="w-4 h-4 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0">
+                <span class="w-4 h-4 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0 wrapped-privacy-avatar">
                   <img
                     v-if="resolveMediaUrl(seg.contact?.avatarUrl) && avatarOk[seg.contact?.username] !== false"
                     :src="resolveMediaUrl(seg.contact?.avatarUrl)"
@@ -47,7 +47,7 @@
                     {{ avatarFallback(seg.contact?.displayName) }}
                   </span>
                 </span>
-                <span class="wrapped-body text-sm text-[#000000e6] max-w-[8rem] truncate">
+                <span class="wrapped-body text-sm text-[#000000e6] max-w-[8rem] truncate wrapped-privacy-name">
                   {{ seg.contact?.displayName || '' }}
                 </span>
               </span>
@@ -95,7 +95,7 @@
 
     <!-- 主内容：抽奖揭晓 + 右侧年度 Top10 总消息 bar race -->
     <div v-else class="w-full">
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
         <!-- Left: 抽奖区 -->
         <div
           class="reply-buddy-rail flex flex-col items-center justify-center transition-transform duration-500 will-change-transform"
@@ -109,7 +109,7 @@
             <img
               v-if="shownAvatarUrl && shownAvatarOk"
               :src="shownAvatarUrl"
-              class="w-full h-full object-cover"
+              class="w-full h-full object-cover wrapped-privacy-avatar"
               alt="avatar"
               @error="onShownAvatarError"
             />
@@ -121,7 +121,7 @@
             />
             <div
               v-else
-              class="w-full h-full flex items-center justify-center"
+              class="w-full h-full flex items-center justify-center wrapped-privacy-avatar"
             >
               <span class="wrapped-number text-3xl text-[#00000066]">
                 {{ shownAvatarFallback }}
@@ -129,7 +129,7 @@
             </div>
           </div>
 
-          <div class="mt-4 min-h-[1.75rem] wrapped-body text-base text-[#000000e6] max-w-[18rem] truncate" :title="shownDisplayName">
+          <div class="mt-4 min-h-[1.75rem] wrapped-body text-base text-[#000000e6] max-w-[18rem] truncate wrapped-privacy-name" :title="shownDisplayName">
             {{ shownDisplayName }}
           </div>
 
@@ -210,7 +210,7 @@
                   </div>
 
                   <div
-                    class="w-7 h-7 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0"
+                    class="w-7 h-7 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0 wrapped-privacy-avatar"
                   >
                     <img
                       v-if="item.avatarUrl && avatarOk[item.username] !== false"
@@ -227,7 +227,7 @@
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center justify-between gap-3">
                       <div class="min-w-0">
-                        <div class="wrapped-body text-[#000000e6] text-sm truncate" :title="item.displayName">
+                        <div class="wrapped-body text-[#000000e6] text-sm truncate wrapped-privacy-name" :title="item.displayName">
                           {{ item.displayName }}
                         </div>
                       </div>

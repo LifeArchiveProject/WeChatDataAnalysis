@@ -66,39 +66,39 @@
           <!-- 最早最晚消息描述（按一天中的时刻） -->
           <template v-if="earliestSent && latestSent && totalMessages > 0">
             <template v-if="sameMomentTarget">
-              最先想起的是「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」，
-              最后放不下的也还是「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」。
+              最先想起的是「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ earliestSent.displayName }}</span>」，
+              最后放不下的也还是「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ earliestSent.displayName }}</span>」。
             </template>
             <template v-else>
               <template v-if="sameMomentDate">
-                在 {{ earliestDateLabel }}，最早的一条发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」，
-                最晚的一条发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」。
+                在 {{ earliestDateLabel }}，最早的一条发给了「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ earliestSent.displayName }}</span>」，
+                最晚的一条发给了「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ latestSent.displayName }}</span>」。
               </template>
               <template v-else-if="!hasMomentDates">
                 最早的一条发给了
-                <span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>，
+                <span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ earliestSent.displayName }}</span>，
                 最晚的一条发给了
-                <span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>。
+                <span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ latestSent.displayName }}</span>。
               </template>
               <template v-else-if="momentVariant === 0">
-                最早的一条（{{ earliestDateLabel }}）发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」，
-                最晚的一条（{{ latestDateLabel }}）发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」。
+                最早的一条（{{ earliestDateLabel }}）发给了「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ earliestSent.displayName }}</span>」，
+                最晚的一条（{{ latestDateLabel }}）发给了「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ latestSent.displayName }}</span>」。
               </template>
               <template v-else-if="momentVariant === 1">
-                最早的收件人是「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」（{{ earliestDateLabel }}），
-                最晚的收件人是「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」（{{ latestDateLabel }}）。
+                最早的收件人是「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ earliestSent.displayName }}</span>」（{{ earliestDateLabel }}），
+                最晚的收件人是「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ latestSent.displayName }}</span>」（{{ latestDateLabel }}）。
               </template>
               <template v-else-if="momentVariant === 2">
-                在 {{ earliestDateLabel }}，你把消息发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」；
-                在 {{ latestDateLabel }}，你又发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」。
+                在 {{ earliestDateLabel }}，你把消息发给了「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ earliestSent.displayName }}</span>」；
+                在 {{ latestDateLabel }}，你又发给了「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ latestSent.displayName }}</span>」。
               </template>
               <template v-else-if="momentVariant === 3">
-                最早与最晚，分别写给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」（{{ earliestDateLabel }}）
-                和「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」（{{ latestDateLabel }}）。
+                最早与最晚，分别写给了「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ earliestSent.displayName }}</span>」（{{ earliestDateLabel }}）
+                和「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ latestSent.displayName }}</span>」（{{ latestDateLabel }}）。
               </template>
               <template v-else>
-                最早的一条落在 {{ earliestDateLabel }}，发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ earliestSent.displayName }}</span>」；
-                最晚的一条落在 {{ latestDateLabel }}，发给了「<span class="wrapped-number text-[#07C160] font-semibold">{{ latestSent.displayName }}</span>」。
+                最早的一条落在 {{ earliestDateLabel }}，发给了「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ earliestSent.displayName }}</span>」；
+                最晚的一条落在 {{ latestDateLabel }}，发给了「<span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ latestSent.displayName }}</span>」。
               </template>
             </template>
           </template>
@@ -111,15 +111,15 @@
             v-if="yearFirstSent.avatarUrl"
             :src="yearFirstSent.avatarUrl"
             :alt="yearFirstSent.displayName"
-            class="inline-block w-5 h-5 rounded align-middle mx-0.5"
-          /><span class="wrapped-number text-[#07C160] font-semibold">{{ yearFirstSent.displayName }}</span>：「{{ yearFirstSent.content || '...' }}」<template v-if="yearLastSent">；
+            class="inline-block w-5 h-5 rounded align-middle mx-0.5 wrapped-privacy-avatar"
+          /><span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ yearFirstSent.displayName }}</span>：「<span class="wrapped-privacy-message">{{ yearFirstSent.content || '...' }}</span>」<template v-if="yearLastSent">；
           最后一条消息（<span class="wrapped-number text-[#07C160] font-semibold">{{ yearLastDateLabel }} {{ yearLastSent.time }}</span>）发给了
           <img
             v-if="yearLastSent.avatarUrl"
             :src="yearLastSent.avatarUrl"
             :alt="yearLastSent.displayName"
-            class="inline-block w-5 h-5 rounded align-middle mx-0.5"
-          /><span class="wrapped-number text-[#07C160] font-semibold">{{ yearLastSent.displayName }}</span>：「{{ yearLastSent.content || '...' }}」</template>。
+            class="inline-block w-5 h-5 rounded align-middle mx-0.5 wrapped-privacy-avatar"
+          /><span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ yearLastSent.displayName }}</span>：「<span class="wrapped-privacy-message">{{ yearLastSent.content || '...' }}</span>」</template>。
           <template v-if="sameYearTarget">
             <span class="text-[#7F7F7F]">——从年初到年末，始终如一。</span>
           </template>

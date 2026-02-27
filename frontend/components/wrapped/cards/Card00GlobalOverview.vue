@@ -36,11 +36,8 @@
           <template v-if="topContact || topGroup">
             <template v-if="topContact">
               你发消息最多的人是
-              「<span
-                class="privacy-blur inline-flex items-center gap-2 align-bottom max-w-[12rem]"
-                :title="topContact.displayName"
-              >
-                <span class="w-6 h-6 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0">
+              「<span class="inline-flex items-center gap-2 align-bottom max-w-[12rem]" :title="topContact.displayName">
+                <span class="w-6 h-6 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0 wrapped-privacy-avatar">
                   <img
                     v-if="topContactAvatarUrl && avatarOk.topContact"
                     :src="topContactAvatarUrl"
@@ -52,18 +49,15 @@
                     {{ avatarFallback(topContact.displayName) }}
                   </span>
                 </span>
-                <span class="inline-block max-w-[10rem] truncate align-bottom">{{ topContact.displayName }}</span>
+                <span class="wrapped-privacy-name inline-block max-w-[10rem] truncate align-bottom">{{ topContact.displayName }}</span>
               </span>」
               （<span class="wrapped-number text-[#07C160] font-semibold">{{ formatInt(topContact.messages) }}</span> 条）
             </template>
             <template v-if="topContact && topGroup">，</template>
             <template v-if="topGroup">
               你最常发言的群是
-              「<span
-                class="privacy-blur inline-flex items-center gap-2 align-bottom max-w-[12rem]"
-                :title="topGroup.displayName"
-              >
-                <span class="w-6 h-6 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0">
+              「<span class="inline-flex items-center gap-2 align-bottom max-w-[12rem]" :title="topGroup.displayName">
+                <span class="w-6 h-6 rounded-md overflow-hidden bg-[#0000000d] flex items-center justify-center flex-shrink-0 wrapped-privacy-avatar">
                   <img
                     v-if="topGroupAvatarUrl && avatarOk.topGroup"
                     :src="topGroupAvatarUrl"
@@ -75,7 +69,7 @@
                     {{ avatarFallback(topGroup.displayName) }}
                   </span>
                 </span>
-                <span class="inline-block max-w-[10rem] truncate align-bottom">{{ topGroup.displayName }}</span>
+                <span class="wrapped-privacy-name inline-block max-w-[10rem] truncate align-bottom">{{ topGroup.displayName }}</span>
               </span>」
               （<span class="wrapped-number text-[#07C160] font-semibold">{{ formatInt(topGroup.messages) }}</span> 条）
             </template>
@@ -87,10 +81,7 @@
           </template>
 
           <template v-if="topPhrase && topPhrase.phrase && topPhrase.count > 0">
-            你说得最多的一句话是「<span
-              class="privacy-blur inline-block max-w-[12rem] truncate align-bottom"
-              :title="topPhrase.phrase"
-            >{{ topPhrase.phrase }}</span>」（<span class="wrapped-number text-[#07C160] font-semibold">{{ formatInt(topPhrase.count) }}</span> 次）。
+            你说得最多的一句话是「<span class="inline-block max-w-[12rem] truncate align-bottom" :title="topPhrase.phrase">{{ topPhrase.phrase }}</span>」（<span class="wrapped-number text-[#07C160] font-semibold">{{ formatInt(topPhrase.count) }}</span> 次）。
           </template>
 
           <span class="hidden sm:inline text-[#00000055]">愿你的每一句分享，都有人回应。</span>
