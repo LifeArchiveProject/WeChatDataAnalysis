@@ -4,7 +4,7 @@
 
 <div align="center">
     <h1>WeChatDataAnalysis - 微信数据库解密与分析工具</h1>
-    <p>一个专门用于微信4.x版本数据库解密的工具（支持聊天记录实时更新）</p>
+    <p>微信4.x数据解密并生成年度总结，高仿微信，支持实时更新，导出聊天记录，朋友圈等大量便捷功能</p>
     <p><b>特别致谢</b>：<a href="https://github.com/H3CoF6">H3CoF6</a>（密钥与朋友圈等核心内容的技术支持）、<a href="https://github.com/ycccccccy/echotrace">echotrace</a>、<a href="https://github.com/hicccc77/WeFlow">WeFlow</a>（本项目大量功能参考其实现）</p>
     <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
@@ -16,38 +16,44 @@
     <img src="https://img.shields.io/badge/SQLite-003B57?logo=SQLite&logoColor=white" alt="SQLite" />
 </div>
 
+## 年度总结
+
+<table>
+  <tr>
+    <td align="center" colspan="2"><img src="frontend/public/style1.png" alt="年度总结 Modern" width="800"/></td>
+  </tr>
+  <tr>
+    <td><img src="frontend/public/AnnualSummary1.png" alt="AnnualSummary 1" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary2.png" alt="AnnualSummary 2" width="400"/></td>
+  </tr>
+  <tr>
+    <td><img src="frontend/public/AnnualSummary3.png" alt="AnnualSummary 3" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary4.gif" alt="AnnualSummary 4" width="400"/></td>
+  </tr>
+  <tr>
+    <td><img src="frontend/public/AnnualSummary5.gif" alt="AnnualSummary 5" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary6.png" alt="AnnualSummary 6" width="400"/></td>
+  </tr>
+  <tr>
+    <td><img src="frontend/public/AnnualSummary7.png" alt="AnnualSummary 7" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary8.png" alt="AnnualSummary 8" width="400"/></td>
+  </tr>
+</table>
+
 ## 界面预览
 
 <table>
   <tr>
-    <td align="center"><b>首页</b></td>
-    <td align="center"><b>检测页面</b></td>
-  </tr>
-  <tr>
-    <td><img src="frontend/public/home.png" alt="首页" width="400"/></td>
-    <td><img src="frontend/public/detection.png" alt="微信检测页面" width="400"/></td>
-  </tr>
-  <tr>
-    <td align="center"><b>解密页面</b></td>
-    <td align="center"><b>图片密钥（填写）</b></td>
-  </tr>
-  <tr>
-    <td><img src="frontend/public/decrypt.png" alt="数据库解密页面" width="400"/></td>
-    <td><img src="frontend/public/imageAES.png" alt="图片密钥（填写）" width="400"/></td>
-  </tr>
-  <tr>
-    <td align="center"><b>图片解密页面</b></td>
-    <td align="center"><b>解密成功页面</b></td>
-  </tr>
-  <tr>
-    <td><img src="frontend/public/imageSucces.png" alt="图片解密页面" width="400"/></td>
-    <td><img src="frontend/public/success.png" alt="解密成功页面" width="400"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>聊天记录页面</b></td>
+    <td align="center" colspan="2"><b>聊天记录页面</b>（支持多种消息类型展示，样式尽可能与微信保持一致）</td>
   </tr>
   <tr>
     <td colspan="2" align="center"><img src="frontend/public/message.png" alt="聊天记录页面" width="800"/></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><b>朋友圈</b>（支持查看用户之前朋友圈的背景图及时间；本地查看过的朋友圈即使后续不可见也可以查看）</td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="frontend/public/sns.png" alt="朋友圈" width="800"/></td>
   </tr>
   <tr>
     <td align="center" colspan="2"><b>聊天记录搜索</b></td>
@@ -61,21 +67,17 @@
   <tr>
     <td colspan="2" align="center"><img src="frontend/public/export.png" alt="聊天记录导出" width="800"/></td>
   </tr>
-</table>
-
-## 年度总结
-
-> ⚠️ **提醒**：年度总结目前还不是最终版本，后续还会增加新总结或新内容。
-
-也欢迎加入下方 QQ 群一起讨论。
-
-<table>
   <tr>
-    <td align="center"><img src="frontend/public/style1.png" alt="年度总结 Modern"/></td>
+    <td align="center" colspan="2"><b>联系人导出</b></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="frontend/public/Contact.png" alt="联系人导出" width="800"/></td>
   </tr>
 </table>
 
 ## 加入群聊
+
+也欢迎加入下方 QQ 群一起讨论。
 
 <p align="center">
     <a href="https://qm.qq.com/q/VQEQ7PcGkk">
