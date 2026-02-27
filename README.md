@@ -4,7 +4,7 @@
 
 <div align="center">
     <h1>WeChatDataAnalysis - 微信数据库解密与分析工具</h1>
-    <p>一个专门用于微信4.x版本数据库解密的工具（支持聊天记录实时更新）</p>
+    <p>微信4.x数据解密并生成年度总结，高仿微信，支持实时更新，导出聊天记录，朋友圈等大量便捷功能</p>
     <p><b>特别致谢</b>：<a href="https://github.com/H3CoF6">H3CoF6</a>（密钥与朋友圈等核心内容的技术支持）、<a href="https://github.com/ycccccccy/echotrace">echotrace</a>、<a href="https://github.com/hicccc77/WeFlow">WeFlow</a>（本项目大量功能参考其实现）</p>
     <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
@@ -15,11 +15,22 @@
     <img src="https://img.shields.io/badge/SQLite-003B57?logo=SQLite&logoColor=white" alt="SQLite" />
 </div>
 
-## 年度总结
+## 界面预览
 
-> ⚠️ **提醒**：年度总结目前还不是最终版本，后续还会增加新总结或新内容。
-
-
+<table>
+  <tr>
+    <td align="center" colspan="2"><b>聊天记录页面</b>（支持多种消息类型展示，样式尽可能与微信保持一致）</td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><b>朋友圈</b>（支持查看用户之前朋友圈的背景图及时间；本地查看过的朋友圈即使后续不可见也可以查看）</td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><b>联系人导出</b></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="frontend/public/Contact.png" alt="联系人导出" width="800"/></td>
+  </tr>
+</table>
 
 ## 快速开始
 
