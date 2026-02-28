@@ -136,8 +136,9 @@ npm run dev
 #### 2.5 访问应用
 
 - 前端界面: http://localhost:3000
-- API服务: http://localhost:8000
-- API文档: http://localhost:8000/docs
+- API服务(默认): http://localhost:10392 （可通过环境变量 WECHAT_TOOL_PORT 修改）
+- API文档(默认): http://localhost:10392/docs
+- 也可在应用内“设置 -> 后端端口”修改（支持“恢复默认”一键回到 10392）：网页端会尝试重启本机后端到新端口并刷新（并写入 `output/runtime_settings.json`，开发模式下也会写入项目根目录 `.env` 供 `uv run` 下次启动使用）；桌面端会重启内置后端并刷新
 
 ## 打包为 EXE（Windows 桌面端）
 
