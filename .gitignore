@@ -21,6 +21,8 @@ wheels/
 pnpm-lock.yaml
 /tools/tmp_isaac64_compare.js
 /.claude/settings.local.json
+.env
+.env.*
 
 # Local dev repos and data
 /WxDatDecrypt/
@@ -44,3 +46,6 @@ pnpm-lock.yaml
 /desktop/resources/backend/*.exe
 !/desktop/resources/backend/.gitkeep
 /desktop/resources/icon.ico
+
+# Local scratch file accidentally generated during development
+/bento-summary.html

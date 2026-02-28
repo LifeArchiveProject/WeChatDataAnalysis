@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """测试图片 API"""
+import os
 import requests
 
 r = requests.get(
-    'http://localhost:8000/api/chat/media/image',
+    f'http://localhost:{os.environ.get("WECHAT_TOOL_PORT", "10392")}/api/chat/media/image',
     params={
         'account': 'wxid_v4mbduwqtzpt22',
         'md5': '8753fcd3b1f8c4470b53551e13c5fbc1',

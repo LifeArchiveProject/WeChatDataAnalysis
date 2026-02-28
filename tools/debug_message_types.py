@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """调试消息类型返回值"""
 
+import os
 import requests
 
-resp = requests.get('http://localhost:8000/api/chat/messages', params={
+PORT = os.environ.get("WECHAT_TOOL_PORT", "10392")
+resp = requests.get(f'http://localhost:{PORT}/api/chat/messages', params={
     'account': 'wxid_v4mbduwqtzpt22',
     'username': 'wxid_qmzc7q0xfm0j22',
     'limit': 100
