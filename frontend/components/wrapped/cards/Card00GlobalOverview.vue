@@ -137,8 +137,7 @@ const topGroup = computed(() => {
   return o && typeof o === 'object' && typeof o.displayName === 'string' ? o : null
 })
 
-// Keep the same behavior as the chat page: media (including avatars) comes from backend :8000 in dev.
-const mediaBase = process.client ? 'http://localhost:8000' : ''
+const apiBase = useApiBase()
 const resolveMediaUrl = (value) => {
   const raw = String(value || '').trim()
   if (!raw) return ''
@@ -147,13 +146,13 @@ const resolveMediaUrl = (value) => {
     try {
       const host = new URL(raw).hostname.toLowerCase()
       if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
-        return `${mediaBase}/api/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
+        return `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
       }
     } catch {}
     return raw
   }
-  // Most backend fields are like "/api/...", so just prefix.
-  return `${mediaBase}${raw.startsWith('/') ? '' : '/'}${raw}`
+  if (/^\/api\//i.test(raw)) return `${apiBase}${raw.slice(4)}`
+  return raw.startsWith('/') ? raw : `/${raw}`
 }
 
 const topContactAvatarUrl = computed(() => {

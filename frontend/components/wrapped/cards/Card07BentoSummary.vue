@@ -944,6 +944,8 @@ const formatDurationZh = (seconds) => {
   return h > 0 ? `${d}天${h}小时` : `${d}天`
 }
 
+const apiBase = useApiBase()
+
 const resolveMediaUrl = (value, opts = { backend: false }) => {
   const raw = String(value || '').trim()
   if (!raw) return ''
@@ -952,13 +954,12 @@ const resolveMediaUrl = (value, opts = { backend: false }) => {
     try {
       const host = new URL(raw).hostname.toLowerCase()
       if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
-        // Keep same-origin `/api` so Nuxt devProxy / backend-mounted UI both work.
-        return `/api/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
+        return `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
       }
     } catch {}
     return raw
   }
-  // Keep `/api/...` as same-origin (avoid hardcoding backend host like `localhost:8000`).
+  if (/^\/api\//i.test(raw)) return `${apiBase}${raw.slice(4)}`
   return raw.startsWith('/') ? raw : `/${raw}`
 }
 

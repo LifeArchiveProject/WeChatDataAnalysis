@@ -89,8 +89,8 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
     if (!account) return
     if (typeof EventSource === 'undefined') return
 
-    const base = 'http://localhost:8000'
-    const url = `${base}/api/chat/realtime/stream?account=${encodeURIComponent(account)}`
+    const apiBase = useApiBase()
+    const url = `${apiBase}/chat/realtime/stream?account=${encodeURIComponent(account)}`
 
     try {
       eventSource = new EventSource(url)
@@ -223,4 +223,3 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
     toggle,
   }
 })
-

@@ -270,7 +270,7 @@ const props = defineProps({
 const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
 const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
 
-const mediaBase = process.client ? 'http://localhost:8000' : ''
+const apiBase = useApiBase()
 const resolveMediaUrl = (value, opts = { backend: false }) => {
   const raw = String(value || '').trim()
   if (!raw) return ''
@@ -278,13 +278,15 @@ const resolveMediaUrl = (value, opts = { backend: false }) => {
     try {
       const host = new URL(raw).hostname.toLowerCase()
       if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
-        return `${mediaBase}/api/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
+        return `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
       }
     } catch {}
     return raw
   }
-  if (opts.backend || raw.startsWith('/api/')) {
-    return `${mediaBase}${raw.startsWith('/') ? '' : '/'}${raw}`
+  if (/^\/api\//i.test(raw)) return `${apiBase}${raw.slice(4)}`
+  if (opts.backend) {
+    const origin = apiBase.endsWith('/api') ? apiBase.slice(0, -4) : apiBase
+    return `${origin}${raw.startsWith('/') ? '' : '/'}${raw}`
   }
   return raw.startsWith('/') ? raw : `/${raw}`
 }
