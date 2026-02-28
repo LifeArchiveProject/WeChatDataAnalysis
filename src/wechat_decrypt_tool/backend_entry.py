@@ -9,11 +9,12 @@ import os
 import uvicorn
 
 from wechat_decrypt_tool.api import app
+from wechat_decrypt_tool.runtime_settings import read_effective_backend_port
 
 
 def main() -> None:
     host = os.environ.get("WECHAT_TOOL_HOST", "127.0.0.1")
-    port = int(os.environ.get("WECHAT_TOOL_PORT", "8000"))
+    port, _ = read_effective_backend_port(default=10392)
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 

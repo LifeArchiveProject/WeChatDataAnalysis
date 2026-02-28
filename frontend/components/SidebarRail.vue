@@ -171,7 +171,7 @@
         title="设置"
       >
         <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
-          <svg class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isSettingsRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <svg class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="settingsDialogOpen ? 'text-[#07b75b]' : 'text-[#5d5d5d]'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path
               stroke-linecap="round"
               stroke-linejoin="round"
@@ -201,17 +201,18 @@ const { privacyMode } = storeToRefs(privacyStore)
 
 const realtimeStore = useChatRealtimeStore()
 const { enabled: realtimeEnabled, available: realtimeAvailable, checking: realtimeChecking, statusError: realtimeStatusError, toggling: realtimeToggling } = storeToRefs(realtimeStore)
+const { open: settingsDialogOpen, openDialog: openSettingsDialog } = useSettingsDialog()
 
 onMounted(async () => {
   await chatAccounts.ensureLoaded()
 })
 
-const sidebarMediaBase = process.client ? 'http://localhost:8000' : ''
+const apiBase = useApiBase()
 
 const selfAvatarUrl = computed(() => {
   const acc = String(selectedAccount.value || '').trim()
   if (!acc) return ''
-  return `${sidebarMediaBase}/api/chat/avatar?account=${encodeURIComponent(acc)}&username=${encodeURIComponent(acc)}`
+  return `${apiBase}/chat/avatar?account=${encodeURIComponent(acc)}&username=${encodeURIComponent(acc)}`
 })
 
 const isChatRoute = computed(() => route.path?.startsWith('/chat'))
@@ -219,8 +220,6 @@ const isEditsRoute = computed(() => route.path?.startsWith('/edits'))
 const isSnsRoute = computed(() => route.path?.startsWith('/sns'))
 const isContactsRoute = computed(() => route.path?.startsWith('/contacts'))
 const isWrappedRoute = computed(() => route.path?.startsWith('/wrapped'))
-const isSettingsRoute = computed(() => route.path?.startsWith('/settings'))
-
 const goChat = async () => {
   await navigateTo('/chat')
 }
@@ -241,8 +240,8 @@ const goWrapped = async () => {
   await navigateTo('/wrapped')
 }
 
-const goSettings = async () => {
-  await navigateTo('/settings')
+const goSettings = () => {
+  openSettingsDialog()
 }
 
 const realtimeBusy = computed(() => !!realtimeChecking.value || !!realtimeToggling.value)

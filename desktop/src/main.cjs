@@ -12,19 +12,19 @@ const { autoUpdater } = require("electron-updater");
 const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const http = require("http");
+const net = require("net");
 const path = require("path");
 
-const BACKEND_HOST = process.env.WECHAT_TOOL_HOST || "127.0.0.1";
-const BACKEND_PORT = Number(process.env.WECHAT_TOOL_PORT || "8000");
-const BACKEND_HEALTH_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}/api/health`;
+const DEFAULT_BACKEND_HOST = String(process.env.WECHAT_TOOL_HOST || "127.0.0.1").trim() || "127.0.0.1";
+const DEFAULT_BACKEND_PORT = parsePort(process.env.WECHAT_TOOL_PORT) ?? 10392;
 
 let backendProc = null;
-let backendStdioStream = null;
 let resolvedDataDir = null;
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let desktopSettings = null;
+let backendPortChangeInProgress = false;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -44,6 +44,77 @@ if (!gotSingleInstanceLock) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function parsePort(value) {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n)) return null;
+  if (n < 1 || n > 65535) return null;
+  return n;
+}
+
+function formatHostForUrl(host) {
+  const h = String(host || "").trim();
+  if (!h) return "127.0.0.1";
+  // IPv6 literals must be wrapped in brackets in URLs.
+  if (h.includes(":") && !(h.startsWith("[") && h.endsWith("]"))) return `[${h}]`;
+  return h;
+}
+
+function getBackendBindHost() {
+  return DEFAULT_BACKEND_HOST;
+}
+
+function getBackendAccessHost() {
+  // 0.0.0.0 / :: are fine bind hosts, but not a reachable client destination.
+  const host = String(getBackendBindHost() || "").trim();
+  if (host === "0.0.0.0" || host === "::") return "127.0.0.1";
+  return host || "127.0.0.1";
+}
+
+function getBackendPort() {
+  const settingsPort = parsePort(loadDesktopSettings()?.backendPort);
+  return settingsPort ?? DEFAULT_BACKEND_PORT;
+}
+
+function setBackendPortSetting(nextPort) {
+  const p = parsePort(nextPort);
+  if (p == null) throw new Error("端口无效，请输入 1-65535 的整数");
+  loadDesktopSettings();
+  desktopSettings.backendPort = p;
+  persistDesktopSettings();
+  process.env.WECHAT_TOOL_PORT = String(p);
+  return p;
+}
+
+function getBackendHealthUrl() {
+  const host = formatHostForUrl(getBackendAccessHost());
+  const port = getBackendPort();
+  return `http://${host}:${port}/api/health`;
+}
+
+function getBackendUiUrl() {
+  const host = formatHostForUrl(getBackendAccessHost());
+  const port = getBackendPort();
+  return `http://${host}:${port}/`;
+}
+
+function isPortAvailable(port, host) {
+  return new Promise((resolve) => {
+    try {
+      const srv = net.createServer();
+      srv.unref();
+      srv.once("error", () => resolve(false));
+      srv.listen({ port, host }, () => {
+        srv.close(() => resolve(true));
+      });
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
 function resolveDataDir() {
@@ -146,6 +217,8 @@ function loadDesktopSettings() {
     closeBehavior: "tray",
     // When set, suppress the auto-update prompt for this exact version.
     ignoredUpdateVersion: "",
+    // Backend (FastAPI) listens on this port. Used in packaged builds.
+    backendPort: DEFAULT_BACKEND_PORT,
   };
 
   const p = getDesktopSettingsPath();
@@ -162,6 +235,7 @@ function loadDesktopSettings() {
     const raw = fs.readFileSync(p, { encoding: "utf8" });
     const parsed = JSON.parse(raw || "{}");
     desktopSettings = { ...defaults, ...(parsed && typeof parsed === "object" ? parsed : {}) };
+    desktopSettings.backendPort = parsePort(desktopSettings.backendPort) ?? defaults.backendPort;
   } catch (err) {
     desktopSettings = { ...defaults };
     logMain(`[main] failed to load settings: ${err?.message || err}`);
@@ -710,20 +784,20 @@ function attachBackendStdio(proc, logPath) {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
   } catch {}
 
+  let stream = null;
   try {
-    backendStdioStream = fs.createWriteStream(logPath, { flags: "a" });
-    backendStdioStream.write(`[${nowIso()}] [main] backend stdio -> ${logPath}\n`);
+    stream = fs.createWriteStream(logPath, { flags: "a" });
+    stream.write(`[${nowIso()}] [main] backend stdio -> ${logPath}\n`);
   } catch {
-    backendStdioStream = null;
     return;
   }
 
   const write = (prefix, chunk) => {
-    if (!backendStdioStream) return;
+    if (!stream) return;
     try {
       const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-      backendStdioStream.write(`[${nowIso()}] ${prefix} ${text}`);
-      if (!text.endsWith("\n")) backendStdioStream.write("\n");
+      stream.write(`[${nowIso()}] ${prefix} ${text}`);
+      if (!text.endsWith("\n")) stream.write("\n");
     } catch {}
   };
 
@@ -733,9 +807,9 @@ function attachBackendStdio(proc, logPath) {
   proc.on("close", (code, signal) => {
     write("[backend:close]", `code=${code} signal=${signal}`);
     try {
-      backendStdioStream?.end();
+      stream?.end();
     } catch {}
-    backendStdioStream = null;
+    stream = null;
   });
 }
 
@@ -754,8 +828,8 @@ function startBackend() {
 
   const env = {
     ...process.env,
-    WECHAT_TOOL_HOST: BACKEND_HOST,
-    WECHAT_TOOL_PORT: String(BACKEND_PORT),
+    WECHAT_TOOL_HOST: getBackendBindHost(),
+    WECHAT_TOOL_PORT: String(getBackendPort()),
     // Make sure Python prints UTF-8 to stdout/stderr.
     PYTHONIOENCODING: process.env.PYTHONIOENCODING || "utf-8",
   };
@@ -795,8 +869,9 @@ function startBackend() {
     });
   }
 
-  backendProc.on("exit", (code, signal) => {
-    backendProc = null;
+  const proc = backendProc;
+  proc.on("exit", (code, signal) => {
+    if (backendProc === proc) backendProc = null;
     // eslint-disable-next-line no-console
     console.log(`[backend] exited code=${code} signal=${signal}`);
     logMain(`[backend] exited code=${code} signal=${signal}`);
@@ -835,6 +910,42 @@ function stopBackend() {
   } catch {}
 }
 
+async function stopBackendAndWait({ timeoutMs = 10_000 } = {}) {
+  if (!backendProc) return;
+  const proc = backendProc;
+
+  await new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+
+    const timer = setTimeout(finish, timeoutMs);
+
+    try {
+      proc.once("exit", () => {
+        clearTimeout(timer);
+        finish();
+      });
+    } catch {}
+
+    try {
+      stopBackend();
+    } catch {
+      clearTimeout(timer);
+      finish();
+    }
+  });
+}
+
+async function restartBackend({ timeoutMs = 30_000 } = {}) {
+  await stopBackendAndWait({ timeoutMs: 10_000 });
+  startBackend();
+  await waitForBackend({ timeoutMs });
+}
+
 function httpGet(url) {
   return new Promise((resolve, reject) => {
     const req = http.get(url, (res) => {
@@ -849,17 +960,18 @@ function httpGet(url) {
   });
 }
 
-async function waitForBackend({ timeoutMs }) {
+async function waitForBackend({ timeoutMs, healthUrl } = {}) {
+  const url = String(healthUrl || getBackendHealthUrl()).trim();
   const startedAt = Date.now();
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
-      const code = await httpGet(BACKEND_HEALTH_URL);
+      const code = await httpGet(url);
       if (code >= 200 && code < 500) return;
     } catch {}
 
     if (Date.now() - startedAt > timeoutMs) {
-      throw new Error(`Backend did not become ready in ${timeoutMs}ms: ${BACKEND_HEALTH_URL}`);
+      throw new Error(`Backend did not become ready in ${timeoutMs}ms: ${url}`);
     }
 
     await new Promise((r) => setTimeout(r, 300));
@@ -1051,6 +1163,63 @@ function registerWindowIpc() {
     }
   });
 
+  ipcMain.handle("backend:getPort", () => {
+    try {
+      return getBackendPort();
+    } catch (err) {
+      logMain(`[main] backend:getPort failed: ${err?.message || err}`);
+      return DEFAULT_BACKEND_PORT;
+    }
+  });
+
+  ipcMain.handle("backend:setPort", async (_event, port) => {
+    if (backendPortChangeInProgress) throw new Error("端口切换中，请稍后重试");
+    if (!app.isPackaged) {
+      throw new Error("开发模式不支持界面修改端口；请设置 WECHAT_TOOL_PORT 环境变量后重启");
+    }
+
+    const nextPort = parsePort(port);
+    if (nextPort == null) throw new Error("端口无效，请输入 1-65535 的整数");
+
+    const prevPort = getBackendPort();
+    if (nextPort === prevPort) {
+      return { success: true, changed: false, port: prevPort, uiUrl: getBackendUiUrl() };
+    }
+
+    const bindHost = getBackendBindHost();
+    const ok = await isPortAvailable(nextPort, bindHost);
+    if (!ok) throw new Error(`端口 ${nextPort} 已被占用，请换一个端口`);
+
+    backendPortChangeInProgress = true;
+    try {
+      setBackendPortSetting(nextPort);
+      try {
+        await restartBackend({ timeoutMs: 30_000 });
+      } catch (err) {
+        // Roll back to the previous port so the UI can keep working.
+        setBackendPortSetting(prevPort);
+        try {
+          await restartBackend({ timeoutMs: 30_000 });
+        } catch {}
+        throw err;
+      }
+
+      const uiUrl = getBackendUiUrl();
+      setTimeout(() => {
+        try {
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          void loadWithRetry(mainWindow, uiUrl);
+        } catch (err) {
+          logMain(`[main] failed to reload UI after backend port change: ${err?.message || err}`);
+        }
+      }, 50);
+
+      return { success: true, changed: true, port: nextPort, uiUrl };
+    } finally {
+      backendPortChangeInProgress = false;
+    }
+  });
+
   ipcMain.handle("app:getVersion", () => {
     try {
       return app.getVersion();
@@ -1134,7 +1303,7 @@ async function main() {
 
   const startUrl =
     process.env.ELECTRON_START_URL ||
-    (app.isPackaged ? `http://${BACKEND_HOST}:${BACKEND_PORT}/` : "http://localhost:3000");
+    (app.isPackaged ? getBackendUiUrl() : "http://localhost:3000");
 
   await loadWithRetry(win, startUrl);
 
