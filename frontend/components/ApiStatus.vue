@@ -8,7 +8,7 @@
       <div>
         <h4 class="text-red-800 font-semibold">API连接问题</h4>
         <p class="text-red-700 text-sm mt-1">{{ appStore.apiMessage || '无法连接到后端服务' }}</p>
-        <p class="text-red-600 text-xs mt-2">请确保后端服务正在运行 (端口: 8000)</p>
+        <p class="text-red-600 text-xs mt-2">请确保后端服务正在运行</p>
       </div>
     </div>
   </div>

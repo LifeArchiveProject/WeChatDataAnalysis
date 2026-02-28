@@ -1,15 +1,10 @@
 // API请求组合式函数
 export const useApi = () => {
-  const config = useRuntimeConfig()
+  const baseURL = useApiBase()
   
   // 基础请求函数
   const request = async (url, options = {}) => {
     try {
-      // Default to same-origin `/api` so Nuxt devProxy / backend-mounted UI both work.
-      // Override via `NUXT_PUBLIC_API_BASE`, e.g. `http://127.0.0.1:8000/api`.
-      const apiBase = String(config?.public?.apiBase || '').trim()
-      const baseURL = (apiBase ? apiBase : '/api').replace(/\/$/, '')
-      
       const response = await $fetch(url, {
         baseURL,
         ...options,

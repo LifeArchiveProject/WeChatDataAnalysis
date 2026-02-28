@@ -3630,8 +3630,8 @@ const startExportPolling = (exportId) => {
   if (!exportId) return
 
   if (process.client && typeof window !== 'undefined' && typeof EventSource !== 'undefined') {
-    const base = 'http://localhost:8000'
-    const url = `${base}/api/chat/exports/${encodeURIComponent(String(exportId))}/events`
+    const apiBase = useApiBase()
+    const url = `${apiBase}/chat/exports/${encodeURIComponent(String(exportId))}/events`
     try {
       exportEventSource = new EventSource(url)
       exportEventSource.onmessage = (ev) => {
@@ -3889,8 +3889,8 @@ watch(
 )
 
 const getExportDownloadUrl = (exportId) => {
-  const base = process.client ? 'http://localhost:8000' : ''
-  return `${base}/api/chat/exports/${encodeURIComponent(String(exportId || ''))}/download`
+  const apiBase = useApiBase()
+  return `${apiBase}/chat/exports/${encodeURIComponent(String(exportId || ''))}/download`
 }
 
 const startChatExport = async () => {
@@ -6089,7 +6089,7 @@ const normalizeMessage = (msg) => {
   const sender = isSent ? '我' : (msg.senderDisplayName || msg.senderUsername || selectedContact.value?.name || '')
   const fallbackAvatar = (!isSent && !selectedContact.value?.isGroup) ? (selectedContact.value?.avatar || null) : null
 
-  const mediaBase = process.client ? 'http://localhost:8000' : ''
+  const apiBase = useApiBase()
   const normalizeMaybeUrl = (u) => (typeof u === 'string' ? u.trim() : '')
   const isUsableMediaUrl = (u) => {
     const v = normalizeMaybeUrl(u)
@@ -6121,7 +6121,7 @@ const normalizeMessage = (msg) => {
     try {
       const host = new URL(u).hostname.toLowerCase()
       if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
-        return `${mediaBase}/api/chat/media/proxy_image?url=${encodeURIComponent(u)}`
+        return `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(u)}`
       }
     } catch {}
     return u
@@ -6129,15 +6129,15 @@ const normalizeMessage = (msg) => {
 
   const fromUsername = String(msg.fromUsername || '').trim()
   const fromAvatar = fromUsername
-    ? `${mediaBase}/api/chat/avatar?account=${encodeURIComponent(selectedAccount.value || '')}&username=${encodeURIComponent(fromUsername)}`
+    ? `${apiBase}/chat/avatar?account=${encodeURIComponent(selectedAccount.value || '')}&username=${encodeURIComponent(fromUsername)}`
     : (() => {
       // App/web link shares may not provide `fromUsername` (sourceusername), so we don't have a WeChat avatar.
       // Fall back to a best-effort website favicon fetched via backend.
       const href = String(msg.url || '').trim()
-      return href ? `${mediaBase}/api/chat/media/favicon?url=${encodeURIComponent(href)}` : ''
+      return href ? `${apiBase}/chat/media/favicon?url=${encodeURIComponent(href)}` : ''
     })()
 
-  const localEmojiUrl = msg.emojiMd5 ? `${mediaBase}/api/chat/media/emoji?account=${encodeURIComponent(selectedAccount.value || '')}&md5=${encodeURIComponent(msg.emojiMd5)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : ''
+  const localEmojiUrl = msg.emojiMd5 ? `${apiBase}/chat/media/emoji?account=${encodeURIComponent(selectedAccount.value || '')}&md5=${encodeURIComponent(msg.emojiMd5)}&username=${encodeURIComponent(selectedContact.value?.username || '')}` : ''
   const localImageUrl = (() => {
     if (!msg.imageMd5 && !msg.imageFileId) return ''
     const parts = [
@@ -6146,7 +6146,7 @@ const normalizeMessage = (msg) => {
       msg.imageFileId ? `file_id=${encodeURIComponent(msg.imageFileId)}` : '',
       `username=${encodeURIComponent(selectedContact.value?.username || '')}`,
     ].filter(Boolean)
-    return `${mediaBase}/api/chat/media/image?${parts.join('&')}`
+    return `${apiBase}/chat/media/image?${parts.join('&')}`
   })()
   const normalizedImageUrl = (() => {
     const cur = (isUsableMediaUrl(msg.imageUrl) ? normalizeMaybeUrl(msg.imageUrl) : '')
@@ -6165,7 +6165,7 @@ const normalizeMessage = (msg) => {
       msg.videoThumbFileId ? `file_id=${encodeURIComponent(msg.videoThumbFileId)}` : '',
       `username=${encodeURIComponent(selectedContact.value?.username || '')}`,
     ].filter(Boolean)
-    return `${mediaBase}/api/chat/media/video_thumb?${parts.join('&')}`
+    return `${apiBase}/chat/media/video_thumb?${parts.join('&')}`
   })()
 
   const localVideoUrl = (() => {
@@ -6176,7 +6176,7 @@ const normalizeMessage = (msg) => {
       msg.videoFileId ? `file_id=${encodeURIComponent(msg.videoFileId)}` : '',
       `username=${encodeURIComponent(selectedContact.value?.username || '')}`,
     ].filter(Boolean)
-    return `${mediaBase}/api/chat/media/video?${parts.join('&')}`
+    return `${apiBase}/chat/media/video?${parts.join('&')}`
   })()
 
   const normalizedVideoThumbUrl = (isUsableMediaUrl(msg.videoThumbUrl) ? normalizeMaybeUrl(msg.videoThumbUrl) : '') || localVideoThumbUrl
@@ -6186,7 +6186,7 @@ const normalizeMessage = (msg) => {
     if (msg.voiceUrl) return msg.voiceUrl
     if (!serverIdStr) return ''
     if (String(msg.renderType || '') !== 'voice') return ''
-    return `${mediaBase}/api/chat/media/voice?account=${encodeURIComponent(selectedAccount.value || '')}&server_id=${encodeURIComponent(serverIdStr)}`
+    return `${apiBase}/chat/media/voice?account=${encodeURIComponent(selectedAccount.value || '')}&server_id=${encodeURIComponent(serverIdStr)}`
   })()
 
   const remoteFromServer = (
@@ -6228,7 +6228,7 @@ const normalizeMessage = (msg) => {
   const quoteServerIdStr = String(msg.quoteServerId || '').trim()
   const quoteTypeStr = String(msg.quoteType || '').trim()
   const quoteVoiceUrl = quoteServerIdStr
-    ? `${mediaBase}/api/chat/media/voice?account=${encodeURIComponent(selectedAccount.value || '')}&server_id=${encodeURIComponent(quoteServerIdStr)}`
+    ? `${apiBase}/chat/media/voice?account=${encodeURIComponent(selectedAccount.value || '')}&server_id=${encodeURIComponent(quoteServerIdStr)}`
     : ''
   const quoteImageUrl = (() => {
     if (!quoteServerIdStr) return ''
@@ -6239,7 +6239,7 @@ const normalizeMessage = (msg) => {
       `server_id=${encodeURIComponent(quoteServerIdStr)}`,
       convUsername ? `username=${encodeURIComponent(convUsername)}` : ''
     ].filter(Boolean)
-    return parts.length ? `${mediaBase}/api/chat/media/image?${parts.join('&')}` : ''
+    return parts.length ? `${apiBase}/chat/media/image?${parts.join('&')}` : ''
   })()
   const quoteThumbUrl = (() => {
     const raw = isUsableMediaUrl(msg.quoteThumbUrl) ? normalizeMaybeUrl(msg.quoteThumbUrl) : ''
@@ -6249,7 +6249,7 @@ const normalizeMessage = (msg) => {
     try {
       const host = new URL(raw).hostname.toLowerCase()
       if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
-        return `${mediaBase}/api/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
+        return `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
       }
     } catch {}
     return raw
@@ -6744,7 +6744,7 @@ const formatChatHistoryVideoDuration = (value) => {
 }
 
 const normalizeChatHistoryRecordItem = (rec) => {
-  const mediaBase = process.client ? 'http://localhost:8000' : ''
+  const apiBase = useApiBase()
   const account = encodeURIComponent(selectedAccount.value || '')
   const username = encodeURIComponent(selectedContact.value?.username || '')
 
@@ -6768,7 +6768,7 @@ const normalizeChatHistoryRecordItem = (rec) => {
     })()
     if (fileId) {
       previewCandidates.push(
-        `${mediaBase}/api/chat/media/image?account=${account}&file_id=${encodeURIComponent(fileId)}&username=${username}`
+        `${apiBase}/chat/media/image?account=${account}&file_id=${encodeURIComponent(fileId)}&username=${username}`
       )
     }
 
@@ -6782,7 +6782,7 @@ const normalizeChatHistoryRecordItem = (rec) => {
         srcServerId ? `server_id=${encodeURIComponent(srcServerId)}` : '',
         `username=${username}`
       ].filter(Boolean)
-      previewCandidates.push(`${mediaBase}/api/chat/media/image?${previewParts.join('&')}`)
+      previewCandidates.push(`${apiBase}/chat/media/image?${previewParts.join('&')}`)
     }
 
     out._linkPreviewCandidates = previewCandidates
@@ -6793,8 +6793,8 @@ const normalizeChatHistoryRecordItem = (rec) => {
     const fromUsername = String(out.fromUsername || '').trim()
     out.fromUsername = fromUsername
     out.fromAvatar = fromUsername
-      ? `${mediaBase}/api/chat/avatar?account=${account}&username=${encodeURIComponent(fromUsername)}`
-      : (linkUrl ? `${mediaBase}/api/chat/media/favicon?url=${encodeURIComponent(linkUrl)}` : '')
+      ? `${apiBase}/chat/avatar?account=${account}&username=${encodeURIComponent(fromUsername)}`
+      : (linkUrl ? `${apiBase}/chat/media/favicon?url=${encodeURIComponent(linkUrl)}` : '')
     out._fromAvatarLast = out.fromAvatar
     out._fromAvatarImgOk = false
     out._fromAvatarImgError = false
@@ -6804,17 +6804,17 @@ const normalizeChatHistoryRecordItem = (rec) => {
     out.videoDuration = String(out.duration || '').trim()
     const thumbCandidates = []
     if (out.videoMd5) {
-      thumbCandidates.push(`${mediaBase}/api/chat/media/video_thumb?account=${account}&md5=${encodeURIComponent(out.videoMd5)}&username=${username}`)
+      thumbCandidates.push(`${apiBase}/chat/media/video_thumb?account=${account}&md5=${encodeURIComponent(out.videoMd5)}&username=${username}`)
     }
     if (out.videoThumbMd5 && out.videoThumbMd5 !== out.videoMd5) {
-      thumbCandidates.push(`${mediaBase}/api/chat/media/video_thumb?account=${account}&md5=${encodeURIComponent(out.videoThumbMd5)}&username=${username}`)
+      thumbCandidates.push(`${apiBase}/chat/media/video_thumb?account=${account}&md5=${encodeURIComponent(out.videoThumbMd5)}&username=${username}`)
     }
     out._videoThumbCandidates = thumbCandidates
     out._videoThumbCandidateIndex = 0
     out._videoThumbError = false
     out.videoThumbUrl = thumbCandidates[0] || ''
     out.videoUrl = out.videoMd5
-      ? `${mediaBase}/api/chat/media/video?account=${account}&md5=${encodeURIComponent(out.videoMd5)}&username=${username}`
+      ? `${apiBase}/chat/media/video?account=${account}&md5=${encodeURIComponent(out.videoMd5)}&username=${username}`
       : ''
     if (!out.content || /^\[.+\]$/.test(String(out.content || '').trim())) out.content = '[视频]'
   } else if (out.renderType === 'emoji') {
@@ -6823,7 +6823,7 @@ const normalizeChatHistoryRecordItem = (rec) => {
     const remoteAesKey = String(out.aeskey || '').trim()
     out.emojiRemoteUrl = remoteEmojiUrl
     out.emojiUrl = out.emojiMd5
-      ? `${mediaBase}/api/chat/media/emoji?account=${account}&md5=${encodeURIComponent(out.emojiMd5)}&username=${username}${remoteEmojiUrl ? `&emoji_url=${encodeURIComponent(remoteEmojiUrl)}` : ''}${remoteAesKey ? `&aes_key=${encodeURIComponent(remoteAesKey)}` : ''}`
+      ? `${apiBase}/chat/media/emoji?account=${account}&md5=${encodeURIComponent(out.emojiMd5)}&username=${username}${remoteEmojiUrl ? `&emoji_url=${encodeURIComponent(remoteEmojiUrl)}` : ''}${remoteAesKey ? `&aes_key=${encodeURIComponent(remoteAesKey)}` : ''}`
       : ''
     if (!out.content || /^\[.+\]$/.test(String(out.content || '').trim())) out.content = '[表情]'
   } else if (out.renderType === 'image') {
@@ -6835,7 +6835,7 @@ const normalizeChatHistoryRecordItem = (rec) => {
       srcServerId ? `server_id=${encodeURIComponent(srcServerId)}` : '',
       `username=${username}`
     ].filter(Boolean)
-    out.imageUrl = imgParts.length ? `${mediaBase}/api/chat/media/image?${imgParts.join('&')}` : ''
+    out.imageUrl = imgParts.length ? `${apiBase}/chat/media/image?${imgParts.join('&')}` : ''
     if (!out.content || /^\[.+\]$/.test(String(out.content || '').trim())) out.content = '[图片]'
   }
 
@@ -7190,7 +7190,7 @@ const resolveChatHistoryLinkRecord = async (rec) => {
       const content = String(resp.content || '').trim()
       const url = String(resp.url || '').trim()
       const from = String(resp.from || '').trim()
-      const mediaBase = process.client ? 'http://localhost:8000' : ''
+      const apiBase = useApiBase()
       const normalizePreviewUrl = (u) => {
         const raw = String(u || '').trim()
         if (!raw) return ''
@@ -7199,7 +7199,7 @@ const resolveChatHistoryLinkRecord = async (rec) => {
         try {
           const host = new URL(raw).hostname.toLowerCase()
           if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
-            return `${mediaBase}/api/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
+            return `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
           }
         } catch {}
         return raw
@@ -7214,8 +7214,8 @@ const resolveChatHistoryLinkRecord = async (rec) => {
       const fromUsername = String(resp.fromUsername || '').trim()
       if (fromUsername) rec.fromUsername = fromUsername
       const fromAvatarUrl = fromUsername
-        ? `${mediaBase}/api/chat/avatar?account=${encodeURIComponent(selectedAccount.value || '')}&username=${encodeURIComponent(fromUsername)}`
-        : (url ? `${mediaBase}/api/chat/media/favicon?url=${encodeURIComponent(url)}` : '')
+        ? `${apiBase}/chat/avatar?account=${encodeURIComponent(selectedAccount.value || '')}&username=${encodeURIComponent(fromUsername)}`
+        : (url ? `${apiBase}/chat/media/favicon?url=${encodeURIComponent(url)}` : '')
       if (fromAvatarUrl) {
         const last = String(rec._fromAvatarLast || '').trim()
         rec.fromAvatar = fromAvatarUrl

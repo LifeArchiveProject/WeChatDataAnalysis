@@ -775,7 +775,8 @@ const handleDecrypt = async () => {
     const params = new URLSearchParams()
     params.set('key', formData.key)
     params.set('db_storage_path', formData.db_storage_path)
-    const url = `http://localhost:8000/api/decrypt_stream?${params.toString()}`
+    const apiBase = useApiBase()
+    const url = `${apiBase}/decrypt_stream?${params.toString()}`
 
     dbDecryptProgress.message = '连接中...'
     const eventSource = new EventSource(url)
@@ -904,7 +905,8 @@ const decryptAllImages = async () => {
     if (mediaAccount.value) params.set('account', mediaAccount.value)
     if (mediaKeys.xor_key) params.set('xor_key', mediaKeys.xor_key)
     if (mediaKeys.aes_key) params.set('aes_key', mediaKeys.aes_key)
-    const url = `http://localhost:8000/api/media/decrypt_all_stream?${params.toString()}`
+    const apiBase = useApiBase()
+    const url = `${apiBase}/media/decrypt_all_stream?${params.toString()}`
     
     // 使用EventSource接收SSE
     const eventSource = new EventSource(url)

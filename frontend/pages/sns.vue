@@ -794,7 +794,7 @@ const filteredSnsUsers = computed(() => {
 
 const pageSize = 20
 
-const mediaBase = process.client ? 'http://localhost:8000' : ''
+const apiBase = useApiBase()
 
 // 朋友圈导出（HTML 离线 ZIP）
 const exportJob = ref(null)
@@ -835,8 +835,7 @@ const startSnsExportPolling = (exportId) => {
   if (!exportId) return
 
   if (process.client && typeof window !== 'undefined' && typeof EventSource !== 'undefined') {
-    const base = 'http://localhost:8000'
-    const url = `${base}/api/sns/exports/${encodeURIComponent(String(exportId))}/events`
+    const url = `${apiBase}/sns/exports/${encodeURIComponent(String(exportId))}/events`
     try {
       exportEventSource = new EventSource(url)
       exportEventSource.onmessage = (ev) => {
@@ -867,8 +866,7 @@ const downloadSnsExport = (exportId) => {
   if (!process.client) return
   const id = String(exportId || '').trim()
   if (!id) return
-  const base = 'http://localhost:8000'
-  const url = `${base}/api/sns/exports/${encodeURIComponent(id)}/download`
+  const url = `${apiBase}/sns/exports/${encodeURIComponent(id)}/download`
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
@@ -1109,7 +1107,7 @@ const selfInfo = ref({ wxid: '', nickname: '' })
 const loadSelfInfo = async () => {
   if (!selectedAccount.value) return
   try {
-    const resp = await $fetch(`${mediaBase}/api/sns/self_info?account=${encodeURIComponent(selectedAccount.value)}`)
+    const resp = await $fetch(`${apiBase}/sns/self_info?account=${encodeURIComponent(selectedAccount.value)}`)
     if (resp && resp.wxid) {
       selfInfo.value = resp
     }
@@ -1145,7 +1143,7 @@ const selectSnsUser = async (username) => {
 const getArticleThumbProxyUrl = (contentUrl) => {
   const u = String(contentUrl || '').trim()
   if (!u) return ''
-  return `${mediaBase}/api/sns/article_thumb?url=${encodeURIComponent(u)}`
+  return `${apiBase}/sns/article_thumb?url=${encodeURIComponent(u)}`
 }
 
 const guessOfficialAccountNameFromTitle = (title) => {
@@ -1443,7 +1441,7 @@ const postAvatarUrl = (username) => {
   const acc = String(selectedAccount.value || '').trim()
   const u = String(username || '').trim()
   if (!acc || !u) return ''
-  return `${mediaBase}/api/chat/avatar?account=${encodeURIComponent(acc)}&username=${encodeURIComponent(u)}`
+  return `${apiBase}/chat/avatar?account=${encodeURIComponent(acc)}&username=${encodeURIComponent(u)}`
 }
 
 const cleanLikeName = (v) => String(v ?? '').replace(/\u00A0/g, ' ').trim()
@@ -1460,7 +1458,7 @@ const normalizeMediaUrl = (u) => {
   try {
     const host = new URL(raw).hostname.toLowerCase()
     if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
-      return `${mediaBase}/api/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
+      return `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
     }
   } catch {}
   return raw
@@ -1515,8 +1513,10 @@ const getSnsMediaUrl = (post, m, idx, rawUrl) => {
   if (!raw) return ''
   const rawLower = raw.toLowerCase()
 
-  // If backend already provides a local media endpoint, keep it as-is.
-  if (rawLower.startsWith('/api/') || rawLower.startsWith('blob:') || rawLower.startsWith('data:')) return raw
+  // If backend already provides a local media endpoint, rewrite it to the effective API base
+  // (so web builds with a custom API port still work).
+  if (rawLower.startsWith('/api/')) return `${apiBase}${raw.slice(4)}`
+  if (rawLower.startsWith('blob:') || rawLower.startsWith('data:')) return raw
 
   // For Moments images/thumbnails, prefer a backend endpoint that can decrypt local cache.
   if (/^https?:\/\//i.test(raw)) {
@@ -1568,7 +1568,7 @@ const getSnsMediaUrl = (post, m, idx, rawUrl) => {
         // Bump this when changing backend matching logic to avoid stale cached wrong images.
         parts.set('v', '9')
         parts.set('url', raw)
-        return `${mediaBase}/api/sns/media?${parts.toString()}`
+        return `${apiBase}/sns/media?${parts.toString()}`
       }
     } catch {}
   }
@@ -1589,7 +1589,7 @@ const getSnsVideoUrl = (postId, mediaId) => {
   // 本地缓存视频
   const acc = String(selectedAccount.value || '').trim()
   if (!acc || !postId || !mediaId) return ''
-  return `${mediaBase}/api/sns/video?account=${encodeURIComponent(acc)}&post_id=${encodeURIComponent(postId)}&media_id=${encodeURIComponent(mediaId)}`
+  return `${apiBase}/sns/video?account=${encodeURIComponent(acc)}&post_id=${encodeURIComponent(postId)}&media_id=${encodeURIComponent(mediaId)}`
 }
 
 const getSnsRemoteVideoSrc = (post, m) => {
@@ -1610,7 +1610,7 @@ const getSnsRemoteVideoSrc = (post, m) => {
   // When cache is disabled, bust browser caching so backend really downloads+decrypts each time.
   if (!snsUseCache.value) parts.set('_t', String(Date.now()))
   parts.set('v', '1')
-  return `${mediaBase}/api/sns/video_remote?${parts.toString()}`
+  return `${apiBase}/sns/video_remote?${parts.toString()}`
 }
 
 const localVideoStatus = ref({})
@@ -1726,7 +1726,7 @@ const getLivePhotoVideoSrc = (post, m, idx = 0) => {
   if (!snsUseCache.value) parts.set('_t', String(Date.now()))
   // Version bump for frontend cache busting when endpoint changes.
   parts.set('v', '1')
-  return `${mediaBase}/api/sns/video_remote?${parts.toString()}`
+  return `${apiBase}/sns/video_remote?${parts.toString()}`
 }
 
 // 图片预览 + 候选匹配选择
@@ -2114,7 +2114,7 @@ const getProxyExternalUrl = (url) => {
   // 目前难以计算enc，代理获取封面图（thumbnail）
   const u = String(url || '').trim()
   if (!u) return ''
-  return `${mediaBase}/api/chat/media/proxy_image?url=${encodeURIComponent(u)}`
+  return `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(u)}`
 }
 
 
