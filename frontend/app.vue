@@ -3,11 +3,13 @@
     <SidebarRail v-if="showSidebar" />
     <div class="flex-1 flex flex-col min-h-0">
       <!-- Desktop titlebar lives above the page content (right column) -->
-      <DesktopTitleBar />
+      <DesktopTitleBar v-if="showDesktopTitleBar" />
       <div :class="contentClass">
         <NuxtPage />
       </div>
     </div>
+
+    <SettingsDialog :open="settingsDialogOpen" @close="closeSettingsDialog" />
 
     <ClientOnly v-if="isDesktopUpdater">
       <DesktopUpdateDialog
@@ -33,6 +35,7 @@ import { usePrivacyStore } from '~/stores/privacy'
 
 const route = useRoute()
 const desktopUpdate = useDesktopUpdate()
+const { open: settingsDialogOpen, closeDialog: closeSettingsDialog } = useSettingsDialog()
 
 // In Electron the server/pre-render doesn't know about `window.wechatDesktop`.
 // If we render different DOM on server vs client, Vue hydration will keep the
@@ -86,6 +89,8 @@ const contentClass = computed(() =>
     ? 'wechat-desktop-content flex-1 overflow-auto min-h-0'
     : 'flex-1 overflow-auto min-h-0'
 )
+
+const showDesktopTitleBar = computed(() => isDesktop.value)
 
 const showSidebar = computed(() => {
   const path = String(route.path || '')

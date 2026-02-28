@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld("wechatDesktop", {
   getCloseBehavior: () => ipcRenderer.invoke("app:getCloseBehavior"),
   setCloseBehavior: (behavior) => ipcRenderer.invoke("app:setCloseBehavior", String(behavior || "")),
 
+  getBackendPort: () => ipcRenderer.invoke("backend:getPort"),
+  setBackendPort: (port) => ipcRenderer.invoke("backend:setPort", Number(port)),
+
   chooseDirectory: (options = {}) => ipcRenderer.invoke("dialog:chooseDirectory", options),
 
   // Auto update

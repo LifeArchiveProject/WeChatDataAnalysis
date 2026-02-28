@@ -5,7 +5,7 @@
   "main": "src/main.cjs",
   "scripts": {
     "dev": "concurrently -k -s first \"cd ..\\\\frontend && npm run dev\" \"cross-env ELECTRON_START_URL=http://localhost:3000 electron .\"",
-    "dev:static": "pushd ..\\\\frontend && npm run generate && popd && cross-env ELECTRON_START_URL=http://127.0.0.1:8000 electron .",
+    "dev:static": "pushd ..\\\\frontend && npm run generate && popd && cross-env ELECTRON_START_URL=http://127.0.0.1:10392 electron .",
     "build:ui": "pushd ..\\\\frontend && npm run generate && popd && node scripts\\\\copy-ui.cjs",
     "build:backend": "uv sync --extra build && node scripts/build-backend.cjs",
     "build:icon": "node scripts/build-icon.cjs",

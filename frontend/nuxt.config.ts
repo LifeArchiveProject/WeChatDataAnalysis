@@ -1,4 +1,7 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
+const backendPort = String(process.env.WECHAT_TOOL_PORT || '10392').trim() || '10392'
+const devProxyTarget = `http://127.0.0.1:${backendPort}/api`
+
 export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
   devtools: { enabled: false },
@@ -6,7 +9,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       // Full API base, including `/api` when needed.
-      // Example: `NUXT_PUBLIC_API_BASE=http://127.0.0.1:8000/api`
+      // Example: `NUXT_PUBLIC_API_BASE=http://127.0.0.1:10392/api`
       apiBase: process.env.NUXT_PUBLIC_API_BASE || '/api',
     },
   },
@@ -22,7 +25,7 @@ export default defineNuxtConfig({
       '/api': {
         // `h3` strips the matched prefix (`/api`) before calling the middleware,
         // so the proxy target must include `/api` to preserve backend routes.
-        target: 'http://127.0.0.1:8000/api',
+        target: devProxyTarget,
         changeOrigin: true
       }
     }
