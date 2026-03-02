@@ -10,8 +10,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
-from . import __version__ as APP_VERSION
 from .logging_config import setup_logging, get_logger
+
+# 初始化日志系统
+setup_logging()
+logger = get_logger(__name__)
+
+from . import __version__ as APP_VERSION
 from .path_fix import PathFixRoute
 from .chat_realtime_autosync import CHAT_REALTIME_AUTOSYNC
 from .routers.chat import router as _chat_router
@@ -29,10 +34,6 @@ from .routers.wechat_detection import router as _wechat_detection_router
 from .routers.wrapped import router as _wrapped_router
 from .sns_stage_timing import add_sns_stage_timing_headers
 from .wcdb_realtime import WCDB_REALTIME, shutdown as _wcdb_shutdown
-
-# 初始化日志系统
-setup_logging()
-logger = get_logger(__name__)
 
 app = FastAPI(
     title="微信数据库解密工具",
