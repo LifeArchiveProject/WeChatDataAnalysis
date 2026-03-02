@@ -253,7 +253,9 @@ def _ensure_initialized() -> None:
             return
         rc = int(lib.wcdb_init())
         if rc != 0:
-            raise WCDBRealtimeError(f"wcdb_init failed: {rc}")
+            logs = get_native_logs(require_initialized=False)
+            hint = f" logs={logs[:6]}" if logs else ""
+            raise WCDBRealtimeError(f"wcdb_init failed: {rc}.{hint}")
         _initialized = True
 
 
@@ -315,11 +317,12 @@ def _call_out_error(fn, *args) -> None:
             pass
 
 
-def get_native_logs() -> list[str]:
-    try:
-        _ensure_initialized()
-    except Exception:
-        return []
+def get_native_logs(*, require_initialized: bool = True) -> list[str]:
+    if require_initialized:
+        try:
+            _ensure_initialized()
+        except Exception:
+            return []
     lib = _load_wcdb_lib()
     out = ctypes.c_char_p()
     rc = int(lib.wcdb_get_logs(ctypes.byref(out)))
