@@ -123,6 +123,68 @@ function isPortAvailable(port, host) {
   });
 }
 
+function getEphemeralPort(host) {
+  return new Promise((resolve) => {
+    try {
+      const srv = net.createServer();
+      srv.unref();
+      srv.once("error", () => resolve(null));
+      srv.listen({ port: 0, host }, () => {
+        const addr = srv.address();
+        const p = addr && typeof addr === "object" ? Number(addr.port) : null;
+        srv.close(() => resolve(Number.isInteger(p) ? p : null));
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function chooseAvailablePort(preferredPort, host) {
+  const preferred = parsePort(preferredPort);
+  if (preferred != null && (await isPortAvailable(preferred, host))) return preferred;
+
+  // Keep the port close to the user's expectation when possible.
+  if (preferred != null) {
+    for (let i = 1; i <= 50; i += 1) {
+      const cand = preferred + i;
+      if (cand > 65535) break;
+      if (await isPortAvailable(cand, host)) return cand;
+    }
+  }
+
+  // Fall back to an OS-chosen ephemeral port.
+  const random = await getEphemeralPort(host);
+  if (random != null && (await isPortAvailable(random, host))) return random;
+
+  return null;
+}
+
+async function ensureBackendPortAvailableOnStartup() {
+  // Avoid surprising behavior in dev: the frontend dev server expects a stable backend port.
+  if (!app.isPackaged) return getBackendPort();
+
+  const bindHost = getBackendBindHost();
+  const currentPort = getBackendPort();
+  const ok = await isPortAvailable(currentPort, bindHost);
+  if (ok) return currentPort;
+
+  const chosen = await chooseAvailablePort(currentPort, bindHost);
+  if (chosen == null) {
+    logMain(`[main] backend port unavailable: ${currentPort} host=${bindHost}; failed to find a free port`);
+    return currentPort;
+  }
+
+  try {
+    setBackendPortSetting(chosen);
+    logMain(`[main] backend port ${currentPort} unavailable; switched to ${chosen}`);
+  } catch (err) {
+    logMain(`[main] failed to persist backend port ${chosen}: ${err?.message || err}`);
+  }
+
+  return getBackendPort();
+}
+
 function resolveDataDir() {
   if (resolvedDataDir) return resolvedDataDir;
 
@@ -1024,6 +1086,16 @@ async function waitForBackend({ timeoutMs, healthUrl } = {}) {
   const startedAt = Date.now();
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    // If the backend process died, fail fast (otherwise we'd wait for the full timeout).
+    if (!backendProc) {
+      throw new Error(`Backend process exited before becoming ready: ${url}`);
+    }
+    if (backendProc.exitCode != null) {
+      throw new Error(
+        `Backend process exited (code=${backendProc.exitCode} signal=${backendProc.signalCode || "null"}): ${url}`
+      );
+    }
+
     try {
       const code = await httpGet(url);
       if (code >= 200 && code < 500) return;
@@ -1379,11 +1451,37 @@ async function main() {
   // next to the installed exe for easier access.
   resolveDataDir();
   ensureOutputLink();
+  await ensureBackendPortAvailableOnStartup();
 
   logMain(`[main] app.isPackaged=${app.isPackaged} argv=${JSON.stringify(process.argv)}`);
 
   startBackend();
-  await waitForBackend({ timeoutMs: 30_000 });
+  try {
+    await waitForBackend({ timeoutMs: 30_000 });
+  } catch (err) {
+    // In some environments a specific port may be blocked/reserved (WSAEACCES) or taken.
+    // Best-effort: pick a new port and retry once so the app can still start.
+    if (app.isPackaged) {
+      const prevPort = getBackendPort();
+      const bindHost = getBackendBindHost();
+      const nextPort = await chooseAvailablePort(prevPort + 1, bindHost);
+      if (nextPort != null && nextPort !== prevPort) {
+        logMain(`[main] backend not ready on port ${prevPort}; retrying on ${nextPort}`);
+        try {
+          setBackendPortSetting(nextPort);
+          await restartBackend({ timeoutMs: 30_000 });
+          logMain(`[main] backend retry succeeded on port ${nextPort}`);
+        } catch (retryErr) {
+          logMain(`[main] backend retry failed: ${retryErr?.stack || String(retryErr)}`);
+          throw retryErr;
+        }
+      } else {
+        throw err;
+      }
+    } else {
+      throw err;
+    }
+  }
 
   const win = createMainWindow();
   mainWindow = win;
