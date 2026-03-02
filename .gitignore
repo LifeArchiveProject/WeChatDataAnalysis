@@ -44,6 +44,8 @@ pnpm-lock.yaml
 /desktop/resources/ui/*
 !/desktop/resources/ui/.gitkeep
 /desktop/resources/backend/*.exe
+/desktop/resources/backend/native/*
+/desktop/resources/backend/pyproject.toml
 !/desktop/resources/backend/.gitkeep
 /desktop/resources/icon.ico
 
