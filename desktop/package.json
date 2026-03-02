@@ -25,7 +25,29 @@
     },
     "files": [
       "src/**/*",
-      "package.json"
+      "package.json",
+      {
+        "from": "node_modules",
+        "to": "node_modules",
+        "filter": [
+          "electron-updater/**/*",
+          "builder-util-runtime/**/*",
+          "debug/**/*",
+          "ms/**/*",
+          "sax/**/*",
+          "js-yaml/**/*",
+          "argparse/**/*",
+          "lazy-val/**/*",
+          "lodash.escaperegexp/**/*",
+          "lodash.isequal/**/*",
+          "tiny-typed-emitter/**/*",
+          "fs-extra/**/*",
+          "graceful-fs/**/*",
+          "jsonfile/**/*",
+          "universalify/**/*",
+          "semver/**/*"
+        ]
+      }
     ],
     "extraResources": [
       {
