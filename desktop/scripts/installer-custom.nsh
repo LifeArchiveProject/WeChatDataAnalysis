@@ -14,6 +14,34 @@
 
 Var WDA_InstallDirPage
 
+!macro customInit
+  ; Safety: older versions created an `output` junction inside the install directory that points to the
+  ; per-user AppData `output` folder. Some uninstall/update flows may traverse that junction and delete
+  ; real user data. Remove it as early as possible during install/update.
+  Call WDA_RemoveLegacyOutputLink
+!macroend
+
+!macro customInstall
+  ; Provide a safe, non-junction way for users to locate the real per-user output directory.
+  ; The actual data is NOT stored inside $INSTDIR (it is wiped on update/reinstall).
+  ; `open-output.cmd` uses %APPDATA% so it works for the current user.
+  FileOpen $0 "$INSTDIR\output-location.txt" w
+  FileWrite $0 "WeChatDataAnalysis output folder (per user):$\r$\n%APPDATA%\\${APP_PACKAGE_NAME}\\output$\r$\n"
+  FileClose $0
+
+  FileOpen $1 "$INSTDIR\open-output.cmd" w
+  ; NSIS escaping: use $\" to output a literal quote character into the .cmd file.
+  FileWrite $1 "@echo off$\r$\nexplorer $\"%APPDATA%\\${APP_PACKAGE_NAME}\\output$\"$\r$\n"
+  FileClose $1
+!macroend
+
+Function WDA_RemoveLegacyOutputLink
+  ; $INSTDIR is usually the full install directory. Be defensive and also try the nested path
+  ; in case the installer is running before electron-builder appends "\${APP_FILENAME}".
+  RMDir "$INSTDIR\output"
+  RMDir "$INSTDIR\${APP_FILENAME}\output"
+FunctionEnd
+
 !macro customPageAfterChangeDir
   ; Add a confirmation page after the directory picker so users clearly see
   ; the final install location (includes the app sub-folder).
@@ -90,6 +118,10 @@ Var /GLOBAL WDA_DeleteUserData
 !macro customUnInit
   ; Default: keep user data (also applies to silent uninstall / update uninstall).
   StrCpy $WDA_DeleteUserData "0"
+
+  ; Safety: if an older build created an `output` junction inside the install dir, remove it early so
+  ; directory cleanup can't traverse it and delete the real per-user output folder.
+  RMDir "$INSTDIR\output"
 !macroend
 
 !macro customUnWelcomePage
