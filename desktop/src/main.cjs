@@ -8,7 +8,13 @@ const {
   dialog,
   shell,
 } = require("electron");
-const { autoUpdater } = require("electron-updater");
+let autoUpdater = null;
+let autoUpdaterLoadError = null;
+try {
+  ({ autoUpdater } = require("electron-updater"));
+} catch (err) {
+  autoUpdaterLoadError = err;
+}
 const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const http = require("http");
@@ -297,6 +303,12 @@ function isAutoUpdateEnabled() {
 
   const forced = parseEnvBool(process.env.AUTO_UPDATE_ENABLED);
   let enabled = forced != null ? forced : !!app.isPackaged;
+  if (enabled && !autoUpdater) {
+    enabled = false;
+    logMain(
+      `[main] auto-update disabled: electron-updater unavailable: ${autoUpdaterLoadError?.message || "unknown error"}`
+    );
+  }
 
   // In packaged builds electron-updater reads update config from app-update.yml.
   // If missing, treat auto-update as disabled to avoid noisy errors.
@@ -823,6 +835,10 @@ function getPackagedBackendPath() {
   return path.join(process.resourcesPath, "backend", "wechat-backend.exe");
 }
 
+function getPackagedWcdbDllPath() {
+  return path.join(process.resourcesPath, "backend", "native", "wcdb_api.dll");
+}
+
 function startBackend() {
   if (backendProc) return backendProc;
 
@@ -853,8 +869,17 @@ function startBackend() {
         `Packaged backend not found: ${backendExe}. Build it into desktop/resources/backend/wechat-backend.exe`
       );
     }
+    const packagedWcdbDll = getPackagedWcdbDllPath();
+    if (fs.existsSync(packagedWcdbDll)) {
+      env.WECHAT_TOOL_WCDB_API_DLL_PATH = packagedWcdbDll;
+      logMain(`[main] using packaged wcdb_api.dll: ${packagedWcdbDll}`);
+    } else {
+      logMain(`[main] packaged wcdb_api.dll not found: ${packagedWcdbDll}`);
+    }
+
+    const backendCwd = path.dirname(backendExe);
     backendProc = spawn(backendExe, [], {
-      cwd: env.WECHAT_TOOL_DATA_DIR,
+      cwd: backendCwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
