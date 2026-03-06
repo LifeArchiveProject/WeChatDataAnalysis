@@ -132,6 +132,16 @@ class TestChatExportMessageTypesSemantics(unittest.TestCase):
                     '<sysmsg type="revokemsg"><revokemsg><replacemsg><![CDATA[“测试好友”撤回了一条消息]]></replacemsg></revokemsg></sysmsg>',
                     None,
                 ),
+                (
+                    7,
+                    1007,
+                    48,
+                    7,
+                    2,
+                    1735689607,
+                    '<msg><location x="39.9042" y="116.4074" scale="15" label="北京市东城区东华门街道" poiname="天安门" /></msg>',
+                    None,
+                ),
             ]
             conn.executemany(
                 f"INSERT INTO {table_name} (local_id, server_id, local_type, sort_seq, real_sender_id, create_time, message_content, compress_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -351,6 +361,41 @@ class TestChatExportMessageTypesSemantics(unittest.TestCase):
                 self.assertIn("video_thumb", kinds)
                 self.assertTrue(any(n.startswith("media/videos/") for n in names))
                 self.assertTrue(any(n.startswith("media/video_thumbs/") for n in names))
+            finally:
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_checked_location_exports_location_fields(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            self._prepare_account(root, account=account, username=username)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+                job = self._create_job(
+                    svc.CHAT_EXPORT_MANAGER,
+                    account=account,
+                    username=username,
+                    message_types=["location"],
+                    include_media=False,
+                )
+                self.assertEqual(job.status, "done", msg=job.error)
+
+                payload, manifest, _ = self._load_export_payload(job.zip_path)
+                location_msg = next((m for m in payload.get("messages", []) if int(m.get("type") or 0) == 48), None)
+                self.assertIsNotNone(location_msg)
+                self.assertEqual(str(location_msg.get("renderType") or ""), "location")
+                self.assertEqual(str(location_msg.get("locationPoiname") or ""), "天安门")
+                self.assertEqual(str(location_msg.get("locationLabel") or ""), "北京市东城区东华门街道")
+                self.assertAlmostEqual(float(location_msg.get("locationLat") or 0), 39.9042, places=4)
+                self.assertAlmostEqual(float(location_msg.get("locationLng") or 0), 116.4074, places=4)
+                self.assertEqual(manifest.get("filters", {}).get("messageTypes"), ["location"])
             finally:
                 if prev_data is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
