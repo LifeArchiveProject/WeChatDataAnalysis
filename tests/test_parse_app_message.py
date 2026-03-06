@@ -10,6 +10,34 @@ from wechat_decrypt_tool.chat_helpers import _parse_app_message
 
 
 class TestParseAppMessage(unittest.TestCase):
+    def test_mini_program_type_33_parses_as_link(self):
+        # 小程序分享是 appmsg type=33/36。部分 payload 会在 <weappinfo> 内嵌一个 <type>0</type>，
+        # 并且出现在外层 <type>33</type> 之前，因此解析必须避免被嵌套 <type> 误导。
+        raw_text = (
+            "<msg><appmsg appid='' sdkver='0'>"
+            "<title>锦城苑房源详情分享给你，点击查看哦~</title>"
+            "<des></des>"
+            "<weappinfo>"
+            "<type>0</type>"
+            "<username><![CDATA[gh_xxx@app]]></username>"
+            "<weappiconurl><![CDATA[https://example.com/icon.png]]></weappiconurl>"
+            "</weappinfo>"
+            "<type>33</type>"
+            "<url></url>"
+            "<thumburl>https://example.com/thumb.jpg</thumburl>"
+            "<sourcedisplayname><![CDATA[成都购房通]]></sourcedisplayname>"
+            "</appmsg></msg>"
+        )
+
+        parsed = _parse_app_message(raw_text)
+
+        self.assertEqual(parsed.get("renderType"), "link")
+        self.assertEqual(parsed.get("linkType"), "mini_program")
+        self.assertEqual(parsed.get("title"), "锦城苑房源详情分享给你，点击查看哦~")
+        self.assertEqual(parsed.get("from"), "成都购房通")
+        self.assertEqual(parsed.get("fromUsername"), "gh_xxx@app")
+        self.assertEqual(parsed.get("thumbUrl"), "https://example.com/thumb.jpg")
+
     def test_quote_type_57_nested_refermsg_uses_inner_title(self):
         raw_text = (
             '<msg><appmsg appid="" sdkver="0">'

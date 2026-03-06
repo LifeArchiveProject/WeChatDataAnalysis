@@ -50,6 +50,7 @@ from ..chat_helpers import (
     _lookup_resource_md5,
     _normalize_xml_url,
     _parse_app_message,
+    _parse_location_message,
     _parse_system_message_content,
     _parse_pat_message,
     _pick_display_name,
@@ -2673,6 +2674,10 @@ def _append_full_messages_from_rows(
         file_md5 = ""
         transfer_id = ""
         voip_type = ""
+        location_lat: Optional[float] = None
+        location_lng: Optional[float] = None
+        location_poiname = ""
+        location_label = ""
 
         if local_type == 10000:
             render_type = "system"
@@ -2883,6 +2888,14 @@ def _append_full_messages_from_rows(
                     create_time=create_time,
                 )
             content_text = "[表情]"
+        elif local_type == 48:
+            parsed = _parse_location_message(raw_text)
+            render_type = str(parsed.get("renderType") or "location")
+            content_text = str(parsed.get("content") or "[Location]")
+            location_lat = parsed.get("locationLat")
+            location_lng = parsed.get("locationLng")
+            location_poiname = str(parsed.get("locationPoiname") or "")
+            location_label = str(parsed.get("locationLabel") or "")
         elif local_type == 50:
             render_type = "voip"
             try:
@@ -2929,10 +2942,15 @@ def _append_full_messages_from_rows(
                             cover_url = str(parsed.get("coverUrl") or cover_url)
                             thumb_url = str(parsed.get("thumbUrl") or thumb_url)
                             from_name = str(parsed.get("from") or from_name)
+                            from_username = str(parsed.get("fromUsername") or from_username)
                             file_size = str(parsed.get("size") or file_size)
                             pay_sub_type = str(parsed.get("paySubType") or pay_sub_type)
                             file_md5 = str(parsed.get("fileMd5") or file_md5)
                             transfer_id = str(parsed.get("transferId") or transfer_id)
+                            quote_username = str(parsed.get("quoteUsername") or quote_username)
+                            quote_server_id = str(parsed.get("quoteServerId") or quote_server_id)
+                            quote_type = str(parsed.get("quoteType") or quote_type)
+                            quote_voice_length = str(parsed.get("quoteVoiceLength") or quote_voice_length)
 
                             if render_type == "transfer":
                                 # 如果 transferId 仍为空，尝试从原始 XML 提取
@@ -3009,6 +3027,10 @@ def _append_full_messages_from_rows(
                 "paySubType": pay_sub_type,
                 "transferStatus": transfer_status,
                 "transferId": transfer_id,
+                "locationLat": location_lat,
+                "locationLng": location_lng,
+                "locationPoiname": location_poiname,
+                "locationLabel": location_label,
                 "_rawText": raw_text if local_type == 266287972401 else "",
             }
         )
@@ -3734,8 +3756,19 @@ def list_chat_sessions(
         except Exception:
             last_previews = {}
 
+    def _is_generic_location_preview(value: Any) -> bool:
+        text = re.sub(r"\s+", " ", str(value or "").strip()).strip()
+        if not text:
+            return False
+        lowered = text.lower()
+        return lowered in {"[location]", "[位置]"} or lowered.endswith(": [location]") or lowered.endswith(": [位置]")
+
     if preview_mode in {"latest", "db"}:
-        targets = usernames if preview_mode == "db" else [u for u in usernames if u and (u not in last_previews)]
+        targets = (
+            usernames
+            if preview_mode == "db"
+            else [u for u in usernames if u and ((u not in last_previews) or _is_generic_location_preview(last_previews.get(u)))]
+        )
         if targets:
             legacy = _load_latest_message_previews(account_dir, targets)
             for u, v in legacy.items():
@@ -3830,6 +3863,11 @@ def list_chat_sessions(
                 last_msg_sub_type = 0
             if last_msg_type == 81604378673 or (last_msg_type == 49 and last_msg_sub_type == 19):
                 last_message = "[聊天记录]"
+            elif last_msg_type == 48:
+                text = re.sub(r"\s+", " ", str(last_message or "").strip()).strip()
+                text = re.sub(r"^\[location\]", "", text, flags=re.IGNORECASE).strip()
+                text = re.sub(r"^\[位置\]", "", text).strip()
+                last_message = f"[位置]{text}" if text else "[位置]"
 
         last_message = _normalize_session_preview_text(
             last_message,
@@ -4065,6 +4103,10 @@ def _collect_chat_messages(
                 file_md5 = ""
                 transfer_id = ""
                 voip_type = ""
+                location_lat: Optional[float] = None
+                location_lng: Optional[float] = None
+                location_poiname = ""
+                location_label = ""
 
                 if local_type == 10000:
                     render_type = "system"
@@ -4251,6 +4293,14 @@ def _collect_chat_messages(
                             create_time=create_time,
                         )
                     content_text = "[表情]"
+                elif local_type == 48:
+                    parsed = _parse_location_message(raw_text)
+                    render_type = str(parsed.get("renderType") or "location")
+                    content_text = str(parsed.get("content") or "[Location]")
+                    location_lat = parsed.get("locationLat")
+                    location_lng = parsed.get("locationLng")
+                    location_poiname = str(parsed.get("locationPoiname") or "")
+                    location_label = str(parsed.get("locationLabel") or "")
                 elif local_type == 50:
                     render_type = "voip"
                     try:
@@ -4289,6 +4339,7 @@ def _collect_chat_messages(
                                     title = str(parsed.get("title") or title)
                                     url = str(parsed.get("url") or url)
                                     from_name = str(parsed.get("from") or from_name)
+                                    from_username = str(parsed.get("fromUsername") or from_username)
                                     record_item = str(parsed.get("recordItem") or record_item)
                                     quote_title = str(parsed.get("quoteTitle") or quote_title)
                                     quote_content = str(parsed.get("quoteContent") or quote_content)
@@ -4302,6 +4353,10 @@ def _collect_chat_messages(
                                     pay_sub_type = str(parsed.get("paySubType") or pay_sub_type)
                                     file_md5 = str(parsed.get("fileMd5") or file_md5)
                                     transfer_id = str(parsed.get("transferId") or transfer_id)
+                                    quote_username = str(parsed.get("quoteUsername") or quote_username)
+                                    quote_server_id = str(parsed.get("quoteServerId") or quote_server_id)
+                                    quote_type = str(parsed.get("quoteType") or quote_type)
+                                    quote_voice_length = str(parsed.get("quoteVoiceLength") or quote_voice_length)
 
                                     if render_type == "transfer":
                                         # 如果 transferId 仍为空，尝试从原始 XML 提取
@@ -4385,6 +4440,10 @@ def _collect_chat_messages(
                         "paySubType": pay_sub_type,
                         "transferStatus": transfer_status,
                         "transferId": transfer_id,
+                        "locationLat": location_lat,
+                        "locationLng": location_lng,
+                        "locationPoiname": location_poiname,
+                        "locationLabel": location_label,
                         "_rawText": raw_text if local_type == 266287972401 else "",
                     }
                 )

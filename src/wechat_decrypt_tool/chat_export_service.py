@@ -40,6 +40,7 @@ from .chat_helpers import (
     _load_latest_message_previews,
     _lookup_resource_md5,
     _parse_app_message,
+    _parse_location_message,
     _parse_system_message_content,
     _parse_pat_message,
     _pick_display_name,
@@ -3378,6 +3379,10 @@ def _parse_message_for_export(
     file_md5 = ""
     transfer_id = ""
     voip_type = ""
+    location_lat: Optional[float] = None
+    location_lng: Optional[float] = None
+    location_poiname = ""
+    location_label = ""
 
     if local_type == 10000:
         render_type = "system"
@@ -3437,6 +3442,14 @@ def _parse_message_for_export(
         quote_voice_length = str(parsed.get("quoteVoiceLength") or "")
         quote_title = str(parsed.get("quoteTitle") or "")
         quote_content = str(parsed.get("quoteContent") or "")
+    elif local_type == 48:
+        parsed = _parse_location_message(raw_text)
+        render_type = str(parsed.get("renderType") or "location")
+        content_text = str(parsed.get("content") or "[Location]")
+        location_lat = parsed.get("locationLat")
+        location_lng = parsed.get("locationLng")
+        location_poiname = str(parsed.get("locationPoiname") or "")
+        location_label = str(parsed.get("locationLabel") or "")
     elif local_type == 3:
         render_type = "image"
         def add_md5(v: Any) -> None:
@@ -3708,6 +3721,10 @@ def _parse_message_for_export(
         "transferStatus": transfer_status,
         "transferId": transfer_id,
         "voipType": voip_type,
+        "locationLat": location_lat,
+        "locationLng": location_lng,
+        "locationPoiname": location_poiname,
+        "locationLabel": location_label,
     }
 
 

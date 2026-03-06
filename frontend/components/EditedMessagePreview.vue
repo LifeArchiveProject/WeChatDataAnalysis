@@ -83,6 +83,10 @@
           [语音]
         </div>
 
+        <div v-else-if="renderType === 'location'" class="max-w-sm">
+          <ChatLocationCard :message="message" />
+        </div>
+
         <!-- 默认文本消息 -->
         <div
           v-else

@@ -551,6 +551,7 @@
                     :preview="message.preview"
                     :fromAvatar="message.fromAvatar"
                     :from="message.from"
+                    :linkType="message.linkType"
                     :isSent="message.isSent"
                     :variant="message.linkCardVariant || 'default'"
                   />
@@ -813,6 +814,9 @@
                     <div class="wechat-redpacket-bottom">
                       <span>微信红包</span>
                     </div>
+                  </div>
+                  <div v-else-if="message.renderType === 'location'" class="max-w-sm">
+                    <ChatLocationCard :message="message" />
                   </div>
                   <!-- 文本消息 -->
                   <div v-else-if="message.renderType === 'text'"
@@ -1490,12 +1494,12 @@
                       @contextmenu="openMediaContextMenu($event, rec, 'message')"
                     >
                       <div class="wechat-link-content">
-                        <div class="wechat-link-info">
-                          <div class="wechat-link-title">{{ rec.title || rec.content || rec.url || '链接' }}</div>
+                        <div class="wechat-link-title">{{ rec.title || rec.content || rec.url || '链接' }}</div>
+                        <div v-if="rec.content || rec.preview" class="wechat-link-summary">
                           <div v-if="rec.content" class="wechat-link-desc">{{ rec.content }}</div>
-                        </div>
-                        <div v-if="rec.preview" class="wechat-link-thumb">
-                          <img :src="rec.preview" :alt="rec.title || '链接预览'" class="wechat-link-thumb-img" referrerpolicy="no-referrer" loading="lazy" decoding="async" @error="onChatHistoryLinkPreviewError(rec)" />
+                          <div v-if="rec.preview" class="wechat-link-thumb">
+                            <img :src="rec.preview" :alt="rec.title || '链接预览'" class="wechat-link-thumb-img" referrerpolicy="no-referrer" loading="lazy" decoding="async" @error="onChatHistoryLinkPreviewError(rec)" />
+                          </div>
                         </div>
                       </div>
                       <div class="wechat-link-from">
@@ -1602,12 +1606,12 @@
                 @contextmenu="openMediaContextMenu($event, win, 'message')"
               >
                 <div class="wechat-link-content">
-                  <div class="wechat-link-info">
-                    <div class="wechat-link-title">{{ win.title || win.url || '链接' }}</div>
+                  <div class="wechat-link-title">{{ win.title || win.url || '链接' }}</div>
+                  <div v-if="win.content || win.preview" class="wechat-link-summary">
                     <div v-if="win.content" class="wechat-link-desc">{{ win.content }}</div>
-                  </div>
-                  <div v-if="win.preview" class="wechat-link-thumb">
-                    <img :src="win.preview" :alt="win.title || '链接预览'" class="wechat-link-thumb-img" referrerpolicy="no-referrer" loading="lazy" decoding="async" @error="onChatHistoryLinkPreviewError(win)" />
+                    <div v-if="win.preview" class="wechat-link-thumb">
+                      <img :src="win.preview" :alt="win.title || '链接预览'" class="wechat-link-thumb-img" referrerpolicy="no-referrer" loading="lazy" decoding="async" @error="onChatHistoryLinkPreviewError(win)" />
+                    </div>
                   </div>
                 </div>
                 <div class="wechat-link-from">
@@ -1768,12 +1772,12 @@
                     @contextmenu="openMediaContextMenu($event, rec, 'message')"
                   >
                     <div class="wechat-link-content">
-                      <div class="wechat-link-info">
-                        <div class="wechat-link-title">{{ rec.title || rec.content || rec.url || '链接' }}</div>
+                      <div class="wechat-link-title">{{ rec.title || rec.content || rec.url || '链接' }}</div>
+                      <div v-if="rec.content || rec.preview" class="wechat-link-summary">
                         <div v-if="rec.content" class="wechat-link-desc">{{ rec.content }}</div>
-                      </div>
-                      <div v-if="rec.preview" class="wechat-link-thumb">
-                        <img :src="rec.preview" :alt="rec.title || '链接预览'" class="wechat-link-thumb-img" referrerpolicy="no-referrer" loading="lazy" decoding="async" @error="onChatHistoryLinkPreviewError(rec)" />
+                        <div v-if="rec.preview" class="wechat-link-thumb">
+                          <img :src="rec.preview" :alt="rec.title || '链接预览'" class="wechat-link-thumb-img" referrerpolicy="no-referrer" loading="lazy" decoding="async" @error="onChatHistoryLinkPreviewError(rec)" />
+                        </div>
                       </div>
                     </div>
                     <div class="wechat-link-from">
@@ -2465,6 +2469,7 @@ import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { useChatRealtimeStore } from '~/stores/chatRealtime'
 import { usePrivacyStore } from '~/stores/privacy'
 import wechatPcLogoUrl from '~/assets/images/wechat/WeChat-Icon-Logo.wine.svg'
+import miniProgramIconUrl from '~/assets/images/wechat/mini-program.svg'
 import zipIconUrl from '~/assets/images/wechat/zip.png'
 import pdfIconUrl from '~/assets/images/wechat/pdf.png'
 import wordIconUrl from '~/assets/images/wechat/word.png'
@@ -5953,7 +5958,7 @@ const loadSessionsForSelectedAccount = async () => {
     id: s.id,
     name: s.name || s.username || s.id,
     avatar: s.avatar || null,
-    lastMessage: s.lastMessage || '',
+    lastMessage: normalizeSessionPreview(s.lastMessage || ''),
     lastMessageTime: s.lastMessageTime || '',
     unreadCount: s.unreadCount || 0,
     isGroup: !!s.isGroup,
@@ -6039,7 +6044,7 @@ const refreshSessionsForSelectedAccount = async ({ sourceOverride } = {}) => {
     id: s.id,
     name: s.name || s.username || s.id,
     avatar: s.avatar || null,
-    lastMessage: s.lastMessage || '',
+    lastMessage: normalizeSessionPreview(s.lastMessage || ''),
     lastMessageTime: s.lastMessageTime || '',
     unreadCount: s.unreadCount || 0,
     isGroup: !!s.isGroup,
@@ -6308,6 +6313,10 @@ const normalizeMessage = (msg) => {
     transferReceived: msg.paySubType === '3' || msg.transferStatus === '已收款' || msg.transferStatus === '已被接收',
     voiceUrl: normalizedVoiceUrl || '',
     voiceDuration: msg.voiceLength || msg.voiceDuration || '',
+    locationLat: msg.locationLat ?? null,
+    locationLng: msg.locationLng ?? null,
+    locationPoiname: String(msg.locationPoiname || '').trim(),
+    locationLabel: String(msg.locationLabel || '').trim(),
     preview: normalizedLinkPreviewUrl || '',
     linkType: String(msg.linkType || '').trim(),
     linkStyle: String(msg.linkStyle || '').trim(),
@@ -6407,6 +6416,14 @@ const closeTopFloatingWindow = () => {
   if (!list.length) return
   const top = list.reduce((acc, cur) => (Number(cur?.zIndex || 0) >= Number(acc?.zIndex || 0) ? cur : acc), list[0])
   if (top?.id) closeFloatingWindow(top.id)
+}
+
+const normalizeSessionPreview = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  if (/^\[location\]/i.test(text)) return text.replace(/^\[location\]/i, '[位置]')
+  if (/:\s*\[location\]$/i.test(text)) return text.replace(/\[location\]$/i, '[位置]')
+  return text
 }
 
 const openFloatingWindow = (payload) => {
@@ -7843,13 +7860,15 @@ const onMessageScroll = async () => {
 const LinkCard = defineComponent({
   name: 'LinkCard',
   props: {
-    href: { type: String, required: true },
+    href: { type: String, default: '' },
     heading: { type: String, default: '' },
     abstract: { type: String, default: '' },
     preview: { type: String, default: '' },
     fromAvatar: { type: String, default: '' },
     from: { type: String, default: '' },
+    linkType: { type: String, default: '' },
     isSent: { type: Boolean, default: false },
+    badge: { type: String, default: '' },
     variant: { type: String, default: 'default' }
   },
   setup(props) {
@@ -7863,7 +7882,9 @@ const LinkCard = defineComponent({
       // Fallback: when the appmsg XML doesn't provide sourcedisplayname/appname,
       // show the host so the footer row still matches WeChat's fixed card layout.
       try {
-        const host = new URL(String(props.href || '')).hostname
+        const href = String(props.href || '').trim()
+        if (!/^https?:\/\//i.test(href)) return ''
+        const host = new URL(href).hostname
         return String(host || '').trim()
       } catch {
         return ''
@@ -7872,6 +7893,9 @@ const LinkCard = defineComponent({
 
     return () => {
       const fromText = getFromText()
+      const href = String(props.href || '').trim()
+      const canNavigate = /^https?:\/\//i.test(href)
+      const badgeText = String(props.badge || '').trim()
       // WeChat link cards show a small avatar next to the source text. We don't
       // always have a real image URL, so fall back to the first glyph.
       const fromAvatarText = (() => {
@@ -7879,7 +7903,9 @@ const LinkCard = defineComponent({
         return t ? (Array.from(t)[0] || '') : ''
       })()
       const fromAvatarUrl = String(props.fromAvatar || '').trim()
-      const isCoverVariant = String(props.variant || '').trim() === 'cover'
+      const isMiniProgram = String(props.linkType || '').trim() === 'mini_program'
+      const isCoverVariant = !isMiniProgram && String(props.variant || '').trim() === 'cover'
+      const Tag = canNavigate ? 'a' : 'div'
 
       // Props may change when switching accounts/chats; reset load state per URL.
       if (fromAvatarUrl !== lastFromAvatarUrl.value) {
@@ -7893,6 +7919,12 @@ const LinkCard = defineComponent({
       const fromAvatarStyle = fromAvatarImgOk.value
         ? {
             background: isCoverVariant ? 'rgba(255, 255, 255, 0.92)' : '#fff',
+            color: 'transparent'
+          }
+        : null
+      const miniProgramAvatarStyle = fromAvatarImgOk.value
+        ? {
+            background: '#fff',
             color: 'transparent'
           }
         : null
@@ -7918,17 +7950,17 @@ const LinkCard = defineComponent({
               onError: onFromAvatarError
             }) : null
           ].filter(Boolean)),
-          h('div', { class: 'wechat-link-cover-from-name' }, fromText || '\u200B')
-        ])
+          h('div', { class: 'wechat-link-cover-from-name', style: { flex: '1 1 auto', minWidth: '0' } }, fromText || '\u200B'),
+          badgeText ? h('div', { class: 'wechat-link-cover-badge' }, badgeText) : null,
+        ].filter(Boolean))
 
         return h(
-          'a',
+          Tag,
           {
-            href: props.href,
-            target: '_blank',
-            rel: 'noreferrer',
+            ...(canNavigate ? { href, target: '_blank', rel: 'noreferrer' } : { role: 'group', 'aria-disabled': 'true' }),
             class: [
               'wechat-link-card-cover',
+              !canNavigate ? 'wechat-link-card--disabled' : '',
               'wechat-special-card',
               'msg-radius',
               props.isSent ? 'wechat-special-sent-side' : ''
@@ -7958,19 +7990,91 @@ const LinkCard = defineComponent({
               }),
               fromRow,
             ]) : fromRow,
-            h('div', { class: 'wechat-link-cover-title' }, props.heading || props.href)
+            h('div', { class: 'wechat-link-cover-title' }, props.heading || href)
           ].filter(Boolean)
         )
       }
 
+      const headingText = String(props.heading || href || '').trim()
+      let abstractText = String(props.abstract || '').trim()
+      if (abstractText && headingText && abstractText === headingText) abstractText = ''
+
+      if (isMiniProgram) {
+        return h(
+          Tag,
+          {
+            ...(canNavigate ? { href, target: '_blank', rel: 'noreferrer' } : { role: 'group', 'aria-disabled': 'true' }),
+            class: [
+              'wechat-link-card',
+              'wechat-link-card--mini-program',
+              !canNavigate ? 'wechat-link-card--disabled' : '',
+              'wechat-special-card',
+              'msg-radius',
+              props.isSent ? 'wechat-special-sent-side' : ''
+            ].filter(Boolean).join(' '),
+            style: {
+              width: '210px',
+              minWidth: '210px',
+              maxWidth: '210px',
+              maxHeight: '270px',
+              height: '270px',
+              display: 'flex',
+              flexDirection: 'column',
+              boxSizing: 'border-box',
+              flex: '0 0 auto',
+              background: '#fff',
+              border: 'none',
+              boxShadow: 'none',
+              textDecoration: 'none',
+              outline: 'none'
+            }
+          },
+          [
+            h('div', { class: 'wechat-link-mini-body' }, [
+              h('div', { class: 'wechat-link-mini-header' }, [
+                h('div', { class: 'wechat-link-mini-header-avatar', style: miniProgramAvatarStyle, 'aria-hidden': 'true' }, [
+                  showFromAvatarText ? (fromAvatarText || '\u200B') : null,
+                  showFromAvatarImg ? h('img', {
+                    src: fromAvatarUrl,
+                    alt: '',
+                    class: 'wechat-link-mini-header-avatar-img',
+                    referrerpolicy: 'no-referrer',
+                    onLoad: onFromAvatarLoad,
+                    onError: onFromAvatarError
+                  }) : null
+                ].filter(Boolean)),
+                h('div', { class: 'wechat-link-mini-header-name' }, fromText || '\u200B')
+              ]),
+              h('div', { class: 'wechat-link-mini-title' }, headingText || abstractText || href),
+              h('div', { class: ['wechat-link-mini-preview', !props.preview ? 'wechat-link-mini-preview--empty' : ''].filter(Boolean).join(' ') }, [
+                props.preview ? h('img', {
+                  src: props.preview,
+                  alt: props.heading || '小程序预览',
+                  class: 'wechat-link-mini-preview-img',
+                  referrerpolicy: 'no-referrer'
+                }) : null
+              ].filter(Boolean))
+            ]),
+            h('div', { class: 'wechat-link-mini-footer' }, [
+              h('img', {
+                src: miniProgramIconUrl,
+                alt: '',
+                class: 'wechat-link-mini-footer-icon',
+                'aria-hidden': 'true'
+              }),
+              h('span', { class: 'wechat-link-mini-footer-text' }, '小程序')
+            ])
+          ]
+        )
+      }
+
       return h(
-        'a',
+        Tag,
         {
-          href: props.href,
-          target: '_blank',
-          rel: 'noreferrer',
+          ...(canNavigate ? { href, target: '_blank', rel: 'noreferrer' } : { role: 'group', 'aria-disabled': 'true' }),
           class: [
             'wechat-link-card',
+            !canNavigate ? 'wechat-link-card--disabled' : '',
             'wechat-special-card',
             'msg-radius',
             props.isSent ? 'wechat-special-sent-side' : ''
@@ -7995,13 +8099,15 @@ const LinkCard = defineComponent({
         },
         [
           h('div', { class: 'wechat-link-content' }, [
-            h('div', { class: 'wechat-link-info' }, [
-              h('div', { class: 'wechat-link-title' }, props.heading || props.href),
-              props.abstract ? h('div', { class: 'wechat-link-desc' }, props.abstract) : null
-            ].filter(Boolean)),
-            props.preview ? h('div', { class: 'wechat-link-thumb' }, [
-              h('img', { src: props.preview, alt: props.heading || '链接预览', class: 'wechat-link-thumb-img', referrerpolicy: 'no-referrer' })
-            ]) : null
+            h('div', { class: 'wechat-link-title' }, headingText || href),
+            (abstractText || props.preview)
+              ? h('div', { class: 'wechat-link-summary' }, [
+                abstractText ? h('div', { class: 'wechat-link-desc' }, abstractText) : null,
+                props.preview ? h('div', { class: 'wechat-link-thumb' }, [
+                  h('img', { src: props.preview, alt: props.heading || '链接预览', class: 'wechat-link-thumb-img', referrerpolicy: 'no-referrer' })
+                ]) : null
+              ].filter(Boolean))
+              : null
           ].filter(Boolean)),
           h('div', { class: 'wechat-link-from' }, [
             h('div', { class: 'wechat-link-from-avatar', style: fromAvatarStyle, 'aria-hidden': 'true' }, [
@@ -8015,8 +8121,9 @@ const LinkCard = defineComponent({
                 onError: onFromAvatarError
               }) : null
             ].filter(Boolean)),
-            h('div', { class: 'wechat-link-from-name' }, fromText || '\u200B')
-          ])
+            h('div', { class: 'wechat-link-from-name', style: { flex: '1 1 auto', minWidth: '0' } }, fromText || '\u200B'),
+            badgeText ? h('div', { class: 'wechat-link-badge' }, badgeText) : null
+          ].filter(Boolean))
         ].filter(Boolean)
       )
     }
@@ -8026,6 +8133,35 @@ const LinkCard = defineComponent({
 </script>
 
 <style scoped>
+/* LinkCard：小程序标记与无 URL 降级 */
+::deep(.wechat-link-badge) {
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 11px;
+  color: #b2b2b2;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+::deep(.wechat-link-cover-badge) {
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 11px;
+  color: rgba(243, 243, 243, 0.92);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+::deep(.wechat-link-card.wechat-link-card--disabled),
+::deep(.wechat-link-card-cover.wechat-link-card--disabled) {
+  cursor: default;
+}
+
+::deep(.wechat-link-card.wechat-link-card--disabled:hover),
+::deep(.wechat-link-card-cover.wechat-link-card--disabled:hover) {
+  background: #fff;
+}
+
 /* 滚动条样式 */
 .overflow-y-auto::-webkit-scrollbar {
   width: 6px;
@@ -8775,21 +8911,18 @@ const LinkCard = defineComponent({
 
 :deep(.wechat-link-content) {
   display: flex;
-  flex-direction: row;
-  align-items: flex-start;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   box-sizing: border-box;
-  /* Keep a small breathing room above the footer divider. */
-  padding: 8px 10px 6px;
+  padding: 10px 10px 8px;
   flex: 1 1 auto;
 }
 
-:deep(.wechat-link-info) {
+:deep(.wechat-link-summary) {
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  flex: 1 1 auto;
-  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 42px;
 }
 
 :deep(.wechat-link-title) {
@@ -8806,24 +8939,24 @@ const LinkCard = defineComponent({
 :deep(.wechat-link-desc) {
   font-size: 12px;
   color: #8c8c8c;
-  margin-top: 4px;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   line-height: 1.4;
   word-break: break-word;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 :deep(.wechat-link-thumb) {
   width: 42px;
   height: 42px;
-  flex-shrink: 0;
+  flex: 0 0 auto;
   border-radius: 0;
   overflow: hidden;
   background: #f2f2f2;
-  /* Center the thumbnail in the content area (WeChat desktop style). */
-  align-self: center;
+  align-self: flex-start;
 }
 
 :deep(.wechat-link-thumb-img) {
@@ -8831,6 +8964,127 @@ const LinkCard = defineComponent({
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+:deep(.wechat-link-card--mini-program) {
+  max-height: 270px;
+  height: 270px;
+}
+
+:deep(.wechat-link-mini-body) {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+:deep(.wechat-link-mini-header) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+:deep(.wechat-link-mini-header-avatar) {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #14c15f;
+  color: #fff;
+  font-size: 11px;
+  line-height: 20px;
+  text-align: center;
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+:deep(.wechat-link-mini-header-avatar-img) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+:deep(.wechat-link-mini-header-name) {
+  font-size: 13px;
+  color: #7d7d7d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+:deep(.wechat-link-mini-title) {
+  font-size: 13px;
+  line-height: 1.45;
+  color: #1a1a1a;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+:deep(.wechat-link-mini-preview) {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background: #f2f2f2;
+  margin-top: auto;
+}
+
+:deep(.wechat-link-mini-preview--empty) {
+  background: #f7f7f7;
+}
+
+:deep(.wechat-link-mini-preview-img) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+}
+
+:deep(.wechat-link-mini-footer) {
+  height: 23px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  position: relative;
+  flex-shrink: 0;
+}
+
+:deep(.wechat-link-mini-footer)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: #e8e8e8;
+}
+
+:deep(.wechat-link-mini-footer-icon) {
+  width: 12px;
+  height: 12px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+:deep(.wechat-link-mini-footer-text) {
+  font-size: 10px;
+  color: #8c8c8c;
 }
 
 :deep(.wechat-link-from) {
@@ -9057,3 +9311,4 @@ const LinkCard = defineComponent({
   }
 }
 </style>
+
