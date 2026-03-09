@@ -638,7 +638,19 @@
 	    >
 	      <div class="relative max-w-[92vw] max-h-[92vh] flex flex-col items-center" @click.stop>
 	        <video
-	          v-if="previewLivePhotoVideoSrc && !previewHasLivePhotoVideoError"
+	          v-if="previewIsVideo"
+	          ref="previewVideoEl"
+	          :key="previewVideoKey"
+	          :src="previewVideoSrc"
+	          :poster="previewVideoPoster"
+	          class="max-w-[90vw] max-h-[70vh] object-contain"
+	          controls
+	          autoplay
+	          playsinline
+	          @error="onPreviewVideoError"
+	        ></video>
+	        <video
+	          v-else-if="previewLivePhotoVideoSrc && !previewHasLivePhotoVideoError"
 	          ref="previewLiveVideoEl"
 	          :src="previewLivePhotoVideoSrc"
 	          :poster="previewSrc"
@@ -650,6 +662,13 @@
 	          @error="onPreviewLivePhotoVideoError"
 	        ></video>
 	        <img v-else :src="previewSrc" alt="预览" class="max-w-[90vw] max-h-[70vh] object-contain" />
+
+	        <div
+	          v-if="previewIsVideo && previewVideoError"
+	          class="mt-3 text-xs text-red-200 whitespace-pre-wrap text-center max-w-[90vw]"
+	        >
+	          {{ previewVideoError }}
+	        </div>
 
 	      </div>
 
@@ -1756,6 +1775,53 @@ const previewSrc = computed(() => {
   return getMediaPreviewSrc(ctx.post, ctx.media, ctx.idx)
 })
 
+const previewVideoEl = ref(null)
+const previewVideoMode = ref('') // 'local' | 'remote' | 'raw'
+const previewVideoError = ref('')
+const previewVideoTried = reactive({ local: false, remote: false, raw: false })
+
+const resetPreviewVideo = () => {
+  previewVideoMode.value = ''
+  previewVideoError.value = ''
+  previewVideoTried.local = false
+  previewVideoTried.remote = false
+  previewVideoTried.raw = false
+}
+
+const previewIsVideo = computed(() => {
+  const ctx = previewCtx.value
+  if (!ctx) return false
+  return Number(ctx.media?.type || 0) === 6
+})
+
+const previewVideoPoster = computed(() => {
+  const ctx = previewCtx.value
+  if (!ctx) return ''
+  if (Number(ctx.media?.type || 0) !== 6) return ''
+  return getMediaThumbSrc(ctx.post, ctx.media, ctx.idx) || ''
+})
+
+const previewVideoSrc = computed(() => {
+  const ctx = previewCtx.value
+  if (!ctx) return ''
+  if (Number(ctx.media?.type || 0) !== 6) return ''
+
+  const local = getSnsVideoUrl(ctx.post?.id, ctx.media?.id)
+  const remote = getSnsRemoteVideoSrc(ctx.post, ctx.media)
+  const raw = upgradeTencentHttps(String(ctx.media?.url || '').trim())
+
+  const mode = String(previewVideoMode.value || '').toLowerCase()
+  if (mode === 'local') return local
+  if (mode === 'remote') return remote
+  if (mode === 'raw') return raw
+  return local || remote || raw || ''
+})
+
+const previewVideoKey = computed(() => {
+  if (!previewIsVideo.value) return ''
+  return `${String(previewVideoMode.value || '')}:${String(previewVideoSrc.value || '')}`
+})
+
 const previewLivePhotoVideoSrc = computed(() => {
   const ctx = previewCtx.value
   if (!ctx) return ''
@@ -1879,6 +1945,7 @@ const loadPreviewCandidates = async ({ reset }) => {
 
 const openImagePreview = async (post, m, idx = 0) => {
   if (!process.client) return
+  resetPreviewVideo()
   // Stop any background hover-playing live photo when opening the preview.
   activeLivePhotoKey.value = ''
   // Preview is an intentional action; allow retry even if hover playback failed once.
@@ -1898,11 +1965,58 @@ const openImagePreview = async (post, m, idx = 0) => {
   await loadPreviewCandidates({ reset: true })
 }
 
+const openVideoPreview = (post, m, idx = 0) => {
+  if (!process.client) return
+  resetPreviewVideo()
+  activeLivePhotoKey.value = ''
+
+  const local = getSnsVideoUrl(post?.id, m?.id)
+  const remote = getSnsRemoteVideoSrc(post, m)
+  const raw = upgradeTencentHttps(String(m?.url || '').trim())
+
+  if (local) previewVideoMode.value = 'local'
+  else if (remote) previewVideoMode.value = 'remote'
+  else if (raw) previewVideoMode.value = 'raw'
+  else previewVideoError.value = '视频地址缺失。'
+
+  previewCtx.value = { post, media: m, idx: Number(idx) || 0 }
+  previewCandidatesOpen.value = false
+  resetPreviewCandidates()
+  document.body.style.overflow = 'hidden'
+}
+
+const onPreviewVideoError = () => {
+  const ctx = previewCtx.value
+  if (!ctx) return
+  if (Number(ctx.media?.type || 0) !== 6) return
+
+  const current = String(previewVideoMode.value || '').toLowerCase()
+  if (current === 'local') previewVideoTried.local = true
+  if (current === 'remote') previewVideoTried.remote = true
+  if (current === 'raw') previewVideoTried.raw = true
+
+  // Fallback order: local -> remote -> raw
+  const remote = getSnsRemoteVideoSrc(ctx.post, ctx.media)
+  if (!previewVideoTried.remote && remote) {
+    previewVideoMode.value = 'remote'
+    return
+  }
+
+  const raw = upgradeTencentHttps(String(ctx.media?.url || '').trim())
+  if (!previewVideoTried.raw && raw) {
+    previewVideoMode.value = 'raw'
+    return
+  }
+
+  previewVideoError.value = '视频加载失败：可能是本地缓存不存在，或远程下载/解密失败。'
+}
+
 const closeImagePreview = () => {
   if (!process.client) return
   previewCtx.value = null
   previewCandidatesOpen.value = false
   resetPreviewCandidates()
+  resetPreviewVideo()
   document.body.style.overflow = ''
 }
 
@@ -1912,16 +2026,7 @@ const onMediaClick = (post, m, idx = 0) => {
 
   // 视频点击逻辑
   if (mt === 6) {
-    // Open a playable mp4 via backend (downloads+decrypts as needed).
-    const remoteUrl = getSnsRemoteVideoSrc(post, m)
-    if (remoteUrl) {
-      window.open(remoteUrl, '_blank', 'noopener,noreferrer')
-      return
-    }
-
-    // Last-resort: open raw CDN url.
-    const u = String(m?.url || '').trim()
-    if (u) window.open(u, '_blank', 'noopener,noreferrer')
+    openVideoPreview(post, m, idx)
     return
   }
 

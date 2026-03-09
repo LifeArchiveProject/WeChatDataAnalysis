@@ -589,17 +589,16 @@
                         :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
                         {{ message.content }}
                       </div>
-                      <a
+                      <button
                         v-if="message.videoThumbUrl && message.videoUrl"
-                        :href="message.videoUrl"
-                        target="_blank"
-                        rel="noreferrer"
+                        type="button"
                         class="absolute inset-0 flex items-center justify-center"
+                        @click.stop="openVideoPreview(message.videoUrl, message.videoThumbUrl)"
                       >
                         <div class="w-12 h-12 rounded-full bg-black/45 flex items-center justify-center">
                           <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                         </div>
-                      </a>
+                      </button>
                       <div class="absolute inset-0 flex items-center justify-center" v-else-if="message.videoThumbUrl">
                         <div class="w-12 h-12 rounded-full bg-black/45 flex items-center justify-center">
                           <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -1388,6 +1387,40 @@
       </button>
     </div>
 
+    <!-- 视频预览弹窗 (全局固定定位) -->
+    <div
+      v-if="previewVideoUrl"
+      class="fixed inset-0 z-[13000] bg-black/90 flex items-center justify-center"
+      @click="closeVideoPreview"
+    >
+      <div class="relative max-w-[92vw] max-h-[92vh] flex flex-col items-center" @click.stop>
+        <video
+          :key="previewVideoUrl"
+          :src="previewVideoUrl"
+          :poster="previewVideoPosterUrl"
+          class="max-w-[90vw] max-h-[90vh] object-contain"
+          controls
+          autoplay
+          playsinline
+          @error="onPreviewVideoError"
+        ></video>
+        <div
+          v-if="previewVideoError"
+          class="mt-3 text-xs text-red-200 whitespace-pre-wrap text-center max-w-[90vw]"
+        >
+          {{ previewVideoError }}
+        </div>
+      </div>
+      <button
+        class="absolute top-4 right-4 text-white/80 hover:text-white p-2 rounded-full bg-black/30 hover:bg-black/50 transition-colors"
+        @click.stop="closeVideoPreview"
+      >
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
     <!-- 浮动窗口（可拖动）：合并消息 / 链接卡片 -->
     <div
       v-for="win in floatingWindows"
@@ -1561,17 +1594,16 @@
                         @error="onChatHistoryVideoThumbError(rec)"
                       />
                       <div v-else class="px-3 py-2 text-sm text-gray-700">{{ rec.content || '[视频]' }}</div>
-                      <a
+                      <button
                         v-if="rec.videoUrl"
-                        :href="rec.videoUrl"
-                        target="_blank"
-                        rel="noreferrer"
+                        type="button"
                         class="absolute inset-0 flex items-center justify-center"
+                        @click.stop="openVideoPreview(rec.videoUrl, rec.videoThumbUrl)"
                       >
                         <div class="w-12 h-12 rounded-full bg-black/45 flex items-center justify-center">
                           <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                         </div>
-                      </a>
+                      </button>
                       <div
                         v-if="rec.videoDuration"
                         class="absolute bottom-2 right-2 text-xs text-white bg-black/55 px-1.5 py-0.5 rounded"
@@ -1814,17 +1846,16 @@
                     />
                     <div v-else class="px-3 py-2 text-sm text-gray-700">{{ rec.content || '[视频]' }}</div>
 
-                    <a
+                    <button
                       v-if="rec.videoThumbUrl && rec.videoUrl"
-                      :href="rec.videoUrl"
-                      target="_blank"
-                      rel="noreferrer"
+                      type="button"
                       class="absolute inset-0 flex items-center justify-center"
+                      @click.stop="openVideoPreview(rec.videoUrl, rec.videoThumbUrl)"
                     >
                       <div class="w-12 h-12 rounded-full bg-black/45 flex items-center justify-center">
                         <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                       </div>
-                    </a>
+                    </button>
                     <div class="absolute inset-0 flex items-center justify-center" v-else-if="rec.videoThumbUrl">
                       <div class="w-12 h-12 rounded-full bg-black/45 flex items-center justify-center">
                         <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -4070,15 +4101,42 @@ const scrollToMessageId = async (id) => {
 
 // 图片预览状态
 const previewImageUrl = ref(null)
+const previewVideoUrl = ref(null)
+const previewVideoPosterUrl = ref('')
+const previewVideoError = ref('')
 
 const openImagePreview = (url) => {
+  if (!process.client) return
   previewImageUrl.value = url
   document.body.style.overflow = 'hidden'
 }
 
 const closeImagePreview = () => {
+  if (!process.client) return
   previewImageUrl.value = null
-  document.body.style.overflow = ''
+  if (!previewVideoUrl.value) document.body.style.overflow = ''
+}
+
+const openVideoPreview = (url, poster) => {
+  if (!process.client) return
+  const u = String(url || '').trim()
+  if (!u) return
+  previewVideoError.value = ''
+  previewVideoPosterUrl.value = String(poster || '').trim()
+  previewVideoUrl.value = u
+  document.body.style.overflow = 'hidden'
+}
+
+const closeVideoPreview = () => {
+  if (!process.client) return
+  previewVideoUrl.value = null
+  previewVideoPosterUrl.value = ''
+  previewVideoError.value = ''
+  if (!previewImageUrl.value) document.body.style.overflow = ''
+}
+
+const onPreviewVideoError = () => {
+  previewVideoError.value = '视频加载失败。'
 }
 
 const voiceRefs = ref({})
@@ -7047,9 +7105,7 @@ const openChatHistoryQuote = (rec) => {
   if (!url) return
 
   if (kind === 'video') {
-    try {
-      window.open(url, '_blank', 'noreferrer')
-    } catch {}
+    openVideoPreview(url, q?.thumbUrl)
     return
   }
 
@@ -7392,6 +7448,7 @@ const onGlobalKeyDown = (e) => {
   if (key === 'Escape') {
     if (contextMenu.value.visible) closeContextMenu()
     if (previewImageUrl.value) closeImagePreview()
+    if (previewVideoUrl.value) closeVideoPreview()
     if (Array.isArray(floatingWindows.value) && floatingWindows.value.length) closeTopFloatingWindow()
     if (chatHistoryModalVisible.value) closeChatHistoryModal()
     if (contactProfileCardOpen.value) {
@@ -9311,4 +9368,3 @@ const LinkCard = defineComponent({
   }
 }
 </style>
-
