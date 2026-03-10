@@ -67,3 +67,20 @@ def upsert_account_keys_in_store(
         pass
 
     return item
+
+
+def remove_account_keys_from_store(account: str) -> bool:
+    account = str(account or "").strip()
+    if not account:
+        return False
+
+    store = load_account_keys_store()
+    if account not in store:
+        return False
+
+    try:
+        store.pop(account, None)
+        _atomic_write_json(_KEY_STORE_PATH, store)
+        return True
+    except Exception:
+        return False
