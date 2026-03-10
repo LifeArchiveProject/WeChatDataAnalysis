@@ -1,6 +1,8 @@
 import os
 import json
 import hashlib
+import logging
+import re
 import sqlite3
 import sys
 import unittest
@@ -243,6 +245,22 @@ class TestChatExportHtmlFormat(unittest.TestCase):
         self._seed_media_files(account_dir)
         return account_dir
 
+    def _insert_missing_voice_message(self, account_dir: Path, *, username: str, server_id: int, duration_ms: int) -> None:
+        conn = sqlite3.connect(str(account_dir / "message_0.db"))
+        try:
+            table_name = f"msg_{hashlib.md5(username.encode('utf-8')).hexdigest()}"
+            row = conn.execute(f"SELECT COALESCE(MAX(local_id), 0), COALESCE(MAX(sort_seq), 0) FROM {table_name}").fetchone()
+            next_local_id = int((row[0] or 0)) + 1
+            next_sort_seq = int((row[1] or 0)) + 1
+            voice_xml = f'<msg><voicemsg voicelength="{int(duration_ms)}" /></msg>'
+            conn.execute(
+                f"INSERT INTO {table_name} (local_id, server_id, local_type, sort_seq, real_sender_id, create_time, message_content, compress_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (next_local_id, int(server_id), 34, next_sort_seq, 2, 1735689700, voice_xml, None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def _create_job(self, manager, *, account: str, username: str):
         job = manager.create_job(
             account=account,
@@ -283,7 +301,14 @@ class TestChatExportHtmlFormat(unittest.TestCase):
             try:
                 os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
                 svc = self._reload_export_modules()
-                job = self._create_job(svc.CHAT_EXPORT_MANAGER, account=account, username=username)
+                original_converter = svc._convert_silk_to_browser_audio
+                svc._convert_silk_to_browser_audio = (
+                    lambda data, preferred_format="mp3": (bytes(data or b""), "silk", "audio/silk")
+                )
+                try:
+                    job = self._create_job(svc.CHAT_EXPORT_MANAGER, account=account, username=username)
+                finally:
+                    svc._convert_silk_to_browser_audio = original_converter
                 self.assertEqual(job.status, "done", msg=job.error)
 
                 self.assertTrue(job.zip_path and job.zip_path.exists())
@@ -332,6 +357,8 @@ class TestChatExportHtmlFormat(unittest.TestCase):
 
                     css_text = zf.read("assets/wechat-chat-export.css").decode("utf-8", errors="ignore")
                     self.assertIn("wechat-transfer-card", css_text)
+                    self.assertRegex(css_text, re.compile(r"\.wechat-voice-sent(?::|::)after"))
+                    self.assertRegex(css_text, re.compile(r"\.wechat-voice-received(?::|::)before"))
                     self.assertNotIn("wechat-transfer-card[data-v-", css_text)
                     self.assertNotIn("bento-container", css_text)
 
@@ -346,6 +373,87 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     self.assertIn("wxemoji/Expression_1@2x.png", names)
                     self.assertIn("../../wxemoji/Expression_1@2x.png", html_text)
             finally:
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_html_export_prefers_mp3_for_voice_assets(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            self._prepare_account(root, account=account, username=username)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+
+                original_converter = svc._convert_silk_to_browser_audio
+                svc._convert_silk_to_browser_audio = (
+                    lambda data, preferred_format="mp3": (b"ID3FAKE_MP3_DATA", "mp3", "audio/mpeg")
+                )
+                try:
+                    job = self._create_job(svc.CHAT_EXPORT_MANAGER, account=account, username=username)
+                finally:
+                    svc._convert_silk_to_browser_audio = original_converter
+
+                self.assertEqual(job.status, "done", msg=job.error)
+
+                self.assertTrue(job.zip_path and job.zip_path.exists())
+                with zipfile.ZipFile(job.zip_path, "r") as zf:
+                    names = set(zf.namelist())
+                    voice_path = f"media/voices/voice_{self._VOICE_SERVER_ID}.mp3"
+                    self.assertIn(voice_path, names)
+                    self.assertNotIn(f"media/voices/voice_{self._VOICE_SERVER_ID}.wav", names)
+
+                    html_path = next((n for n in names if n.endswith("/messages.html")), "")
+                    self.assertTrue(html_path)
+                    html_text = zf.read(html_path).decode("utf-8")
+                    self.assertIn(f"../../{voice_path}", html_text)
+            finally:
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_html_export_keeps_voice_bubble_when_audio_file_missing(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            account_dir = self._prepare_account(root, account=account, username=username)
+            self._insert_missing_voice_message(account_dir, username=username, server_id=999999, duration_ms=6543)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+                original_converter = svc._convert_silk_to_browser_audio
+                svc._convert_silk_to_browser_audio = (
+                    lambda data, preferred_format="mp3": (bytes(data or b""), "silk", "audio/silk")
+                )
+                try:
+                    job = self._create_job(svc.CHAT_EXPORT_MANAGER, account=account, username=username)
+                finally:
+                    svc._convert_silk_to_browser_audio = original_converter
+                self.assertEqual(job.status, "done", msg=job.error)
+
+                self.assertTrue(job.zip_path and job.zip_path.exists())
+                with zipfile.ZipFile(job.zip_path, "r") as zf:
+                    names = set(zf.namelist())
+                    html_path = next((n for n in names if n.endswith("/messages.html")), "")
+                    self.assertTrue(html_path)
+                    html_text = zf.read(html_path).decode("utf-8")
+                    self.assertIn("wechat-voice-wrapper", html_text)
+                    self.assertIn('data-render-type="voice"', html_text)
+                    self.assertIn('data-voice-id="message_0:msg_d5616d78f22fe35c632f66cabecfc82d:11"', html_text)
+                    self.assertIn('class="wechat-voice-duration">7"</span>', html_text)
+            finally:
+                logging.shutdown()
                 if prev_data is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
                 else:

@@ -1964,6 +1964,114 @@ def _convert_silk_to_wav(silk_data: bytes) -> bytes:
         return silk_data
 
 
+def _looks_like_mp3(data: bytes) -> bool:
+    if not data:
+        return False
+    if data.startswith(b"ID3"):
+        return True
+    return len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0
+
+
+@lru_cache(maxsize=1)
+def _find_ffmpeg_executable() -> str:
+    import shutil
+
+    env_value = str(os.environ.get("WECHAT_TOOL_FFMPEG") or "").strip()
+    if env_value:
+        resolved = shutil.which(env_value)
+        if resolved:
+            return resolved
+        candidate = Path(env_value).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+
+    return shutil.which("ffmpeg") or ""
+
+
+def _convert_wav_to_mp3(wav_data: bytes) -> bytes:
+    import subprocess
+    import tempfile
+
+    if not wav_data or not wav_data.startswith(b"RIFF"):
+        return b""
+
+    ffmpeg_exe = _find_ffmpeg_executable()
+    if not ffmpeg_exe:
+        return b""
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            wav_path = tmp_path / "voice.wav"
+            mp3_path = tmp_path / "voice.mp3"
+            wav_path.write_bytes(wav_data)
+
+            proc = subprocess.run(
+                [
+                    ffmpeg_exe,
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(wav_path),
+                    "-vn",
+                    "-codec:a",
+                    "libmp3lame",
+                    "-q:a",
+                    "4",
+                    str(mp3_path),
+                ],
+                check=False,
+                capture_output=True,
+            )
+            if proc.returncode != 0 or not mp3_path.exists():
+                err = proc.stderr.decode("utf-8", errors="ignore").strip()
+                if err:
+                    logger.warning(f"WAV to MP3 conversion failed: {err}")
+                return b""
+
+            mp3_data = mp3_path.read_bytes()
+            if _looks_like_mp3(mp3_data):
+                return mp3_data
+    except Exception as e:
+        logger.warning(f"WAV to MP3 conversion failed: {e}")
+
+    return b""
+
+
+def _convert_silk_to_browser_audio(
+    silk_data: bytes,
+    *,
+    preferred_format: str = "mp3",
+) -> tuple[bytes, str, str]:
+    """Convert SILK audio to a browser-friendly format.
+
+    Returns `(payload, ext, media_type)`.
+    Preference order:
+      1) MP3 if ffmpeg is available
+      2) WAV if SILK decoding succeeds
+      3) original SILK bytes as a last-resort fallback
+    """
+
+    data = bytes(silk_data or b"")
+    if not data:
+        return b"", "silk", "audio/silk"
+
+    if _looks_like_mp3(data):
+        return data, "mp3", "audio/mpeg"
+
+    wav_data = data if data.startswith(b"RIFF") else _convert_silk_to_wav(data)
+    if wav_data.startswith(b"RIFF"):
+        if str(preferred_format or "").strip().lower() == "mp3":
+            mp3_data = _convert_wav_to_mp3(wav_data)
+            if mp3_data:
+                return mp3_data, "mp3", "audio/mpeg"
+        return wav_data, "wav", "audio/wav"
+
+    return data, "silk", "audio/silk"
+
+
 def _resolve_media_path_for_kind(
     account_dir: Path,
     kind: str,

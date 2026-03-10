@@ -1,6 +1,7 @@
 import os
 import json
 import hashlib
+import logging
 import sqlite3
 import sys
 import unittest
@@ -215,6 +216,7 @@ class TestChatExportHtmlPaging(unittest.TestCase):
                     page1_text = zf.read(page1_js).decode("utf-8", errors="ignore")
                     self.assertIn("MSG0001", page1_text)
             finally:
+                logging.shutdown()
                 if prev_data is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
                 else:
