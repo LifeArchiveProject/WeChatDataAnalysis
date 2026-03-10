@@ -63,186 +63,202 @@
           </div>
 
           <section ref="desktopSectionRef">
-            <div class="mb-3 text-[12px] font-bold text-[#999] tracking-widest">桌面行为</div>
-            
-            <div class="space-y-3">
-              <div class="flex items-center justify-between gap-3">
-                <div class="min-w-0 flex-1">
-                  <div class="text-[13px] font-medium text-[#222]">开机自启动</div>
-                  <div class="mt-0.5 text-[11px] text-[#909090]">系统登录后自动启动桌面端应用</div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  :aria-checked="desktopAutoLaunch"
-                  class="settings-switch shrink-0"
-                  :class="switchTrackClass(desktopAutoLaunch, !isDesktopEnv || desktopAutoLaunchLoading)"
-                  :disabled="!isDesktopEnv || desktopAutoLaunchLoading"
-                  @click="toggleDesktopAutoLaunch"
-                >
-                  <span class="settings-switch-thumb" :class="desktopAutoLaunch ? 'translate-x-[20px]' : 'translate-x-0'" />
-                </button>
-              </div>
-              <div v-if="desktopAutoLaunchError" class="text-xs text-red-600 whitespace-pre-wrap -mt-2">
-                {{ desktopAutoLaunchError }}
-              </div>
-
-              <div class="flex items-center justify-between gap-3">
-                <div class="min-w-0 flex-1">
-                  <div class="text-[13px] font-medium text-[#222]">关闭窗口行为</div>
-                  <div class="mt-0.5 text-[11px] text-[#909090]">点击关闭按钮时：默认最小化到托盘</div>
-                </div>
-                <select
-                  class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#333] outline-none transition focus:border-[#07b75b] focus:ring-1 focus:ring-[#07b75b]/30"
-                  :disabled="!isDesktopEnv || desktopCloseBehaviorLoading"
-                  :value="desktopCloseBehavior"
-                  @change="onDesktopCloseBehaviorChange"
-                >
-                  <option value="tray">最小化到托盘</option>
-                  <option value="exit">直接退出</option>
-                </select>
-              </div>
-              <div v-if="desktopCloseBehaviorError" class="text-xs text-red-600 whitespace-pre-wrap -mt-2">
-                {{ desktopCloseBehaviorError }}
-              </div>
-
-              <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
-                <div class="min-w-0 flex-1">
-                  <div class="text-[13px] font-medium text-[#222]">后端端口</div>
-                  <div class="mt-0.5 text-[11px] text-[#909090]">桌面端：重启内置后端并刷新；网页端：尝试切换端口</div>
-                </div>
-                <div class="flex shrink-0 items-center gap-1.5">
-                  <input
-                    v-model="desktopBackendPortInput"
-                    type="number"
-                    min="1"
-                    max="65535"
-                    class="w-16 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-center text-[12px] tabular-nums text-[#333] outline-none transition focus:border-[#07b75b] focus:ring-1 focus:ring-[#07b75b]/30"
-                    :disabled="desktopBackendPortLoading || desktopBackendPortApplying"
-                    @keyup.enter="onDesktopBackendPortApply"
-                  />
+            <div class="mb-2.5 text-[12px] font-bold text-[#999] tracking-widest">桌面行为</div>
+            <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
+              <div class="px-3.5 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">开机自启动</div>
+                    <div class="mt-0.5 text-[11px] text-[#909090]">系统登录后自动启动桌面端应用</div>
+                  </div>
                   <button
                     type="button"
-                    class="rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="desktopBackendPortLoading || desktopBackendPortApplying"
-                    @click="onDesktopBackendPortApply"
+                    role="switch"
+                    :aria-checked="desktopAutoLaunch"
+                    class="settings-switch shrink-0"
+                    :class="switchTrackClass(desktopAutoLaunch, !isDesktopEnv || desktopAutoLaunchLoading)"
+                    :disabled="!isDesktopEnv || desktopAutoLaunchLoading"
+                    @click="toggleDesktopAutoLaunch"
                   >
-                    {{ desktopBackendPortApplying ? '...' : '应用' }}
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="desktopBackendPortLoading || desktopBackendPortApplying"
-                    @click="onDesktopBackendPortReset"
-                  >
-                    恢复默认
+                    <span class="settings-switch-thumb" :class="desktopAutoLaunch ? 'translate-x-[20px]' : 'translate-x-0'" />
                   </button>
                 </div>
-              </div>
-              <div v-if="desktopBackendPortError" class="text-xs text-red-600 whitespace-pre-wrap -mt-1.5">
-                {{ desktopBackendPortError }}
+                <div v-if="desktopAutoLaunchError" class="mt-1.5 text-[11px] text-red-600 whitespace-pre-wrap">
+                  {{ desktopAutoLaunchError }}
+                </div>
               </div>
 
-              <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
-                <div class="min-w-0 flex-1">
-                  <div class="text-[13px] font-medium text-[#222]">output 目录</div>
-                  <div class="mt-0.5 text-[11px] text-[#909090] break-words">{{ desktopOutputDirText }}</div>
+              <div class="px-3.5 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">关闭窗口行为</div>
+                    <div class="mt-0.5 text-[11px] text-[#909090]">点击关闭按钮时：默认最小化到托盘</div>
+                  </div>
+                  <select
+                    class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#333] outline-none transition focus:border-[#07b75b] focus:ring-1 focus:ring-[#07b75b]/30"
+                    :disabled="!isDesktopEnv || desktopCloseBehaviorLoading"
+                    :value="desktopCloseBehavior"
+                    @change="onDesktopCloseBehaviorChange"
+                  >
+                    <option value="tray">最小化到托盘</option>
+                    <option value="exit">直接退出</option>
+                  </select>
                 </div>
-                <button
-                  type="button"
-                  class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
-                  :disabled="!isDesktopEnv || desktopOutputDirLoading"
-                  @click="onDesktopOpenOutputDir"
-                >
-                  打开 output
-                </button>
+                <div v-if="desktopCloseBehaviorError" class="mt-1.5 text-[11px] text-red-600 whitespace-pre-wrap">
+                  {{ desktopCloseBehaviorError }}
+                </div>
               </div>
-              <div v-if="desktopOutputDirError" class="text-xs text-red-600 whitespace-pre-wrap -mt-1.5">
-                {{ desktopOutputDirError }}
+
+              <div class="px-3.5 py-3">
+                <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">后端端口</div>
+                    <div class="mt-0.5 text-[11px] text-[#909090]">桌面端：重启内置后端并刷新；网页端：尝试切换端口</div>
+                  </div>
+                  <div class="flex shrink-0 items-center gap-1.5">
+                    <input
+                      v-model="desktopBackendPortInput"
+                      type="number"
+                      min="1"
+                      max="65535"
+                      class="w-16 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-center text-[12px] tabular-nums text-[#333] outline-none transition focus:border-[#07b75b] focus:ring-1 focus:ring-[#07b75b]/30"
+                      :disabled="desktopBackendPortLoading || desktopBackendPortApplying"
+                      @keyup.enter="onDesktopBackendPortApply"
+                    />
+                    <button
+                      type="button"
+                      class="rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="desktopBackendPortLoading || desktopBackendPortApplying"
+                      @click="onDesktopBackendPortApply"
+                    >
+                      {{ desktopBackendPortApplying ? '...' : '应用' }}
+                    </button>
+                    <button
+                      type="button"
+                      class="rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="desktopBackendPortLoading || desktopBackendPortApplying"
+                      @click="onDesktopBackendPortReset"
+                    >
+                      恢复默认
+                    </button>
+                  </div>
+                </div>
+                <div v-if="desktopBackendPortError" class="mt-1.5 text-[11px] text-red-600 whitespace-pre-wrap">
+                  {{ desktopBackendPortError }}
+                </div>
+              </div>
+
+              <div class="px-3.5 py-3">
+                <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">output 目录</div>
+                    <div class="mt-0.5 text-[11px] text-[#909090] break-words">{{ desktopOutputDirText }}</div>
+                  </div>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="!isDesktopEnv || desktopOutputDirLoading"
+                    @click="onDesktopOpenOutputDir"
+                  >
+                    打开 output
+                  </button>
+                </div>
+                <div v-if="desktopOutputDirError" class="mt-1.5 text-[11px] text-red-600 whitespace-pre-wrap">
+                  {{ desktopOutputDirError }}
+                </div>
               </div>
             </div>
           </section>
 
           <section ref="startupSectionRef">
-            <div class="mb-3 text-[12px] font-bold text-[#999] tracking-widest">启动偏好</div>
-            
-            <div class="space-y-3">
-              <div class="flex items-center justify-between gap-3">
-                <div class="min-w-0 flex-1">
-                  <div class="text-[13px] font-medium text-[#222]">启动后自动开启实时获取</div>
-                  <div class="mt-0.5 text-[11px] text-[#909090]">进入聊天页后自动打开“实时开关”</div>
+            <div class="mb-2.5 text-[12px] font-bold text-[#999] tracking-widest">启动偏好</div>
+            <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
+              <div class="px-3.5 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">启动后自动开启实时获取</div>
+                    <div class="mt-0.5 text-[11px] text-[#909090]">进入聊天页后自动打开“实时开关”</div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    :aria-checked="desktopAutoRealtime"
+                    class="settings-switch shrink-0"
+                    :class="switchTrackClass(desktopAutoRealtime)"
+                    @click="toggleDesktopAutoRealtime"
+                  >
+                    <span class="settings-switch-thumb" :class="desktopAutoRealtime ? 'translate-x-[20px]' : 'translate-x-0'" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  :aria-checked="desktopAutoRealtime"
-                  class="settings-switch shrink-0"
-                  :class="switchTrackClass(desktopAutoRealtime)"
-                  @click="toggleDesktopAutoRealtime"
-                >
-                  <span class="settings-switch-thumb" :class="desktopAutoRealtime ? 'translate-x-[20px]' : 'translate-x-0'" />
-                </button>
               </div>
 
-              <div class="flex items-center justify-between gap-3">
-                <div class="min-w-0 flex-1">
-                  <div class="text-[13px] font-medium text-[#222]">有数据时默认进入聊天页</div>
-                  <div class="mt-0.5 text-[11px] text-[#909090]">有已解密账号时，打开应用跳转到 /chat</div>
+              <div class="px-3.5 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">有数据时默认进入聊天页</div>
+                    <div class="mt-0.5 text-[11px] text-[#909090]">有已解密账号时，打开应用跳转到 /chat</div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    :aria-checked="desktopDefaultToChatWhenData"
+                    class="settings-switch shrink-0"
+                    :class="switchTrackClass(desktopDefaultToChatWhenData)"
+                    @click="toggleDesktopDefaultToChat"
+                  >
+                    <span class="settings-switch-thumb" :class="desktopDefaultToChatWhenData ? 'translate-x-[20px]' : 'translate-x-0'" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  :aria-checked="desktopDefaultToChatWhenData"
-                  class="settings-switch shrink-0"
-                  :class="switchTrackClass(desktopDefaultToChatWhenData)"
-                  @click="toggleDesktopDefaultToChat"
-                >
-                  <span class="settings-switch-thumb" :class="desktopDefaultToChatWhenData ? 'translate-x-[20px]' : 'translate-x-0'" />
-                </button>
               </div>
             </div>
           </section>
 
           <section ref="updatesSectionRef">
-            <div class="mb-3 text-[12px] font-bold text-[#999] tracking-widest">更新</div>
-            
-            <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
-              <div class="min-w-0 flex-1">
-                <div class="text-[13px] font-medium text-[#222]">当前版本</div>
-                <div class="mt-0.5 text-[11px] text-[#909090]">{{ desktopVersionText }}</div>
+            <div class="mb-2.5 text-[12px] font-bold text-[#999] tracking-widest">更新</div>
+            <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
+              <div class="px-3.5 py-3">
+                <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">当前版本</div>
+                    <div class="mt-0.5 text-[11px] text-[#909090]">{{ desktopVersionText }}</div>
+                  </div>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-[#fafafa] px-2.5 py-1 text-[12px] text-[#222] transition hover:bg-[#f0f0f0] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="!isDesktopEnv || desktopUpdate.manualCheckLoading.value"
+                    @click="onDesktopCheckUpdates"
+                  >
+                    {{ desktopUpdate.manualCheckLoading.value ? '检查中...' : '检查桌面版更新' }}
+                  </button>
+                </div>
+                <div v-if="desktopUpdate.lastCheckMessage.value" class="mt-2 rounded-[6px] bg-[#f9f9f9] border border-[#eee] px-2.5 py-1.5 text-[11px] text-[#666] whitespace-pre-wrap break-words">
+                  {{ desktopUpdate.lastCheckMessage.value }}
+                </div>
               </div>
-              <button
-                type="button"
-                class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-[#fafafa] px-2.5 py-1 text-[12px] text-[#222] transition hover:bg-[#f0f0f0] disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="!isDesktopEnv || desktopUpdate.manualCheckLoading.value"
-                @click="onDesktopCheckUpdates"
-              >
-                {{ desktopUpdate.manualCheckLoading.value ? '检查中...' : '检查桌面版更新' }}
-              </button>
-            </div>
-            <div v-if="desktopUpdate.lastCheckMessage.value" class="mt-2 rounded-[6px] bg-[#f9f9f9] border border-[#eee] px-2.5 py-1.5 text-[11px] text-[#666] whitespace-pre-wrap break-words">
-              {{ desktopUpdate.lastCheckMessage.value }}
             </div>
           </section>
 
           <section ref="snsSectionRef">
-            <div class="mb-3 text-[12px] font-bold text-[#999] tracking-widest">朋友圈</div>
-            
-            <div class="flex items-center justify-between gap-3">
-              <div class="min-w-0 flex-1">
-                <div class="text-[13px] font-medium text-[#222]">朋友圈图片使用缓存</div>
-                <div class="mt-0.5 text-[11px] text-[#909090]">开启：下载解密失败时回退本地缓存（默认）；关闭：始终重新下载</div>
+            <div class="mb-2.5 text-[12px] font-bold text-[#999] tracking-widest">朋友圈</div>
+            <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
+              <div class="px-3.5 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">朋友圈图片使用缓存</div>
+                    <div class="mt-0.5 text-[11px] text-[#909090]">开启：下载解密失败时回退本地缓存（默认）；关闭：始终重新下载</div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    :aria-checked="snsUseCache"
+                    class="settings-switch shrink-0"
+                    :class="switchTrackClass(snsUseCache)"
+                    @click="toggleSnsUseCache"
+                  >
+                    <span class="settings-switch-thumb" :class="snsUseCache ? 'translate-x-[20px]' : 'translate-x-0'" />
+                  </button>
+                </div>
               </div>
-              <button
-                type="button"
-                role="switch"
-                :aria-checked="snsUseCache"
-                class="settings-switch shrink-0"
-                :class="switchTrackClass(snsUseCache)"
-                @click="toggleSnsUseCache"
-              >
-                <span class="settings-switch-thumb" :class="snsUseCache ? 'translate-x-[20px]' : 'translate-x-0'" />
-              </button>
             </div>
           </section>
 
