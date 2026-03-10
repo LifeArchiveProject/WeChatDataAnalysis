@@ -485,3 +485,30 @@ def update_message_edit_local_id(
                 conn.close()
         except Exception:
             pass
+
+
+def delete_account_edits(account: str) -> int:
+    a = str(account or "").strip()
+    if not a:
+        return 0
+
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = _connect()
+        cur = conn.execute(
+            """
+            DELETE FROM message_edits
+            WHERE account = ?
+            """,
+            (a,),
+        )
+        conn.commit()
+        return int(getattr(cur, "rowcount", 0) or 0)
+    except Exception:
+        return 0
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass

@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld("wechatDesktop", {
   // Data/output folder helpers
   getOutputDir: () => ipcRenderer.invoke("app:getOutputDir"),
   openOutputDir: () => ipcRenderer.invoke("app:openOutputDir"),
+  getAccountInfo: (account) => ipcRenderer.invoke("app:getAccountInfo", String(account || "")),
+  deleteAccountData: (account) => ipcRenderer.invoke("app:deleteAccountData", String(account || "")),
 
   // Auto update
   getVersion: () => ipcRenderer.invoke("app:getVersion"),

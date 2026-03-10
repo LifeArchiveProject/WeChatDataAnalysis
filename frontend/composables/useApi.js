@@ -60,6 +60,22 @@ export const useApi = () => {
     return await request('/chat/accounts')
   }
 
+  const getChatAccountInfo = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/chat/account_info' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const deleteChatAccount = async (params = {}) => {
+    const account = String(params?.account || '').trim()
+    if (!account) throw new Error('Missing account')
+    const query = new URLSearchParams()
+    query.set('account', account)
+    const url = '/chat/account' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'DELETE' })
+  }
+
   const listChatSessions = async (params = {}) => {
     const query = new URLSearchParams()
     if (params && params.account) query.set('account', params.account)
@@ -540,6 +556,8 @@ export const useApi = () => {
     decryptDatabase,
     healthCheck,
     listChatAccounts,
+    getChatAccountInfo,
+    deleteChatAccount,
     listChatSessions,
     listChatMessages,
     getChatMessageRaw,

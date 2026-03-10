@@ -215,6 +215,161 @@ function getUserDataDir() {
   return resolveDataDir();
 }
 
+function sanitizeAccountName(account) {
+  const name = String(account || "").trim();
+  if (!name) throw new Error("缺少账号参数");
+  if (name === "." || name === "..") throw new Error("账号参数非法");
+  if (name.includes("/") || name.includes("\\")) throw new Error("账号参数非法");
+  return name;
+}
+
+function listDecryptedAccountsOnDisk(databasesDir) {
+  try {
+    if (!fs.existsSync(databasesDir)) return [];
+  } catch {
+    return [];
+  }
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(databasesDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const accounts = [];
+  for (const entry of entries) {
+    try {
+      if (!entry || !entry.isDirectory()) continue;
+      const accountDir = path.join(databasesDir, entry.name);
+      const hasSession = fs.existsSync(path.join(accountDir, "session.db"));
+      const hasContact = fs.existsSync(path.join(accountDir, "contact.db"));
+      if (hasSession && hasContact) accounts.push(String(entry.name || ""));
+    } catch {}
+  }
+  accounts.sort((a, b) => a.localeCompare(b));
+  return accounts;
+}
+
+function resolveAccountDirInOutput(account) {
+  const dataDir = resolveDataDir();
+  if (!dataDir) throw new Error("无法定位数据目录");
+
+  const outputDir = path.join(dataDir, "output");
+  const databasesDir = path.join(outputDir, "databases");
+  const accountName = sanitizeAccountName(account);
+
+  const base = path.resolve(databasesDir);
+  const accountDir = path.resolve(path.join(databasesDir, accountName));
+  if (accountDir !== base && !accountDir.startsWith(base + path.sep)) {
+    throw new Error("账号路径非法");
+  }
+
+  return {
+    dataDir,
+    outputDir,
+    databasesDir,
+    accountName,
+    accountDir,
+  };
+}
+
+function getAccountInfoFromDisk(account) {
+  const { accountName, accountDir } = resolveAccountDirInOutput(account);
+  if (!fs.existsSync(accountDir) || !fs.statSync(accountDir).isDirectory()) {
+    throw new Error("账号数据不存在");
+  }
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(accountDir, { withFileTypes: true });
+  } catch {}
+  const dbFiles = entries
+    .filter((e) => !!e && e.isFile() && String(e.name || "").toLowerCase().endsWith(".db"))
+    .map((e) => String(e.name || ""))
+    .sort((a, b) => a.localeCompare(b));
+
+  let sessionUpdatedAt = 0;
+  try {
+    const st = fs.statSync(path.join(accountDir, "session.db"));
+    sessionUpdatedAt = Math.floor(Number(st?.mtimeMs || 0) / 1000);
+  } catch {}
+
+  return {
+    status: "success",
+    account: accountName,
+    path: accountDir,
+    database_count: dbFiles.length,
+    databases: dbFiles,
+    session_updated_at: sessionUpdatedAt,
+  };
+}
+
+function removeAccountFromKeyStore(dataDir, accountName) {
+  const keyStorePath = path.join(dataDir, "output", "account_keys.json");
+  try {
+    if (!fs.existsSync(keyStorePath)) return false;
+    const raw = fs.readFileSync(keyStorePath, { encoding: "utf8" });
+    const parsed = JSON.parse(raw || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    if (!Object.prototype.hasOwnProperty.call(parsed, accountName)) return false;
+    delete parsed[accountName];
+    fs.writeFileSync(keyStorePath, JSON.stringify(parsed, null, 2), { encoding: "utf8" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function deleteAccountDataFromDisk(account) {
+  const { dataDir, outputDir, databasesDir, accountName, accountDir } = resolveAccountDirInOutput(account);
+  if (!fs.existsSync(accountDir) || !fs.statSync(accountDir).isDirectory()) {
+    throw new Error("账号数据不存在");
+  }
+
+  const wasBackendRunning = !!backendProc;
+  let restartError = null;
+  let result = null;
+
+  if (wasBackendRunning) {
+    await stopBackendAndWait({ timeoutMs: 10_000 });
+  }
+
+  try {
+    const exportsDir = path.join(outputDir, "exports", accountName);
+    try {
+      fs.rmSync(exportsDir, { recursive: true, force: true });
+    } catch {}
+
+    fs.rmSync(accountDir, { recursive: true, force: true });
+    const removedKeyCache = removeAccountFromKeyStore(dataDir, accountName);
+    const accounts = listDecryptedAccountsOnDisk(databasesDir);
+    result = {
+      status: "success",
+      deleted_account: accountName,
+      accounts,
+      default_account: accounts.length ? accounts[0] : null,
+      removed_key_cache: removedKeyCache,
+    };
+  } finally {
+    if (wasBackendRunning) {
+      try {
+        startBackend();
+        await waitForBackend({ timeoutMs: 30_000 });
+      } catch (err) {
+        restartError = err;
+        logMain(`[main] failed to restart backend after deleteAccountData: ${err?.message || err}`);
+      }
+    }
+  }
+
+  if (restartError) {
+    throw new Error(`删除完成，但后端重启失败：${restartError?.message || restartError}`);
+  }
+  if (!result) throw new Error("删除账号数据失败");
+  return result;
+}
+
 function getExeDir() {
   try {
     return path.dirname(process.execPath);
@@ -1381,6 +1536,22 @@ function registerWindowIpc() {
       const message = e?.message || String(e);
       logMain(`[main] openOutputDir failed: ${message}`);
       throw new Error(message);
+    }
+  });
+
+  ipcMain.handle("app:getAccountInfo", async (_event, account) => {
+    try {
+      return getAccountInfoFromDisk(account);
+    } catch (e) {
+      throw new Error(e?.message || String(e));
+    }
+  });
+
+  ipcMain.handle("app:deleteAccountData", async (_event, account) => {
+    try {
+      return await deleteAccountDataFromDisk(account);
+    } catch (e) {
+      throw new Error(e?.message || String(e));
     }
   });
 

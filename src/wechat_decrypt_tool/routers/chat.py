@@ -3,6 +3,7 @@ import re
 import sqlite3
 import asyncio
 import json
+import shutil
 import time
 import threading
 from datetime import datetime, timedelta
@@ -67,6 +68,8 @@ from ..chat_helpers import (
 )
 from ..media_helpers import _resolve_account_db_storage_dir, _try_find_decrypted_resource
 from .. import chat_edit_store
+from ..app_paths import get_output_dir
+from ..key_store import remove_account_keys_from_store
 from ..path_fix import PathFixRoute
 from ..session_last_message import (
     build_session_last_message_table,
@@ -3493,6 +3496,85 @@ async def list_chat_accounts():
         "status": "success",
         "accounts": accounts,
         "default_account": accounts[0],
+    }
+
+
+@router.get("/api/chat/account_info", summary="获取当前账号信息")
+def get_chat_account_info(account: Optional[str] = None):
+    account_dir = _resolve_account_dir(account)
+    db_files = sorted([p.name for p in account_dir.glob("*.db") if p.is_file()])
+
+    session_db = account_dir / "session.db"
+    session_updated_at = 0
+    try:
+        session_updated_at = int(session_db.stat().st_mtime)
+    except Exception:
+        session_updated_at = 0
+
+    return {
+        "status": "success",
+        "account": account_dir.name,
+        "path": str(account_dir),
+        "database_count": len(db_files),
+        "databases": db_files,
+        "session_updated_at": session_updated_at,
+    }
+
+
+@router.delete("/api/chat/account", summary="删除当前账号在本项目中的数据")
+def delete_chat_account(account: str):
+    account_name = str(account or "").strip()
+    if not account_name:
+        raise HTTPException(status_code=400, detail="Missing account.")
+
+    account_dir = _resolve_account_dir(account_name)
+
+    # Best-effort: close realtime connections first, otherwise Windows may keep db files locked.
+    try:
+        WCDB_REALTIME.disconnect(account_name)
+    except Exception:
+        pass
+
+    with _REALTIME_SYNC_MU:
+        _REALTIME_SYNC_ALL_LOCKS.pop(account_name, None)
+        stale_lock_keys = [k for k in _REALTIME_SYNC_LOCKS.keys() if k and k[0] == account_name]
+        for k in stale_lock_keys:
+            _REALTIME_SYNC_LOCKS.pop(k, None)
+
+    removed_edit_count = 0
+    try:
+        removed_edit_count = int(chat_edit_store.delete_account_edits(account_name) or 0)
+    except Exception:
+        removed_edit_count = 0
+
+    removed_key_cache = False
+    try:
+        removed_key_cache = bool(remove_account_keys_from_store(account_name))
+    except Exception:
+        removed_key_cache = False
+
+    output_dir = get_output_dir()
+    exports_dir = output_dir / "exports" / account_name
+    if exports_dir.exists():
+        try:
+            shutil.rmtree(exports_dir)
+        except Exception:
+            # Ignore export cleanup failure; account dir removal is the core operation.
+            pass
+
+    try:
+        shutil.rmtree(account_dir)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除账号数据失败：{e}")
+
+    accounts = _list_decrypted_accounts()
+    return {
+        "status": "success",
+        "deleted_account": account_name,
+        "accounts": accounts,
+        "default_account": accounts[0] if accounts else None,
+        "removed_edit_count": removed_edit_count,
+        "removed_key_cache": removed_key_cache,
     }
 
 
