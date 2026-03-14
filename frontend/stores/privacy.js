@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 
-import { readPrivacyMode, writePrivacyMode } from '~/utils/privacy-mode'
+import { readPrivacyMode, writePrivacyMode } from '~/lib/privacy-mode'
 
 export const usePrivacyStore = defineStore('privacy', () => {
   const privacyMode = ref(false)

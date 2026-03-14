@@ -100,7 +100,7 @@
   <script setup>
   import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
   import { storeToRefs } from 'pinia'
-  import { parseTextWithEmoji } from '~/utils/wechat-emojis'
+  import { parseTextWithEmoji } from '~/lib/wechat-emojis'
   import { usePrivacyStore } from '~/stores/privacy'
 
 const props = defineProps({

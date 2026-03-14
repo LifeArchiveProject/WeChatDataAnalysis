@@ -107,7 +107,7 @@
 </template>
 
 <script setup>
-import { heatColor } from '~/utils/wrapped/heatmap'
+import { heatColor } from '~/lib/wrapped/heatmap'
 
 const props = defineProps({
   year: { type: Number, default: new Date().getFullYear() },
