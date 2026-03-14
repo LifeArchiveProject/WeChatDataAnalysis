@@ -260,7 +260,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import Stack from '~/components/wrapped/shared/VueBitsStack.vue'
-import WechatEmojiTable, { parseTextWithEmoji } from '~/utils/wechat-emojis'
+import WechatEmojiTable, { parseTextWithEmoji } from '~/lib/wechat-emojis'
 
 const props = defineProps({
   card: { type: Object, required: true },

@@ -9,6 +9,11 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
   const error = ref('')
   const loaded = ref(false)
 
+  // Capture apiBase during synchronous store setup when Nuxt context is available.
+  // useApiBase() calls useRuntimeConfig() which requires the Nuxt app context;
+  // that context can be lost inside deferred async functions (e.g. onMounted callbacks).
+  const _apiBase = useApiBase()
+
   let loadPromise = null
 
   const readSelectedAccount = () => {
@@ -64,8 +69,7 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
       }
 
       try {
-        const api = useApi()
-        const resp = await api.listChatAccounts()
+        const resp = await $fetch('/chat/accounts', { baseURL: _apiBase })
         const nextAccounts = Array.isArray(resp?.accounts) ? resp.accounts : []
         accounts.value = nextAccounts
 
