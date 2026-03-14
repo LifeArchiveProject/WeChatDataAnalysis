@@ -206,11 +206,11 @@
             </div>
 
             <select
-              v-if="availableAccounts.length > 1"
               v-model="selectedAccount"
               @change="onAccountChange"
               class="account-select"
             >
+              <option v-if="!availableAccounts.length" disabled value="">{{ chatAccounts.loading ? '加载中...' : (chatAccounts.error || '无数据库') }}</option>
               <option v-for="acc in availableAccounts" :key="acc" :value="acc">{{ acc }}</option>
             </select>
           </div>
@@ -249,7 +249,7 @@
                 <div class="relative flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
                   <div class="w-[calc(45px/var(--dpr))] h-[calc(45px/var(--dpr))] rounded-md overflow-hidden bg-gray-300">
                     <div v-if="contact.avatar" class="w-full h-full">
-                      <img :src="contact.avatar" :alt="contact.name" class="w-full h-full object-cover" referrerpolicy="no-referrer" @error="onAvatarError($event, contact)">
+                      <img :src="contact.avatar" :alt="contact.name" class="w-full h-full object-cover" loading="lazy" referrerpolicy="no-referrer" @error="onAvatarError($event, contact)">
                     </div>
                     <div v-else class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
                       :style="{ backgroundColor: contact.avatarColor || '#4B5563' }">
@@ -2493,10 +2493,10 @@ definePageMeta({
 })
 
 import { useApi } from '~/composables/useApi'
-import { parseTextWithEmoji } from '~/utils/wechat-emojis'
-import { DESKTOP_SETTING_AUTO_REALTIME_KEY, readLocalBoolSetting } from '~/utils/desktop-settings'
-import { reportServerErrorFromResponse } from '~/utils/server-error-logging'
-import { heatColor } from '~/utils/wrapped/heatmap'
+import { parseTextWithEmoji } from '~/lib/wechat-emojis'
+import { DESKTOP_SETTING_AUTO_REALTIME_KEY, readLocalBoolSetting } from '~/lib/desktop-settings'
+import { reportServerErrorFromResponse } from '~/lib/server-error-logging'
+import { heatColor } from '~/lib/wrapped/heatmap'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { useChatRealtimeStore } from '~/stores/chatRealtime'
 import { usePrivacyStore } from '~/stores/privacy'
@@ -2537,6 +2537,12 @@ useHead({
 })
 
 const route = useRoute()
+
+// Capture the API helper once in the synchronous setup scope.
+// In Nuxt 4, useApi() → useApiBase() → useRuntimeConfig() requires the Nuxt
+// app context which can be lost inside deferred async functions (onMounted,
+// event handlers).  By capturing it here we guarantee it always works.
+const _api = useApi()
 
 const routeUsername = computed(() => {
   const raw = route.params.username
@@ -2703,6 +2709,97 @@ const isLoadingContacts = ref(false)
 const contactsError = ref('')
 const chatAccounts = useChatAccountsStore()
 const { selectedAccount, accounts: availableAccounts } = storeToRefs(chatAccounts)
+
+// Pre-fetch accounts during SSR so the dropdown data is embedded in the HTML payload.
+// This also serves as a robust fallback when the Nuxt composable context is lost
+// inside deferred async functions (e.g. onMounted → ensureLoaded).
+const _apiBase = useApiBase()
+const { data: _prefetchedAccounts } = await useAsyncData('chat-accounts', () => {
+  // During SSR, relative URLs bypass the devProxy, so hit the backend directly.
+  if (process.server) {
+    const port = process.env.WECHAT_TOOL_PORT || '10392'
+    return $fetch('/api/chat/accounts', { baseURL: `http://127.0.0.1:${port}` })
+  }
+  return $fetch('/chat/accounts', { baseURL: _apiBase })
+}, { watch: false })
+if (_prefetchedAccounts.value?.accounts?.length && !chatAccounts.loaded) {
+  const resp = _prefetchedAccounts.value
+  chatAccounts.accounts = resp.accounts
+  const preferred = chatAccounts.selectedAccount
+  const fallback = resp.default_account || resp.accounts[0] || ''
+  chatAccounts.selectedAccount = (preferred && resp.accounts.includes(preferred)) ? preferred : fallback
+  chatAccounts.loaded = true
+}
+
+// Pre-fetch sessions during SSR so the contacts list renders immediately.
+const _ssrSelectedAccount = chatAccounts.selectedAccount || ''
+const { data: _prefetchedSessions } = await useAsyncData(
+  'chat-sessions-' + _ssrSelectedAccount,
+  () => {
+    if (!_ssrSelectedAccount) return Promise.resolve(null)
+    const params = new URLSearchParams({
+      account: _ssrSelectedAccount,
+      limit: '400',
+      include_hidden: 'false',
+      include_official: 'false',
+    })
+    if (process.server) {
+      const port = process.env.WECHAT_TOOL_PORT || '10392'
+      return $fetch(`/api/chat/sessions?${params}`, { baseURL: `http://127.0.0.1:${port}` })
+    }
+    return $fetch(`/chat/sessions?${params}`, { baseURL: _apiBase })
+  },
+  { watch: false },
+)
+// Populate contacts from SSR-prefetched sessions so the list renders immediately.
+// Deliberately omit avatar URLs during SSR to prevent the browser from flooding
+// the single-threaded backend with hundreds of avatar requests on first paint.
+// Avatars will be populated lazily on the client after hydration.
+if (_prefetchedSessions.value?.sessions?.length) {
+  const _normPreview = (v) => {
+    const t = String(v || '').trim()
+    if (/^\[location\]/i.test(t)) return t.replace(/^\[location\]/i, '[位置]')
+    if (/:\s*\[location\]$/i.test(t)) return t.replace(/\[location\]$/i, '[位置]')
+    return t
+  }
+  const _ssrAvatars = new Map()
+  contacts.value = _prefetchedSessions.value.sessions.map((s) => {
+    if (s.avatar) _ssrAvatars.set(s.username || s.id, s.avatar)
+    return {
+      id: s.id,
+      name: s.name || s.username || s.id,
+      avatar: null, // deferred — see _applySsrAvatars below
+      lastMessage: _normPreview(s.lastMessage || ''),
+      lastMessageTime: s.lastMessageTime || '',
+      unreadCount: s.unreadCount || 0,
+      isGroup: !!s.isGroup,
+      isTop: !!s.isTop,
+      username: s.username,
+    }
+  })
+  // After hydration, drip-feed avatar URLs in small batches so the browser
+  // doesn't fire hundreds of requests at once and starve the backend.
+  if (process.client && _ssrAvatars.size) {
+    const _applySsrAvatars = () => {
+      const entries = Array.from(_ssrAvatars.entries())
+      const BATCH = 6
+      let i = 0
+      const next = () => {
+        const batch = entries.slice(i, i + BATCH)
+        if (!batch.length) return
+        for (const [key, url] of batch) {
+          const c = contacts.value.find((ct) => (ct.username || ct.id) === key)
+          if (c) c.avatar = url
+        }
+        i += BATCH
+        if (i < entries.length) setTimeout(next, 150)
+      }
+      next()
+    }
+    // Delay until after hydration and initial message load have a chance to run.
+    setTimeout(_applySsrAvatars, 500)
+  }
+}
 
 // Realtime is a global switch (SidebarRail) and only affects the selected account.
 const realtimeStore = useChatRealtimeStore()
@@ -2975,7 +3072,7 @@ const selectMessageSearchSender = (username) => {
 
 const fetchMessageSearchIndexStatus = async () => {
   if (!selectedAccount.value) return null
-  const api = useApi()
+  const api = _api
   try {
     const resp = await api.getChatSearchIndexStatus({ account: selectedAccount.value })
     messageSearchIndexInfo.value = resp?.index || null
@@ -3049,7 +3146,7 @@ const fetchMessageSearchSenders = async () => {
     if (st) params.session_type = st
   }
 
-  const api = useApi()
+  const api = _api
   messageSearchSenderLoading.value = true
   try {
     const resp = await api.listChatSearchSenders(params)
@@ -3112,7 +3209,7 @@ const ensureMessageSearchIndexPolling = () => {
 
 const onMessageSearchIndexAction = async () => {
   if (!selectedAccount.value) return
-  const api = useApi()
+  const api = _api
   const rebuild = messageSearchIndexExists.value
   try {
     const resp = await api.buildChatSearchIndex({ account: selectedAccount.value, rebuild })
@@ -3652,7 +3749,7 @@ const stopExportPolling = () => {
 
 const startExportHttpPolling = (exportId) => {
   if (!exportId) return
-  const api = useApi()
+  const api = _api
   exportPollTimer = setInterval(async () => {
     try {
       const resp = await api.getChatExport(exportId)
@@ -3673,7 +3770,7 @@ const startExportPolling = (exportId) => {
   if (!exportId) return
 
   if (process.client && typeof window !== 'undefined' && typeof EventSource !== 'undefined') {
-    const apiBase = useApiBase()
+    const apiBase = _apiBase
     const url = `${apiBase}/chat/exports/${encodeURIComponent(String(exportId))}/events`
     try {
       exportEventSource = new EventSource(url)
@@ -3743,7 +3840,7 @@ const fetchContactProfile = async (options = {}) => {
   contactProfileLoading.value = true
   contactProfileError.value = ''
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.listChatContacts({
       account,
       include_friends: true,
@@ -3932,7 +4029,7 @@ watch(
 )
 
 const getExportDownloadUrl = (exportId) => {
-  const apiBase = useApiBase()
+  const apiBase = _apiBase
   return `${apiBase}/chat/exports/${encodeURIComponent(String(exportId || ''))}/download`
 }
 
@@ -4006,7 +4103,7 @@ const startChatExport = async () => {
   isExportCreating.value = true
   exportAutoSavedFor.value = ''
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.createChatExport({
       account: selectedAccount.value,
       scope,
@@ -4041,7 +4138,7 @@ const cancelCurrentExport = async () => {
   if (!exportId) return
 
   try {
-    const api = useApi()
+    const api = _api
     await api.cancelChatExport(exportId)
     const resp = await api.getChatExport(exportId)
     exportJob.value = resp?.job || exportJob.value
@@ -4316,7 +4413,7 @@ const loadContextMenuEditStatus = async (params) => {
   }
 
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.getChatEditStatus({ account, username, message_id: messageId })
     const cur = String(contextMenu.value?.message?.id || '').trim()
     if (contextMenu.value.visible && cur === messageId) {
@@ -4401,7 +4498,7 @@ const openMessageEditModal = async ({ message, mode }) => {
   }
 
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.getChatMessageRaw({ account, username: sessionId, message_id: messageId })
     const row = resp?.row || null
     const rawContent = row?.message_content
@@ -4426,7 +4523,7 @@ const saveMessageEditModal = async () => {
 
   messageEditModal.value = { ...messageEditModal.value, saving: true, error: '' }
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.editChatMessage({
       account,
       session_id: sessionId,
@@ -4512,7 +4609,7 @@ const openMessageFieldsModal = async (message) => {
   }
 
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.getChatMessageRaw({ account, username: sessionId, message_id: messageId })
     const row = resp?.row || null
     const seed = {}
@@ -4559,7 +4656,7 @@ const saveMessageFieldsModal = async () => {
 
   messageFieldsModal.value = { ...messageFieldsModal.value, saving: true, error: '' }
   try {
-    const api = useApi()
+    const api = _api
     await api.editChatMessage({
       account,
       session_id: sessionId,
@@ -4607,7 +4704,7 @@ const onResetEditedMessageClick = async () => {
   if (!ok) return
 
   try {
-    const api = useApi()
+    const api = _api
     await api.resetChatEditedMessage({ account, session_id: sessionId, message_id: messageId })
     closeContextMenu()
     await refreshSelectedMessages()
@@ -4631,7 +4728,7 @@ const onRepairMessageSenderAsMeClick = async () => {
   if (!ok) return
 
   try {
-    const api = useApi()
+    const api = _api
     await api.repairChatMessageSender({ account, session_id: sessionId, message_id: messageId, mode: 'me' })
     closeContextMenu()
     await refreshSelectedMessages()
@@ -4657,7 +4754,7 @@ const onFlipWechatMessageDirectionClick = async () => {
   if (!ok) return
 
   try {
-    const api = useApi()
+    const api = _api
     await api.flipChatMessageDirection({ account, session_id: sessionId, message_id: messageId })
     closeContextMenu()
     await refreshSelectedMessages()
@@ -4743,7 +4840,7 @@ const onCopyMessageJsonClick = async () => {
 
 const onOpenFolderClick = async () => {
   if (contextMenu.value.disabled) return
-  const api = useApi()
+  const api = _api
   const m = contextMenu.value.message
   const kind = contextMenu.value.kind
 
@@ -4889,7 +4986,7 @@ const loadTimeSidebarMonth = async ({ year, month, force } = {}) => {
   }
 
   const reqId = ++timeSidebarReqId
-  const api = useApi()
+  const api = _api
   timeSidebarLoading.value = true
   timeSidebarError.value = ''
 
@@ -5044,7 +5141,7 @@ const runMessageSearch = async ({ reset } = {}) => {
   }
 
   const reqId = ++messageSearchReqId
-  const api = useApi()
+  const api = _api
   messageSearchLoading.value = true
   messageSearchError.value = ''
   messageSearchBackendStatus.value = ''
@@ -5255,7 +5352,7 @@ const locateSearchHit = async (hit) => {
   }
 
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.getChatMessagesAround({
       account: selectedAccount.value,
       username: targetUsername,
@@ -5326,7 +5423,7 @@ const locateByAnchorId = async ({ targetUsername, anchorId, kind, label } = {}) 
   }
 
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.getChatMessagesAround({
       account: selectedAccount.value,
       username: u,
@@ -5360,7 +5457,7 @@ const locateByDate = async (dateStr) => {
   await _applyTimeSidebarSelectedDate(ds, { syncMonth: true })
 
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.getChatMessageAnchor({
       account: selectedAccount.value,
       username: selectedContact.value.username,
@@ -5385,7 +5482,7 @@ const jumpToConversationFirst = async () => {
   if (!selectedContact.value?.username) return
 
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.getChatMessageAnchor({
       account: selectedAccount.value,
       username: selectedContact.value.username,
@@ -5448,7 +5545,7 @@ const loadMoreSearchContextAfter = async () => {
   const ctxUsername = u
   searchContext.value.loadingAfter = true
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.getChatMessagesAround({
       account: selectedAccount.value,
       username: ctxUsername,
@@ -5511,7 +5608,7 @@ const loadMoreSearchContextBefore = async () => {
   const ctxUsername = u
   searchContext.value.loadingBefore = true
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.getChatMessagesAround({
       account: selectedAccount.value,
       username: ctxUsername,
@@ -5785,7 +5882,7 @@ const getFileIcon = (fileName) => {
 // 文件点击事件 - 打开文件所在文件夹
 const onFileClick = async (message) => {
   if (!message?.fileMd5) return
-  const api = useApi()
+  const api = _api
   
   try {
     if (!selectedAccount.value) return
@@ -5920,14 +6017,20 @@ const selectContact = async (contact, options = {}) => {
   selectedContact.value = contact
   const username = nextUsername
   if (!username) return
+
+  // Fire loadMessages before navigateTo so the fetch starts immediately.
+  // navigateTo can cause Nuxt to re-run useAsyncData (Suspense), which races
+  // with or cancels the message fetch when it happens afterward.
+  if (!options.skipLoadMessages) {
+    loadMessages({ username, reset: true })
+  }
+
   if (options.syncRoute !== false && username) {
     const current = routeUsername.value || ''
     if (current !== username) {
       await navigateTo(buildChatPath(username), { replace: options.replaceRoute !== false })
     }
   }
-  if (options.skipLoadMessages) return
-  loadMessages({ username, reset: true })
 }
 
 const applyRouteSelection = async () => {
@@ -5962,6 +6065,14 @@ onMounted(() => {
 })
 
 const loadContacts = async () => {
+  // If contacts were already pre-fetched during SSR, skip the initial client-side fetch.
+  // Only apply route selection (e.g. deep-link to a specific contact).
+  if (contacts.value.length && !isLoadingContacts.value) {
+    await applyRouteSelection()
+    await tryEnableRealtimeAuto()
+    return
+  }
+
   isLoadingContacts.value = true
   contactsError.value = ''
 
@@ -5987,7 +6098,7 @@ const loadContacts = async () => {
 }
 
 const loadSessionsForSelectedAccount = async () => {
-  const api = useApi()
+  const api = _api
 
   if (!selectedAccount.value) {
     contacts.value = []
@@ -6074,7 +6185,7 @@ const refreshSessionsForSelectedAccount = async ({ sourceOverride } = {}) => {
   if (!selectedAccount.value) return
   if (isLoadingContacts.value) return
 
-  const api = useApi()
+  const api = _api
   const prevSelected = selectedContact.value?.username || ''
 
   const desiredSource = (sourceOverride != null)
@@ -6159,7 +6270,7 @@ const normalizeMessage = (msg) => {
   const sender = isSent ? '我' : (msg.senderDisplayName || msg.senderUsername || selectedContact.value?.name || '')
   const fallbackAvatar = (!isSent && !selectedContact.value?.isGroup) ? (selectedContact.value?.avatar || null) : null
 
-  const apiBase = useApiBase()
+  const apiBase = _apiBase
   const normalizeMaybeUrl = (u) => (typeof u === 'string' ? u.trim() : '')
   const isUsableMediaUrl = (u) => {
     const v = normalizeMaybeUrl(u)
@@ -6425,7 +6536,7 @@ const onEmojiDownloadClick = async (message) => {
   message._emojiDownloading = true
 
   try {
-    const api = useApi()
+    const api = _api
     await api.downloadChatEmoji({
       account: selectedAccount.value,
       md5: message.emojiMd5,
@@ -6826,7 +6937,7 @@ const formatChatHistoryVideoDuration = (value) => {
 }
 
 const normalizeChatHistoryRecordItem = (rec) => {
-  const apiBase = useApiBase()
+  const apiBase = _apiBase
   const account = encodeURIComponent(selectedAccount.value || '')
   const username = encodeURIComponent(selectedContact.value?.username || '')
 
@@ -7206,7 +7317,7 @@ const openNestedChatHistory = (rec) => {
 
   ;(async () => {
     try {
-      const api = useApi()
+      const api = _api
       const resp = await api.resolveNestedChatHistory({
         account: selectedAccount.value,
         server_id: sid,
@@ -7260,7 +7371,7 @@ const resolveChatHistoryLinkRecord = async (rec) => {
   if (rec._linkResolving) return null
   rec._linkResolving = true
   try {
-    const api = useApi()
+    const api = _api
     const resp = await api.resolveAppMsg({
       account: selectedAccount.value,
       server_id: sid,
@@ -7270,7 +7381,7 @@ const resolveChatHistoryLinkRecord = async (rec) => {
       const content = String(resp.content || '').trim()
       const url = String(resp.url || '').trim()
       const from = String(resp.from || '').trim()
-      const apiBase = useApiBase()
+      const apiBase = _apiBase
       const normalizePreviewUrl = (u) => {
         const raw = String(u || '').trim()
         if (!raw) return ''
@@ -7520,7 +7631,7 @@ const loadMessages = async ({ username, reset }) => {
   if (!username) return
   if (!selectedAccount.value) return
 
-  const api = useApi()
+  const api = _api
   messagesError.value = ''
   isLoadingMessages.value = true
   activeMessagesFor.value = username
@@ -7627,7 +7738,7 @@ const refreshRealtimeIncremental = async () => {
   const container = messageContainerRef.value
   const atBottom = !!container && (container.scrollHeight - container.scrollTop - container.clientHeight) < 80
 
-  const api = useApi()
+  const api = _api
   const params = {
     account: selectedAccount.value,
     username,
@@ -7733,10 +7844,13 @@ watch(messageTypeFilter, async (next, prev) => {
 watch(
   routeUsername,
   async () => {
+    if (!process.client) return
     if (isLoadingContacts.value) return
+    // Skip if contacts haven't loaded yet — the initial selection is
+    // handled by onMounted → loadContacts → applyRouteSelection.
+    if (!contacts.value.length) return
     await applyRouteSelection()
   },
-  { immediate: true }
 )
 
 watch(messageSearchScope, async () => {

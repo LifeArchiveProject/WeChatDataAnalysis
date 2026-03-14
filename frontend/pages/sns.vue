@@ -705,9 +705,9 @@
 import { storeToRefs } from 'pinia'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
-import { parseTextWithEmoji } from '~/utils/wechat-emojis'
-import { SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting } from '~/utils/desktop-settings'
-import { reportServerErrorFromError } from '~/utils/server-error-logging'
+import { parseTextWithEmoji } from '~/lib/wechat-emojis'
+import { SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting } from '~/lib/desktop-settings'
+import { reportServerErrorFromError } from '~/lib/server-error-logging'
 
 useHead({ title: '朋友圈 - 微信数据分析助手' })
 

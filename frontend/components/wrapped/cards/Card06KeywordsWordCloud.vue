@@ -99,7 +99,7 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { gsap } from 'gsap'
 import KeywordWordCloud from '~/components/wrapped/visualizations/KeywordWordCloud.vue'
-import { parseTextWithEmoji } from '~/utils/wechat-emojis'
+import { parseTextWithEmoji } from '~/lib/wechat-emojis'
 import { usePrivacyStore } from '~/stores/privacy'
 
 const props = defineProps({

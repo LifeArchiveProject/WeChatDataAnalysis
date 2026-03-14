@@ -289,9 +289,10 @@
 </template>
 
 <script setup>
-import { DESKTOP_SETTING_AUTO_REALTIME_KEY, DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting, writeLocalBoolSetting } from '~/utils/desktop-settings'
-import { readApiBaseOverride, writeApiBaseOverride } from '~/utils/api-settings'
-import { reportServerErrorFromError } from '~/utils/server-error-logging'
+import { DESKTOP_SETTING_AUTO_REALTIME_KEY, DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting, writeLocalBoolSetting } from '~/lib/desktop-settings'
+import { readApiBaseOverride, writeApiBaseOverride } from '~/lib/api-settings'
+import { invalidateApiBaseCache } from '~/composables/useApiBase'
+import { reportServerErrorFromError } from '~/lib/server-error-logging'
 
 const props = defineProps({
   open: {
@@ -624,6 +625,7 @@ const applyDesktopBackendPort = async () => {
     const host = String(window.location?.hostname || '').trim() || '127.0.0.1'
     const nextOrigin = `${protocol}//${host}:${n}`
     writeApiBaseOverride(`${nextOrigin}/api`)
+    invalidateApiBaseCache()
 
     const waitForHealth = async (healthUrl, timeoutMs = 30_000) => {
       const startedAt = Date.now()

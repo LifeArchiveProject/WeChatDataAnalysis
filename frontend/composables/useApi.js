@@ -1,4 +1,4 @@
-import { reportServerError } from '~/utils/server-error-logging'
+import { reportServerError } from '~/lib/server-error-logging'
 
 // API请求组合式函数
 export const useApi = () => {

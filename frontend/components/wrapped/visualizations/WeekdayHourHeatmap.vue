@@ -59,7 +59,7 @@
 </template>
 
 <script setup>
-import { heatColor, maxInMatrix, formatHourRange } from '~/utils/wrapped/heatmap'
+import { heatColor, maxInMatrix, formatHourRange } from '~/lib/wrapped/heatmap'
 
 const props = defineProps({
   weekdayLabels: { type: Array, default: () => ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] },

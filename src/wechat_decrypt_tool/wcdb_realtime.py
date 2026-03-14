@@ -787,10 +787,14 @@ class WCDBRealtimeConnection:
 
 
 class WCDBRealtimeManager:
+    _FAILED_TTL = 60.0  # seconds before retrying a failed connection
+
     def __init__(self) -> None:
         self._mu = threading.Lock()
         self._conns: dict[str, WCDBRealtimeConnection] = {}
         self._connecting: dict[str, threading.Event] = {}
+        # Negative cache: accounts that failed to connect recently (avoids repeated timeouts).
+        self._failed: dict[str, float] = {}  # account -> monotonic timestamp of failure
 
     def get_status(self, account_dir: Path) -> dict[str, Any]:
         account = str(account_dir.name)
@@ -830,8 +834,18 @@ class WCDBRealtimeManager:
             conn = self._conns.get(str(account))
             return bool(conn and conn.handle > 0)
 
-    def ensure_connected(self, account_dir: Path, *, key_hex: Optional[str] = None) -> WCDBRealtimeConnection:
+    def ensure_connected(
+        self, account_dir: Path, *, key_hex: Optional[str] = None, timeout: float = 5.0
+    ) -> WCDBRealtimeConnection:
         account = str(account_dir.name)
+
+        # Fast-reject if this account failed recently to avoid repeated timeouts.
+        with self._mu:
+            failed_at = self._failed.get(account)
+            if failed_at is not None and (time.monotonic() - failed_at) < self._FAILED_TTL:
+                raise WCDBRealtimeError("WCDB connection recently failed; retry after 60s.")
+
+        deadline = time.monotonic() + timeout
 
         while True:
             with self._mu:
@@ -846,22 +860,59 @@ class WCDBRealtimeManager:
                     break
 
             # Another thread is connecting; wait a bit and retry.
-            waiter.wait(timeout=10.0)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise WCDBRealtimeError("Timed out waiting for WCDB connection.")
+            waiter.wait(timeout=min(remaining, 10.0))
+            if time.monotonic() >= deadline:
+                raise WCDBRealtimeError("Timed out waiting for WCDB connection.")
 
         key = str(key_hex or "").strip()
         if not key:
             key_item = get_account_keys_from_store(account)
             key = str((key_item or {}).get("db_key") or "").strip()
-        if len(key) != 64:
-            raise WCDBRealtimeError("Missing db key for this account (call /api/keys or decrypt first).")
 
         try:
+            if len(key) != 64:
+                with self._mu:
+                    self._failed[account] = time.monotonic()
+                raise WCDBRealtimeError("Missing db key for this account (call /api/keys or decrypt first).")
             db_storage_dir = _resolve_account_db_storage_dir(account_dir)
             if db_storage_dir is None:
                 raise WCDBRealtimeError("Cannot resolve db_storage directory for this account.")
 
             session_db_path = _resolve_session_db_path(db_storage_dir)
-            handle = open_account(session_db_path, key)
+
+            # Run open_account in a daemon thread with a timeout to avoid
+            # blocking indefinitely when the native library hangs (locked DB).
+            _handle_box: list[int] = []
+            _open_err: list[Exception] = []
+
+            def _do_open() -> None:
+                try:
+                    _handle_box.append(open_account(session_db_path, key))
+                except Exception as exc:
+                    _open_err.append(exc)
+
+            remaining = max(0.1, deadline - time.monotonic())
+            open_thread = threading.Thread(target=_do_open, daemon=True)
+            open_thread.start()
+            open_thread.join(timeout=remaining)
+
+            if open_thread.is_alive():
+                with self._mu:
+                    self._failed[account] = time.monotonic()
+                raise WCDBRealtimeError(
+                    f"open_account timed out after {timeout:.0f}s for {session_db_path}"
+                )
+            if _open_err:
+                with self._mu:
+                    self._failed[account] = time.monotonic()
+                raise _open_err[0]
+            if not _handle_box:
+                raise WCDBRealtimeError("open_account returned no handle.")
+
+            handle = _handle_box[0]
             # Some WCDB APIs (e.g. exec_query on non-session DBs) may require this context.
             try:
                 set_my_wxid(handle, account)
@@ -893,6 +944,7 @@ class WCDBRealtimeManager:
             return
         with self._mu:
             conn = self._conns.pop(a, None)
+            self._failed.pop(a, None)  # clear negative cache on explicit disconnect
         if conn is None:
             return
         try:
