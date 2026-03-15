@@ -41,6 +41,11 @@ export default defineNuxtConfig({
   },
   
   // 应用配置
+  css: [
+    '~/assets/css/chat.css'
+  ],
+
+  // 应用配置
   app: {
     head: {
       title: '微信数据库解密工具',
