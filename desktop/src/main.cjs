@@ -83,6 +83,11 @@ function getBackendAccessHost() {
 }
 
 function getBackendPort() {
+  const envPort = parsePort(process.env.WECHAT_TOOL_PORT);
+  if (envPort != null) return envPort;
+  // In dev we intentionally ignore persisted packaged-app settings so the
+  // launcher can keep Electron, Nuxt devProxy and the backend child aligned.
+  if (!app.isPackaged) return DEFAULT_BACKEND_PORT;
   const settingsPort = parsePort(loadDesktopSettings()?.backendPort);
   return settingsPort ?? DEFAULT_BACKEND_PORT;
 }

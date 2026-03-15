@@ -1,7 +1,8 @@
 // 客户端插件：检查API连接状态
-export default defineNuxtPlugin(async (nuxtApp) => {
+export default defineNuxtPlugin((nuxtApp) => {
   const { healthCheck } = useApi()
   const appStore = useAppStore()
+  let intervalId = 0
   
   // 检查API连接
   const checkApiConnection = async () => {
@@ -17,10 +18,14 @@ export default defineNuxtPlugin(async (nuxtApp) => {
       console.error('API连接失败:', error)
     }
   }
-  
-  // 初始检查
-  await checkApiConnection()
-  
-  // 定期检查（每30秒）
-  setInterval(checkApiConnection, 30000)
+
+  nuxtApp.hook('app:mounted', () => {
+    void checkApiConnection()
+
+    if (!intervalId) {
+      intervalId = window.setInterval(() => {
+        void checkApiConnection()
+      }, 30000)
+    }
+  })
 })

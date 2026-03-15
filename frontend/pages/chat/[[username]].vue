@@ -206,6 +206,7 @@
             </div>
 
             <select
+              v-if="showSearchAccountSwitcher"
               v-model="selectedAccount"
               @change="onAccountChange"
               class="account-select"
@@ -2537,6 +2538,7 @@ useHead({
 })
 
 const route = useRoute()
+const showSearchAccountSwitcher = false
 
 // Capture the API helper once in the synchronous setup scope.
 // In Nuxt 4, useApi() → useApiBase() → useRuntimeConfig() requires the Nuxt
@@ -2721,7 +2723,7 @@ const { data: _prefetchedAccounts } = await useAsyncData('chat-accounts', () => 
     return $fetch('/api/chat/accounts', { baseURL: `http://127.0.0.1:${port}` })
   }
   return $fetch('/chat/accounts', { baseURL: _apiBase })
-}, { watch: false })
+}, { watch: false, lazy: true })
 if (_prefetchedAccounts.value?.accounts?.length && !chatAccounts.loaded) {
   const resp = _prefetchedAccounts.value
   chatAccounts.accounts = resp.accounts
@@ -2749,7 +2751,7 @@ const { data: _prefetchedSessions } = await useAsyncData(
     }
     return $fetch(`/chat/sessions?${params}`, { baseURL: _apiBase })
   },
-  { watch: false },
+  { watch: false, lazy: true },
 )
 // Populate contacts from SSR-prefetched sessions so the list renders immediately.
 // Deliberately omit avatar URLs during SSR to prevent the browser from flooding
