@@ -4,6 +4,11 @@ import { normalizeApiBase, readApiBaseOverride } from '~/lib/api-settings'
 // the Nuxt composable context (e.g. inside async callbacks / onMounted chains).
 let _clientCache = ''
 
+const shouldIgnoreStoredOverride = () => {
+  if (!process.client || !import.meta.dev) return false
+  return typeof window !== 'undefined' && !!window.wechatDesktop?.__brand
+}
+
 export const useApiBase = () => {
   if (process.client && _clientCache) return _clientCache
 
@@ -23,7 +28,7 @@ export const useApiBase = () => {
   // 1) Local UI setting (web + desktop)
   // 2) NUXT_PUBLIC_API_BASE env/runtime config
   // 3) `/api`
-  const override = process.client ? readApiBaseOverride() : ''
+  const override = process.client && !shouldIgnoreStoredOverride() ? readApiBaseOverride() : ''
   const runtime = String(config?.public?.apiBase || '').trim()
   const result = normalizeApiBase(override || runtime || '/api')
 
