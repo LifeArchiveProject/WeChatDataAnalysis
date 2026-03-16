@@ -1,5 +1,5 @@
 <script>
-import { defineComponent, h, ref } from 'vue'
+import { defineComponent, h, ref, watch } from 'vue'
 import miniProgramIconUrl from '~/assets/images/wechat/mini-program.svg'
 
 export default defineComponent({
@@ -19,7 +19,15 @@ export default defineComponent({
   setup(props) {
     const fromAvatarImgOk = ref(false)
     const fromAvatarImgError = ref(false)
-    const lastFromAvatarUrl = ref('')
+
+    watch(
+      () => String(props.fromAvatar || '').trim(),
+      () => {
+        fromAvatarImgOk.value = false
+        fromAvatarImgError.value = false
+      },
+      { immediate: true }
+    )
 
     const getFromText = () => {
       const raw = String(props.from || '').trim()
@@ -46,12 +54,6 @@ export default defineComponent({
       const isMiniProgram = String(props.linkType || '').trim() === 'mini_program'
       const isCoverVariant = !isMiniProgram && String(props.variant || '').trim() === 'cover'
       const Tag = canNavigate ? 'a' : 'div'
-
-      if (fromAvatarUrl !== lastFromAvatarUrl.value) {
-        lastFromAvatarUrl.value = fromAvatarUrl
-        fromAvatarImgOk.value = false
-        fromAvatarImgError.value = false
-      }
 
       const showFromAvatarImg = Boolean(fromAvatarUrl) && !fromAvatarImgError.value
       const showFromAvatarText = (!fromAvatarUrl) || (!fromAvatarImgOk.value)
