@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("wechatDesktop", {
   toggleMaximize: () => ipcRenderer.invoke("window:toggleMaximize"),
   close: () => ipcRenderer.invoke("window:close"),
   isMaximized: () => ipcRenderer.invoke("window:isMaximized"),
+  isDebugEnabled: () => ipcRenderer.invoke("app:isDebugEnabled"),
 
   getAutoLaunch: () => ipcRenderer.invoke("app:getAutoLaunch"),
   setAutoLaunch: (enabled) => ipcRenderer.invoke("app:setAutoLaunch", !!enabled),

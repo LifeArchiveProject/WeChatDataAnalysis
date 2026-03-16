@@ -27,6 +27,22 @@ export const useChatMessages = ({
   const messageContainerRef = ref(null)
   const activeMessagesFor = ref('')
   const showJumpToBottom = ref(false)
+  let lastRenderMessagesFingerprint = ''
+
+  const isDesktopRenderer = () => {
+    if (!process.client || typeof window === 'undefined') return false
+    return !!window.wechatDesktop?.__brand
+  }
+
+  const logMessagePhase = (phase, details = {}) => {
+    if (!isDesktopRenderer()) return
+    console.info(`[chat-messages] ${phase}`, {
+      account: String(selectedAccount.value || '').trim(),
+      selectedUsername: String(selectedContact.value?.username || '').trim(),
+      activeMessagesFor: String(activeMessagesFor.value || '').trim(),
+      ...details
+    })
+  }
 
   const previewImageUrl = ref(null)
   const previewVideoUrl = ref(null)
@@ -113,8 +129,16 @@ export const useChatMessages = ({
   const renderMessages = computed(() => {
     const list = messages.value || []
     const reverseSides = !!reverseMessageSides.value
+    const fingerprint = `${String(selectedContact.value?.username || '').trim()}:${list.length}:${reverseSides ? '1' : '0'}`
+    const shouldLogRender = isDesktopRenderer() && fingerprint !== lastRenderMessagesFingerprint
+    if (shouldLogRender) {
+      logMessagePhase('renderMessages:start', {
+        count: list.length,
+        reverseSides
+      })
+    }
     let previousTs = 0
-    return list.map((message) => {
+    const rendered = list.map((message) => {
       const ts = Number(message.createTime || 0)
       const show = !previousTs || (ts && Math.abs(ts - previousTs) >= 300)
       if (ts) previousTs = ts
@@ -127,6 +151,14 @@ export const useChatMessages = ({
         timeDivider: formatTimeDivider(ts)
       }
     })
+    if (shouldLogRender) {
+      lastRenderMessagesFingerprint = fingerprint
+      logMessagePhase('renderMessages:end', {
+        count: rendered.length,
+        reverseSides
+      })
+    }
+    return rendered
   })
 
   const updateJumpToBottomState = () => {
@@ -333,6 +365,10 @@ export const useChatMessages = ({
   const loadMessages = async ({ username, reset }) => {
     if (!username || !selectedAccount.value) return
 
+    logMessagePhase('loadMessages:enter', {
+      username,
+      reset
+    })
     messagesError.value = ''
     isLoadingMessages.value = true
     activeMessagesFor.value = username
@@ -357,13 +393,47 @@ export const useChatMessages = ({
       if (realtimeEnabled.value) {
         params.source = 'realtime'
       }
+      logMessagePhase('loadMessages:request:start', {
+        username,
+        reset,
+        offset,
+        existingCount: existing.length,
+        renderTypeFilter: messageTypeFilter.value,
+        realtime: !!realtimeEnabled.value
+      })
       const response = await api.listChatMessages(params)
+      logMessagePhase('loadMessages:request:end', {
+        username,
+        reset,
+        rawCount: Array.isArray(response?.messages) ? response.messages.length : 0,
+        total: Number(response?.total || 0),
+        hasMore: response?.hasMore
+      })
 
       const raw = response?.messages || []
+      logMessagePhase('loadMessages:normalize:start', {
+        username,
+        rawCount: raw.length
+      })
       const mapped = dedupeMessagesById(raw.map(normalizeMessage))
+      logMessagePhase('loadMessages:normalize:end', {
+        username,
+        mappedCount: mapped.length
+      })
 
-      if (activeMessagesFor.value !== username) return
+      if (activeMessagesFor.value !== username) {
+        logMessagePhase('loadMessages:abort-stale', {
+          username,
+          activeMessagesFor: activeMessagesFor.value
+        })
+        return
+      }
 
+      logMessagePhase('loadMessages:state-commit:start', {
+        username,
+        reset,
+        mappedCount: mapped.length
+      })
       if (reset) {
         allMessages.value = { ...allMessages.value, [username]: mapped }
       } else {
@@ -380,6 +450,10 @@ export const useChatMessages = ({
           [username]: [...older, ...existing]
         }
       }
+      logMessagePhase('loadMessages:state-commit:end', {
+        username,
+        storedCount: (allMessages.value[username] || []).length
+      })
 
       messagesMeta.value = {
         ...messagesMeta.value,
@@ -388,8 +462,20 @@ export const useChatMessages = ({
           hasMore: response?.hasMore
         }
       }
+      logMessagePhase('loadMessages:meta-commit:end', {
+        username,
+        total: Number(response?.total || 0),
+        hasMore: response?.hasMore
+      })
 
+      logMessagePhase('loadMessages:nextTick:start', {
+        username
+      })
       await nextTick()
+      logMessagePhase('loadMessages:nextTick:end', {
+        username,
+        renderedCount: (allMessages.value[username] || []).length
+      })
       const nextContainer = messageContainerRef.value
       if (nextContainer) {
         if (reset) {
@@ -400,10 +486,28 @@ export const useChatMessages = ({
         }
       }
       updateJumpToBottomState()
+      logMessagePhase('loadMessages:scroll:end', {
+        username,
+        hasContainer: !!nextContainer,
+        scrollTop: nextContainer ? nextContainer.scrollTop : null,
+        scrollHeight: nextContainer ? nextContainer.scrollHeight : null
+      })
     } catch (error) {
+      console.error('[chat-messages] loadMessages:error', {
+        account: String(selectedAccount.value || '').trim(),
+        username: String(username || '').trim(),
+        reset: !!reset,
+        error
+      })
       messagesError.value = error?.message || '加载聊天记录失败'
     } finally {
       isLoadingMessages.value = false
+      logMessagePhase('loadMessages:exit', {
+        username,
+        reset,
+        loading: isLoadingMessages.value,
+        error: messagesError.value
+      })
     }
   }
 

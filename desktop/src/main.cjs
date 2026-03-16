@@ -1380,6 +1380,62 @@ function setupRendererConsoleLogging(win) {
   });
 }
 
+function setupRendererLifecycleLogging(win) {
+  if (!debugEnabled()) return;
+
+  const logRendererLifecycle = (message) => {
+    logMain(`[renderer] ${message}`);
+  };
+
+  logRendererLifecycle(`window-created id=${win.id}`);
+
+  win.webContents.on("did-start-loading", () => {
+    logRendererLifecycle("did-start-loading");
+  });
+
+  win.webContents.on("dom-ready", () => {
+    logRendererLifecycle(`dom-ready url=${win.webContents.getURL()}`);
+  });
+
+  win.webContents.on("did-stop-loading", () => {
+    logRendererLifecycle("did-stop-loading");
+  });
+
+  win.webContents.on("did-finish-load", () => {
+    logRendererLifecycle(`did-finish-load url=${win.webContents.getURL()}`);
+  });
+
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    logRendererLifecycle(
+      `did-fail-load code=${errorCode} mainFrame=${!!isMainFrame} url=${validatedURL} error=${errorDescription}`
+    );
+  });
+
+  win.webContents.on("did-navigate", (_event, url, httpResponseCode, httpStatusText) => {
+    logRendererLifecycle(
+      `did-navigate url=${url} code=${httpResponseCode || 0} status=${httpStatusText || ""}`
+    );
+  });
+
+  win.webContents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
+    logRendererLifecycle(`did-navigate-in-page mainFrame=${!!isMainFrame} url=${url}`);
+  });
+
+  win.webContents.on("render-process-gone", (_event, details) => {
+    logRendererLifecycle(
+      `render-process-gone reason=${details?.reason || ""} exitCode=${details?.exitCode ?? ""}`
+    );
+  });
+
+  win.on("unresponsive", () => {
+    logRendererLifecycle("window-unresponsive");
+  });
+
+  win.on("responsive", () => {
+    logRendererLifecycle("window-responsive");
+  });
+}
+
 function createMainWindow() {
   const win = new BrowserWindow({
     width: 1200,
@@ -1423,18 +1479,26 @@ function createMainWindow() {
   });
 
   setupRendererConsoleLogging(win);
+  setupRendererLifecycleLogging(win);
 
   return win;
 }
 
 async function loadWithRetry(win, url) {
   const startedAt = Date.now();
+  let attempt = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    attempt += 1;
+    logMain(`[main] loadWithRetry attempt=${attempt} url=${url}`);
     try {
       await win.loadURL(url);
+      logMain(`[main] loadWithRetry success attempt=${attempt} elapsedMs=${Date.now() - startedAt} url=${url}`);
       return;
-    } catch {
+    } catch (err) {
+      logMain(
+        `[main] loadWithRetry failure attempt=${attempt} elapsedMs=${Date.now() - startedAt} url=${url} error=${err?.message || err}`
+      );
       if (Date.now() - startedAt > 60_000) throw new Error(`Failed to load URL in time: ${url}`);
       await new Promise((r) => setTimeout(r, 500));
     }
@@ -1499,6 +1563,15 @@ function registerWindowIpc() {
     } catch (err) {
       logMain(`[main] getCloseBehavior failed: ${err?.message || err}`);
       return "tray";
+    }
+  });
+
+  ipcMain.handle("app:isDebugEnabled", () => {
+    try {
+      return debugEnabled();
+    } catch (err) {
+      logMain(`[main] app:isDebugEnabled failed: ${err?.message || err}`);
+      return false;
     }
   });
 
@@ -1727,6 +1800,7 @@ async function main() {
     process.env.ELECTRON_START_URL ||
     (app.isPackaged ? getBackendUiUrl() : "http://localhost:3000");
 
+  logMain(`[main] debugEnabled=${debugEnabled()} startUrl=${startUrl}`);
   await loadWithRetry(win, startUrl);
 
   // Auto-check updates after the UI has loaded (packaged builds only).

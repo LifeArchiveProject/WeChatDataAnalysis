@@ -58,6 +58,64 @@ const routeUsername = computed(() => {
   return (Array.isArray(raw) ? raw[0] : raw) || ''
 })
 
+const isDesktopShell = () => {
+  if (!process.client || typeof window === 'undefined') return false
+  return !!window.wechatDesktop?.__brand
+}
+
+const desktopDebugEnabled = ref(false)
+const chatBootstrapStartedAt = process.client && typeof performance !== 'undefined' ? performance.now() : 0
+let messageLoadSequence = 0
+let firstSelectContactLogged = false
+let firstLoadMessagesLogged = false
+
+const resolveDesktopDebugEnabled = async () => {
+  if (!isDesktopShell() || typeof window.wechatDesktop?.isDebugEnabled !== 'function') {
+    desktopDebugEnabled.value = false
+    return false
+  }
+
+  try {
+    desktopDebugEnabled.value = !!(await window.wechatDesktop.isDebugEnabled())
+  } catch {
+    desktopDebugEnabled.value = false
+  }
+
+  return desktopDebugEnabled.value
+}
+
+const chatBootstrapElapsedMs = () => {
+  if (!process.client || typeof performance === 'undefined') return null
+  const elapsed = performance.now() - chatBootstrapStartedAt
+  return Number.isFinite(elapsed) ? Number(elapsed.toFixed(1)) : null
+}
+
+const shouldLogChatBootstrap = () => isDesktopShell() || desktopDebugEnabled.value
+
+const logChatBootstrap = (phase, details = {}) => {
+  if (!shouldLogChatBootstrap()) return
+  console.info(`[chat-bootstrap] ${phase}`, {
+    elapsedMs: chatBootstrapElapsedMs(),
+    route: route.fullPath,
+    ...details
+  })
+}
+
+const waitForNextPaint = async () => {
+  await nextTick()
+  if (!process.client || typeof window === 'undefined') return
+  await new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.setTimeout(resolve, 0)
+    })
+  })
+}
+
+const nextMessageLoadToken = () => {
+  messageLoadSequence += 1
+  return messageLoadSequence
+}
+
 const buildChatPath = (username) => {
   return username ? `/chat/${encodeURIComponent(username)}` : '/chat'
 }
@@ -184,17 +242,83 @@ const {
 
 let exitSearchContext = async () => {}
 
+const runMessageLoad = async ({ username, reset = true, deferUntilPaint = false, reason = '', token = nextMessageLoadToken() } = {}) => {
+  const nextUsername = String(username || '').trim()
+  if (!nextUsername) return false
+
+  if (deferUntilPaint) {
+    logChatBootstrap('loadMessages:scheduled', {
+      username: nextUsername,
+      reason,
+      token
+    })
+    await waitForNextPaint()
+    if (token !== messageLoadSequence) {
+      logChatBootstrap('loadMessages:skipped-stale', {
+        username: nextUsername,
+        reason,
+        token
+      })
+      return false
+    }
+  }
+
+  const isFirstLoad = !firstLoadMessagesLogged
+  if (isFirstLoad) {
+    firstLoadMessagesLogged = true
+  }
+
+  logChatBootstrap(isFirstLoad ? 'loadMessages:first:start' : 'loadMessages:start', {
+    username: nextUsername,
+    reason,
+    token,
+    reset
+  })
+
+  await loadMessages({ username: nextUsername, reset })
+
+  logChatBootstrap(isFirstLoad ? 'loadMessages:first:end' : 'loadMessages:end', {
+    username: nextUsername,
+    reason,
+    token,
+    renderedMessages: messages.value.length
+  })
+
+  return true
+}
+
 const selectContact = async (contact, options = {}) => {
   if (!contact) return
+  const selectionReason = String(options.reason || 'manual-select').trim() || 'manual-select'
+  const loadToken = nextMessageLoadToken()
   const nextUsername = contact?.username || ''
   if (searchContext.value?.active && searchContext.value.username && searchContext.value.username !== nextUsername) {
     await exitSearchContext()
   }
+
+  const isFirstSelect = !firstSelectContactLogged
+  if (isFirstSelect) {
+    firstSelectContactLogged = true
+  }
+  logChatBootstrap(isFirstSelect ? 'selectContact:first' : 'selectContact', {
+    username: nextUsername,
+    reason: selectionReason,
+    deferLoadMessages: !!options.deferLoadMessages,
+    skipLoadMessages: !!options.skipLoadMessages,
+    syncRoute: options.syncRoute !== false
+  })
+
   selectedContact.value = contact
   if (!nextUsername) return
 
   if (!options.skipLoadMessages) {
-    loadMessages({ username: nextUsername, reset: true })
+    void runMessageLoad({
+      username: nextUsername,
+      reset: true,
+      deferUntilPaint: !!options.deferLoadMessages,
+      reason: selectionReason,
+      token: loadToken
+    })
   }
 
   if (options.syncRoute !== false && nextUsername) {
@@ -205,24 +329,34 @@ const selectContact = async (contact, options = {}) => {
   }
 }
 
-const applyRouteSelection = async () => {
+const applyRouteSelection = async (options = {}) => {
   if (!contacts.value || contacts.value.length === 0) {
     selectedContact.value = null
     return
   }
 
+  const selectionReason = String(options.reason || 'route-selection').trim() || 'route-selection'
   const requested = routeUsername.value || ''
   if (requested) {
     const matched = contacts.value.find((contact) => contact.username === requested)
     if (matched) {
       if (selectedContact.value?.username !== matched.username) {
-        await selectContact(matched, { syncRoute: false })
+        await selectContact(matched, {
+          syncRoute: false,
+          deferLoadMessages: !!options.deferLoadMessages,
+          reason: `${selectionReason}:matched-route`
+        })
       }
       return
     }
   }
 
-  await selectContact(contacts.value[0], { syncRoute: true, replaceRoute: true })
+  await selectContact(contacts.value[0], {
+    syncRoute: true,
+    replaceRoute: true,
+    deferLoadMessages: !!options.deferLoadMessages,
+    reason: `${selectionReason}:fallback-first-contact`
+  })
 }
 
 const searchState = useChatSearch({
@@ -363,6 +497,9 @@ const queueRealtimeSessionsRefresh = () => {
 }
 
 const onAccountChange = async () => {
+  logChatBootstrap('accountChange:start', {
+    selectedAccount: selectedAccount.value
+  })
   try {
     isLoadingContacts.value = true
     contactsError.value = ''
@@ -374,7 +511,18 @@ const onAccountChange = async () => {
   }
 
   resetAccountScopedState()
-  await applyRouteSelection()
+  logChatBootstrap('accountChange:applyRouteSelection:start', {
+    selectedAccount: selectedAccount.value,
+    contactCount: contacts.value.length
+  })
+  await applyRouteSelection({
+    reason: 'account-change'
+  })
+  logChatBootstrap('accountChange:end', {
+    selectedAccount: selectedAccount.value,
+    selectedUsername: selectedContact.value?.username || '',
+    contactCount: contacts.value.length
+  })
 }
 
 const onGlobalClick = (event) => {
@@ -420,6 +568,13 @@ const onGlobalKeyDown = (event) => {
 onMounted(async () => {
   if (!process.client) return
 
+  await resolveDesktopDebugEnabled()
+  logChatBootstrap('route mount start', {
+    requestedUsername: routeUsername.value,
+    selectedAccount: selectedAccount.value,
+    desktopShell: isDesktopShell()
+  })
+
   document.addEventListener('click', onGlobalClick)
   document.addEventListener('keydown', onGlobalKeyDown)
   document.addEventListener('mousemove', onFloatingWindowMouseMove)
@@ -428,9 +583,43 @@ onMounted(async () => {
   document.addEventListener('touchend', onFloatingWindowMouseUp)
   document.addEventListener('touchcancel', onFloatingWindowMouseUp)
 
+  logChatBootstrap('loadContacts:start', {
+    selectedAccount: selectedAccount.value
+  })
   await loadContacts()
-  await applyRouteSelection()
+  logChatBootstrap('loadContacts:end', {
+    selectedAccount: selectedAccount.value,
+    contactCount: contacts.value.length
+  })
+
+  const deferInitialConversationBoot = isDesktopShell()
+  await waitForNextPaint()
+  logChatBootstrap('first render completion', {
+    contactCount: contacts.value.length,
+    deferInitialConversationBoot
+  })
+
+  logChatBootstrap('applyRouteSelection:start', {
+    requestedUsername: routeUsername.value,
+    deferLoadMessages: deferInitialConversationBoot
+  })
+  await applyRouteSelection({
+    deferLoadMessages: deferInitialConversationBoot,
+    reason: deferInitialConversationBoot ? 'initial-route-post-paint' : 'initial-route'
+  })
+  logChatBootstrap('applyRouteSelection:end', {
+    selectedUsername: selectedContact.value?.username || '',
+    requestedUsername: routeUsername.value
+  })
+
+  logChatBootstrap('tryEnableRealtimeAuto:start', {
+    selectedAccount: selectedAccount.value,
+    realtimeEnabled: realtimeEnabled.value
+  })
   await tryEnableRealtimeAuto()
+  logChatBootstrap('tryEnableRealtimeAuto:end', {
+    realtimeEnabled: realtimeEnabled.value
+  })
 })
 
 onUnmounted(() => {
@@ -488,11 +677,17 @@ watch(messageTypeFilter, async (next, prev) => {
 
 watch(
   routeUsername,
-  async () => {
+  async (next, prev) => {
     if (!process.client) return
     if (isLoadingContacts.value) return
     if (!contacts.value.length) return
-    await applyRouteSelection()
+    logChatBootstrap('routeUsername:change', {
+      previousUsername: prev || '',
+      nextUsername: next || ''
+    })
+    await applyRouteSelection({
+      reason: 'route-watch'
+    })
   }
 )
 
