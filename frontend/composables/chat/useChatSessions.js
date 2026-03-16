@@ -7,7 +7,7 @@ const SESSION_LIST_WIDTH_DEFAULT = 295
 const SESSION_LIST_WIDTH_MIN = 220
 const SESSION_LIST_WIDTH_MAX = 520
 
-export const useChatSessions = async ({ chatAccounts, selectedAccount, realtimeEnabled, api }) => {
+export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled, api }) => {
   const showSearchAccountSwitcher = false
 
   const contacts = ref([])
@@ -133,79 +133,6 @@ export const useChatSessions = async ({ chatAccounts, selectedAccount, realtimeE
   onMounted(() => {
     loadSessionListWidth()
   })
-
-  const apiBase = useApiBase()
-
-  const { data: prefetchedAccounts } = await useAsyncData('chat-accounts', () => {
-    if (process.server) {
-      const port = process.env.WECHAT_TOOL_PORT || '10392'
-      return $fetch('/api/chat/accounts', { baseURL: `http://127.0.0.1:${port}` })
-    }
-    return $fetch('/chat/accounts', { baseURL: apiBase })
-  }, { watch: false, lazy: true })
-
-  if (prefetchedAccounts.value?.accounts?.length && !chatAccounts.loaded) {
-    const response = prefetchedAccounts.value
-    chatAccounts.accounts = response.accounts
-    const preferred = chatAccounts.selectedAccount
-    const fallback = response.default_account || response.accounts[0] || ''
-    chatAccounts.selectedAccount = (preferred && response.accounts.includes(preferred)) ? preferred : fallback
-    chatAccounts.loaded = true
-  }
-
-  const ssrSelectedAccount = chatAccounts.selectedAccount || ''
-  const { data: prefetchedSessions } = await useAsyncData(`chat-sessions-${ssrSelectedAccount}`, () => {
-    if (!ssrSelectedAccount) return Promise.resolve(null)
-    const params = new URLSearchParams({
-      account: ssrSelectedAccount,
-      limit: '400',
-      include_hidden: 'false',
-      include_official: 'false'
-    })
-    if (process.server) {
-      const port = process.env.WECHAT_TOOL_PORT || '10392'
-      return $fetch(`/api/chat/sessions?${params}`, { baseURL: `http://127.0.0.1:${port}` })
-    }
-    return $fetch(`/chat/sessions?${params}`, { baseURL: apiBase })
-  }, { watch: false, lazy: true })
-
-  if (prefetchedSessions.value?.sessions?.length) {
-    const ssrAvatars = new Map()
-    contacts.value = prefetchedSessions.value.sessions.map((session) => {
-      if (session.avatar) ssrAvatars.set(session.username || session.id, session.avatar)
-      return {
-        id: session.id,
-        name: session.name || session.username || session.id,
-        avatar: null,
-        lastMessage: normalizeSessionPreview(session.lastMessage || ''),
-        lastMessageTime: session.lastMessageTime || '',
-        unreadCount: session.unreadCount || 0,
-        isGroup: !!session.isGroup,
-        isTop: !!session.isTop,
-        username: session.username
-      }
-    })
-
-    if (process.client && ssrAvatars.size) {
-      const applySsrAvatars = () => {
-        const entries = Array.from(ssrAvatars.entries())
-        const batchSize = 6
-        let index = 0
-        const next = () => {
-          const batch = entries.slice(index, index + batchSize)
-          if (!batch.length) return
-          for (const [key, url] of batch) {
-            const contact = contacts.value.find((item) => (item.username || item.id) === key)
-            if (contact) contact.avatar = url
-          }
-          index += batchSize
-          if (index < entries.length) setTimeout(next, 150)
-        }
-        next()
-      }
-      setTimeout(applySsrAvatars, 500)
-    }
-  }
 
   const filteredContacts = computed(() => {
     const query = String(searchQuery.value || '').trim().toLowerCase()

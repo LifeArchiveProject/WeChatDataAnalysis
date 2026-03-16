@@ -84,7 +84,7 @@ if (process.client) {
 
 const searchContext = ref(createEmptySearchContext())
 
-const sessionState = await useChatSessions({
+const sessionState = useChatSessions({
   chatAccounts,
   selectedAccount,
   realtimeEnabled,
