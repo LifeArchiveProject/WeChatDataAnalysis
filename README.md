@@ -10,7 +10,7 @@
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
     <img src="https://gh-down-badges.linkof.link/LifeArchiveProject/WeChatDataAnalysis" alt="Downloads" />
     <img src="https://img.shields.io/github/forks/LifeArchiveProject/WeChatDataAnalysis" alt="Forks" />
-    <a href="https://qm.qq.com/q/VQEQ7PcGkk"><img src="https://img.shields.io/badge/QQ%20Group-WeChatDataAnalysis-12B7F5?logo=tencentqq&logoColor=white" alt="QQ Group" /></a>
+    <a href="https://qm.qq.com/q/VQEQ7PcGkk"><img src="https://img.shields.io/badge/QQ Group-WeChatDataAnalysis-12B7F5?logo=tencentqq&logoColor=white" alt="QQ Group" /></a>
     <img src="https://img.shields.io/badge/Python-3776AB?logo=Python&logoColor=white" alt="Python" />
     <img src="https://img.shields.io/badge/Vue.js-4FC08D?logo=Vue.js&logoColor=white" alt="Vue.js" />
     <img src="https://img.shields.io/badge/SQLite-003B57?logo=SQLite&logoColor=white" alt="SQLite" />
@@ -201,6 +201,33 @@ npm run dist
 <p align="center">
   <img src="frontend/public/edit.gif" alt="本地消息修改" width="800" />
 </p>
+
+## 赞助与支持
+
+如果本项目对你有帮助，欢迎通过以下方式赞助。付款时请在备注中填写“希望公开展示的链接”（如个人主页、B 站空间、GitHub 仓库等），我们会在 README 的“赞助鸣谢”表格中展示。
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center">
+        <img src="https://github.com/LifeArchiveProject/BilibiliHistoryFetcher/raw/master/public/wechat.png" alt="微信收款码" width="220"><br>
+        微信赞助
+      </td>
+      <td align="center">
+        <img src="https://github.com/LifeArchiveProject/BilibiliHistoryFetcher/raw/master/public/zfb.jpg" alt="支付宝收款码" width="220"><br>
+        支付宝赞助
+      </td>
+    </tr>
+  </table>
+</div>
+
+### 赞助鸣谢
+
+| 联系内容                                              | 付款金额 |
+| ----------------------------------------------------- | -------- |
+| [惜囍的个人空间-哔哩哔哩](https://space.bilibili.com/291501729) | ￥29.99      |
+
+提示：已赞助但未收录，请在 Issues 提交凭证与备注链接；如需匿名可说明。
 
 ## 致谢
 
