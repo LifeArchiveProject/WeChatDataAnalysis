@@ -366,12 +366,12 @@
 }
 
 /* 统一特殊消息尾巴（红包 / 文件等） */
-:deep(.wechat-special-card) {
+.wechat-special-card {
   position: relative;
   overflow: visible;
 }
 
-:deep(.wechat-special-card)::after {
+.wechat-special-card::after {
   content: '';
   position: absolute;
   top: 12px;
@@ -383,7 +383,7 @@
   border-radius: 2px;
 }
 
-:deep(.wechat-special-sent-side)::after {
+.wechat-special-sent-side::after {
   left: auto;
   right: -4px;
 }
@@ -754,7 +754,7 @@
 }
 
 /* 链接消息样式 - 微信风格 */
-:deep(.wechat-link-card) {
+.wechat-link-card {
   width: 210px;
   min-width: 210px;
   max-width: 210px;
@@ -770,11 +770,11 @@
   transition: background-color 0.15s ease;
 }
 
-:deep(.wechat-link-card:hover) {
+.wechat-link-card:hover {
   background: #f5f5f5;
 }
 
-:deep(.wechat-link-content) {
+.wechat-link-content {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -783,14 +783,14 @@
   flex: 1 1 auto;
 }
 
-:deep(.wechat-link-summary) {
+.wechat-link-summary {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   min-height: 42px;
 }
 
-:deep(.wechat-link-title) {
+.wechat-link-title {
   font-size: 14px;
   color: #1a1a1a;
   display: -webkit-box;
@@ -801,7 +801,7 @@
   word-break: break-word;
 }
 
-:deep(.wechat-link-desc) {
+.wechat-link-desc {
   font-size: 12px;
   color: #8c8c8c;
   display: -webkit-box;
@@ -814,7 +814,7 @@
   min-width: 0;
 }
 
-:deep(.wechat-link-thumb) {
+.wechat-link-thumb {
   width: 42px;
   height: 42px;
   flex: 0 0 auto;
@@ -824,19 +824,19 @@
   align-self: flex-start;
 }
 
-:deep(.wechat-link-thumb-img) {
+.wechat-link-thumb-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
 
-:deep(.wechat-link-card--mini-program) {
+.wechat-link-card--mini-program {
   max-height: 270px;
   height: 270px;
 }
 
-:deep(.wechat-link-mini-body) {
+.wechat-link-mini-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -846,14 +846,14 @@
   min-height: 0;
 }
 
-:deep(.wechat-link-mini-header) {
+.wechat-link-mini-header {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
-:deep(.wechat-link-mini-header-avatar) {
+.wechat-link-mini-header-avatar {
   width: 20px;
   height: 20px;
   border-radius: 50%;
@@ -867,7 +867,7 @@
   overflow: hidden;
 }
 
-:deep(.wechat-link-mini-header-avatar-img) {
+.wechat-link-mini-header-avatar-img {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -876,7 +876,7 @@
   display: block;
 }
 
-:deep(.wechat-link-mini-header-name) {
+.wechat-link-mini-header-name {
   font-size: 13px;
   color: #7d7d7d;
   overflow: hidden;
@@ -886,7 +886,7 @@
   flex: 1 1 auto;
 }
 
-:deep(.wechat-link-mini-title) {
+.wechat-link-mini-title {
   font-size: 13px;
   line-height: 1.45;
   color: #1a1a1a;
@@ -897,7 +897,7 @@
   word-break: break-word;
 }
 
-:deep(.wechat-link-mini-preview) {
+.wechat-link-mini-preview {
   width: 100%;
   height: auto;
   min-height: 0;
@@ -907,11 +907,11 @@
   margin-top: auto;
 }
 
-:deep(.wechat-link-mini-preview--empty) {
+.wechat-link-mini-preview--empty {
   background: #f7f7f7;
 }
 
-:deep(.wechat-link-mini-preview-img) {
+.wechat-link-mini-preview-img {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -919,7 +919,7 @@
   display: block;
 }
 
-:deep(.wechat-link-mini-footer) {
+.wechat-link-mini-footer {
   height: 23px;
   display: flex;
   align-items: center;
@@ -930,7 +930,7 @@
   flex-shrink: 0;
 }
 
-:deep(.wechat-link-mini-footer)::before {
+.wechat-link-mini-footer::before {
   content: '';
   position: absolute;
   top: 0;
@@ -940,19 +940,19 @@
   background: #e8e8e8;
 }
 
-:deep(.wechat-link-mini-footer-icon) {
+.wechat-link-mini-footer-icon {
   width: 12px;
   height: 12px;
   object-fit: contain;
   flex-shrink: 0;
 }
 
-:deep(.wechat-link-mini-footer-text) {
+.wechat-link-mini-footer-text {
   font-size: 10px;
   color: #8c8c8c;
 }
 
-:deep(.wechat-link-from) {
+.wechat-link-from {
   height: 30px;
   display: flex;
   align-items: center;
@@ -962,7 +962,7 @@
   flex-shrink: 0;
 }
 
-:deep(.wechat-link-from)::before {
+.wechat-link-from::before {
   content: '';
   position: absolute;
   top: 0;
@@ -972,7 +972,7 @@
   background: #e8e8e8;
 }
 
-:deep(.wechat-link-from-avatar) {
+.wechat-link-from-avatar {
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -986,7 +986,7 @@
   overflow: hidden;
 }
 
-:deep(.wechat-link-from-avatar-img) {
+.wechat-link-from-avatar-img {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -995,7 +995,7 @@
   display: block;
 }
 
-:deep(.wechat-link-from-name) {
+.wechat-link-from-name {
   font-size: 12px;
   color: #b2b2b2;
   overflow: hidden;
@@ -1004,7 +1004,7 @@
 }
 
 /* 链接封面卡片（170x230 图 + 60 底栏） */
-:deep(.wechat-link-card-cover) {
+.wechat-link-card-cover {
   width: 137px;
   min-width: 137px;
   max-width: 137px;
@@ -1020,11 +1020,11 @@
   transition: background-color 0.15s ease;
 }
 
-:deep(.wechat-link-card-cover:hover) {
+.wechat-link-card-cover:hover {
   background: #f5f5f5;
 }
 
-:deep(.wechat-link-cover-image-wrap) {
+.wechat-link-cover-image-wrap {
   width: 137px;
   height: 180px;
   position: relative;
@@ -1034,7 +1034,7 @@
   flex-shrink: 0;
 }
 
-:deep(.wechat-link-cover-image) {
+.wechat-link-cover-image {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -1043,11 +1043,11 @@
 }
 
 /* 仅公众号封面卡片去掉菱形尖角，其它消息保持原样 */
-:deep(.wechat-link-card-cover.wechat-special-card)::after {
+.wechat-link-card-cover.wechat-special-card::after {
   content: none !important;
 }
 
-:deep(.wechat-link-cover-from) {
+.wechat-link-cover-from {
   height: 30px;
   display: flex;
   align-items: center;
@@ -1062,7 +1062,7 @@
   flex-shrink: 0;
 }
 
-:deep(.wechat-link-cover-from-avatar) {
+.wechat-link-cover-from-avatar {
   width: 18px;
   height: 18px;
   border-radius: 50%;
@@ -1076,7 +1076,7 @@
   overflow: hidden;
 }
 
-:deep(.wechat-link-cover-from-avatar-img) {
+.wechat-link-cover-from-avatar-img {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -1085,7 +1085,7 @@
   display: block;
 }
 
-:deep(.wechat-link-cover-from-name) {
+.wechat-link-cover-from-name {
   font-size: 12px;
   color: #f3f3f3;
   overflow: hidden;
@@ -1093,7 +1093,7 @@
   white-space: nowrap;
 }
 
-:deep(.wechat-link-cover-title) {
+.wechat-link-cover-title {
   height: 50px;
   padding: 7px 10px 0;
   box-sizing: border-box;
