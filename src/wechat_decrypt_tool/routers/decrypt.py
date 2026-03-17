@@ -14,7 +14,7 @@ from ..app_paths import get_output_databases_dir
 from ..logging_config import get_logger
 from ..path_fix import PathFixRoute
 from ..key_store import upsert_account_keys_in_store
-from ..wechat_decrypt import WeChatDatabaseDecryptor, decrypt_wechat_databases
+from ..wechat_decrypt import WeChatDatabaseDecryptor, decrypt_wechat_databases, scan_account_databases_from_path
 
 logger = get_logger(__name__)
 
@@ -79,6 +79,8 @@ async def decrypt_databases(request: DecryptRequest):
             "account_results": results.get("account_results", {}),
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"解密API异常: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -126,44 +128,17 @@ async def decrypt_databases_stream(
         yield _sse({"type": "scanning", "message": "正在扫描数据库文件..."})
         await asyncio.sleep(0)
 
-        account_name = "unknown_account"
-        path_parts = storage_path.parts
-        account_patterns = ["wxid_"]
-        for part in path_parts:
-            for pattern in account_patterns:
-                if part.startswith(pattern):
-                    parts = part.split("_")
-                    if len(parts) >= 3:
-                        account_name = "_".join(parts[:-1])
-                    else:
-                        account_name = part
-                    break
-            if account_name != "unknown_account":
-                break
-
-        if account_name == "unknown_account":
-            for part in reversed(path_parts):
-                if part != "db_storage" and len(part) > 3:
-                    account_name = part
-                    break
-
-        databases: list[dict] = []
-        for root, _dirs, files in os.walk(storage_path):
-            if "db_storage" not in str(root):
-                continue
-            for file_name in files:
-                if not file_name.endswith(".db"):
-                    continue
-                if file_name in ["key_info.db"]:
-                    continue
-                db_path = os.path.join(root, file_name)
-                databases.append({"path": db_path, "name": file_name, "account": account_name})
-
-        if not databases:
-            yield _sse({"type": "error", "message": "未找到微信数据库文件！请检查 db_storage_path 是否正确"})
+        scan_result = scan_account_databases_from_path(p)
+        if scan_result["status"] == "error":
+            payload = {"type": "error", "message": scan_result["message"]}
+            detected_accounts = scan_result.get("detected_accounts") or []
+            if detected_accounts:
+                payload["detected_accounts"] = detected_accounts
+            yield _sse(payload)
             return
 
-        account_databases = {account_name: databases}
+        account_databases = scan_result.get("account_databases", {})
+        account_sources = scan_result.get("account_sources", {})
         total_databases = sum(len(dbs) for dbs in account_databases.values())
 
         yield _sse({"type": "start", "total": total_databases, "message": f"开始解密 {total_databases} 个数据库"})
@@ -193,12 +168,9 @@ async def decrypt_databases_stream(
 
             # Save a hint for later UI (same as non-stream endpoint).
             try:
-                source_db_storage_path = p
-                wxid_dir = ""
-                if storage_path.name.lower() == "db_storage":
-                    wxid_dir = str(storage_path.parent)
-                else:
-                    wxid_dir = str(storage_path)
+                source_info = account_sources.get(account, {})
+                source_db_storage_path = str(source_info.get("db_storage_path") or p)
+                wxid_dir = str(source_info.get("wxid_dir") or "")
                 (account_output_dir / "_source.json").write_text(
                     json.dumps({"db_storage_path": source_db_storage_path, "wxid_dir": wxid_dir}, ensure_ascii=False, indent=2),
                     encoding="utf-8",
