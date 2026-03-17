@@ -24,6 +24,17 @@ logger = get_logger(__name__)
 
 _OUTPUT_DATABASES_DIR = get_output_databases_dir()
 _DEBUG_SESSIONS = os.environ.get("WECHAT_TOOL_DEBUG_SESSIONS", "0") == "1"
+_SQLITE_HEADER = b"SQLite format 3\x00"
+
+
+def _is_valid_decrypted_sqlite(path: Path) -> bool:
+    try:
+        if not path.exists() or (not path.is_file()):
+            return False
+        with path.open("rb") as f:
+            return f.read(len(_SQLITE_HEADER)) == _SQLITE_HEADER
+    except Exception:
+        return False
 
 
 def _list_decrypted_accounts() -> list[str]:
@@ -34,7 +45,7 @@ def _list_decrypted_accounts() -> list[str]:
     for p in _OUTPUT_DATABASES_DIR.iterdir():
         if not p.is_dir():
             continue
-        if (p / "session.db").exists() and (p / "contact.db").exists():
+        if _is_valid_decrypted_sqlite(p / "session.db") and _is_valid_decrypted_sqlite(p / "contact.db"):
             accounts.append(p.name)
 
     accounts.sort()
@@ -49,7 +60,9 @@ def _resolve_account_dir(account: Optional[str]) -> Path:
             detail="No decrypted databases found. Please decrypt first.",
         )
 
-    selected = account or accounts[0]
+    selected = str(account or "").strip() or accounts[0]
+    if selected not in accounts:
+        raise HTTPException(status_code=404, detail="Account not found.")
     base = _OUTPUT_DATABASES_DIR.resolve()
     candidate = (_OUTPUT_DATABASES_DIR / selected).resolve()
 
