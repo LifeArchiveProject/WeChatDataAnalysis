@@ -73,20 +73,35 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     return Math.round(clamp01(done / total) * 100)
   })
 
-  const exportFilteredContacts = computed(() => {
-    const query = String(exportSearchQuery.value || '').trim().toLowerCase()
+  const normalizeExportSelectedUsernames = (list) => {
+    const seen = new Set()
+    return (Array.isArray(list) ? list : []).reduce((acc, item) => {
+      const username = String(item || '').trim()
+      if (!username || seen.has(username)) return acc
+      seen.add(username)
+      acc.push(username)
+      return acc
+    }, [])
+  }
+
+  const getExportFilteredContacts = ({ tab = exportListTab.value, query = exportSearchQuery.value } = {}) => {
+    const normalizedQuery = String(query || '').trim().toLowerCase()
     let list = Array.isArray(contacts.value) ? contacts.value : []
 
-    const tab = String(exportListTab.value || 'all')
-    if (tab === 'groups') list = list.filter((contact) => !!contact?.isGroup)
-    if (tab === 'singles') list = list.filter((contact) => !contact?.isGroup)
+    const normalizedTab = String(tab || 'all')
+    if (normalizedTab === 'groups') list = list.filter((contact) => !!contact?.isGroup)
+    if (normalizedTab === 'singles') list = list.filter((contact) => !contact?.isGroup)
 
-    if (!query) return list
+    if (!normalizedQuery) return list
     return list.filter((contact) => {
       const name = String(contact?.name || '').toLowerCase()
       const username = String(contact?.username || '').toLowerCase()
-      return name.includes(query) || username.includes(query)
+      return name.includes(normalizedQuery) || username.includes(normalizedQuery)
     })
+  }
+
+  const exportFilteredContacts = computed(() => {
+    return getExportFilteredContacts()
   })
 
   const exportContactCounts = computed(() => {
@@ -95,6 +110,60 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     const groups = list.filter((contact) => !!contact?.isGroup).length
     return { total, groups, singles: total - groups }
   })
+
+  const exportSelectedUsernameSet = computed(() => {
+    return new Set(normalizeExportSelectedUsernames(exportSelectedUsernames.value))
+  })
+
+  const setExportSelectedUsernames = (list) => {
+    exportSelectedUsernames.value = normalizeExportSelectedUsernames(list)
+  }
+
+  const getExportFilteredUsernames = (tab = exportListTab.value) => {
+    return getExportFilteredContacts({ tab })
+      .map((contact) => String(contact?.username || '').trim())
+      .filter(Boolean)
+  }
+
+  const selectExportFilteredContacts = (tab = exportListTab.value) => {
+    setExportSelectedUsernames(getExportFilteredUsernames(tab))
+  }
+
+  const clearExportFilteredContacts = () => {
+    setExportSelectedUsernames([])
+  }
+
+  const areExportFilteredContactsAllSelected = (tab = exportListTab.value) => {
+    const usernames = getExportFilteredUsernames(tab)
+    if (usernames.length !== exportSelectedUsernameSet.value.size) return false
+    return usernames.every((username) => exportSelectedUsernameSet.value.has(username))
+  }
+
+  const onExportListTabClick = (tab) => {
+    const nextTab = String(tab || 'all')
+    const isSameTab = String(exportListTab.value || 'all') === nextTab
+    exportListTab.value = nextTab
+
+    if (isSameTab) {
+      if (areExportFilteredContactsAllSelected(nextTab)) {
+        clearExportFilteredContacts(nextTab)
+      } else {
+        selectExportFilteredContacts(nextTab)
+      }
+      return
+    }
+
+    selectExportFilteredContacts(nextTab)
+  }
+
+  const isExportContactSelected = (username) => {
+    return exportSelectedUsernameSet.value.has(String(username || '').trim())
+  }
+
+  const onExportBatchScopeClick = (tab) => {
+    exportScope.value = 'selected'
+    onExportListTabClick(tab)
+  }
 
   const isDesktopExportRuntime = () => {
     return !!(process.client && window?.wechatDesktop?.chooseDirectory)
@@ -269,12 +338,17 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportModalOpen.value = true
     exportError.value = ''
     exportSaveMsg.value = ''
+    exportSearchQuery.value = ''
     exportListTab.value = 'all'
+    exportSelectedUsernames.value = []
     exportStartLocal.value = ''
     exportEndLocal.value = ''
     exportMessageTypes.value = exportMessageTypeOptions.map((item) => item.value)
     exportAutoSavedFor.value = ''
-    exportScope.value = selectedContact.value?.username ? 'current' : 'all'
+    exportScope.value = selectedContact.value?.username ? 'current' : 'selected'
+    if (!selectedContact.value?.username) {
+      selectExportFilteredContacts('all')
+    }
   }
 
   const closeExportModal = () => {
@@ -294,6 +368,12 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     if (exportId && (status === 'queued' || status === 'running')) {
       startExportPolling(exportId)
     }
+  })
+
+  watch(exportScope, (scope, previousScope) => {
+    if (scope !== 'selected' || previousScope === 'selected') return
+    if (exportSelectedUsernames.value.length > 0) return
+    selectExportFilteredContacts(exportListTab.value)
   })
 
   watch(
@@ -447,6 +527,9 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportCurrentPercent,
     exportFilteredContacts,
     exportContactCounts,
+    onExportBatchScopeClick,
+    onExportListTabClick,
+    isExportContactSelected,
     hasWebExportFolder,
     chooseExportFolder,
     getExportDownloadUrl,
