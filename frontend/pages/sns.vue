@@ -1,7 +1,7 @@
 <template>
-  <div class="h-screen flex overflow-hidden" style="background-color: #EDEDED">
+  <div class="sns-page h-screen flex overflow-hidden" style="background-color: var(--app-shell-bg)">
     <!-- 左侧朋友圈联系人 -->
-    <div class="w-[280px] flex flex-col min-h-0 border-r border-gray-200 bg-[#EDEDED]">
+    <div class="w-[280px] flex flex-col min-h-0 border-r border-gray-200 bg-[#EDEDED]" style="background-color: var(--app-shell-bg)">
       <div class="p-3">
         <div class="flex items-center justify-between">
           <div class="text-sm font-semibold text-gray-700">朋友圈联系人</div>
@@ -104,7 +104,7 @@
     </div>
 
     <!-- 右侧朋友圈区域 -->
-    <div class="flex-1 flex flex-col min-h-0" style="background-color: #EDEDED">
+    <div class="flex-1 flex flex-col min-h-0" style="background-color: var(--app-shell-bg)">
       <div ref="timelineScrollEl" class="flex-1 overflow-auto min-h-0 bg-white" @scroll="onScroll">
 	        <div class="max-w-2xl mx-auto px-4 py-4">
             <div class="relative w-full mb-12 -mt-4 bg-white">

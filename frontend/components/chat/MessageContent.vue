@@ -127,7 +127,7 @@
                     </div>
                       <div
                         v-if="message.quoteTitle || message.quoteContent"
-                       class="mt-[5px] px-2 text-xs text-neutral-600 rounded max-w-[404px] max-h-[65px] overflow-hidden flex items-start bg-[#e1e1e1]">
+                       class="wechat-quote-preview mt-[5px] px-2 text-xs rounded max-w-[404px] max-h-[65px] overflow-hidden flex items-start">
                        <div class="py-2 min-w-0 flex-1">
                          <div v-if="isQuotedVoice(message)" class="flex items-center gap-1 min-w-0">
                            <span v-if="message.quoteTitle" class="truncate flex-shrink-0">{{ message.quoteTitle }}:</span>

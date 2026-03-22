@@ -1,9 +1,9 @@
 <template>
-  <div class="h-screen flex overflow-hidden" style="background-color: #EDEDED">
+  <div class="edits-page h-screen flex overflow-hidden" style="background-color: var(--app-shell-bg)">
     <!-- 左侧：会话列表（与聊天页统一风格） -->
     <div class="edits-sidebar border-r border-gray-200 flex flex-col">
       <!-- 搜索栏区域 -->
-      <div class="p-3 border-b border-gray-200" style="background-color: #F7F7F7">
+      <div class="p-3 border-b border-gray-200" style="background-color: var(--app-surface-muted)">
         <div class="flex items-center gap-2">
           <div class="contact-search-wrapper flex-1">
             <svg class="contact-search-icon" fill="none" stroke="currentColor" viewBox="0 0 16 16">
@@ -137,7 +137,7 @@
       </div>
 
       <!-- 内容区 -->
-      <div class="flex-1 overflow-y-auto" style="background-color: #EDEDED">
+      <div class="flex-1 overflow-y-auto" style="background-color: var(--app-shell-bg)">
         <!-- 错误提示 -->
         <div v-if="itemsError" class="mx-5 mt-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-4 py-3 whitespace-pre-wrap">{{ itemsError }}</div>
 

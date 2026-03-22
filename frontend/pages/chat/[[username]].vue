@@ -1,8 +1,8 @@
 <template>
-  <div class="h-screen flex overflow-hidden" style="background-color: #EDEDED">
+  <div class="chat-page-shell h-screen flex overflow-hidden">
     <SessionListPanel :state="chatState" />
 
-    <div class="flex-1 flex flex-col min-h-0" style="background-color: #EDEDED">
+    <div class="chat-page-main flex-1 flex flex-col min-h-0">
       <div class="flex-1 flex min-h-0">
         <ConversationPane :state="chatState" />
       </div>
@@ -46,7 +46,7 @@ definePageMeta({
 })
 
 useHead({
-  title: '??????? - ????????'
+  title: '聊天记录 - 微信数据库解密工具'
 })
 
 const route = useRoute()
@@ -508,7 +508,7 @@ const onAccountChange = async () => {
     contactsError.value = ''
     await loadSessionsForSelectedAccount()
   } catch (error) {
-    contactsError.value = error?.message || '???????'
+    contactsError.value = error?.message || '加载会话失败'
   } finally {
     isLoadingContacts.value = false
   }

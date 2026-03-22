@@ -303,14 +303,13 @@ const slides = computed(() => {
   return out
 })
 
-const currentBg = computed(() => '#F3FFF8')
+const currentBg = '#F3FFF8'
 const deckTrackClass = computed(() => 'z-10')
 
 const applyViewportBg = () => {
   if (!import.meta.client) return
-  const bg = currentBg.value
-  document.documentElement.style.backgroundColor = bg
-  document.body.style.backgroundColor = bg
+  document.documentElement.style.backgroundColor = currentBg
+  document.body.style.backgroundColor = currentBg
 }
 
 const slideStyle = computed(() => (

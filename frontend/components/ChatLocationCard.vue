@@ -136,8 +136,17 @@ const openLocation = () => {
 
 <style scoped>
 .wechat-location-card-wrap {
+  --location-card-bg: var(--chat-bubble-received);
+  --location-card-text: var(--chat-bubble-received-text);
+  --location-card-muted: var(--chat-sender-name);
   position: relative;
   display: inline-block;
+}
+
+.wechat-location-card-wrap--sent {
+  --location-card-bg: var(--chat-bubble-sent);
+  --location-card-text: var(--chat-bubble-sent-text);
+  --location-card-muted: rgba(255, 255, 255, 0.78);
 }
 
 .wechat-location-card-wrap--received::before,
@@ -147,7 +156,7 @@ const openLocation = () => {
   top: 12px;
   width: 12px;
   height: 12px;
-  background: #fff;
+  background: var(--location-card-bg);
   transform: rotate(45deg);
   border-radius: 2px;
 }
@@ -165,27 +174,27 @@ const openLocation = () => {
   overflow: hidden;
   border-radius: var(--message-radius);
   border: none;
-  background: #fff;
+  background: var(--location-card-bg);
   box-shadow: none;
   cursor: pointer;
   transition: opacity 0.15s ease;
 }
 
 .wechat-location-card--sent {
-  background: #fff;
+  background: var(--location-card-bg);
 }
 
 .wechat-location-card__text {
   padding: 10px 12px 8px;
-  background: #fff;
+  background: var(--location-card-bg);
 }
 
 .wechat-location-card--sent .wechat-location-card__text {
-  background: #fff;
+  background: var(--location-card-bg);
 }
 
 .wechat-location-card__title {
-  color: #111827;
+  color: var(--location-card-text);
   font-size: 13px;
   font-weight: 500;
   line-height: 1.4;
@@ -197,7 +206,7 @@ const openLocation = () => {
 
 .wechat-location-card__subtitle {
   margin-top: 4px;
-  color: #9ca3af;
+  color: var(--location-card-muted);
   font-size: 11px;
   line-height: 1.4;
   white-space: nowrap;
@@ -206,7 +215,7 @@ const openLocation = () => {
 }
 
 .wechat-location-card--sent .wechat-location-card__subtitle {
-  color: #9ca3af;
+  color: var(--location-card-muted);
 }
 
 .wechat-location-card__map {
