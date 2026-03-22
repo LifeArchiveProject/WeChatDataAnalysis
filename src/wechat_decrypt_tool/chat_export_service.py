@@ -19,7 +19,7 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Literal, Optional
+from typing import Any, Callable, Iterable, Literal, Optional
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -3386,6 +3386,7 @@ def _parse_message_for_export(
     resource_conn: Optional[sqlite3.Connection],
     resource_chat_id: Optional[int],
     sender_alias: str = "",
+    resolve_display_name: Optional[Callable[[str], str]] = None,
 ) -> dict[str, Any]:
     raw_text = row.raw_text or ""
     sender_username = str(row.sender_username or "").strip()
@@ -3449,7 +3450,18 @@ def _parse_message_for_export(
 
     if local_type == 10000:
         render_type = "system"
-        content_text = _parse_system_message_content(raw_text)
+        system_display_name_resolver = None
+        if resolve_display_name is not None:
+            def system_display_name_resolver(username: str, fallback_display_name: str) -> str:
+                resolved = str(resolve_display_name(username) or "").strip()
+                if resolved and resolved != username:
+                    return resolved
+                fallback = str(fallback_display_name or "").strip()
+                return fallback or resolved or username
+        content_text = _parse_system_message_content(
+            raw_text,
+            resolve_display_name=system_display_name_resolver,
+        )
     elif local_type == 49:
         parsed = _parse_app_message(raw_text)
         render_type = str(parsed.get("renderType") or "text")
@@ -3923,6 +3935,7 @@ def _write_conversation_json(
                     resource_conn=resource_conn,
                     resource_chat_id=resource_chat_id,
                     sender_alias=sender_alias,
+                    resolve_display_name=resolve_display_name,
                 )
                 if not _is_render_type_selected(msg.get("renderType"), want_types):
                     continue
@@ -4101,6 +4114,7 @@ def _write_conversation_txt(
                     resource_conn=resource_conn,
                     resource_chat_id=resource_chat_id,
                     sender_alias=sender_alias,
+                    resolve_display_name=resolve_display_name,
                 )
                 if not _is_render_type_selected(msg.get("renderType"), want_types):
                     continue
@@ -4859,6 +4873,7 @@ def _write_conversation_html(
                     resource_conn=resource_conn,
                     resource_chat_id=resource_chat_id,
                     sender_alias="",
+                    resolve_display_name=resolve_display_name,
                 )
                 if not _is_render_type_selected(msg.get("renderType"), want_types):
                     continue
