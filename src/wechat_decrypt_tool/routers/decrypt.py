@@ -14,7 +14,12 @@ from ..app_paths import get_output_databases_dir
 from ..logging_config import get_logger
 from ..path_fix import PathFixRoute
 from ..key_store import upsert_account_keys_in_store
-from ..wechat_decrypt import WeChatDatabaseDecryptor, decrypt_wechat_databases, scan_account_databases_from_path
+from ..wechat_decrypt import (
+    WeChatDatabaseDecryptor,
+    build_decrypt_result_message,
+    decrypt_wechat_databases,
+    scan_account_databases_from_path,
+)
 
 logger = get_logger(__name__)
 
@@ -76,6 +81,7 @@ async def decrypt_databases(request: DecryptRequest):
             "message": results["message"],
             "processed_files": results["processed_files"],
             "failed_files": results["failed_files"],
+            "failure_details": results.get("failure_details", []),
             "account_results": results.get("account_results", {}),
         }
 
@@ -159,6 +165,7 @@ async def decrypt_databases_stream(
         fail_count = 0
         processed_files: list[str] = []
         failed_files: list[str] = []
+        failure_details: list[dict] = []
         account_results: dict = {}
         overall_current = 0
 
@@ -181,6 +188,7 @@ async def decrypt_databases_stream(
             account_success = 0
             account_processed: list[str] = []
             account_failed: list[str] = []
+            account_failure_details: list[dict] = []
 
             for db_info in dbs:
                 if await request.is_disconnected():
@@ -232,11 +240,20 @@ async def decrypt_databases_stream(
                     status = "success"
                     msg = "解密成功"
                 else:
+                    failure_detail = {
+                        "account": account,
+                        "file": db_path,
+                        "name": db_name,
+                        "code": str(decryptor.last_error_code or "").strip(),
+                        "reason": str(decryptor.last_error_message or "").strip() or "解密失败",
+                    }
                     account_failed.append(db_path)
+                    account_failure_details.append(failure_detail)
                     failed_files.append(db_path)
+                    failure_details.append(failure_detail)
                     fail_count += 1
                     status = "fail"
-                    msg = "解密失败"
+                    msg = failure_detail["reason"]
 
                 yield _sse(
                     {
@@ -261,6 +278,7 @@ async def decrypt_databases_stream(
                 "output_dir": str(account_output_dir),
                 "processed_files": account_processed,
                 "failed_files": account_failed,
+                "failure_details": account_failure_details,
             }
 
             # Build cache table (keep behavior consistent with the POST endpoint).
@@ -307,9 +325,15 @@ async def decrypt_databases_stream(
             "success_count": success_count,
             "failure_count": total_databases - success_count,
             "output_directory": str(base_output_dir.absolute()),
-            "message": f"解密完成: 成功 {success_count}/{total_databases}",
+            "message": build_decrypt_result_message(
+                total_databases=total_databases,
+                success_count=success_count,
+                failed_count=total_databases - success_count,
+                failure_details=failure_details,
+            ),
             "processed_files": processed_files,
             "failed_files": failed_files,
+            "failure_details": failure_details,
             "account_results": account_results,
         }
 
