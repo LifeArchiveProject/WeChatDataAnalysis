@@ -73,6 +73,9 @@
                 </svg>
                 点击按钮将自动获取【数据库】与【图片】双重密钥。您也可以手动输入已知的64位密钥（使用<a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a>等工具获取）。
               </p>
+              <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+                提示：数据库密钥跟随“账号 + 设备”下发。同一账号在另一台电脑生成的聊天记录，复制到当前设备后，通常无法在当前设备重新获取原设备对应的密钥，因此也无法直接解密。
+              </div>
             </div>
             
             <!-- 数据库路径输入 -->
