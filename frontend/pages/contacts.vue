@@ -1,10 +1,10 @@
 <template>
-  <div class="h-screen flex overflow-hidden" style="background-color: #EDEDED">
-    <div class="flex-1 flex flex-col min-h-0" style="background-color: #EDEDED">
+  <div class="contacts-page h-screen flex overflow-hidden" style="background-color: var(--app-shell-bg)">
+    <div class="flex-1 flex flex-col min-h-0" style="background-color: var(--app-shell-bg)">
       <div class="flex-1 min-h-0 overflow-hidden p-4">
         <div class="h-full grid grid-cols-1 lg:grid-cols-[400px_minmax(0,1fr)] gap-4">
           <div class="bg-white border border-gray-200 rounded-lg flex flex-col min-h-0 overflow-hidden">
-            <div class="p-3 border-b border-gray-200" style="background-color: #F7F7F7">
+            <div class="p-3 border-b border-gray-200" style="background-color: var(--app-surface-muted)">
               <div class="flex items-center gap-2">
                 <div class="contact-search-wrapper flex-1" :class="{ 'privacy-blur': privacyMode }">
                   <svg class="contact-search-icon" fill="none" stroke="currentColor" viewBox="0 0 16 16">
@@ -80,7 +80,7 @@
             </div>
           </div>
 
-          <div class="bg-white border border-gray-200 rounded-lg p-4 flex flex-col gap-3">
+          <div class="contacts-export-panel bg-white border border-gray-200 rounded-lg p-4 flex flex-col gap-3">
             <div>
               <div class="text-base font-medium text-gray-900">导出联系人</div>
               <div class="text-xs text-gray-500 mt-1">支持 JSON / CSV，默认包含头像链接</div>

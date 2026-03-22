@@ -10,13 +10,13 @@
     :data-create-time="message.createTime"
   >
     <div v-if="message.showTimeDivider" class="flex justify-center mb-4">
-      <div class="px-3 py-1 text-xs text-[#9e9e9e]">
+      <div class="message-time-divider px-3 py-1 text-xs">
         {{ message.timeDivider }}
       </div>
     </div>
 
     <div v-if="message.renderType === 'system'" class="flex justify-center">
-      <div class="px-3 py-1 text-xs text-[#9e9e9e]">
+      <div class="message-time-divider px-3 py-1 text-xs">
         {{ message.content }}
       </div>
     </div>
@@ -110,7 +110,7 @@
           :class="[message.isSent ? 'items-end' : 'items-start', { 'privacy-blur': privacyMode }]"
           @contextmenu="openMediaContextMenu($event, message, 'message')"
         >
-          <div v-if="message.isGroup && !message.isSent && message.senderDisplayName" class="text-[11px] text-gray-500 mb-1" :class="message.isSent ? 'text-right' : 'text-left'">
+          <div v-if="message.isGroup && !message.isSent && message.senderDisplayName" class="message-sender-name text-[11px] mb-1" :class="message.isSent ? 'text-right' : 'text-left'">
             {{ message.senderDisplayName }}
           </div>
           <div

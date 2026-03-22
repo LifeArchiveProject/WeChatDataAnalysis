@@ -1,10 +1,10 @@
 <template>
   <div
     v-if="open"
-    class="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 px-4 py-4 backdrop-blur-md sm:py-8"
+    class="settings-dialog fixed inset-0 z-[120] flex items-center justify-center bg-black/40 px-4 py-4 backdrop-blur-md sm:py-8"
     @click.self="handleClose"
   >
-    <div class="flex h-[80vh] min-h-[380px] w-full max-w-[760px] overflow-hidden rounded-[10px] border border-[#e2e2e2] bg-white shadow-2xl">
+    <div class="settings-dialog-panel flex h-[80vh] min-h-[380px] w-full max-w-[760px] overflow-hidden rounded-[10px] border border-[#e2e2e2] bg-white shadow-2xl">
       <!-- Sidebar -->
       <aside class="flex w-[180px] shrink-0 flex-col bg-[#fcfcfc] border-r border-[#eeeeee]">
         <div class="mt-4 mb-2 flex items-center px-4 gap-2">

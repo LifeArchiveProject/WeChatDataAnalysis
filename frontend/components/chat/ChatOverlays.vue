@@ -826,51 +826,51 @@
     <!-- 合并转发聊天记录弹窗 -->
     <div
       v-if="chatHistoryModalVisible"
-      class="fixed inset-0 z-50 bg-black/40 flex items-center justify-center"
+      class="chat-history-modal-overlay fixed inset-0 z-50 bg-black/40 flex items-center justify-center"
       @click="closeChatHistoryModal"
     >
       <div
-        class="w-[92vw] max-w-[560px] max-h-[80vh] bg-[#f7f7f7] rounded-xl shadow-xl overflow-hidden flex flex-col"
+        class="chat-history-modal-panel w-[92vw] max-w-[560px] max-h-[80vh] rounded-xl shadow-xl overflow-hidden flex flex-col"
         @click.stop
       >
-        <div class="px-4 py-3 bg-[#f7f7f7] border-b border-gray-200 flex items-center justify-between">
+        <div class="chat-history-modal-header px-4 py-3 border-b flex items-center justify-between">
           <div class="flex items-center gap-2 min-w-0">
             <button
               v-if="chatHistoryModalStack.length"
               type="button"
-              class="p-2 rounded hover:bg-black/5 flex-shrink-0"
+              class="chat-history-modal-icon-btn p-2 rounded flex-shrink-0"
               @click="goBackChatHistoryModal"
               aria-label="返回"
               title="返回"
             >
-              <svg class="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="chat-history-modal-icon w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
               </svg>
             </button>
-            <div class="text-sm text-[#161616] truncate">{{ chatHistoryModalTitle || '聊天记录' }}</div>
+            <div class="chat-history-modal-title text-sm truncate">{{ chatHistoryModalTitle || '聊天记录' }}</div>
           </div>
           <button
             type="button"
-            class="p-2 rounded hover:bg-black/5"
+            class="chat-history-modal-icon-btn p-2 rounded"
             @click="closeChatHistoryModal"
             aria-label="关闭"
             title="关闭"
           >
-            <svg class="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="chat-history-modal-icon w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
             </svg>
           </button>
         </div>
 
-        <div class="flex-1 overflow-auto bg-[#f7f7f7]">
-          <div v-if="!chatHistoryModalRecords.length" class="text-sm text-gray-500 text-center py-10">
+        <div class="chat-history-modal-body flex-1 overflow-auto">
+          <div v-if="!chatHistoryModalRecords.length" class="chat-history-modal-empty text-sm text-center py-10">
             没有可显示的聊天记录
           </div>
           <template v-else>
             <div
               v-for="(rec, idx) in chatHistoryModalRecords"
               :key="rec.id || idx"
-              class="px-4 py-3 flex gap-3 border-b border-gray-100 bg-[#f7f7f7]"
+              class="chat-history-modal-row px-4 py-3 flex gap-3 border-b"
             >
               <div class="w-9 h-9 rounded-md overflow-hidden bg-gray-200 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
                 <img
@@ -892,12 +892,12 @@
                   <div class="min-w-0 flex-1">
                     <div
                       v-if="chatHistoryModalInfo?.isChatRoom && (rec.senderDisplayName || rec.sourcename)"
-                      class="text-xs text-gray-500 leading-none truncate mb-1"
+                      class="chat-history-modal-sender text-xs leading-none truncate mb-1"
                     >
                       {{ rec.senderDisplayName || rec.sourcename }}
                     </div>
                   </div>
-                  <div v-if="rec.fullTime || rec.sourcetime" class="text-xs text-gray-400 flex-shrink-0 leading-none">
+                  <div v-if="rec.fullTime || rec.sourcetime" class="chat-history-modal-time text-xs flex-shrink-0 leading-none">
                     {{ rec.fullTime || rec.sourcetime }}
                   </div>
                 </div>
@@ -1273,7 +1273,7 @@
     <!-- 导出弹窗 -->
     <div v-if="exportModalOpen" class="fixed inset-0 z-[11000] flex items-center justify-center">
       <div class="absolute inset-0 bg-black/40" @click="closeExportModal"></div>
-      <div class="relative w-[960px] max-w-[95vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
+      <div class="chat-export-modal relative w-[960px] max-w-[95vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
         <div class="px-5 py-4 border-b border-gray-200 flex items-center">
           <div class="text-base font-medium text-gray-900">导出聊天记录（离线 ZIP）</div>
           <button class="ml-auto text-gray-400 hover:text-gray-700" type="button" @click="closeExportModal">

@@ -3,7 +3,7 @@
     <div v-if="open && info" class="fixed inset-0 z-[9999] flex items-center justify-center">
       <div class="absolute inset-0 bg-black/40" @click="onBackdropClick" />
 
-      <div class="relative w-[min(520px,calc(100vw-32px))] rounded-lg bg-white shadow-xl border border-gray-200">
+      <div class="desktop-update-dialog-panel relative w-[min(520px,calc(100vw-32px))] rounded-lg bg-white shadow-xl border border-gray-200">
         <button
           class="absolute right-3 top-3 h-8 w-8 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700"
           type="button"
