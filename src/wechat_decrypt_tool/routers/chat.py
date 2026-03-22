@@ -26,6 +26,7 @@ from ..chat_helpers import (
     _build_fts_query,
     _decode_message_content,
     _decode_sqlite_text,
+    _extract_chatroom_top_message_metadata,
     _extract_md5_from_packed_info,
     _extract_sender_from_group_xml,
     _extract_xml_attr,
@@ -512,6 +513,61 @@ def _resolve_sender_display_name(
         if wd and wd != su:
             display_name = wd
     return display_name
+
+
+def _resolve_system_message_display_name(
+    *,
+    sender_username: str,
+    fallback_display_name: str,
+    sender_contact_rows: dict[str, sqlite3.Row],
+    wcdb_display_names: dict[str, str],
+) -> str:
+    su = str(sender_username or "").strip()
+    fallback = str(fallback_display_name or "").strip()
+    if not su:
+        return fallback or "有人"
+
+    row = sender_contact_rows.get(su)
+    display_name = _pick_display_name(row, su)
+    if display_name != su:
+        return display_name
+
+    if fallback and fallback != su:
+        return fallback
+
+    wd = str(wcdb_display_names.get(su) or "").strip()
+    if wd and wd != su:
+        return wd
+
+    return fallback or wd or su
+
+
+def _postprocess_special_message_content(
+    *,
+    message: dict[str, Any],
+    sender_contact_rows: dict[str, sqlite3.Row],
+    wcdb_display_names: dict[str, str],
+) -> None:
+    raw = str(message.get("_rawText") or "")
+    if not raw:
+        message.pop("_rawText", None)
+        return
+
+    local_type = int(message.get("type") or 0)
+    if local_type == 266287972401:
+        message["content"] = _parse_pat_message(raw, sender_contact_rows)
+    elif local_type == 10000:
+        message["content"] = _parse_system_message_content(
+            raw,
+            resolve_display_name=lambda sender_username, fallback_display_name="": _resolve_system_message_display_name(
+                sender_username=sender_username,
+                fallback_display_name=fallback_display_name,
+                sender_contact_rows=sender_contact_rows,
+                wcdb_display_names=wcdb_display_names,
+            ),
+        )
+
+    message.pop("_rawText", None)
 
 
 def _realtime_sync_lock(account: str, username: str) -> threading.Lock:
@@ -3034,7 +3090,7 @@ def _append_full_messages_from_rows(
                 "locationLng": location_lng,
                 "locationPoiname": location_poiname,
                 "locationLabel": location_label,
-                "_rawText": raw_text if local_type == 266287972401 else "",
+                "_rawText": raw_text if local_type in (10000, 266287972401) else "",
             }
         )
 
@@ -3271,9 +3327,20 @@ def _postprocess_full_messages(
                 if fn and fn in name_to_username:
                     m["fromUsername"] = name_to_username[fn]
 
+    system_usernames: set[str] = set()
+    for m in merged:
+        if int(m.get("type") or 0) != 10000:
+            continue
+        meta = _extract_chatroom_top_message_metadata(str(m.get("_rawText") or ""))
+        operator_username = str(meta.get("operatorUsername") or "").strip()
+        if operator_username:
+            system_usernames.add(operator_username)
+
     from_usernames = [str(m.get("fromUsername") or "").strip() for m in merged]
     uniq_senders = list(
-        dict.fromkeys([u for u in (sender_usernames + list(pat_usernames) + quote_usernames + from_usernames) if u])
+        dict.fromkeys(
+            [u for u in (sender_usernames + list(pat_usernames) + quote_usernames + from_usernames + list(system_usernames)) if u]
+        )
     )
     sender_contact_rows = _load_contact_rows(contact_db_path, uniq_senders)
     local_sender_avatars = _query_head_image_usernames(head_image_db_path, uniq_senders)
@@ -3327,20 +3394,19 @@ def _postprocess_full_messages(
                     m["from"] = wd
 
         su = str(m.get("senderUsername") or "")
-        if not su:
-            continue
-        m["senderDisplayName"] = _resolve_sender_display_name(
-            sender_username=su,
-            sender_contact_rows=sender_contact_rows,
-            wcdb_display_names=wcdb_display_names,
-            group_nicknames=group_nicknames,
-        )
-        avatar_url = base_url + _avatar_url_unified(
-            account_dir=account_dir,
-            username=su,
-            local_avatar_usernames=local_sender_avatars,
-        )
-        m["senderAvatar"] = avatar_url
+        if su:
+            m["senderDisplayName"] = _resolve_sender_display_name(
+                sender_username=su,
+                sender_contact_rows=sender_contact_rows,
+                wcdb_display_names=wcdb_display_names,
+                group_nicknames=group_nicknames,
+            )
+            avatar_url = base_url + _avatar_url_unified(
+                account_dir=account_dir,
+                username=su,
+                local_avatar_usernames=local_sender_avatars,
+            )
+            m["senderAvatar"] = avatar_url
 
         qu = str(m.get("quoteUsername") or "").strip()
         if qu:
@@ -3471,13 +3537,11 @@ def _postprocess_full_messages(
         except Exception:
             pass
 
-        if int(m.get("type") or 0) == 266287972401:
-            raw = str(m.get("_rawText") or "")
-            if raw:
-                m["content"] = _parse_pat_message(raw, sender_contact_rows)
-
-        if "_rawText" in m:
-            m.pop("_rawText", None)
+        _postprocess_special_message_content(
+            message=m,
+            sender_contact_rows=sender_contact_rows,
+            wcdb_display_names=wcdb_display_names,
+        )
 
 
 @router.get("/api/chat/accounts", summary="列出已解密账号")
@@ -4526,7 +4590,7 @@ def _collect_chat_messages(
                         "locationLng": location_lng,
                         "locationPoiname": location_poiname,
                         "locationLabel": location_label,
-                        "_rawText": raw_text if local_type == 266287972401 else "",
+                        "_rawText": raw_text if local_type in (10000, 266287972401) else "",
                     }
                 )
         finally:
@@ -5409,7 +5473,7 @@ def list_chat_messages(
                         "paySubType": pay_sub_type,
                         "transferStatus": transfer_status,
                         "transferId": transfer_id,
-                        "_rawText": raw_text if local_type == 266287972401 else "",
+                        "_rawText": raw_text if local_type in (10000, 266287972401) else "",
                     }
                 )
         finally:
@@ -5498,6 +5562,15 @@ def list_chat_messages(
             continue
         pat_usernames_in_page.update({mm.group(1) for mm in re.finditer(r"\$\{([^}]+)\}", template) if mm.group(1)})
 
+    system_usernames_in_page: set[str] = set()
+    for m in messages_window:
+        if int(m.get("type") or 0) != 10000:
+            continue
+        meta = _extract_chatroom_top_message_metadata(str(m.get("_rawText") or ""))
+        operator_username = str(meta.get("operatorUsername") or "").strip()
+        if operator_username:
+            system_usernames_in_page.add(operator_username)
+
     from_usernames = [str(m.get("fromUsername") or "").strip() for m in messages_window]
     sender_usernames_in_page = [str(m.get("senderUsername") or "").strip() for m in messages_window]
     quote_usernames_in_page = [str(m.get("quoteUsername") or "").strip() for m in messages_window]
@@ -5510,6 +5583,7 @@ def list_chat_messages(
                     + list(pat_usernames_in_page)
                     + quote_usernames_in_page
                     + from_usernames
+                    + list(system_usernames_in_page)
                 )
                 if u
             ]
@@ -5567,20 +5641,19 @@ def list_chat_messages(
                     m["from"] = wd
 
         su = str(m.get("senderUsername") or "")
-        if not su:
-            continue
-        m["senderDisplayName"] = _resolve_sender_display_name(
-            sender_username=su,
-            sender_contact_rows=sender_contact_rows,
-            wcdb_display_names=wcdb_display_names,
-            group_nicknames=group_nicknames,
-        )
-        avatar_url = base_url + _avatar_url_unified(
-            account_dir=account_dir,
-            username=su,
-            local_avatar_usernames=local_sender_avatars,
-        )
-        m["senderAvatar"] = avatar_url
+        if su:
+            m["senderDisplayName"] = _resolve_sender_display_name(
+                sender_username=su,
+                sender_contact_rows=sender_contact_rows,
+                wcdb_display_names=wcdb_display_names,
+                group_nicknames=group_nicknames,
+            )
+            avatar_url = base_url + _avatar_url_unified(
+                account_dir=account_dir,
+                username=su,
+                local_avatar_usernames=local_sender_avatars,
+            )
+            m["senderAvatar"] = avatar_url
 
         qu = str(m.get("quoteUsername") or "").strip()
         if qu:
@@ -5706,13 +5779,11 @@ def list_chat_messages(
         except Exception:
             pass
 
-        if int(m.get("type") or 0) == 266287972401:
-            raw = str(m.get("_rawText") or "")
-            if raw:
-                m["content"] = _parse_pat_message(raw, sender_contact_rows)
-
-        if "_rawText" in m:
-            m.pop("_rawText", None)
+        _postprocess_special_message_content(
+            message=m,
+            sender_contact_rows=sender_contact_rows,
+            wcdb_display_names=wcdb_display_names,
+        )
 
     return {
         "status": "success",
@@ -6032,7 +6103,14 @@ async def _search_chat_messages_via_fts(
     scope = "conversation" if username else "global"
 
     if username:
-        uniq_usernames = list(dict.fromkeys([username] + [str(x.get("senderUsername") or "") for x in hits]))
+        system_usernames = [
+            str(_extract_chatroom_top_message_metadata(str(x.get("_rawText") or "")).get("operatorUsername") or "").strip()
+            for x in hits
+            if int(x.get("type") or 0) == 10000
+        ]
+        uniq_usernames = list(
+            dict.fromkeys([username] + [str(x.get("senderUsername") or "") for x in hits] + system_usernames)
+        )
         contact_rows = _load_contact_rows(contact_db_path, uniq_usernames)
         local_avatar_usernames = _query_head_image_usernames(head_image_db_path, uniq_usernames)
 
@@ -6099,10 +6177,22 @@ async def _search_chat_messages_via_fts(
                     local_avatar_usernames=local_avatar_usernames,
                 )
                 h["senderAvatar"] = avatar_url
+            _postprocess_special_message_content(
+                message=h,
+                sender_contact_rows=contact_rows,
+                wcdb_display_names=wcdb_display_names,
+            )
     else:
+        system_usernames = [
+            str(_extract_chatroom_top_message_metadata(str(x.get("_rawText") or "")).get("operatorUsername") or "").strip()
+            for x in hits
+            if int(x.get("type") or 0) == 10000
+        ]
         uniq_contacts = list(
             dict.fromkeys(
-                [str(x.get("username") or "") for x in hits] + [str(x.get("senderUsername") or "") for x in hits]
+                [str(x.get("username") or "") for x in hits]
+                + [str(x.get("senderUsername") or "") for x in hits]
+                + system_usernames
             )
         )
         contact_rows = _load_contact_rows(contact_db_path, uniq_contacts)
@@ -6182,6 +6272,11 @@ async def _search_chat_messages_via_fts(
                     local_avatar_usernames=local_avatar_usernames,
                 )
                 h["senderAvatar"] = avatar_url
+            _postprocess_special_message_content(
+                message=h,
+                sender_contact_rows=contact_rows,
+                wcdb_display_names=wcdb_display_names,
+            )
 
     return {
         "status": "success",
@@ -6434,7 +6529,14 @@ async def search_chat_messages(
         total_in_scan = len(conv_hits)
         page = conv_hits[int(offset) : int(offset) + int(limit)]
 
-        uniq_usernames = list(dict.fromkeys([username] + [str(x.get("senderUsername") or "") for x in page]))
+        system_usernames = [
+            str(_extract_chatroom_top_message_metadata(str(x.get("_rawText") or "")).get("operatorUsername") or "").strip()
+            for x in page
+            if int(x.get("type") or 0) == 10000
+        ]
+        uniq_usernames = list(
+            dict.fromkeys([username] + [str(x.get("senderUsername") or "") for x in page] + system_usernames)
+        )
         contact_rows = _load_contact_rows(contact_db_path, uniq_usernames)
         conv_row = contact_rows.get(username)
         conv_name = _pick_display_name(conv_row, username)
@@ -6455,6 +6557,11 @@ async def search_chat_messages(
                     wcdb_display_names={},
                     group_nicknames=group_nicknames,
                 )
+            _postprocess_special_message_content(
+                message=h,
+                sender_contact_rows=contact_rows,
+                wcdb_display_names={},
+            )
 
         return {
             "status": "success",
@@ -6531,7 +6638,13 @@ async def search_chat_messages(
 
     uniq_contacts = list(
         dict.fromkeys(
-            [str(x.get("username") or "") for x in page] + [str(x.get("senderUsername") or "") for x in page]
+            [str(x.get("username") or "") for x in page]
+            + [str(x.get("senderUsername") or "") for x in page]
+            + [
+                str(_extract_chatroom_top_message_metadata(str(x.get("_rawText") or "")).get("operatorUsername") or "").strip()
+                for x in page
+                if int(x.get("type") or 0) == 10000
+            ]
         )
     )
     contact_rows = _load_contact_rows(contact_db_path, uniq_contacts)
@@ -6566,6 +6679,11 @@ async def search_chat_messages(
                 wcdb_display_names={},
                 group_nicknames=group_nickname_cache.get(cu, {}),
             )
+        _postprocess_special_message_content(
+            message=h,
+            sender_contact_rows=contact_rows,
+            wcdb_display_names={},
+        )
 
     return {
         "status": "success",

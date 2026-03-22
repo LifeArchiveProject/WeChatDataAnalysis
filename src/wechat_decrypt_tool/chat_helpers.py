@@ -7,7 +7,7 @@ import sqlite3
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import HTTPException
@@ -787,7 +787,112 @@ def _parse_location_message(text: str) -> dict[str, Any]:
     }
 
 
-def _parse_system_message_content(raw_text: str) -> str:
+def _extract_chatroom_top_message_metadata(raw_text: str) -> dict[str, str]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return {}
+
+    lower_text = text.lower()
+    if "<mmchatroomtopmsg" in lower_text or "<sysmsg" in lower_text:
+        chatroom_id = str(_extract_xml_tag_text(text, "chatroomname") or "").strip()
+        operation = str(_extract_xml_tag_text(text, "op") or "").strip()
+        operator_username = str(_extract_xml_tag_text(text, "username") or "").strip()
+        operator_display_name = str(_extract_xml_tag_text(text, "nickname") or "").strip()
+        if chatroom_id.endswith("@chatroom") and operation in {"1", "2"} and operator_username:
+            return {
+                "operation": operation,
+                "operatorUsername": operator_username,
+                "operatorDisplayName": operator_display_name,
+            }
+
+    def _is_int_token(value: str) -> bool:
+        candidate = str(value or "").strip()
+        if not candidate:
+            return False
+        if candidate[0] in {"+", "-"}:
+            candidate = candidate[1:]
+        return candidate.isdigit()
+
+    normalized = re.sub(r"<!--\s*ChatRoomTopMsgRequest\s*-->", " ", text, flags=re.IGNORECASE)
+    normalized = re.sub(r"<!--\s*ChatRoomTopMsgResponse\s*-->", " ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return {}
+
+    parts = normalized.split(" ")
+    has_markers = ("chatroomtopmsgrequest" in lower_text) or ("chatroomtopmsgresponse" in lower_text)
+    if len(parts) < 5:
+        return {}
+
+    chatroom_id = str(parts[0] or "").strip()
+    operation = str(parts[1] or "").strip()
+    if not chatroom_id.endswith("@chatroom"):
+        return {}
+    if operation not in {"1", "2"}:
+        return {}
+
+    if not has_markers:
+        if len(parts) < 6:
+            return {}
+        if not _is_int_token(parts[2]) or not _is_int_token(parts[3]) or not _is_int_token(parts[5]):
+            return {}
+
+    operator_username = str(parts[4] or "").strip()
+    if not operator_username:
+        return {}
+
+    operator_display_name = ""
+    if len(parts) >= 6 and _is_int_token(parts[5]):
+        response_tokens = parts[6:]
+        if len(response_tokens) >= 2 and _is_int_token(response_tokens[-1]):
+            response_tokens = response_tokens[:-1]
+        operator_display_name = " ".join(response_tokens).strip()
+
+    return {
+        "operation": operation,
+        "operatorUsername": operator_username,
+        "operatorDisplayName": operator_display_name,
+    }
+
+
+def _parse_chatroom_top_message(
+    raw_text: str,
+    resolve_display_name: Optional[Callable[[str, str], str]] = None,
+) -> str:
+    meta = _extract_chatroom_top_message_metadata(raw_text)
+    if not meta:
+        return ""
+
+    operation = str(meta.get("operation") or "").strip()
+    operator_username = str(meta.get("operatorUsername") or "").strip()
+    operator_display_name = str(meta.get("operatorDisplayName") or "").strip()
+
+    if resolve_display_name is not None and operator_username:
+        try:
+            resolved = str(resolve_display_name(operator_username, operator_display_name) or "").strip()
+        except Exception:
+            resolved = ""
+        if resolved:
+            operator_display_name = resolved
+
+    if not operator_display_name:
+        operator_display_name = operator_username or "有人"
+
+    action_map = {
+        "1": "置顶了一条消息",
+        "2": "移除了一条置顶消息",
+    }
+    action = action_map.get(operation)
+    if not action:
+        return ""
+
+    return f"{operator_display_name}{action}"
+
+
+def _parse_system_message_content(
+    raw_text: str,
+    resolve_display_name: Optional[Callable[[str, str], str]] = None,
+) -> str:
     text = str(raw_text or "").strip()
     if not text:
         return "[系统消息]"
@@ -801,11 +906,16 @@ def _parse_system_message_content(raw_text: str) -> str:
         if nested_content:
             candidate = nested_content
 
+        candidate = re.sub(r"<!--.*?-->", " ", candidate, flags=re.IGNORECASE | re.DOTALL)
         candidate = re.sub(r"<!\[CDATA\[", "", candidate, flags=re.IGNORECASE)
         candidate = re.sub(r"\]\]>", "", candidate)
         candidate = re.sub(r"</?[_a-zA-Z0-9]+[^>]*>", "", candidate)
         candidate = re.sub(r"\s+", " ", candidate).strip()
         return candidate
+
+    top_message_text = _parse_chatroom_top_message(text, resolve_display_name=resolve_display_name)
+    if top_message_text:
+        return top_message_text
 
     if "revokemsg" in text.lower():
         replace_msg = _extract_xml_tag_text(text, "replacemsg")
@@ -2334,4 +2444,5 @@ def _row_to_search_hit(
         "locationLng": location_lng,
         "locationPoiname": location_poiname,
         "locationLabel": location_label,
+        "_rawText": raw_text if local_type in (10000, 266287972401) else "",
     }
