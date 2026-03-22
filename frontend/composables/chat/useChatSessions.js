@@ -250,7 +250,11 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
     isLoadingContacts.value = true
     contactsError.value = ''
     try {
+      const hadLoadedAccountSnapshot = !!chatAccounts.loaded
       await chatAccounts.ensureLoaded()
+      if (!selectedAccount.value && hadLoadedAccountSnapshot) {
+        await chatAccounts.ensureLoaded({ force: true })
+      }
 
       if (!selectedAccount.value) {
         clearContactsState(chatAccounts.error || '未检测到已解密账号，请先解密数据库。')

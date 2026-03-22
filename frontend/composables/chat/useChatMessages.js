@@ -35,16 +35,20 @@ export const useChatMessages = ({
   }
 
   const logMessagePhase = (phase, details = {}) => {
-    if (!isDesktopRenderer()) return
-    try {
-      window.wechatDesktop?.logDebug?.('chat-messages', phase, details)
-    } catch {}
-    console.info(`[chat-messages] ${phase}`, {
+    const payload = {
       account: String(selectedAccount.value || '').trim(),
       selectedUsername: String(selectedContact.value?.username || '').trim(),
       activeMessagesFor: String(activeMessagesFor.value || '').trim(),
       ...details
-    })
+    }
+
+    if (isDesktopRenderer()) {
+      try {
+        window.wechatDesktop?.logDebug?.('chat-messages', phase, payload)
+      } catch {}
+    }
+
+    console.info(`[chat-messages] ${phase}`, payload)
   }
 
   const summarizeRenderTypes = (list) => {
@@ -556,28 +560,38 @@ export const useChatMessages = ({
       params.render_types = messageTypeFilter.value
     }
 
-    const response = await api.listChatMessages(params)
-    if (selectedContact.value?.username !== username) return
+    try {
+      const response = await api.listChatMessages(params)
+      if (selectedContact.value?.username !== username) return
 
-    const latest = (response?.messages || []).map(normalizeMessage)
-    const seenIds = new Set(existing.map((message) => String(message?.id || '')))
-    const newOnes = []
-    for (const message of latest) {
-      const id = String(message?.id || '')
-      if (!id || seenIds.has(id)) continue
-      seenIds.add(id)
-      newOnes.push(message)
+      const rawMessages = response?.messages || []
+      const latest = rawMessages.map(normalizeMessage)
+
+      const seenIds = new Set(existing.map((message) => String(message?.id || '')))
+      const newOnes = []
+      for (const message of latest) {
+        const id = String(message?.id || '')
+        if (!id || seenIds.has(id)) continue
+        seenIds.add(id)
+        newOnes.push(message)
+      }
+      if (!newOnes.length) return
+
+      allMessages.value = { ...allMessages.value, [username]: [...existing, ...newOnes] }
+
+      await nextTick()
+      const nextContainer = messageContainerRef.value
+      if (nextContainer && atBottom) {
+        nextContainer.scrollTop = nextContainer.scrollHeight
+      }
+      updateJumpToBottomState()
+    } catch (error) {
+      console.error('[chat-messages] refreshRealtimeIncremental:error', {
+        account: String(selectedAccount.value || '').trim(),
+        username: String(username || '').trim(),
+        error
+      })
     }
-    if (!newOnes.length) return
-
-    allMessages.value = { ...allMessages.value, [username]: [...existing, ...newOnes] }
-
-    await nextTick()
-    const nextContainer = messageContainerRef.value
-    if (nextContainer && atBottom) {
-      nextContainer.scrollTop = nextContainer.scrollHeight
-    }
-    updateJumpToBottomState()
   }
 
   let realtimeRefreshFuture = null

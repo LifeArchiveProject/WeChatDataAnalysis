@@ -178,8 +178,10 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
 
     return {
       id: msg.id,
+      localId: Number(msg.localId || 0),
       serverId: msg.serverId || 0,
       serverIdStr,
+      type: Number(msg.type || 0),
       sender,
       senderUsername: msg.senderUsername || '',
       senderDisplayName: msg.senderDisplayName || '',
@@ -188,7 +190,6 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
       fullTime: formatMessageFullTime(msg.createTime),
       createTime: Number(msg.createTime || 0),
       isSent,
-      type: 'text',
       renderType: msg.renderType || 'text',
       voipType: msg.voipType || '',
       title: msg.title || '',
