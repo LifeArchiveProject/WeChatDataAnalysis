@@ -267,4 +267,10 @@ const openLocation = () => {
   width: 100%;
   height: 100%;
 }
+
+html[data-theme='dark'] .wechat-location-card-wrap {
+  --location-card-bg: var(--merged-history-bg);
+  --location-card-text: var(--merged-history-title);
+  --location-card-muted: var(--merged-history-preview);
+}
 </style>

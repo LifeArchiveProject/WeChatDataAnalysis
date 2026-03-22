@@ -49,7 +49,7 @@
 
           <div
             v-if="contactProfileCardOpen && contactProfileCardMessageId === String(message.id ?? '')"
-            class="absolute z-40 w-[360px] max-w-[88vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden"
+            class="chat-contact-card absolute z-40 w-[360px] max-w-[88vw] rounded-lg overflow-hidden"
             :class="message.isSent ? 'right-0 top-[calc(100%+8px)]' : 'left-0 top-[calc(100%+8px)]'"
             @mouseenter="onContactCardMouseEnter"
             @mouseleave="onMessageAvatarMouseLeave"
@@ -146,3 +146,40 @@ export default defineComponent({
   }
 })
 </script>
+
+<style scoped>
+.chat-contact-card {
+  background-color: var(--app-surface-bg);
+  border: 1px solid var(--app-border);
+  color: var(--app-text-primary);
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.16);
+}
+
+html[data-theme='dark'] .chat-contact-card {
+  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.42);
+}
+
+.chat-contact-card .bg-white {
+  background-color: var(--app-surface-bg);
+}
+
+.chat-contact-card [class*='bg-[#F6F6F6]'] {
+  background-color: var(--app-surface-soft);
+}
+
+.chat-contact-card .bg-gray-200 {
+  background-color: var(--app-border-soft);
+}
+
+.chat-contact-card :is(.border-gray-100, .border-gray-200, .border-gray-300) {
+  border-color: var(--app-border);
+}
+
+.chat-contact-card :is(.text-gray-900, .text-gray-800, .text-gray-700) {
+  color: var(--app-text-primary);
+}
+
+.chat-contact-card :is(.text-gray-600, .text-gray-500, .text-gray-400) {
+  color: var(--app-text-muted);
+}
+</style>

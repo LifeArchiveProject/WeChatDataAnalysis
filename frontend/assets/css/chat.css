@@ -24,7 +24,7 @@
 
 .wechat-link-card.wechat-link-card--disabled:hover,
 .wechat-link-card-cover.wechat-link-card--disabled:hover {
-  background: #fff;
+  background: var(--merged-history-bg);
 }
 
 /* 滚动条样式 */
@@ -704,7 +704,7 @@
 /* 文件消息样式 - 基于红包样式覆盖 */
 .wechat-file-card {
   width: 210px;
-  background: #fff;
+  background: var(--merged-history-bg);
   cursor: pointer;
   transition: background-color 0.15s ease;
 }
@@ -728,11 +728,11 @@
   left: 13px;
   right: 13px;
   height: 1.5px;
-  background: #e8e8e8;
+  background: var(--merged-history-divider);
 }
 
 .wechat-file-card:hover {
-  background: #f5f5f5;
+  background: var(--merged-history-hover);
 }
 
 .wechat-file-card .wechat-file-info {
@@ -742,7 +742,7 @@
 
 .wechat-file-name {
   font-size: 14px;
-  color: #1a1a1a;
+  color: var(--merged-history-title);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -753,7 +753,7 @@
 
 .wechat-file-size {
   font-size: 12px;
-  color: #b2b2b2;
+  color: var(--merged-history-footer);
   margin-top: 4px;
 }
 
@@ -765,12 +765,16 @@
 }
 
 .wechat-file-bottom {
-  border-top: 1px solid #e8e8e8;
+  border-top: 1px solid var(--merged-history-divider);
 }
 
 .wechat-file-bottom span {
   font-size: 12px;
-  color: #b2b2b2;
+  color: var(--merged-history-footer);
+}
+
+.wechat-file-card :is(.text-gray-500, .text-gray-400) {
+  color: var(--merged-history-preview);
 }
 
 .wechat-file-logo {
@@ -785,7 +789,7 @@
   width: 210px;
   min-width: 210px;
   max-width: 210px;
-  background: #fff;
+  background: var(--merged-history-bg);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -798,7 +802,7 @@
 }
 
 .wechat-link-card:hover {
-  background: #f5f5f5;
+  background: var(--merged-history-hover);
 }
 
 .wechat-link-content {
@@ -819,7 +823,7 @@
 
 .wechat-link-title {
   font-size: 14px;
-  color: #1a1a1a;
+  color: var(--merged-history-title);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -830,7 +834,7 @@
 
 .wechat-link-desc {
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--merged-history-preview);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -847,7 +851,7 @@
   flex: 0 0 auto;
   border-radius: 0;
   overflow: hidden;
-  background: #f2f2f2;
+  background: var(--app-surface-muted);
   align-self: flex-start;
 }
 
@@ -905,7 +909,7 @@
 
 .wechat-link-mini-header-name {
   font-size: 13px;
-  color: #7d7d7d;
+  color: var(--merged-history-preview);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -916,7 +920,7 @@
 .wechat-link-mini-title {
   font-size: 13px;
   line-height: 1.45;
-  color: #1a1a1a;
+  color: var(--merged-history-title);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -930,12 +934,12 @@
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
-  background: #f2f2f2;
+  background: var(--app-surface-muted);
   margin-top: auto;
 }
 
 .wechat-link-mini-preview--empty {
-  background: #f7f7f7;
+  background: var(--app-surface-soft);
 }
 
 .wechat-link-mini-preview-img {
@@ -964,7 +968,7 @@
   left: 12px;
   right: 12px;
   height: 1px;
-  background: #e8e8e8;
+  background: var(--merged-history-divider);
 }
 
 .wechat-link-mini-footer-icon {
@@ -976,7 +980,7 @@
 
 .wechat-link-mini-footer-text {
   font-size: 10px;
-  color: #8c8c8c;
+  color: var(--merged-history-preview);
 }
 
 .wechat-link-from {
@@ -996,7 +1000,7 @@
   left: 11px;
   right: 11px;
   height: 1.5px;
-  background: #e8e8e8;
+  background: var(--merged-history-divider);
 }
 
 .wechat-link-from-avatar {
@@ -1024,7 +1028,7 @@
 
 .wechat-link-from-name {
   font-size: 12px;
-  color: #b2b2b2;
+  color: var(--merged-history-footer);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1035,7 +1039,7 @@
   width: 137px;
   min-width: 137px;
   max-width: 137px;
-  background: #fff;
+  background: var(--merged-history-bg);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -1048,7 +1052,7 @@
 }
 
 .wechat-link-card-cover:hover {
-  background: #f5f5f5;
+  background: var(--merged-history-hover);
 }
 
 .wechat-link-cover-image-wrap {
@@ -1057,7 +1061,7 @@
   position: relative;
   overflow: hidden;
   border-radius: 4px 4px 0 0;
-  background: #f2f2f2;
+  background: var(--app-surface-muted);
   flex-shrink: 0;
 }
 
@@ -1126,7 +1130,7 @@
   box-sizing: border-box;
   font-size: 12px;
   line-height: 1.24;
-  color: #1a1a1a;
+  color: var(--merged-history-title);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
