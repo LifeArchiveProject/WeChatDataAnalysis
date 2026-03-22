@@ -1597,6 +1597,154 @@
     background-color: var(--search-panel-bg);
   }
 
+  .chat-overlay-dropdown,
+  .chat-context-menu,
+  .chat-floating-window,
+  .chat-edit-modal {
+    background-color: var(--app-surface-bg);
+    border: 1px solid var(--app-border);
+    color: var(--app-text-primary);
+    box-shadow: 0 20px 48px rgba(15, 23, 42, 0.16);
+  }
+
+  html[data-theme='dark'] :is(.chat-overlay-dropdown, .chat-context-menu, .chat-floating-window, .chat-edit-modal) {
+    box-shadow: 0 24px 56px rgba(0, 0, 0, 0.42);
+  }
+
+  .chat-overlay-dropdown input {
+    background-color: var(--app-input-bg);
+    border-color: var(--app-input-border);
+    color: var(--app-text-primary);
+  }
+
+  .chat-overlay-dropdown input::placeholder {
+    color: var(--app-text-muted);
+  }
+
+  .chat-overlay-dropdown :is(.bg-gray-200, .bg-gray-300),
+  .chat-floating-window :is(.bg-gray-200, .bg-gray-300) {
+    background-color: var(--app-border-soft);
+  }
+
+  .chat-overlay-dropdown :is(.border-gray-100, .border-gray-200, .border-gray-300),
+  .chat-floating-window :is(.border-gray-100, .border-gray-200, .border-gray-300) {
+    border-color: var(--app-border);
+  }
+
+  .chat-overlay-dropdown :is(.text-gray-900, .text-gray-800, .text-gray-700),
+  .chat-floating-window :is(.text-gray-900, .text-gray-800, .text-gray-700) {
+    color: var(--app-text-primary);
+  }
+
+  .chat-overlay-dropdown :is(.text-gray-600, .text-gray-500, .text-gray-400),
+  .chat-floating-window :is(.text-gray-600, .text-gray-500, .text-gray-400) {
+    color: var(--app-text-muted);
+  }
+
+  .chat-overlay-option {
+    color: var(--app-text-primary);
+    transition: background-color 0.15s ease;
+  }
+
+  .chat-overlay-option:hover {
+    background-color: var(--app-neutral-btn-hover);
+  }
+
+  .chat-overlay-option--active {
+    background-color: var(--app-surface-soft);
+  }
+
+  .chat-overlay-option--active:hover {
+    background-color: var(--app-neutral-btn-hover);
+  }
+
+  .chat-context-menu__item {
+    color: inherit;
+    transition: background-color 0.15s ease;
+  }
+
+  .chat-context-menu__item:hover {
+    background-color: var(--app-neutral-btn-hover);
+  }
+
+  .chat-context-menu :is(.border-gray-100, .border-gray-200, .border-gray-300) {
+    border-color: var(--app-border);
+  }
+
+  .chat-floating-window__header,
+  .chat-floating-window__body,
+  .chat-floating-window__row {
+    background-color: var(--app-surface-soft);
+  }
+
+  .chat-floating-window__header {
+    border-bottom: 1px solid var(--app-border);
+  }
+
+  .chat-floating-window__row {
+    border-bottom: 1px solid var(--app-border);
+  }
+
+  .chat-floating-window__title {
+    color: var(--app-text-primary);
+  }
+
+  .chat-floating-window__close {
+    color: var(--app-text-secondary);
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  .chat-floating-window__close:hover {
+    background-color: var(--app-neutral-btn-hover);
+    color: var(--app-text-primary);
+  }
+
+  .chat-floating-window .bg-white {
+    background-color: var(--app-surface-bg);
+  }
+
+  .chat-floating-window .bg-gray-50 {
+    background-color: var(--app-surface-soft);
+  }
+
+  .chat-floating-window [class*='hover:bg-gray-50']:hover {
+    background-color: var(--app-neutral-btn-hover);
+  }
+
+  .chat-edit-modal :is(.border-gray-100, .border-gray-200, .border-gray-300) {
+    border-color: var(--app-border);
+  }
+
+  .chat-edit-modal .bg-white {
+    background-color: var(--app-surface-bg);
+  }
+
+  .chat-edit-modal .bg-gray-50 {
+    background-color: var(--app-surface-soft);
+  }
+
+  .chat-edit-modal :is(.text-gray-900, .text-gray-800, .text-gray-700) {
+    color: var(--app-text-primary);
+  }
+
+  .chat-edit-modal :is(.text-gray-600, .text-gray-500, .text-gray-400) {
+    color: var(--app-text-muted);
+  }
+
+  .chat-edit-modal :is(input:not([type='checkbox']):not([type='radio']), textarea, select) {
+    background-color: var(--app-input-bg);
+    border-color: var(--app-input-border);
+    color: var(--app-text-primary);
+  }
+
+  .chat-edit-modal :is(input:not([type='checkbox']):not([type='radio']), textarea, select)::placeholder {
+    color: var(--app-text-muted);
+  }
+
+  .chat-edit-modal [class*='hover:bg-gray-50']:hover {
+    background-color: var(--app-neutral-btn-hover);
+  }
+
   .search-input-combined {
     background-color: var(--search-input-bg);
     border-color: var(--search-input-border);
