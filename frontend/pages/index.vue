@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen flex items-center justify-center relative overflow-hidden">
+  <div class="landing-page min-h-screen flex items-center justify-center relative overflow-hidden">
     <!-- 网格背景 -->
     <div class="absolute inset-0 bg-grid-pattern opacity-5"></div>
     

@@ -42,6 +42,240 @@
 
     /* 统一消息圆角（聊天所有消息共用） */
     --message-radius: 4px;
+
+    /* 主题色板 */
+    --sidebar-rail-bg: #e8e7e7;
+    --sidebar-rail-border: #dadada;
+    --sidebar-rail-hover: #e1e1e1;
+    --sidebar-rail-icon-color: #5d5d5d;
+    --sidebar-rail-icon-active-color: #07b75b;
+    --desktop-titlebar-bg: #ededed;
+    --desktop-titlebar-icon: #111111;
+    --desktop-titlebar-hover: rgba(0, 0, 0, 0.06);
+    --desktop-titlebar-active: rgba(0, 0, 0, 0.1);
+
+    --app-shell-bg: #ededed;
+    --app-surface-bg: #ffffff;
+    --app-surface-soft: #f7f7f7;
+    --app-surface-muted: #f3f3f3;
+    --app-surface-overlay: rgba(255, 255, 255, 0.92);
+    --app-border: #e7e7e7;
+    --app-border-soft: #ececec;
+    --app-border-subtle: #f1f1f1;
+    --app-text-primary: #191919;
+    --app-text-secondary: #5f5f5f;
+    --app-text-muted: #909090;
+    --app-text-faint: #9e9e9e;
+    --app-input-bg: #ffffff;
+    --app-input-border: #e7e7e7;
+    --app-input-hover: #f7f7f7;
+    --app-neutral-btn-bg: #ffffff;
+    --app-neutral-btn-hover: #f7f7f7;
+    --app-list-hover: #eaeaea;
+    --app-list-active: #dedede;
+    --app-list-active-hover: #d3d3d3;
+    --app-accent: #07c160;
+    --app-accent-hover: #06ad56;
+
+    --session-list-bg: #f7f7f7;
+    --session-list-search-bg: #f7f7f7;
+    --session-list-border: #e5e7eb;
+    --session-list-item-border: #f1f1f1;
+    --session-list-item-bg: transparent;
+    --session-list-item-hover: #eaeaea;
+    --session-list-item-selected: #dedede;
+    --session-list-item-selected-hover: #d3d3d3;
+    --session-list-item-top-bg: #eaeaea;
+    --session-list-item-top-hover: #dedede;
+    --session-list-item-top-selected: #d2d2d2;
+    --session-list-item-top-selected-hover: #c7c7c7;
+    --session-list-name: #111827;
+    --session-list-meta: #6b7280;
+    --session-list-preview: #6b7280;
+    --session-list-resizer: rgba(0, 0, 0, 0.12);
+
+    --contact-search-bg: #eaeaea;
+    --contact-search-focus-bg: #ffffff;
+    --contact-search-focus-ring: rgba(3, 193, 96, 0.2);
+    --contact-search-icon: #9ca3af;
+    --contact-search-text: #1f2937;
+    --contact-search-placeholder: #9ca3af;
+    --contact-search-clear: #9ca3af;
+    --account-select-bg: #eaeaea;
+
+    --chat-page-bg: #ededed;
+    --chat-header-bg: #ededed;
+    --chat-header-border: #e5e7eb;
+    --chat-header-title: #111827;
+    --chat-header-icon: #4b5563;
+    --chat-header-icon-hover: #1f2937;
+    --message-filter-color: #374151;
+    --message-list-status: #6b7280;
+    --message-load-more-bg: #ffffff;
+    --message-load-more-border: #e5e7eb;
+    --message-load-more-text: #374151;
+    --jump-to-bottom-bg: rgba(255, 255, 255, 0.9);
+    --jump-to-bottom-border: #e5e7eb;
+    --jump-to-bottom-text: #374151;
+    --chat-date-text: #9e9e9e;
+    --chat-sender-name: #6b7280;
+    --chat-bubble-sent: #95ec69;
+    --chat-bubble-sent-text: #000000;
+    --chat-bubble-received: #ffffff;
+    --chat-bubble-received-text: #1f2937;
+    --quote-bubble-bg: #e1e1e1;
+    --quote-bubble-text: #525252;
+    --merged-history-bg: #ffffff;
+    --merged-history-hover: #f5f5f5;
+    --merged-history-title: #161616;
+    --merged-history-preview: #6b7280;
+    --merged-history-divider: #e8e8e8;
+    --merged-history-footer: #b2b2b2;
+
+    --search-panel-bg: #ffffff;
+    --search-panel-header-bg: #f9fafb;
+    --search-panel-border: #e5e7eb;
+    --search-panel-soft: #f9fafb;
+    --search-item-hover: #f3f4f6;
+    --search-panel-text: #1f2937;
+    --search-panel-muted: #9ca3af;
+    --search-result-selected: rgba(3, 193, 96, 0.08);
+    --search-result-selected-hover: rgba(3, 193, 96, 0.12);
+    --search-input-bg: #ffffff;
+    --search-input-border: #e5e7eb;
+
+    --calendar-day-bg: #ffffff;
+    --calendar-day-border: #e5e7eb;
+    --calendar-day-text: #374151;
+    --calendar-day-empty-bg: #f3f4f6;
+    --calendar-day-empty-border: #f3f4f6;
+    --calendar-day-empty-text: #9ca3af;
+
+    --scrollbar-track: #f1f1f1;
+    --scrollbar-thumb: #c1c1c1;
+    --scrollbar-thumb-hover: #a1a1a1;
+  }
+
+  html[data-theme='dark'] {
+    --bg-primary: #191919;
+    --bg-secondary: #242424;
+    --bg-gray: #242424;
+    --text-primary: #f5f5f5;
+    --text-secondary: #c7c7c7;
+    --text-light: #9f9f9f;
+    --border-color: #303030;
+    --border-light: #262626;
+
+    --sidebar-rail-bg: #2d2d2d;
+    --sidebar-rail-border: #2d2d2d;
+    --sidebar-rail-hover: #373737;
+    --sidebar-rail-icon-color: #a0a0a0;
+    --sidebar-rail-icon-active-color: #3eb575;
+    --desktop-titlebar-bg: #191919;
+    --desktop-titlebar-icon: #d0d0d0;
+    --desktop-titlebar-hover: rgba(255, 255, 255, 0.08);
+    --desktop-titlebar-active: rgba(255, 255, 255, 0.14);
+
+    --app-shell-bg: #191919;
+    --app-surface-bg: #242424;
+    --app-surface-soft: #2e2e2e;
+    --app-surface-muted: #2f2f2f;
+    --app-surface-overlay: rgba(46, 46, 46, 0.92);
+    --app-border: #373737;
+    --app-border-soft: #3a3a3a;
+    --app-border-subtle: #2d2d2d;
+    --app-text-primary: #f5f5f5;
+    --app-text-secondary: #c7c7c7;
+    --app-text-muted: #9f9f9f;
+    --app-text-faint: #9f9f9f;
+    --app-input-bg: #2f2f2f;
+    --app-input-border: #3a3a3a;
+    --app-input-hover: #373737;
+    --app-neutral-btn-bg: #2f2f2f;
+    --app-neutral-btn-hover: #3a3a3a;
+    --app-list-hover: #2f2f2f;
+    --app-list-active: #3a3a3a;
+    --app-list-active-hover: #444444;
+    --app-accent: #3eb575;
+    --app-accent-hover: #35a86b;
+
+    --session-list-bg: #191919;
+    --session-list-search-bg: #191919;
+    --session-list-border: #2d2d2d;
+    --session-list-item-border: #2d2d2d;
+    --session-list-item-bg: #242424;
+    --session-list-item-hover: #2f2f2f;
+    --session-list-item-selected: #3a3a3a;
+    --session-list-item-selected-hover: #444444;
+    --session-list-item-top-bg: #2f2f2f;
+    --session-list-item-top-hover: #3a3a3a;
+    --session-list-item-top-selected: #444444;
+    --session-list-item-top-selected-hover: #4e4e4e;
+    --session-list-name: #f5f5f5;
+    --session-list-meta: #c4c4c4;
+    --session-list-preview: #b8b8b8;
+    --session-list-resizer: rgba(255, 255, 255, 0.18);
+
+    --contact-search-bg: #2f2f2f;
+    --contact-search-focus-bg: #2f2f2f;
+    --contact-search-focus-ring: rgba(62, 181, 117, 0.22);
+    --contact-search-icon: #9f9f9f;
+    --contact-search-text: #f5f5f5;
+    --contact-search-placeholder: #9f9f9f;
+    --contact-search-clear: #9f9f9f;
+    --account-select-bg: #2f2f2f;
+
+    --chat-page-bg: #191919;
+    --chat-header-bg: #191919;
+    --chat-header-border: #2b2b2b;
+    --chat-header-title: #f5f5f5;
+    --chat-header-icon: #d0d0d0;
+    --chat-header-icon-hover: #ffffff;
+    --message-filter-color: #d0d0d0;
+    --message-list-status: #9f9f9f;
+    --message-load-more-bg: #242424;
+    --message-load-more-border: #373737;
+    --message-load-more-text: #d8d8d8;
+    --jump-to-bottom-bg: rgba(36, 36, 36, 0.94);
+    --jump-to-bottom-border: #373737;
+    --jump-to-bottom-text: #d8d8d8;
+    --chat-date-text: #9f9f9f;
+    --chat-sender-name: #b9b9b9;
+    --chat-bubble-sent: #3eb575;
+    --chat-bubble-sent-text: #ffffff;
+    --chat-bubble-received: #2e2e2e;
+    --chat-bubble-received-text: #f5f5f5;
+    --quote-bubble-bg: #252525;
+    --quote-bubble-text: #c9c9c9;
+    --merged-history-bg: #2e2e2e;
+    --merged-history-hover: #383838;
+    --merged-history-title: #f5f5f5;
+    --merged-history-preview: #c4c4c4;
+    --merged-history-divider: #3a3a3a;
+    --merged-history-footer: #a8a8a8;
+
+    --search-panel-bg: #191919;
+    --search-panel-header-bg: #191919;
+    --search-panel-border: #2b2b2b;
+    --search-panel-soft: #2f2f2f;
+    --search-item-hover: #2f2f2f;
+    --search-panel-text: #f5f5f5;
+    --search-panel-muted: #9f9f9f;
+    --search-result-selected: #3a3a3a;
+    --search-result-selected-hover: #444444;
+    --search-input-bg: #2f2f2f;
+    --search-input-border: #3a3a3a;
+
+    --calendar-day-bg: #242424;
+    --calendar-day-border: #373737;
+    --calendar-day-text: #e5e5e5;
+    --calendar-day-empty-bg: #1f1f1f;
+    --calendar-day-empty-border: #1f1f1f;
+    --calendar-day-empty-text: #7f7f7f;
+
+    --scrollbar-track: #232323;
+    --scrollbar-thumb: #4b4b4b;
+    --scrollbar-thumb-hover: #5b5b5b;
   }
 
   body {
@@ -50,6 +284,7 @@
     color: var(--text-primary);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 }
 
@@ -1140,6 +1375,1352 @@
   .sidebar-slide-leave-from {
     transform: translateX(0);
     opacity: 1;
+  }
+
+  .chat-page-shell,
+  .chat-page-main,
+  .conversation-pane,
+  .message-list {
+    background-color: var(--chat-page-bg);
+  }
+
+  .session-list-panel {
+    background-color: var(--session-list-bg);
+    border-color: var(--session-list-border);
+  }
+
+  .session-list-search {
+    background-color: var(--session-list-search-bg);
+    border-color: var(--session-list-border);
+  }
+
+  .session-list-scroll {
+    background-color: var(--session-list-bg);
+  }
+
+  .session-list-status {
+    color: var(--session-list-meta);
+  }
+
+  .session-list-item {
+    background-color: var(--session-list-item-bg);
+    border-bottom: 1px solid var(--session-list-item-border);
+  }
+
+  .session-list-item:hover {
+    background-color: var(--session-list-item-hover);
+  }
+
+  .session-list-item--selected {
+    background-color: var(--session-list-item-selected);
+  }
+
+  .session-list-item--selected:hover {
+    background-color: var(--session-list-item-selected-hover);
+  }
+
+  .session-list-item--top {
+    background-color: var(--session-list-item-top-bg);
+  }
+
+  .session-list-item--top:hover {
+    background-color: var(--session-list-item-top-hover);
+  }
+
+  .session-list-item--top.session-list-item--selected {
+    background-color: var(--session-list-item-top-selected);
+  }
+
+  .session-list-item--top.session-list-item--selected:hover {
+    background-color: var(--session-list-item-top-selected-hover);
+  }
+
+  .session-list-item-name {
+    color: var(--session-list-name);
+  }
+
+  .session-list-item-time {
+    color: var(--session-list-meta);
+  }
+
+  .session-list-item-preview {
+    color: var(--session-list-preview);
+  }
+
+  .contact-search-wrapper {
+    background-color: var(--contact-search-bg);
+  }
+
+  .contact-search-wrapper:focus-within {
+    background-color: var(--contact-search-focus-bg);
+    box-shadow: 0 0 0 2px var(--contact-search-focus-ring);
+  }
+
+  .contact-search-icon {
+    color: var(--contact-search-icon);
+  }
+
+  .contact-search-input {
+    color: var(--contact-search-text);
+  }
+
+  .contact-search-input::placeholder {
+    color: var(--contact-search-placeholder);
+  }
+
+  .contact-search-clear {
+    color: var(--contact-search-clear);
+  }
+
+  .contact-search-clear:hover {
+    color: var(--contact-search-text);
+  }
+
+  .account-select {
+    background-color: var(--account-select-bg);
+    border-color: var(--search-input-border);
+    color: var(--contact-search-text);
+  }
+
+  .chat-header {
+    background-color: var(--chat-header-bg);
+    border-bottom-color: var(--chat-header-border);
+  }
+
+  .chat-header-title {
+    color: var(--chat-header-title);
+  }
+
+  .header-btn-icon {
+    color: var(--chat-header-icon);
+  }
+
+  .header-btn-icon:hover {
+    color: var(--chat-header-icon-hover);
+  }
+
+  .message-filter-select {
+    color: var(--message-filter-color);
+  }
+
+  .conversation-empty-title {
+    color: var(--chat-header-title);
+  }
+
+  .conversation-empty-text,
+  .message-list-status {
+    color: var(--message-list-status);
+  }
+
+  .message-list-load-more {
+    background-color: var(--message-load-more-bg);
+    border-color: var(--message-load-more-border);
+    color: var(--message-load-more-text);
+  }
+
+  .message-list-load-more:hover {
+    background-color: var(--message-load-more-bg);
+    filter: brightness(1.06);
+  }
+
+  .jump-to-bottom-btn {
+    background-color: var(--jump-to-bottom-bg);
+    border-color: var(--jump-to-bottom-border);
+    color: var(--jump-to-bottom-text);
+  }
+
+  .jump-to-bottom-btn:hover {
+    filter: brightness(1.06);
+  }
+
+  .message-time-divider {
+    color: var(--chat-date-text);
+  }
+
+  .message-sender-name {
+    color: var(--chat-sender-name);
+  }
+
+  .search-sidebar,
+  .time-sidebar {
+    background-color: var(--search-panel-bg);
+    border-left-color: var(--search-panel-border);
+    color: var(--search-panel-text);
+  }
+
+  .search-sidebar-header,
+  .time-sidebar-header {
+    background-color: var(--search-panel-header-bg);
+    border-bottom-color: var(--search-panel-border);
+  }
+
+  .search-sidebar-title,
+  .time-sidebar-title,
+  .calendar-month-label,
+  .sidebar-result-contact,
+  .sidebar-result-content,
+  .sidebar-result-sender,
+  .sidebar-empty-text,
+  .sidebar-initial-text {
+    color: var(--search-panel-text);
+  }
+
+  .search-sidebar-close,
+  .time-sidebar-close,
+  .calendar-nav-btn,
+  .sidebar-clear-btn,
+  .search-clear-inline {
+    color: var(--search-panel-muted);
+  }
+
+  .search-sidebar-close:hover,
+  .time-sidebar-close:hover,
+  .calendar-nav-btn:hover:not(:disabled),
+  .sidebar-clear-btn:hover,
+  .search-clear-inline:hover {
+    color: var(--search-panel-text);
+    background-color: var(--search-panel-soft);
+  }
+
+  .search-sidebar-input-section,
+  .search-sidebar-history,
+  .search-sidebar-status,
+  .search-sidebar-scope,
+  .search-sidebar-filters,
+  .search-sidebar-advanced,
+  .time-sidebar-status {
+    border-color: var(--search-panel-border);
+  }
+
+  .search-sidebar-results,
+  .time-sidebar-body {
+    background-color: var(--search-panel-bg);
+  }
+
+  .search-input-combined {
+    background-color: var(--search-input-bg);
+    border-color: var(--search-input-border);
+  }
+
+  .search-input-combined:hover {
+    border-color: var(--search-input-border);
+    filter: brightness(1.04);
+  }
+
+  .search-scope-inline {
+    background-color: var(--search-panel-soft);
+    border-right-color: var(--search-panel-border);
+  }
+
+  .scope-inline-btn,
+  .scope-inline-divider,
+  .sidebar-section-title,
+  .sidebar-status-info,
+  .sidebar-status-detail,
+  .calendar-weekday,
+  .time-sidebar-status,
+  .sidebar-empty-hint,
+  .sidebar-initial-hint,
+  .sidebar-result-time,
+  .sidebar-result-header {
+    color: var(--search-panel-muted);
+  }
+
+  .search-input-inline,
+  .search-filter-select,
+  .search-filter-input,
+  .search-date-input,
+  .sidebar-filter-select,
+  .calendar-ym-select {
+    color: var(--search-panel-text);
+  }
+
+  .search-input-inline::placeholder,
+  .search-filter-input::placeholder {
+    color: var(--search-panel-muted);
+  }
+
+  .search-filter-select,
+  .search-date-input,
+  .sidebar-filter-select,
+  .calendar-ym-select,
+  .search-session-type-btn,
+  .sidebar-history-item,
+  .sidebar-index-btn,
+  .sidebar-load-more-btn,
+  .sidebar-initial-hint kbd {
+    background-color: var(--search-panel-soft);
+    border-color: var(--search-input-border);
+    color: var(--search-panel-text);
+  }
+
+  .search-session-type-btn:hover,
+  .sidebar-history-item:hover,
+  .sidebar-index-btn:hover,
+  .sidebar-load-more-btn:hover {
+    background-color: var(--search-item-hover);
+  }
+
+  .sidebar-result-card:hover {
+    background-color: var(--search-item-hover);
+  }
+
+  .sidebar-result-card-selected {
+    background-color: var(--search-result-selected);
+  }
+
+  .sidebar-result-card-selected:hover {
+    background-color: var(--search-result-selected-hover);
+  }
+
+  .calendar-day {
+    background-color: var(--calendar-day-bg);
+    border-color: var(--calendar-day-border);
+    color: var(--calendar-day-text);
+  }
+
+  .calendar-day-empty {
+    background-color: var(--calendar-day-empty-bg);
+    border-color: var(--calendar-day-empty-border);
+    color: var(--calendar-day-empty-text);
+  }
+
+  .calendar-day-outside {
+    background-color: transparent;
+    border-color: transparent;
+  }
+
+  .chat-history-modal-panel,
+  .chat-history-modal-body,
+  .chat-history-modal-header,
+  .chat-history-modal-row {
+    background-color: var(--chat-page-bg);
+  }
+
+  .chat-history-modal-header,
+  .chat-history-modal-row {
+    border-color: var(--chat-header-border);
+  }
+
+  .chat-history-modal-title,
+  .chat-history-modal-icon {
+    color: var(--chat-header-title);
+  }
+
+  .chat-history-modal-icon-btn:hover {
+    background-color: var(--search-panel-soft);
+  }
+
+  .chat-history-modal-empty,
+  .chat-history-modal-sender,
+  .chat-history-modal-time {
+    color: var(--message-list-status);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) {
+    color: var(--app-text-primary);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page
+  ) {
+    background-color: var(--app-shell-bg);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) .bg-white {
+    background-color: var(--app-surface-bg);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="bg-white/"] {
+    background-color: var(--app-surface-overlay);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) .bg-gray-50,
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="bg-[#f9f9f9]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="bg-[#fafafa]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="bg-[#fcfcfc]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="bg-[#F7F7F7]"] {
+    background-color: var(--app-surface-soft);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) .bg-gray-100,
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="bg-[#EDEDED]"] {
+    background-color: var(--app-surface-muted);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) .bg-gray-200 {
+    background-color: var(--app-border-soft);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) .bg-gray-300 {
+    background-color: #4a4a4a;
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(.border-gray-100, .border-gray-200, .border-gray-300) {
+    border-color: var(--app-border);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="border-[#EDEDED]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="border-[#e2e2e2]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="border-[#e7e7e7]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="border-[#eeeeee]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="border-[#ededed]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="border-[#efefef]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="border-[#ececec]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="border-[#F3F3F3]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="border-[#eee]"] {
+    border-color: var(--app-border);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) .divide-y > :not([hidden]) ~ :not([hidden]) {
+    border-color: var(--app-border-soft);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(.text-gray-900, .text-gray-800, .text-gray-700) {
+    color: var(--app-text-primary);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(.text-gray-600, .text-gray-500) {
+    color: var(--app-text-secondary);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(.text-gray-400, .text-gray-300) {
+    color: var(--app-text-muted);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#000000e6]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#1f1f1f]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#222]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#111]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#333]"] {
+    color: var(--app-text-primary);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#444]"] {
+    color: var(--app-text-secondary);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#7F7F7F]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#666]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#777]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#5f5f5f]"] {
+    color: var(--app-text-secondary);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#909090]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#999]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#888]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#8a8a8a]"],
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="text-[#9e9e9e]"] {
+    color: var(--app-text-muted);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(input:not([type='checkbox']):not([type='radio']), textarea, select) {
+    background-color: var(--app-input-bg);
+    border-color: var(--app-input-border);
+    color: var(--app-text-primary);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(input:not([type='checkbox']):not([type='radio']), textarea, select)::placeholder {
+    color: var(--app-text-muted);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(code, pre) {
+    background-color: var(--app-surface-muted);
+    color: var(--app-text-primary);
+    border-color: var(--app-border);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="hover:bg-gray-50"]:hover,
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="hover:bg-gray-100"]:hover,
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="hover:bg-[#f0f0f0]"]:hover,
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="hover:bg-[#f2f2f2]"]:hover,
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="hover:bg-[#f7f7f7]"]:hover,
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="hover:bg-[#F7F7F7]"]:hover,
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) [class*="hover:bg-[#EFEFEF]"]:hover {
+    background-color: var(--app-neutral-btn-hover);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) .bg-amber-50 {
+    background-color: rgba(242, 170, 0, 0.14);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(.border-amber-200, .border-amber-300) {
+    border-color: rgba(242, 170, 0, 0.28);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(.text-amber-900, .text-amber-800, .text-amber-700) {
+    color: #f7d27a;
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) .bg-red-50 {
+    background-color: rgba(250, 81, 81, 0.14);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(.border-red-100, .border-red-200, .border-red-300) {
+    border-color: rgba(250, 81, 81, 0.28);
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) :is(.text-red-700, .text-red-600, .text-red-500) {
+    color: #ff8a8a;
+  }
+
+  html[data-theme='dark'] .api-status-banner {
+    background-color: rgba(250, 81, 81, 0.14);
+    border-color: rgba(250, 81, 81, 0.28);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
+  }
+
+  html[data-theme='dark'] .api-status-banner :is(.text-red-800, .text-red-700, .text-red-600) {
+    color: #ff9b9b;
+  }
+
+  html[data-theme='dark'] :is(
+    .landing-page,
+    .decrypt-page,
+    .decrypt-result-page,
+    .detection-result-page,
+    .contacts-page,
+    .sns-page,
+    .edits-page,
+    .settings-dialog-panel,
+    .desktop-update-dialog-panel,
+    .account-info-dialog-panel
+  ) .text-green-600 {
+    color: #7cd8a3;
+  }
+
+  html[data-theme='dark'] .contacts-page .bg-blue-100 {
+    background-color: rgba(96, 122, 255, 0.18);
+    color: #bfd0ff;
+  }
+
+  html[data-theme='dark'] .contacts-page .bg-green-100 {
+    background-color: rgba(62, 181, 117, 0.18);
+    color: #8edcaf;
+  }
+
+  html[data-theme='dark'] .contacts-page .bg-orange-100 {
+    background-color: rgba(242, 170, 0, 0.18);
+    color: #f7d27a;
+  }
+
+  html[data-theme='dark'] .sns-page [class*="bg-[#F7F7F7]"],
+  html[data-theme='dark'] .sns-page [class*="bg-[#EFEFEF]"] {
+    background-color: var(--app-surface-soft);
+  }
+
+  html[data-theme='dark'] .sns-page [class*="hover:bg-[#EFEFEF]"]:hover {
+    background-color: var(--app-neutral-btn-hover);
+  }
+
+  html[data-theme='dark'] .detection-result-page [class*="bg-[#07C160]/5"] {
+    background-color: rgba(62, 181, 117, 0.14);
+  }
+
+  html[data-theme='dark'] .detection-result-page [class*="bg-[#07C160]/5"]:hover {
+    background-color: rgba(62, 181, 117, 0.18);
+  }
+
+  html[data-theme='dark'] .settings-dialog-panel [class*="bg-[#e7f5ee]"] {
+    background-color: rgba(62, 181, 117, 0.16);
+  }
+
+  html[data-theme='dark'] .settings-dialog-panel [class*="ring-[#e5e5e5]"] {
+    --tw-ring-color: var(--app-border);
+  }
+
+  html[data-theme='dark'] .settings-dialog-panel [class*="bg-[#d0d0d0]"] {
+    background-color: #4a4a4a;
+  }
+
+  html[data-theme='dark'] .settings-dialog .settings-dialog-panel {
+    border-width: 0 !important;
+    border-color: transparent !important;
+    outline: none !important;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.46) !important;
+  }
+
+  html[data-theme='dark'] .contacts-export-panel {
+    background-color: var(--app-surface-bg);
+    border-color: var(--app-border);
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.2);
+  }
+
+  html[data-theme='dark'] .chat-export-modal {
+    background-color: var(--app-surface-bg);
+    border-color: var(--app-border);
+    color: var(--app-text-primary);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+  }
+
+  html[data-theme='dark'] .chat-export-modal .bg-white {
+    background-color: var(--app-surface-bg);
+  }
+
+  html[data-theme='dark'] .chat-export-modal .bg-gray-50 {
+    background-color: var(--app-surface-soft);
+  }
+
+  html[data-theme='dark'] .chat-export-modal :is(.border-gray-100, .border-gray-200) {
+    border-color: var(--app-border);
+  }
+
+  html[data-theme='dark'] .chat-export-modal :is(.text-gray-900, .text-gray-800, .text-gray-700) {
+    color: var(--app-text-primary);
+  }
+
+  html[data-theme='dark'] .chat-export-modal :is(.text-gray-600, .text-gray-500, .text-gray-400) {
+    color: var(--app-text-muted);
+  }
+
+  html[data-theme='dark'] .chat-export-modal .bg-amber-50 {
+    background-color: rgba(242, 170, 0, 0.14);
+  }
+
+  html[data-theme='dark'] .chat-export-modal .border-amber-200 {
+    border-color: rgba(242, 170, 0, 0.28);
+  }
+
+  html[data-theme='dark'] .chat-export-modal .text-amber-800 {
+    color: #f7d27a;
+  }
+
+  html[data-theme='dark'] .chat-export-modal :is(.text-green-600, .text-green-500) {
+    color: #7cd8a3;
+  }
+
+  html[data-theme='dark'] .chat-export-modal :is(.text-red-600, .text-red-500) {
+    color: #ff8a8a;
+  }
+
+  html[data-theme='dark'] .chat-export-modal :is(input:not([type='checkbox']):not([type='radio']), textarea, select) {
+    background-color: var(--app-input-bg);
+    border-color: var(--app-input-border);
+    color: var(--app-text-primary);
+  }
+
+  html[data-theme='dark'] .chat-export-modal :is(input:not([type='checkbox']):not([type='radio']), textarea, select)::placeholder {
+    color: var(--app-text-muted);
+  }
+
+  html[data-theme='dark'] .chat-export-modal [class*="hover:bg-gray-50"]:hover {
+    background-color: var(--app-neutral-btn-hover);
+  }
+
+  html[data-theme='dark'] .chat-export-modal [class*="bg-[#03C160]/5"] {
+    background-color: rgba(62, 181, 117, 0.14);
+  }
+
+  html[data-theme='dark'] .chat-export-modal [class*="hover:bg-[#03C160]/10"]:hover {
+    background-color: rgba(62, 181, 117, 0.18);
+  }
+
+  html[data-theme='dark'] .settings-dialog .scrollbar-custom::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  html[data-theme='dark'] .settings-dialog .scrollbar-custom::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.28);
+  }
+
+  html[data-theme='dark'] .edits-page .edits-sidebar {
+    background-color: var(--app-surface-soft);
+    border-color: var(--app-border-subtle);
+  }
+
+  html[data-theme='dark'] .edits-page .edits-item {
+    border-top-color: var(--app-border-subtle);
+  }
+
+  html[data-theme='dark'] .edits-page .edits-item:last-child {
+    border-bottom-color: var(--app-border-subtle);
+  }
+
+  html[data-theme='dark'] .edits-page .edits-divider-arrow {
+    background: var(--app-surface-muted);
+    color: var(--app-accent);
+  }
+
+  html[data-theme='dark'] .edits-page .edits-divider-arrow:hover:not(:disabled) {
+    background: var(--app-neutral-btn-hover);
+    color: var(--app-accent);
+  }
+
+  html[data-theme='dark'] .edits-page [class*="bg-[#DEDEDE]"] {
+    background-color: var(--app-list-active);
+  }
+
+  html[data-theme='dark'] .edits-page [class*="hover:bg-[#d3d3d3]"]:hover {
+    background-color: var(--app-list-active-hover);
+  }
+
+  html[data-theme='dark'] .edits-page [class*="hover:bg-[#eaeaea]"]:hover {
+    background-color: var(--app-list-hover);
+  }
+
+  html[data-theme='dark'] .edits-page .edits-diff-pane::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  html[data-theme='dark'] .edits-page .edits-diff-pane::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.28);
+  }
+
+  html[data-theme='dark'] .edits-dialog-card {
+    background: var(--app-surface-bg);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  }
+
+  html[data-theme='dark'] .edits-dialog-title {
+    color: var(--app-text-primary);
+  }
+
+  html[data-theme='dark'] .edits-dialog-msg,
+  html[data-theme='dark'] .edits-dialog-cancel {
+    color: var(--app-text-secondary);
+  }
+
+  html[data-theme='dark'] .edits-dialog-actions,
+  html[data-theme='dark'] .edits-dialog-cancel {
+    border-color: var(--app-border);
+  }
+
+  html[data-theme='dark'] .edits-dialog-btn:active {
+    background: var(--app-neutral-btn-hover);
   }
 }
 

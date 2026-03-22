@@ -33,17 +33,17 @@
 }
 
 .overflow-y-auto::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: var(--scrollbar-track);
   border-radius: 3px;
 }
 
 .overflow-y-auto::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 
 .overflow-y-auto::-webkit-scrollbar-thumb:hover {
-  background: #a1a1a1;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* 会话列表宽度：按物理像素(px)配置，按 dpr 换算为 CSS px */
@@ -75,7 +75,25 @@
 
 .session-list-resizer:hover::after,
 .session-list-resizer-active::after {
-  background: rgba(0, 0, 0, 0.12);
+  background: var(--session-list-resizer);
+}
+
+.msg-bubble.bubble-tail-r {
+  background-color: var(--chat-bubble-sent) !important;
+  color: var(--chat-bubble-sent-text) !important;
+}
+
+.msg-bubble.bubble-tail-l {
+  background-color: var(--chat-bubble-received) !important;
+  color: var(--chat-bubble-received-text) !important;
+}
+
+.bubble-tail-r::after {
+  background: var(--chat-bubble-sent);
+}
+
+.bubble-tail-l::after {
+  background: var(--chat-bubble-received);
 }
 
 /* 消息气泡样式 */
@@ -87,7 +105,7 @@
 
 /* 发送的消息（右侧绿色气泡） */
 .sent-message {
-  background-color: #95EB69 !important;
+  background-color: var(--chat-bubble-sent) !important;
   border-radius: var(--message-radius);
 }
 
@@ -99,13 +117,13 @@
   transform: translateY(-50%) rotate(45deg);
   width: 10px;
   height: 10px;
-  background-color: #95EB69;
+  background-color: var(--chat-bubble-sent);
   border-radius: 2px;
 }
 
 /* 接收的消息（左侧白色气泡） */
 .received-message {
-  background-color: white !important;
+  background-color: var(--chat-bubble-received) !important;
   border-radius: var(--message-radius);
 }
 
@@ -117,7 +135,7 @@
   transform: translateY(-50%) rotate(45deg);
   width: 10px;
   height: 10px;
-  background-color: white;
+  background-color: var(--chat-bubble-received);
   border-radius: 2px;
 }
 
@@ -172,7 +190,7 @@
   transform: translateY(-50%) rotate(45deg);
   width: 10px;
   height: 10px;
-  background-color: #95EC69;
+  background-color: var(--chat-bubble-sent);
   border-radius: 2px;
 }
 
@@ -188,7 +206,7 @@
   transform: translateY(-50%) rotate(45deg);
   width: 10px;
   height: 10px;
-  background-color: white;
+  background-color: var(--chat-bubble-received);
   border-radius: 2px;
 }
 
@@ -216,7 +234,8 @@
 }
 
 .wechat-voice-sent {
-  background: #95EC69;
+  background: var(--chat-bubble-sent);
+  color: var(--chat-bubble-sent-text);
 }
 
 .wechat-voice-sent::after {
@@ -227,12 +246,13 @@
   transform: translateY(-50%) rotate(45deg);
   width: 10px;
   height: 10px;
-  background: #95EC69;
+  background: var(--chat-bubble-sent);
   border-radius: 2px;
 }
 
 .wechat-voice-received {
-  background: white;
+  background: var(--chat-bubble-received);
+  color: var(--chat-bubble-received-text);
 }
 
 .wechat-voice-received::before {
@@ -243,7 +263,7 @@
   transform: translateY(-50%) rotate(45deg);
   width: 10px;
   height: 10px;
-  background: white;
+  background: var(--chat-bubble-received);
   border-radius: 2px;
 }
 
@@ -259,7 +279,7 @@
   width: 18px;
   height: 18px;
   flex-shrink: 0;
-  color: #1a1a1a;
+  color: currentColor;
 }
 
 .wechat-quote-voice-icon {
@@ -293,7 +313,7 @@
 
 .wechat-voice-duration {
   font-size: 14px;
-  color: #1a1a1a;
+  color: inherit;
 }
 
 .wechat-voice-unread {
@@ -315,7 +335,8 @@
 }
 
 .wechat-voip-sent {
-  background: #95EC69;
+  background: var(--chat-bubble-sent);
+  color: var(--chat-bubble-sent-text);
 }
 
 .wechat-voip-sent::after {
@@ -326,12 +347,13 @@
   transform: translateY(-50%) rotate(45deg);
   width: 10px;
   height: 10px;
-  background: #95EC69;
+  background: var(--chat-bubble-sent);
   border-radius: 2px;
 }
 
 .wechat-voip-received {
-  background: white;
+  background: var(--chat-bubble-received);
+  color: var(--chat-bubble-received-text);
 }
 
 .wechat-voip-received::before {
@@ -342,7 +364,7 @@
   transform: translateY(-50%) rotate(45deg);
   width: 10px;
   height: 10px;
-  background: white;
+  background: var(--chat-bubble-received);
   border-radius: 2px;
 }
 
@@ -362,7 +384,7 @@
 
 .wechat-voip-text {
   font-size: 14px;
-  color: #1a1a1a;
+  color: inherit;
 }
 
 /* 统一特殊消息尾巴（红包 / 文件等） */
@@ -390,14 +412,14 @@
 
 .wechat-chat-history-card {
   width: 210px;
-  background: #ffffff;
+  background: var(--merged-history-bg);
   border-radius: var(--message-radius);
   cursor: pointer;
   transition: background-color 0.15s ease;
 }
 
 .wechat-chat-history-card:hover {
-  background: #f5f5f5;
+  background: var(--merged-history-hover);
 }
 
 .wechat-chat-history-body {
@@ -407,13 +429,13 @@
 .wechat-chat-history-title {
   font-size: 14px;
   font-weight: 400;
-  color: #161616;
+  color: var(--merged-history-title);
   margin-bottom: 6px;
 }
 
 .wechat-chat-history-preview {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--merged-history-preview);
   line-height: 1.4;
 }
 
@@ -439,12 +461,17 @@
   left: 13px;
   right: 13px;
   height: 1.5px;
-  background: #e8e8e8;
+  background: var(--merged-history-divider);
 }
 
 .wechat-chat-history-bottom span {
   font-size: 12px;
-  color: #b2b2b2;
+  color: var(--merged-history-footer);
+}
+
+.wechat-quote-preview {
+  background: var(--quote-bubble-bg);
+  color: var(--quote-bubble-text);
 }
 
 /* 转账消息样式 - 微信风格 */

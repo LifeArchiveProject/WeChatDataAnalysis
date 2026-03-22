@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen relative overflow-hidden flex items-center">
+  <div class="detection-result-page min-h-screen relative overflow-hidden flex items-center">
     <!-- 网格背景 -->
     <div class="absolute inset-0 bg-grid-pattern opacity-5 pointer-events-none"></div>
     

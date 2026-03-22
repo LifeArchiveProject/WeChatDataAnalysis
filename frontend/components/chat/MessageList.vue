@@ -1,8 +1,8 @@
 <template>
-  <div ref="messageContainerRef" class="flex-1 overflow-y-auto p-4 min-h-0" @scroll="onMessageScroll">
+  <div ref="messageContainerRef" class="message-list flex-1 overflow-y-auto p-4 min-h-0" @scroll="onMessageScroll">
     <div v-if="selectedContact && hasMoreMessages" class="flex justify-center mb-4">
       <div
-        class="text-xs px-3 py-1 rounded-md bg-white border border-gray-200 text-gray-700 select-none"
+        class="message-list-load-more text-xs px-3 py-1 rounded-md border select-none"
         :class="isLoadingMessages ? 'opacity-60' : 'hover:bg-gray-50 cursor-pointer'"
         @click="!isLoadingMessages && loadMoreMessages()"
       >
@@ -10,13 +10,13 @@
       </div>
     </div>
 
-    <div v-if="isLoadingMessages && messages.length === 0" class="text-center text-sm text-gray-500 py-6">
+    <div v-if="isLoadingMessages && messages.length === 0" class="message-list-status text-center text-sm py-6">
       加载中...
     </div>
     <div v-else-if="messagesError" class="text-center text-sm text-red-500 py-6 whitespace-pre-wrap">
       {{ messagesError }}
     </div>
-    <div v-else-if="messages.length === 0" class="text-center text-sm text-gray-500 py-6">
+    <div v-else-if="messages.length === 0" class="message-list-status text-center text-sm py-6">
       暂无聊天记录
     </div>
 

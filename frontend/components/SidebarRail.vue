@@ -1,7 +1,6 @@
 <template>
   <div
-    class="border-r border-gray-200 flex flex-col"
-    :style="{ backgroundColor: '#e8e7e7', width: '60px', minWidth: '60px', maxWidth: '60px' }"
+    class="sidebar-rail border-r flex flex-col"
   >
     <div class="flex-1 flex flex-col justify-start pt-0 gap-0">
       <!-- Avatar -->
@@ -25,12 +24,12 @@
 
       <!-- Chat -->
       <div
-        class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
         title="聊天"
         @click="goChat"
       >
-        <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
-          <div class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isChatRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'">
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <div class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': isChatRoute }">
             <svg class="w-full h-full" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M12 19.8C17.52 19.8 22 15.99 22 11.3C22 6.6 17.52 2.8 12 2.8C6.48 2.8 2 6.6 2 11.3C2 13.29 2.8 15.12 4.15 16.57C4.6 17.05 4.82 17.29 4.92 17.44C5.14 17.79 5.21 17.99 5.23 18.4C5.24 18.59 5.22 18.81 5.16 19.26C5.1 19.75 5.07 19.99 5.13 20.16C5.23 20.49 5.53 20.71 5.87 20.72C6.04 20.72 6.27 20.63 6.72 20.43L8.07 19.86C8.43 19.71 8.61 19.63 8.77 19.59C8.95 19.55 9.04 19.54 9.22 19.54C9.39 19.53 9.64 19.57 10.14 19.65C10.74 19.75 11.37 19.8 12 19.8Z" />
             </svg>
@@ -40,12 +39,12 @@
 
       <!-- Edits -->
       <div
-        class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
         title="修改记录"
         @click="goEdits"
       >
-        <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
-          <div class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isEditsRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'">
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <div class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': isEditsRoute }">
             <svg class="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12 20h9" />
               <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
@@ -56,12 +55,12 @@
 
       <!-- Moments -->
       <div
-        class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
         title="朋友圈"
         @click="goSns"
       >
-        <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
-          <div class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isSnsRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'">
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <div class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': isSnsRoute }">
             <svg
               class="w-full h-full"
               viewBox="0 0 24 24"
@@ -86,12 +85,12 @@
 
       <!-- Contacts -->
       <div
-        class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
         title="联系人"
         @click="goContacts"
       >
-        <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
-          <div class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isContactsRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'">
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <div class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': isContactsRoute }">
             <svg class="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
               <circle cx="10" cy="7" r="4" />
@@ -104,12 +103,12 @@
 
       <!-- Wrapped -->
       <div
-        class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
         title="年度总结"
         @click="goWrapped"
       >
-        <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
-          <div class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="isWrappedRoute ? 'text-[#07b75b]' : 'text-[#5d5d5d]'">
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <div class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': isWrappedRoute }">
             <svg
               class="w-full h-full"
               viewBox="0 0 24 24"
@@ -132,15 +131,15 @@
 
       <!-- Realtime -->
       <div
-        class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center group"
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center group"
         :class="realtimeBusy ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'"
         :title="realtimeTitle"
         @click="toggleRealtime"
       >
-        <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
           <svg
-            class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]"
-            :class="realtimeEnabled ? 'text-[#07b75b]' : 'text-[#5d5d5d]'"
+            class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]"
+            :class="{ 'sidebar-rail-icon-active': realtimeEnabled }"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -156,12 +155,12 @@
 
       <!-- Privacy -->
       <div
-        class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
         @click="privacyStore.toggle"
         :title="privacyMode ? '关闭隐私模式' : '开启隐私模式'"
       >
-        <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
-          <svg class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="privacyMode ? 'text-[#07b75b]' : 'text-[#5d5d5d]'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <svg class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': privacyMode }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path v-if="privacyMode" stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
             <path v-else stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
             <circle v-if="!privacyMode" cx="12" cy="12" r="3" />
@@ -169,15 +168,52 @@
         </div>
       </div>
 
+      <!-- Theme -->
+      <div
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        :title="themeStore.isDark ? '切换浅色模式' : '切换深色模式'"
+        @click="themeStore.toggle"
+      >
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <svg
+            v-if="themeStore.isDark"
+            class="sidebar-rail-icon sidebar-rail-icon-active w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="4.5" />
+            <path d="M12 2.5v2.2M12 19.3v2.2M4.93 4.93l1.56 1.56M17.51 17.51l1.56 1.56M2.5 12h2.2M19.3 12h2.2M4.93 19.07l1.56-1.56M17.51 6.49l1.56-1.56" />
+          </svg>
+          <svg
+            v-else
+            class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M21 12.79A9 9 0 1 1 11.21 3c-.08.5-.12 1.01-.12 1.54a8.25 8.25 0 0 0 8.37 8.25c.52 0 1.03-.04 1.54-.12Z" />
+          </svg>
+        </div>
+      </div>
+
       <div class="mt-auto">
         <!-- Guide -->
         <div
-          class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+          class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
           title="引导页"
           @click="goGuide"
         >
-          <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
-            <svg class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)] text-[#5d5d5d]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+            <svg class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M3 10.5L12 3l9 7.5" />
               <path d="M5 9.5V20h14V9.5" />
               <path d="M10 20v-6h4v6" />
@@ -187,12 +223,12 @@
 
         <!-- Settings -->
         <div
-          class="w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+          class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
           @click="goSettings"
           title="设置"
         >
-          <div class="w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent group-hover:bg-[#E1E1E1]">
-            <svg class="w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="settingsDialogOpen ? 'text-[#07b75b]' : 'text-[#5d5d5d]'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+            <svg class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': settingsDialogOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"
@@ -208,10 +244,10 @@
 
   <div
     v-if="accountDialogOpen"
-    class="fixed inset-0 z-[130] flex items-center justify-center bg-black/35 px-4"
+    class="account-info-dialog fixed inset-0 z-[130] flex items-center justify-center bg-black/35 px-4"
     @click.self="closeAccountDialog"
   >
-    <div class="w-full max-w-[440px] overflow-hidden rounded-[12px] border border-[#e7e7e7] bg-white shadow-2xl">
+    <div class="account-info-dialog-panel w-full max-w-[440px] overflow-hidden rounded-[12px] border border-[#e7e7e7] bg-white shadow-2xl">
       <div class="flex items-center justify-between border-b border-[#efefef] px-4 py-3">
         <div class="text-[14px] font-semibold text-[#222]">当前账号信息</div>
         <button
@@ -289,6 +325,7 @@ import { storeToRefs } from 'pinia'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { useChatRealtimeStore } from '~/stores/chatRealtime'
 import { usePrivacyStore } from '~/stores/privacy'
+import { useThemeStore } from '~/stores/theme'
 
 const route = useRoute()
 
@@ -297,6 +334,9 @@ const { selectedAccount } = storeToRefs(chatAccounts)
 
 const privacyStore = usePrivacyStore()
 const { privacyMode } = storeToRefs(privacyStore)
+
+const themeStore = useThemeStore()
+themeStore.init()
 
 const realtimeStore = useChatRealtimeStore()
 const { enabled: realtimeEnabled, available: realtimeAvailable, checking: realtimeChecking, statusError: realtimeStatusError, toggling: realtimeToggling } = storeToRefs(realtimeStore)
@@ -540,3 +580,30 @@ const toggleRealtime = async () => {
   await realtimeStore.toggle({ silent: false })
 }
 </script>
+
+<style scoped>
+.sidebar-rail {
+  width: 60px;
+  min-width: 60px;
+  max-width: 60px;
+  background-color: var(--sidebar-rail-bg);
+  border-color: var(--sidebar-rail-border);
+}
+
+.sidebar-rail-plate {
+  transition: background-color 0.15s ease;
+}
+
+.sidebar-rail-action:hover .sidebar-rail-plate {
+  background-color: var(--sidebar-rail-hover);
+}
+
+.sidebar-rail-icon {
+  color: var(--sidebar-rail-icon-color);
+  transition: color 0.15s ease;
+}
+
+.sidebar-rail-icon-active {
+  color: var(--sidebar-rail-icon-active-color);
+}
+</style>
