@@ -1,7 +1,7 @@
 <template>
     <div
-      class="session-list-panel border-r border-gray-200 flex flex-col min-h-0 shrink-0 relative"
-      :style="{ backgroundColor: '#F7F7F7', '--session-list-width': sessionListWidth + 'px' }"
+      class="session-list-panel border-r flex flex-col min-h-0 shrink-0 relative"
+      :style="{ '--session-list-width': sessionListWidth + 'px' }"
     >
       <!-- 拖动调整会话列表宽度 -->
       <div
@@ -14,7 +14,7 @@
       <!-- 聊天列表 -->
       <div class="h-full flex flex-col min-h-0">
         <!-- 搜索栏 -->
-        <div class="p-3 border-b border-gray-200" style="background-color: #F7F7F7">
+        <div class="session-list-search p-3 border-b">
           <div class="flex items-center gap-2">
             <div class="contact-search-wrapper flex-1">
               <svg class="contact-search-icon" fill="none" stroke="currentColor" viewBox="0 0 16 16">
@@ -53,7 +53,7 @@
         </div>
 
         <!-- 联系人列表 -->
-        <div class="flex-1 overflow-y-auto min-h-0">
+        <div class="session-list-scroll flex-1 overflow-y-auto min-h-0">
           <div v-if="isLoadingContacts" class="px-3 py-4 h-full overflow-hidden">
             <div v-for="i in 15" :key="i" class="flex items-center space-x-3 h-[calc(80px/var(--dpr))]">
               <div class="w-[calc(45px/var(--dpr))] h-[calc(45px/var(--dpr))] rounded-md bg-gray-200 skeleton-pulse"></div>
@@ -63,22 +63,19 @@
               </div>
             </div>
           </div>
-          <div v-else-if="contactsError" class="px-3 py-2 text-sm text-red-500 whitespace-pre-wrap">
+          <div v-else-if="contactsError" class="session-list-status px-3 py-2 text-sm text-red-500 whitespace-pre-wrap">
             {{ contactsError }}
           </div>
-          <div v-else-if="contacts.length === 0" class="px-3 py-2 text-sm text-gray-500">
+          <div v-else-if="contacts.length === 0" class="session-list-status px-3 py-2 text-sm">
             暂无会话
           </div>
           <template v-else>
             <div v-for="contact in filteredContacts" :key="contact.id"
-              class="px-3 cursor-pointer transition-colors duration-150 border-b border-gray-100 h-[calc(80px/var(--dpr))] flex items-center"
-              :class="contact.isTop
-                ? (selectedContact?.id === contact.id
-                    ? 'bg-[#D2D2D2] hover:bg-[#C7C7C7]'
-                    : 'bg-[#EAEAEA] hover:bg-[#DEDEDE]')
-                : (selectedContact?.id === contact.id
-                    ? 'bg-[#DEDEDE] hover:bg-[#d3d3d3]'
-                    : 'hover:bg-[#eaeaea]')"
+              class="session-list-item px-3 cursor-pointer transition-colors duration-150 h-[calc(80px/var(--dpr))] flex items-center"
+              :class="{
+                'session-list-item--top': contact.isTop,
+                'session-list-item--selected': selectedContact?.id === contact.id
+              }"
               @click="selectContact(contact)">
               <div class="flex items-center space-x-3 w-full">
                 <!-- 联系人头像 -->
@@ -101,12 +98,12 @@
                 <!-- 联系人信息 -->
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center justify-between">
-                    <h3 class="text-sm font-medium text-gray-900 truncate" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</h3>
+                    <h3 class="session-list-item-name text-sm font-medium truncate" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</h3>
                     <div class="flex items-center flex-shrink-0 ml-2">
-                      <span class="text-xs text-gray-500">{{ contact.lastMessageTime }}</span>
+                      <span class="session-list-item-time text-xs">{{ contact.lastMessageTime }}</span>
                     </div>
                   </div>
-                  <p class="text-xs text-gray-500 truncate mt-0.5 leading-tight" :class="{ 'privacy-blur': privacyMode }">
+                  <p class="session-list-item-preview text-xs truncate mt-0.5 leading-tight" :class="{ 'privacy-blur': privacyMode }">
                     <span
                       v-for="(seg, idx) in parseTextWithEmoji(
                         (contact.unreadCount > 0 ? `[${contact.unreadCount > 99 ? '99+' : contact.unreadCount}条] ` : '') +

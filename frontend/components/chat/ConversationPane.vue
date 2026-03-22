@@ -1,9 +1,9 @@
 <template>
-  <div class="flex-1 flex flex-col min-h-0 min-w-0">
+  <div class="conversation-pane flex-1 flex flex-col min-h-0 min-w-0">
     <div v-if="selectedContact" class="flex-1 flex flex-col min-h-0 relative">
       <div class="chat-header">
         <div class="flex items-center gap-3">
-          <h2 class="text-base font-medium text-gray-900" :class="{ 'privacy-blur': privacyMode }">
+          <h2 class="chat-header-title text-base font-medium" :class="{ 'privacy-blur': privacyMode }">
             {{ selectedContact ? selectedContact.name : '' }}
           </h2>
         </div>
@@ -71,7 +71,7 @@
       <button
         v-if="showJumpToBottom"
         type="button"
-        class="absolute bottom-6 right-6 z-20 w-10 h-10 rounded-full bg-white/90 border border-gray-200 shadow hover:bg-white flex items-center justify-center"
+        class="jump-to-bottom-btn absolute bottom-6 right-6 z-20 w-10 h-10 rounded-full border shadow flex items-center justify-center"
         title="回到最新"
         @click="scrollToBottom"
       >
@@ -81,15 +81,15 @@
       </button>
     </div>
 
-    <div v-else class="flex-1 flex items-center justify-center">
+    <div v-else class="conversation-empty flex-1 flex items-center justify-center">
       <div class="text-center">
         <div class="w-20 h-20 mx-auto mb-5 rounded-2xl bg-gradient-to-br from-[#03C160]/10 to-[#03C160]/5 flex items-center justify-center">
           <svg class="w-10 h-10 text-[#03C160]/60" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 19.8C17.52 19.8 22 15.99 22 11.3C22 6.6 17.52 2.8 12 2.8C6.48 2.8 2 6.6 2 11.3C2 13.29 2.8 15.12 4.15 16.57C4.6 17.05 4.82 17.29 4.92 17.44C5.14 17.79 5.21 17.99 5.23 18.4C5.24 18.59 5.22 18.81 5.16 19.26C5.1 19.75 5.07 19.99 5.13 20.16C5.23 20.49 5.53 20.71 5.87 20.72C6.04 20.72 6.27 20.63 6.72 20.43L8.07 19.86C8.43 19.71 8.61 19.63 8.77 19.59C8.95 19.55 9.04 19.54 9.22 19.54C9.39 19.53 9.64 19.57 10.14 19.65C10.74 19.75 11.37 19.8 12 19.8Z"/>
           </svg>
         </div>
-        <h3 class="text-base font-medium text-gray-700 mb-1.5">选择一个会话</h3>
-        <p class="text-sm text-gray-400">
+        <h3 class="conversation-empty-title text-base font-medium mb-1.5">选择一个会话</h3>
+        <p class="conversation-empty-text text-sm">
           从左侧列表选择联系人查看聊天记录
         </p>
       </div>

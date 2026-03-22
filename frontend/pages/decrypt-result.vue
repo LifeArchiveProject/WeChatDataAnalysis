@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen relative overflow-hidden flex items-center justify-center">
+  <div class="decrypt-result-page min-h-screen relative overflow-hidden flex items-center justify-center">
     <!-- 网格背景 -->
     <div class="absolute inset-0 bg-grid-pattern opacity-5 pointer-events-none"></div>
     

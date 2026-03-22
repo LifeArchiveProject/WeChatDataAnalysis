@@ -60,7 +60,7 @@ const closeWindow = () => {
 <style scoped>
 .desktop-titlebar {
   height: var(--desktop-titlebar-height, 32px);
-  background: #ededed;
+  background: var(--desktop-titlebar-bg);
   display: flex;
   align-items: stretch;
   flex-shrink: 0;
@@ -92,11 +92,11 @@ const closeWindow = () => {
 }
 
 .desktop-titlebar-btn:hover {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--desktop-titlebar-hover);
 }
 
 .desktop-titlebar-btn:active {
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--desktop-titlebar-active);
 }
 
 .desktop-titlebar-btn-close:hover {
@@ -122,7 +122,7 @@ const closeWindow = () => {
   /* Optical centering: the glyph was anchored to the bottom, so it looked low. */
   top: 5px;
   height: 1px;
-  background: #111;
+  background: var(--desktop-titlebar-icon);
 }
 
 .desktop-titlebar-icon-maximize::before {
@@ -132,7 +132,7 @@ const closeWindow = () => {
   top: 2px;
   right: 2px;
   bottom: 2px;
-  border: 1px solid #111;
+  border: 1px solid var(--desktop-titlebar-icon);
   box-sizing: border-box;
 }
 
@@ -144,7 +144,7 @@ const closeWindow = () => {
   right: 1px;
   top: 50%;
   height: 1px;
-  background: #111;
+  background: var(--desktop-titlebar-icon);
   transform-origin: center;
 }
 
