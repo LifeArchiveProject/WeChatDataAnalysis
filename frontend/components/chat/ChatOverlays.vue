@@ -258,7 +258,7 @@
 
                 <div
                   v-if="messageSearchSenderDropdownOpen"
-                  class="absolute left-0 right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg z-50 overflow-hidden"
+                  class="chat-overlay-dropdown absolute left-0 right-0 mt-1 rounded-md z-50 overflow-hidden"
                 >
                   <div class="p-2 border-b border-gray-100">
                     <input
@@ -274,8 +274,8 @@
                   <div class="max-h-64 overflow-y-auto">
                     <button
                       type="button"
-                      class="w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-gray-50"
-                      :class="!messageSearchSender ? 'bg-gray-50' : ''"
+                      class="chat-overlay-option w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs"
+                      :class="!messageSearchSender ? 'chat-overlay-option--active' : ''"
                       @click="selectMessageSearchSender('')"
                     >
                       <span class="w-6 h-6 rounded-md overflow-hidden bg-gray-200 flex-shrink-0 flex items-center justify-center text-[10px] text-gray-500">
@@ -298,8 +298,8 @@
                         v-for="s in filteredMessageSearchSenderOptions"
                         :key="s.username"
                         type="button"
-                        class="w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-gray-50"
-                        :class="messageSearchSender === s.username ? 'bg-gray-50' : ''"
+                        class="chat-overlay-option w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs"
+                        :class="messageSearchSender === s.username ? 'chat-overlay-option--active' : ''"
                         @click="selectMessageSearchSender(s.username)"
                       >
                         <div class="w-6 h-6 rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
@@ -560,29 +560,29 @@
       @mousedown="focusFloatingWindow(win.id)"
     >
       <div
-        class="bg-[#f7f7f7] rounded-xl shadow-xl overflow-hidden border border-gray-200 flex flex-col"
+        class="chat-floating-window rounded-xl overflow-hidden flex flex-col"
         :style="{ width: win.width + 'px', height: win.height + 'px' }"
       >
         <div
-          class="px-3 py-2 bg-[#f7f7f7] border-b border-gray-200 flex items-center justify-between select-none cursor-move"
+          class="chat-floating-window__header px-3 py-2 flex items-center justify-between select-none cursor-move"
           @mousedown.stop="startFloatingWindowDrag(win.id, $event)"
           @touchstart.stop="startFloatingWindowDrag(win.id, $event)"
         >
-          <div class="text-sm text-[#161616] truncate min-w-0">{{ win.title || (win.kind === 'link' ? '链接' : '聊天记录') }}</div>
+          <div class="chat-floating-window__title text-sm truncate min-w-0">{{ win.title || (win.kind === 'link' ? '链接' : '聊天记录') }}</div>
           <button
             type="button"
-            class="p-2 rounded hover:bg-black/5 flex-shrink-0"
+            class="chat-floating-window__close p-2 rounded flex-shrink-0"
             @click.stop="closeFloatingWindow(win.id)"
             aria-label="关闭"
             title="关闭"
           >
-            <svg class="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
             </svg>
           </button>
         </div>
 
-        <div class="flex-1 overflow-auto bg-[#f7f7f7]">
+        <div class="chat-floating-window__body flex-1 overflow-auto">
           <!-- Chat history window -->
           <template v-if="win.kind === 'chatHistory'">
             <div v-if="win.loading" class="text-xs text-gray-500 text-center py-2">加载中...</div>
@@ -593,7 +593,7 @@
               <div
                 v-for="(rec, idx) in win.records"
                 :key="rec.id || idx"
-                class="px-4 py-3 flex gap-3 border-b border-gray-100 bg-[#f7f7f7]"
+                class="chat-floating-window__row px-4 py-3 flex gap-3"
               >
                 <div class="w-9 h-9 rounded-md overflow-hidden bg-gray-200 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
                   <img
@@ -1087,19 +1087,19 @@
     <div
       v-if="contextMenu.visible"
       ref="contextMenuElement"
-      class="fixed z-[12000] max-h-[calc(100vh-16px)] overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg text-sm"
+      class="chat-context-menu fixed z-[12000] max-h-[calc(100vh-16px)] overflow-y-auto rounded-md text-sm"
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
       @click.stop
     >
       <button
-        class="block w-full text-left px-3 py-2 hover:bg-gray-100"
+        class="chat-context-menu__item block w-full text-left px-3 py-2"
         type="button"
         @click="onCopyMessageTextClick"
       >
         复制文本
       </button>
       <button
-        class="block w-full text-left px-3 py-2 hover:bg-gray-100"
+        class="chat-context-menu__item block w-full text-left px-3 py-2"
         type="button"
         @click="onCopyMessageJsonClick"
       >
@@ -1107,14 +1107,14 @@
       </button>
       <button
         v-if="contextMenu.message?.renderType === 'quote' && contextMenu.message?.quoteServerId"
-        class="block w-full text-left px-3 py-2 hover:bg-gray-100"
+        class="chat-context-menu__item block w-full text-left px-3 py-2"
         type="button"
         @click="onLocateQuotedMessageClick"
       >
         定位引用消息
       </button>
       <button
-        class="block w-full text-left px-3 py-2 hover:bg-gray-100"
+        class="chat-context-menu__item block w-full text-left px-3 py-2"
         type="button"
         :disabled="contextMenu.disabled"
         :class="contextMenu.disabled ? 'opacity-50 cursor-not-allowed' : ''"
@@ -1127,7 +1127,7 @@
 
       <button
         v-if="contextMenu.message?.id"
-        class="block w-full text-left px-3 py-2 hover:bg-gray-100"
+        class="chat-context-menu__item block w-full text-left px-3 py-2"
         type="button"
         @click="onEditMessageClick"
       >
@@ -1135,7 +1135,7 @@
       </button>
       <button
         v-if="contextMenu.message?.id"
-        class="block w-full text-left px-3 py-2 hover:bg-gray-100"
+        class="chat-context-menu__item block w-full text-left px-3 py-2"
         type="button"
         @click="onEditMessageFieldsClick"
       >
@@ -1143,7 +1143,7 @@
       </button>
       <button
         v-if="contextMenu.editStatus?.modified"
-        class="block w-full text-left px-3 py-2 hover:bg-gray-100 text-red-600"
+        class="chat-context-menu__item block w-full text-left px-3 py-2 text-red-600"
         type="button"
         @click="onResetEditedMessageClick"
       >
@@ -1151,7 +1151,7 @@
       </button>
       <button
         v-if="contextMenu.message?.id"
-        class="block w-full text-left px-3 py-2 hover:bg-gray-100"
+        class="chat-context-menu__item block w-full text-left px-3 py-2"
         type="button"
         @click="onRepairMessageSenderAsMeClick"
       >
@@ -1159,7 +1159,7 @@
       </button>
       <button
         v-if="contextMenu.message?.id"
-        class="block w-full text-left px-3 py-2 hover:bg-gray-100 text-orange-600"
+        class="chat-context-menu__item block w-full text-left px-3 py-2 text-orange-600"
         type="button"
         @click="onFlipWechatMessageDirectionClick"
       >
@@ -1171,7 +1171,7 @@
     <!-- 修改消息弹窗 -->
     <div v-if="messageEditModal.open" class="fixed inset-0 z-[11000] flex items-center justify-center">
       <div class="absolute inset-0 bg-black/40" @click="closeMessageEditModal"></div>
-      <div class="relative w-[860px] max-w-[95vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
+      <div class="chat-edit-modal relative w-[860px] max-w-[95vw] rounded-lg overflow-hidden">
         <div class="px-5 py-4 border-b border-gray-200 flex items-center">
           <div class="text-base font-medium text-gray-900">{{ messageEditModal.mode === 'content' ? '修改消息' : '编辑源码' }}</div>
           <button class="ml-auto text-gray-400 hover:text-gray-600" type="button" @click="closeMessageEditModal">
@@ -1218,7 +1218,7 @@
     <!-- 字段编辑弹窗 -->
     <div v-if="messageFieldsModal.open" class="fixed inset-0 z-[11000] flex items-center justify-center">
       <div class="absolute inset-0 bg-black/40" @click="closeMessageFieldsModal"></div>
-      <div class="relative w-[920px] max-w-[95vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
+      <div class="chat-edit-modal relative w-[920px] max-w-[95vw] rounded-lg overflow-hidden">
         <div class="px-5 py-4 border-b border-gray-200 flex items-center">
           <div class="text-base font-medium text-gray-900">字段编辑</div>
           <button class="ml-auto text-gray-400 hover:text-gray-600" type="button" @click="closeMessageFieldsModal">
