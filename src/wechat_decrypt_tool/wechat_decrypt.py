@@ -43,6 +43,29 @@ def _derive_mac_key(raw_key: bytes, salt: bytes) -> bytes:
     return hashlib.pbkdf2_hmac("sha512", raw_key, mac_salt, 2, dklen=KEY_SIZE)
 
 
+def _derive_sqlcipher_enc_key(key_material: bytes, salt: bytes) -> bytes:
+    return hashlib.pbkdf2_hmac("sha512", key_material, salt, 256000, dklen=KEY_SIZE)
+
+
+def _resolve_page1_key_material(key_material: bytes, page1: bytes) -> tuple[bytes, bytes, str] | None:
+    salt = page1[:SALT_SIZE]
+    stored_page1_hmac = page1[PAGE_SIZE - HMAC_SIZE : PAGE_SIZE]
+
+    candidates = [
+        ("raw_enc_key", key_material, _derive_mac_key(key_material, salt)),
+    ]
+
+    derived_key = _derive_sqlcipher_enc_key(key_material, salt)
+    candidates.append(("sqlcipher_passphrase", derived_key, _derive_mac_key(derived_key, salt)))
+
+    for mode, enc_key, mac_key in candidates:
+        expected_page1_hmac = _compute_page_hmac(mac_key, page1, 1)
+        if stored_page1_hmac == expected_page1_hmac:
+            return enc_key, mac_key, mode
+
+    return None
+
+
 def _compute_page_hmac(mac_key: bytes, page: bytes, page_num: int) -> bytes:
     offset = SALT_SIZE if page_num == 1 else 0
     data_end = PAGE_SIZE - RESERVE_SIZE + IV_SIZE
@@ -323,8 +346,9 @@ class WeChatDatabaseDecryptor:
     def decrypt_database(self, db_path: str, output_path: str) -> bool:
         """解密微信4.x版本数据库
 
-        这里传入的 key 已经是从微信进程内存提取出的 raw enc_key，
-        不是 SQLCipher 的口令，因此不能再做一轮 PBKDF2。
+        兼容两种输入形态：
+        - raw enc_key（部分内存扫描/工具直接返回）
+        - SQLCipher 口令/基础 key（需先用数据库 salt 做一轮 PBKDF2）
         """
         from .logging_config import get_logger
         logger = get_logger(__name__)
@@ -370,15 +394,14 @@ class WeChatDatabaseDecryptor:
                 tmp_output_path = ""
                 return True
 
-            salt = page1[:SALT_SIZE]
-            mac_key = _derive_mac_key(self.key_bytes, salt)
-            expected_page1_hmac = _compute_page_hmac(mac_key, page1, 1)
-            stored_page1_hmac = page1[PAGE_SIZE - HMAC_SIZE : PAGE_SIZE]
-            if stored_page1_hmac != expected_page1_hmac:
+            resolved_key_material = _resolve_page1_key_material(self.key_bytes, page1)
+            if resolved_key_material is None:
                 message = f"当前数据库密钥不正确，或该密钥不属于当前账号/当前设备: {db_path}"
                 self._set_last_error("key_mismatch", message)
                 logger.error(f"页面 1 HMAC验证失败，密钥与数据库不匹配: {db_path}")
                 return False
+            enc_key, mac_key, key_mode = resolved_key_material
+            logger.info(f"页面 1 HMAC验证通过: mode={key_mode} path={db_path}")
 
             total_pages = (file_size + PAGE_SIZE - 1) // PAGE_SIZE
             successful_pages = 0
@@ -406,7 +429,7 @@ class WeChatDatabaseDecryptor:
                         logger.error(f"页面 {page_num} HMAC验证失败，终止解密: {db_path}")
                         return False
 
-                    target.write(_decrypt_page(self.key_bytes, page, page_num))
+                    target.write(_decrypt_page(enc_key, page, page_num))
                     successful_pages += 1
 
             logger.info(f"解密完成: 成功 {successful_pages} 页, 失败 0 页")
