@@ -6,6 +6,7 @@
     <h1>WeChatDataAnalysis - 微信数据库解密与分析工具</h1>
     <p>微信4.x数据解密并生成年度总结，高仿微信，支持实时更新，导出聊天记录，朋友圈等大量便捷功能</p>
     <p><b>特别致谢</b>：<a href="https://github.com/H3CoF6">H3CoF6</a>（密钥与朋友圈等核心内容的技术支持）、<a href="https://github.com/ycccccccy/echotrace">echotrace</a>、<a href="https://github.com/hicccc77/WeFlow">WeFlow</a>（本项目大量功能参考其实现）</p>
+    <p>如需定制功能，请联系 QQ：2977094657。</p>
     <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
     <img src="https://gh-down-badges.linkof.link/LifeArchiveProject/WeChatDataAnalysis" alt="Downloads" />
@@ -191,16 +192,6 @@ npm run dist
 2. **密钥安全**: 请妥善保管您的解密密钥，不要泄露给他人
 3. **数据隐私**: 解密后的数据包含个人隐私信息，请谨慎处理
 4. **合法使用**: 请遵守相关法律法规，不得用于非法目的
-
-## 修改消息
-
-支持在聊天页对单条消息进行本地修改（如修改消息文本/字段、修复为我发送、反转本地气泡方向），并在“修改记录”页查看原始与当前对比，支持单条恢复或按会话一键恢复。
-
-该功能只修改本机本地数据库（`db_storage` 与解密副本），不会调用远端回写接口。
-
-<p align="center">
-  <img src="frontend/public/edit.gif" alt="本地消息修改" width="800" />
-</p>
 
 ## 赞助与支持
 
