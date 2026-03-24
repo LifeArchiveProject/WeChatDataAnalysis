@@ -19,22 +19,11 @@ from wechat_decrypt_tool.wechat_decrypt import (
     SQLITE_HEADER,
     WeChatDatabaseDecryptor,
     _derive_mac_key,
-    _derive_sqlcipher_enc_key,
     decrypt_wechat_databases,
 )
 
 
-def _encrypt_page(
-    raw_key: bytes,
-    plain_page: bytes,
-    page_num: int,
-    salt: bytes,
-    iv: bytes,
-    *,
-    sqlcipher_passphrase: bool = False,
-) -> bytes:
-    enc_key = _derive_sqlcipher_enc_key(raw_key, salt) if sqlcipher_passphrase else raw_key
-
+def _encrypt_page(raw_key: bytes, plain_page: bytes, page_num: int, salt: bytes, iv: bytes) -> bytes:
     if page_num == 1:
         encrypted_input = plain_page[SALT_SIZE : PAGE_SIZE - RESERVE_SIZE]
         prefix = salt
@@ -43,7 +32,7 @@ def _encrypt_page(
         prefix = b""
 
     cipher = Cipher(
-        algorithms.AES(enc_key),
+        algorithms.AES(raw_key),
         modes.CBC(iv),
         backend=default_backend(),
     )
@@ -51,7 +40,7 @@ def _encrypt_page(
     encrypted = encryptor.update(encrypted_input) + encryptor.finalize()
 
     page_without_hmac = prefix + encrypted + iv
-    mac = hmac.new(_derive_mac_key(enc_key, salt), digestmod=hashlib.sha512)
+    mac = hmac.new(_derive_mac_key(raw_key, salt), digestmod=hashlib.sha512)
     mac.update(page_without_hmac[SALT_SIZE if page_num == 1 else 0 :])
     mac.update(page_num.to_bytes(4, "little"))
     return page_without_hmac + mac.digest()
@@ -82,39 +71,6 @@ class WeChatDecryptRawKeyTests(unittest.TestCase):
             src.write_bytes(encrypted_db)
 
             decryptor = WeChatDatabaseDecryptor(raw_key.hex())
-            self.assertTrue(decryptor.decrypt_database(str(src), str(dst)))
-            self.assertEqual(dst.read_bytes(), page1 + page2)
-
-    def test_decrypt_database_falls_back_to_sqlcipher_passphrase_mode(self):
-        passphrase_key = bytes.fromhex("9f5dd0d3b6d0477ea5045c9e380ee272e53927993eb548dd98a022e842d5f7bd")
-        salt = bytes.fromhex("50f4090ef6897e146f94109f13743e34")
-        iv1 = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")
-        iv2 = bytes.fromhex("1112131415161718191a1b1c1d1e1f20")
-
-        page1 = _build_plain_page(0x41, first_page=True)
-        page2 = _build_plain_page(0x42, first_page=False)
-        encrypted_db = _encrypt_page(
-            passphrase_key,
-            page1,
-            1,
-            salt,
-            iv1,
-            sqlcipher_passphrase=True,
-        ) + _encrypt_page(
-            passphrase_key,
-            page2,
-            2,
-            salt,
-            iv2,
-            sqlcipher_passphrase=True,
-        )
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src = Path(tmpdir) / "source.db"
-            dst = Path(tmpdir) / "out.db"
-            src.write_bytes(encrypted_db)
-
-            decryptor = WeChatDatabaseDecryptor(passphrase_key.hex())
             self.assertTrue(decryptor.decrypt_database(str(src), str(dst)))
             self.assertEqual(dst.read_bytes(), page1 + page2)
 
