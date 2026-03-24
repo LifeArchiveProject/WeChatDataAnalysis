@@ -1626,12 +1626,13 @@ def sync_chat_realtime_messages(
 
             inserted = 0
             backfilled = 0
-            if new_rows and (not name2id_synced):
-                _best_effort_upsert_output_name2id_rows(
-                    msg_conn,
-                    account_name=account_dir.name,
-                    rows=new_rows,
-                )
+            if new_rows:
+                if not name2id_synced:
+                    _best_effort_upsert_output_name2id_rows(
+                        msg_conn,
+                        account_name=account_dir.name,
+                        rows=new_rows,
+                    )
 
                 # Insert older -> newer to keep sqlite btree locality similar to existing data.
                 values = [tuple(r.get(c) for c in insert_cols) for r in reversed(new_rows)]
@@ -1991,12 +1992,13 @@ def _sync_chat_realtime_messages_for_table(
 
         inserted = 0
         backfilled = 0
-        if new_rows and (not name2id_synced):
-            _best_effort_upsert_output_name2id_rows(
-                msg_conn,
-                account_name=account_dir.name,
-                rows=new_rows,
-            )
+        if new_rows:
+            if not name2id_synced:
+                _best_effort_upsert_output_name2id_rows(
+                    msg_conn,
+                    account_name=account_dir.name,
+                    rows=new_rows,
+                )
 
             values = [tuple(r.get(c) for c in insert_cols) for r in reversed(new_rows)]
             insert_t0 = time.perf_counter()
