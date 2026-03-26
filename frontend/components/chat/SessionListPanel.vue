@@ -98,7 +98,7 @@
                 <!-- 联系人信息 -->
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center justify-between">
-                    <h3 class="session-list-item-name text-sm font-medium truncate" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</h3>
+                    <h3 class="session-list-item-name text-sm truncate" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</h3>
                     <div class="flex items-center flex-shrink-0 ml-2">
                       <span class="session-list-item-time text-xs">{{ contact.lastMessageTime }}</span>
                     </div>

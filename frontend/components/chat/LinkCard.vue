@@ -2,6 +2,8 @@
 import { defineComponent, h, ref, watch } from 'vue'
 import miniProgramIconUrl from '~/assets/images/wechat/mini-program.svg'
 
+const finderLogoUrl = '/assets/images/wechat/channels-logo.svg'
+
 export default defineComponent({
   name: 'LinkCard',
   props: {
@@ -51,7 +53,11 @@ export default defineComponent({
         return text ? (Array.from(text)[0] || '') : ''
       })()
       const fromAvatarUrl = String(props.fromAvatar || '').trim()
+      const headingText = String(props.heading || href || '').trim()
+      let abstractText = String(props.abstract || '').trim()
+      if (abstractText && headingText && abstractText === headingText) abstractText = ''
       const isMiniProgram = String(props.linkType || '').trim() === 'mini_program'
+      const isFinder = String(props.linkType || '').trim() === 'finder'
       const isCoverVariant = !isMiniProgram && String(props.variant || '').trim() === 'cover'
       const Tag = canNavigate ? 'a' : 'div'
 
@@ -140,9 +146,68 @@ export default defineComponent({
         )
       }
 
-      const headingText = String(props.heading || href || '').trim()
-      let abstractText = String(props.abstract || '').trim()
-      if (abstractText && headingText && abstractText === headingText) abstractText = ''
+      if (isFinder) {
+        return h(
+          Tag,
+          {
+            ...(canNavigate ? { href, target: '_blank', rel: 'noreferrer' } : { role: 'group', 'aria-disabled': 'true' }),
+            class: [
+              'wechat-link-card-finder',
+              !canNavigate ? 'wechat-link-card--disabled' : '',
+              'wechat-special-card',
+              'msg-radius',
+              props.isSent ? 'wechat-special-sent-side' : ''
+            ].filter(Boolean).join(' '),
+            style: {
+              width: '135px',
+              minWidth: '135px',
+              maxWidth: '135px',
+              display: 'flex',
+              flexDirection: 'column',
+              boxSizing: 'border-box',
+              flex: '0 0 auto',
+              border: 'none',
+              boxShadow: 'none',
+              textDecoration: 'none',
+              outline: 'none'
+            }
+          },
+          [
+            h('div', { class: ['wechat-link-finder-cover', !props.preview ? 'wechat-link-finder-cover--empty' : ''].filter(Boolean).join(' ') }, [
+              props.preview
+                ? h('img', {
+                    src: props.preview,
+                    alt: props.heading || '视频号封面',
+                    class: 'wechat-link-finder-cover-img',
+                    referrerpolicy: 'no-referrer'
+                  })
+                : h('div', { class: 'wechat-link-finder-cover-placeholder', 'aria-hidden': 'true' }, [
+                    h('svg', { viewBox: '0 0 24 24', fill: 'currentColor' }, [
+                      h('path', { d: 'M8 5v14l11-7z' })
+                    ])
+                  ]),
+              h('div', { class: 'wechat-link-finder-cover-shade', 'aria-hidden': 'true' }),
+              h('div', { class: 'wechat-link-finder-play', 'aria-hidden': 'true' }, [
+                h('svg', { viewBox: '0 0 24 24', fill: 'currentColor' }, [
+                  h('path', { d: 'M8 5v14l11-7z' })
+                ])
+              ]),
+              h('div', { class: 'wechat-link-finder-meta' }, [
+                h('div', { class: 'wechat-link-finder-author' }, [
+                  h('div', { class: 'wechat-link-finder-author-avatar', 'aria-hidden': 'true' }, [
+                    h('img', {
+                      src: finderLogoUrl,
+                      alt: '',
+                      class: 'wechat-link-finder-author-avatar-img'
+                    })
+                  ]),
+                  h('div', { class: 'wechat-link-finder-author-name' }, fromText || '视频号')
+                ])
+              ])
+            ])
+          ]
+        )
+      }
 
       if (isMiniProgram) {
         return h(
