@@ -1437,14 +1437,20 @@
 
   .session-list-item-name {
     color: var(--session-list-name);
+    font-weight: 400;
+    font-synthesis: none;
   }
 
   .session-list-item-time {
     color: var(--session-list-meta);
+    font-weight: 400;
+    font-synthesis: none;
   }
 
   .session-list-item-preview {
     color: var(--session-list-preview);
+    font-weight: 400;
+    font-synthesis: none;
   }
 
   .contact-search-wrapper {

@@ -1220,6 +1220,70 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             "linkStyle": link_style,
         }
 
+    if app_type == 51:
+        # 视频号分享（Finder / Channels）
+        # 常见特征：
+        # - title 是「当前版本不支持展示该内容，请升级至最新版本。」
+        # - 真正标题在 <finderFeed><desc> 或其它 finder 节点里
+        finder_feed = _extract_xml_tag_text(text, "finderFeed")
+        finder_desc = (
+            (_extract_xml_tag_text(finder_feed, "desc") if finder_feed else "")
+            or _extract_xml_tag_text(text, "finderdesc")
+            or des
+        )
+        finder_nickname = (
+            _extract_xml_tag_text(text, "findernickname")
+            or _extract_xml_tag_text(text, "finder_nickname")
+            or (_extract_xml_tag_text(finder_feed, "nickname") if finder_feed else "")
+            or (_extract_xml_tag_text(finder_feed, "findernickname") if finder_feed else "")
+        )
+        finder_username = (
+            _extract_xml_tag_text(text, "finderusername")
+            or _extract_xml_tag_text(text, "finder_username")
+            or (_extract_xml_tag_text(finder_feed, "username") if finder_feed else "")
+            or (_extract_xml_tag_text(finder_feed, "finderusername") if finder_feed else "")
+        )
+
+        thumb_url = _normalize_xml_url(
+            _extract_xml_tag_or_attr(text, "thumburl")
+            or _extract_xml_tag_or_attr(text, "cdnthumburl")
+            or _extract_xml_tag_or_attr(text, "coverurl")
+            or _extract_xml_tag_or_attr(text, "cover")
+            or (_extract_xml_tag_or_attr(finder_feed, "thumbUrl") if finder_feed else "")
+            or (_extract_xml_tag_or_attr(finder_feed, "thumburl") if finder_feed else "")
+            or (_extract_xml_tag_or_attr(finder_feed, "coverUrl") if finder_feed else "")
+            or (_extract_xml_tag_or_attr(finder_feed, "coverurl") if finder_feed else "")
+        )
+
+        finder_url = url or _normalize_xml_url(
+            (_extract_xml_tag_text(finder_feed, "url") if finder_feed else "")
+            or (_extract_xml_tag_text(text, "playurl"))
+            or (_extract_xml_tag_text(text, "dataurl"))
+        )
+
+        display_title = str(title or "").strip()
+        if (not display_title) or ("不支持" in display_title):
+            display_title = str(finder_desc or "").strip()
+        if not display_title:
+            display_title = str(des or "").strip()
+        display_title = display_title or "[视频号]"
+
+        summary_text = str(finder_desc or "").strip() or display_title
+        from_display = str(finder_nickname or source_display_name or "").strip() or "视频号"
+        from_u = str(finder_username or source_username or "").strip()
+
+        return {
+            "renderType": "link",
+            "content": summary_text,
+            "title": display_title,
+            "url": finder_url or "",
+            "thumbUrl": thumb_url or "",
+            "from": from_display,
+            "fromUsername": from_u,
+            "linkType": "finder",
+            "linkStyle": "finder",
+        }
+
     if app_type in (33, 36):
         # 小程序分享（WeChat v4 常见：local_type = 49 + (33<<32) / 49 + (36<<32)）
         # 注：部分 payload 的 <url> 为空；前端会按需渲染为不可点击卡片。

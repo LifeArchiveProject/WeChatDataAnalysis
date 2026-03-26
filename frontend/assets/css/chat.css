@@ -1139,6 +1139,132 @@
   flex-shrink: 0;
 }
 
+.wechat-link-card-finder {
+  width: 135px;
+  min-width: 135px;
+  max-width: 135px;
+  border: none;
+  box-shadow: none;
+  outline: none;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.wechat-link-card-finder.wechat-link-card--disabled {
+  cursor: default;
+}
+
+.wechat-link-finder-cover {
+  width: 135px;
+  height: 185px;
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--app-surface-muted);
+}
+
+.wechat-link-finder-cover--empty {
+  background: linear-gradient(180deg, #37cc6a 0%, #118f42 100%);
+}
+
+.wechat-link-finder-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+
+.wechat-link-finder-cover-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.wechat-link-finder-cover-placeholder svg {
+  width: 34px;
+  height: 34px;
+}
+
+.wechat-link-finder-cover-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.04) 0%, rgba(0, 0, 0, 0.12) 42%, rgba(0, 0, 0, 0.68) 100%);
+}
+
+.wechat-link-finder-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -66%);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.wechat-link-finder-play svg {
+  width: 20px;
+  height: 20px;
+  margin-left: 2px;
+}
+
+.wechat-link-finder-meta {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.wechat-link-finder-author {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 5px 7px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(6px);
+}
+
+.wechat-link-finder-author-avatar {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wechat-link-finder-author-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.wechat-link-finder-author-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.96);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
 /* 隐私模式模糊效果 */
 .privacy-blur {
   filter: blur(9px);
