@@ -118,6 +118,36 @@ class TestParseAppMessage(unittest.TestCase):
         self.assertEqual(parsed.get("linkType"), "official_article")
         self.assertEqual(parsed.get("linkStyle"), "cover")
 
+    def test_finder_type_51_uses_nested_desc_and_cover(self):
+        raw_text = (
+            '<msg><appmsg appid="" sdkver="0">'
+            '<title>当前版本不支持展示该内容，请升级至最新版本。</title>'
+            '<des></des>'
+            '<type>51</type>'
+            '<url></url>'
+            '<finderFeed>'
+            '<nickname><![CDATA[央视新闻]]></nickname>'
+            '<username><![CDATA[finder_cctv_news]]></username>'
+            '<desc><![CDATA[微信视频号全金融行业今公布发布]]></desc>'
+            '<mediaList><media>'
+            '<coverUrl><![CDATA[https://finder.video.qq.com/cover.jpg]]></coverUrl>'
+            '<url><![CDATA[https://channels.weixin.qq.com/web/pages/feed?feedid=abc]]></url>'
+            '</media></mediaList>'
+            '</finderFeed>'
+            '</appmsg></msg>'
+        )
+
+        parsed = _parse_app_message(raw_text)
+
+        self.assertEqual(parsed.get("renderType"), "link")
+        self.assertEqual(parsed.get("linkType"), "finder")
+        self.assertEqual(parsed.get("title"), "微信视频号全金融行业今公布发布")
+        self.assertEqual(parsed.get("content"), "微信视频号全金融行业今公布发布")
+        self.assertEqual(parsed.get("from"), "央视新闻")
+        self.assertEqual(parsed.get("fromUsername"), "finder_cctv_news")
+        self.assertEqual(parsed.get("thumbUrl"), "https://finder.video.qq.com/cover.jpg")
+        self.assertEqual(parsed.get("url"), "https://channels.weixin.qq.com/web/pages/feed?feedid=abc")
+
     def test_quote_type_5_nested_xml_refermsg_uses_inner_title(self):
         raw_text = (
             '<msg><appmsg appid="" sdkver="0">'
