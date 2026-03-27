@@ -106,9 +106,9 @@
                   {{ msg.des }}
                 </div>
 
-                <div v-if="msg.content_list && msg.content_list.length > 0" class="flex flex-col">
+                <div v-if="msg.content_list && msg.content_list.length > 1" class="flex flex-col">
                   <a
-                      v-for="(item, idx) in msg.content_list"
+                      v-for="(item, idx) in msg.content_list.slice(1)"
                       :key="idx"
                       :href="item.url"
                       target="_blank"
