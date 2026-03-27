@@ -562,18 +562,32 @@ export const useApi = () => {
   }
 
   // 枚举服务号信息
-  const listBizAccounts = async (params) => {
-    return await request('/biz/list', params)
+  const listBizAccounts = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/biz/list' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
   }
 
   // 获取普通服务号消息
-  const listBizMessages = async (params) => {
-    return await request('/biz/messages', params)
+  const listBizMessages = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    const url = '/biz/messages' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
   }
 
   // 获取微信支付记录
-  const listBizPayRecords = async (params) => {
-    return await request('/biz/pay_records', params)
+  const listBizPayRecords = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    const url = '/biz/pay_records' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
   }
 
   return {
