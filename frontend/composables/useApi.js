@@ -561,6 +561,21 @@ export const useApi = () => {
     return await request('/get_image_key')
   }
 
+  // 枚举服务号信息
+  const listBizAccounts = async (params) => {
+    return await request('/biz/list', params)
+  }
+
+  // 获取普通服务号消息
+  const listBizMessages = async (params) => {
+    return await request('/biz/messages', params)
+  }
+
+  // 获取微信支付记录
+  const listBizPayRecords = async (params) => {
+    return await request('/biz/pay_records', params)
+  }
+
   return {
     detectWechat,
     detectCurrentAccount,
@@ -616,5 +631,8 @@ export const useApi = () => {
     getKeys,
     getImageKey,
     getWxStatus,
+    listBizAccounts,
+    listBizMessages,
+    listBizPayRecords,
   }
 }
