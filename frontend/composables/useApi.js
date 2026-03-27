@@ -590,6 +590,15 @@ export const useApi = () => {
     return await request(url)
   }
 
+  const getBizProxyImageUrl = (url) => {
+    if (!url) return ''
+    if (url.startsWith('data:')) return url // 如果已经是 base64，不处理
+    const query = new URLSearchParams()
+    query.set('url', url)
+    const base = baseURL ? baseURL.replace(/\/$/, '') : ''
+    return `${base}/biz/proxy_image?${query.toString()}`
+  }
+
   return {
     detectWechat,
     detectCurrentAccount,
@@ -648,5 +657,6 @@ export const useApi = () => {
     listBizAccounts,
     listBizMessages,
     listBizPayRecords,
+    getBizProxyImageUrl,
   }
 }
