@@ -132,7 +132,6 @@ def proxy_biz_image(url: str):
     if not url:
         return Response(status_code=400)
     try:
-        # 伪装 UA，防止被拦截
         req = urllib.request.Request(url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         })
@@ -183,7 +182,6 @@ def get_biz_account_list(account: Optional[str] = None):
         except Exception as e:
             logger.warning(f"读取 Name2Id 失败 {db_file}: {e}")
 
-    # 2. 查询 contact.db 完善昵称和头像信息
     contact_db_path = account_dir / "contact.db"
     contact_info = {}
     if contact_db_path.exists() and biz_ids:
@@ -191,17 +189,37 @@ def get_biz_account_list(account: Optional[str] = None):
             conn = sqlite3.connect(str(contact_db_path))
             cursor = conn.cursor()
             placeholders = ",".join(["?"] * len(biz_ids))
-            query = f"SELECT username, remark, nick_name, alias, big_head_url FROM contact WHERE username IN ({placeholders})"
-            rows = cursor.execute(query, list(biz_ids)).fetchall()
 
-            for r in rows:
+            # 先查 contact 表
+            query_contact = f"SELECT username, remark, nick_name, alias, big_head_url FROM contact WHERE username IN ({placeholders})"
+            rows_contact = cursor.execute(query_contact, list(biz_ids)).fetchall()
+
+            for r in rows_contact:
                 uname = r[0]
                 name = r[1] or r[2] or r[3] or uname
                 contact_info[uname] = {
                     "username": uname,
                     "name": name,
-                    "avatar": r[4]
+                    "avatar": r[4],
+                    "type": 3  # 默认给个 3（未知）
                 }
+
+            # 再查 biz_info 表获取类型
+            try:
+                query_biz = f"SELECT username, type FROM biz_info WHERE username IN ({placeholders})"
+                rows_biz = cursor.execute(query_biz, list(biz_ids)).fetchall()
+                for r in rows_biz:
+                    uname = r[0]
+                    biz_type = r[1]
+                    # 如果查到了且是 0, 1, 2，就更新进去，否则保留 3
+                    if uname in contact_info:
+                        if biz_type in (0, 1, 2):
+                            contact_info[uname]["type"] = biz_type
+                        else:
+                            contact_info[uname]["type"] = 3
+            except Exception as e:
+                logger.warning(f"读取 biz_info 失败: {e}")
+
             conn.close()
         except Exception as e:
             logger.warning(f"读取 contact.db 失败: {e}")

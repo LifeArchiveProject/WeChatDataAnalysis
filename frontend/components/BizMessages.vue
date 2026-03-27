@@ -22,8 +22,14 @@
               v-for="item in filteredAccounts"
               :key="item.username"
               @click="selectAccount(item)"
-              class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors border-b border-gray-50"
-              :class="{ 'bg-[#F2F2F2]': selectedAccount?.username === item.username }"
+              class="flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors border-b border-gray-50"
+              :class="[
+                selectedAccount?.username === item.username
+                  ? 'bg-[#E5E5E5]' // 选中状态最深
+                  : item.username === 'gh_3dfda90e39d6'
+                    ? 'bg-[#F2F2F2] hover:bg-[#EAEAEA]' // 微信支付专门的底色，以示区分
+                    : 'hover:bg-gray-50' // 普通项的悬浮色
+              ]"
           >
             <img v-if="item.avatar" :src="api.getBizProxyImageUrl(item.avatar)" class="w-10 h-10 rounded-md object-cover bg-gray-200 flex-shrink-0" alt=""/>
             <div v-else class="w-10 h-10 rounded-md bg-[#03C160] text-white flex items-center justify-center text-lg font-medium flex-shrink-0 shadow-sm">
@@ -37,8 +43,17 @@
                   {{ item.formatted_last_time }}
                 </span>
               </div>
-              <div v-if="item.username === 'gh_3dfda90e39d6'" class="text-[10px] text-[#03C160] bg-[#03C160]/10 px-1.5 py-0.5 rounded w-max">
-                官方
+
+              <div
+                  class="text-[10px] px-1.5 py-0.5 rounded w-max mt-0.5"
+                  :class="{
+                      'text-[#03C160] bg-[#03C160]/10': item.type === 1, // 服务号 - 绿色
+                      'text-blue-500 bg-blue-50': item.type === 0,       // 公众号 - 蓝色
+                      'text-orange-500 bg-orange-50': item.type === 2,   // 企业号 - 橙色
+                      'text-gray-400 bg-gray-100': item.type === 3       // 未知 - 灰色
+                  }"
+              >
+                {{ {1: '服务号', 0: '公众号', 2: '企业号', 3: '未知'}[item.type] || '未知' }}
               </div>
             </div>
           </div>
