@@ -4,10 +4,6 @@
     <div class="w-[300px] lg:w-[320px] bg-white border-r border-gray-200 flex flex-col flex-shrink-0 z-10">
       <div class="p-3 border-b border-gray-200" style="background-color: var(--app-surface-muted)">
         <div class="contact-search-wrapper flex-1">
-          <svg class="contact-search-icon" fill="none" stroke="currentColor" viewBox="0 0 16 16">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.33333 12.6667C10.2789 12.6667 12.6667 10.2789 12.6667 7.33333C12.6667 4.38781 10.2789 2 7.33333 2C4.38781 2 2 4.38781 2 7.33333C2 10.2789 4.38781 12.6667 7.33333 12.6667Z" />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14 14L11.1 11.1" />
-          </svg>
           <input
               v-model="searchQuery"
               type="text"
@@ -26,19 +22,24 @@
               v-for="item in filteredAccounts"
               :key="item.username"
               @click="selectAccount(item)"
-              class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
+              class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors border-b border-gray-50"
               :class="{ 'bg-[#F2F2F2]': selectedAccount?.username === item.username }"
           >
-            <img
-                :src="item.avatar || defaultAvatar"
-                class="w-10 h-10 rounded-md object-cover bg-gray-200 flex-shrink-0"
-                @error="(e) => e.target.src = defaultAvatar"
-             alt=""/>
-            <div class="flex-1 min-w-0">
-              <h3 class="text-sm text-gray-900 truncate">{{ item.name || item.username }}</h3>
+            <img v-if="item.avatar" :src="api.getBizProxyImageUrl(item.avatar)" class="w-10 h-10 rounded-md object-cover bg-gray-200 flex-shrink-0" alt=""/>
+            <div v-else class="w-10 h-10 rounded-md bg-[#03C160] text-white flex items-center justify-center text-lg font-medium flex-shrink-0 shadow-sm">
+              {{ (item.name || item.username).charAt(0).toUpperCase() }}
             </div>
-            <div v-if="item.username === 'gh_3dfda90e39d6'" class="text-xs text-[#03C160] bg-[#03C160]/10 px-1.5 py-0.5 rounded">
-              官方
+
+            <div class="flex-1 min-w-0 flex flex-col justify-center gap-0.5">
+              <div class="flex justify-between items-center">
+                <h3 class="text-sm text-gray-900 truncate">{{ item.name || item.username }}</h3>
+                <span v-if="item.formatted_last_time" class="text-[11px] text-gray-400 flex-shrink-0 ml-2">
+                  {{ item.formatted_last_time }}
+                </span>
+              </div>
+              <div v-if="item.username === 'gh_3dfda90e39d6'" class="text-[10px] text-[#03C160] bg-[#03C160]/10 px-1.5 py-0.5 rounded w-max">
+                官方
+              </div>
             </div>
           </div>
         </div>
@@ -51,11 +52,7 @@
           <h2 class="text-base text-gray-900">{{ selectedAccount.name }}</h2>
         </div>
 
-        <div
-            class="flex-1 overflow-y-auto px-4 py-6 flex flex-col-reverse"
-            @scroll="handleScroll"
-            ref="messageListRef"
-        >
+        <div class="flex-1 overflow-y-auto px-4 py-6 flex flex-col-reverse" @scroll="handleScroll" ref="messageListRef">
           <div v-if="!hasMore" class="text-center text-xs text-gray-400 py-4 w-full">没有更多消息了</div>
           <div v-if="loadingMessages" class="text-center text-xs text-gray-400 py-4 w-full">正在加载...</div>
 
@@ -64,7 +61,7 @@
 
               <div v-if="selectedAccount.username === 'gh_3dfda90e39d6'" class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
                 <div class="flex items-center text-gray-500 text-sm mb-5">
-                  <img v-if="msg.merchant_icon" :src="msg.merchant_icon" class="w-6 h-6 rounded-full mr-2 object-cover"  alt=""/>
+                  <img v-if="msg.merchant_icon" :src="api.getBizProxyImageUrl(msg.merchant_icon)" class="w-6 h-6 rounded-full mr-2 object-cover"  alt=""/>
                   <div v-else class="w-6 h-6 rounded-full mr-2 bg-green-100 flex items-center justify-center text-green-600">¥</div>
                   <span>{{ msg.merchant_name || '微信支付' }}</span>
                 </div>
@@ -81,7 +78,7 @@
 
               <div v-else class="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
                 <a :href="msg.url" target="_blank" class="block relative group cursor-pointer">
-                  <img :src="msg.cover || defaultImage" class="w-full h-[180px] object-cover bg-gray-100"  alt=""/>
+                  <img :src="msg.cover ? api.getBizProxyImageUrl(msg.cover) : defaultImage" class="w-full h-[180px] object-cover bg-gray-100"  alt=""/>
                   <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3 pt-8">
                     <h3 class="text-white text-[15px] font-medium leading-snug line-clamp-2 group-hover:underline">
                       {{ msg.title }}
@@ -104,7 +101,7 @@
                     <span class="text-[14px] text-gray-800 leading-snug line-clamp-2 pr-3 group-hover:underline">
                       {{ item.title }}
                     </span>
-                    <img :src="item.cover" class="w-12 h-12 rounded object-cover flex-shrink-0 bg-gray-100 border border-gray-100"  alt=""/>
+                    <img :src="item.cover ? api.getBizProxyImageUrl(item.cover) : defaultImage" class="w-12 h-12 rounded object-cover flex-shrink-0 bg-gray-100 border border-gray-100"  alt=""/>
                   </a>
                 </div>
               </div>
@@ -113,17 +110,6 @@
           </div>
         </div>
 
-      </div>
-
-      <div v-else class="flex-1 flex items-center justify-center">
-        <div class="text-center">
-          <div class="w-20 h-20 mx-auto mb-5 rounded-2xl bg-gray-200/50 flex items-center justify-center">
-            <svg class="w-10 h-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9.5L18.5 7H20" />
-            </svg>
-          </div>
-          <p class="text-sm text-gray-400">请选择一个服务号查看消息</p>
-        </div>
       </div>
     </div>
   </div>
@@ -150,30 +136,15 @@ const hasMore = ref(true)
 const messageListRef = ref(null)
 
 // 默认占位图
-const defaultAvatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgdmlld0JveD0iMCAwIDQwIDQwIj48cmVjdCB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIGZpbGw9IiNlNWU3ZWIiLz48L3N2Zz4='
+// const defaultAvatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgdmlld0JveD0iMCAwIDQwIDQwIj48cmVjdCB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIGZpbGw9IiNlNWU3ZWIiLz48L3N2Zz4='
 const defaultImage = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iMTgwIj48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjE4MCIgZmlsbD0iI2Y1ZjVmNSIvPjwvc3ZnPg=='
 
-// 获取账号列表，并将微信支付置顶
 const fetchAccounts = async () => {
   loadingAccounts.value = true
   try {
     const res = await api.listBizAccounts()
     if (res && res.data) {
-      // 提取微信支付
-      const payAccount = res.data.find(a => a.username === 'gh_3dfda90e39d6')
-      const otherAccounts = res.data.filter(a => a.username !== 'gh_3dfda90e39d6')
-
-      const sortedList = []
-      if (payAccount) {
-        // 如果后端没有返回名字，可以手动补齐
-        payAccount.name = '微信支付'
-        sortedList.push(payAccount)
-      } else {
-        // 如果后端列表里没有，但你想强行显示，也可以造一个假的
-        sortedList.push({ username: 'gh_3dfda90e39d6', name: '微信支付', avatar: '' })
-      }
-
-      accounts.value = [...sortedList, ...otherAccounts]
+      accounts.value = res.data
     }
   } catch (err) {
     console.error('获取服务号失败:', err)
