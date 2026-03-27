@@ -4,8 +4,8 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional, Any, Dict, List
-
-from fastapi import APIRouter, HTTPException
+import urllib
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from ..chat_helpers import _resolve_account_dir
@@ -127,20 +127,37 @@ def parse_pay_xml(xml_str: str, local_id: int) -> Optional[Dict[str, Any]]:
         logger.error(error_msg)
         return None
 
+@router.get("/api/biz/proxy_image", summary="代理请求微信服务号图片")
+def proxy_biz_image(url: str):
+    if not url:
+        return Response(status_code=400)
+    try:
+        # 伪装 UA，防止被拦截
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
+        with urllib.request.urlopen(req, timeout=10) as response:
+            content = response.read()
+            content_type = response.headers.get('Content-Type', 'image/jpeg')
+            return Response(content=content, media_type=content_type)
+    except Exception as e:
+        logger.error(f"[biz] 代理图片失败: {url} -> {e}")
+        return Response(status_code=500)
 
 # 接口 1：获取全部的服务号/公众号的信息
 @router.get("/api/biz/list", summary="获取全部服务号/公众号列表")
 def get_biz_account_list(account: Optional[str] = None):
     account_dir = _resolve_account_dir(account)
 
-    # 1. 遍历 biz_message_*.db，从 Name2Id 拿到所有 id
     biz_ids = set()
+    biz_latest_time = {}
+
+    # 1. 遍历 biz_message_*.db
     for db_file in account_dir.glob("biz_message*.db"):
         try:
             conn = sqlite3.connect(str(db_file))
             cursor = conn.cursor()
 
-            # 不同微信版本的主键可能是 user_name 或 username
             cursor.execute("PRAGMA table_info(Name2Id)")
             cols = [row[1].lower() for row in cursor.fetchall()]
             user_col = "username" if "username" in cols else "user_name" if "user_name" in cols else ""
@@ -149,7 +166,19 @@ def get_biz_account_list(account: Optional[str] = None):
                 rows = cursor.execute(f"SELECT {user_col} FROM Name2Id").fetchall()
                 for r in rows:
                     if r[0]:
-                        biz_ids.add(r[0])
+                        uname = r[0]
+                        biz_ids.add(uname)
+
+                        # 顺便查询该号的最后一条消息时间
+                        md5_id = hashlib.md5(uname.encode('utf-8')).hexdigest().lower()
+                        table_name = f"Msg_{md5_id}"
+                        try:
+                            time_res = conn.execute(f"SELECT MAX(create_time) FROM {table_name}").fetchone()
+                            if time_res and time_res[0]:
+                                current_max = biz_latest_time.get(uname, 0)
+                                biz_latest_time[uname] = max(current_max, time_res[0])
+                        except Exception:
+                            pass
             conn.close()
         except Exception as e:
             logger.warning(f"读取 Name2Id 失败 {db_file}: {e}")
@@ -161,40 +190,42 @@ def get_biz_account_list(account: Optional[str] = None):
         try:
             conn = sqlite3.connect(str(contact_db_path))
             cursor = conn.cursor()
-
             placeholders = ",".join(["?"] * len(biz_ids))
             query = f"SELECT username, remark, nick_name, alias, big_head_url FROM contact WHERE username IN ({placeholders})"
             rows = cursor.execute(query, list(biz_ids)).fetchall()
 
             for r in rows:
                 uname = r[0]
-                remark = r[1]
-                nick_name = r[2]
-                alias = r[3]
-                head_url = r[4]
-
-                # 优先级: remark > nick_name > alias > id
-                name = remark or nick_name or alias or uname
+                name = r[1] or r[2] or r[3] or uname
                 contact_info[uname] = {
                     "username": uname,
                     "name": name,
-                    "avatar": head_url
+                    "avatar": r[4]
                 }
             conn.close()
         except Exception as e:
             logger.warning(f"读取 contact.db 失败: {e}")
 
+    # 3. 组装结果（不在 contact_info 里的直接丢弃）
     result = []
     for uid in biz_ids:
         if uid in contact_info:
-            result.append(contact_info[uid])
-        # else:
-        #     result.append({"username": uid, "name": uid, "avatar": ""})
+            info = contact_info[uid]
+            info["last_time"] = biz_latest_time.get(uid, 0)
+            if info["last_time"]:
+                # 格式化日期给前端展示用
+                info["formatted_last_time"] = time.strftime("%Y-%m-%d", time.localtime(info["last_time"]))
+            else:
+                info["formatted_last_time"] = ""
+            result.append(info)
+
+    # 4. 按最后一条消息的时间降序排列
+    result.sort(key=lambda x: x.get("last_time", 0), reverse=True)
 
     return {"status": "success", "total": len(result), "data": result}
 
 
-# 接口 2：获取普通服务号/公众号的 json 消息
+# 接口 2：获取普通服务号/公众号的 json 消息 (已修复表名比对 bug)
 @router.get("/api/biz/messages", summary="获取指定服务号的消息")
 def get_biz_messages(username: str, account: Optional[str] = None, limit: int = 50, offset: int = 0):
     if username == "gh_3dfda90e39d6":
@@ -208,6 +239,7 @@ def get_biz_messages(username: str, account: Optional[str] = None, limit: int = 
     for db_file in account_dir.glob("biz_message*.db"):
         conn = sqlite3.connect(str(db_file))
         try:
+            # 必须用 table_name.lower()，否则永远匹配不上
             res = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND lower(name)=?",
                                (table_name.lower(),)).fetchone()
             if res:
@@ -221,6 +253,7 @@ def get_biz_messages(username: str, account: Optional[str] = None, limit: int = 
     if not target_db:
         return {"status": "success", "data": [], "message": f"未找到 {username} 的消息历史"}
 
+    # ... (后续数据库查询逻辑保持不变) ...
     messages = []
     try:
         conn = sqlite3.connect(str(target_db))
@@ -254,6 +287,7 @@ def get_biz_messages(username: str, account: Optional[str] = None, limit: int = 
     return {"status": "success", "data": messages}
 
 
+# 接口 3：返回微信支付的 json 消息 (已修复表名比对 bug)
 @router.get("/api/biz/pay_records", summary="获取微信支付记录")
 def get_wechat_pay_records(account: Optional[str] = None, limit: int = 50, offset: int = 0):
     username = "gh_3dfda90e39d6"
@@ -263,9 +297,9 @@ def get_wechat_pay_records(account: Optional[str] = None, limit: int = 50, offse
 
     target_db = None
     for db_file in account_dir.glob("biz_message*.db"):
-        # print(db_file)
         conn = sqlite3.connect(str(db_file))
         try:
+            # 必须用 table_name.lower()
             res = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND lower(name)=?",
                                (table_name.lower(),)).fetchone()
             if res:
