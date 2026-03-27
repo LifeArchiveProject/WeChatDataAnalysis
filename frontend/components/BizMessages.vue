@@ -132,6 +132,9 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 
+import { useApi } from '~/composables/useApi'
+const api = useApi()
+
 // 状态
 const accounts = ref([])
 const loadingAccounts = ref(false)
