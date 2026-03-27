@@ -188,8 +188,8 @@ def get_biz_account_list(account: Optional[str] = None):
     for uid in biz_ids:
         if uid in contact_info:
             result.append(contact_info[uid])
-        else:
-            result.append({"username": uid, "name": uid, "avatar": ""})
+        # else:
+        #     result.append({"username": uid, "name": uid, "avatar": ""})
 
     return {"status": "success", "total": len(result), "data": result}
 
@@ -209,7 +209,7 @@ def get_biz_messages(username: str, account: Optional[str] = None, limit: int = 
         conn = sqlite3.connect(str(db_file))
         try:
             res = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND lower(name)=?",
-                               (table_name,)).fetchone()
+                               (table_name.lower(),)).fetchone()
             if res:
                 target_db = db_file
                 break
@@ -254,7 +254,6 @@ def get_biz_messages(username: str, account: Optional[str] = None, limit: int = 
     return {"status": "success", "data": messages}
 
 
-# 接口 3：返回微信支付的 json 消息
 @router.get("/api/biz/pay_records", summary="获取微信支付记录")
 def get_wechat_pay_records(account: Optional[str] = None, limit: int = 50, offset: int = 0):
     username = "gh_3dfda90e39d6"
@@ -264,10 +263,11 @@ def get_wechat_pay_records(account: Optional[str] = None, limit: int = 50, offse
 
     target_db = None
     for db_file in account_dir.glob("biz_message*.db"):
+        # print(db_file)
         conn = sqlite3.connect(str(db_file))
         try:
             res = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND lower(name)=?",
-                               (table_name,)).fetchone()
+                               (table_name.lower(),)).fetchone()
             if res:
                 target_db = db_file
                 break
