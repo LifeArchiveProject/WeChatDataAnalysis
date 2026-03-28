@@ -205,6 +205,8 @@ export const useApi = () => {
     if (params && params.priority_max_scan != null) query.set('priority_max_scan', String(params.priority_max_scan))
     if (params && params.include_hidden != null) query.set('include_hidden', String(!!params.include_hidden))
     if (params && params.include_official != null) query.set('include_official', String(!!params.include_official))
+    if (params && params.only_official != null) query.set('only_official', String(!!params.only_official))
+    if (params && params.backfill_limit != null) query.set('backfill_limit', String(params.backfill_limit))
     const url = '/chat/realtime/sync_all' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url, { method: 'POST' })
   }
