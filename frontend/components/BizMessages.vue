@@ -1,5 +1,5 @@
 <template>
-  <div class="biz-page h-screen flex overflow-hidden" style="background-color: var(--app-shell-bg)">
+  <div class="biz-page h-full min-h-0 flex overflow-hidden" style="background-color: var(--app-shell-bg)">
 
     <div :class="['w-[300px] lg:w-[320px] border-r flex flex-col flex-shrink-0 z-10', isDark ? 'bg-[#1e1e1e] border-[#333]' : 'bg-white border-gray-200']">
       <div class="p-3 border-b" :class="isDark ? 'border-[#333]' : 'border-gray-200'" style="background-color: var(--app-surface-muted)">
@@ -17,7 +17,7 @@
         <div v-if="loadingAccounts" class="flex justify-center py-4">
           <span class="text-sm" :class="isDark ? 'text-gray-500' : 'text-gray-400'">加载中...</span>
         </div>
-        <div v-else>
+        <div v-else class="pb-4">
           <div
               v-for="item in filteredAccounts"
               :key="item.username"
@@ -25,7 +25,7 @@
               class="flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors border-b"
               :class="[
                 isDark ? 'border-[#333]' : 'border-gray-50',
-                selectedAccount?.username === item.username
+                selectedBizAccount?.username === item.username
                   ? (isDark ? 'bg-[#333]' : 'bg-[#E5E5E5]') // 选中状态
                   : item.username === 'gh_3dfda90e39d6'
                     ? (isDark ? 'bg-[#2a2a2a] hover:bg-[#333]' : 'bg-[#F2F2F2] hover:bg-[#EAEAEA]') // 微信支付专门的底色
@@ -63,19 +63,20 @@
     </div>
 
     <div class="flex-1 flex flex-col min-h-0 min-w-0" :class="isDark ? 'bg-[#121212]' : 'bg-[#F5F5F5]'">
-      <div v-if="selectedAccount" class="flex-1 flex flex-col min-h-0 relative">
+      <div v-if="selectedBizAccount" class="flex-1 flex flex-col min-h-0 relative">
         <div class="h-14 border-b flex items-center px-5 shrink-0 z-10" :class="isDark ? 'bg-[#121212] border-[#333]' : 'bg-[#F5F5F5] border-gray-200'">
-          <h2 class="text-base" :class="isDark ? 'text-gray-100' : 'text-gray-900'">{{ selectedAccount.name }}</h2>
+          <h2 class="text-base" :class="isDark ? 'text-gray-100' : 'text-gray-900'">{{ selectedBizAccount.name }}</h2>
         </div>
 
         <div class="flex-1 overflow-y-auto px-4 py-6 flex flex-col-reverse" @scroll="handleScroll" ref="messageListRef">
+          <div class="h-4 shrink-0" aria-hidden="true"></div>
           <div v-if="!hasMore" class="text-center text-xs py-4 w-full" :class="isDark ? 'text-gray-500' : 'text-gray-400'">没有更多消息了</div>
           <div v-if="loadingMessages" class="text-center text-xs py-4 w-full" :class="isDark ? 'text-gray-500' : 'text-gray-400'">正在加载...</div>
 
           <div class="w-full max-w-[400px] mx-auto flex flex-col-reverse gap-6">
             <div v-for="msg in messages" :key="msg.local_id" class="w-full">
 
-              <div v-if="selectedAccount.username === 'gh_3dfda90e39d6'" class="rounded-xl shadow-sm p-5 border" :class="isDark ? 'bg-[#1e1e1e] border-[#333]' : 'bg-white border-gray-100'">
+              <div v-if="selectedBizAccount.username === 'gh_3dfda90e39d6'" class="rounded-xl shadow-sm p-5 border" :class="isDark ? 'bg-[#1e1e1e] border-[#333]' : 'bg-white border-gray-100'">
                 <div class="flex items-center text-sm mb-5" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
                   <img v-if="msg.merchant_icon" :src="api.getBizProxyImageUrl(msg.merchant_icon)" class="w-6 h-6 rounded-full mr-2 object-cover"  alt=""/>
                   <div v-else class="w-6 h-6 rounded-full mr-2 flex items-center justify-center" :class="isDark ? 'bg-green-900/40 text-green-400' : 'bg-green-100 text-green-600'">¥</div>
@@ -143,21 +144,28 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 
 import { useApi } from '~/composables/useApi'
 const api = useApi()
 
 import { storeToRefs } from 'pinia'
 import { useThemeStore } from '~/stores/theme'
+import { useChatAccountsStore } from '~/stores/chatAccounts'
+import { useChatRealtimeStore } from '~/stores/chatRealtime'
 
 const accounts = ref([])
 const loadingAccounts = ref(false)
 const searchQuery = ref('')
-const selectedAccount = ref(null)
+const selectedBizAccount = ref(null)
 
 const themeStore = useThemeStore()
+const chatAccountsStore = useChatAccountsStore()
+const realtimeStore = useChatRealtimeStore()
 const { isDark } = storeToRefs(themeStore)
+const { selectedAccount: selectedDbAccount } = storeToRefs(chatAccountsStore)
+const { enabled: realtimeEnabled, changeSeq } = storeToRefs(realtimeStore)
+
 const messages = ref([])
 const loadingMessages = ref(false)
 const offset = ref(0)
@@ -165,19 +173,40 @@ const limit = 20
 const hasMore = ref(true)
 
 const messageListRef = ref(null)
+let realtimeRefreshFuture = null
+let realtimeRefreshQueued = false
 
 // 默认占位图
 // const defaultAvatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgdmlld0JveD0iMCAwIDQwIDQwIj48cmVjdCB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIGZpbGw9IiNlNWU3ZWIiLz48L3N2Zz4='
 const defaultImage = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iMTgwIj48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjE4MCIgZmlsbD0iI2Y1ZjVmNSIvPjwvc3ZnPg=='
 
-const fetchAccounts = async () => {
+const getCurrentAccountParam = () => {
+  const account = String(selectedDbAccount.value || '').trim()
+  return account || undefined
+}
+
+const resetMessagesState = () => {
+  messages.value = []
+  offset.value = 0
+  hasMore.value = true
+}
+
+const fetchAccounts = async ({ preserveSelection = true } = {}) => {
   loadingAccounts.value = true
+  const previousUsername = preserveSelection ? String(selectedBizAccount.value?.username || '').trim() : ''
   try {
-    const res = await api.listBizAccounts()
-    if (res && res.data) {
-      accounts.value = res.data
+    const res = await api.listBizAccounts({ account: getCurrentAccountParam() })
+    const nextAccounts = Array.isArray(res?.data) ? res.data : []
+    accounts.value = nextAccounts
+
+    if (previousUsername) {
+      selectedBizAccount.value = nextAccounts.find(item => item.username === previousUsername) || null
+    } else if (!selectedBizAccount.value?.username) {
+      selectedBizAccount.value = null
     }
   } catch (err) {
+    accounts.value = []
+    selectedBizAccount.value = null
     console.error('获取服务号失败:', err)
   } finally {
     loadingAccounts.value = false
@@ -195,26 +224,29 @@ const filteredAccounts = computed(() => {
 })
 
 // 点击选择服务号
-const selectAccount = (account) => {
-  if (selectedAccount.value?.username === account.username) return
-  selectedAccount.value = account
+const selectAccount = async (account) => {
+  if (selectedBizAccount.value?.username === account.username) return
+  selectedBizAccount.value = account
 
   // 重置消息状态
-  messages.value = []
-  offset.value = 0
-  hasMore.value = true
+  resetMessagesState()
 
-  loadMessages()
+  await loadMessages()
 }
 
 // 加载消息
 const loadMessages = async () => {
-  if (loadingMessages.value || !hasMore.value || !selectedAccount.value) return
+  if (loadingMessages.value || !hasMore.value || !selectedBizAccount.value) return
 
   loadingMessages.value = true
   try {
-    const username = selectedAccount.value.username
-    const params = { username, offset: offset.value, limit }
+    const username = selectedBizAccount.value.username
+    const params = {
+      account: getCurrentAccountParam(),
+      username,
+      offset: offset.value,
+      limit,
+    }
 
     let res
     if (username === 'gh_3dfda90e39d6') {
@@ -238,6 +270,66 @@ const loadMessages = async () => {
   }
 }
 
+const reloadSelectedMessages = async () => {
+  if (!selectedBizAccount.value) return
+  resetMessagesState()
+  await loadMessages()
+}
+
+const syncAllBizRealtime = async ({ forceReload = false } = {}) => {
+  const priorityUsername = String(selectedBizAccount.value?.username || '').trim()
+  if (!realtimeEnabled.value) {
+    if (forceReload) {
+      await reloadSelectedMessages()
+    }
+    return
+  }
+
+  try {
+    const result = await api.syncChatRealtimeAll({
+      account: getCurrentAccountParam(),
+      max_scan: 200,
+      priority_username: priorityUsername,
+      priority_max_scan: 400,
+      include_hidden: true,
+      include_official: true,
+      only_official: true,
+      backfill_limit: 0,
+    })
+    const hasDelta = Number(result?.insertedTotal || 0) > 0 || Number(result?.sessionsUpdated || 0) > 0
+    await fetchAccounts({ preserveSelection: true })
+    if (selectedBizAccount.value?.username) {
+      if (hasDelta || forceReload) {
+        await reloadSelectedMessages()
+      }
+    } else if (forceReload) {
+      resetMessagesState()
+    }
+  } catch (err) {
+    console.error('实时同步服务号失败:', err)
+    if (forceReload) {
+      await fetchAccounts({ preserveSelection: true })
+      await reloadSelectedMessages()
+    }
+  }
+}
+
+const queueRealtimeBizRefresh = () => {
+  if (!realtimeEnabled.value) return
+  if (realtimeRefreshFuture) {
+    realtimeRefreshQueued = true
+    return
+  }
+
+  realtimeRefreshFuture = syncAllBizRealtime().finally(() => {
+    realtimeRefreshFuture = null
+    if (realtimeRefreshQueued) {
+      realtimeRefreshQueued = false
+      queueRealtimeBizRefresh()
+    }
+  })
+}
+
 // 向上滚动加载逻辑
 // 因为容器设置了 flex-col-reverse，所以 scrollTop 越靠近负值(或0取决于浏览器)越是到了历史消息端
 // 但比较通用兼容的做法是监听 scroll，距离顶部或底部小于阈值时触发
@@ -250,8 +342,40 @@ const handleScroll = (e) => {
   }
 }
 
-onMounted(() => {
-  fetchAccounts()
+watch(selectedDbAccount, async (next, prev) => {
+  if (String(next || '').trim() === String(prev || '').trim()) return
+  selectedBizAccount.value = null
+  resetMessagesState()
+  searchQuery.value = ''
+
+  if (!String(next || '').trim()) {
+    accounts.value = []
+    return
+  }
+  await fetchAccounts({ preserveSelection: false })
+  if (realtimeEnabled.value) {
+    await syncAllBizRealtime({ forceReload: true })
+  }
+})
+
+watch(changeSeq, (next, prev) => {
+  if (!realtimeEnabled.value) return
+  if (next === prev) return
+  queueRealtimeBizRefresh()
+})
+
+watch(realtimeEnabled, async (enabled, wasEnabled) => {
+  if (enabled && !wasEnabled) {
+    await syncAllBizRealtime({ forceReload: true })
+  }
+})
+
+onMounted(async () => {
+  await chatAccountsStore.ensureLoaded()
+  await fetchAccounts({ preserveSelection: false })
+  if (realtimeEnabled.value) {
+    await syncAllBizRealtime({ forceReload: true })
+  }
 })
 </script>
 
