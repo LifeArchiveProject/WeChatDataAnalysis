@@ -561,6 +561,44 @@ export const useApi = () => {
     return await request('/get_image_key')
   }
 
+  // 枚举服务号信息
+  const listBizAccounts = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/biz/list' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 获取普通服务号消息
+  const listBizMessages = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    const url = '/biz/messages' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 获取微信支付记录
+  const listBizPayRecords = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    const url = '/biz/pay_records' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const getBizProxyImageUrl = (url) => {
+    if (!url) return ''
+    if (url.startsWith('data:')) return url // 如果已经是 base64，不处理
+    const query = new URLSearchParams()
+    query.set('url', url)
+    const base = baseURL ? baseURL.replace(/\/$/, '') : ''
+    return `${base}/biz/proxy_image?${query.toString()}`
+  }
+
   return {
     detectWechat,
     detectCurrentAccount,
@@ -616,5 +654,9 @@ export const useApi = () => {
     getKeys,
     getImageKey,
     getWxStatus,
+    listBizAccounts,
+    listBizMessages,
+    listBizPayRecords,
+    getBizProxyImageUrl,
   }
 }

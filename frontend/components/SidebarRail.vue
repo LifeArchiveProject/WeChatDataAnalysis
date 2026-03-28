@@ -101,6 +101,21 @@
         </div>
       </div>
 
+      <div
+          class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+          title="服务号"
+          @click="goBiz"
+      >
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <div class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': isBizRoute }">
+            <svg class="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+            </svg>
+          </div>
+        </div>
+      </div>
+
       <!-- Wrapped -->
       <div
         class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
@@ -479,34 +494,17 @@ const isChatRoute = computed(() => route.path?.startsWith('/chat'))
 const isEditsRoute = computed(() => route.path?.startsWith('/edits'))
 const isSnsRoute = computed(() => route.path?.startsWith('/sns'))
 const isContactsRoute = computed(() => route.path?.startsWith('/contacts'))
+const isBizRoute = computed(() => route.path?.startsWith('/biz')) // 新增
 const isWrappedRoute = computed(() => route.path?.startsWith('/wrapped'))
-const goChat = async () => {
-  await navigateTo('/chat')
-}
 
-const goEdits = async () => {
-  await navigateTo('/edits')
-}
-
-const goSns = async () => {
-  await navigateTo('/sns')
-}
-
-const goContacts = async () => {
-  await navigateTo('/contacts')
-}
-
-const goWrapped = async () => {
-  await navigateTo('/wrapped')
-}
-
-const goGuide = async () => {
-  await navigateTo('/')
-}
-
-const goSettings = () => {
-  openSettingsDialog()
-}
+const goChat = async () => { await navigateTo('/chat') }
+const goEdits = async () => { await navigateTo('/edits') }
+const goSns = async () => { await navigateTo('/sns') }
+const goContacts = async () => { await navigateTo('/contacts') }
+const goBiz = async () => { await navigateTo('/biz') }
+const goWrapped = async () => { await navigateTo('/wrapped') }
+const goGuide = async () => { await navigateTo('/') }
+const goSettings = () => { openSettingsDialog() }
 
 const onWindowKeydown = (event) => {
   if (event?.key !== 'Escape') return

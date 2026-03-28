@@ -36,6 +36,7 @@ from .routers.wrapped import router as _wrapped_router
 from .request_logging import log_server_errors_middleware
 from .sns_stage_timing import add_sns_stage_timing_headers
 from .wcdb_realtime import WCDB_REALTIME, shutdown as _wcdb_shutdown
+from .routers.biz import router as _biz_router
 
 app = FastAPI(
     title="微信数据库解密工具",
@@ -96,6 +97,7 @@ app.include_router(_chat_media_router)
 app.include_router(_sns_router)
 app.include_router(_sns_export_router)
 app.include_router(_wrapped_router)
+app.include_router(_biz_router)
 
 
 class _SPAStaticFiles(StaticFiles):
