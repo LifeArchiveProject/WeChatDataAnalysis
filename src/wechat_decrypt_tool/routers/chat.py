@@ -1391,6 +1391,299 @@ def _load_contact_top_flags(contact_db_path: Path, usernames: list[str]) -> dict
         conn.close()
 
 
+def _coerce_realtime_blobish_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, bytearray):
+        return bytes(value)
+    if isinstance(value, bytes):
+        try:
+            s = value.decode("ascii").strip()
+        except Exception:
+            return value
+        if not s:
+            return value
+        b = _hex_to_bytes(s)
+        if b is not None:
+            return b
+        if (len(s) % 2 == 0) and (_HEX_RE.fullmatch(s) is not None):
+            try:
+                return bytes.fromhex(s)
+            except Exception:
+                return value
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return value
+        b = _hex_to_bytes(s)
+        if b is not None:
+            return b
+        if (len(s) % 2 == 0) and (_HEX_RE.fullmatch(s) is not None):
+            try:
+                return bytes.fromhex(s)
+            except Exception:
+                return value
+        return value
+    return value
+
+
+def _normalize_realtime_message_item(item: dict[str, Any]) -> dict[str, Any]:
+    def _pick(*keys: str) -> Any:
+        return _pick_case_insensitive_value(item, *keys)
+
+    message_content = _coerce_realtime_blobish_value(
+        _pick("message_content", "messageContent", "MessageContent")
+    )
+    if message_content is None:
+        message_content = ""
+
+    return {
+        "local_id": int(_pick("local_id", "localId") or 0),
+        "server_id": int(_pick("server_id", "serverId", "MsgSvrID") or 0),
+        "local_type": int(_pick("local_type", "localType", "Type", "type") or 0),
+        "sort_seq": int(_pick("sort_seq", "sortSeq", "SortSeq") or 0),
+        "real_sender_id": int(_pick("real_sender_id", "realSenderId") or 0),
+        "create_time": int(_pick("create_time", "createTime", "CreateTime") or 0),
+        "message_content": message_content,
+        "compress_content": _coerce_realtime_blobish_value(
+            _pick("compress_content", "compressContent", "CompressContent")
+        ),
+        "packed_info_data": _coerce_realtime_blobish_value(
+            _pick("packed_info_data", "packedInfoData", "PackedInfoData")
+        ),
+        "sender_username": str(
+            _pick("sender_username", "senderUsername", "sender", "SenderUsername") or ""
+        ).strip(),
+    }
+
+
+def _collect_realtime_rows_for_session(
+    *,
+    trace_id: Optional[str],
+    account_name: str,
+    rt_conn: Any,
+    username: str,
+    msg_db_path_real: Path,
+    table_name: str,
+    max_local_id: int,
+    max_scan: int,
+    backfill_limit: int,
+) -> dict[str, Any]:
+    label = f"[{trace_id}]" if trace_id else "[realtime]"
+    log_fn = logger.info if trace_id else logger.debug
+    uname = str(username or "").strip()
+    use_biz_exec_query = uname.startswith("gh_") and ("biz_message" in str(msg_db_path_real.name).lower())
+
+    if use_biz_exec_query:
+        try:
+            quoted_table = _quote_ident(table_name)
+            select_cols = (
+                "local_id",
+                "server_id",
+                "local_type",
+                "sort_seq",
+                "real_sender_id",
+                "create_time",
+                "message_content",
+                "compress_content",
+                "packed_info_data",
+            )
+            select_sql = ", ".join([_quote_ident(col) for col in select_cols])
+
+            if int(max_local_id) > 0:
+                sql_new = (
+                    f"SELECT {select_sql} FROM {quoted_table} "
+                    f"WHERE local_id > {int(max_local_id)} "
+                    f"ORDER BY local_id ASC LIMIT {int(max_scan)}"
+                )
+            else:
+                sql_new = f"SELECT {select_sql} FROM {quoted_table} ORDER BY local_id DESC LIMIT {int(max_scan)}"
+
+            log_fn(
+                "%s wcdb_exec_query biz account=%s username=%s mode=new_rows max_local_id=%s limit=%s",
+                label,
+                account_name,
+                uname,
+                int(max_local_id),
+                int(max_scan),
+            )
+            wcdb_t0 = time.perf_counter()
+            with rt_conn.lock:
+                raw_new_rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(msg_db_path_real), sql=sql_new)
+            wcdb_ms = (time.perf_counter() - wcdb_t0) * 1000.0
+            logger.info(
+                "%s wcdb_exec_query biz done account=%s username=%s mode=new_rows rows=%s ms=%.1f",
+                label,
+                account_name,
+                uname,
+                len(raw_new_rows or []),
+                wcdb_ms,
+            )
+            if wcdb_ms > 2000:
+                logger.warning(
+                    "%s wcdb_exec_query biz slow account=%s username=%s mode=new_rows ms=%.1f",
+                    label,
+                    account_name,
+                    uname,
+                    wcdb_ms,
+                )
+
+            normalized_new_rows: list[dict[str, Any]] = []
+            for item in raw_new_rows or []:
+                if not isinstance(item, dict):
+                    continue
+                norm = _normalize_realtime_message_item(item)
+                if int(norm.get("local_id") or 0) <= 0:
+                    continue
+                normalized_new_rows.append(norm)
+
+            if int(max_local_id) > 0:
+                new_rows = list(reversed(normalized_new_rows))
+            else:
+                new_rows = normalized_new_rows
+
+            backfill_rows: list[dict[str, Any]] = []
+            scanned = len(raw_new_rows or [])
+            if int(backfill_limit) > 0 and int(max_local_id) > 0:
+                sql_backfill = (
+                    f"SELECT {select_sql} FROM {quoted_table} "
+                    f"WHERE local_id <= {int(max_local_id)} "
+                    f"ORDER BY local_id DESC LIMIT {int(backfill_limit)}"
+                )
+                log_fn(
+                    "%s wcdb_exec_query biz account=%s username=%s mode=backfill limit=%s",
+                    label,
+                    account_name,
+                    uname,
+                    int(backfill_limit),
+                )
+                backfill_t0 = time.perf_counter()
+                with rt_conn.lock:
+                    raw_backfill_rows = _wcdb_exec_query(
+                        rt_conn.handle,
+                        kind="message",
+                        path=str(msg_db_path_real),
+                        sql=sql_backfill,
+                    )
+                backfill_ms = (time.perf_counter() - backfill_t0) * 1000.0
+                logger.info(
+                    "%s wcdb_exec_query biz done account=%s username=%s mode=backfill rows=%s ms=%.1f",
+                    label,
+                    account_name,
+                    uname,
+                    len(raw_backfill_rows or []),
+                    backfill_ms,
+                )
+                if backfill_ms > 2000:
+                    logger.warning(
+                        "%s wcdb_exec_query biz slow account=%s username=%s mode=backfill ms=%.1f",
+                        label,
+                        account_name,
+                        uname,
+                        backfill_ms,
+                    )
+                scanned += len(raw_backfill_rows or [])
+                for item in raw_backfill_rows or []:
+                    if not isinstance(item, dict):
+                        continue
+                    norm = _normalize_realtime_message_item(item)
+                    if int(norm.get("local_id") or 0) <= 0:
+                        continue
+                    backfill_rows.append(norm)
+
+            return {
+                "fetchMode": "biz_exec_query",
+                "scanned": int(scanned),
+                "new_rows": new_rows,
+                "backfill_rows": backfill_rows,
+            }
+        except Exception as e:
+            logger.warning(
+                "%s wcdb_exec_query biz failed account=%s username=%s err=%s fallback=wcdb_get_messages",
+                label,
+                account_name,
+                uname,
+                str(e),
+            )
+
+    batch_size = 200
+    scanned = 0
+    offset = 0
+    new_rows: list[dict[str, Any]] = []
+    backfill_rows: list[dict[str, Any]] = []
+    reached_existing = False
+    stop = False
+
+    while scanned < int(max_scan):
+        take = min(batch_size, int(max_scan) - scanned)
+        log_fn(
+            "%s wcdb_get_messages account=%s username=%s take=%s offset=%s",
+            label,
+            account_name,
+            uname,
+            int(take),
+            int(offset),
+        )
+        wcdb_t0 = time.perf_counter()
+        with rt_conn.lock:
+            raw_rows = _wcdb_get_messages(rt_conn.handle, uname, limit=take, offset=offset)
+        wcdb_ms = (time.perf_counter() - wcdb_t0) * 1000.0
+        log_fn(
+            "%s wcdb_get_messages done account=%s username=%s rows=%s ms=%.1f",
+            label,
+            account_name,
+            uname,
+            len(raw_rows or []),
+            wcdb_ms,
+        )
+        if wcdb_ms > 2000:
+            logger.warning(
+                "%s wcdb_get_messages slow account=%s username=%s ms=%.1f",
+                label,
+                account_name,
+                uname,
+                wcdb_ms,
+            )
+        if not raw_rows:
+            break
+
+        scanned += len(raw_rows)
+        offset += len(raw_rows)
+
+        for item in raw_rows:
+            if not isinstance(item, dict):
+                continue
+            norm = _normalize_realtime_message_item(item)
+            lid = int(norm.get("local_id") or 0)
+            if lid <= 0:
+                continue
+            if (not reached_existing) and lid > int(max_local_id):
+                new_rows.append(norm)
+                continue
+
+            reached_existing = True
+            if int(backfill_limit) <= 0:
+                stop = True
+                break
+            backfill_rows.append(norm)
+            if len(backfill_rows) >= int(backfill_limit):
+                stop = True
+                break
+
+        if stop or len(raw_rows) < take:
+            break
+
+    return {
+        "fetchMode": "wcdb_get_messages",
+        "scanned": int(scanned),
+        "new_rows": new_rows,
+        "backfill_rows": backfill_rows,
+    }
+
+
 @router.post("/api/chat/realtime/sync", summary="实时消息同步到解密库（按会话增量）")
 def sync_chat_realtime_messages(
     request: Request,
@@ -1511,118 +1804,20 @@ def sync_chat_realtime_messages(
 
             placeholders = ",".join(["?"] * len(insert_cols))
             insert_sql = f"INSERT OR IGNORE INTO {quoted_table} ({','.join(insert_cols)}) VALUES ({placeholders})"
-
-            def pick(item: dict[str, Any], *keys: str) -> Any:
-                for k in keys:
-                    if k in item and item[k] is not None:
-                        return item[k]
-                    lk = k.lower()
-                    for kk in item.keys():
-                        if str(kk).lower() == lk and item[kk] is not None:
-                            return item[kk]
-                return None
-
-            def normalize_blob(value: Any) -> Optional[bytes]:
-                if value is None:
-                    return None
-                if isinstance(value, memoryview):
-                    return value.tobytes()
-                if isinstance(value, (bytes, bytearray)):
-                    return bytes(value)
-                if isinstance(value, str):
-                    s = value.strip()
-                    if s.lower().startswith("0x"):
-                        s = s[2:]
-                    if s and re.fullmatch(r"[0-9a-fA-F]+", s) and (len(s) % 2 == 0):
-                        try:
-                            return bytes.fromhex(s)
-                        except Exception:
-                            return None
-                    return s.encode("utf-8", errors="ignore")
-                return None
-
-            def normalize(item: dict[str, Any]) -> dict[str, Any]:
-                return {
-                    "local_id": int(pick(item, "local_id", "localId") or 0),
-                    "server_id": int(pick(item, "server_id", "serverId", "MsgSvrID") or 0),
-                    "local_type": int(pick(item, "local_type", "localType", "Type", "type") or 0),
-                    "sort_seq": int(pick(item, "sort_seq", "sortSeq", "SortSeq") or 0),
-                    "real_sender_id": int(pick(item, "real_sender_id", "realSenderId") or 0),
-                    "create_time": int(pick(item, "create_time", "createTime", "CreateTime") or 0),
-                    "message_content": pick(item, "message_content", "messageContent", "MessageContent") or "",
-                    "compress_content": pick(item, "compress_content", "compressContent", "CompressContent"),
-                    "packed_info_data": normalize_blob(pick(item, "packed_info_data", "packedInfoData")),
-                    "sender_username": str(
-                        pick(item, "sender_username", "senderUsername", "sender", "SenderUsername") or ""
-                    ).strip(),
-                }
-
-            batch_size = 200
-            scanned = 0
-            offset = 0
-            new_rows: list[dict[str, Any]] = []
-            backfill_rows: list[dict[str, Any]] = []
-            reached_existing = False
-            stop = False
-
-            while scanned < int(max_scan):
-                take = min(batch_size, int(max_scan) - scanned)
-                logger.info(
-                    "[%s] wcdb_get_messages account=%s username=%s take=%s offset=%s",
-                    trace_id,
-                    account_dir.name,
-                    username,
-                    int(take),
-                    int(offset),
-                )
-                wcdb_t0 = time.perf_counter()
-                with rt_conn.lock:
-                    raw_rows = _wcdb_get_messages(rt_conn.handle, username, limit=take, offset=offset)
-                wcdb_ms = (time.perf_counter() - wcdb_t0) * 1000.0
-                logger.info(
-                    "[%s] wcdb_get_messages done account=%s username=%s rows=%s ms=%.1f",
-                    trace_id,
-                    account_dir.name,
-                    username,
-                    len(raw_rows or []),
-                    wcdb_ms,
-                )
-                if wcdb_ms > 2000:
-                    logger.warning(
-                        "[%s] wcdb_get_messages slow account=%s username=%s ms=%.1f",
-                        trace_id,
-                        account_dir.name,
-                        username,
-                        wcdb_ms,
-                    )
-                if not raw_rows:
-                    break
-
-                scanned += len(raw_rows)
-                offset += len(raw_rows)
-
-                for item in raw_rows:
-                    if not isinstance(item, dict):
-                        continue
-                    norm = normalize(item)
-                    lid = int(norm.get("local_id") or 0)
-                    if lid <= 0:
-                        continue
-                    if (not reached_existing) and lid > max_local_id:
-                        new_rows.append(norm)
-                        continue
-
-                    reached_existing = True
-                    if int(backfill_limit) <= 0:
-                        stop = True
-                        break
-                    backfill_rows.append(norm)
-                    if len(backfill_rows) >= int(backfill_limit):
-                        stop = True
-                        break
-
-                if stop or len(raw_rows) < take:
-                    break
+            fetch_result = _collect_realtime_rows_for_session(
+                trace_id=trace_id,
+                account_name=account_dir.name,
+                rt_conn=rt_conn,
+                username=username,
+                msg_db_path_real=msg_db_path_real,
+                table_name=table_name,
+                max_local_id=max_local_id,
+                max_scan=int(max_scan),
+                backfill_limit=int(backfill_limit),
+            )
+            scanned = int(fetch_result.get("scanned") or 0)
+            new_rows = list(fetch_result.get("new_rows") or [])
+            backfill_rows = list(fetch_result.get("backfill_rows") or [])
 
             inserted = 0
             backfilled = 0
@@ -1880,115 +2075,20 @@ def _sync_chat_realtime_messages_for_table(
 
         placeholders = ",".join(["?"] * len(insert_cols))
         insert_sql = f"INSERT OR IGNORE INTO {quoted_table} ({','.join(insert_cols)}) VALUES ({placeholders})"
-
-        def pick(item: dict[str, Any], *keys: str) -> Any:
-            for k in keys:
-                if k in item and item[k] is not None:
-                    return item[k]
-                lk = k.lower()
-                for kk in item.keys():
-                    if str(kk).lower() == lk and item[kk] is not None:
-                        return item[kk]
-            return None
-
-        def normalize_blob(value: Any) -> Optional[bytes]:
-            if value is None:
-                return None
-            if isinstance(value, memoryview):
-                return value.tobytes()
-            if isinstance(value, (bytes, bytearray)):
-                return bytes(value)
-            if isinstance(value, str):
-                s = value.strip()
-                if s.lower().startswith("0x"):
-                    s = s[2:]
-                if s and re.fullmatch(r"[0-9a-fA-F]+", s) and (len(s) % 2 == 0):
-                    try:
-                        return bytes.fromhex(s)
-                    except Exception:
-                        return None
-                return s.encode("utf-8", errors="ignore")
-            return None
-
-        def normalize(item: dict[str, Any]) -> dict[str, Any]:
-            return {
-                "local_id": int(pick(item, "local_id", "localId") or 0),
-                "server_id": int(pick(item, "server_id", "serverId", "MsgSvrID") or 0),
-                "local_type": int(pick(item, "local_type", "localType", "Type", "type") or 0),
-                "sort_seq": int(pick(item, "sort_seq", "sortSeq", "SortSeq") or 0),
-                "real_sender_id": int(pick(item, "real_sender_id", "realSenderId") or 0),
-                "create_time": int(pick(item, "create_time", "createTime", "CreateTime") or 0),
-                "message_content": pick(item, "message_content", "messageContent", "MessageContent") or "",
-                "compress_content": pick(item, "compress_content", "compressContent", "CompressContent"),
-                "packed_info_data": normalize_blob(pick(item, "packed_info_data", "packedInfoData")),
-                "sender_username": str(
-                    pick(item, "sender_username", "senderUsername", "sender", "SenderUsername") or ""
-                ).strip(),
-            }
-
-        batch_size = 200
-        scanned = 0
-        offset = 0
-        new_rows: list[dict[str, Any]] = []
-        backfill_rows: list[dict[str, Any]] = []
-        reached_existing = False
-        stop = False
-
-        while scanned < int(max_scan):
-            take = min(batch_size, int(max_scan) - scanned)
-            logger.debug(
-                "[realtime] wcdb_get_messages account=%s username=%s take=%s offset=%s",
-                account_dir.name,
-                username,
-                int(take),
-                int(offset),
-            )
-            wcdb_t0 = time.perf_counter()
-            with rt_conn.lock:
-                raw_rows = _wcdb_get_messages(rt_conn.handle, username, limit=take, offset=offset)
-            wcdb_ms = (time.perf_counter() - wcdb_t0) * 1000.0
-            logger.debug(
-                "[realtime] wcdb_get_messages done account=%s username=%s rows=%s ms=%.1f",
-                account_dir.name,
-                username,
-                len(raw_rows or []),
-                wcdb_ms,
-            )
-            if wcdb_ms > 2000:
-                logger.warning(
-                    "[realtime] wcdb_get_messages slow account=%s username=%s ms=%.1f",
-                    account_dir.name,
-                    username,
-                    wcdb_ms,
-                )
-            if not raw_rows:
-                break
-
-            scanned += len(raw_rows)
-            offset += len(raw_rows)
-
-            for item in raw_rows:
-                if not isinstance(item, dict):
-                    continue
-                norm = normalize(item)
-                lid = int(norm.get("local_id") or 0)
-                if lid <= 0:
-                    continue
-                if (not reached_existing) and lid > max_local_id:
-                    new_rows.append(norm)
-                    continue
-
-                reached_existing = True
-                if int(backfill_limit) <= 0:
-                    stop = True
-                    break
-                backfill_rows.append(norm)
-                if len(backfill_rows) >= int(backfill_limit):
-                    stop = True
-                    break
-
-            if stop or len(raw_rows) < take:
-                break
+        fetch_result = _collect_realtime_rows_for_session(
+            trace_id=None,
+            account_name=account_dir.name,
+            rt_conn=rt_conn,
+            username=username,
+            msg_db_path_real=msg_db_path_real,
+            table_name=table_name,
+            max_local_id=max_local_id,
+            max_scan=int(max_scan),
+            backfill_limit=int(backfill_limit),
+        )
+        scanned = int(fetch_result.get("scanned") or 0)
+        new_rows = list(fetch_result.get("new_rows") or [])
+        backfill_rows = list(fetch_result.get("backfill_rows") or [])
 
         inserted = 0
         backfilled = 0
@@ -2163,6 +2263,7 @@ def sync_chat_realtime_messages_all(
     priority_max_scan: int = 600,
     include_hidden: bool = True,
     include_official: bool = True,
+    only_official: bool = False,
     backfill_limit: int = 200,
 ):
     """
@@ -2173,13 +2274,14 @@ def sync_chat_realtime_messages_all(
     account_dir = _resolve_account_dir(account)
     trace_id = f"rt-syncall-{int(time.time() * 1000)}-{threading.get_ident()}"
     logger.info(
-        "[%s] realtime sync_all start account=%s max_scan=%s priority=%s include_hidden=%s include_official=%s",
+        "[%s] realtime sync_all start account=%s max_scan=%s priority=%s include_hidden=%s include_official=%s only_official=%s",
         trace_id,
         account_dir.name,
         int(max_scan),
         str(priority_username or "").strip(),
         bool(include_hidden),
         bool(include_official),
+        bool(only_official),
     )
 
     if max_scan < 20:
@@ -2240,6 +2342,8 @@ def sync_chat_realtime_messages_all(
             except Exception:
                 hidden_val = 0
             if not include_hidden and hidden_val == 1:
+                continue
+            if only_official and not uname.startswith("gh_"):
                 continue
             if not _should_keep_session(uname, include_official=include_official):
                 continue
