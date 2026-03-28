@@ -26,6 +26,32 @@ _DEFAULT_WCDB_API_DLL = _NATIVE_DIR / "wcdb_api.dll"
 _WCDB_API_DLL_SELECTED: Optional[Path] = None
 
 
+def _iter_runtime_wcdb_api_dll_paths() -> tuple[Path, ...]:
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def add_anchor(anchor: str | Path | None) -> None:
+        if not anchor:
+            return
+        try:
+            base = Path(anchor).resolve()
+        except Exception:
+            base = Path(anchor)
+        candidate = base / "native" / "wcdb_api.dll"
+        key = str(candidate).replace("/", "\\").rstrip("\\").lower()
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(candidate)
+
+    add_anchor(os.environ.get("WECHAT_TOOL_DATA_DIR", "").strip())
+    add_anchor(Path.cwd())
+    if getattr(sys, "frozen", False):
+        add_anchor(Path(sys.executable).resolve().parent)
+
+    return tuple(candidates)
+
+
 def _is_project_wcdb_api_dll_path(path: Path) -> bool:
     try:
         resolved = path.resolve(strict=False)
@@ -39,6 +65,14 @@ def _is_project_wcdb_api_dll_path(path: Path) -> bool:
 
     if resolved == default_resolved:
         return True
+
+    for candidate in _iter_runtime_wcdb_api_dll_paths():
+        try:
+            if resolved == candidate.resolve(strict=False):
+                return True
+        except Exception:
+            if resolved == candidate:
+                return True
 
     parts = tuple(str(part).lower() for part in resolved.parts)
     allowed_suffixes = (
