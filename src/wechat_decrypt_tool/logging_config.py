@@ -41,6 +41,22 @@ class ColoredFormatter(logging.Formatter):
         return formatted
 
 
+def _can_use_logging_stream(stream) -> bool:
+    try:
+        if stream is None or getattr(stream, "closed", False):
+            return False
+    except Exception:
+        return False
+
+    try:
+        stream.write("")
+        stream.flush()
+    except Exception:
+        return False
+
+    return True
+
+
 class WeChatLogger:
     """微信解密工具统一日志管理器"""
     
@@ -64,6 +80,12 @@ class WeChatLogger:
         if env_level:
             log_level = env_level
 
+        console_logging_env = str(os.environ.get("WECHAT_TOOL_ENABLE_CONSOLE_LOG", "") or "").strip().lower()
+        console_logging_forced = console_logging_env in {"1", "true", "yes", "on"}
+        console_logging_disabled = console_logging_env in {"0", "false", "no", "off"}
+
+        level = getattr(logging, str(log_level or "INFO").upper(), logging.INFO)
+
         # 创建日志目录
         now = datetime.now()
         from .app_paths import get_output_dir
@@ -73,10 +95,41 @@ class WeChatLogger:
         
         # 设置日志文件名
         date_str = now.strftime("%d")
-        self.log_file = log_dir / f"{date_str}_wechat_tool.log"
+        desired_log_file = log_dir / f"{date_str}_wechat_tool.log"
+
+        root_logger = logging.getLogger()
+        wants_console_handler = _can_use_logging_stream(sys.stdout)
+        if getattr(sys, "frozen", False) and not console_logging_forced:
+            wants_console_handler = False
+        if console_logging_disabled:
+            wants_console_handler = False
+
+        if WeChatLogger._initialized:
+            current_log_file = Path(getattr(self, "log_file", desired_log_file))
+            has_expected_file_handler = False
+            has_stream_handler = False
+            for handler in root_logger.handlers:
+                if isinstance(handler, logging.FileHandler):
+                    try:
+                        if Path(handler.baseFilename).resolve() == desired_log_file.resolve():
+                            has_expected_file_handler = True
+                    except Exception:
+                        if Path(handler.baseFilename) == desired_log_file:
+                            has_expected_file_handler = True
+                elif isinstance(handler, logging.StreamHandler):
+                    has_stream_handler = True
+            if (
+                current_log_file == desired_log_file
+                and root_logger.level == level
+                and has_expected_file_handler
+                and (has_stream_handler or not wants_console_handler)
+            ):
+                self.log_file = desired_log_file
+                return self.log_file
+
+        self.log_file = desired_log_file
         
         # 清除现有的处理器
-        root_logger = logging.getLogger()
         for handler in root_logger.handlers[:]:
             root_logger.removeHandler(handler)
             try:
@@ -100,18 +153,20 @@ class WeChatLogger:
         # 文件处理器
         file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
         file_handler.setFormatter(file_formatter)
-        level = getattr(logging, str(log_level or "INFO").upper(), logging.INFO)
         file_handler.setLevel(level)
 
         # 控制台处理器
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(console_formatter)
-        console_handler.setLevel(level)
+        console_handler = None
+        if wants_console_handler:
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(console_formatter)
+            console_handler.setLevel(level)
         
         # 配置根日志器
         root_logger.setLevel(level)
         root_logger.addHandler(file_handler)
-        root_logger.addHandler(console_handler)
+        if console_handler is not None:
+            root_logger.addHandler(console_handler)
         
         # 只为uvicorn日志器添加文件处理器，保持其原有的控制台处理器（带颜色）
         uvicorn_logger = logging.getLogger("uvicorn")
@@ -158,7 +213,8 @@ class WeChatLogger:
             except Exception:
                 pass
         fastapi_logger.addHandler(file_handler)
-        fastapi_logger.addHandler(console_handler)
+        if console_handler is not None:
+            fastapi_logger.addHandler(console_handler)
         fastapi_logger.setLevel(level)
         
         # 记录初始化信息
