@@ -69,7 +69,7 @@
           <div v-else-if="contacts.length === 0" class="session-list-status px-3 py-2 text-sm">
             暂无会话
           </div>
-          <template v-else>
+          <div v-else class="pb-4">
             <div v-for="contact in filteredContacts" :key="contact.id"
               class="session-list-item px-3 cursor-pointer transition-colors duration-150 h-[calc(80px/var(--dpr))] flex items-center"
               :class="{
@@ -118,7 +118,7 @@
                 </div>
               </div>
             </div>
-          </template>
+          </div>
         </div>
       </div>
 
