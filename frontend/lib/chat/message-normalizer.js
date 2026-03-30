@@ -17,11 +17,12 @@ const buildAccountMediaUrl = (apiBase, path, parts) => {
   return `${apiBase}${path}?${parts.filter(Boolean).join('&')}`
 }
 
-export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelectedContact }) => {
+export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelectedContact, getLocalMediaVersion }) => {
   return (msg) => {
     const account = String(getSelectedAccount?.() || '').trim()
     const contact = getSelectedContact?.() || null
     const username = String(contact?.username || '').trim()
+    const localMediaVersion = Number(getLocalMediaVersion?.() || 0)
     const isSent = !!msg.isSent
     const sender = isSent ? '我' : (msg.senderDisplayName || msg.senderUsername || contact?.name || '')
     const fallbackAvatar = (!isSent && !contact?.isGroup) ? (contact?.avatar || null) : null
@@ -66,7 +67,8 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
         `account=${encodeURIComponent(account)}`,
         msg.imageMd5 ? `md5=${encodeURIComponent(msg.imageMd5)}` : '',
         msg.imageFileId ? `file_id=${encodeURIComponent(msg.imageFileId)}` : '',
-        `username=${encodeURIComponent(username)}`
+        `username=${encodeURIComponent(username)}`,
+        localMediaVersion > 0 ? `v=${encodeURIComponent(String(localMediaVersion))}` : ''
       ])
     })()
 
@@ -86,7 +88,8 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
         `account=${encodeURIComponent(account)}`,
         msg.videoThumbMd5 ? `md5=${encodeURIComponent(msg.videoThumbMd5)}` : '',
         msg.videoThumbFileId ? `file_id=${encodeURIComponent(msg.videoThumbFileId)}` : '',
-        `username=${encodeURIComponent(username)}`
+        `username=${encodeURIComponent(username)}`,
+        localMediaVersion > 0 ? `v=${encodeURIComponent(String(localMediaVersion))}` : ''
       ])
     })()
 
@@ -158,7 +161,8 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
       return buildAccountMediaUrl(apiBase, '/chat/media/image', [
         `account=${encodeURIComponent(account)}`,
         `server_id=${encodeURIComponent(quoteServerIdStr)}`,
-        username ? `username=${encodeURIComponent(username)}` : ''
+        username ? `username=${encodeURIComponent(username)}` : '',
+        localMediaVersion > 0 ? `v=${encodeURIComponent(String(localMediaVersion))}` : ''
       ])
     })()
 
