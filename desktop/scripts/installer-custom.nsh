@@ -1,6 +1,22 @@
 ; This file is included for both installer and uninstaller builds.
 ; Guard installer-only pages/functions to avoid "function not referenced" warnings
 ; when electron-builder compiles the standalone uninstaller.
+!define /ifndef WDA_DEFAULT_SETTINGS_PATH "$APPDATA\${APP_FILENAME}\desktop-settings.json"
+!define /ifndef WDA_DEFAULT_OUTPUT_DIR "$APPDATA\${APP_FILENAME}\output"
+!ifdef APP_PRODUCT_FILENAME
+!define /ifndef WDA_PRODUCT_SETTINGS_PATH "$APPDATA\${APP_PRODUCT_FILENAME}\desktop-settings.json"
+!define /ifndef WDA_PRODUCT_OUTPUT_DIR "$APPDATA\${APP_PRODUCT_FILENAME}\output"
+!else
+!define /ifndef WDA_PRODUCT_SETTINGS_PATH ""
+!define /ifndef WDA_PRODUCT_OUTPUT_DIR ""
+!endif
+!ifdef APP_PACKAGE_NAME
+!define /ifndef WDA_PACKAGE_SETTINGS_PATH "$APPDATA\${APP_PACKAGE_NAME}\desktop-settings.json"
+!define /ifndef WDA_PACKAGE_OUTPUT_DIR "$APPDATA\${APP_PACKAGE_NAME}\output"
+!else
+!define /ifndef WDA_PACKAGE_SETTINGS_PATH ""
+!define /ifndef WDA_PACKAGE_OUTPUT_DIR ""
+!endif
 !ifndef BUILD_UNINSTALLER
 !include nsDialogs.nsh
 !include LogicLib.nsh
@@ -13,6 +29,10 @@
 !define /ifndef MUI_DIRECTORYPAGE_TEXT_DESTINATION "安装位置："
 
 Var WDA_InstallDirPage
+Var WDA_OutputDirPage
+Var WDA_OutputDirInput
+Var WDA_OutputDirBrowseButton
+Var WDA_SelectedOutputDir
 
 !macro customInit
   ; Safety: older versions created an `output` junction inside the install directory that points to the
@@ -22,17 +42,10 @@ Var WDA_InstallDirPage
 !macroend
 
 !macro customInstall
-  ; Provide a safe, non-junction way for users to locate the real per-user output directory.
-  ; The actual data is NOT stored inside $INSTDIR (it is wiped on update/reinstall).
-  ; `open-output.cmd` uses %APPDATA% so it works for the current user.
-  FileOpen $0 "$INSTDIR\output-location.txt" w
-  FileWrite $0 "WeChatDataAnalysis output folder (per user):$\r$\n%APPDATA%\\${APP_PACKAGE_NAME}\\output$\r$\n"
-  FileClose $0
-
-  FileOpen $1 "$INSTDIR\open-output.cmd" w
-  ; NSIS escaping: use $\" to output a literal quote character into the .cmd file.
-  FileWrite $1 "@echo off$\r$\nexplorer $\"%APPDATA%\\${APP_PACKAGE_NAME}\\output$\"$\r$\n"
-  FileClose $1
+  ${If} $WDA_SelectedOutputDir == ""
+    Call WDA_InitOutputDirSelection
+  ${EndIf}
+  Call WDA_WritePendingOutputDirSetting
 !macroend
 
 Function WDA_RemoveLegacyOutputLink
@@ -47,8 +60,26 @@ FunctionEnd
   ; the final install location (includes the app sub-folder).
   !ifdef allowToChangeInstallationDirectory
     Page custom WDA_InstallDirPageCreate WDA_InstallDirPageLeave
+    Page custom WDA_OutputDirPageCreate WDA_OutputDirPageLeave
   !endif
 !macroend
+
+Function WDA_InitOutputDirSelection
+  StrCpy $WDA_SelectedOutputDir "${WDA_DEFAULT_OUTPUT_DIR}"
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { param([string] $$defaultSettingsPath, [string] $$defaultOutputPath, [string] $$legacySettingsPath1, [string] $$legacySettingsPath2) $$candidates = @($$defaultSettingsPath, $$legacySettingsPath1, $$legacySettingsPath2) | Where-Object { -not [string]::IsNullOrWhiteSpace($$_) } | Select-Object -Unique; $$settingsPath = $$defaultSettingsPath; foreach ($$candidate in $$candidates) { if (Test-Path -LiteralPath $$candidate) { $$settingsPath = $$candidate; break } }; $$result = $$defaultOutputPath; if (Test-Path -LiteralPath $$settingsPath) { try { $$json = Get-Content -LiteralPath $$settingsPath -Raw | ConvertFrom-Json; $$value = [string] $$json.pendingOutputDir; if ([string]::IsNullOrWhiteSpace($$value)) { $$value = [string] $$json.outputDir }; if ($$value -eq '''') { $$result = $$defaultOutputPath } elseif (-not [string]::IsNullOrWhiteSpace($$value)) { $$result = $$value } } catch {} }; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::Write($$result) }" "${WDA_DEFAULT_SETTINGS_PATH}" "${WDA_DEFAULT_OUTPUT_DIR}" "${WDA_PRODUCT_SETTINGS_PATH}" "${WDA_PACKAGE_SETTINGS_PATH}"'
+  Pop $0
+  Pop $1
+  ${If} $0 == "0"
+  ${AndIf} $1 != ""
+    StrCpy $WDA_SelectedOutputDir "$1"
+  ${EndIf}
+FunctionEnd
+
+Function WDA_WritePendingOutputDirSetting
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { param([string] $$defaultSettingsPath, [string] $$defaultOutputPath, [string] $$selectedOutputPath, [string] $$legacySettingsPath1, [string] $$legacySettingsPath2) $$candidates = @($$defaultSettingsPath, $$legacySettingsPath1, $$legacySettingsPath2) | Where-Object { -not [string]::IsNullOrWhiteSpace($$_) } | Select-Object -Unique; $$sourceSettingsPath = $$defaultSettingsPath; foreach ($$candidate in $$candidates) { if (Test-Path -LiteralPath $$candidate) { $$sourceSettingsPath = $$candidate; break } }; if ([string]::IsNullOrWhiteSpace($$selectedOutputPath)) { $$selectedOutputPath = $$defaultOutputPath }; $$pending = if ([string]::Equals($$selectedOutputPath, $$defaultOutputPath, [System.StringComparison]::OrdinalIgnoreCase)) { '''' } else { $$selectedOutputPath }; $$obj = @{}; if (Test-Path -LiteralPath $$sourceSettingsPath) { try { $$existing = Get-Content -LiteralPath $$sourceSettingsPath -Raw | ConvertFrom-Json; if ($$null -ne $$existing) { $$existing.PSObject.Properties | ForEach-Object { $$obj[$$_.Name] = $$_.Value } } } catch {} }; $$obj[''pendingOutputDir''] = $$pending; $$dir = Split-Path -Parent $$defaultSettingsPath; New-Item -ItemType Directory -Force -Path $$dir | Out-Null; $$json = [PSCustomObject] $$obj | ConvertTo-Json -Depth 10; Set-Content -LiteralPath $$defaultSettingsPath -Value $$json -Encoding UTF8 }" "${WDA_DEFAULT_SETTINGS_PATH}" "${WDA_DEFAULT_OUTPUT_DIR}" "$WDA_SelectedOutputDir" "${WDA_PRODUCT_SETTINGS_PATH}" "${WDA_PACKAGE_SETTINGS_PATH}"'
+  Pop $0
+  Pop $1
+FunctionEnd
 
 Function WDA_EnsureAppSubDir
   ; Normalize $INSTDIR to always end with "\${APP_FILENAME}" (avoid cluttering a parent folder).
@@ -103,6 +134,48 @@ Function WDA_InstallDirPageCreate
 FunctionEnd
 
 Function WDA_InstallDirPageLeave
+FunctionEnd
+
+Function WDA_OutputDirBrowse
+  nsDialogs::SelectFolderDialog "选择 output 目录" "$WDA_SelectedOutputDir"
+  Pop $0
+  ${If} $0 != error
+    StrCpy $WDA_SelectedOutputDir "$0"
+    ${NSD_SetText} $WDA_OutputDirInput "$0"
+  ${EndIf}
+FunctionEnd
+
+Function WDA_OutputDirPageCreate
+  Call WDA_InitOutputDirSelection
+
+  nsDialogs::Create 1018
+  Pop $WDA_OutputDirPage
+
+  ${If} $WDA_OutputDirPage == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0u 0u 100% 24u "请选择 output 目录（保存解密数据库、导出内容、缓存、日志等）。"
+  Pop $0
+
+  ${NSD_CreateText} 0u 28u 78% 12u "$WDA_SelectedOutputDir"
+  Pop $WDA_OutputDirInput
+
+  ${NSD_CreateButton} 82% 27u 18% 14u "浏览..."
+  Pop $WDA_OutputDirBrowseButton
+  ${NSD_OnClick} $WDA_OutputDirBrowseButton WDA_OutputDirBrowse
+
+  ${NSD_CreateLabel} 0u 52u 100% 28u "安装器只记录你的选择；真正的数据迁移会在首次启动应用时执行。若目标目录已有内容，应用会阻止切换并提示处理。"
+  Pop $0
+
+  nsDialogs::Show
+FunctionEnd
+
+Function WDA_OutputDirPageLeave
+  ${NSD_GetText} $WDA_OutputDirInput $WDA_SelectedOutputDir
+  ${If} $WDA_SelectedOutputDir == ""
+    StrCpy $WDA_SelectedOutputDir "${WDA_DEFAULT_OUTPUT_DIR}"
+  ${EndIf}
 FunctionEnd
 
 !endif
@@ -176,6 +249,12 @@ FunctionEnd
       !ifdef APP_PACKAGE_NAME
         RMDir /r "$APPDATA\${APP_PACKAGE_NAME}"
       !endif
+
+      IfFileExists "$INSTDIR\output-location.path" 0 WDA_SkipCustomOutputDelete
+        nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { param([string] $$pathFile, [string] $$defaultPath1, [string] $$defaultPath2, [string] $$defaultPath3) if (Test-Path -LiteralPath $$pathFile) { $$target = (Get-Content -LiteralPath $$pathFile -Raw).Trim(); $$defaults = @($$defaultPath1, $$defaultPath2, $$defaultPath3) | Where-Object { -not [string]::IsNullOrWhiteSpace($$_) }; $$isDefault = $$false; foreach ($$defaultPath in $$defaults) { if ([string]::Equals($$target, $$defaultPath, [System.StringComparison]::OrdinalIgnoreCase)) { $$isDefault = $$true; break } }; if (-not $$isDefault -and -not [string]::IsNullOrWhiteSpace($$target) -and (Test-Path -LiteralPath $$target)) { Remove-Item -LiteralPath $$target -Recurse -Force -ErrorAction SilentlyContinue } } }" "$INSTDIR\output-location.path" "${WDA_DEFAULT_OUTPUT_DIR}" "${WDA_PRODUCT_OUTPUT_DIR}" "${WDA_PACKAGE_OUTPUT_DIR}"'
+        Pop $0
+        Pop $1
+      WDA_SkipCustomOutputDelete:
 
       ${if} $installMode == "all"
         SetShellVarContext all
