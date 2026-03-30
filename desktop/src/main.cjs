@@ -21,6 +21,13 @@ const fs = require("fs");
 const http = require("http");
 const net = require("net");
 const path = require("path");
+const {
+  getDefaultOutputDirPath,
+  getEffectiveOutputDirPath,
+  migrateOutputDirectory,
+  normalizeDirectoryPath,
+  rollbackOutputDirectoryChange,
+} = require("./output-dir.cjs");
 
 const DEFAULT_BACKEND_HOST = String(process.env.WECHAT_TOOL_HOST || "127.0.0.1").trim() || "127.0.0.1";
 const DEFAULT_BACKEND_PORT = parsePort(process.env.WECHAT_TOOL_PORT) ?? 10392;
@@ -32,6 +39,7 @@ let tray = null;
 let isQuitting = false;
 let desktopSettings = null;
 let backendPortChangeInProgress = false;
+let outputDirChangeInProgress = false;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -216,9 +224,76 @@ function resolveDataDir() {
 }
 
 function getUserDataDir() {
-  // Backwards-compat: we historically used Electron's userData directory for runtime storage.
-  // Keep this name but resolve to the effective data dir (can be overridden via env).
-  return resolveDataDir();
+  try {
+    const dir = app.getPath("userData");
+    if (!dir) return null;
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch {
+    return null;
+  }
+}
+
+function safeNormalizeDirectory(value) {
+  try {
+    return normalizeDirectoryPath(value || "");
+  } catch {
+    return "";
+  }
+}
+
+function getDefaultOutputDir() {
+  const dataDir = resolveDataDir();
+  if (!dataDir) return null;
+  try {
+    return getDefaultOutputDirPath(dataDir);
+  } catch {
+    return null;
+  }
+}
+
+function syncOutputDirEnv(nextDir) {
+  const normalized = safeNormalizeDirectory(nextDir);
+  if (normalized) process.env.WECHAT_TOOL_OUTPUT_DIR = normalized;
+  else delete process.env.WECHAT_TOOL_OUTPUT_DIR;
+}
+
+function normalizePendingOutputDirValue(value) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (!text) return "";
+  try {
+    return normalizeDirectoryPath(text);
+  } catch {
+    return null;
+  }
+}
+
+function resolveOutputDir() {
+  const dataDir = resolveDataDir();
+  if (!dataDir) return null;
+
+  const envOutputDir = safeNormalizeDirectory(process.env.WECHAT_TOOL_OUTPUT_DIR || "");
+  const settingsOutputDir = app.isPackaged ? safeNormalizeDirectory(loadDesktopSettings()?.outputDir || "") : "";
+
+  let chosen = null;
+  try {
+    chosen = getEffectiveOutputDirPath({
+      dataDir,
+      envOutputDir,
+      settingsOutputDir,
+    });
+  } catch {
+    chosen = getDefaultOutputDir();
+  }
+  if (!chosen) return null;
+
+  try {
+    fs.mkdirSync(chosen, { recursive: true });
+  } catch {}
+
+  syncOutputDirEnv(chosen);
+  return chosen;
 }
 
 function sanitizeAccountName(account) {
@@ -261,7 +336,8 @@ function resolveAccountDirInOutput(account) {
   const dataDir = resolveDataDir();
   if (!dataDir) throw new Error("无法定位数据目录");
 
-  const outputDir = path.join(dataDir, "output");
+  const outputDir = resolveOutputDir();
+  if (!outputDir) throw new Error("无法定位 output 目录");
   const databasesDir = path.join(outputDir, "databases");
   const accountName = sanitizeAccountName(account);
 
@@ -311,8 +387,8 @@ function getAccountInfoFromDisk(account) {
   };
 }
 
-function removeAccountFromKeyStore(dataDir, accountName) {
-  const keyStorePath = path.join(dataDir, "output", "account_keys.json");
+function removeAccountFromKeyStore(outputDir, accountName) {
+  const keyStorePath = path.join(outputDir, "account_keys.json");
   try {
     if (!fs.existsSync(keyStorePath)) return false;
     const raw = fs.readFileSync(keyStorePath, { encoding: "utf8" });
@@ -328,7 +404,7 @@ function removeAccountFromKeyStore(dataDir, accountName) {
 }
 
 async function deleteAccountDataFromDisk(account) {
-  const { dataDir, outputDir, databasesDir, accountName, accountDir } = resolveAccountDirInOutput(account);
+  const { outputDir, databasesDir, accountName, accountDir } = resolveAccountDirInOutput(account);
   if (!fs.existsSync(accountDir) || !fs.statSync(accountDir).isDirectory()) {
     throw new Error("账号数据不存在");
   }
@@ -348,7 +424,7 @@ async function deleteAccountDataFromDisk(account) {
     } catch {}
 
     fs.rmSync(accountDir, { recursive: true, force: true });
-    const removedKeyCache = removeAccountFromKeyStore(dataDir, accountName);
+    const removedKeyCache = removeAccountFromKeyStore(outputDir, accountName);
     const accounts = listDecryptedAccountsOnDisk(databasesDir);
     result = {
       status: "success",
@@ -394,10 +470,8 @@ function ensureOutputLink() {
   if (!app.isPackaged) return;
 
   const exeDir = getExeDir();
-  const dataDir = resolveDataDir();
-  if (!exeDir || !dataDir) return;
-
-  const target = path.join(dataDir, "output");
+  const target = resolveOutputDir();
+  if (!exeDir || !target) return;
   const legacyLinkPath = path.join(exeDir, "output");
 
   // Ensure the real output dir exists.
@@ -441,6 +515,11 @@ function ensureOutputLink() {
     const p = path.join(exeDir, "output-location.txt");
     const text = `WeChatDataAnalysis data directory\n\nOutput folder:\n${target}\n`;
     fs.writeFileSync(p, text, { encoding: "utf8" });
+  } catch {}
+
+  try {
+    const p = path.join(exeDir, "output-location.path");
+    fs.writeFileSync(p, `${target}\n`, { encoding: "utf8" });
   } catch {}
 
   try {
@@ -510,6 +589,12 @@ function loadDesktopSettings() {
     ignoredUpdateVersion: "",
     // Backend (FastAPI) listens on this port. Used in packaged builds.
     backendPort: DEFAULT_BACKEND_PORT,
+    // Custom output dir; empty string means use the default dataDir/output.
+    outputDir: "",
+    // Pending output dir written by the installer before the next app startup.
+    pendingOutputDir: null,
+    // Last startup/apply failure when changing output dir.
+    lastOutputDirError: "",
     // Tracks the packaged UI build so we can invalidate Chromium's HTTP cache
     // after upgrades without wiping user data/localStorage.
     lastSeenUiBuildId: "",
@@ -530,6 +615,12 @@ function loadDesktopSettings() {
     const parsed = JSON.parse(raw || "{}");
     desktopSettings = { ...defaults, ...(parsed && typeof parsed === "object" ? parsed : {}) };
     desktopSettings.backendPort = parsePort(desktopSettings.backendPort) ?? defaults.backendPort;
+    desktopSettings.outputDir = safeNormalizeDirectory(desktopSettings.outputDir || "");
+    desktopSettings.pendingOutputDir =
+      parsed && typeof parsed === "object" && Object.prototype.hasOwnProperty.call(parsed, "pendingOutputDir")
+        ? normalizePendingOutputDirValue(parsed.pendingOutputDir)
+        : defaults.pendingOutputDir;
+    desktopSettings.lastOutputDirError = String(desktopSettings.lastOutputDirError || "").trim();
   } catch (err) {
     desktopSettings = { ...defaults };
     logMain(`[main] failed to load settings: ${err?.message || err}`);
@@ -549,6 +640,82 @@ function persistDesktopSettings() {
   } catch (err) {
     logMain(`[main] failed to persist settings: ${err?.message || err}`);
   }
+}
+
+function snapshotOutputDirSettings() {
+  loadDesktopSettings();
+  return {
+    outputDir: desktopSettings.outputDir,
+    pendingOutputDir: desktopSettings.pendingOutputDir,
+    lastOutputDirError: desktopSettings.lastOutputDirError,
+  };
+}
+
+function restoreOutputDirSettings(snapshot) {
+  loadDesktopSettings();
+  desktopSettings.outputDir = safeNormalizeDirectory(snapshot?.outputDir || "");
+  desktopSettings.pendingOutputDir = normalizePendingOutputDirValue(snapshot?.pendingOutputDir);
+  desktopSettings.lastOutputDirError = String(snapshot?.lastOutputDirError || "").trim();
+  const effectiveOutputDir = desktopSettings.outputDir || getDefaultOutputDir() || "";
+  syncOutputDirEnv(effectiveOutputDir);
+  persistDesktopSettings();
+}
+
+function setOutputDirSetting(nextDir) {
+  loadDesktopSettings();
+  const defaultDir = getDefaultOutputDir();
+  const normalized = safeNormalizeDirectory(nextDir || "");
+  if (!normalized || (defaultDir && normalized === defaultDir)) {
+    desktopSettings.outputDir = "";
+  } else {
+    desktopSettings.outputDir = normalized;
+  }
+  syncOutputDirEnv(desktopSettings.outputDir || defaultDir || "");
+  persistDesktopSettings();
+  return desktopSettings.outputDir;
+}
+
+function setPendingOutputDirSetting(nextDir) {
+  loadDesktopSettings();
+  desktopSettings.pendingOutputDir = normalizePendingOutputDirValue(nextDir);
+  persistDesktopSettings();
+  return desktopSettings.pendingOutputDir;
+}
+
+function clearPendingOutputDirSetting() {
+  loadDesktopSettings();
+  desktopSettings.pendingOutputDir = null;
+  persistDesktopSettings();
+}
+
+function setOutputDirLastError(message) {
+  loadDesktopSettings();
+  desktopSettings.lastOutputDirError = String(message || "").trim();
+  persistDesktopSettings();
+  return desktopSettings.lastOutputDirError;
+}
+
+function getOutputDirInfo() {
+  loadDesktopSettings();
+  const defaultPath = getDefaultOutputDir() || "";
+  const currentPath = resolveOutputDir() || defaultPath;
+  const hasPending = desktopSettings.pendingOutputDir !== null;
+  const pendingPath =
+    desktopSettings.pendingOutputDir === null
+      ? ""
+      : desktopSettings.pendingOutputDir === ""
+        ? defaultPath
+        : safeNormalizeDirectory(desktopSettings.pendingOutputDir);
+  return {
+    path: currentPath || "",
+    defaultPath,
+    isDefault: !!currentPath && !!defaultPath && currentPath === defaultPath,
+    pendingPath,
+    hasPending,
+    lastError: String(desktopSettings.lastOutputDirError || "").trim(),
+    canChange: !!app.isPackaged,
+    changeUnavailableReason: app.isPackaged ? "" : "开发模式不支持界面修改 output 目录",
+  };
 }
 
 function getCloseBehavior() {
@@ -574,6 +741,137 @@ function setIgnoredUpdateVersion(version) {
   desktopSettings.ignoredUpdateVersion = String(version || "").trim();
   persistDesktopSettings();
   return desktopSettings.ignoredUpdateVersion;
+}
+
+async function applyOutputDirChange(nextValue) {
+  if (!app.isPackaged) {
+    throw new Error("开发模式不支持界面修改 output 目录");
+  }
+
+  const defaultPath = getDefaultOutputDir();
+  const currentPath = resolveOutputDir();
+  if (!defaultPath || !currentPath) {
+    throw new Error("无法定位 output 目录");
+  }
+
+  const rawText = String(nextValue ?? "").trim();
+  const nextPath = rawText ? normalizeDirectoryPath(rawText) : defaultPath;
+  const previousSettings = snapshotOutputDirSettings();
+
+  if (nextPath === currentPath) {
+    setOutputDirSetting(nextPath);
+    clearPendingOutputDirSetting();
+    setOutputDirLastError("");
+    ensureOutputLink();
+    const info = getOutputDirInfo();
+    return {
+      success: true,
+      changed: false,
+      path: info.path,
+      defaultPath: info.defaultPath,
+      isDefault: info.isDefault,
+      pendingPath: info.pendingPath,
+      backupPath: "",
+      sourceWasEmpty: false,
+      message: "output 目录未变化",
+    };
+  }
+
+  const wasBackendRunning = !!backendProc;
+  let migration = null;
+  let settingsSwitched = false;
+
+  try {
+    if (wasBackendRunning) {
+      await stopBackendAndWait({ timeoutMs: 10_000 });
+    }
+
+    migration = migrateOutputDirectory({
+      currentDir: currentPath,
+      nextDir: nextPath,
+    });
+
+    setOutputDirSetting(nextPath);
+    clearPendingOutputDirSetting();
+    setOutputDirLastError("");
+    settingsSwitched = true;
+    ensureOutputLink();
+
+    if (wasBackendRunning) {
+      startBackend();
+      await waitForBackend({ timeoutMs: 30_000 });
+    }
+
+    const info = getOutputDirInfo();
+    return {
+      success: true,
+      changed: true,
+      path: info.path,
+      defaultPath: info.defaultPath,
+      isDefault: info.isDefault,
+      pendingPath: info.pendingPath,
+      backupPath: migration?.backupDir || "",
+      sourceWasEmpty: !!migration?.sourceWasEmpty,
+      message: migration?.sourceWasEmpty ? "output 目录已切换" : "output 目录已迁移并切换",
+    };
+  } catch (err) {
+    const message = err?.message || String(err);
+    let rollbackMessage = "";
+    if (migration?.changed) {
+      try {
+        rollbackOutputDirectoryChange({
+          previousDir: currentPath,
+          currentDir: nextPath,
+          backupDir: migration.backupDir,
+          sourceWasEmpty: migration.sourceWasEmpty,
+        });
+      } catch (rollbackErr) {
+        logMain(`[main] output dir rollback failed: ${rollbackErr?.message || rollbackErr}`);
+        rollbackMessage = `；回滚失败：${rollbackErr?.message || rollbackErr}`;
+        if (migration?.backupDir) {
+          rollbackMessage += `；备份目录：${migration.backupDir}`;
+        }
+      }
+    }
+
+    if (settingsSwitched) {
+      restoreOutputDirSettings(previousSettings);
+    } else {
+      syncOutputDirEnv(currentPath);
+    }
+    ensureOutputLink();
+
+    if (wasBackendRunning) {
+      try {
+        startBackend();
+        await waitForBackend({ timeoutMs: 30_000 });
+      } catch (restartErr) {
+        throw new Error(
+          `切换 output 目录失败：${message}${rollbackMessage}；且旧后端恢复失败：${restartErr?.message || restartErr}`
+        );
+      }
+    }
+
+    if (rollbackMessage) {
+      throw new Error(`切换 output 目录失败：${message}${rollbackMessage}`);
+    }
+    throw err;
+  }
+}
+
+async function applyPendingOutputDirOnStartup() {
+  if (!app.isPackaged) return;
+  loadDesktopSettings();
+  if (desktopSettings.pendingOutputDir === null) return;
+
+  try {
+    await applyOutputDirChange(desktopSettings.pendingOutputDir);
+  } catch (err) {
+    clearPendingOutputDirSetting();
+    setOutputDirLastError(`安装时设置的 output 目录未能应用：${err?.message || err}`);
+    ensureOutputLink();
+    logMain(`[main] failed to apply pending output dir: ${err?.message || err}`);
+  }
 }
 
 async function refreshRendererCacheForPackagedUi() {
@@ -1171,11 +1469,11 @@ function startBackend() {
   }
 
   if (app.isPackaged) {
-    if (!env.WECHAT_TOOL_DATA_DIR) {
-      env.WECHAT_TOOL_DATA_DIR = app.getPath("userData");
-    }
+    env.WECHAT_TOOL_DATA_DIR = resolveDataDir() || app.getPath("userData");
+    env.WECHAT_TOOL_OUTPUT_DIR = resolveOutputDir() || getDefaultOutputDir() || path.join(env.WECHAT_TOOL_DATA_DIR, "output");
     try {
       fs.mkdirSync(env.WECHAT_TOOL_DATA_DIR, { recursive: true });
+      fs.mkdirSync(env.WECHAT_TOOL_OUTPUT_DIR, { recursive: true });
     } catch {}
 
     const backendExe = getPackagedBackendPath();
@@ -1689,16 +1987,31 @@ function registerWindowIpc() {
     }
   });
 
+  ipcMain.handle("app:getOutputDirInfo", () => {
+    try {
+      return getOutputDirInfo();
+    } catch (err) {
+      logMain(`[main] app:getOutputDirInfo failed: ${err?.message || err}`);
+      return {
+        path: "",
+        defaultPath: "",
+        isDefault: true,
+        pendingPath: "",
+        hasPending: false,
+        lastError: err?.message || String(err),
+        canChange: !!app.isPackaged,
+        changeUnavailableReason: app.isPackaged ? "" : "开发模式不支持界面修改 output 目录",
+      };
+    }
+  });
+
   ipcMain.handle("app:getOutputDir", () => {
-    const dir = resolveDataDir();
-    if (!dir) return "";
-    return path.join(dir, "output");
+    return resolveOutputDir() || "";
   });
 
   ipcMain.handle("app:openOutputDir", async () => {
-    const dir = resolveDataDir();
-    if (!dir) throw new Error("无法定位数据目录");
-    const outDir = path.join(dir, "output");
+    const outDir = resolveOutputDir();
+    if (!outDir) throw new Error("无法定位 output 目录");
     try {
       fs.mkdirSync(outDir, { recursive: true });
     } catch {}
@@ -1710,6 +2023,28 @@ function registerWindowIpc() {
       const message = e?.message || String(e);
       logMain(`[main] openOutputDir failed: ${message}`);
       throw new Error(message);
+    }
+  });
+
+  ipcMain.handle("app:setOutputDir", async (_event, nextDir) => {
+    if (outputDirChangeInProgress) {
+      return {
+        success: false,
+        error: "output 目录切换中，请稍后重试",
+      };
+    }
+    outputDirChangeInProgress = true;
+    try {
+      return await applyOutputDirChange(nextDir);
+    } catch (err) {
+      const message = err?.message || String(err);
+      logMain(`[main] app:setOutputDir failed: ${message}`);
+      return {
+        success: false,
+        error: message,
+      };
+    } finally {
+      outputDirChangeInProgress = false;
     }
   });
 
@@ -1796,6 +2131,8 @@ async function main() {
   // Resolve/create the data dir early so we can log reliably and place helper files
   // next to the installed exe for easier access.
   resolveDataDir();
+  loadDesktopSettings();
+  await applyPendingOutputDirOnStartup();
   ensureOutputLink();
   await ensureBackendPortAvailableOnStartup();
 
@@ -1876,10 +2213,20 @@ if (gotSingleInstanceLock) {
     stopBackend();
     try {
       const dir = getUserDataDir();
+      const outputDir = resolveOutputDir();
       if (dir) {
+        const detailLines = [
+          `启动失败：${err?.message || err}`,
+          "",
+          `桌面日志目录：${dir}`,
+          "文件：desktop-main.log / backend-stdio.log",
+        ];
+        if (outputDir) {
+          detailLines.push("", `当前 output 目录：${outputDir}`, "其中 output\\logs\\... 也在这里");
+        }
         dialog.showErrorBox(
           "WeChatDataAnalysis 启动失败",
-          `启动失败：${err?.message || err}\n\n请查看日志目录：\n${dir}\n\n文件：desktop-main.log / backend-stdio.log / output\\\\logs\\\\...`
+          detailLines.join("\n")
         );
         shell.openPath(dir);
       }

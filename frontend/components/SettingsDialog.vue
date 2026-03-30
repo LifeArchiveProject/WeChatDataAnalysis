@@ -4,9 +4,9 @@
     class="settings-dialog fixed inset-0 z-[120] flex items-center justify-center bg-black/40 px-4 py-4 backdrop-blur-md sm:py-8"
     @click.self="handleClose"
   >
-    <div class="settings-dialog-panel flex h-[80vh] min-h-[380px] w-full max-w-[760px] overflow-hidden rounded-[10px] border border-[#e2e2e2] bg-white shadow-2xl">
+    <div class="settings-dialog-panel flex h-[80vh] min-h-[380px] w-full max-w-[880px] overflow-hidden rounded-[10px] border border-[#e2e2e2] bg-white shadow-2xl">
       <!-- Sidebar -->
-      <aside class="flex w-[180px] shrink-0 flex-col bg-[#fcfcfc] border-r border-[#eeeeee]">
+      <aside class="flex w-[160px] shrink-0 flex-col bg-[#fcfcfc] border-r border-[#eeeeee]">
         <div class="mt-4 mb-2 flex items-center px-4 gap-2">
           <div class="flex h-6 w-6 items-center justify-center rounded-[5px] bg-[#e7f5ee] text-[#07b75b]">
             <svg class="h-[15px] w-[15px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -149,19 +149,74 @@
               </div>
 
               <div class="px-3.5 py-3">
-                <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
-                  <div class="min-w-0 flex-1">
-                    <div class="text-[13px] font-medium text-[#222]">output 目录</div>
-                    <div class="mt-0.5 text-[11px] text-[#909090] break-words">{{ desktopOutputDirText }}</div>
+                <div class="flex flex-col gap-2.5">
+                  <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="min-w-0 flex-1">
+                      <div class="text-[13px] font-medium text-[#222]">output 目录</div>
+                      <div class="mt-0.5 text-[11px] text-[#909090] break-words">
+                        当前：{{ desktopOutputDirText }}
+                        <span class="ml-1 text-[#666]">{{ desktopOutputDirIsDefault ? '（默认位置）' : '（自定义位置）' }}</span>
+                      </div>
+                      <div class="mt-0.5 text-[11px] text-[#909090] break-words">默认：{{ desktopOutputDirDefaultText }}</div>
+                      <div v-if="desktopOutputDirPendingText" class="mt-0.5 text-[11px] text-amber-700 break-words">
+                        待应用：{{ desktopOutputDirPendingText }}
+                      </div>
+                      <div v-if="desktopOutputDirUnavailableReason" class="mt-1 text-[11px] text-amber-700 break-words">
+                        {{ desktopOutputDirUnavailableReason }}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="!isDesktopEnv || desktopOutputDirLoading || desktopOutputDirApplying"
+                      @click="onDesktopOpenOutputDir"
+                    >
+                      打开当前 output
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="!isDesktopEnv || desktopOutputDirLoading"
-                    @click="onDesktopOpenOutputDir"
-                  >
-                    打开 output
-                  </button>
+                  <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center">
+                    <input
+                      v-model="desktopOutputDirInput"
+                      type="text"
+                      spellcheck="false"
+                      class="min-w-0 flex-1 rounded-[6px] border border-[#e2e2e2] bg-white px-2.5 py-1.5 text-[12px] text-[#333] outline-none transition focus:border-[#07b75b] focus:ring-1 focus:ring-[#07b75b]/30"
+                      :disabled="desktopOutputDirControlsDisabled"
+                      :placeholder="desktopOutputDirCanChange ? '选择新的 output 目录' : '当前环境不支持修改 output 目录'"
+                      @keyup.enter="onDesktopOutputDirApply"
+                    />
+                    <div class="flex shrink-0 items-center gap-1.5">
+                      <button
+                        type="button"
+                        class="rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
+                        :disabled="desktopOutputDirControlsDisabled"
+                        @click="onDesktopChooseOutputDir"
+                      >
+                        选择文件夹
+                      </button>
+                      <button
+                        type="button"
+                        class="rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
+                        :disabled="desktopOutputDirControlsDisabled"
+                        @click="onDesktopOutputDirApply"
+                      >
+                        {{ desktopOutputDirApplying ? '迁移中...' : '应用' }}
+                      </button>
+                      <button
+                        type="button"
+                        class="rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
+                        :disabled="desktopOutputDirControlsDisabled"
+                        @click="onDesktopOutputDirReset"
+                      >
+                        恢复默认
+                      </button>
+                    </div>
+                  </div>
+                  <div v-if="desktopOutputDirCanChange" class="text-[11px] text-[#909090]">
+                    修改后会迁移整个 output 目录；如果目标目录已有内容，会先阻止并提示。
+                  </div>
+                  <div v-if="desktopOutputDirMessage" class="rounded-[6px] border border-[#d8efe2] bg-[#f4fbf7] px-2.5 py-1.5 text-[11px] text-[#1b6b43] whitespace-pre-wrap">
+                    {{ desktopOutputDirMessage }}
+                  </div>
                 </div>
                 <div v-if="desktopOutputDirError" class="mt-1.5 text-[11px] text-red-600 whitespace-pre-wrap">
                   {{ desktopOutputDirError }}
@@ -345,13 +400,33 @@ const desktopBackendPortError = ref('')
 const desktopBackendPortDefault = ref(10392)
 
 const desktopOutputDir = ref('')
+const desktopOutputDirDefault = ref('')
+const desktopOutputDirInput = ref('')
+const desktopOutputDirPending = ref('')
 const desktopOutputDirLoading = ref(false)
+const desktopOutputDirApplying = ref(false)
 const desktopOutputDirError = ref('')
+const desktopOutputDirMessage = ref('')
+const desktopOutputDirIsDefault = ref(true)
+const desktopOutputDirCanChange = ref(true)
+const desktopOutputDirUnavailableReason = ref('')
 const desktopOutputDirText = computed(() => {
   if (!isDesktopEnv.value) return '仅桌面端可用'
   const v = String(desktopOutputDir.value || '').trim()
   return v || '—'
 })
+const desktopOutputDirDefaultText = computed(() => {
+  if (!isDesktopEnv.value) return '仅桌面端可用'
+  const v = String(desktopOutputDirDefault.value || '').trim()
+  return v || '—'
+})
+const desktopOutputDirPendingText = computed(() => {
+  const v = String(desktopOutputDirPending.value || '').trim()
+  return v || ''
+})
+const desktopOutputDirControlsDisabled = computed(() => (
+  !isDesktopEnv.value || !desktopOutputDirCanChange.value || desktopOutputDirLoading.value || desktopOutputDirApplying.value
+))
 
 const desktopLogFilePath = ref('')
 const desktopLogFileLoading = ref(false)
@@ -530,12 +605,33 @@ const refreshDesktopBackendPort = async () => {
 
 const refreshDesktopOutputDir = async () => {
   if (!process.client || typeof window === 'undefined') return
-  if (!window.wechatDesktop?.getOutputDir) return
+  if (!window.wechatDesktop?.getOutputDir && !window.wechatDesktop?.getOutputDirInfo) return
   desktopOutputDirLoading.value = true
   desktopOutputDirError.value = ''
   try {
+    if (window.wechatDesktop?.getOutputDirInfo) {
+      const info = await window.wechatDesktop.getOutputDirInfo()
+      desktopOutputDir.value = String(info?.path || '').trim()
+      desktopOutputDirDefault.value = String(info?.defaultPath || '').trim()
+      desktopOutputDirPending.value = String(info?.pendingPath || '').trim()
+      desktopOutputDirIsDefault.value = !!info?.isDefault
+      desktopOutputDirCanChange.value = info?.canChange !== false
+      desktopOutputDirUnavailableReason.value = String(info?.changeUnavailableReason || '').trim()
+      desktopOutputDirInput.value = desktopOutputDir.value || desktopOutputDirDefault.value
+      if (info?.lastError) {
+        desktopOutputDirError.value = String(info.lastError || '').trim()
+      }
+      return
+    }
+
     const v = await window.wechatDesktop.getOutputDir()
     desktopOutputDir.value = String(v || '').trim()
+    desktopOutputDirDefault.value = desktopOutputDir.value
+    desktopOutputDirPending.value = ''
+    desktopOutputDirIsDefault.value = true
+    desktopOutputDirCanChange.value = false
+    desktopOutputDirUnavailableReason.value = '当前桌面环境不支持修改 output 目录'
+    desktopOutputDirInput.value = desktopOutputDir.value
   } catch (e) {
     desktopOutputDirError.value = e?.message || '读取 output 目录失败'
   } finally {
@@ -556,6 +652,62 @@ const onDesktopOpenOutputDir = async () => {
   } finally {
     desktopOutputDirLoading.value = false
   }
+}
+
+const onDesktopChooseOutputDir = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  if (!window.wechatDesktop?.chooseDirectory) return
+  desktopOutputDirError.value = ''
+  desktopOutputDirMessage.value = ''
+  try {
+    const result = await window.wechatDesktop.chooseDirectory({ title: '选择新的 output 目录' })
+    if (result && !result.canceled && Array.isArray(result.filePaths) && result.filePaths.length > 0) {
+      desktopOutputDirInput.value = String(result.filePaths[0] || '').trim()
+    }
+  } catch (e) {
+    desktopOutputDirError.value = e?.message || '选择 output 目录失败'
+  }
+}
+
+const applyDesktopOutputDir = async (nextDir) => {
+  if (!process.client || typeof window === 'undefined') return
+  if (!window.wechatDesktop?.setOutputDir) {
+    desktopOutputDirError.value = '当前桌面环境不支持修改 output 目录'
+    return
+  }
+  if (!desktopOutputDirCanChange.value) {
+    desktopOutputDirError.value = desktopOutputDirUnavailableReason.value || '开发模式不支持界面修改 output 目录'
+    return
+  }
+  desktopOutputDirApplying.value = true
+  desktopOutputDirError.value = ''
+  desktopOutputDirMessage.value = ''
+  try {
+    const res = await window.wechatDesktop.setOutputDir(String(nextDir ?? '').trim())
+    if (res?.success === false) {
+      desktopOutputDirError.value = String(res?.error || '修改 output 目录失败').trim()
+      await refreshDesktopOutputDir()
+      return
+    }
+    await refreshDesktopOutputDir()
+    desktopOutputDirMessage.value = String(
+      res?.message || (res?.changed === false ? 'output 目录未变化' : 'output 目录已更新')
+    ).trim()
+  } catch (e) {
+    desktopOutputDirError.value = e?.message || '修改 output 目录失败'
+    await refreshDesktopOutputDir()
+  } finally {
+    desktopOutputDirApplying.value = false
+  }
+}
+
+const onDesktopOutputDirApply = async () => {
+  await applyDesktopOutputDir(desktopOutputDirInput.value)
+}
+
+const onDesktopOutputDirReset = async () => {
+  desktopOutputDirInput.value = desktopOutputDirDefault.value
+  await applyDesktopOutputDir('')
 }
 
 const refreshBackendLogFileInfo = async () => {
@@ -702,6 +854,9 @@ const onDesktopCheckUpdates = async () => {
 watch(() => props.open, async (isOpen) => {
   if (!isOpen) return
   await refreshBackendLogFileInfo()
+  if (isDesktopEnv.value) {
+    await refreshDesktopOutputDir()
+  }
 }, { immediate: true })
 
 onMounted(async () => {

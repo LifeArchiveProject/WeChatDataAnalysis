@@ -82,7 +82,9 @@ contextBridge.exposeInMainWorld("wechatDesktop", {
   chooseDirectory: (options = {}) => ipcRenderer.invoke("dialog:chooseDirectory", options),
 
   // Data/output folder helpers
+  getOutputDirInfo: () => ipcRenderer.invoke("app:getOutputDirInfo"),
   getOutputDir: () => ipcRenderer.invoke("app:getOutputDir"),
+  setOutputDir: (dir) => ipcRenderer.invoke("app:setOutputDir", String(dir ?? "")),
   openOutputDir: () => ipcRenderer.invoke("app:openOutputDir"),
   getAccountInfo: (account) => ipcRenderer.invoke("app:getAccountInfo", String(account || "")),
   deleteAccountData: (account) => ipcRenderer.invoke("app:deleteAccountData", String(account || "")),
