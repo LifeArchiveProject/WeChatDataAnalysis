@@ -77,6 +77,7 @@ from ..session_last_message import (
     get_session_last_message_status,
     load_session_last_messages,
 )
+from ..sqlite_diagnostics import collect_sqlite_diagnostics, format_sqlite_diagnostics
 from ..wcdb_realtime import (
     WCDBRealtimeError,
     WCDB_REALTIME,
@@ -2022,12 +2023,18 @@ def _sync_chat_realtime_messages_for_table(
     if backfill_limit > max_scan:
         backfill_limit = max_scan
 
-    msg_conn = sqlite3.connect(str(msg_db_path))
-    msg_conn.row_factory = sqlite3.Row
+    msg_conn: Optional[sqlite3.Connection] = None
+    stage = "connect"
     try:
+        stage = "connect"
+        msg_conn = sqlite3.connect(str(msg_db_path))
+        msg_conn.row_factory = sqlite3.Row
+
+        stage = "resolve_db_storage_paths"
         msg_db_path_real, _res_db_path_real = _resolve_db_storage_message_paths(account_dir, msg_db_path.stem)
         name2id_synced = False
         try:
+            stage = "sync_name2id"
             name2id_result = _sync_output_name2id_from_live(
                 msg_conn,
                 rt_conn=rt_conn,
@@ -2050,12 +2057,14 @@ def _sync_chat_realtime_messages_for_table(
             )
 
         quoted_table = _quote_ident(table_name)
+        stage = "max_local_id"
         row = msg_conn.execute(f"SELECT MAX(local_id) AS mx FROM {quoted_table}").fetchone()
         try:
             max_local_id = int((row["mx"] if row is not None else 0) or 0)
         except Exception:
             max_local_id = 0
 
+        stage = "pragma_table_info"
         cols = msg_conn.execute(f"PRAGMA table_info({quoted_table})").fetchall()
         available_cols = {str(c[1] or "") for c in cols}
         base_cols = [
@@ -2075,6 +2084,7 @@ def _sync_chat_realtime_messages_for_table(
 
         placeholders = ",".join(["?"] * len(insert_cols))
         insert_sql = f"INSERT OR IGNORE INTO {quoted_table} ({','.join(insert_cols)}) VALUES ({placeholders})"
+        stage = "collect_realtime_rows"
         fetch_result = _collect_realtime_rows_for_session(
             trace_id=None,
             account_name=account_dir.name,
@@ -2094,6 +2104,7 @@ def _sync_chat_realtime_messages_for_table(
         backfilled = 0
         if new_rows:
             if not name2id_synced:
+                stage = "upsert_name2id_fallback"
                 _best_effort_upsert_output_name2id_rows(
                     msg_conn,
                     account_name=account_dir.name,
@@ -2102,6 +2113,7 @@ def _sync_chat_realtime_messages_for_table(
 
             values = [tuple(r.get(c) for c in insert_cols) for r in reversed(new_rows)]
             insert_t0 = time.perf_counter()
+            stage = "insert_new_rows"
             msg_conn.executemany(insert_sql, values)
             msg_conn.commit()
             insert_ms = (time.perf_counter() - insert_t0) * 1000.0
@@ -2131,6 +2143,7 @@ def _sync_chat_realtime_messages_for_table(
             if update_values:
                 before_changes = msg_conn.total_changes
                 update_t0 = time.perf_counter()
+                stage = "backfill_packed_info"
                 msg_conn.executemany(
                     f"UPDATE {quoted_table} SET packed_info_data = ? WHERE local_id = ? AND (packed_info_data IS NULL OR length(packed_info_data) = 0)",
                     update_values,
@@ -2187,8 +2200,11 @@ def _sync_chat_realtime_messages_for_table(
 
         if inserted and newest_ts:
             session_db_path = account_dir / "session.db"
-            sconn = sqlite3.connect(str(session_db_path))
+            sconn: Optional[sqlite3.Connection] = None
             try:
+                stage = "open_session_db"
+                sconn = sqlite3.connect(str(session_db_path))
+                stage = "update_session_table"
                 sconn.execute("INSERT OR IGNORE INTO SessionTable(username) VALUES (?)", (username,))
                 sconn.execute(
                     """
@@ -2217,6 +2233,7 @@ def _sync_chat_realtime_messages_for_table(
                     ),
                 )
 
+                stage = "update_session_last_message"
                 _ensure_session_last_message_table(sconn)
                 sconn.execute(
                     """
@@ -2239,8 +2256,25 @@ def _sync_chat_realtime_messages_for_table(
                     ),
                 )
                 sconn.commit()
+            except sqlite3.DatabaseError as e:
+                logger.warning(
+                    "[realtime] malformed session db during sync account=%s username=%s session_db=%s stage=%s error=%s diag=%s",
+                    account_dir.name,
+                    username,
+                    str(session_db_path),
+                    stage,
+                    str(e),
+                    format_sqlite_diagnostics(
+                        collect_sqlite_diagnostics(session_db_path, quick_check=True, table_name="SessionTable")
+                    ),
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Malformed session db during realtime sync: {session_db_path.name}",
+                )
             finally:
-                sconn.close()
+                if sconn is not None:
+                    sconn.close()
 
         return {
             "username": username,
@@ -2250,8 +2284,23 @@ def _sync_chat_realtime_messages_for_table(
             "backfilled": int(backfilled),
             "preview": preview or "",
         }
+    except sqlite3.DatabaseError as e:
+        logger.warning(
+            "[realtime] malformed decrypted message db account=%s username=%s db=%s table=%s stage=%s error=%s diag=%s",
+            account_dir.name,
+            username,
+            str(msg_db_path),
+            table_name,
+            stage,
+            str(e),
+            format_sqlite_diagnostics(
+                collect_sqlite_diagnostics(msg_db_path, quick_check=True, table_name=table_name)
+            ),
+        )
+        raise HTTPException(status_code=500, detail=f"Malformed decrypted message db: {msg_db_path.name}")
     finally:
-        msg_conn.close()
+        if msg_conn is not None:
+            msg_conn.close()
 
 
 @router.post("/api/chat/realtime/sync_all", summary="实时消息同步到解密库（全会话增量）")
@@ -2545,20 +2594,24 @@ def sync_chat_realtime_messages_all(
             except HTTPException as e:
                 errors.append(f"{uname}: {str(e.detail or '')}".strip())
                 logger.warning(
-                    "[%s] sync session failed account=%s username=%s err=%s",
+                    "[%s] sync session failed account=%s username=%s db=%s table=%s err=%s",
                     trace_id,
                     account_dir.name,
                     uname,
+                    str(msg_db_path),
+                    str(table_name),
                     str(e.detail or "").strip(),
                 )
                 continue
             except Exception as e:
                 errors.append(f"{uname}: {str(e)}".strip())
                 logger.exception(
-                    "[%s] sync session crashed account=%s username=%s",
+                    "[%s] sync session crashed account=%s username=%s db=%s table=%s",
                     trace_id,
                     account_dir.name,
                     uname,
+                    str(msg_db_path),
+                    str(table_name),
                 )
                 continue
 
@@ -4173,6 +4226,15 @@ def list_chat_sessions(
                 )
                 last_previews = load_session_last_messages(account_dir, usernames)
         except Exception:
+            logger.exception(
+                "[sessions.list] session_last_message preview load failed account=%s preview_mode=%s usernames=%s diag=%s",
+                account_dir.name,
+                preview_mode,
+                len(usernames),
+                format_sqlite_diagnostics(
+                    collect_sqlite_diagnostics(account_dir / "session.db", quick_check=True, table_name="session_last_message")
+                ),
+            )
             last_previews = {}
 
     def _is_generic_location_preview(value: Any) -> bool:
@@ -4189,7 +4251,17 @@ def list_chat_sessions(
             else [u for u in usernames if u and ((u not in last_previews) or _is_generic_location_preview(last_previews.get(u)))]
         )
         if targets:
-            legacy = _load_latest_message_previews(account_dir, targets)
+            try:
+                legacy = _load_latest_message_previews(account_dir, targets)
+            except Exception:
+                logger.exception(
+                    "[sessions.list] legacy latest-message preview fallback failed account=%s preview_mode=%s targets=%s sample_targets=%s; falling back to session summaries",
+                    account_dir.name,
+                    preview_mode,
+                    len(targets),
+                    [str(u) for u in targets[:5]],
+                )
+                legacy = {}
             for u, v in legacy.items():
                 if v:
                     last_previews[u] = v

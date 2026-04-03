@@ -119,6 +119,23 @@ const nextMessageLoadToken = () => {
   return messageLoadSequence
 }
 
+const buildTransientContact = ({ username, name = '', avatar = '', isGroup = null } = {}) => {
+  const u = String(username || '').trim()
+  const displayName = String(name || u).trim() || u
+  return {
+    id: u,
+    username: u,
+    name: displayName,
+    avatar: String(avatar || '').trim() || null,
+    avatarColor: '#4B5563',
+    lastMessage: '',
+    lastMessageTime: '',
+    unreadCount: 0,
+    isGroup: typeof isGroup === 'boolean' ? isGroup : u.endsWith('@chatroom'),
+    isTop: false
+  }
+}
+
 const buildChatPath = (username) => {
   return username ? `/chat/${encodeURIComponent(username)}` : '/chat'
 }
@@ -334,14 +351,28 @@ const selectContact = async (contact, options = {}) => {
 }
 
 const applyRouteSelection = async (options = {}) => {
+  const selectionReason = String(options.reason || 'route-selection').trim() || 'route-selection'
+  const requested = routeUsername.value || ''
+  if ((!contacts.value || contacts.value.length === 0) && requested) {
+    if (selectedContact.value?.username === requested) {
+      return
+    }
+    await selectContact(buildTransientContact({ username: requested }), {
+      syncRoute: false,
+      deferLoadMessages: !!options.deferLoadMessages,
+      reason: `${selectionReason}:transient-route-empty-list`
+    })
+    return
+  }
   if (!contacts.value || contacts.value.length === 0) {
     selectedContact.value = null
     return
   }
 
-  const selectionReason = String(options.reason || 'route-selection').trim() || 'route-selection'
-  const requested = routeUsername.value || ''
   if (requested) {
+    if (selectedContact.value?.username === requested) {
+      return
+    }
     const matched = contacts.value.find((contact) => contact.username === requested)
     if (matched) {
       if (selectedContact.value?.username !== matched.username) {
@@ -353,6 +384,12 @@ const applyRouteSelection = async (options = {}) => {
       }
       return
     }
+    await selectContact(buildTransientContact({ username: requested }), {
+      syncRoute: false,
+      deferLoadMessages: !!options.deferLoadMessages,
+      reason: `${selectionReason}:transient-route`
+    })
+    return
   }
 
   await selectContact(contacts.value[0], {

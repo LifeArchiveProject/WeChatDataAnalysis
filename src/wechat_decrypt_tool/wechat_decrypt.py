@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from .app_paths import get_output_databases_dir
+from .sqlite_diagnostics import collect_sqlite_diagnostics, sqlite_diagnostics_status
 
 # 注意：不再支持默认密钥，所有密钥必须通过参数传入
 
@@ -221,6 +222,7 @@ class WeChatDatabaseDecryptor:
             self.key_bytes = bytes.fromhex(key_hex)
         except ValueError:
             raise ValueError("密钥必须是有效的十六进制字符串")
+        self.last_result: dict = {}
     
     def decrypt_database(self, db_path: str, output_path: str) -> bool:
         """解密微信4.x版本数据库
@@ -234,6 +236,79 @@ class WeChatDatabaseDecryptor:
         from .logging_config import get_logger
         logger = get_logger(__name__)
 
+        result = {
+            "db_path": str(db_path),
+            "db_name": Path(str(db_path)).name,
+            "output_path": str(output_path),
+            "success": False,
+            "copied_as_sqlite": False,
+            "input_size": 0,
+            "output_size": 0,
+            "total_pages": 0,
+            "successful_pages": 0,
+            "failed_pages": 0,
+            "failed_page_samples": [],
+            "failure_reasons": {},
+            "diagnostics": {},
+            "diagnostic_status": "not_run",
+            "error": "",
+        }
+        self.last_result = result
+
+        def _append_failed_page(page_num: int, reason: str, error: str = "") -> None:
+            result["failure_reasons"][reason] = int(result["failure_reasons"].get(reason) or 0) + 1
+            if len(result["failed_page_samples"]) >= 8:
+                return
+            item = {"page": int(page_num), "reason": str(reason)}
+            err = " ".join(str(error or "").split()).strip()
+            if err:
+                item["error"] = err[:200]
+            result["failed_page_samples"].append(item)
+
+        def _finalize(success: bool, error: str = "") -> bool:
+            result["success"] = bool(success)
+            if error:
+                result["error"] = " ".join(str(error).split()).strip()
+
+            output_file = Path(str(output_path))
+            if output_file.exists():
+                try:
+                    result["output_size"] = int(output_file.stat().st_size)
+                except Exception:
+                    pass
+
+                diagnostics = collect_sqlite_diagnostics(output_file, quick_check=True)
+                result["diagnostics"] = diagnostics
+                result["diagnostic_status"] = sqlite_diagnostics_status(diagnostics)
+
+            payload = {
+                "db_name": result["db_name"],
+                "db_path": result["db_path"],
+                "output_path": result["output_path"],
+                "success": result["success"],
+                "copied_as_sqlite": result["copied_as_sqlite"],
+                "input_size": result["input_size"],
+                "output_size": result["output_size"],
+                "total_pages": result["total_pages"],
+                "successful_pages": result["successful_pages"],
+                "failed_pages": result["failed_pages"],
+                "failure_reasons": result["failure_reasons"],
+                "failed_page_samples": result["failed_page_samples"],
+                "diagnostic_status": result["diagnostic_status"],
+                "diagnostics": result["diagnostics"],
+                "error": result["error"],
+            }
+            log_fn = logger.info
+            if (
+                (not result["success"])
+                or int(result["failed_pages"] or 0) > 0
+                or str(result["diagnostic_status"] or "") != "ok"
+            ):
+                log_fn = logger.warning
+            log_fn("[decrypt.diagnostic] %s", json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            self.last_result = result
+            return bool(success)
+
         logger.info(f"开始解密数据库: {db_path}")
         
         try:
@@ -241,17 +316,19 @@ class WeChatDatabaseDecryptor:
                 encrypted_data = f.read()
             
             logger.info(f"读取文件大小: {len(encrypted_data)} bytes")
+            result["input_size"] = int(len(encrypted_data))
 
             if len(encrypted_data) < 4096:
                 logger.warning(f"文件太小，跳过解密: {db_path}")
-                return False
+                return _finalize(False, "file_too_small")
 
             # 检查是否已经是解密的数据库
             if encrypted_data.startswith(SQLITE_HEADER):
                 logger.info(f"文件已是SQLite格式，直接复制: {db_path}")
                 with open(output_path, 'wb') as f:
                     f.write(encrypted_data)
-                return True
+                result["copied_as_sqlite"] = True
+                return _finalize(True)
             
             # 提取salt (前16字节)
             salt = encrypted_data[:16]
@@ -295,6 +372,7 @@ class WeChatDatabaseDecryptor:
             total_pages = len(encrypted_data) // page_size
             successful_pages = 0
             failed_pages = 0
+            result["total_pages"] = int(total_pages)
             
             # 逐页解密
             for cur_page in range(total_pages):
@@ -329,6 +407,7 @@ class WeChatDatabaseDecryptor:
                 if stored_hmac != expected_hmac:
                     logger.warning(f"页面 {page_num} HMAC验证失败")
                     failed_pages += 1
+                    _append_failed_page(page_num, "hmac")
                     continue
                 
                 # 提取IV和加密数据用于AES解密
@@ -354,20 +433,32 @@ class WeChatDatabaseDecryptor:
                 except Exception as e:
                     logger.error(f"页面 {page_num} AES解密失败: {e}")
                     failed_pages += 1
+                    _append_failed_page(page_num, "aes", str(e))
                     continue
 
             logger.info(f"解密完成: 成功 {successful_pages} 页, 失败 {failed_pages} 页")
+            result["successful_pages"] = int(successful_pages)
+            result["failed_pages"] = int(failed_pages)
 
             # 写入解密后的文件
             with open(output_path, 'wb') as f:
                 f.write(decrypted_data)
 
             logger.info(f"解密文件大小: {len(decrypted_data)} bytes")
-            return True
+            if failed_pages > 0:
+                logger.warning(
+                    "解密输出包含页失败: db=%s total_pages=%s failed_pages=%s failure_reasons=%s samples=%s",
+                    result["db_name"],
+                    int(total_pages),
+                    int(failed_pages),
+                    json.dumps(result["failure_reasons"], ensure_ascii=False, sort_keys=True),
+                    json.dumps(result["failed_page_samples"], ensure_ascii=False),
+                )
+            return _finalize(True)
 
         except Exception as e:
             logger.error(f"解密失败: {db_path}, 错误: {e}")
-            return False
+            return _finalize(False, str(e))
 
 def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> dict:
     """
@@ -493,6 +584,7 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
     processed_files = []
     failed_files = []
     account_results = {}
+    diagnostic_warning_count = 0
 
     for account_name, databases in account_databases.items():
         logger.info(f"开始解密账号 {account_name} 的 {len(databases)} 个数据库")
@@ -523,6 +615,8 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
         account_success = 0
         account_processed = []
         account_failed = []
+        account_db_diagnostics = {}
+        account_diagnostic_warning_count = 0
 
         for db_info in databases:
             db_path = db_info['path']
@@ -533,7 +627,26 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
 
             # 解密数据库
             logger.info(f"解密 {account_name}/{db_name}")
-            if decryptor.decrypt_database(db_path, str(output_path)):
+            ok = decryptor.decrypt_database(db_path, str(output_path))
+            db_diagnostic = dict(getattr(decryptor, "last_result", {}) or {})
+            if not db_diagnostic:
+                db_diagnostic = {
+                    "db_path": str(db_path),
+                    "db_name": str(db_name),
+                    "output_path": str(output_path),
+                    "success": bool(ok),
+                }
+            db_diagnostic["account"] = str(account_name)
+            account_db_diagnostics[db_name] = db_diagnostic
+
+            if (
+                (not bool(db_diagnostic.get("success", ok)))
+                or int(db_diagnostic.get("failed_pages") or 0) > 0
+                or str(db_diagnostic.get("diagnostic_status") or "") != "ok"
+            ):
+                account_diagnostic_warning_count += 1
+
+            if ok:
                 account_success += 1
                 success_count += 1
                 account_processed.append(str(output_path))
@@ -551,8 +664,11 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
             "failed": len(databases) - account_success,
             "output_dir": str(account_output_dir),
             "processed_files": account_processed,
-            "failed_files": account_failed
+            "failed_files": account_failed,
+            "db_diagnostics": account_db_diagnostics,
+            "diagnostic_warning_count": int(account_diagnostic_warning_count),
         }
+        diagnostic_warning_count += int(account_diagnostic_warning_count)
 
         # 构建“会话最后一条消息”缓存表：把耗时挪到解密阶段，后续会话列表直接查表
         if os.environ.get("WECHAT_TOOL_BUILD_SESSION_LAST_MESSAGE", "1") != "0":
@@ -586,6 +702,7 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
         "failed_files": failed_files,
         "account_results": account_results,  # 新增：按账号的详细结果
         "detected_accounts": detected_accounts,
+        "diagnostic_warning_count": int(diagnostic_warning_count),
     }
 
     logger.info("=" * 60)
