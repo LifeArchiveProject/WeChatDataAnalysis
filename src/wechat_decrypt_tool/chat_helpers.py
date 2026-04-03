@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 from .app_paths import get_output_databases_dir
 from .logging_config import get_logger
+from .sqlite_diagnostics import collect_sqlite_diagnostics, format_sqlite_diagnostics
 
 try:
     import zstandard as zstd  # type: ignore
@@ -1755,9 +1756,10 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
 
     session_db_path = Path(account_dir) / "session.db"
     if session_db_path.exists() and remaining:
-        sconn = sqlite3.connect(str(session_db_path))
-        sconn.row_factory = sqlite3.Row
+        sconn: Optional[sqlite3.Connection] = None
         try:
+            sconn = sqlite3.connect(str(session_db_path))
+            sconn.row_factory = sqlite3.Row
             uniq = list(dict.fromkeys([u for u in remaining if u]))
             chunk_size = 900
             for i in range(0, len(uniq), chunk_size):
@@ -1786,10 +1788,24 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                         if not u:
                             continue
                         expected_ts_by_user[u] = int(r["last_timestamp"] or 0)
+        except sqlite3.DatabaseError as e:
+            expected_ts_by_user = {}
+            logger.warning(
+                "[sessions.preview] session timestamp lookup failed account=%s db=%s usernames=%s sample_usernames=%s error=%s diag=%s",
+                account_dir.name,
+                str(session_db_path),
+                len(remaining),
+                sorted([u for u in remaining if u])[:5],
+                str(e),
+                format_sqlite_diagnostics(
+                    collect_sqlite_diagnostics(session_db_path, quick_check=True, table_name="SessionTable")
+                ),
+            )
         except Exception:
             expected_ts_by_user = {}
         finally:
-            sconn.close()
+            if sconn is not None:
+                sconn.close()
 
     if _DEBUG_SESSIONS:
         logger.info(
@@ -1800,9 +1816,16 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
         )
 
     for db_path in db_paths:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
+        conn: Optional[sqlite3.Connection] = None
+        stage = "connect"
+        stage_username = ""
+        stage_table = ""
         try:
+            stage = "connect"
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+
+            stage = "sqlite_master"
             rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
             names = [str(r[0]) for r in rows if r and r[0]]
             lower_to_actual = {n.lower(): n for n in names}
@@ -1818,9 +1841,12 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
 
             conn.text_factory = bytes
             for u, tn in found.items():
+                stage_username = str(u)
+                stage_table = str(tn)
                 quoted = _quote_ident(tn)
                 try:
                     try:
+                        stage = "latest_row_with_name2id"
                         r = conn.execute(
                             "SELECT "
                             "m.local_type, m.message_content, m.compress_content, m.create_time, m.sort_seq, m.local_id, "
@@ -1831,6 +1857,7 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                             "LIMIT 1"
                         ).fetchone()
                     except Exception:
+                        stage = "latest_row_without_name2id"
                         r = conn.execute(
                             "SELECT "
                             "local_type, message_content, compress_content, create_time, sort_seq, local_id, '' AS sender_username "
@@ -1838,6 +1865,20 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                             "ORDER BY sort_seq DESC, local_id DESC "
                             "LIMIT 1"
                         ).fetchone()
+                except sqlite3.DatabaseError as e:
+                    logger.warning(
+                        "[sessions.preview] latest row query failed account=%s db=%s username=%s table=%s stage=%s error=%s diag=%s",
+                        account_dir.name,
+                        str(db_path),
+                        str(u),
+                        str(tn),
+                        stage,
+                        str(e),
+                        format_sqlite_diagnostics(
+                            collect_sqlite_diagnostics(db_path, quick_check=True, table_name=tn)
+                        ),
+                    )
+                    continue
                 except Exception as e:
                     if _DEBUG_SESSIONS:
                         logger.info(
@@ -1855,6 +1896,7 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                 expected_ts = int(expected_ts_by_user.get(u) or 0)
                 if expected_ts > 0 and create_time > 0 and create_time < expected_ts:
                     try:
+                        stage = "latest_row_by_create_time_with_name2id"
                         r2 = conn.execute(
                             "SELECT "
                             "m.local_type, m.message_content, m.compress_content, m.create_time, m.sort_seq, m.local_id, "
@@ -1866,6 +1908,7 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                         ).fetchone()
                     except Exception:
                         try:
+                            stage = "latest_row_by_create_time_without_name2id"
                             r2 = conn.execute(
                                 "SELECT "
                                 "local_type, message_content, compress_content, create_time, sort_seq, local_id, '' AS sender_username "
@@ -1873,6 +1916,20 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                                 "ORDER BY COALESCE(create_time, 0) DESC, COALESCE(sort_seq, 0) DESC, local_id DESC "
                                 "LIMIT 1"
                             ).fetchone()
+                        except sqlite3.DatabaseError as e:
+                            logger.warning(
+                                "[sessions.preview] latest row requery failed account=%s db=%s username=%s table=%s stage=%s error=%s diag=%s",
+                                account_dir.name,
+                                str(db_path),
+                                str(u),
+                                str(tn),
+                                stage,
+                                str(e),
+                                format_sqlite_diagnostics(
+                                    collect_sqlite_diagnostics(db_path, quick_check=True, table_name=tn)
+                                ),
+                            )
+                            r2 = None
                         except Exception:
                             r2 = None
 
@@ -1900,8 +1957,28 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
                 prev = best.get(u)
                 if prev is None or sort_key > prev[0]:
                     best[u] = (sort_key, preview)
+        except sqlite3.DatabaseError as e:
+            logger.warning(
+                "[sessions.preview] malformed message db account=%s db=%s stage=%s username=%s table=%s remaining=%s sample_usernames=%s error=%s diag=%s",
+                account_dir.name,
+                str(db_path),
+                stage,
+                stage_username,
+                stage_table,
+                len(remaining),
+                sorted([u for u in remaining if u])[:5],
+                str(e),
+                format_sqlite_diagnostics(
+                    collect_sqlite_diagnostics(db_path, quick_check=True, table_name=(stage_table or None))
+                ),
+            )
+            continue
         finally:
-            conn.close()
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     previews = {u: v[1] for u, v in best.items() if v and v[1]}
     if _DEBUG_SESSIONS:

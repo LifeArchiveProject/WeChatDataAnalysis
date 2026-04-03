@@ -59,6 +59,12 @@ async def decrypt_databases(request: DecryptRequest):
             raise HTTPException(status_code=400, detail=results["message"])
 
         logger.info(f"解密完成: 成功 {results['successful_count']}/{results['total_databases']} 个数据库")
+        if int(results.get("diagnostic_warning_count") or 0) > 0:
+            logger.warning(
+                "解密完成但检测到诊断告警: warning_dbs=%s total=%s",
+                int(results.get("diagnostic_warning_count") or 0),
+                int(results.get("total_databases") or 0),
+            )
 
         # 成功解密后，按账号保存数据库密钥（用于前端自动回填）
         try:
@@ -77,6 +83,7 @@ async def decrypt_databases(request: DecryptRequest):
             "processed_files": results["processed_files"],
             "failed_files": results["failed_files"],
             "account_results": results.get("account_results", {}),
+            "diagnostic_warning_count": int(results.get("diagnostic_warning_count") or 0),
         }
 
     except HTTPException:
@@ -160,6 +167,7 @@ async def decrypt_databases_stream(
         processed_files: list[str] = []
         failed_files: list[str] = []
         account_results: dict = {}
+        diagnostic_warning_count = 0
         overall_current = 0
 
         for account, dbs in account_databases.items():
@@ -181,6 +189,8 @@ async def decrypt_databases_stream(
             account_success = 0
             account_processed: list[str] = []
             account_failed: list[str] = []
+            account_db_diagnostics: dict[str, dict] = {}
+            account_diagnostic_warning_count = 0
 
             for db_info in dbs:
                 if await request.is_disconnected():
@@ -223,6 +233,23 @@ async def decrypt_databases_stream(
                     ok = bool(task.result())
                 except Exception:
                     ok = False
+                db_diagnostic = dict(getattr(decryptor, "last_result", {}) or {})
+                if not db_diagnostic:
+                    db_diagnostic = {
+                        "db_path": str(db_path),
+                        "db_name": str(db_name),
+                        "output_path": str(output_path),
+                        "success": bool(ok),
+                    }
+                db_diagnostic["account"] = str(account)
+                account_db_diagnostics[db_name] = db_diagnostic
+
+                if (
+                    (not bool(db_diagnostic.get("success", ok)))
+                    or int(db_diagnostic.get("failed_pages") or 0) > 0
+                    or str(db_diagnostic.get("diagnostic_status") or "") != "ok"
+                ):
+                    account_diagnostic_warning_count += 1
 
                 if ok:
                     account_success += 1
@@ -238,18 +265,25 @@ async def decrypt_databases_stream(
                     status = "fail"
                     msg = "解密失败"
 
-                yield _sse(
-                    {
-                        "type": "progress",
-                        "current": overall_current,
-                        "total": total_databases,
-                        "success_count": success_count,
-                        "fail_count": fail_count,
-                        "current_file": current_file,
-                        "status": status,
-                        "message": msg,
-                    }
-                )
+                payload = {
+                    "type": "progress",
+                    "current": overall_current,
+                    "total": total_databases,
+                    "success_count": success_count,
+                    "fail_count": fail_count,
+                    "current_file": current_file,
+                    "status": status,
+                    "message": msg,
+                }
+                if db_diagnostic:
+                    payload["diagnostic_status"] = str(db_diagnostic.get("diagnostic_status") or "")
+                    payload["page_failures"] = int(db_diagnostic.get("failed_pages") or 0)
+                    if db_diagnostic.get("failed_page_samples"):
+                        payload["failed_page_samples"] = db_diagnostic.get("failed_page_samples")
+                    if db_diagnostic.get("diagnostics"):
+                        payload["diagnostics"] = db_diagnostic.get("diagnostics")
+
+                yield _sse(payload)
 
                 if overall_current % 5 == 0:
                     await asyncio.sleep(0)
@@ -261,7 +295,10 @@ async def decrypt_databases_stream(
                 "output_dir": str(account_output_dir),
                 "processed_files": account_processed,
                 "failed_files": account_failed,
+                "db_diagnostics": account_db_diagnostics,
+                "diagnostic_warning_count": int(account_diagnostic_warning_count),
             }
+            diagnostic_warning_count += int(account_diagnostic_warning_count)
 
             # Build cache table (keep behavior consistent with the POST endpoint).
             if os.environ.get("WECHAT_TOOL_BUILD_SESSION_LAST_MESSAGE", "1") != "0":
@@ -311,6 +348,7 @@ async def decrypt_databases_stream(
             "processed_files": processed_files,
             "failed_files": failed_files,
             "account_results": account_results,
+            "diagnostic_warning_count": int(diagnostic_warning_count),
         }
 
         # Save db key for frontend autofill.

@@ -457,6 +457,33 @@ if (scope === 'global') {
 }
 return (text.charAt(0) || '?').toString()
 }
+
+const buildTransientSearchTargetContact = ({ username, displayName = '', avatar = '', isGroup = null } = {}) => {
+const u = String(username || '').trim()
+if (!u) return null
+const name = String(displayName || u).trim() || u
+return {
+  id: u,
+  username: u,
+  name,
+  avatar: String(avatar || '').trim() || null,
+  avatarColor: '#4B5563',
+  lastMessage: '',
+  lastMessageTime: '',
+  unreadCount: 0,
+  isGroup: typeof isGroup === 'boolean' ? isGroup : u.endsWith('@chatroom'),
+  isTop: false
+}
+}
+
+const resolveSearchTargetContact = ({ username, displayName = '', avatar = '', isGroup = null } = {}) => {
+const u = String(username || '').trim()
+if (!u) return null
+const existing = contacts.value.find((c) => String(c?.username || '').trim() === u)
+if (existing) return existing
+if (String(selectedContact.value?.username || '').trim() === u) return selectedContact.value
+return buildTransientSearchTargetContact({ username: u, displayName, avatar, isGroup })
+}
 const searchContextBannerText = computed(() => {
 if (!searchContext.value?.active) return ''
 const kind = String(searchContext.value.kind || 'search')
@@ -986,7 +1013,12 @@ if (!hit?.id) return
 const targetUsername = String(hit?.username || selectedContact.value?.username || '').trim()
 if (!targetUsername) return
 
-const targetContact = contacts.value.find((c) => c?.username === targetUsername)
+const targetContact = resolveSearchTargetContact({
+  username: targetUsername,
+  displayName: String(hit?.conversationName || hit?.username || targetUsername).trim(),
+  avatar: String(hit?.conversationAvatar || hit?.senderAvatar || '').trim(),
+  isGroup: targetUsername.endsWith('@chatroom')
+})
 if (targetContact && selectedContact.value?.username !== targetUsername) {
   await selectContact(targetContact, { skipLoadMessages: true })
 }
@@ -1051,7 +1083,12 @@ const u = String(targetUsername || selectedContact.value?.username || '').trim()
 const anchor = String(anchorId || '').trim()
 if (!u || !anchor) return
 
-const targetContact = contacts.value.find((c) => c?.username === u)
+const targetContact = resolveSearchTargetContact({
+  username: u,
+  displayName: String(selectedContact.value?.name || u).trim(),
+  avatar: String(selectedContact.value?.avatar || '').trim(),
+  isGroup: u.endsWith('@chatroom')
+})
 if (targetContact && selectedContact.value?.username !== u) {
   await selectContact(targetContact, { skipLoadMessages: true })
 }
