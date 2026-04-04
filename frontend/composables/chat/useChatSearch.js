@@ -43,6 +43,28 @@ export const useChatSearch = ({
   selectContact,
   loadMoreMessages
 }) => {
+const isDesktopRenderer = () => {
+if (!process.client || typeof window === 'undefined') return false
+return !!window.wechatDesktop?.__brand
+}
+
+const logSearchPhase = (phase, details = {}) => {
+const payload = {
+  account: String(selectedAccount.value || '').trim(),
+  selectedUsername: String(selectedContact.value?.username || '').trim(),
+  contextUsername: String(searchContext.value?.username || '').trim(),
+  ...details
+}
+
+if (isDesktopRenderer()) {
+  try {
+    window.wechatDesktop?.logDebug?.('chat-search', phase, payload)
+  } catch {}
+}
+
+console.info(`[chat-search] ${phase}`, payload)
+}
+
 const messageSearchOpen = ref(false)
 const messageSearchQuery = ref('')
 const messageSearchScope = ref('global') // conversation | global
@@ -1007,11 +1029,36 @@ updateJumpToBottomState()
 
 const locateSearchHit = async (hit) => {
 if (!process.client) return
-if (!selectedAccount.value) return
-if (!hit?.id) return
+if (!selectedAccount.value) {
+  logSearchPhase('locateSearchHit:skip:no-account', {
+    hitId: String(hit?.id || '').trim(),
+    hitUsername: String(hit?.username || '').trim()
+  })
+  return
+}
+if (!hit?.id) {
+  logSearchPhase('locateSearchHit:skip:missing-hit-id', {
+    hitKeys: Object.keys(hit || {})
+  })
+  return
+}
 
 const targetUsername = String(hit?.username || selectedContact.value?.username || '').trim()
-if (!targetUsername) return
+if (!targetUsername) {
+  logSearchPhase('locateSearchHit:skip:missing-target-username', {
+    hitId: String(hit?.id || '').trim(),
+    hitUsername: String(hit?.username || '').trim(),
+    selectedUsernameFallback: String(selectedContact.value?.username || '').trim()
+  })
+  return
+}
+
+logSearchPhase('locateSearchHit:start', {
+  hitId: String(hit?.id || '').trim(),
+  hitUsername: String(hit?.username || '').trim(),
+  targetUsername,
+  conversationName: String(hit?.conversationName || '').trim()
+})
 
 const targetContact = resolveSearchTargetContact({
   username: targetUsername,
@@ -1019,12 +1066,28 @@ const targetContact = resolveSearchTargetContact({
   avatar: String(hit?.conversationAvatar || hit?.senderAvatar || '').trim(),
   isGroup: targetUsername.endsWith('@chatroom')
 })
+logSearchPhase('locateSearchHit:target-resolved', {
+  hitId: String(hit?.id || '').trim(),
+  targetUsername,
+  contactResolved: !!targetContact,
+  contactSource: targetContact
+    ? (contacts.value.find((c) => String(c?.username || '').trim() === targetUsername) ? 'contacts' : 'transient')
+    : 'none'
+})
 if (targetContact && selectedContact.value?.username !== targetUsername) {
   await selectContact(targetContact, { skipLoadMessages: true })
+  logSearchPhase('locateSearchHit:selectContact:done', {
+    hitId: String(hit?.id || '').trim(),
+    targetUsername
+  })
 }
 
 if (searchContext.value?.active && searchContext.value.username !== targetUsername) {
   await exitSearchContext()
+  logSearchPhase('locateSearchHit:exitSearchContext:done', {
+    hitId: String(hit?.id || '').trim(),
+    targetUsername
+  })
 }
 
 if (!searchContext.value?.active) {
@@ -1053,6 +1116,12 @@ if (!searchContext.value?.active) {
 }
 
 try {
+  logSearchPhase('locateSearchHit:messagesAround:start', {
+    hitId: String(hit?.id || '').trim(),
+    targetUsername,
+    before: 35,
+    after: 35
+  })
   const resp = await api.getChatMessagesAround({
     account: selectedAccount.value,
     username: targetUsername,
@@ -1065,13 +1134,31 @@ try {
   const mapped = raw.map(normalizeMessage)
   allMessages.value = { ...allMessages.value, [targetUsername]: mapped }
   messagesMeta.value = { ...messagesMeta.value, [targetUsername]: { total: mapped.length, hasMore: false } }
+  logSearchPhase('locateSearchHit:messagesAround:end', {
+    hitId: String(hit?.id || '').trim(),
+    targetUsername,
+    messageCount: mapped.length,
+    anchorId: String(resp?.anchorId || hit?.id || '').trim(),
+    anchorIndex: Number(resp?.anchorIndex ?? -1)
+  })
 
   searchContext.value.anchorId = String(resp?.anchorId || hit.id)
   searchContext.value.anchorIndex = Number(resp?.anchorIndex ?? -1)
 
   const ok = await scrollToMessageId(searchContext.value.anchorId)
+  logSearchPhase('locateSearchHit:scroll:end', {
+    hitId: String(hit?.id || '').trim(),
+    targetUsername,
+    anchorId: String(searchContext.value.anchorId || '').trim(),
+    scrollFound: !!ok
+  })
   if (ok) flashMessage(searchContext.value.anchorId)
 } catch (e) {
+  logSearchPhase('locateSearchHit:error', {
+    hitId: String(hit?.id || '').trim(),
+    targetUsername,
+    error: String(e?.message || e || '')
+  })
   window.alert(e?.message || '定位失败')
 }
 }
@@ -1356,6 +1443,11 @@ try {
 
 const onSearchHitClick = async (hit, idx) => {
 messageSearchSelectedIndex.value = Number(idx || 0)
+logSearchPhase('onSearchHitClick', {
+  index: Number(idx || 0),
+  hitId: String(hit?.id || '').trim(),
+  hitUsername: String(hit?.username || '').trim()
+})
 await locateSearchHit(hit)
 }
 

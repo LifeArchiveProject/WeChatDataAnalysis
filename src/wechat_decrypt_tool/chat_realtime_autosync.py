@@ -123,8 +123,61 @@ class ChatRealtimeAutoSyncService:
 
         self._mu = threading.Lock()
         self._states: dict[str, _AccountState] = {}
+        self._paused_accounts: dict[str, int] = {}
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+
+    def _is_account_paused_locked(self, account: str) -> bool:
+        key = str(account or "").strip()
+        if not key:
+            return False
+        return int(self._paused_accounts.get(key) or 0) > 0
+
+    def is_account_paused(self, account: str) -> bool:
+        with self._mu:
+            return self._is_account_paused_locked(account)
+
+    def pause_account(self, account: str, reason: str = "") -> int:
+        key = str(account or "").strip()
+        if not key:
+            return 0
+
+        with self._mu:
+            depth = int(self._paused_accounts.get(key) or 0) + 1
+            self._paused_accounts[key] = depth
+            st = self._states.get(key)
+            if st is not None:
+                st.due_at = 0.0
+
+        logger.info(
+            "[realtime-autosync] pause account=%s reason=%s depth=%s",
+            key,
+            str(reason or "").strip() or "-",
+            int(depth),
+        )
+        return depth
+
+    def resume_account(self, account: str, reason: str = "") -> int:
+        key = str(account or "").strip()
+        if not key:
+            return 0
+
+        with self._mu:
+            current = int(self._paused_accounts.get(key) or 0)
+            if current <= 1:
+                self._paused_accounts.pop(key, None)
+                depth = 0
+            else:
+                depth = current - 1
+                self._paused_accounts[key] = depth
+
+        logger.info(
+            "[realtime-autosync] resume account=%s reason=%s depth=%s",
+            key,
+            str(reason or "").strip() or "-",
+            int(depth),
+        )
+        return depth
 
     def start(self) -> None:
         if not self._enabled:
@@ -188,6 +241,12 @@ class ChatRealtimeAutoSyncService:
             if self._stop.is_set():
                 break
 
+            if self.is_account_paused(acc):
+                with self._mu:
+                    st = self._states.setdefault(acc, _AccountState())
+                    st.due_at = 0.0
+                continue
+
             try:
                 account_dir = _resolve_account_dir(acc)
             except HTTPException:
@@ -238,6 +297,9 @@ class ChatRealtimeAutoSyncService:
             for acc, st in self._states.items():
                 if running >= int(self._workers):
                     break
+                if self._is_account_paused_locked(acc):
+                    st.due_at = 0.0
+                    continue
                 if st.due_at <= 0 or st.due_at > now:
                     continue
                 if st.thread is not None and st.thread.is_alive():
@@ -278,6 +340,9 @@ class ChatRealtimeAutoSyncService:
         try:
             if self._stop.is_set() or (not account):
                 return
+            if self.is_account_paused(account):
+                logger.info("[realtime-autosync] sync skipped account=%s reason=paused", account)
+                return
             res = self._sync_account(account)
             inserted = int((res or {}).get("inserted_total") or (res or {}).get("insertedTotal") or 0)
             synced = int((res or {}).get("synced") or (res or {}).get("sessionsSynced") or 0)
@@ -297,6 +362,8 @@ class ChatRealtimeAutoSyncService:
         account = str(account or "").strip()
         if not account:
             return {"status": "skipped", "reason": "missing account"}
+        if self.is_account_paused(account):
+            return {"status": "skipped", "reason": "paused"}
 
         try:
             account_dir = _resolve_account_dir(account)

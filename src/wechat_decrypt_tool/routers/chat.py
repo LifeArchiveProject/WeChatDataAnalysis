@@ -7071,13 +7071,26 @@ async def get_chat_messages_around(
     if after > 200:
         after = 200
 
+    trace_id = f"msg-around-{int(time.time() * 1000)}-{threading.get_ident()}"
+    logger.info(
+        "[%s] chat messages around start account=%s username=%s anchor_id=%s before=%s after=%s",
+        trace_id,
+        str(account or "").strip(),
+        str(username or "").strip(),
+        str(anchor_id or "").strip(),
+        int(before),
+        int(after),
+    )
+
     parts = str(anchor_id).split(":", 2)
     if len(parts) != 3:
+        logger.warning("[%s] chat messages around invalid anchor format anchor_id=%s", trace_id, str(anchor_id or "").strip())
         raise HTTPException(status_code=400, detail="Invalid anchor_id.")
     anchor_db_stem, anchor_table_name_in, anchor_local_id_str = parts
     try:
         anchor_local_id = int(anchor_local_id_str)
     except Exception:
+        logger.warning("[%s] chat messages around invalid anchor local_id anchor_id=%s", trace_id, str(anchor_id or "").strip())
         raise HTTPException(status_code=400, detail="Invalid anchor_id.")
 
     account_dir = _resolve_account_dir(account)
@@ -7093,6 +7106,13 @@ async def get_chat_messages_around(
             anchor_db_path = p
             break
     if anchor_db_path is None:
+        logger.warning(
+            "[%s] chat messages around anchor db missing account=%s username=%s anchor_db=%s",
+            trace_id,
+            account_dir.name,
+            username,
+            anchor_db_stem,
+        )
         raise HTTPException(status_code=404, detail="Anchor database not found.")
 
     # Open resource DB once (optional), and reuse for all message DBs.
@@ -7489,6 +7509,18 @@ async def get_chat_messages_around(
         base_url=base_url,
         contact_db_path=contact_db_path,
         head_image_db_path=head_image_db_path,
+    )
+
+    logger.info(
+        "[%s] chat messages around done account=%s username=%s anchor_id=%s canonical_anchor=%s anchor_index=%s returned=%s merged_total=%s",
+        trace_id,
+        account_dir.name,
+        username,
+        str(anchor_id or "").strip(),
+        anchor_id_canon,
+        int(anchor_index),
+        len(return_messages),
+        len(merged),
     )
 
     return {
