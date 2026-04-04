@@ -128,7 +128,7 @@
             <button
               type="button"
               class="search-sidebar-close"
-              @click="closeMessageSearch"
+              @click="closeMessageSearch('close-button')"
               title="关闭搜索 (Esc)"
             >
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -175,9 +175,9 @@
                 :class="{ 'privacy-blur': privacyMode }"
                 @focus="searchInputFocused = true"
                 @blur="searchInputFocused = false"
-                @keydown.enter.exact.prevent="runMessageSearch({ reset: true })"
+                @keydown.enter.exact.prevent="runMessageSearch({ reset: true, source: 'input-enter' })"
                 @keydown.enter.shift.prevent="onSearchPrev"
-                @keydown.escape="closeMessageSearch"
+                @keydown.escape="closeMessageSearch('input-escape')"
               />
 
               <!-- 清除按钮 -->
@@ -185,7 +185,7 @@
                   v-if="messageSearchQuery"
                   type="button"
                   class="search-clear-inline"
-                  @click="messageSearchQuery = ''; runMessageSearch({ reset: true })"
+                  @click="messageSearchQuery = ''; runMessageSearch({ reset: true, source: 'clear-button' })"
                 >
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -197,7 +197,7 @@
                 type="button"
                 class="search-btn-inline"
                 :disabled="messageSearchLoading"
-                @click="runMessageSearch({ reset: true })"
+                @click="runMessageSearch({ reset: true, source: 'search-button' })"
               >
                 <svg v-if="messageSearchLoading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -428,6 +428,8 @@
                 :key="hit.id + ':' + idx"
                 class="sidebar-result-card"
                 :class="{ 'sidebar-result-card-selected': idx === messageSearchSelectedIndex }"
+                @pointerdown="onSearchHitPointerDown(hit, idx, $event)"
+                @click.capture="onSearchHitClickCapture(hit, idx, $event)"
                 @click="onSearchHitClick(hit, idx)"
               >
                 <div class="sidebar-result-row">

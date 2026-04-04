@@ -6190,6 +6190,24 @@ async def _search_chat_messages_via_fts(
         sender = None
 
     session_type_norm = _normalize_session_type(session_type)
+    trace_id = f"msg-search-{int(time.time() * 1000)}-{threading.get_ident()}"
+    logger.info(
+        "[%s] chat search start account=%s scope=%s username=%s sender=%s q_len=%s token_count=%s limit=%s offset=%s start_time=%s end_time=%s render_types=%s include_hidden=%s include_official=%s",
+        trace_id,
+        str(account or "").strip(),
+        "conversation" if username else "global",
+        str(username or "").strip(),
+        str(sender or "").strip(),
+        len(str(q or "")),
+        len(tokens),
+        int(limit),
+        int(offset),
+        "" if start_ts is None else int(start_ts),
+        "" if end_ts is None else int(end_ts),
+        str(render_types or "").strip(),
+        bool(include_hidden),
+        bool(include_official),
+    )
 
     account_dir = _resolve_account_dir(account)
     contact_db_path = account_dir / "contact.db"
@@ -6214,6 +6232,14 @@ async def _search_chat_messages_via_fts(
         index_ready = bool(index.get("ready"))
 
     if build_status == "error":
+        logger.warning(
+            "[%s] chat search index_error account=%s scope=%s username=%s message=%s",
+            trace_id,
+            account_dir.name,
+            "conversation" if username else "global",
+            str(username or "").strip(),
+            str(build.get("error") or "Search index build failed."),
+        )
         return {
             "status": "index_error",
             "account": account_dir.name,
@@ -6232,6 +6258,14 @@ async def _search_chat_messages_via_fts(
         }
 
     if not index_ready:
+        logger.info(
+            "[%s] chat search index_building account=%s scope=%s username=%s build_status=%s",
+            trace_id,
+            account_dir.name,
+            "conversation" if username else "global",
+            str(username or "").strip(),
+            build_status,
+        )
         return {
             "status": "index_building",
             "account": account_dir.name,
@@ -6315,7 +6349,13 @@ async def _search_chat_messages_via_fts(
                 params + [int(limit), int(offset)],
             ).fetchall()
         except Exception as e:
-            logger.exception("Chat search index query failed")
+            logger.exception(
+                "[%s] chat search index query failed account=%s scope=%s username=%s",
+                trace_id,
+                account_dir.name,
+                "conversation" if username else "global",
+                str(username or "").strip(),
+            )
             return {
                 "status": "index_error",
                 "account": account_dir.name,
@@ -6623,7 +6663,7 @@ async def _search_chat_messages_via_fts(
                 wcdb_display_names=wcdb_display_names,
             )
 
-    return {
+    response = {
         "status": "success",
         "account": account_dir.name,
         "scope": scope,
@@ -6638,6 +6678,19 @@ async def _search_chat_messages_via_fts(
         "index": index,
         "hits": hits,
     }
+    logger.info(
+        "[%s] chat search done account=%s scope=%s username=%s sender=%s total=%s hits=%s has_more=%s rows=%s",
+        trace_id,
+        account_dir.name,
+        scope,
+        str(username or "").strip(),
+        str(sender or "").strip(),
+        int(total),
+        len(hits),
+        bool(response["hasMore"]),
+        len(rows),
+    )
+    return response
 
 
 @router.get("/api/chat/search", summary="搜索聊天记录（消息）")
