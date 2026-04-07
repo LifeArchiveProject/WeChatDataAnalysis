@@ -62,6 +62,14 @@ export const useApi = () => {
     })
   }
 
+  // 导入预览API
+  const importDecryptedPreview = async (data) => {
+    return await request('/import_decrypted/preview', {
+      method: 'POST',
+      body: data
+    })
+  }
+
   // 导入已解密目录API
   const importDecrypted = async (data) => {
     return await request('/import_decrypted', {
@@ -613,6 +621,8 @@ export const useApi = () => {
     detectWechat,
     detectCurrentAccount,
     decryptDatabase,
+    importDecryptedPreview,
+    importDecrypted,
     healthCheck,
     listChatAccounts,
     getChatAccountInfo,

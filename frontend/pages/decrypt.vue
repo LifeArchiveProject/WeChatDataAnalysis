@@ -16,31 +16,13 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
               </svg>
             </div>
-            <div class="flex-1">
-              <h2 class="text-xl font-bold text-[#000000e6]">数据获取</h2>
-              <p class="text-sm text-[#7F7F7F]">选择解密新数据或导入已解密目录</p>
-            </div>
-            <!-- 模式切换 -->
-            <div class="bg-gray-100 p-1 rounded-lg flex">
-              <button 
-                @click="decryptMode = 'standard'"
-                :class="decryptMode === 'standard' ? 'bg-white shadow-sm text-[#07C160]' : 'text-[#7F7F7F]'"
-                class="px-3 py-1.5 text-xs font-medium rounded-md transition-all"
-              >
-                标准解密
-              </button>
-              <button 
-                @click="decryptMode = 'import'"
-                :class="decryptMode === 'import' ? 'bg-white shadow-sm text-[#07C160]' : 'text-[#7F7F7F]'"
-                class="px-3 py-1.5 text-xs font-medium rounded-md transition-all"
-              >
-                直接导入
-              </button>
+            <div>
+              <h2 class="text-xl font-bold text-[#000000e6]">数据库解密</h2>
+              <p class="text-sm text-[#7F7F7F]">输入密钥和路径开始解密</p>
             </div>
           </div>
           
-          <!-- 标准解密模式 -->
-          <form v-if="decryptMode === 'standard'" @submit.prevent="handleDecrypt" class="space-y-6">
+          <form @submit.prevent="handleDecrypt" class="space-y-6">
             <!-- 密钥输入 -->
             <div>
               <label for="key" class="block text-sm font-medium text-[#000000e6] mb-2">
@@ -175,72 +157,6 @@
                   <div class="text-lg font-bold text-[#FA5151]">{{ dbDecryptProgress.fail_count }}</div>
                   <div class="text-xs text-[#7F7F7F]">失败</div>
                 </div>
-              </div>
-            </div>
-          </form>
-
-          <!-- 直接导入模式 -->
-          <form v-else @submit.prevent="handleImport" class="space-y-6">
-            <div class="bg-blue-50 border border-blue-100 rounded-xl p-5 mb-6">
-              <div class="flex items-start">
-                <svg class="w-5 h-5 text-blue-500 mt-0.5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                <div class="text-sm text-blue-700">
-                  <p class="font-bold mb-1">什么是直接导入？</p>
-                  <p>如果您已经有了已解密的数据库文件（扁平化目录结构，含 contact.db, session.db 等）以及 resource 资源目录，可以直接导入。此过程<strong>不校验密钥</strong>，也不进行实时同步。</p>
-                </div>
-              </div>
-            </div>
-
-            <!-- 导入路径输入 -->
-            <div>
-              <label for="importPath" class="block text-sm font-medium text-[#000000e6] mb-2">
-                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-                </svg>
-                已解密目录路径 <span class="text-red-500">*</span>
-              </label>
-              <input
-                id="importPath"
-                v-model="importData.path"
-                type="text"
-                placeholder="例如: D:\MyBackups\wxid_xxxx"
-                class="w-full px-4 py-3 bg-white border border-[#EDEDED] rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
-                :class="{ 'border-red-500': formErrors.import_path }"
-                required
-              />
-              <p v-if="formErrors.import_path" class="mt-1 text-sm text-red-600 flex items-center">
-                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                {{ formErrors.import_path }}
-              </p>
-              <p class="mt-2 text-xs text-[#7F7F7F] flex items-center">
-                <svg class="w-4 h-4 mr-1 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-                该目录应包含已解密的 .db 文件，若有 resource 文件夹也会一并导入。
-              </p>
-            </div>
-
-            <!-- 提交按钮 -->
-            <div class="pt-4 border-t border-[#EDEDED]">
-              <div class="flex items-center justify-center">
-                <button
-                  type="submit"
-                  :disabled="loading"
-                  class="inline-flex items-center px-8 py-3 bg-[#07C160] text-white rounded-lg text-base font-medium hover:bg-[#06AD56] transform hover:scale-105 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <svg v-if="!loading" class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-                  </svg>
-                  <svg v-if="loading" class="w-5 h-5 mr-2 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  {{ loading ? '导入中...' : '开始导入' }}
-                </button>
               </div>
             </div>
           </form>
@@ -518,7 +434,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '~/composables/useApi'
 
-const { decryptDatabase, importDecrypted, saveMediaKeys, getSavedKeys, getKeys, getImageKey, getWxStatus } = useApi()
+const { decryptDatabase, saveMediaKeys, getSavedKeys, getKeys, getImageKey, getWxStatus } = useApi()
 
 const loading = ref(false)
 const error = ref('')
@@ -527,8 +443,12 @@ const currentStep = ref(0)
 const mediaAccount = ref('')
 const isGettingDbKey = ref(false)
 
-// 解密模式切换
-const decryptMode = ref('standard') // 'standard' or 'import'
+// 步骤定义
+const steps = [
+  { title: '数据库解密' },
+  { title: '填写图片密钥' },
+  { title: '图片解密' }
+]
 
 // 表单数据
 const formData = reactive({
@@ -536,16 +456,10 @@ const formData = reactive({
   db_storage_path: ''
 })
 
-// 导入数据
-const importData = reactive({
-  path: ''
-})
-
 // 表单错误
 const formErrors = reactive({
   key: '',
-  db_storage_path: '',
-  import_path: ''
+  db_storage_path: ''
 })
 
 // 图片密钥相关
@@ -782,57 +696,6 @@ const resetDbDecryptProgress = () => {
   dbDecryptProgress.current_file = ''
   dbDecryptProgress.status = ''
   dbDecryptProgress.message = ''
-}
-
-const handleImport = async () => {
-  if (!importData.path) {
-    formErrors.import_path = '请输入已解密目录路径'
-    return
-  }
-  
-  loading.value = true
-  error.value = ''
-  warning.value = ''
-  formErrors.import_path = ''
-  
-  try {
-    const res = await importDecrypted({
-      import_path: importData.path
-    })
-    
-    if (res.status === 'success') {
-      mediaAccount.value = res.account
-      // 模拟一个成功的结果
-      decryptResult.value = {
-        status: 'completed',
-        success_count: res.imported_files.length,
-        total_databases: res.imported_files.length,
-        account_results: {
-          [res.account]: {
-            success: res.imported_files.length
-          }
-        }
-      }
-      
-      if (process.client && typeof window !== 'undefined') {
-        sessionStorage.setItem('decryptResult', JSON.stringify(decryptResult.value))
-      }
-      
-      // 如果有 resource 目录，则提示用户可以跳过图片解密
-      if (res.has_resource) {
-        warning.value = '检测到已包含 resource 资源目录，您可以直接跳转到聊天记录。'
-      }
-      
-      currentStep.value = 1
-      await prefillKeysForAccount(mediaAccount.value)
-    } else {
-      error.value = res.message || '导入失败'
-    }
-  } catch (err) {
-    error.value = err.message || '导入过程中发生错误'
-  } finally {
-    loading.value = false
-  }
 }
 
 // 处理解密
