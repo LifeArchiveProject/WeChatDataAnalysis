@@ -606,16 +606,36 @@ const onGlobalKeyDown = (event) => {
   }
 }
 
+const RESUME_MEDIA_REFRESH_MIN_INTERVAL_MS = 1200
+const RESUME_MEDIA_REFRESH_MIN_HIDDEN_MS = 30 * 1000
+
 let lastResumeMediaRefreshAt = 0
+let lastPageHiddenAt = 0
+
+const hasLoadedConversationMedia = () => {
+  const list = Array.isArray(messages.value) ? messages.value : []
+  return list.some((message) => {
+    return !!(
+      String(message?.imageUrl || '').trim()
+      || String(message?.videoThumbUrl || '').trim()
+      || String(message?.quoteImageUrl || '').trim()
+    )
+  })
+}
 
 const maybeRefreshMediaOnResume = () => {
   if (!process.client) return
   if (!selectedContact.value?.username) return
   if (searchContext.value?.active) return
+  if (!hasLoadedConversationMedia()) return
+
+  const hiddenDuration = lastPageHiddenAt > 0 ? (Date.now() - lastPageHiddenAt) : 0
+  if (hiddenDuration < RESUME_MEDIA_REFRESH_MIN_HIDDEN_MS) return
 
   const now = Date.now()
-  if ((now - lastResumeMediaRefreshAt) < 1200) return
+  if ((now - lastResumeMediaRefreshAt) < RESUME_MEDIA_REFRESH_MIN_INTERVAL_MS) return
   lastResumeMediaRefreshAt = now
+  lastPageHiddenAt = 0
   void refreshCurrentMessageMedia()
 }
 
@@ -624,6 +644,10 @@ const onWindowFocus = () => {
 }
 
 const onVisibilityChange = () => {
+  if (document.visibilityState === 'hidden') {
+    lastPageHiddenAt = Date.now()
+    return
+  }
   if (document.visibilityState !== 'visible') return
   maybeRefreshMediaOnResume()
 }

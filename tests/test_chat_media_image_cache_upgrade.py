@@ -18,6 +18,10 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 class TestChatMediaImageCacheUpgrade(unittest.TestCase):
+    def assert_cacheable_chat_image_response(self, resp) -> None:
+        self.assertEqual(resp.headers.get("cache-control"), "private, max-age=86400")
+        self.assertTrue(str(resp.headers.get("etag") or "").strip())
+
     def _seed_contact_db(self, path: Path, *, account: str, username: str) -> None:
         conn = sqlite3.connect(str(path))
         try:
@@ -147,7 +151,7 @@ class TestChatMediaImageCacheUpgrade(unittest.TestCase):
                 )
                 self.assertEqual(resp.status_code, 200)
                 self.assertEqual(resp.content, live_original)
-                self.assertEqual(resp.headers.get("cache-control"), "no-store")
+                self.assert_cacheable_chat_image_response(resp)
                 self.assertEqual(cache_path.read_bytes(), live_original)
             finally:
                 try:
@@ -192,8 +196,61 @@ class TestChatMediaImageCacheUpgrade(unittest.TestCase):
                 )
                 self.assertEqual(resp.status_code, 200)
                 self.assertEqual(resp.content, cached_original)
-                self.assertEqual(resp.headers.get("cache-control"), "no-store")
+                self.assert_cacheable_chat_image_response(resp)
                 self.assertEqual(cache_path.read_bytes(), cached_original)
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_chat_image_supports_etag_revalidation(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            md5 = "cccccccccccccccccccccccccccccccc"
+
+            account_dir = root / "output" / "databases" / account
+            wxid_dir = root / "wxid_source"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            wxid_dir.mkdir(parents=True, exist_ok=True)
+
+            self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
+            self._seed_session_db(account_dir / "session.db", username=username)
+            self._seed_source_info(account_dir, wxid_dir=wxid_dir)
+
+            cached_original = b"\xff\xd8\xff\xe0" + (b"\x22" * 64) + b"\xff\xd9"
+            self._seed_cached_resource(account_dir, md5=md5, payload=cached_original)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            client = None
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                client = self._build_client()
+                first = client.get(
+                    "/api/chat/media/image",
+                    params={"account": account, "md5": md5, "username": username},
+                )
+                self.assertEqual(first.status_code, 200)
+                self.assertEqual(first.content, cached_original)
+                self.assert_cacheable_chat_image_response(first)
+
+                etag = str(first.headers.get("etag") or "").strip()
+                second = client.get(
+                    "/api/chat/media/image",
+                    params={"account": account, "md5": md5, "username": username},
+                    headers={"If-None-Match": etag},
+                )
+                self.assertEqual(second.status_code, 304)
+                self.assertEqual(second.content, b"")
+                self.assertEqual(second.headers.get("etag"), etag)
+                self.assertEqual(second.headers.get("cache-control"), "private, max-age=86400")
             finally:
                 try:
                     client.close()

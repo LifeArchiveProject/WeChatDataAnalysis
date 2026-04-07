@@ -12,7 +12,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
@@ -67,10 +67,27 @@ logger = get_logger(__name__)
 router = APIRouter(route_class=PathFixRoute)
 
 
-def _build_uncached_media_response(data: bytes, media_type: str) -> Response:
-    resp = Response(content=data, media_type=media_type)
-    resp.headers["Cache-Control"] = "no-store"
-    return resp
+CHAT_MEDIA_BROWSER_CACHE_SECONDS = 24 * 60 * 60
+
+
+def _build_cached_media_response(request: Optional[Request], data: bytes, media_type: str) -> Response:
+    payload = bytes(data or b"")
+    etag = f'"{hashlib.sha1(payload).hexdigest()}"'
+    cache_control = f"private, max-age={CHAT_MEDIA_BROWSER_CACHE_SECONDS}"
+    headers = {
+        "Cache-Control": cache_control,
+        "ETag": etag,
+    }
+
+    try:
+        if_none_match = str(request.headers.get("if-none-match") or "").strip() if request else ""
+    except Exception:
+        if_none_match = ""
+
+    if if_none_match and if_none_match == etag:
+        return Response(status_code=304, headers=headers)
+
+    return Response(content=payload, media_type=media_type, headers=headers)
 
 
 def _image_candidate_variant_rank(path: Path) -> int:
@@ -1363,6 +1380,7 @@ async def download_chat_emoji(req: EmojiDownloadRequest):
 
 @router.get("/api/chat/media/image", summary="获取图片消息资源")
 async def get_chat_image(
+    request: Request,
     md5: Optional[str] = None,
     file_id: Optional[str] = None,
     server_id: Optional[int] = None,
@@ -1502,7 +1520,7 @@ async def get_chat_image(
 
     if not p:
         if cached_path:
-            return _build_uncached_media_response(cached_data, cached_media_type)
+            return _build_cached_media_response(request, cached_data, cached_media_type)
         raise HTTPException(status_code=404, detail="Image not found.")
 
     candidates.extend(_iter_media_source_candidates(p))
@@ -1562,7 +1580,7 @@ async def get_chat_image(
     logger.info(
         f"chat_image: md5={md5} file_id={file_id} chosen={chosen} media_type={media_type} bytes={len(data)}"
     )
-    return _build_uncached_media_response(data, media_type)
+    return _build_cached_media_response(request, data, media_type)
 
 
 @router.get("/api/chat/media/emoji", summary="获取表情消息资源")
