@@ -61,6 +61,14 @@ export const useApi = () => {
       body: data
     })
   }
+
+  // 导入已解密目录API
+  const importDecrypted = async (data) => {
+    return await request('/import_decrypted', {
+      method: 'POST',
+      body: data
+    })
+  }
   
   // 健康检查API
   const healthCheck = async () => {

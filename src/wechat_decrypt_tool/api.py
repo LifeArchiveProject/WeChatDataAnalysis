@@ -25,6 +25,7 @@ from .routers.chat_contacts import router as _chat_contacts_router
 from .routers.chat_export import router as _chat_export_router
 from .routers.chat_media import router as _chat_media_router
 from .routers.decrypt import router as _decrypt_router
+from .routers.import_decrypted import router as _import_decrypted_router
 from .routers.health import router as _health_router
 from .routers.admin import router as _admin_router
 from .routers.keys import router as _keys_router
@@ -87,6 +88,7 @@ async def _log_server_errors(request: Request, call_next):
 app.include_router(_health_router)
 app.include_router(_admin_router)
 app.include_router(_wechat_detection_router)
+app.include_router(_import_decrypted_router)
 app.include_router(_decrypt_router)
 app.include_router(_keys_router)
 app.include_router(_media_router)
