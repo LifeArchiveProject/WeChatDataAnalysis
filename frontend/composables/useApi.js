@@ -61,6 +61,22 @@ export const useApi = () => {
       body: data
     })
   }
+
+  // 导入预览API
+  const importDecryptedPreview = async (data) => {
+    return await request('/import_decrypted/preview', {
+      method: 'POST',
+      body: data
+    })
+  }
+
+  // 导入已解密目录API
+  const importDecrypted = async (data) => {
+    return await request('/import_decrypted', {
+      method: 'POST',
+      body: data
+    })
+  }
   
   // 健康检查API
   const healthCheck = async () => {
@@ -601,10 +617,21 @@ export const useApi = () => {
     return `${base}/biz/proxy_image?${query.toString()}`
   }
 
+  const pickSystemDirectory = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.title) query.set('title', params.title)
+    if (params && params.initial_dir) query.set('initial_dir', params.initial_dir)
+    const url = '/system/pick_directory' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
   return {
+    pickSystemDirectory,
     detectWechat,
     detectCurrentAccount,
     decryptDatabase,
+    importDecryptedPreview,
+    importDecrypted,
     healthCheck,
     listChatAccounts,
     getChatAccountInfo,

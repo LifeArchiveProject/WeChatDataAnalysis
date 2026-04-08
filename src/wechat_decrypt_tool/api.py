@@ -25,6 +25,7 @@ from .routers.chat_contacts import router as _chat_contacts_router
 from .routers.chat_export import router as _chat_export_router
 from .routers.chat_media import router as _chat_media_router
 from .routers.decrypt import router as _decrypt_router
+from .routers.import_decrypted import router as _import_decrypted_router
 from .routers.health import router as _health_router
 from .routers.admin import router as _admin_router
 from .routers.keys import router as _keys_router
@@ -37,6 +38,7 @@ from .request_logging import log_server_errors_middleware
 from .sns_stage_timing import add_sns_stage_timing_headers
 from .wcdb_realtime import WCDB_REALTIME, shutdown as _wcdb_shutdown
 from .routers.biz import router as _biz_router
+from .routers.system import router as _system_router
 
 app = FastAPI(
     title="微信数据库解密工具",
@@ -87,6 +89,7 @@ async def _log_server_errors(request: Request, call_next):
 app.include_router(_health_router)
 app.include_router(_admin_router)
 app.include_router(_wechat_detection_router)
+app.include_router(_import_decrypted_router)
 app.include_router(_decrypt_router)
 app.include_router(_keys_router)
 app.include_router(_media_router)
@@ -98,6 +101,7 @@ app.include_router(_sns_router)
 app.include_router(_sns_export_router)
 app.include_router(_wrapped_router)
 app.include_router(_biz_router)
+app.include_router(_system_router)
 
 
 class _SPAStaticFiles(StaticFiles):

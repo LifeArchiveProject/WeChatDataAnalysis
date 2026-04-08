@@ -21,7 +21,21 @@ async def detect_wechat_detailed(data_root_path: Optional[str] = None):
 
         # 检测当前登录账号
         current_account_info = detect_current_logged_in_account(data_root_path)
+
+        # 【新增特性】目录匹配校验：处理目录名 wxid_xxxx_yyyy 与真实 wxid_xxxx 的适配
+        if current_account_info and current_account_info.get("current_account"):
+            base_wxid = current_account_info["current_account"]
+            current_account_info["matched_folder"] = base_wxid  # 默认兜底
+
+            # 遍历寻找以该 wxid 开头的用户文件夹（支持后缀匹配）
+            for acc in info.get("accounts", []):
+                acc_name = acc["account_name"]
+                if acc_name == base_wxid or acc_name.startswith(f"{base_wxid}_"):
+                    current_account_info["matched_folder"] = acc_name
+                    break
+
         info['current_account'] = current_account_info
+        # logger.info(current_account_info)
 
         # 添加一些统计信息
         stats = {
