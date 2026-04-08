@@ -17,7 +17,6 @@
             </div>
           </div>
 
-          <!-- 导入说明 -->
           <div class="bg-blue-50 border border-blue-100 rounded-2xl p-6 mb-8">
             <h3 class="text-blue-800 font-bold mb-3 flex items-center">
               <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -26,9 +25,9 @@
               标准目录结构要求
             </h3>
             <ul class="text-sm text-blue-700 space-y-2 list-disc list-inside opacity-90">
+              <li><strong>预期目标：</strong>请选择形如 <strong>/output/wxid_xxxxx/</strong> 这一级目录</li>
               <li><strong>databases/</strong> 目录：存放扁平化的 .db 文件</li>
-              <li><strong>account.json</strong> 文件：包含昵称、wxid等信息</li>
-              <li><strong>resource/</strong> 目录：存放解密后的资源文件（可选）</li>
+              <li><strong>account.json</strong> 文件：系统会自动生成</li>
             </ul>
           </div>
 
@@ -119,10 +118,8 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { useApi } from '~/composables/useApi'
-
-const { importDecryptedPreview, importDecrypted } = useApi()
+import {ref} from 'vue'
+import {useApi} from '~/composables/useApi'
 
 const importing = ref(false)
 const importPreview = ref(null)
@@ -140,13 +137,15 @@ const resetImport = () => {
   selectedImportPath.value = ''
 }
 
+const { importDecryptedPreview, importDecrypted, pickSystemDirectory } = useApi()
+
 const handlePickDirectory = async () => {
   let path = ''
-  
+
   if (isDesktopShell()) {
     try {
       const res = await window.wechatDesktop.chooseDirectory({
-        title: '选择解密数据所在目录'
+        title: '请选择解密输出目录 (如: output/wxid_xxxxx)'
       })
       if (!res || res.canceled || !res.filePaths?.length) return
       path = res.filePaths[0]
@@ -155,17 +154,28 @@ const handlePickDirectory = async () => {
       return
     }
   } else {
-    path = window.prompt('请输入已解密目录的绝对路径:')
-    if (!path) return
+    try {
+      const res = await pickSystemDirectory({ title: '请选择解密输出目录 (需选到 wxid_xxx 层级)' })
+      if (!res || !res.path) return
+      path = res.path
+    } catch (e) {
+      console.error('唤起目录选择器失败:', e)
+      path = window.prompt('无法唤起选择器，请输入已解密目录的绝对路径:')
+      if (!path) return
+    }
+  }
+
+  if (path && !path.includes('wxid_')) {
+    const isOk = window.confirm(`你选择的目录为：\n${path}\n\n该目录似乎不符合 "wxid_xxxxx" 的格式。确定要继续吗？`)
+    if (!isOk) return
   }
 
   selectedImportPath.value = path
   importError.value = ''
   importPreview.value = null
-  
+
   try {
-    const res = await importDecryptedPreview({ import_path: path })
-    importPreview.value = res
+    importPreview.value = await importDecryptedPreview({import_path: path})
   } catch (e) {
     importError.value = e.message || '目录格式不正确，请确保包含 databases 目录和 account.json'
   }
