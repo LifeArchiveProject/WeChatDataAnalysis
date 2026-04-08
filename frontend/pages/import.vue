@@ -222,7 +222,7 @@ const confirmImport = async () => {
   importProgress.value = 0
   importMessage.value = '启动导入程序...'
 
-  const url = new URL(`${apiBase.replace(/\/$/, '')}/api/import_decrypted`, window.location.origin)
+  const url = new URL(`${apiBase.replace(/\/$/, '')}/import_decrypted`, window.location.origin)
   url.searchParams.set('import_path', selectedImportPath.value)
 
   if (eventSource) eventSource.close()
