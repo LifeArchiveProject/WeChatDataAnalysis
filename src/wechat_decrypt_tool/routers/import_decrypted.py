@@ -3,14 +3,18 @@ from __future__ import annotations
 import os
 import shutil
 import json
+import asyncio
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..app_paths import get_output_databases_dir
 from ..logging_config import get_logger
 from ..path_fix import PathFixRoute
 from ..session_last_message import build_session_last_message_table
+from ..media_helpers import _wxgf_to_image_bytes
 
 logger = get_logger(__name__)
 
@@ -78,99 +82,190 @@ async def preview_import(request: ImportRequest):
         
     return _validate_import_structure(import_path)
 
-@router.post("/api/import_decrypted", summary="执行导入已解密的数据库和资源目录")
-async def import_decrypted_directory(request: ImportRequest):
-    import_path = Path(request.import_path.strip())
-    if not import_path.exists() or not import_path.is_dir():
-        raise HTTPException(status_code=400, detail="导入路径不存在或不是目录")
-
-    # 1. 验证并获取账号信息
-    info = _validate_import_structure(import_path)
-    account_name = info["username"]
+@router.get("/api/import_decrypted", summary="执行导入已解密的数据库和资源目录 (SSE)")
+async def import_decrypted_directory(
+    import_path: str = Query(..., description="已解密的数据库和资源所在目录的绝对路径")
+):
+    import_path_obj = Path(import_path.strip())
     
-    # 2. 准备输出目录
-    output_base = get_output_databases_dir()
-    account_output_dir = output_base / account_name
-    account_output_dir.mkdir(parents=True, exist_ok=True)
+    def _sse(data: dict):
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-    logger.info(f"正在从 {import_path} 导入账号 {account_name} ...")
+    async def generate_progress():
+        try:
+            if not import_path_obj.exists() or not import_path_obj.is_dir():
+                yield _sse({"type": "error", "message": "导入路径不存在或不是目录"})
+                return
 
-    # 3. 导入 databases 目录下的 .db 文件
-    db_src_dir = import_path / "databases"
-    imported_files = []
-    for item in db_src_dir.iterdir():
-        if item.is_file() and item.suffix == ".db":
-            target = account_output_dir / item.name
+            yield _sse({"type": "progress", "percent": 5, "message": "正在验证目录结构..."})
+            # 1. 验证并获取账号信息
             try:
-                if target.exists():
-                    target.unlink()
-                os.link(item, target)
-                imported_files.append(item.name)
-            except Exception:
+                info = await asyncio.to_thread(_validate_import_structure, import_path_obj)
+            except HTTPException as e:
+                yield _sse({"type": "error", "message": e.detail})
+                return
+            except Exception as e:
+                yield _sse({"type": "error", "message": f"验证失败: {e}"})
+                return
+            
+            account_name = info["username"]
+            yield _sse({"type": "progress", "percent": 10, "message": f"验证成功: {account_name}"})
+            
+            # 2. 准备输出目录
+            output_base = get_output_databases_dir()
+            account_output_dir = output_base / account_name
+            await asyncio.to_thread(account_output_dir.mkdir, parents=True, exist_ok=True)
+
+            yield _sse({"type": "progress", "percent": 15, "message": "正在准备目标目录..."})
+
+            # 3. 导入 databases 目录下的 .db 文件
+            db_src_dir = import_path_obj / "databases"
+            db_files = [f for f in db_src_dir.iterdir() if f.is_file() and f.suffix == ".db"]
+            imported_files = []
+            
+            for i, item in enumerate(db_files):
+                target = account_output_dir / item.name
+                def _do_import_db(src, dst):
+                    if dst.exists():
+                        dst.unlink()
+                    try:
+                        os.link(src, dst)
+                    except Exception:
+                        shutil.copy2(src, dst)
+                
                 try:
-                    shutil.copy2(item, target)
+                    await asyncio.to_thread(_do_import_db, item, target)
                     imported_files.append(item.name)
                 except Exception as e:
                     logger.error(f"导入数据库失败: {item.name}, error: {e}")
+                
+                percent = 15 + int((i + 1) / (len(db_files) or 1) * 15)
+                yield _sse({"type": "progress", "percent": percent, "message": f"正在导入数据库: {item.name}"})
 
-    # 4. 导入 resource 目录
-    resource_src = import_path / "resource"
-    if resource_src.exists() and resource_src.is_dir():
-        resource_dst = account_output_dir / "resource"
-        try:
-            if resource_dst.exists():
-                if resource_dst.is_symlink() or resource_dst.is_file():
-                    resource_dst.unlink()
-                else:
-                    shutil.rmtree(resource_dst)
-            
+            # 4. 导入 resource 目录
+            resource_src = import_path_obj / "resource"
+            if resource_src.exists() and resource_src.is_dir():
+                yield _sse({"type": "progress", "percent": 30, "message": "正在导入资源文件 (这可能需要一些时间)..."})
+                resource_dst = account_output_dir / "resource"
+                
+                def _do_import_resource(src, dst):
+                    if dst.exists():
+                        if dst.is_symlink() or dst.is_file():
+                            dst.unlink()
+                        else:
+                            shutil.rmtree(dst)
+                    try:
+                        os.symlink(src, dst, target_is_directory=True)
+                    except Exception:
+                        shutil.copytree(src, dst, dirs_exist_ok=True)
+                
+                try:
+                    await asyncio.to_thread(_do_import_resource, resource_src, resource_dst)
+                except Exception as e:
+                    logger.error(f"导入 resource 目录失败: {e}")
+                
+                # 5. 转换 .wxgf 资源 (新增加的流程)
+                yield _sse({"type": "progress", "percent": 50, "message": "正在搜索并转换 .wxgf 图片..."})
+                
+                if resource_dst.exists():
+                    # 搜索 wxgf 文件
+                    def _find_wxgf(root_dir):
+                        found = []
+                        for root, _, files in os.walk(root_dir):
+                            for f in files:
+                                if f.lower().endswith(".wxgf"):
+                                    found.append(Path(root) / f)
+                        return found
+                    
+                    wxgf_files = await asyncio.to_thread(_find_wxgf, resource_dst)
+                    
+                    if wxgf_files:
+                        total_wxgf = len(wxgf_files)
+                        converted_count = 0
+                        for i, wxgf_path in enumerate(wxgf_files):
+                            def _convert_one(p):
+                                jpg_p = p.with_suffix(".wxgf.jpg")
+                                if not jpg_p.exists():
+                                    data = p.read_bytes()
+                                    if data.startswith(b"wxgf"):
+                                        converted = _wxgf_to_image_bytes(data)
+                                        if converted:
+                                            jpg_p.write_bytes(converted)
+                                            return True
+                                else:
+                                    return True # 已经存在视为成功
+                                return False
+
+                            try:
+                                success = await asyncio.to_thread(_convert_one, wxgf_path)
+                                if success:
+                                    converted_count += 1
+                            except Exception as e:
+                                logger.error(f"转换 wxgf 失败: {wxgf_path}, {e}")
+                            
+                            if i % max(1, total_wxgf // 20) == 0 or i == total_wxgf - 1:
+                                progress_val = 50 + int((i + 1) / total_wxgf * 30)
+                                yield _sse({"type": "progress", "percent": progress_val, "message": f"转换 wxgf 图片: {i+1}/{total_wxgf}"})
+                        
+                        logger.info(f"账号 {account_name} 转换完成: {converted_count}/{total_wxgf} 个 .wxgf 文件")
+                
+            # 6. 复制 account.json
+            yield _sse({"type": "progress", "percent": 85, "message": "正在更新账号配置..."})
             try:
-                os.symlink(resource_src, resource_dst, target_is_directory=True)
+                await asyncio.to_thread(shutil.copy2, import_path_obj / "account.json", account_output_dir / "account.json")
             except Exception:
-                shutil.copytree(resource_src, resource_dst, dirs_exist_ok=True)
+                pass
+
+            # 7. 保存来源信息
+            def _save_source_info(dst, path, info):
+                (dst / "_source.json").write_text(
+                    json.dumps(
+                        {
+                            "db_storage_path": str(path), 
+                            "import_mode": "manual_import", 
+                            "imported_at": __import__('datetime').datetime.now().isoformat(),
+                            "original_info": info
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+
+            try:
+                await asyncio.to_thread(_save_source_info, account_output_dir, import_path_obj, info)
+            except Exception:
+                pass
+
+            # 8. 构建缓存
+            yield _sse({"type": "progress", "percent": 90, "message": "正在构建会话缓存 (这可能需要较长时间)..."})
+            try:
+                await asyncio.to_thread(
+                    build_session_last_message_table,
+                    account_output_dir,
+                    rebuild=True,
+                    include_hidden=True,
+                    include_official=True,
+                )
+            except Exception as e:
+                logger.error(f"构建会话缓存失败: {e}")
+
+            yield _sse({
+                "type": "complete",
+                "status": "success",
+                "account": account_name,
+                "nick": info["nick"],
+                "message": f"成功导入账号 {info['nick']} ({account_name})"
+            })
+
         except Exception as e:
-            logger.error(f"导入 resource 目录失败: {e}")
+            logger.error(f"导入过程中发生异常: {e}", exc_info=True)
+            yield _sse({"type": "error", "message": f"导入失败: {str(e)}"})
 
-    # 5. 复制 account.json
-    try:
-        shutil.copy2(import_path / "account.json", account_output_dir / "account.json")
-    except Exception:
-        pass
-
-    # 6. 保存来源信息
-    try:
-        (account_output_dir / "_source.json").write_text(
-            json.dumps(
-                {
-                    "db_storage_path": str(import_path), 
-                    "import_mode": "manual_import", 
-                    "imported_at": __import__('datetime').datetime.now().isoformat(),
-                    "original_info": info
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-    # 7. 构建缓存
-    logger.info(f"正在为 {account_name} 构建会话缓存...")
-    try:
-        build_session_last_message_table(
-            account_output_dir,
-            rebuild=True,
-            include_hidden=True,
-            include_official=True,
-        )
-    except Exception as e:
-        logger.error(f"构建会话缓存失败: {e}")
-
-    return {
-        "status": "success",
-        "account": account_name,
-        "nick": info["nick"],
-        "imported_files": imported_files,
-        "message": f"成功导入账号 {info['nick']} ({account_name})"
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no"
     }
+    return StreamingResponse(generate_progress(), headers=headers)
