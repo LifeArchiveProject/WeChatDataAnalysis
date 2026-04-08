@@ -24,26 +24,36 @@
         </NuxtLink>
       </div>
 
-      <!-- 兜底：允许输入数据库路径再次检测 -->
-      <div class="bg-white rounded-xl p-4 border border-[#EDEDED] mb-4">
-        <label class="block text-sm text-[#000000e6] mb-2">数据库文件夹路径（可选）</label>
-        <div class="flex gap-2">
-          <input
-            v-model="customPath"
-            type="text"
-            placeholder="例如：D:\wechatMSG\xwechat_files"
-            class="flex-1 px-4 py-2 bg-white border border-[#EDEDED] rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
-          />
-          <button @click="startDetection" class="px-4 py-2 bg-[#07C160] text-white rounded-lg text-sm hover:bg-[#06AD56]">重新检测</button>
+      <!-- 兜底：唤起原生目录选择器再次检测 -->
+      <div class="bg-white rounded-xl p-4 md:p-5 border border-[#EDEDED] mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm hover:shadow transition-shadow duration-200">
+        <div>
+          <h3 class="text-sm font-bold text-[#000000e6] flex items-center">
+            未找到想要的账号？
+<!--            <span class="ml-2 px-2 py-0.5 bg-gray-100 text-gray-500 rounded text-xs font-normal">深度检测兜底</span>-->
+          </h3>
+          <p class="text-xs text-[#7F7F7F] mt-1.5">
+            <span v-if="customPath">当前指定检测路径：<span class="font-mono bg-gray-50 px-1 rounded text-[#000000e6]">{{ customPath }}</span></span>
+            <span v-else>如果自动检测漏了，您可以手动指定微信数据根目录 (通常名为 xwechat_files) 让系统重新扫描。</span>
+          </p>
         </div>
-        <p class="text-xs text-[#7F7F7F] mt-1">未找到时可填写 xwechat_files 根目录。</p>
+        <button @click="handlePickDirectory" :disabled="loading"
+                class="shrink-0 px-5 py-2.5 bg-[#07C160] text-white rounded-xl text-sm font-medium hover:bg-[#06AD56] focus:ring-2 focus:ring-[#07C160] focus:ring-offset-1 disabled:opacity-50 transition-all duration-200 flex items-center justify-center">
+          <svg v-if="!loading" class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+          </svg>
+          <svg v-else class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          {{ loading ? '检测中...' : '手动选择目录检测' }}
+        </button>
       </div>
       
       <!-- 主内容区域 -->
       <div>
         <!-- 检测中状态 -->
-        <div v-if="loading" class="bg-white rounded-2xl p-12 text-center">
-          <svg class="w-16 h-16 mx-auto animate-spin text-[#07C160]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div v-if="loading" class="absolute inset-0 bg-white/80 backdrop-blur-sm z-20 rounded-2xl flex flex-col items-center justify-center border border-[#EDEDED]">
+          <svg class="w-16 h-16 animate-spin text-[#07C160]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
@@ -51,16 +61,16 @@
         </div>
         
         <!-- 检测结果内容 -->
-        <div v-else-if="detectionResult">
+        <div v-if="detectionResult && !loading">
           <!-- 错误信息 -->
-          <div v-if="detectionResult.error" class="bg-white rounded-2xl border border-red-200 p-8">
+          <div v-if="detectionResult.error" class="bg-red-50 rounded-2xl border border-red-100 p-8">
             <div class="flex items-center">
-              <svg class="w-8 h-8 text-red-500 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-8 h-8 text-red-500 mr-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
               </svg>
               <div>
-                <p class="text-lg font-medium text-red-600">检测失败</p>
-                <p class="text-red-500 mt-1">{{ detectionResult.error }}</p>
+                <p class="text-lg font-bold text-red-800">未找到微信数据</p>
+                <p class="text-red-600 mt-1 text-sm">{{ detectionResult.error }}</p>
               </div>
             </div>
           </div>
@@ -114,89 +124,91 @@
             </div>
             
             <!-- 账户列表 -->
-          <div v-if="detectionResult.data?.accounts && detectionResult.data.accounts.length > 0"
-            class="bg-white rounded-2xl border border-[#EDEDED] overflow-hidden">
-            <div class="p-4 border-b border-[#EDEDED] bg-gray-50">
-              <h3 class="text-base font-semibold text-[#000000e6]">微信账户详情</h3>
-            </div>
-            <div class="divide-y divide-[#EDEDED] max-h-64 overflow-y-auto">
-              <!-- 将当前登录账号放在第一位 -->
-              <div v-for="(account, index) in sortedAccounts" :key="index"
-                :class="['p-4 hover:bg-gray-50 transition-all duration-200', isCurrentAccount(account.account_name) ? 'bg-[#07C160]/5' : '']">
-                <div class="flex items-center justify-between">
-                  <div class="flex-1">
-                    <div class="flex items-center">
-                      <div class="w-12 h-12 bg-gradient-to-br from-[#07C160]/10 to-[#91D300]/10 rounded-full flex items-center justify-center mr-4">
-                        <span class="text-[#07C160] font-bold text-lg">{{ account.account_name?.charAt(0)?.toUpperCase() || 'U' }}</span>
-                      </div>
-                      <div>
-                        <div class="flex items-center">
-                          <p class="text-lg font-medium text-[#000000e6]">{{ account.account_name || '未知账户' }}</p>
-                          <!-- 当前登录账号标识 -->
-                          <span v-if="isCurrentAccount(account.account_name)"
-                            class="ml-2 inline-flex items-center px-2 py-1 bg-[#07C160]/10 text-[#07C160] rounded text-xs font-medium">
-                            <svg class="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                              <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/>
-                            </svg>
-                            当前登录
-                          </span>
-                        </div>
-                        <div class="flex items-center mt-1 space-x-4 text-sm text-[#7F7F7F]">
-                          <span class="flex items-center">
-                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
-                            </svg>
-                            {{ account.database_count }} 个数据库
-                          </span>
-                          <span v-if="account.data_dir" class="flex items-center">
-                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-                            </svg>
-                            数据目录已找到
-                          </span>
+            <div v-if="detectionResult.data?.accounts && detectionResult.data.accounts.length > 0"
+                 class="bg-white rounded-2xl border border-[#EDEDED] overflow-hidden shadow-sm">
+              <div class="p-4 border-b border-[#EDEDED] bg-gray-50 flex items-center justify-between">
+                <h3 class="text-base font-bold text-[#000000e6]">可操作的微信账户</h3>
+                <span class="text-xs text-gray-500">点击解密即可提取数据</span>
+              </div>
+              <div class="divide-y divide-[#EDEDED] max-h-96 overflow-y-auto">
+                <div v-for="(account, index) in sortedAccounts" :key="index"
+                     :class="['p-5 transition-all duration-200 relative overflow-hidden', isCurrentAccount(account.account_name) ? 'bg-[#07C160]/5 border border-[#07C160]/20' : 'hover:bg-[#F9F9F9]']">
+
+                  <div v-if="isCurrentAccount(account.account_name)" class="absolute top-0 right-0 bg-gradient-to-l from-[#07C160]/20 to-transparent px-4 py-1 rounded-bl-xl flex items-center">
+    <span class="text-xs text-[#07C160] font-bold flex items-center">
+      <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+      最近登录账户
+    </span>
+                  </div>
+
+                  <div class="flex items-center justify-between mt-1">
+                    <div class="flex-1">
+                      <div class="flex items-center">
+                        <template v-if="isCurrentAccount(account.account_name) && currentAccountInfo?.avatar">
+                          <img :src="currentAccountInfo.avatar" class="w-14 h-14 rounded-xl border-2 border-[#07C160]/30 mr-4 shadow-sm object-cover bg-white"  alt=""/>
+                        </template>
+                        <template v-else>
+                          <div class="w-14 h-14 bg-gradient-to-br from-[#07C160]/10 to-[#91D300]/10 rounded-xl flex items-center justify-center mr-4 shadow-inner">
+                            <span class="text-[#07C160] font-bold text-xl">{{ account.account_name?.charAt(0)?.toUpperCase() || 'U' }}</span>
+                          </div>
+                        </template>
+
+                        <div>
+                          <div class="flex flex-col">
+                            <template v-if="isCurrentAccount(account.account_name) && currentAccountInfo?.nickname">
+                              <p class="text-xl font-extrabold text-[#000000e6] leading-tight">{{ currentAccountInfo.nickname }}</p>
+                              <p class="text-xs text-[#7F7F7F] mt-1 font-mono">wxid: {{ account.account_name }}</p>
+                            </template>
+                            <template v-else>
+                              <p class="text-lg font-bold text-[#000000e6]">{{ account.account_name || '未知账户' }}</p>
+                            </template>
+                          </div>
+
+                          <div class="flex items-center mt-2 space-x-4 text-sm text-[#7F7F7F]">
+            <span class="flex items-center">
+              <svg class="w-4 h-4 mr-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
+              </svg>
+              {{ account.database_count }} 个库文件
+            </span>
+                            <span v-if="account.data_dir" class="flex items-center">
+              <svg class="w-4 h-4 mr-1 text-[#07C160]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+              </svg>
+              路径已确认
+            </span>
+                          </div>
                         </div>
                       </div>
                     </div>
+
+                    <button @click="goToDecrypt(account)"
+                            class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-xl font-bold hover:bg-[#06AD56] hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 text-sm shrink-0 z-10">
+                      解密提取
+                      <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                      </svg>
+                    </button>
                   </div>
-                  <button @click="goToDecrypt(account)"
-                    class="inline-flex items-center px-4 py-2 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56] transition-all duration-200 text-sm">
-                    <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/>
-                    </svg>
-                    解密
-                  </button>
-                </div>
-                
-                <!-- 展开更多信息 -->
-                <div class="mt-4 text-sm text-[#7F7F7F]">
-                  <p v-if="account.data_dir" class="font-mono text-xs truncate">
-                    数据路径：{{ account.data_dir }}
-                  </p>
+
+                  <div class="mt-4 pt-3 border-t border-dashed border-gray-200 text-sm text-gray-400">
+                    <p v-if="account.data_dir" class="font-mono text-xs truncate" title="复制路径">
+                      📂 {{ account.data_dir }}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
+
+            <!-- 无账户提示 -->
+            <div v-else class="bg-white rounded-2xl p-12 text-center border border-[#EDEDED]">
+              <svg class="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              <p class="text-lg text-[#000000e6] font-medium">没有在这台设备上发现微信数据</p>
+              <p class="text-sm text-gray-500 mt-2">您可以尝试通过上方的按钮手动指定 "xwechat_files" 文件夹路径。</p>
+            </div>
           </div>
-          
-          <!-- 无账户提示 -->
-          <div v-else class="bg-white rounded-2xl p-12 text-center">
-            <svg class="w-16 h-16 mx-auto text-[#7F7F7F] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-            <p class="text-lg text-[#7F7F7F]">未检测到微信账户数据</p>
-          </div>
-          </div>
-        </div>
-        
-        <!-- 未检测状态 -->
-        <div v-else class="bg-white rounded-2xl p-12 text-center">
-          <svg class="w-16 h-16 mx-auto text-[#7F7F7F] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-          </svg>
-          <p class="text-lg text-[#7F7F7F] mb-4">暂无检测结果</p>
-          <NuxtLink to="/" 
-            class="inline-flex items-center px-6 py-3 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56] transition-colors">
-            返回首页开始检测
-          </NuxtLink>
         </div>
       </div>
     </div>
@@ -204,34 +216,79 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { useApi } from '~/composables/useApi'
-import { useAppStore } from '~/stores/app'
+import {computed, onMounted, ref} from 'vue'
+import {useApi} from '~/composables/useApi'
+import {useAppStore} from '~/stores/app'
 
-const { detectWechat } = useApi()
+const { detectWechat, pickSystemDirectory } = useApi()
 const appStore = useAppStore()
 const loading = ref(false)
 const detectionResult = ref(null)
 const customPath = ref('')
 const STORAGE_KEY = 'wechat_data_root_path'
 
+const isDesktopShell = () => {
+  if (!process.client || typeof window === 'undefined') return false
+  return !!window.wechatDesktop?.__brand
+}
+
+// 唤起目录选择器并自动检测
+const handlePickDirectory = async () => {
+  let path = ''
+
+  if (isDesktopShell()) {
+    try {
+      const res = await window.wechatDesktop.chooseDirectory({
+        title: '请选择微信数据根目录 (通常名为 xwechat_files)'
+      })
+      if (!res || res.canceled || !res.filePaths?.length) return
+      path = res.filePaths[0]
+    } catch (e) {
+      console.error('桌面端选择目录失败:', e)
+      return
+    }
+  } else {
+    try {
+      const res = await pickSystemDirectory({
+        title: '请选择微信数据根目录 (通常名为 xwechat_files)'
+      })
+      if (!res || !res.path) return // 用户取消
+      path = res.path
+    } catch (e) {
+      console.error('通过API唤起系统目录选择器失败:', e)
+      path = window.prompt('无法直接唤起窗口，请输入 xwechat_files 目录的绝对路径:')
+      if (!path) return
+    }
+  }
+
+  if (path) {
+    customPath.value = path
+    // 选完后立刻启动重新检测
+    startDetection()
+  }
+}
+
 // 计算属性：将当前登录账号排在第一位
 const sortedAccounts = computed(() => {
   if (!detectionResult.value?.data?.accounts) return []
-  
   const accounts = [...detectionResult.value.data.accounts]
-  const currentAccountName = detectionResult.value.data?.current_account?.current_account
-  
-  if (!currentAccountName) return accounts
-  
-  // 将当前登录账号移到第一位
-  const sorted = accounts.sort((a, b) => {
-    if (a.account_name === currentAccountName) return -1
-    if (b.account_name === currentAccountName) return 1
+
+  const current = detectionResult.value.data?.current_account
+  const currentTargetName = current?.matched_folder || current?.current_account
+
+  if (!currentTargetName) return accounts
+
+  // 置顶最近登录账号
+  return accounts.sort((a, b) => {
+    if (a.account_name === currentTargetName) return -1
+    if (b.account_name === currentTargetName) return 1
     return 0
   })
-  
-  return sorted
+})
+
+
+const currentAccountInfo = computed(() => {
+  return detectionResult.value?.data?.current_account || null
 })
 
 // 开始检测
@@ -247,9 +304,10 @@ const startDetection = async () => {
     // 检测微信安装信息
     let result = await detectWechat(params)
 
-    // 如果用户提供/缓存的路径不可用，自动回退到“自动检测”（避免因错误缓存导致一直检测不到）
+    // 如果用户提供/缓存的路径不可用，自动回退到“自动检测”
     const hasCustomPath = !!(params.data_root_path && String(params.data_root_path).trim())
     const accounts0 = Array.isArray(result?.data?.accounts) ? result.data.accounts : []
+
     if (hasCustomPath && (result?.status !== 'success' || accounts0.length === 0)) {
       try {
         const fallback = await detectWechat({})
@@ -267,7 +325,7 @@ const startDetection = async () => {
     }
 
     detectionResult.value = result
-    
+
     if (result.status === 'success') {
       const current = result?.data?.current_account || null
       if (current) {
@@ -288,6 +346,7 @@ const startDetection = async () => {
           }
           if (toSave) {
             localStorage.setItem(STORAGE_KEY, toSave)
+            customPath.value = toSave
           }
         } catch {}
       }
@@ -296,7 +355,7 @@ const startDetection = async () => {
     console.error('检测过程中发生错误:', err)
     detectionResult.value = {
       status: 'error',
-      error: err.message || '检测过程中出现错误'
+      error: err.message || '未在常规路径下扫描到您的微信数据。'
     }
   } finally {
     loading.value = false
@@ -305,7 +364,6 @@ const startDetection = async () => {
 
 // 跳转到解密页面并传递账户信息
 const goToDecrypt = (account) => {
-  // 将选中的账户信息存储到sessionStorage
   if (process.client && typeof window !== 'undefined') {
     sessionStorage.setItem('selectedAccount', JSON.stringify({
       account_name: account.account_name,
@@ -314,7 +372,6 @@ const goToDecrypt = (account) => {
       databases: account.databases
     }))
   }
-  // 跳转到解密页面
   navigateTo('/decrypt')
 }
 
@@ -323,29 +380,9 @@ const isCurrentAccount = (accountName) => {
   if (!detectionResult.value?.data?.current_account) {
     return false
   }
-  return detectionResult.value.data.current_account.current_account === accountName
-}
-
-// 获取当前登录账号信息
-const getCurrentAccountInfo = () => {
-  return detectionResult.value?.data?.current_account
-}
-
-// 格式化时间显示
-const formatTime = (timeString) => {
-  if (!timeString) return ''
-  try {
-    const date = new Date(timeString)
-    return date.toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  } catch {
-    return timeString
-  }
+  const current = detectionResult.value.data.current_account
+  // 支持严格匹配或通过后缀兼容的匹配
+  return accountName === current.matched_folder || accountName === current.current_account
 }
 
 // 页面加载时自动检测
@@ -357,49 +394,5 @@ onMounted(() => {
     } catch {}
   }
   startDetection()
-  
-  // 调试：检查各元素高度（仅开发环境）
-  if (process.dev && process.client) {
-    setTimeout(() => {
-      const mainContainer = document.querySelector('.min-h-screen')
-      const contentContainer = document.querySelector('.max-w-6xl')
-      
-      console.log('=== 高度调试信息 ===')
-      console.log('视口高度:', window.innerHeight)
-      console.log('主容器高度:', mainContainer?.scrollHeight)
-      console.log('内容容器高度:', contentContainer?.scrollHeight)
-      console.log('body滚动高度:', document.body.scrollHeight)
-      console.log('documentElement滚动高度:', document.documentElement.scrollHeight)
-      
-      // 检查是否有滚动条
-      const hasVerticalScrollbar = document.documentElement.scrollHeight > window.innerHeight
-      console.log('是否有垂直滚动条:', hasVerticalScrollbar)
-    }, 1000)
-  }
 })
 </script>
-
-<style scoped>
-@keyframes fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(-20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-fade-in {
-  animation: fade-in 0.8s ease-out;
-}
-
-/* 网格背景 */
-.bg-grid-pattern {
-  background-image: 
-    linear-gradient(rgba(7, 193, 96, 0.1) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(7, 193, 96, 0.1) 1px, transparent 1px);
-  background-size: 50px 50px;
-}
-</style>

@@ -41,6 +41,14 @@
           </svg>
           <span>直接解密</span>
         </NuxtLink>
+
+        <NuxtLink to="/import" 
+          class="group inline-flex items-center px-12 py-4 bg-white text-[#91D300] border border-[#91D300] rounded-lg text-lg font-medium hover:bg-[#F7F7F7] transform hover:scale-105 transition-all duration-200">
+          <svg class="w-6 h-6 mr-3 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+          </svg>
+          <span>数据导入</span>
+        </NuxtLink>
         
         <NuxtLink to="/chat" 
           class="group inline-flex items-center px-12 py-4 bg-white text-[#10AEEF] border border-[#10AEEF] rounded-lg text-lg font-medium hover:bg-[#F7F7F7] transform hover:scale-105 transition-all duration-200">
@@ -70,6 +78,8 @@ import { onMounted } from 'vue'
 import { useApi } from '~/composables/useApi'
 import { DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, readLocalBoolSetting } from '~/lib/desktop-settings'
 
+const { listChatAccounts } = useApi()
+
 onMounted(async () => {
   if (!process.client || typeof window === 'undefined') return
 
@@ -77,8 +87,7 @@ onMounted(async () => {
   if (!enabled) return
 
   try {
-    const api = useApi()
-    const resp = await api.listChatAccounts()
+    const resp = await listChatAccounts()
     const accounts = resp?.accounts || []
     if (accounts.length) {
       await navigateTo('/chat', { replace: true })
