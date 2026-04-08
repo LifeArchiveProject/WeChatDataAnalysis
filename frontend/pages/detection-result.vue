@@ -132,40 +132,58 @@
               </div>
               <div class="divide-y divide-[#EDEDED] max-h-96 overflow-y-auto">
                 <div v-for="(account, index) in sortedAccounts" :key="index"
-                     :class="['p-5 hover:bg-[#F9F9F9] transition-all duration-200', isCurrentAccount(account.account_name) ? 'bg-[#07C160]/5' : '']">
-                  <div class="flex items-center justify-between">
+                     :class="['p-5 transition-all duration-200 relative overflow-hidden', isCurrentAccount(account.account_name) ? 'bg-[#07C160]/5 border border-[#07C160]/20' : 'hover:bg-[#F9F9F9]']">
+
+                  <div v-if="isCurrentAccount(account.account_name)" class="absolute top-0 right-0 bg-gradient-to-l from-[#07C160]/20 to-transparent px-4 py-1 rounded-bl-xl flex items-center">
+    <span class="text-xs text-[#07C160] font-bold flex items-center">
+      <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+      最近登录账户
+    </span>
+                  </div>
+
+                  <div class="flex items-center justify-between mt-1">
                     <div class="flex-1">
                       <div class="flex items-center">
-                        <div class="w-12 h-12 bg-gradient-to-br from-[#07C160]/10 to-[#91D300]/10 rounded-full flex items-center justify-center mr-4 shadow-inner">
-                          <span class="text-[#07C160] font-bold text-lg">{{ account.account_name?.charAt(0)?.toUpperCase() || 'U' }}</span>
-                        </div>
-                        <div>
-                          <div class="flex items-center">
-                            <p class="text-lg font-bold text-[#000000e6]">{{ account.account_name || '未知账户' }}</p>
-                            <span v-if="isCurrentAccount(account.account_name)"
-                                  class="ml-2 inline-flex items-center px-2.5 py-0.5 bg-[#07C160]/10 text-[#07C160] rounded-full text-xs font-bold">
-                              当前登录
-                            </span>
+                        <template v-if="isCurrentAccount(account.account_name) && currentAccountInfo?.avatar">
+                          <img :src="currentAccountInfo.avatar" class="w-14 h-14 rounded-xl border-2 border-[#07C160]/30 mr-4 shadow-sm object-cover bg-white"  alt=""/>
+                        </template>
+                        <template v-else>
+                          <div class="w-14 h-14 bg-gradient-to-br from-[#07C160]/10 to-[#91D300]/10 rounded-xl flex items-center justify-center mr-4 shadow-inner">
+                            <span class="text-[#07C160] font-bold text-xl">{{ account.account_name?.charAt(0)?.toUpperCase() || 'U' }}</span>
                           </div>
-                          <div class="flex items-center mt-1.5 space-x-4 text-sm text-[#7F7F7F]">
-                            <span class="flex items-center">
-                              <svg class="w-4 h-4 mr-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
-                              </svg>
-                              {{ account.database_count }} 个库文件
-                            </span>
+                        </template>
+
+                        <div>
+                          <div class="flex flex-col">
+                            <template v-if="isCurrentAccount(account.account_name) && currentAccountInfo?.nickname">
+                              <p class="text-xl font-extrabold text-[#000000e6] leading-tight">{{ currentAccountInfo.nickname }}</p>
+                              <p class="text-xs text-[#7F7F7F] mt-1 font-mono">wxid: {{ account.account_name }}</p>
+                            </template>
+                            <template v-else>
+                              <p class="text-lg font-bold text-[#000000e6]">{{ account.account_name || '未知账户' }}</p>
+                            </template>
+                          </div>
+
+                          <div class="flex items-center mt-2 space-x-4 text-sm text-[#7F7F7F]">
+            <span class="flex items-center">
+              <svg class="w-4 h-4 mr-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
+              </svg>
+              {{ account.database_count }} 个库文件
+            </span>
                             <span v-if="account.data_dir" class="flex items-center">
-                              <svg class="w-4 h-4 mr-1 text-[#07C160]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                              </svg>
-                              路径已确认
-                            </span>
+              <svg class="w-4 h-4 mr-1 text-[#07C160]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+              </svg>
+              路径已确认
+            </span>
                           </div>
                         </div>
                       </div>
                     </div>
+
                     <button @click="goToDecrypt(account)"
-                            class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-xl font-bold hover:bg-[#06AD56] hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 text-sm shrink-0">
+                            class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-xl font-bold hover:bg-[#06AD56] hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 text-sm shrink-0 z-10">
                       解密提取
                       <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
@@ -173,7 +191,6 @@
                     </button>
                   </div>
 
-                  <!-- 展开更多信息 -->
                   <div class="mt-4 pt-3 border-t border-dashed border-gray-200 text-sm text-gray-400">
                     <p v-if="account.data_dir" class="font-mono text-xs truncate" title="复制路径">
                       📂 {{ account.data_dir }}
@@ -254,18 +271,24 @@ const handlePickDirectory = async () => {
 // 计算属性：将当前登录账号排在第一位
 const sortedAccounts = computed(() => {
   if (!detectionResult.value?.data?.accounts) return []
-  
   const accounts = [...detectionResult.value.data.accounts]
-  const currentAccountName = detectionResult.value.data?.current_account?.current_account
-  
-  if (!currentAccountName) return accounts
-  
-  // 将当前登录账号移到第一位
+
+  const current = detectionResult.value.data?.current_account
+  const currentTargetName = current?.matched_folder || current?.current_account
+
+  if (!currentTargetName) return accounts
+
+  // 置顶最近登录账号
   return accounts.sort((a, b) => {
-    if (a.account_name === currentAccountName) return -1
-    if (b.account_name === currentAccountName) return 1
+    if (a.account_name === currentTargetName) return -1
+    if (b.account_name === currentTargetName) return 1
     return 0
   })
+})
+
+
+const currentAccountInfo = computed(() => {
+  return detectionResult.value?.data?.current_account || null
 })
 
 // 开始检测
@@ -357,7 +380,9 @@ const isCurrentAccount = (accountName) => {
   if (!detectionResult.value?.data?.current_account) {
     return false
   }
-  return detectionResult.value.data.current_account.current_account === accountName
+  const current = detectionResult.value.data.current_account
+  // 支持严格匹配或通过后缀兼容的匹配
+  return accountName === current.matched_folder || accountName === current.current_account
 }
 
 // 页面加载时自动检测
