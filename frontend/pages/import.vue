@@ -32,7 +32,7 @@
           </div>
 
           <!-- 初始状态：选择目录 -->
-          <div v-if="!importPreview && !importError" class="flex flex-col items-center justify-center py-12 border-2 border-dashed border-[#EDEDED] rounded-3xl hover:border-[#91D300] transition-colors cursor-pointer group" @click="handlePickDirectory">
+          <div v-if="!importPreview && !importError && !importing" class="flex flex-col items-center justify-center py-12 border-2 border-dashed border-[#EDEDED] rounded-3xl hover:border-[#91D300] transition-colors cursor-pointer group" @click="handlePickDirectory">
             <div class="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300">
               <svg class="w-10 h-10 text-gray-400 group-hover:text-[#91D300]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
@@ -42,8 +42,30 @@
             <p class="text-[#7F7F7F] text-sm mt-2">支持原生目录选择器</p>
           </div>
 
+          <!-- 导入进度状态 -->
+          <div v-if="importing" class="animate-fade-in py-12">
+            <div class="flex flex-col items-center">
+              <div class="relative w-32 h-32 mb-8">
+                <svg class="w-full h-full" viewBox="0 0 100 100">
+                  <circle class="text-gray-100" stroke-width="8" stroke="currentColor" fill="transparent" r="42" cx="50" cy="50"/>
+                  <circle class="text-[#91D300] transition-all duration-500" stroke-width="8" :stroke-dasharray="263.89" :stroke-dashoffset="263.89 * (1 - importProgress / 100)" stroke-linecap="round" stroke="currentColor" fill="transparent" r="42" cx="50" cy="50" transform="rotate(-90 50 50)"/>
+                </svg>
+                <div class="absolute inset-0 flex items-center justify-center">
+                  <span class="text-2xl font-bold text-gray-900">{{ importProgress }}%</span>
+                </div>
+              </div>
+              
+              <h3 class="text-lg font-bold text-gray-900 mb-2">{{ importMessage }}</h3>
+              <p class="text-sm text-gray-500">正在为您处理数据，请稍候...</p>
+              
+              <div class="w-full max-w-xs bg-gray-100 h-1.5 rounded-full mt-8 overflow-hidden">
+                <div class="bg-[#91D300] h-full transition-all duration-500" :style="{ width: importProgress + '%' }"></div>
+              </div>
+            </div>
+          </div>
+
           <!-- 预览状态：显示账号信息 -->
-          <div v-if="importPreview" class="animate-fade-in">
+          <div v-if="importPreview && !importing" class="animate-fade-in">
             <div class="flex flex-col items-center py-8 bg-[#FBFBFB] rounded-3xl border border-[#EDEDED] mb-8">
               <div class="w-28 h-28 rounded-full overflow-hidden border-4 border-white shadow-md mb-5">
                 <img :src="importPreview.avatar_url || '/Contact.png'" class="w-full h-full object-cover" alt="头像">
@@ -72,10 +94,6 @@
               </button>
               <button @click="confirmImport" :disabled="importing"
                 class="flex-[2] px-8 py-4 bg-[#91D300] text-white rounded-2xl font-bold hover:bg-[#82BD00] shadow-lg shadow-[#91D300]/20 disabled:opacity-50 transition-all flex items-center justify-center transform hover:scale-[1.02] active:scale-[0.98]">
-                <svg v-if="importing" class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
                 <span v-if="!importing">确认导入此账号</span>
                 <span v-else>正在导入数据...</span>
               </button>
@@ -83,13 +101,13 @@
           </div>
 
           <!-- 错误状态 -->
-          <div v-if="importError" class="animate-fade-in">
+          <div v-if="importError && !importing" class="animate-fade-in">
             <div class="p-6 bg-red-50 border border-red-100 rounded-2xl flex items-start mb-8">
               <svg class="w-6 h-6 text-red-500 mr-3 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
               </svg>
               <div>
-                <p class="font-bold text-red-800 mb-1">目录校验失败</p>
+                <p class="font-bold text-red-800 mb-1">导入失败</p>
                 <p class="text-sm text-red-600">{{ importError }}</p>
               </div>
             </div>
@@ -118,13 +136,24 @@
 </template>
 
 <script setup>
-import {ref} from 'vue'
+import {ref, onUnmounted} from 'vue'
 import {useApi} from '~/composables/useApi'
+import {useApiBase} from '~/composables/useApiBase'
 
 const importing = ref(false)
+const importProgress = ref(0)
+const importMessage = ref('正在准备...')
 const importPreview = ref(null)
 const importError = ref('')
 const selectedImportPath = ref('')
+
+let eventSource = null
+
+onUnmounted(() => {
+  if (eventSource) {
+    eventSource.close()
+  }
+})
 
 const isDesktopShell = () => {
   if (!process.client || typeof window === 'undefined') return false
@@ -135,9 +164,13 @@ const resetImport = () => {
   importPreview.value = null
   importError.value = ''
   selectedImportPath.value = ''
+  importing.value = false
+  importProgress.value = 0
+  importMessage.value = '正在准备...'
 }
 
-const { importDecryptedPreview, importDecrypted, pickSystemDirectory } = useApi()
+const { importDecryptedPreview, pickSystemDirectory } = useApi()
+const apiBase = useApiBase()
 
 const handlePickDirectory = async () => {
   let path = ''
@@ -186,18 +219,47 @@ const confirmImport = async () => {
   
   importing.value = true
   importError.value = ''
+  importProgress.value = 0
+  importMessage.value = '启动导入程序...'
+
+  const url = new URL(`${apiBase.replace(/\/$/, '')}/api/import_decrypted`, window.location.origin)
+  url.searchParams.set('import_path', selectedImportPath.value)
+
+  if (eventSource) eventSource.close()
   
-  try {
-    const res = await importDecrypted({ import_path: selectedImportPath.value })
-    if (res.status === 'success') {
-      await navigateTo('/chat')
-    } else {
-      importError.value = res.message || '导入失败'
+  eventSource = new EventSource(url.toString())
+  
+  eventSource.onmessage = async (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      
+      if (data.type === 'progress') {
+        importProgress.value = data.percent || 0
+        importMessage.value = data.message || '正在处理...'
+      } else if (data.type === 'complete') {
+        importProgress.value = 100
+        importMessage.value = '导入完成！'
+        eventSource.close()
+        
+        // 延迟跳转，让用户看到 100%
+        setTimeout(async () => {
+          await navigateTo('/chat')
+        }, 1000)
+      } else if (data.type === 'error') {
+        importError.value = data.message || '导入失败'
+        importing.value = false
+        eventSource.close()
+      }
+    } catch (e) {
+      console.error('解析 SSE 数据失败:', e)
     }
-  } catch (e) {
-    importError.value = e.message || '导入过程中发生错误'
-  } finally {
+  }
+
+  eventSource.onerror = (e) => {
+    console.error('EventSource 错误:', e)
+    importError.value = '与服务器连接断开或发生错误'
     importing.value = false
+    eventSource.close()
   }
 }
 </script>
