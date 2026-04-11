@@ -18,6 +18,7 @@ from fastapi import HTTPException
 
 from .app_paths import get_output_databases_dir
 from .logging_config import get_logger
+from .sqlite_diagnostics import is_usable_sqlite_db
 
 logger = get_logger(__name__)
 
@@ -28,13 +29,7 @@ _SQLITE_HEADER = b"SQLite format 3\x00"
 
 
 def _is_valid_decrypted_sqlite(path: Path) -> bool:
-    try:
-        if not path.exists() or (not path.is_file()):
-            return False
-        with path.open("rb") as f:
-            return f.read(len(_SQLITE_HEADER)) == _SQLITE_HEADER
-    except Exception:
-        return False
+    return is_usable_sqlite_db(path)
 
 
 def _list_decrypted_accounts() -> list[str]:

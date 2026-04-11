@@ -70,6 +70,7 @@ from ..chat_helpers import (
 from ..media_helpers import _resolve_account_db_storage_dir, _try_find_decrypted_resource
 from .. import chat_edit_store
 from ..app_paths import get_output_dir
+from ..database_filters import list_countable_database_names
 from ..key_store import remove_account_keys_from_store
 from ..path_fix import PathFixRoute
 from ..session_last_message import (
@@ -3892,7 +3893,7 @@ async def list_chat_accounts():
 @router.get("/api/chat/account_info", summary="获取当前账号信息")
 def get_chat_account_info(account: Optional[str] = None):
     account_dir = _resolve_account_dir(account)
-    db_files = sorted([p.name for p in account_dir.glob("*.db") if p.is_file()])
+    db_files = list_countable_database_names(account_dir)
 
     session_db = account_dir / "session.db"
     session_updated_at = 0

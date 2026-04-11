@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from .app_paths import get_output_databases_dir
+from .database_filters import should_skip_source_database
 from .sqlite_diagnostics import collect_sqlite_diagnostics, sqlite_diagnostics_status
 
 # 注意：不再支持默认密钥，所有密钥必须通过参数传入
@@ -62,6 +63,59 @@ def _derive_account_name_from_path(path: Path) -> str:
         return _normalize_account_name(part_str)
 
     return "unknown_account"
+
+
+def _build_decrypt_failure_message(result: dict) -> str:
+    failed_pages = int(result.get("failed_pages") or 0)
+    successful_pages = int(result.get("successful_pages") or 0)
+    diagnostic_status = str(result.get("diagnostic_status") or "").strip()
+    diagnostics = dict(result.get("diagnostics") or {})
+
+    detail = (
+        diagnostics.get("quick_check_error")
+        or diagnostics.get("connect_error")
+        or diagnostics.get("table_list_error")
+        or diagnostics.get("page_count_error")
+        or diagnostics.get("quick_check")
+        or diagnostic_status
+    )
+    detail_text = " ".join(str(detail or "").split()).strip()
+
+    if failed_pages > 0 and successful_pages == 0:
+        if detail_text:
+            return f"数据库校验未通过，密钥可能不匹配当前账号: {detail_text}"
+        return "数据库校验未通过，密钥可能不匹配当前账号"
+
+    if diagnostic_status and diagnostic_status != "ok":
+        if detail_text:
+            return f"解密输出不是有效的 SQLite 数据库: {detail_text}"
+        return "解密输出不是有效的 SQLite 数据库"
+
+    if failed_pages > 0:
+        return "解密输出包含页失败，结果不完整"
+
+    return ""
+
+
+def build_decrypt_summary_message(*, success_count: int, total_databases: int, diagnostic_warning_count: int) -> str:
+    success_count = int(success_count or 0)
+    total_databases = int(total_databases or 0)
+    diagnostic_warning_count = int(diagnostic_warning_count or 0)
+
+    if total_databases <= 0:
+        return "未找到可解密的数据库"
+
+    if success_count <= 0:
+        if diagnostic_warning_count > 0:
+            return "解密失败：数据库校验未通过，密钥可能不匹配当前账号。"
+        return "解密失败：未能成功解密任何数据库。"
+
+    if success_count < total_databases:
+        if diagnostic_warning_count > 0:
+            return f"解密部分成功：成功 {success_count}/{total_databases}，其余数据库校验未通过。"
+        return f"解密部分成功：成功 {success_count}/{total_databases}。"
+
+    return f"解密完成: 成功 {success_count}/{total_databases}"
 
 
 def _resolve_db_storage_roots(storage_path: Path) -> list[Path]:
@@ -158,7 +212,7 @@ def scan_account_databases_from_path(db_storage_path: str) -> dict:
         for file_name in files:
             if not file_name.endswith(".db"):
                 continue
-            if file_name in ["key_info.db"]:
+            if should_skip_source_database(file_name):
                 continue
             db_path = os.path.join(root, file_name)
             databases.append(
@@ -266,7 +320,8 @@ class WeChatDatabaseDecryptor:
             result["failed_page_samples"].append(item)
 
         def _finalize(success: bool, error: str = "") -> bool:
-            result["success"] = bool(success)
+            normalized_success = bool(success)
+            result["success"] = normalized_success
             if error:
                 result["error"] = " ".join(str(error).split()).strip()
 
@@ -280,6 +335,19 @@ class WeChatDatabaseDecryptor:
                 diagnostics = collect_sqlite_diagnostics(output_file, quick_check=True)
                 result["diagnostics"] = diagnostics
                 result["diagnostic_status"] = sqlite_diagnostics_status(diagnostics)
+
+            if normalized_success:
+                failure_message = _build_decrypt_failure_message(result)
+                if failure_message:
+                    normalized_success = False
+                    result["success"] = False
+                    if not result["error"]:
+                        result["error"] = failure_message
+                    if output_file.exists():
+                        try:
+                            output_file.unlink()
+                        except Exception as exc:
+                            logger.warning("删除无效解密输出失败: %s, 错误: %s", output_file, exc)
 
             payload = {
                 "db_name": result["db_name"],
@@ -307,7 +375,7 @@ class WeChatDatabaseDecryptor:
                 log_fn = logger.warning
             log_fn("[decrypt.diagnostic] %s", json.dumps(payload, ensure_ascii=False, sort_keys=True))
             self.last_result = result
-            return bool(success)
+            return bool(result["success"])
 
         logger.info(f"开始解密数据库: {db_path}")
         
@@ -693,7 +761,11 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
     # 返回结果
     result = {
         "status": "success" if success_count > 0 else "error",
-        "message": f"解密完成: 成功 {success_count}/{total_databases}",
+        "message": build_decrypt_summary_message(
+            success_count=success_count,
+            total_databases=total_databases,
+            diagnostic_warning_count=diagnostic_warning_count,
+        ),
         "total_databases": total_databases,
         "successful_count": success_count,
         "failed_count": total_databases - success_count,

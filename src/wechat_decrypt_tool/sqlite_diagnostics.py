@@ -123,6 +123,40 @@ def collect_sqlite_diagnostics(
     return diagnostics
 
 
+def is_usable_sqlite_db(path: str | Path) -> bool:
+    db_path = Path(path)
+    if not db_path.exists() or (not db_path.is_file()):
+        return False
+
+    try:
+        if int(db_path.stat().st_size) <= len(SQLITE_HEADER):
+            return False
+    except Exception:
+        return False
+
+    try:
+        with db_path.open("rb") as f:
+            if f.read(len(SQLITE_HEADER)) != SQLITE_HEADER:
+                return False
+    except Exception:
+        return False
+
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA schema_version").fetchone()
+        row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").fetchone()
+        return row is not None
+    except Exception:
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def sqlite_diagnostics_status(diagnostics: Mapping[str, Any]) -> str:
     if not diagnostics:
         return "not_run"

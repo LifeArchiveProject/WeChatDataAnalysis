@@ -16,7 +16,12 @@ from ..chat_realtime_autosync import CHAT_REALTIME_AUTOSYNC
 from ..logging_config import get_logger
 from ..path_fix import PathFixRoute
 from ..key_store import upsert_account_keys_in_store
-from ..wechat_decrypt import WeChatDatabaseDecryptor, decrypt_wechat_databases, scan_account_databases_from_path
+from ..wechat_decrypt import (
+    WeChatDatabaseDecryptor,
+    build_decrypt_summary_message,
+    decrypt_wechat_databases,
+    scan_account_databases_from_path,
+)
 
 logger = get_logger(__name__)
 
@@ -463,7 +468,11 @@ async def decrypt_databases_stream(
                 "success_count": success_count,
                 "failure_count": total_databases - success_count,
                 "output_directory": str(base_output_dir.absolute()),
-                "message": f"解密完成: 成功 {success_count}/{total_databases}",
+                "message": build_decrypt_summary_message(
+                    success_count=success_count,
+                    total_databases=total_databases,
+                    diagnostic_warning_count=diagnostic_warning_count,
+                ),
                 "processed_files": processed_files,
                 "failed_files": failed_files,
                 "account_results": account_results,
