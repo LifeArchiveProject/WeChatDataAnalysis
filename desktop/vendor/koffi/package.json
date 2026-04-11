@@ -1,0 +1,26 @@
+{
+  "name": "koffi",
+  "version": "2.15.2",
+  "description": "Fast and simple C FFI (foreign function interface) for Node.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Koromix/koffi"
+  },
+  "homepage": "https://koffi.dev/",
+  "author": {
+    "name": "Niels Martignène",
+    "email": "niels.martignene@protonmail.com",
+    "url": "https://koromix.dev/"
+  },
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "license": "MIT",
+  "cnoke": {
+    "api": "../../vendor/node-api-headers",
+    "output": "build/koffi/{{ toolchain }}",
+    "node": 16,
+    "napi": 8,
+    "require": "./index.js"
+  },
+  "funding": "https://liberapay.com/Koromix"
+}
