@@ -58,7 +58,7 @@
                   <svg v-else class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
-                  {{ isGettingDbKey ? '获取中...' : '一键获取全部密钥' }}
+                  {{ isGettingDbKey ? '获取中...' : '一键获取数据库密钥' }}
                 </button>
               </div>
               <p v-if="formErrors.key" class="mt-1 text-sm text-red-600 flex items-center">
@@ -71,7 +71,7 @@
                 <svg class="w-4 h-4 mr-1 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
-                点击按钮将自动获取【数据库】与【图片】双重密钥。您也可以手动输入已知的64位密钥（使用<a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a>等工具获取）。
+                点击按钮将自动获取【数据库解密密钥】。您也可以手动输入已知的64位密钥。
               </p>
             </div>
             
@@ -189,7 +189,7 @@
                 <svg class="w-4 h-4 mr-1 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
-                如果您在第一步使用了“一键获取”或触发了云端解析，下方输入框已被自动填充。您也可可以使用<a href="https://github.com/ycccccccy/wx_key" target="_blank" class="text-[#07C160] hover:text-[#06AD56]">wx_key</a>等工具手动获取。
+                系统已为您尝试通过【本地算法】或【云端解析】自动获取图片密钥。如果输入框为空，请手动填写。
               </p>
 
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -547,14 +547,7 @@ const handleGetDbKey = async () => {
       if (res.data?.db_key) {
         formData.key = res.data.db_key
       }
-      // 直接把图片密钥也存好
-      if (res.data?.xor_key) {
-        manualKeys.xor_key = res.data.xor_key
-      }
-      if (res.data?.aes_key) {
-        manualKeys.aes_key = res.data.aes_key
-      }
-      warning.value = '🎉 数据库与图片密钥均已获取成功！'
+      warning.value = '🎉 数据库解密密钥已获取成功！'
       // 3秒后清除成功提示，保持 UI 干净
       setTimeout(() => { if(warning.value.includes('获取成功')) warning.value = '' }, 3000)
     } else {
