@@ -13,6 +13,8 @@ from typing import List, Dict, Any, Union
 from ctypes import wintypes
 from datetime import datetime
 
+from .database_filters import should_skip_source_database
+
 
 def get_wx_db(msg_dir: str = None,
               db_types: Union[List[str], str] = None,
@@ -59,8 +61,7 @@ def get_wx_db(msg_dir: str = None,
             for file_name in files:
                 if not file_name.endswith(".db"):
                     continue
-                # 排除不需要解密的数据库
-                if file_name in ["key_info.db"]:
+                if should_skip_source_database(file_name):
                     continue
                 db_type = re.sub(r"\d*\.db$", "", file_name)
                 if db_types and db_type not in db_types:  # 如果指定db_type,则过滤掉其他db_type
@@ -672,8 +673,7 @@ def collect_account_databases(data_dir: str, account_name: str) -> List[Dict[str
                 if not file_name.endswith('.db'):
                     continue
 
-                # 排除不需要解密的数据库
-                if file_name in ["key_info.db"]:
+                if should_skip_source_database(file_name):
                     continue
 
                 db_path = os.path.join(root, file_name)
