@@ -16,6 +16,37 @@ from datetime import datetime
 from .database_filters import should_skip_source_database
 
 
+COMMON_WECHAT_PATTERNS = [
+    "WeChat Files",
+    "Weixin Files",
+    "wechat_files",
+    "xwechat_files",
+    "wechatMSG",
+    "WeChat",
+    "微信",
+    "Weixin",
+    "wechat",
+]
+
+SYSTEM_SCAN_SKIP_NAMES = {
+    "$recycle.bin",
+    "$winreagent",
+    "config.msi",
+    "documents and settings",
+    "intel",
+    "onedrivetemp",
+    "perflogs",
+    "program files",
+    "program files (x86)",
+    "programdata",
+    "recovery",
+    "system volume information",
+    "windows",
+    "windows.old",
+    "windows.old(1)",
+}
+
+
 def get_wx_db(msg_dir: str = None,
               db_types: Union[List[str], str] = None,
               wxids: Union[List[str], str] = None) -> List[dict]:
@@ -285,6 +316,87 @@ def get_process_list():
     return process_list
 
 
+def _is_wechat_dir_candidate_name(name: str) -> bool:
+    normalized = str(name or "").strip().lower()
+    if not normalized:
+        return False
+    return any(pattern.lower() in normalized for pattern in COMMON_WECHAT_PATTERNS)
+
+
+def _safe_iter_subdirs(directory: str) -> List[tuple[str, str]]:
+    items: List[tuple[str, str]] = []
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir():
+                        items.append((entry.name, entry.path))
+                except OSError:
+                    continue
+    except (PermissionError, OSError):
+        return []
+    return items
+
+
+def _append_detected_dir(detected_dirs: List[str], candidate: str) -> None:
+    if not candidate:
+        return
+    normalized = os.path.normpath(candidate)
+    if normalized not in detected_dirs:
+        detected_dirs.append(normalized)
+
+
+def _build_auto_detect_scan_paths() -> List[str]:
+    scan_paths: List[str] = []
+    seen_paths = set()
+
+    def add(path_value: str | None) -> None:
+        raw = str(path_value or "").strip()
+        if not raw:
+            return
+        normalized = os.path.normpath(raw)
+        key = normalized.lower()
+        if key in seen_paths:
+            return
+        seen_paths.add(key)
+        scan_paths.append(normalized)
+
+    home_dir = str(Path.home())
+    add(home_dir)
+    add(os.path.join(home_dir, "Documents"))
+    add(os.path.join(home_dir, "Desktop"))
+    add(os.path.join(home_dir, "Downloads"))
+
+    user_profile = str(os.environ.get("USERPROFILE") or "").strip()
+    if user_profile:
+        add(user_profile)
+        add(os.path.join(user_profile, "Documents"))
+        add(os.path.join(user_profile, "Desktop"))
+        add(os.path.join(user_profile, "Downloads"))
+
+    for drive in ("C:", "D:", "E:", "F:"):
+        drive_root = drive + os.sep
+        if not os.path.exists(drive_root):
+            continue
+
+        add(drive_root)
+
+        for child_name, child_path in _safe_iter_subdirs(drive_root):
+            if child_name.strip().lower() in SYSTEM_SCAN_SKIP_NAMES:
+                continue
+            add(child_path)
+
+        users_dir = os.path.join(drive_root, "Users")
+        add(users_dir)
+        for _user_name, user_dir in _safe_iter_subdirs(users_dir):
+            add(user_dir)
+            add(os.path.join(user_dir, "Documents"))
+            add(os.path.join(user_dir, "Desktop"))
+            add(os.path.join(user_dir, "Downloads"))
+
+    return scan_paths
+
+
 def auto_detect_wechat_data_dirs():
     """
     自动检测微信数据目录 - 多策略组合检测
@@ -292,52 +404,27 @@ def auto_detect_wechat_data_dirs():
     """
     detected_dirs = []
 
-    # 策略1：注册表检测已移除
-
-    # 策略2和策略3：注册表相关检测已移除
-
-    # 策略1：常见驱动器扫描微信相关目录
-    common_wechat_patterns = [
-        "WeChat Files", "wechat_files", "xwechat_files", "wechatMSG",
-        "WeChat", "微信", "Weixin", "wechat"
-    ]
-
-    # 扫描常见驱动器
-    drives = ['C:', 'D:', 'E:', 'F:']
-    for drive in drives:
-        if not os.path.exists(drive):
+    # 策略1：常见驱动器 / 用户目录 / 自定义目录的浅层扫描。
+    # 这里既检查扫描根目录本身，也检查其直接子目录，兼容：
+    # - C:\Users\<user>\Documents\WeChat Files
+    # - D:\wechatMSG\xwechat_files
+    # - D:\abc\wechatMSG\xwechat_files
+    for scan_path in _build_auto_detect_scan_paths():
+        if not os.path.exists(scan_path):
             continue
 
-        try:
-            # 扫描驱动器根目录和常见目录
-            scan_paths = [
-                drive + os.sep,
-                os.path.join(drive + os.sep, "Users"),
-            ]
+        scan_name = os.path.basename(os.path.normpath(scan_path))
+        if _is_wechat_dir_candidate_name(scan_name) and has_wxid_directories(scan_path):
+            _append_detected_dir(detected_dirs, scan_path)
+            print(f"[DEBUG] 目录扫描检测成功: {scan_path}")
 
-            for scan_path in scan_paths:
-                if not os.path.exists(scan_path):
-                    continue
-
-                try:
-                    for item in os.listdir(scan_path):
-                        item_path = os.path.join(scan_path, item)
-                        if not os.path.isdir(item_path):
-                            continue
-
-                        # 检查是否匹配微信目录模式
-                        for pattern in common_wechat_patterns:
-                            if pattern.lower() in item.lower():
-                                # 检查是否包含wxid目录
-                                if has_wxid_directories(item_path):
-                                    if item_path not in detected_dirs:
-                                        detected_dirs.append(item_path)
-                                        print(f"[DEBUG] 目录扫描检测成功: {item_path}")
-                                break
-                except (PermissionError, OSError):
-                    continue
-        except (PermissionError, OSError):
-            continue
+        for item_name, item_path in _safe_iter_subdirs(scan_path):
+            if not _is_wechat_dir_candidate_name(item_name):
+                continue
+            if not has_wxid_directories(item_path):
+                continue
+            _append_detected_dir(detected_dirs, item_path)
+            print(f"[DEBUG] 目录扫描检测成功: {item_path}")
 
     # 策略2：进程内存分析（简化版）
     try:
@@ -361,12 +448,11 @@ def auto_detect_wechat_data_dirs():
                             break
 
                     for parent_dir in parent_dirs:
-                        for pattern in common_wechat_patterns:
+                        for pattern in COMMON_WECHAT_PATTERNS:
                             potential_dir = os.path.join(parent_dir, pattern)
                             if os.path.exists(potential_dir) and has_wxid_directories(potential_dir):
-                                if potential_dir not in detected_dirs:
-                                    detected_dirs.append(potential_dir)
-                                    print(f"[DEBUG] 进程分析检测成功: {potential_dir}")
+                                _append_detected_dir(detected_dirs, potential_dir)
+                                print(f"[DEBUG] 进程分析检测成功: {potential_dir}")
                 except:
                     pass
     except:

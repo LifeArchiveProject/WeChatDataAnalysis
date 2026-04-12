@@ -272,7 +272,7 @@
               <div class="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
                 <div 
                   class="h-2.5 rounded-full transition-all duration-300 ease-out"
-                  :class="decryptProgress.status === 'complete' ? 'bg-[#07C160]' : 'bg-[#91D300]'"
+                  :class="decryptProgress.status === 'complete' ? 'bg-[#07C160]' : decryptProgress.status === 'cancelled' ? 'bg-[#FAAD14]' : 'bg-[#91D300]'"
                   :style="{ width: progressPercent + '%' }"
                 ></div>
               </div>
@@ -365,6 +365,13 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/>
               </svg>
               {{ mediaDecrypting ? '解密中...' : (mediaDecryptResult ? '重新解密' : '开始解密图片') }}
+            </button>
+            <button
+              v-if="mediaDecrypting"
+              @click="cancelMediaDecrypt"
+              class="inline-flex items-center px-6 py-3 bg-[#FA5151] text-white rounded-lg font-medium hover:bg-[#E54D4D] transition-all duration-200"
+            >
+              停止解密
             </button>
             <button
               @click="skipToChat"
@@ -671,6 +678,18 @@ const validateForm = () => {
 }
 
 let dbDecryptEventSource = null
+let mediaDecryptEventSource = null
+
+const closeMediaDecryptEventSource = () => {
+  try {
+    if (mediaDecryptEventSource) mediaDecryptEventSource.close()
+  } catch (e) {
+    // ignore
+  } finally {
+    mediaDecryptEventSource = null
+  }
+}
+
 onBeforeUnmount(() => {
   try {
     if (dbDecryptEventSource) dbDecryptEventSource.close()
@@ -679,6 +698,8 @@ onBeforeUnmount(() => {
   } finally {
     dbDecryptEventSource = null
   }
+
+  closeMediaDecryptEventSource()
 })
 
 const resetDbDecryptProgress = () => {
@@ -689,6 +710,17 @@ const resetDbDecryptProgress = () => {
   dbDecryptProgress.current_file = ''
   dbDecryptProgress.status = ''
   dbDecryptProgress.message = ''
+}
+
+const resetMediaDecryptProgress = () => {
+  decryptProgress.current = 0
+  decryptProgress.total = 0
+  decryptProgress.success_count = 0
+  decryptProgress.skip_count = 0
+  decryptProgress.fail_count = 0
+  decryptProgress.current_file = ''
+  decryptProgress.fileStatus = ''
+  decryptProgress.status = ''
 }
 
 // 处理解密
@@ -877,20 +909,14 @@ const handleDecrypt = async () => {
 
 // 批量解密所有图片（使用SSE实时进度）
 const decryptAllImages = async () => {
+  closeMediaDecryptEventSource()
   mediaDecrypting.value = true
   mediaDecryptResult.value = null
   error.value = ''
   warning.value = ''
   
   // 重置进度
-  decryptProgress.current = 0
-  decryptProgress.total = 0
-  decryptProgress.success_count = 0
-  decryptProgress.skip_count = 0
-  decryptProgress.fail_count = 0
-  decryptProgress.current_file = ''
-  decryptProgress.fileStatus = ''
-  decryptProgress.status = ''
+  resetMediaDecryptProgress()
   
   try {
     // 构建SSE URL
@@ -903,8 +929,11 @@ const decryptAllImages = async () => {
     
     // 使用EventSource接收SSE
     const eventSource = new EventSource(url)
+    mediaDecryptEventSource = eventSource
     
     eventSource.onmessage = (event) => {
+      if (mediaDecryptEventSource !== eventSource) return
+
       try {
         const data = JSON.parse(event.data)
         
@@ -928,12 +957,12 @@ const decryptAllImages = async () => {
           decryptProgress.skip_count = data.skip_count
           decryptProgress.fail_count = data.fail_count
           mediaDecryptResult.value = data
-          eventSource.close()
           mediaDecrypting.value = false
+          closeMediaDecryptEventSource()
         } else if (data.type === 'error') {
           error.value = data.message
-          eventSource.close()
           mediaDecrypting.value = false
+          closeMediaDecryptEventSource()
         }
       } catch (e) {
         console.error('解析SSE消息失败:', e)
@@ -941,8 +970,10 @@ const decryptAllImages = async () => {
     }
     
     eventSource.onerror = (e) => {
+      if (mediaDecryptEventSource !== eventSource) return
+
       console.error('SSE连接错误:', e)
-      eventSource.close()
+      closeMediaDecryptEventSource()
       if (mediaDecrypting.value) {
         error.value = 'SSE连接中断，请重试'
         mediaDecrypting.value = false
@@ -951,7 +982,17 @@ const decryptAllImages = async () => {
   } catch (err) {
     error.value = err.message || '图片解密过程中发生错误'
     mediaDecrypting.value = false
+    closeMediaDecryptEventSource()
   }
+}
+
+const cancelMediaDecrypt = () => {
+  if (!mediaDecrypting.value) return
+
+  decryptProgress.status = 'cancelled'
+  mediaDecrypting.value = false
+  warning.value = '已停止图片解密，已完成的图片会保留。'
+  closeMediaDecryptEventSource()
 }
 
 // 从密钥步骤进入图片解密步骤
