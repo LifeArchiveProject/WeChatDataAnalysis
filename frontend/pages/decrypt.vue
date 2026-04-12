@@ -542,7 +542,7 @@ const handleGetDbKey = async () => {
     const wxStatus = statusRes?.wx_status
 
     if (wxStatus?.is_running) {
-      warning.value = '检测到微信正在运行，5秒后将终止进程并重启以获取全套密钥！'
+      warning.value = '检测到微信正在运行，5秒后将终止进程并重启以获取数据库密钥！'
       await new Promise(resolve => setTimeout(resolve, 5000))
     }
 
@@ -554,8 +554,7 @@ const handleGetDbKey = async () => {
       if (res.data?.db_key) {
         formData.key = res.data.db_key
       }
-      warning.value = '🎉 数据库解密密钥已获取成功！'
-      // 3秒后清除成功提示，保持 UI 干净
+      warning.value = '数据库解密密钥已获取成功！'
       setTimeout(() => { if(warning.value.includes('获取成功')) warning.value = '' }, 3000)
     } else {
       error.value = '获取失败: ' + (res?.errmsg || '未知错误')
@@ -569,7 +568,6 @@ const handleGetDbKey = async () => {
     isGettingDbKey.value = false
   }
 }
-
 
 const applyManualKeys = () => {
   manualKeyErrors.xor_key = ''
@@ -752,16 +750,23 @@ const handleDecrypt = async () => {
         }
         try {
           const accounts = Object.keys(result.account_results || {})
-          if (accounts.length > 0) mediaAccount.value = accounts[0]
+          if (accounts.length > 0) {
+            mediaAccount.value = accounts[0]
+          } else {
+            const match = formData.db_storage_path.match(/(wxid_[a-zA-Z0-9]+)/)
+            if (match) mediaAccount.value = match[1]
+          }
         } catch (e) {}
 
         currentStep.value = 1
         await prefillKeysForAccount(mediaAccount.value)
 
         if (!manualKeys.xor_key && !manualKeys.aes_key) {
-          warning.value = '正在通过云端备选方案自动获取图片密钥，请稍候...'
+          warning.value = '正在通过云端/本地算法自动获取图片密钥，请稍候...'
           try {
-            const imgRes = await getImageKey({ account: mediaAccount.value })
+            const params = mediaAccount.value ? { account: mediaAccount.value } : {}
+            const imgRes = await getImageKey(params)
+
             if (imgRes && imgRes.status === 0) {
               if (imgRes.data?.xor_key) manualKeys.xor_key = imgRes.data.xor_key
               if (imgRes.data?.aes_key) manualKeys.aes_key = imgRes.data.aes_key
@@ -842,7 +847,12 @@ const handleDecrypt = async () => {
 
           try {
             const accounts = Object.keys(data.account_results || {})
-            if (accounts.length > 0) mediaAccount.value = accounts[0]
+            if (accounts.length > 0) {
+              mediaAccount.value = accounts[0]
+            } else {
+              const match = formData.db_storage_path.match(/(wxid_[a-zA-Z0-9]+)/)
+              if (match) mediaAccount.value = match[1]
+            }
           } catch (e) {}
 
           try {
@@ -855,11 +865,11 @@ const handleDecrypt = async () => {
             currentStep.value = 1
             await prefillKeysForAccount(mediaAccount.value)
 
-            // 【重点】如果刚才没有通过双 Hook 拿到图片密钥，触发云端 API 备用方案自动获取
             if (!manualKeys.xor_key && !manualKeys.aes_key) {
-              warning.value = '正在通过云端备选方案自动获取图片密钥，请稍候...'
+              warning.value = '正在通过云端/本地算法自动获取图片密钥，请稍候...'
               try {
-                const imgRes = await getImageKey({ account: mediaAccount.value })
+                const params = mediaAccount.value ? { account: mediaAccount.value } : {}
+                const imgRes = await getImageKey(params)
                 if (imgRes && imgRes.status === 0) {
                   if (imgRes.data?.xor_key) manualKeys.xor_key = imgRes.data.xor_key
                   if (imgRes.data?.aes_key) manualKeys.aes_key = imgRes.data.aes_key
