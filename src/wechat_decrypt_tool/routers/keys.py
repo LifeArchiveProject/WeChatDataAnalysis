@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter
 
 from ..key_store import get_account_keys_from_store
-from ..key_service import get_db_key_workflow, fetch_and_save_remote_keys
+from ..key_service import get_db_key_workflow, get_image_key_integrated_workflow
 from ..media_helpers import _load_media_keys, _resolve_account_dir
 from ..path_fix import PathFixRoute
 
@@ -97,7 +97,7 @@ async def get_image_key(account: Optional[str] = None):
     4. 解析返回流，自动存入本地数据库
     """
     try:
-        result = await fetch_and_save_remote_keys(account)
+        result = await get_image_key_integrated_workflow(account)
 
         return {
             "status": 0,
@@ -105,8 +105,8 @@ async def get_image_key(account: Optional[str] = None):
             "data": {
                 "xor_key": result["xor_key"],
                 "aes_key": result["aes_key"],
-                "nick_name": result.get("nick_name"),
-                "account": result["wxid"]
+                "nick_name": result.get("nick_name", ""),
+                "account": result.get("wxid", "")
             }
         }
     except FileNotFoundError as e:
