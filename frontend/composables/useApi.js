@@ -575,8 +575,12 @@ export const useApi = () => {
   }
 
   // 获取图片密钥
-  const getImageKey = async () => {
-    return await request('/get_image_key')
+  const getImageKey = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/get_image_key' + (query.toString() ? `?${query.toString()}` : '')
+
+    return await request(url)
   }
 
   // 枚举服务号信息
