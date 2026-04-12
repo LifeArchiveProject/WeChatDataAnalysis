@@ -4,6 +4,8 @@ import binascii
 import json
 import os
 import re
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -128,6 +130,10 @@ _loaded_wcdb_api_dll: Optional[Path] = None
 _preloaded_native_libs: list[ctypes.CDLL] = []
 _protection_checked = False
 _protection_result: Optional[tuple[int, str]] = None
+_AUTO_SIDECAR_LOCK = threading.Lock()
+_AUTO_SIDECAR_PROC: Optional[subprocess.Popen] = None
+_AUTO_SIDECAR_URL = ""
+_AUTO_SIDECAR_TOKEN = ""
 
 
 def _is_windows() -> bool:
@@ -236,6 +242,197 @@ def _sidecar_url() -> str:
 
 def _sidecar_enabled() -> bool:
     return bool(_sidecar_url())
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _source_sidecar_assets() -> tuple[Path, Path, Path] | None:
+    if getattr(sys, "frozen", False):
+        return None
+
+    repo_root = _repo_root()
+    electron_exe = repo_root / "desktop" / "node_modules" / "electron" / "dist" / "electron.exe"
+    sidecar_script = repo_root / "desktop" / "src" / "wcdb-sidecar.cjs"
+    koffi_dir = repo_root / "desktop" / "vendor" / "koffi"
+
+    try:
+        if electron_exe.is_file() and sidecar_script.is_file() and koffi_dir.exists():
+            return electron_exe, sidecar_script, koffi_dir
+    except Exception:
+        return None
+    return None
+
+
+def _auto_sidecar_started_here() -> bool:
+    with _AUTO_SIDECAR_LOCK:
+        return bool(_AUTO_SIDECAR_URL and _AUTO_SIDECAR_TOKEN)
+
+
+def _parse_port(value: object) -> Optional[int]:
+    try:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        port = int(raw, 10)
+    except Exception:
+        return None
+    if 1 <= port <= 65535:
+        return port
+    return None
+
+
+def _pick_free_port() -> int:
+    requested = _parse_port(os.environ.get("WECHAT_TOOL_WCDB_SIDECAR_PORT"))
+    if requested is not None:
+        return requested
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        return int(sock.getsockname()[1])
+
+
+def _build_auto_sidecar_resource_paths(wcdb_api_dll: Path) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+
+    def add(path: str | Path | None) -> None:
+        if not path:
+            return
+        try:
+            resolved = Path(path).resolve()
+        except Exception:
+            resolved = Path(path)
+        key = str(resolved).replace("/", "\\").rstrip("\\").lower()
+        if not key or key in seen:
+            return
+        seen.add(key)
+        items.append(str(resolved))
+
+    repo_root = _repo_root()
+    dll_dir = wcdb_api_dll.parent
+    add(dll_dir)
+    add(dll_dir.parent)
+    add(repo_root)
+    add(repo_root / "resources")
+
+    data_dir = str(os.environ.get("WECHAT_TOOL_DATA_DIR", "") or "").strip()
+    if data_dir:
+        add(data_dir)
+        add(Path(data_dir) / "resources")
+    else:
+        add(Path.cwd())
+        add(Path.cwd() / "resources")
+
+    return items
+
+
+def _stop_auto_sidecar() -> None:
+    global _AUTO_SIDECAR_PROC, _AUTO_SIDECAR_URL, _AUTO_SIDECAR_TOKEN
+
+    with _AUTO_SIDECAR_LOCK:
+        proc = _AUTO_SIDECAR_PROC
+        owned_url = _AUTO_SIDECAR_URL
+        owned_token = _AUTO_SIDECAR_TOKEN
+        _AUTO_SIDECAR_PROC = None
+        _AUTO_SIDECAR_URL = ""
+        _AUTO_SIDECAR_TOKEN = ""
+
+    if owned_url and os.environ.get("WECHAT_TOOL_WCDB_SIDECAR_URL") == owned_url:
+        os.environ.pop("WECHAT_TOOL_WCDB_SIDECAR_URL", None)
+    if owned_token and os.environ.get("WECHAT_TOOL_WCDB_SIDECAR_TOKEN") == owned_token:
+        os.environ.pop("WECHAT_TOOL_WCDB_SIDECAR_TOKEN", None)
+
+    if proc is None:
+        return
+
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5.0)
+            except Exception:
+                proc.kill()
+    except Exception:
+        pass
+
+
+def _maybe_start_auto_sidecar() -> bool:
+    global _AUTO_SIDECAR_PROC, _AUTO_SIDECAR_URL, _AUTO_SIDECAR_TOKEN
+
+    if _sidecar_enabled() or not _is_windows():
+        return False
+
+    assets = _source_sidecar_assets()
+    if not assets:
+        return False
+
+    wcdb_api_dll = _resolve_wcdb_api_dll_path()
+    try:
+        if not wcdb_api_dll.exists():
+            return False
+    except Exception:
+        return False
+
+    electron_exe, sidecar_script, koffi_dir = assets
+    repo_root = _repo_root()
+
+    with _AUTO_SIDECAR_LOCK:
+        proc = _AUTO_SIDECAR_PROC
+        if proc is not None and proc.poll() is None and _AUTO_SIDECAR_URL and _AUTO_SIDECAR_TOKEN:
+            os.environ["WECHAT_TOOL_WCDB_SIDECAR_URL"] = _AUTO_SIDECAR_URL
+            os.environ["WECHAT_TOOL_WCDB_SIDECAR_TOKEN"] = _AUTO_SIDECAR_TOKEN
+            return True
+
+        if proc is not None and proc.poll() is not None:
+            _AUTO_SIDECAR_PROC = None
+            _AUTO_SIDECAR_URL = ""
+            _AUTO_SIDECAR_TOKEN = ""
+
+        port = _pick_free_port()
+        token = os.urandom(24).hex()
+        url = f"http://127.0.0.1:{port}"
+        env = os.environ.copy()
+        env.update(
+            {
+                "ELECTRON_RUN_AS_NODE": "1",
+                "WECHAT_TOOL_WCDB_SIDECAR_HOST": "127.0.0.1",
+                "WECHAT_TOOL_WCDB_SIDECAR_PORT": str(port),
+                "WECHAT_TOOL_WCDB_SIDECAR_TOKEN": token,
+                "WECHAT_TOOL_WCDB_API_DLL_PATH": str(wcdb_api_dll),
+                "WECHAT_TOOL_WCDB_DLL_DIR": str(wcdb_api_dll.parent),
+                "WECHAT_TOOL_WCDB_RESOURCE_PATHS": json.dumps(
+                    _build_auto_sidecar_resource_paths(wcdb_api_dll), ensure_ascii=False
+                ),
+                "WECHAT_TOOL_KOFFI_DIR": str(koffi_dir),
+            }
+        )
+
+        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
+        try:
+            proc = subprocess.Popen(
+                [str(electron_exe), str(sidecar_script)],
+                cwd=str(repo_root),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+        except Exception as exc:
+            logger.warning("[wcdb] auto sidecar start failed: %s", exc)
+            return False
+
+        _AUTO_SIDECAR_PROC = proc
+        _AUTO_SIDECAR_URL = url
+        _AUTO_SIDECAR_TOKEN = token
+        os.environ["WECHAT_TOOL_WCDB_SIDECAR_URL"] = url
+        os.environ["WECHAT_TOOL_WCDB_SIDECAR_TOKEN"] = token
+
+    logger.info("[wcdb] auto-started electron sidecar url=%s dll=%s", _AUTO_SIDECAR_URL, wcdb_api_dll)
+    return True
 
 
 def _sidecar_call(action: str, payload: Optional[dict[str, Any]] = None, *, timeout: float = 30.0) -> dict[str, Any]:
@@ -476,30 +673,37 @@ def _load_wcdb_lib() -> ctypes.CDLL:
 
 def _ensure_initialized() -> None:
     global _initialized, _loaded_wcdb_api_dll, _protection_result
+    _maybe_start_auto_sidecar()
     if _sidecar_enabled():
         with _lib_lock:
             if _initialized:
                 return
-        result = _sidecar_call("init", timeout=30.0)
-        dll_path = str(result.get("dllPath") or "").strip()
-        if dll_path:
-            try:
-                _loaded_wcdb_api_dll = Path(dll_path)
-            except Exception:
-                pass
-        protection = result.get("protection")
-        if isinstance(protection, list):
-            for item in protection:
-                if isinstance(item, dict) and "rc" in item:
-                    try:
-                        _protection_result = (int(item.get("rc")), str(item.get("path") or ""))
-                        if int(item.get("rc")) == 0:
-                            break
-                    except Exception:
-                        continue
-        with _lib_lock:
-            _initialized = True
-        return
+        try:
+            result = _sidecar_call("init", timeout=30.0)
+            dll_path = str(result.get("dllPath") or "").strip()
+            if dll_path:
+                try:
+                    _loaded_wcdb_api_dll = Path(dll_path)
+                except Exception:
+                    pass
+            protection = result.get("protection")
+            if isinstance(protection, list):
+                for item in protection:
+                    if isinstance(item, dict) and "rc" in item:
+                        try:
+                            _protection_result = (int(item.get("rc")), str(item.get("path") or ""))
+                            if int(item.get("rc")) == 0:
+                                break
+                        except Exception:
+                            continue
+            with _lib_lock:
+                _initialized = True
+            return
+        except Exception:
+            if not _auto_sidecar_started_here():
+                raise
+            logger.warning("[wcdb] auto sidecar init failed, fallback to in-process wcdb")
+            _stop_auto_sidecar()
 
     lib = _load_wcdb_lib()
     with _lib_lock:
@@ -1188,13 +1392,15 @@ def shutdown() -> None:
     global _initialized
     if _sidecar_enabled():
         with _lib_lock:
-            if not _initialized:
-                return
+            should_shutdown = bool(_initialized)
         try:
-            _sidecar_call("shutdown", timeout=5.0)
+            if should_shutdown:
+                _sidecar_call("shutdown", timeout=5.0)
         finally:
             with _lib_lock:
                 _initialized = False
+            if _auto_sidecar_started_here():
+                _stop_auto_sidecar()
         return
 
     lib = _load_wcdb_lib()
@@ -1205,6 +1411,8 @@ def shutdown() -> None:
             lib.wcdb_shutdown()
         finally:
             _initialized = False
+    if _auto_sidecar_started_here():
+        _stop_auto_sidecar()
 
 
 def _resolve_session_db_path(db_storage_dir: Path) -> Path:
