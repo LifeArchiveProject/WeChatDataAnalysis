@@ -2,7 +2,7 @@ import asyncio
 import json
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -226,6 +226,7 @@ async def get_decrypted_resource(md5: str, account: Optional[str] = None):
 
 @router.get("/api/media/decrypt_all_stream", summary="批量解密所有图片资源（SSE实时进度）")
 async def decrypt_all_media_stream(
+    request: Request,
     account: Optional[str] = None,
     xor_key: Optional[str] = None,
     aes_key: Optional[str] = None,
@@ -252,8 +253,18 @@ async def decrypt_all_media_stream(
     - 解密后非有效图片格式
     """
 
+    async def is_client_disconnected() -> bool:
+        try:
+            return await request.is_disconnected()
+        except Exception:
+            return False
+
     async def generate_progress():
         try:
+            if await is_client_disconnected():
+                logger.info("[SSE] 客户端已断开，取消图片解密任务")
+                return
+
             account_dir = _resolve_account_dir(account)
             wxid_dir = _resolve_account_wxid_dir(account_dir)
 
@@ -301,6 +312,10 @@ async def decrypt_all_media_stream(
             total_files = len(dat_files)
             logger.info(f"[SSE] 共发现 {total_files} 个.dat文件（仅图片）")
 
+            if await is_client_disconnected():
+                logger.info("[SSE] 扫描完成后客户端已断开，停止图片解密任务")
+                return
+
             if total_files == 0:
                 yield f"data: {json.dumps({'type': 'complete', 'message': '未发现需要解密的图片文件', 'total': 0, 'success_count': 0, 'skip_count': 0, 'fail_count': 0})}\n\n"
                 return
@@ -319,6 +334,10 @@ async def decrypt_all_media_stream(
             resource_dir.mkdir(parents=True, exist_ok=True)
 
             for i, (dat_path, md5) in enumerate(dat_files):
+                if await is_client_disconnected():
+                    logger.info("[SSE] 客户端已断开，停止图片解密任务")
+                    return
+
                 current = i + 1
                 file_name = dat_path.name
 
