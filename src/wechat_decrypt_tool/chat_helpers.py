@@ -1238,6 +1238,14 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             or (_extract_xml_tag_text(finder_feed, "username") if finder_feed else "")
             or (_extract_xml_tag_text(finder_feed, "finderusername") if finder_feed else "")
         )
+        object_id = (
+            (_extract_xml_tag_or_attr(finder_feed, "objectid") if finder_feed else "")
+            or _extract_xml_tag_or_attr(text, "objectid")
+        )
+        object_nonce_id = (
+            (_extract_xml_tag_or_attr(finder_feed, "objectnonceid") if finder_feed else "")
+            or _extract_xml_tag_or_attr(text, "objectnonceid")
+        )
 
         thumb_url = _normalize_xml_url(
             _extract_xml_tag_or_attr(text, "thumburl")
@@ -1277,6 +1285,8 @@ def _parse_app_message(text: str) -> dict[str, Any]:
             "fromUsername": from_u,
             "linkType": "finder",
             "linkStyle": "finder",
+            "objectId": str(object_id or "").strip(),
+            "objectNonceId": str(object_nonce_id or "").strip(),
         }
 
     if app_type in (33, 36):
@@ -2418,6 +2428,8 @@ def _row_to_search_hit(
     quote_thumb_url = ""
     link_type = ""
     link_style = ""
+    object_id = ""
+    object_nonce_id = ""
     amount = ""
     pay_sub_type = ""
     transfer_status = ""
@@ -2441,6 +2453,8 @@ def _row_to_search_hit(
         quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
         link_type = str(parsed.get("linkType") or "")
         link_style = str(parsed.get("linkStyle") or "")
+        object_id = str(parsed.get("objectId") or "")
+        object_nonce_id = str(parsed.get("objectNonceId") or "")
         quote_username = str(parsed.get("quoteUsername") or "")
         amount = str(parsed.get("amount") or "")
         pay_sub_type = str(parsed.get("paySubType") or "")
@@ -2526,6 +2540,8 @@ def _row_to_search_hit(
                         quote_thumb_url = str(parsed.get("quoteThumbUrl") or quote_thumb_url)
                         link_type = str(parsed.get("linkType") or link_type)
                         link_style = str(parsed.get("linkStyle") or link_style)
+                        object_id = str(parsed.get("objectId") or object_id)
+                        object_nonce_id = str(parsed.get("objectNonceId") or object_nonce_id)
                         amount = str(parsed.get("amount") or amount)
                         pay_sub_type = str(parsed.get("paySubType") or pay_sub_type)
                         quote_username = str(parsed.get("quoteUsername") or quote_username)
@@ -2567,6 +2583,8 @@ def _row_to_search_hit(
         "url": url,
         "linkType": link_type,
         "linkStyle": link_style,
+        "objectId": object_id,
+        "objectNonceId": object_nonce_id,
         "quoteUsername": quote_username,
         "quoteTitle": quote_title,
         "quoteContent": quote_content,

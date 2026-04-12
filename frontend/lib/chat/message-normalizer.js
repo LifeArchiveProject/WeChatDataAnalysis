@@ -227,6 +227,8 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
       _quoteThumbError: false,
       amount: msg.amount || '',
       coverUrl: msg.coverUrl || '',
+      objectId: String(msg.objectId || '').trim(),
+      objectNonceId: String(msg.objectNonceId || '').trim(),
       fileSize: msg.fileSize || '',
       fileMd5: msg.fileMd5 || '',
       paySubType: msg.paySubType || '',
