@@ -3435,6 +3435,8 @@ def _parse_message_for_export(
     quote_voice_length = ""
     quote_title = ""
     quote_content = ""
+    object_id = ""
+    object_nonce_id = ""
     amount = ""
     cover_url = ""
     file_size = ""
@@ -3472,6 +3474,8 @@ def _parse_message_for_export(
         from_username = str(parsed.get("fromUsername") or "")
         link_type = str(parsed.get("linkType") or "")
         link_style = str(parsed.get("linkStyle") or "")
+        object_id = str(parsed.get("objectId") or "")
+        object_nonce_id = str(parsed.get("objectNonceId") or "")
         record_item = str(parsed.get("recordItem") or "")
         quote_username = str(parsed.get("quoteUsername") or "")
         quote_server_id = str(parsed.get("quoteServerId") or "")
@@ -3699,6 +3703,8 @@ def _parse_message_for_export(
                         from_username = str(parsed.get("fromUsername") or from_username)
                         link_type = str(parsed.get("linkType") or link_type)
                         link_style = str(parsed.get("linkStyle") or link_style)
+                        object_id = str(parsed.get("objectId") or object_id)
+                        object_nonce_id = str(parsed.get("objectNonceId") or object_nonce_id)
                         record_item = str(parsed.get("recordItem") or record_item)
                         quote_username = str(parsed.get("quoteUsername") or quote_username)
                         quote_server_id = str(parsed.get("quoteServerId") or quote_server_id)
@@ -3765,6 +3771,8 @@ def _parse_message_for_export(
         "fromUsername": from_username,
         "linkType": link_type,
         "linkStyle": link_style,
+        "objectId": object_id,
+        "objectNonceId": object_nonce_id,
         "recordItem": record_item,
         "thumbUrl": thumb_url,
         "imageMd5": image_md5,

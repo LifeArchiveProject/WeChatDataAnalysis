@@ -3049,6 +3049,8 @@ def _append_full_messages_from_rows(
         quote_thumb_url = ""
         link_type = ""
         link_style = ""
+        object_id = ""
+        object_nonce_id = ""
         quote_server_id = ""
         quote_type = ""
         quote_voice_length = ""
@@ -3082,6 +3084,8 @@ def _append_full_messages_from_rows(
             quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
             link_type = str(parsed.get("linkType") or "")
             link_style = str(parsed.get("linkStyle") or "")
+            object_id = str(parsed.get("objectId") or "")
+            object_nonce_id = str(parsed.get("objectNonceId") or "")
             quote_username = str(parsed.get("quoteUsername") or "")
             quote_server_id = str(parsed.get("quoteServerId") or "")
             quote_type = str(parsed.get("quoteType") or "")
@@ -3324,6 +3328,8 @@ def _append_full_messages_from_rows(
                             quote_thumb_url = str(parsed.get("quoteThumbUrl") or quote_thumb_url)
                             link_type = str(parsed.get("linkType") or link_type)
                             link_style = str(parsed.get("linkStyle") or link_style)
+                            object_id = str(parsed.get("objectId") or object_id)
+                            object_nonce_id = str(parsed.get("objectNonceId") or object_nonce_id)
                             amount = str(parsed.get("amount") or amount)
                             cover_url = str(parsed.get("coverUrl") or cover_url)
                             thumb_url = str(parsed.get("thumbUrl") or thumb_url)
@@ -3382,6 +3388,8 @@ def _append_full_messages_from_rows(
                 "url": url,
                 "linkType": link_type,
                 "linkStyle": link_style,
+                "objectId": object_id,
+                "objectNonceId": object_nonce_id,
                 "from": from_name,
                 "fromUsername": from_username,
                 "recordItem": record_item,
@@ -4584,6 +4592,8 @@ def _collect_chat_messages(
                 quote_thumb_url = ""
                 link_type = ""
                 link_style = ""
+                object_id = ""
+                object_nonce_id = ""
                 quote_server_id = ""
                 quote_type = ""
                 quote_voice_length = ""
@@ -4617,6 +4627,8 @@ def _collect_chat_messages(
                     quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
                     link_type = str(parsed.get("linkType") or "")
                     link_style = str(parsed.get("linkStyle") or "")
+                    object_id = str(parsed.get("objectId") or "")
+                    object_nonce_id = str(parsed.get("objectNonceId") or "")
                     quote_username = str(parsed.get("quoteUsername") or "")
                     quote_server_id = str(parsed.get("quoteServerId") or "")
                     quote_type = str(parsed.get("quoteType") or "")
@@ -4838,6 +4850,8 @@ def _collect_chat_messages(
                                     quote_thumb_url = str(parsed.get("quoteThumbUrl") or quote_thumb_url)
                                     link_type = str(parsed.get("linkType") or link_type)
                                     link_style = str(parsed.get("linkStyle") or link_style)
+                                    object_id = str(parsed.get("objectId") or object_id)
+                                    object_nonce_id = str(parsed.get("objectNonceId") or object_nonce_id)
                                     amount = str(parsed.get("amount") or amount)
                                     cover_url = str(parsed.get("coverUrl") or cover_url)
                                     thumb_url = str(parsed.get("thumbUrl") or thumb_url)
@@ -4901,6 +4915,8 @@ def _collect_chat_messages(
                         "url": url,
                         "linkType": link_type,
                         "linkStyle": link_style,
+                        "objectId": object_id,
+                        "objectNonceId": object_nonce_id,
                         "from": from_name,
                         "fromUsername": from_username,
                         "recordItem": record_item,
@@ -5502,6 +5518,8 @@ def list_chat_messages(
                 quote_thumb_url = ""
                 link_type = ""
                 link_style = ""
+                object_id = ""
+                object_nonce_id = ""
                 quote_server_id = ""
                 quote_type = ""
                 quote_voice_length = ""
@@ -5531,6 +5549,8 @@ def list_chat_messages(
                     quote_thumb_url = str(parsed.get("quoteThumbUrl") or "")
                     link_type = str(parsed.get("linkType") or "")
                     link_style = str(parsed.get("linkStyle") or "")
+                    object_id = str(parsed.get("objectId") or "")
+                    object_nonce_id = str(parsed.get("objectNonceId") or "")
                     quote_username = str(parsed.get("quoteUsername") or "")
                     quote_server_id = str(parsed.get("quoteServerId") or "")
                     quote_type = str(parsed.get("quoteType") or "")
@@ -5736,6 +5756,8 @@ def list_chat_messages(
                                     quote_thumb_url = str(parsed.get("quoteThumbUrl") or quote_thumb_url)
                                     link_type = str(parsed.get("linkType") or link_type)
                                     link_style = str(parsed.get("linkStyle") or link_style)
+                                    object_id = str(parsed.get("objectId") or object_id)
+                                    object_nonce_id = str(parsed.get("objectNonceId") or object_nonce_id)
                                     amount = str(parsed.get("amount") or amount)
                                     cover_url = str(parsed.get("coverUrl") or cover_url)
                                     thumb_url = str(parsed.get("thumbUrl") or thumb_url)
@@ -5788,6 +5810,8 @@ def list_chat_messages(
                         "url": url,
                         "linkType": link_type,
                         "linkStyle": link_style,
+                        "objectId": object_id,
+                        "objectNonceId": object_nonce_id,
                         "from": from_name,
                         "fromUsername": from_username,
                         "recordItem": record_item,
@@ -7796,6 +7820,8 @@ async def resolve_app_message(
                     "fromUsername": str(parsed.get("fromUsername") or "").strip(),
                     "linkType": str(parsed.get("linkType") or "").strip(),
                     "linkStyle": str(parsed.get("linkStyle") or "").strip(),
+                    "objectId": str(parsed.get("objectId") or "").strip(),
+                    "objectNonceId": str(parsed.get("objectNonceId") or "").strip(),
                     "size": str(parsed.get("size") or "").strip(),
                     "baseUrl": base_url,
                 }

@@ -148,6 +148,26 @@ class TestParseAppMessage(unittest.TestCase):
         self.assertEqual(parsed.get("thumbUrl"), "https://finder.video.qq.com/cover.jpg")
         self.assertEqual(parsed.get("url"), "https://channels.weixin.qq.com/web/pages/feed?feedid=abc")
 
+    def test_finder_type_51_exposes_object_fields(self):
+        raw_text = (
+            '<msg><appmsg appid="" sdkver="0">'
+            '<title>当前版本不支持展示该内容，请升级至最新版本。</title>'
+            '<des></des>'
+            '<type>51</type>'
+            '<finderFeed>'
+            '<nickname><![CDATA[央视新闻]]></nickname>'
+            '<objectId><![CDATA[1234567890]]></objectId>'
+            '<objectNonceId><![CDATA[nonce-abc]]></objectNonceId>'
+            '</finderFeed>'
+            '</appmsg></msg>'
+        )
+
+        parsed = _parse_app_message(raw_text)
+
+        self.assertEqual(parsed.get("linkType"), "finder")
+        self.assertEqual(parsed.get("objectId"), "1234567890")
+        self.assertEqual(parsed.get("objectNonceId"), "nonce-abc")
+
     def test_quote_type_5_nested_xml_refermsg_uses_inner_title(self):
         raw_text = (
             '<msg><appmsg appid="" sdkver="0">'
