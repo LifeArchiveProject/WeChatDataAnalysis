@@ -193,7 +193,7 @@ async def get_image_key_integrated_workflow(account: Optional[str] = None) -> Di
         # 如果指定了账号，尝试在本地结果中找匹配的
         if target_account_wxid:
             for k in local_keys:
-                if k['wxid'] == target_account_wxid:
+                if k['wxid'] in target_account_wxid:
                     logger.info(f"成功通过本地算法匹配到账号 {target_account_wxid} 的图片密钥")
                     upsert_account_keys_in_store(
                         account=k['wxid'],
@@ -205,6 +205,7 @@ async def get_image_key_integrated_workflow(account: Optional[str] = None) -> Di
             # 如果没指定账号，返回第一个发现的并存入 store (如果有的话)
             k = local_keys[0]
             logger.info(f"本地算法提取成功 (未指定账号，返回首个): {k['wxid']}")
+            # logger.info(local_keys)
             upsert_account_keys_in_store(
                 account=k['wxid'],
                 image_xor_key=k['xor_key'],
