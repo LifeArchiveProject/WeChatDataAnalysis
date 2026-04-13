@@ -30,6 +30,24 @@ from .media_helpers import _resolve_account_dir, _resolve_account_wxid_dir
 logger = logging.getLogger(__name__)
 
 
+def _summarize_aes_key(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) <= 8:
+        return raw
+    return f"{raw[:4]}...{raw[-4:]}(len={len(raw)})"
+
+
+def _summarize_key_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    payload = payload or {}
+    return {
+        "wxid": str(payload.get("wxid") or "").strip(),
+        "xor_key": str(payload.get("xor_key") or "").strip(),
+        "aes_key": _summarize_aes_key(payload.get("aes_key")),
+    }
+
+
 def _resolve_wxid_dir_for_image_key(
     account: Optional[str] = None,
     *,
@@ -40,6 +58,7 @@ def _resolve_wxid_dir_for_image_key(
     if explicit_wxid_dir:
         candidate = Path(explicit_wxid_dir).expanduser()
         if candidate.exists() and candidate.is_dir():
+            logger.info("[image_key] 使用显式 wxid_dir: %s", str(candidate))
             return candidate
         raise FileNotFoundError(f"指定的 wxid_dir 不存在或不是目录: {candidate}")
 
@@ -50,19 +69,42 @@ def _resolve_wxid_dir_for_image_key(
             if db_storage_dir.name.lower() == "db_storage":
                 candidate = db_storage_dir.parent
                 if candidate.exists() and candidate.is_dir():
+                    logger.info(
+                        "[image_key] 通过 db_storage_path 反推出 wxid_dir: db_storage_path=%s wxid_dir=%s",
+                        str(db_storage_dir),
+                        str(candidate),
+                    )
                     return candidate
             nested_db_storage = db_storage_dir / "db_storage"
             if nested_db_storage.exists() and nested_db_storage.is_dir():
+                logger.info(
+                    "[image_key] db_storage_path 指向 wxid_dir，自动使用其子目录: wxid_dir=%s",
+                    str(db_storage_dir),
+                )
                 return db_storage_dir
+        logger.info(
+            "[image_key] 提供的 db_storage_path 无法解析 wxid_dir: %s",
+            explicit_db_storage_path,
+        )
 
     if account:
         try:
             account_dir = _resolve_account_dir(account)
             wx_id_dir = _resolve_account_wxid_dir(account_dir)
             if wx_id_dir:
+                logger.info(
+                    "[image_key] 通过已解密账号目录解析 wxid_dir: account=%s account_dir=%s wxid_dir=%s",
+                    str(account).strip(),
+                    str(account_dir),
+                    str(wx_id_dir),
+                )
                 return wx_id_dir
-        except Exception:
-            pass
+        except Exception as e:
+            logger.info(
+                "[image_key] 无法通过已解密账号目录解析 wxid_dir: account=%s error=%s",
+                str(account).strip(),
+                str(e),
+            )
 
     raise FileNotFoundError("无法定位该账号的 wxid_dir，请传入有效的 db_storage_path 或先完成数据库解密")
 
@@ -180,11 +222,13 @@ def get_wechat_internal_global_config(wx_dir: Path, file_name1) -> bytes:
 def try_get_local_image_keys() -> List[Dict[str, Any]]:
     """尝试通过本地算法提取图片密钥 (无需 Hook)"""
     if wx_key is None or not hasattr(wx_key, 'get_image_key'):
+        logger.info("[image_key] 本地算法不可用：wx_key.get_image_key 缺失")
         return []
     
     try:
         res_json = wx_key.get_image_key()
         if not res_json:
+            logger.info("[image_key] 本地算法返回空结果")
             return []
         
         data = json.loads(res_json)
@@ -202,6 +246,11 @@ def try_get_local_image_keys() -> List[Dict[str, Any]]:
                         "xor_key": f"0x{int(xor_key):02X}",
                         "aes_key": aes_key
                     })
+        logger.info(
+            "[image_key] 本地算法完成：accounts=%s results=%s",
+            len(accounts),
+            [_summarize_key_payload(item) for item in results],
+        )
         return results
     except Exception as e:
         logger.error(f"本地提取图片密钥失败: {e}")
@@ -234,6 +283,14 @@ async def get_image_key_integrated_workflow(
         except Exception:
             target_account_wxid = account
     target_account_wxid = str(target_account_wxid or "").strip().lower()
+    logger.info(
+        "[image_key] 开始集成流程：request_account=%s target_wxid=%s local_key_count=%s db_storage_path=%s wxid_dir=%s",
+        str(account or "").strip(),
+        target_account_wxid,
+        len(local_keys),
+        str(db_storage_path or "").strip(),
+        str(wxid_dir or "").strip(),
+    )
 
     if local_keys:
         # 如果指定了账号，尝试在本地结果中找匹配的
@@ -241,17 +298,29 @@ async def get_image_key_integrated_workflow(
             for k in local_keys:
                 local_wxid = str(k.get("wxid") or "").strip().lower()
                 if local_wxid and local_wxid == target_account_wxid:
+                    logger.info(
+                        "[image_key] 本地算法精确匹配成功：target_wxid=%s payload=%s",
+                        target_account_wxid,
+                        _summarize_key_payload(k),
+                    )
                     upsert_account_keys_in_store(
                         account=str(k.get("wxid") or "").strip(),
                         image_xor_key=k['xor_key'],
                         image_aes_key=k['aes_key']
                     )
                     return k
+            logger.info(
+                "[image_key] 本地算法未匹配到目标账号：target_wxid=%s local_wxids=%s",
+                target_account_wxid,
+                [str(item.get("wxid") or "").strip() for item in local_keys],
+            )
         else:
             # 如果没指定账号，返回第一个发现的并存入 store (如果有的话)
             k = local_keys[0]
-            logger.info(f"本地算法提取成功 (未指定账号，返回首个): {k['wxid']}")
-            # logger.info(local_keys)
+            logger.info(
+                "[image_key] 未指定账号，返回本地首个结果：payload=%s",
+                _summarize_key_payload(k),
+            )
             upsert_account_keys_in_store(
                 account=k['wxid'],
                 image_xor_key=k['xor_key'],
@@ -260,7 +329,7 @@ async def get_image_key_integrated_workflow(
             return k
 
     # 2. 本地提取失败或不匹配，尝试远程解析
-    logger.info("本地算法提取未命中，尝试远程 API 解析...")
+    logger.info("[image_key] 本地算法未命中，尝试远程 API 解析")
     return await fetch_and_save_remote_keys(
         account,
         wxid_dir=wxid_dir,
@@ -284,13 +353,25 @@ async def fetch_and_save_remote_keys(
     url = "https://view.free.c3o.re/api/key"
     data = {"weixinIDFolder": wxid}
 
-    logger.info(f"正在为账号 {wxid} 获取云端备选图片密钥...")
+    logger.info(
+        "[image_key] 准备请求远程密钥：request_account=%s resolved_account=%s wxid_dir=%s db_storage_path=%s",
+        str(account or "").strip(),
+        wxid,
+        str(wx_id_dir),
+        str(db_storage_path or "").strip(),
+    )
 
     try:
         blob1_bytes = get_wechat_internal_global_config(wx_id_dir, file_name1="global_config")
         blob2_bytes = get_wechat_internal_global_config(wx_id_dir, file_name1="global_config.crc")
     except Exception as e:
         raise RuntimeError(f"读取微信内部文件失败: {e}")
+    logger.info(
+        "[image_key] 远程请求输入文件已读取：wxid=%s global_config_bytes=%s crc_bytes=%s",
+        wxid,
+        len(blob1_bytes),
+        len(blob2_bytes),
+    )
 
     files = {
         'fileBytes': ('file', blob1_bytes, 'application/octet-stream'),
@@ -298,7 +379,7 @@ async def fetch_and_save_remote_keys(
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
-        logger.info("向云端 API 发送请求...")
+        logger.info("[image_key] 向云端 API 发送请求：url=%s wxid=%s", url, wxid)
         response = await client.post(url, data=data, files=files)
 
     if response.status_code != 200:
@@ -307,6 +388,15 @@ async def fetch_and_save_remote_keys(
     config = response.json()
     if not config:
         raise RuntimeError("云端解析失败: 返回数据为空")
+    logger.info(
+        "[image_key] 收到远程响应：status_code=%s keys=%s nick_name=%s",
+        response.status_code,
+        {
+            "xor_key": str(config.get("xorKey", config.get("xor_key", ""))),
+            "aes_key": _summarize_aes_key(config.get("aesKey", config.get("aes_key", ""))),
+        },
+        str(config.get("nickName", config.get("nick_name", ""))),
+    )
 
     # 新 API 的字段兼容处理
     xor_raw = str(config.get("xorKey", config.get("xor_key", "")))
@@ -325,6 +415,12 @@ async def fetch_and_save_remote_keys(
         account=wxid,
         image_xor_key=xor_hex_str,
         image_aes_key=aes_val
+    )
+    logger.info(
+        "[image_key] 远程密钥已保存：account=%s xor_key=%s aes_key=%s",
+        wxid,
+        xor_hex_str,
+        _summarize_aes_key(aes_val),
     )
 
     return {

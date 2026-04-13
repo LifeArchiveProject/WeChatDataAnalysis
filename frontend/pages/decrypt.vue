@@ -487,6 +487,44 @@ const manualKeyErrors = reactive({
 })
 
 const normalizeAccountId = (value) => String(value || '').trim()
+const summarizeAesForLog = (value) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (raw.length <= 8) return raw
+  return `${raw.slice(0, 4)}...${raw.slice(-4)}(len=${raw.length})`
+}
+const summarizeKeyStateForLog = (xorKey, aesKey) => ({
+  xor_key: String(xorKey || '').trim(),
+  aes_key: summarizeAesForLog(aesKey),
+  has_xor: !!String(xorKey || '').trim(),
+  has_aes: !!String(aesKey || '').trim()
+})
+const formatLogError = (error) => {
+  if (!error) return ''
+  if (error instanceof Error) {
+    return {
+      name: String(error.name || 'Error'),
+      message: String(error.message || ''),
+      stack: String(error.stack || '')
+    }
+  }
+  if (typeof error === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(error))
+    } catch {}
+  }
+  return String(error)
+}
+const logDecryptDebug = (phase, details = {}) => {
+  if (process.client && typeof window !== 'undefined') {
+    try {
+      window.wechatDesktop?.logDebug?.('decrypt-page', phase, details)
+    } catch {}
+  }
+  try {
+    console.info(`[decrypt-page] ${phase}`, details)
+  } catch {}
+}
 
 const normalizeXorKey = (value) => {
   const raw = String(value || '').trim()
@@ -508,6 +546,7 @@ const normalizeAesKey = (value) => {
 const prefillKeysForAccount = async (account) => {
   const acc = normalizeAccountId(account)
   if (!acc) return
+  logDecryptDebug('prefill:start', { account: acc })
   try {
     const resp = await getSavedKeys({ account: acc })
     if (!resp || resp.status !== 'success') return
@@ -527,21 +566,45 @@ const prefillKeysForAccount = async (account) => {
     if (aesKey && !String(manualKeys.aes_key || '').trim()) {
       manualKeys.aes_key = aesKey
     }
+    logDecryptDebug('prefill:done', {
+      request_account: acc,
+      response_account: String(resp.account || '').trim(),
+      db_key_present: !!dbKey,
+      ...summarizeKeyStateForLog(
+        String(keys.image_xor_key || '').trim(),
+        String(keys.image_aes_key || '').trim()
+      ),
+      applied: summarizeKeyStateForLog(manualKeys.xor_key, manualKeys.aes_key)
+    })
   } catch (e) {
-    // ignore
+    logDecryptDebug('prefill:error', { account: acc, error: formatLogError(e) })
   }
 }
 
 const tryAutoFetchImageKeys = async (account) => {
   const acc = normalizeAccountId(account)
   if (!acc) return
-  if (String(manualKeys.xor_key || '').trim() || String(manualKeys.aes_key || '').trim()) return
+  if (String(manualKeys.xor_key || '').trim() || String(manualKeys.aes_key || '').trim()) {
+    logDecryptDebug('auto-fetch:skip-existing', {
+      account: acc,
+      keys: summarizeKeyStateForLog(manualKeys.xor_key, manualKeys.aes_key)
+    })
+    return
+  }
 
   warning.value = '正在通过云端/本地算法自动获取图片密钥，请稍候...'
+  logDecryptDebug('auto-fetch:start', { account: acc })
   try {
     const imgRes = await getImageKey({
       account: acc,
       db_storage_path: String(formData.db_storage_path || '').trim()
+    })
+    logDecryptDebug('auto-fetch:response', {
+      account: acc,
+      status: imgRes?.status,
+      errmsg: String(imgRes?.errmsg || ''),
+      data_account: String(imgRes?.data?.account || '').trim(),
+      keys: summarizeKeyStateForLog(imgRes?.data?.xor_key, imgRes?.data?.aes_key)
     })
 
     if (imgRes && imgRes.status === 0) {
@@ -554,6 +617,7 @@ const tryAutoFetchImageKeys = async (account) => {
     }
   } catch (e) {
     warning.value = '网络请求失败，请手动填写图片密钥。'
+    logDecryptDebug('auto-fetch:error', { account: acc, error: formatLogError(e) })
   }
 }
 
@@ -561,13 +625,27 @@ const ensureKeysForAccount = async (account) => {
   const acc = normalizeAccountId(account)
   if (!acc) return
 
+  logDecryptDebug('ensure-keys:start', {
+    account: acc,
+    previous_account: activeKeyAccount.value,
+    current_manual: summarizeKeyStateForLog(manualKeys.xor_key, manualKeys.aes_key)
+  })
   if (activeKeyAccount.value && activeKeyAccount.value !== acc) {
+    logDecryptDebug('ensure-keys:switch-account', {
+      from: activeKeyAccount.value,
+      to: acc,
+      cleared_keys: summarizeKeyStateForLog(manualKeys.xor_key, manualKeys.aes_key)
+    })
     clearManualKeys()
   }
 
   activeKeyAccount.value = acc
   await prefillKeysForAccount(acc)
   await tryAutoFetchImageKeys(acc)
+  logDecryptDebug('ensure-keys:done', {
+    account: acc,
+    manual: summarizeKeyStateForLog(manualKeys.xor_key, manualKeys.aes_key)
+  })
 }
 
 const handleGetDbKey = async () => {
@@ -640,6 +718,11 @@ const applyManualKeys = () => {
 }
 
 const clearManualKeys = () => {
+  logDecryptDebug('keys:clear', {
+    active_account: activeKeyAccount.value,
+    manual: summarizeKeyStateForLog(manualKeys.xor_key, manualKeys.aes_key),
+    applied: summarizeKeyStateForLog(mediaKeys.xor_key, mediaKeys.aes_key)
+  })
   manualKeys.xor_key = ''
   manualKeys.aes_key = ''
   manualKeyErrors.xor_key = ''
@@ -769,6 +852,10 @@ const handleDecrypt = async () => {
     return
   }
 
+  logDecryptDebug('decrypt:start', {
+    db_storage_path: String(formData.db_storage_path || '').trim(),
+    db_key_length: String(formData.key || '').trim().length
+  })
   loading.value = true
   error.value = ''
   warning.value = ''
@@ -799,6 +886,10 @@ const handleDecrypt = async () => {
             if (match) mediaAccount.value = match[1]
           }
         } catch (e) {}
+        logDecryptDebug('decrypt:completed-fallback', {
+          media_account: mediaAccount.value,
+          accounts: Object.keys(result.account_results || {})
+        })
 
         currentStep.value = 1
         await ensureKeysForAccount(mediaAccount.value)
@@ -877,6 +968,10 @@ const handleDecrypt = async () => {
               if (match) mediaAccount.value = match[1]
             }
           } catch (e) {}
+          logDecryptDebug('decrypt:completed-sse', {
+            media_account: mediaAccount.value,
+            accounts: Object.keys(data.account_results || {})
+          })
 
           try {
             eventSource.close()
@@ -929,6 +1024,10 @@ const decryptAllImages = async () => {
   mediaDecryptResult.value = null
   error.value = ''
   warning.value = ''
+  logDecryptDebug('media-decrypt:start', {
+    account: mediaAccount.value,
+    keys: summarizeKeyStateForLog(mediaKeys.xor_key, mediaKeys.aes_key)
+  })
   
   // 重置进度
   resetMediaDecryptProgress()
@@ -973,9 +1072,20 @@ const decryptAllImages = async () => {
           decryptProgress.fail_count = data.fail_count
           mediaDecryptResult.value = data
           mediaDecrypting.value = false
+          logDecryptDebug('media-decrypt:complete', {
+            account: mediaAccount.value,
+            total: data.total,
+            success_count: data.success_count,
+            skip_count: data.skip_count,
+            fail_count: data.fail_count
+          })
           closeMediaDecryptEventSource()
         } else if (data.type === 'error') {
           error.value = data.message
+          logDecryptDebug('media-decrypt:error-event', {
+            account: mediaAccount.value,
+            message: data.message
+          })
           mediaDecrypting.value = false
           closeMediaDecryptEventSource()
         }
@@ -1016,19 +1126,30 @@ const goToMediaDecryptStep = async () => {
   warning.value = ''
   // 校验并应用（未填写则允许直接进入，后端会使用已保存密钥或报错提示）
   const ok = applyManualKeys()
+  logDecryptDebug('media-step:apply-manual', {
+    account: mediaAccount.value,
+    ok,
+    manual: summarizeKeyStateForLog(manualKeys.xor_key, manualKeys.aes_key),
+    applied: summarizeKeyStateForLog(mediaKeys.xor_key, mediaKeys.aes_key),
+    errors: { ...manualKeyErrors }
+  })
   if (!ok || manualKeyErrors.xor_key || manualKeyErrors.aes_key) return
 
   // 用户已输入 XOR 时，自动保存一次，避免下次重复输入（失败不影响继续）
   if (mediaKeys.xor_key) {
     try {
       const aesVal = String(mediaKeys.aes_key || '').trim()
+      logDecryptDebug('media-step:save-keys', {
+        account: mediaAccount.value,
+        keys: summarizeKeyStateForLog(mediaKeys.xor_key, aesVal)
+      })
       await saveMediaKeys({
         account: mediaAccount.value || null,
         xor_key: mediaKeys.xor_key,
         aes_key: aesVal ? aesVal : null
       })
     } catch (e) {
-      // ignore
+      logDecryptDebug('media-step:save-keys-error', { account: mediaAccount.value, error: formatLogError(e) })
     }
   }
   currentStep.value = 2
@@ -1040,6 +1161,10 @@ const skipToChat = async () => {
     const ok = applyManualKeys()
     if (ok && mediaKeys.xor_key) {
       const aesVal = String(mediaKeys.aes_key || '').trim()
+      logDecryptDebug('skip-chat:save-keys', {
+        account: mediaAccount.value,
+        keys: summarizeKeyStateForLog(mediaKeys.xor_key, aesVal)
+      })
       await saveMediaKeys({
         account: mediaAccount.value || null,
         xor_key: mediaKeys.xor_key,
@@ -1047,7 +1172,7 @@ const skipToChat = async () => {
       })
     }
   } catch (e) {
-    // ignore
+    logDecryptDebug('skip-chat:save-keys-error', { account: mediaAccount.value, error: formatLogError(e) })
   }
   navigateTo('/chat')
 }
@@ -1056,6 +1181,7 @@ const skipToChat = async () => {
 onMounted(async () => {
   if (process.client && typeof window !== 'undefined') {
     const selectedAccount = sessionStorage.getItem('selectedAccount')
+    logDecryptDebug('mounted:selected-account-raw', { raw: selectedAccount || '' })
     if (selectedAccount) {
       try {
         const account = JSON.parse(selectedAccount)
@@ -1068,9 +1194,14 @@ onMounted(async () => {
         }
         // 清除sessionStorage
         sessionStorage.removeItem('selectedAccount')
+        logDecryptDebug('mounted:selected-account-parsed', {
+          account_name: String(account.account_name || '').trim(),
+          data_dir: String(account.data_dir || '').trim()
+        })
         await ensureKeysForAccount(mediaAccount.value)
       } catch (e) {
         console.error('解析账户信息失败:', e)
+        logDecryptDebug('mounted:selected-account-error', { error: formatLogError(e) })
       }
     }
   }

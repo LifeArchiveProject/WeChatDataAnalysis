@@ -27,6 +27,26 @@ logger = get_logger(__name__)
 router = APIRouter(route_class=PathFixRoute)
 
 
+def _summarize_aes_key(value: Optional[str]) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if len(raw) <= 8:
+        return raw
+    return f"{raw[:4]}...{raw[-4:]}(len={len(raw)})"
+
+
+def _summarize_media_keys(*, xor_key: Optional[str] = None, aes_key: Optional[str] = None) -> dict:
+    xor_str = str(xor_key or "").strip()
+    aes_str = str(aes_key or "").strip()
+    return {
+        "xor_key": xor_str,
+        "aes_key": _summarize_aes_key(aes_str),
+        "has_xor": bool(xor_str),
+        "has_aes": bool(aes_str),
+    }
+
+
 class MediaKeysSaveRequest(BaseModel):
     """媒体密钥保存请求模型（用户手动提供）"""
 
@@ -52,6 +72,12 @@ async def save_media_keys_api(request: MediaKeysSaveRequest):
     - aes_key: AES密钥（可选，至少16个字符；V4-V2需要）
     """
     account_dir = _resolve_account_dir(request.account)
+    logger.info(
+        "[media] save_media_keys start: request_account=%s resolved_account=%s keys=%s",
+        str(request.account or "").strip(),
+        account_dir.name,
+        _summarize_media_keys(xor_key=request.xor_key, aes_key=request.aes_key),
+    )
 
     # 解析XOR密钥
     try:
@@ -76,6 +102,11 @@ async def save_media_keys_api(request: MediaKeysSaveRequest):
         )
     except Exception:
         pass
+    logger.info(
+        "[media] save_media_keys done: account=%s keys=%s",
+        account_dir.name,
+        _summarize_media_keys(xor_key=f"0x{xor_int:02X}", aes_key=aes_str[:16] if aes_str else ""),
+    )
 
     return {
         "status": "success",
@@ -99,6 +130,12 @@ async def decrypt_all_media(request: MediaDecryptRequest):
     """
     account_dir = _resolve_account_dir(request.account)
     wxid_dir = _resolve_account_wxid_dir(account_dir)
+    logger.info(
+        "[media] decrypt_all start: request_account=%s resolved_account=%s provided_keys=%s",
+        str(request.account or "").strip(),
+        account_dir.name,
+        _summarize_media_keys(xor_key=request.xor_key, aes_key=request.aes_key),
+    )
 
     if not wxid_dir:
         raise HTTPException(
@@ -125,12 +162,28 @@ async def decrypt_all_media(request: MediaDecryptRequest):
     # 如果未提供密钥，尝试从缓存加载
     if xor_key_int is None or aes_key16 is None:
         cached = _load_media_keys(account_dir)
+        logger.info(
+            "[media] decrypt_all cache lookup: account=%s cached_keys=%s",
+            account_dir.name,
+            _summarize_media_keys(
+                xor_key=f"0x{int(cached.get('xor')):02X}" if cached.get("xor") is not None else "",
+                aes_key=str(cached.get("aes") or "").strip(),
+            ),
+        )
         if xor_key_int is None:
             xor_key_int = cached.get("xor")
         if aes_key16 is None:
             aes_str = str(cached.get("aes") or "").strip()
             if len(aes_str) >= 16:
                 aes_key16 = aes_str[:16].encode("ascii", errors="ignore")
+    logger.info(
+        "[media] decrypt_all effective_keys: account=%s keys=%s",
+        account_dir.name,
+        _summarize_media_keys(
+            xor_key=f"0x{int(xor_key_int):02X}" if xor_key_int is not None else "",
+            aes_key=(aes_key16 or b"").decode("ascii", errors="ignore") if aes_key16 else "",
+        ),
+    )
 
     if xor_key_int is None:
         raise HTTPException(
@@ -267,6 +320,12 @@ async def decrypt_all_media_stream(
 
             account_dir = _resolve_account_dir(account)
             wxid_dir = _resolve_account_wxid_dir(account_dir)
+            logger.info(
+                "[media] decrypt_all_stream start: request_account=%s resolved_account=%s provided_keys=%s",
+                str(account or "").strip(),
+                account_dir.name,
+                _summarize_media_keys(xor_key=xor_key, aes_key=aes_key),
+            )
 
             if not wxid_dir:
                 yield f"data: {json.dumps({'type': 'error', 'message': '未找到微信数据目录'})}\n\n"
@@ -292,12 +351,28 @@ async def decrypt_all_media_stream(
             # 如果未提供密钥，尝试从缓存加载
             if xor_key_int is None or aes_key16 is None:
                 cached = _load_media_keys(account_dir)
+                logger.info(
+                    "[media] decrypt_all_stream cache lookup: account=%s cached_keys=%s",
+                    account_dir.name,
+                    _summarize_media_keys(
+                        xor_key=f"0x{int(cached.get('xor')):02X}" if cached.get("xor") is not None else "",
+                        aes_key=str(cached.get("aes") or "").strip(),
+                    ),
+                )
                 if xor_key_int is None:
                     xor_key_int = cached.get("xor")
                 if aes_key16 is None:
                     aes_str = str(cached.get("aes") or "").strip()
                     if len(aes_str) >= 16:
                         aes_key16 = aes_str[:16].encode("ascii", errors="ignore")
+            logger.info(
+                "[media] decrypt_all_stream effective_keys: account=%s keys=%s",
+                account_dir.name,
+                _summarize_media_keys(
+                    xor_key=f"0x{int(xor_key_int):02X}" if xor_key_int is not None else "",
+                    aes_key=(aes_key16 or b"").decode("ascii", errors="ignore") if aes_key16 else "",
+                ),
+            )
 
             if xor_key_int is None:
                 yield f"data: {json.dumps({'type': 'error', 'message': '未找到XOR密钥，请先使用 wx_key 获取并保存/填写'})}\n\n"
