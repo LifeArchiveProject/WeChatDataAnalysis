@@ -5,6 +5,7 @@ import {
   getVoiceDurationInSeconds,
   getVoiceWidth
 } from '~/lib/chat/formatters'
+import { createPerfTrace } from '~/lib/chat/perf-logger'
 import { createMessageNormalizer, dedupeMessagesById } from '~/lib/chat/message-normalizer'
 
 export const useChatMessages = ({
@@ -410,9 +411,15 @@ export const useChatMessages = ({
   const loadMessages = async ({ username, reset }) => {
     if (!username || !selectedAccount.value) return
 
-    logMessagePhase('loadMessages:enter', {
-      username,
-      reset
+    const trace = createPerfTrace('chat-messages', {
+      account: String(selectedAccount.value || '').trim(),
+      selectedUsername: String(selectedContact.value?.username || '').trim(),
+      username: String(username || '').trim(),
+      reset: !!reset
+    })
+
+    trace.log('loadMessages:enter', {
+      activeMessagesFor: String(activeMessagesFor.value || '').trim()
     })
     messagesError.value = ''
     isLoadingMessages.value = true
@@ -438,46 +445,37 @@ export const useChatMessages = ({
       if (realtimeEnabled.value) {
         params.source = 'realtime'
       }
-      logMessagePhase('loadMessages:request:start', {
-        username,
-        reset,
+      trace.log('loadMessages:request:start', {
         offset,
         existingCount: existing.length,
         renderTypeFilter: messageTypeFilter.value,
         realtime: !!realtimeEnabled.value
       })
       const response = await api.listChatMessages(params)
-      logMessagePhase('loadMessages:request:end', {
-        username,
-        reset,
+      trace.log('loadMessages:request:end', {
         rawCount: Array.isArray(response?.messages) ? response.messages.length : 0,
         total: Number(response?.total || 0),
         hasMore: response?.hasMore
       })
 
       const raw = response?.messages || []
-      logMessagePhase('loadMessages:normalize:start', {
-        username,
+      trace.log('loadMessages:normalize:start', {
         rawCount: raw.length
       })
       const mapped = dedupeMessagesById(raw.map(normalizeMessage))
-      logMessagePhase('loadMessages:normalize:end', {
-        username,
+      trace.log('loadMessages:normalize:end', {
         mappedCount: mapped.length,
         renderTypeCounts: summarizeRenderTypes(mapped)
       })
 
       if (activeMessagesFor.value !== username) {
-        logMessagePhase('loadMessages:abort-stale', {
-          username,
+        trace.log('loadMessages:abort-stale', {
           activeMessagesFor: activeMessagesFor.value
         })
         return
       }
 
-      logMessagePhase('loadMessages:state-commit:start', {
-        username,
-        reset,
+      trace.log('loadMessages:state-commit:start', {
         mappedCount: mapped.length
       })
       if (reset) {
@@ -496,8 +494,7 @@ export const useChatMessages = ({
           [username]: [...older, ...existing]
         }
       }
-      logMessagePhase('loadMessages:state-commit:end', {
-        username,
+      trace.log('loadMessages:state-commit:end', {
         storedCount: (allMessages.value[username] || []).length
       })
 
@@ -508,18 +505,14 @@ export const useChatMessages = ({
           hasMore: response?.hasMore
         }
       }
-      logMessagePhase('loadMessages:meta-commit:end', {
-        username,
+      trace.log('loadMessages:meta-commit:end', {
         total: Number(response?.total || 0),
         hasMore: response?.hasMore
       })
 
-      logMessagePhase('loadMessages:nextTick:start', {
-        username
-      })
+      trace.log('loadMessages:nextTick:start')
       await nextTick()
-      logMessagePhase('loadMessages:nextTick:end', {
-        username,
+      trace.log('loadMessages:nextTick:end', {
         renderedCount: (allMessages.value[username] || []).length
       })
       const nextContainer = messageContainerRef.value
@@ -532,13 +525,16 @@ export const useChatMessages = ({
         }
       }
       updateJumpToBottomState()
-      logMessagePhase('loadMessages:scroll:end', {
-        username,
+      trace.log('loadMessages:scroll:end', {
         hasContainer: !!nextContainer,
         scrollTop: nextContainer ? nextContainer.scrollTop : null,
         scrollHeight: nextContainer ? nextContainer.scrollHeight : null
       })
     } catch (error) {
+      trace.log('loadMessages:error', {
+        message: String(error?.message || ''),
+        errorName: String(error?.name || '')
+      })
       console.error('[chat-messages] loadMessages:error', {
         account: String(selectedAccount.value || '').trim(),
         username: String(username || '').trim(),
@@ -548,9 +544,7 @@ export const useChatMessages = ({
       messagesError.value = error?.message || '加载聊天记录失败'
     } finally {
       isLoadingMessages.value = false
-      logMessagePhase('loadMessages:exit', {
-        username,
-        reset,
+      trace.log('loadMessages:exit', {
         loading: isLoadingMessages.value,
         error: messagesError.value
       })
@@ -571,9 +565,24 @@ export const useChatMessages = ({
 
   const refreshCurrentMessageMedia = async () => {
     if (!selectedContact.value?.username) return
+    const trace = createPerfTrace('chat-messages', {
+      account: String(selectedAccount.value || '').trim(),
+      username: String(selectedContact.value?.username || '').trim(),
+      action: 'refreshCurrentMessageMedia'
+    })
+    trace.log('refreshCurrentMessageMedia:start', {
+      localMediaVersion: Number(localMediaVersion.value || 0)
+    })
     bumpLocalMediaVersion()
+    trace.log('refreshCurrentMessageMedia:version-bumped', {
+      localMediaVersion: Number(localMediaVersion.value || 0)
+    })
     renormalizeLoadedMessages(selectedContact.value.username)
+    trace.log('refreshCurrentMessageMedia:renormalized', {
+      renderedCount: (allMessages.value[selectedContact.value.username] || []).length
+    })
     await nextTick()
+    trace.log('refreshCurrentMessageMedia:end')
   }
 
   const refreshRealtimeIncremental = async () => {

@@ -1,5 +1,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { normalizeSessionPreview } from '~/lib/chat/formatters'
+import { createPerfTrace } from '~/lib/chat/perf-logger'
 
 const SESSION_LIST_WIDTH_KEY = 'ui.chat.session_list_width_physical'
 const SESSION_LIST_WIDTH_KEY_LEGACY = 'ui.chat.session_list_width'
@@ -170,6 +171,14 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
       return []
     }
 
+    const trace = createPerfTrace('chat-sessions', {
+      account: String(selectedAccount.value || '').trim(),
+      action: 'loadSessionsForSelectedAccount'
+    })
+    trace.log('loadSessions:start', {
+      realtimeEnabled: !!realtimeEnabled?.value
+    })
+
     const fetchSessions = async (source) => {
       const params = {
         account: selectedAccount.value,
@@ -184,18 +193,38 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
     let sessionsResp = null
     if (realtimeEnabled?.value) {
       try {
+        trace.log('loadSessions:request:start', {
+          source: 'realtime'
+        })
         sessionsResp = await fetchSessions('realtime')
+        trace.log('loadSessions:request:end', {
+          source: 'realtime',
+          rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
+        })
       } catch {
         sessionsResp = null
+        trace.log('loadSessions:request:error', {
+          source: 'realtime'
+        })
       }
     }
     if (!sessionsResp) {
+      trace.log('loadSessions:request:start', {
+        source: 'default'
+      })
       sessionsResp = await fetchSessions('')
+      trace.log('loadSessions:request:end', {
+        source: 'default',
+        rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
+      })
     }
 
     const sessions = Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions : []
     contacts.value = mapSessions(sessions)
     contactsError.value = ''
+    trace.log('loadSessions:end', {
+      contactCount: contacts.value.length
+    })
     return contacts.value
   }
 
@@ -208,6 +237,14 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
     const desiredSource = (sourceOverride != null)
       ? String(sourceOverride || '').trim()
       : (realtimeEnabled?.value ? 'realtime' : '')
+    const trace = createPerfTrace('chat-sessions', {
+      account: String(selectedAccount.value || '').trim(),
+      action: 'refreshSessionsForSelectedAccount',
+      desiredSource
+    })
+    trace.log('refreshSessions:start', {
+      previousUsername
+    })
 
     const params = {
       account: selectedAccount.value,
@@ -219,15 +256,35 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
     let sessionsResp = null
     if (desiredSource) {
       try {
+        trace.log('refreshSessions:request:start', {
+          source: desiredSource
+        })
         sessionsResp = await api.listChatSessions({ ...params, source: desiredSource })
+        trace.log('refreshSessions:request:end', {
+          source: desiredSource,
+          rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
+        })
       } catch {
         sessionsResp = null
+        trace.log('refreshSessions:request:error', {
+          source: desiredSource
+        })
       }
     }
     if (!sessionsResp) {
       try {
+        trace.log('refreshSessions:request:start', {
+          source: 'default'
+        })
         sessionsResp = await api.listChatSessions(params)
+        trace.log('refreshSessions:request:end', {
+          source: 'default',
+          rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
+        })
       } catch {
+        trace.log('refreshSessions:request:error', {
+          source: 'default'
+        })
         return
       }
     }
@@ -240,6 +297,10 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
       const matched = nextContacts.find((contact) => contact.username === previousUsername)
       if (matched) selectedContact.value = matched
     }
+    trace.log('refreshSessions:end', {
+      contactCount: nextContacts.length,
+      selectedUsername: String(selectedContact.value?.username || '').trim()
+    })
   }
 
   const loadContacts = async () => {
@@ -249,25 +310,50 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
 
     isLoadingContacts.value = true
     contactsError.value = ''
+    const trace = createPerfTrace('chat-sessions', {
+      account: String(selectedAccount.value || '').trim(),
+      action: 'loadContacts'
+    })
+    trace.log('loadContacts:start', {
+      cachedContacts: contacts.value.length
+    })
     try {
       const hadLoadedAccountSnapshot = !!chatAccounts.loaded
       await chatAccounts.ensureLoaded()
+      trace.log('loadContacts:accounts-ready', {
+        hadLoadedAccountSnapshot,
+        availableAccounts: Array.isArray(chatAccounts?.accounts) ? chatAccounts.accounts.length : 0
+      })
       if (!selectedAccount.value && hadLoadedAccountSnapshot) {
         await chatAccounts.ensureLoaded({ force: true })
+        trace.log('loadContacts:accounts-refreshed')
       }
 
       if (!selectedAccount.value) {
         clearContactsState(chatAccounts.error || '未检测到已解密账号，请先解密数据库。')
+        trace.log('loadContacts:no-account', {
+          error: contactsError.value
+        })
         return { usedPrefetched: false }
       }
 
       await loadSessionsForSelectedAccount()
+      trace.log('loadContacts:end', {
+        contactCount: contacts.value.length
+      })
       return { usedPrefetched: false }
     } catch (error) {
       clearContactsState(error?.message || '加载联系人失败')
+      trace.log('loadContacts:error', {
+        message: String(error?.message || '')
+      })
       return { usedPrefetched: false }
     } finally {
       isLoadingContacts.value = false
+      trace.log('loadContacts:exit', {
+        loading: isLoadingContacts.value,
+        error: contactsError.value
+      })
     }
   }
 
