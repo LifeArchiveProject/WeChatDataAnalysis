@@ -73,6 +73,7 @@ from ..app_paths import get_output_dir
 from ..database_filters import list_countable_database_names
 from ..key_store import remove_account_keys_from_store
 from ..path_fix import PathFixRoute
+from ..perf_trace import create_perf_trace
 from ..session_last_message import (
     build_session_last_message_table,
     get_session_last_message_status,
@@ -3998,6 +3999,17 @@ def list_chat_sessions(
     contact_db_path = account_dir / "contact.db"
     head_image_db_path = account_dir / "head_image.db"
     base_url = str(request.base_url).rstrip("/")
+    _trace_id, trace = create_perf_trace(
+        logger,
+        "chat.sessions",
+        account=account_dir.name,
+        source=source_norm or "default",
+        limit=int(limit),
+        includeHidden=bool(include_hidden),
+        includeOfficial=bool(include_official),
+        preview=str(preview or ""),
+    )
+    trace("request:start")
 
     rt_conn = None
     rows: list[Any]
@@ -4122,6 +4134,12 @@ def list_chat_sessions(
         finally:
             sconn.close()
 
+    trace(
+        "rows:loaded",
+        rawCount=len(rows or []),
+        realtime=bool(source_norm == "realtime"),
+    )
+
     filtered: list[Any] = []
     for r in rows:
         username = _session_row_get(r, "username", "") or ""
@@ -4133,8 +4151,18 @@ def list_chat_sessions(
             continue
         filtered.append(r)
 
+    trace(
+        "rows:filtered",
+        filteredCount=len(filtered),
+    )
+
     raw_usernames = [str(_session_row_get(r, "username", "") or "").strip() for r in filtered]
     top_flags = _load_contact_top_flags(contact_db_path, raw_usernames)
+    trace(
+        "top-flags:loaded",
+        usernameCount=len(raw_usernames),
+        topCount=sum(1 for value in top_flags.values() if value),
+    )
 
     def _to_int(v: Any) -> int:
         try:
@@ -4164,6 +4192,12 @@ def list_chat_sessions(
 
     contact_rows = _load_contact_rows(contact_db_path, usernames)
     local_avatar_usernames = _query_head_image_usernames(head_image_db_path, usernames)
+    trace(
+        "contacts:loaded",
+        usernameCount=len(usernames),
+        contactRowCount=len(contact_rows),
+        localAvatarCount=len(local_avatar_usernames),
+    )
 
     # Some sessions (notably enterprise groups / openim-related IDs) may be missing from decrypted contact.db
     # (or lack nickname/avatar columns). In that case, fall back to WCDB APIs (same as WeFlow) to resolve
@@ -4211,6 +4245,12 @@ def list_chat_sessions(
     except Exception:
         wcdb_display_names = {}
         wcdb_avatar_urls = {}
+
+    trace(
+        "wcdb-fallback:loaded",
+        displayNameCount=len(wcdb_display_names),
+        avatarUrlCount=len(wcdb_avatar_urls),
+    )
 
     preview_mode = str(preview or "").strip().lower()
     if preview_mode not in {"latest", "index", "session", "db", "none"}:
@@ -4298,6 +4338,14 @@ def list_chat_sessions(
                     group_sender_display_names[sender_username] = wcdb_name
         except Exception:
             pass
+
+    trace(
+        "previews:resolved",
+        previewMode=preview_mode,
+        previewCount=len(last_previews),
+        groupSenderDisplayCount=len(group_sender_display_names),
+        unresolvedGroupSenderCount=len(unresolved),
+    )
 
     sessions: list[dict[str, Any]] = []
     for r in filtered:
@@ -4416,6 +4464,10 @@ def list_chat_sessions(
             }
         )
 
+    trace(
+        "response:ready",
+        sessionCount=len(sessions),
+    )
     return {
         "status": "success",
         "account": account_dir.name,
@@ -5169,11 +5221,24 @@ def list_chat_messages(
     head_image_db_path = account_dir / "head_image.db"
     message_resource_db_path = account_dir / "message_resource.db"
     base_url = str(request.base_url).rstrip("/")
+    _trace_id, trace = create_perf_trace(
+        logger,
+        "chat.messages",
+        account=account_dir.name,
+        username=username,
+        source=source_norm or "default",
+        limit=int(limit),
+        offset=int(offset),
+        order=str(order or ""),
+        renderTypes=str(render_types or ""),
+    )
+    trace("request:start")
 
     db_paths: list[Path] = []
     if source_norm != "realtime":
         db_paths = _iter_message_db_paths(account_dir)
         if not db_paths:
+            trace("response:error", reason="no-message-dbs")
             return {
                 "status": "error",
                 "account": account_dir.name,
@@ -5198,6 +5263,12 @@ def list_chat_messages(
                 pass
         resource_conn = None
         resource_chat_id = None
+
+    trace(
+        "resource-db:resolved",
+        hasResourceDb=bool(resource_conn is not None),
+        resourceChatId=int(resource_chat_id or 0),
+    )
 
     want_asc = str(order or "").lower() != "desc"
 
@@ -5337,6 +5408,16 @@ def list_chat_messages(
                 break
             scan_take = next_take
 
+    trace(
+        "messages:collected",
+        scanTake=int(scan_take),
+        mergedCount=len(merged),
+        hasMoreAny=bool(has_more_any),
+        senderUsernameCount=len(sender_usernames),
+        quoteUsernameCount=len(quote_usernames),
+        patUsernameCount=len(pat_usernames),
+    )
+
     # Self-heal (default source only): if the decrypted snapshot has no conversation table yet (new session),
     # do a one-shot realtime->decrypted sync and re-query once. This avoids "暂无聊天记录" after turning off realtime.
     if (
@@ -5352,6 +5433,7 @@ def list_chat_messages(
             missing_table = True
 
         if missing_table:
+            trace("self-heal:missing-table")
             rt_conn2 = None
             try:
                 rt_conn2 = WCDB_REALTIME.ensure_connected(account_dir)
@@ -5362,6 +5444,7 @@ def list_chat_messages(
 
             if rt_conn2 is not None:
                 try:
+                    trace("self-heal:sync:start")
                     with _realtime_sync_lock(account_dir.name, username):
                         msg_db_path2, table_name2 = _ensure_decrypted_message_table(account_dir, username)
                         _sync_chat_realtime_messages_for_table(
@@ -5373,7 +5456,9 @@ def list_chat_messages(
                             max_scan=max(200, int(limit) + 50),
                             backfill_limit=0,
                         )
+                    trace("self-heal:sync:end")
                 except Exception:
+                    trace("self-heal:sync:error")
                     pass
 
                 (
@@ -5393,6 +5478,11 @@ def list_chat_messages(
                 )
                 if want_types is not None:
                     merged = [m for m in merged if _normalize_render_type_key(m.get("renderType")) in want_types]
+                trace(
+                    "self-heal:requery:end",
+                    mergedCount=len(merged),
+                    hasMoreAny=bool(has_more_any),
+                )
 
     r"""
     take = int(limit) + int(offset)
@@ -5886,8 +5976,17 @@ def list_chat_messages(
     if want_asc:
         page = list(reversed(page))
 
+    trace(
+        "page:sliced",
+        mergedCount=len(merged),
+        pageCount=len(page),
+        hasMore=bool(has_more_global),
+        orderAsc=bool(want_asc),
+    )
+
     # Hot path optimization: only enrich the page we return.
     if not page:
+        trace("response:ready", pageCount=0)
         return {
             "status": "success",
             "account": account_dir.name,
@@ -5961,6 +6060,12 @@ def list_chat_messages(
     )
     sender_contact_rows = _load_contact_rows(contact_db_path, uniq_senders)
     local_sender_avatars = _query_head_image_usernames(head_image_db_path, uniq_senders)
+    trace(
+        "senders:loaded",
+        uniqSenderCount=len(uniq_senders),
+        senderContactRowCount=len(sender_contact_rows),
+        localSenderAvatarCount=len(local_sender_avatars),
+    )
 
     # contact.db may not include enterprise/openim contacts (or group chatroom records). WCDB has a more complete
     # view of display names + avatar URLs, so we use it as a best-effort fallback.
@@ -5996,6 +6101,12 @@ def list_chat_messages(
         contact_db_path=contact_db_path,
         chatroom_id=username,
         sender_usernames=uniq_senders,
+    )
+    trace(
+        "sender-fallbacks:loaded",
+        wcdbDisplayNameCount=len(wcdb_display_names),
+        wcdbAvatarUrlCount=len(wcdb_avatar_urls),
+        groupNicknameCount=len(group_nicknames),
     )
 
     for m in messages_window:
@@ -6155,6 +6266,12 @@ def list_chat_messages(
             wcdb_display_names=wcdb_display_names,
         )
 
+    trace(
+        "response:ready",
+        pageCount=len(page),
+        total=int(offset) + len(page) + (1 if has_more_global else 0),
+        hasMore=bool(has_more_global),
+    )
     return {
         "status": "success",
         "account": account_dir.name,

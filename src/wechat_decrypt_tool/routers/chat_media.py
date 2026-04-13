@@ -60,6 +60,7 @@ from ..media_helpers import (
 )
 from ..chat_helpers import _extract_md5_from_packed_info, _load_contact_rows, _pick_avatar_url
 from ..path_fix import PathFixRoute
+from ..perf_trace import create_perf_trace
 from ..wcdb_realtime import WCDB_REALTIME, get_avatar_urls as _wcdb_get_avatar_urls
 
 logger = get_logger(__name__)
@@ -424,6 +425,13 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
     account_dir = _resolve_account_dir(account)
     account_name = str(account_dir.name or "").strip()
     user_key = str(username or "").strip()
+    _trace_id, trace = create_perf_trace(
+        logger,
+        "chat.avatar",
+        account=account_name,
+        username=user_key,
+    )
+    trace("request:start")
 
     # 1) Try on-disk cache first (fast path)
     user_entry = None
@@ -436,17 +444,25 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
                 logger.info(f"[avatar_cache_hit] kind=user account={account_name} username={user_key}")
         except Exception as e:
             logger.warning(f"[avatar_cache_error] read user cache failed account={account_name} username={user_key} err={e}")
+    trace(
+        "user-cache:checked",
+        cacheEnabled=bool(is_avatar_cache_enabled()),
+        hasEntry=bool(user_entry),
+        hasFile=bool(cached_file is not None),
+    )
 
     head_image_db_path = account_dir / "head_image.db"
     if not head_image_db_path.exists():
         # No local head_image.db: allow fallback from cached/remote URL path.
         if cached_file is not None and user_entry:
             headers = build_avatar_cache_response_headers(user_entry)
+            trace("response:ready", result="user-cache-hit-no-head-image", mediaType=str(user_entry.get("media_type") or ""))
             return FileResponse(
                 str(cached_file),
                 media_type=str(user_entry.get("media_type") or "application/octet-stream"),
                 headers=headers,
             )
+        trace("response:error", result="head-image-db-missing")
         raise HTTPException(status_code=404, detail="head_image.db not found.")
 
     conn = sqlite3.connect(str(head_image_db_path))
@@ -455,6 +471,7 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
             "SELECT md5, update_time FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1",
             (username,),
         ).fetchone()
+        trace("head-image:meta", hasMeta=bool(meta and meta[0] is not None))
         if meta and meta[0] is not None:
             db_md5 = str(meta[0] or "").strip().lower()
             try:
@@ -472,6 +489,11 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
                 if cached_md5 == db_md5 and cached_update == db_update_time:
                     touch_avatar_cache_entry(account_name, str(user_entry.get("cache_key") or ""))
                     headers = build_avatar_cache_response_headers(user_entry)
+                    trace(
+                        "response:ready",
+                        result="user-cache-hit-head-image-matched",
+                        mediaType=str(user_entry.get("media_type") or ""),
+                    )
                     return FileResponse(
                         str(cached_file),
                         media_type=str(user_entry.get("media_type") or "application/octet-stream"),
@@ -487,6 +509,7 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
                 data = bytes(row[0]) if isinstance(row[0], (memoryview, bytearray)) else row[0]
                 if not isinstance(data, (bytes, bytearray)):
                     data = bytes(data)
+                trace("head-image:blob", bytes=len(data or b""))
                 if data:
                     media_type = _detect_image_media_type(data)
                     media_type = media_type if media_type.startswith("image/") else "application/octet-stream"
@@ -505,12 +528,14 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
                             f"[avatar_cache_download] kind=user account={account_name} username={user_key} src=head_image"
                         )
                         headers = build_avatar_cache_response_headers(entry)
+                        trace("response:ready", result="head-image-blob-cache-write", mediaType=media_type, bytes=len(data))
                         return FileResponse(str(out_path), media_type=media_type, headers=headers)
 
                     # cache write failed: fallback to response bytes
                     logger.warning(
                         f"[avatar_cache_error] kind=user account={account_name} username={user_key} action=write_fallback"
                     )
+                    trace("response:ready", result="head-image-blob-direct", mediaType=media_type, bytes=len(data))
                     return Response(content=bytes(data), media_type=media_type)
 
         # meta not found (no local avatar blob)
@@ -520,9 +545,16 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
 
     # 2) Fallback: remote avatar URL (contact/WCDB), cache by URL.
     remote_url = _resolve_avatar_remote_url(account_dir=account_dir, username=user_key)
+    trace("remote-url:resolved", hasRemoteUrl=bool(remote_url))
     if remote_url and is_avatar_cache_enabled():
         url_entry = get_avatar_cache_url_entry(account_name, remote_url)
         url_file = avatar_cache_entry_file_exists(account_name, url_entry)
+        trace(
+            "url-cache:checked",
+            hasEntry=bool(url_entry),
+            hasFile=bool(url_file),
+            isFresh=bool(avatar_cache_entry_is_fresh(url_entry) if url_entry else False),
+        )
         if url_entry and url_file and avatar_cache_entry_is_fresh(url_entry):
             logger.info(f"[avatar_cache_hit] kind=url account={account_name} username={user_key}")
             touch_avatar_cache_entry(account_name, str(url_entry.get("cache_key") or ""))
@@ -548,6 +580,7 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
             except Exception:
                 pass
             headers = build_avatar_cache_response_headers(url_entry)
+            trace("response:ready", result="url-cache-hit", mediaType=str(url_entry.get("media_type") or ""))
             return FileResponse(
                 str(url_file),
                 media_type=str(url_entry.get("media_type") or "application/octet-stream"),
@@ -624,21 +657,31 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
         etag0 = str((url_entry or {}).get("etag") or "").strip()
         lm0 = str((url_entry or {}).get("last_modified") or "").strip()
         try:
+            trace("remote-download:start", hasEtag=bool(etag0), hasLastModified=bool(lm0))
             payload, ct, etag_new, lm_new, not_modified = await asyncio.to_thread(
                 _download_remote_avatar,
                 remote_url,
                 etag=etag0,
                 last_modified=lm0,
             )
+            trace(
+                "remote-download:end",
+                bytes=len(payload or b""),
+                contentType=str(ct or ""),
+                notModified=bool(not_modified),
+            )
         except Exception as e:
             logger.warning(f"[avatar_cache_error] kind=url account={account_name} username={user_key} err={e}")
+            trace("remote-download:error", error=str(e))
             if url_entry and url_file:
                 headers = build_avatar_cache_response_headers(url_entry)
+                trace("response:ready", result="stale-url-cache-after-download-error")
                 return FileResponse(
                     str(url_file),
                     media_type=str(url_entry.get("media_type") or "application/octet-stream"),
                     headers=headers,
                 )
+            trace("response:error", result="remote-download-failed")
             raise HTTPException(status_code=404, detail="Avatar not found.")
 
         if not_modified and url_entry and url_file:
@@ -663,6 +706,7 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
                     pass
             logger.info(f"[avatar_cache_revalidate] kind=url account={account_name} username={user_key} status=304")
             headers = build_avatar_cache_response_headers(url_entry)
+            trace("response:ready", result="remote-not-modified", mediaType=str(url_entry.get("media_type") or ""))
             return FileResponse(
                 str(url_file),
                 media_type=str(url_entry.get("media_type") or "application/octet-stream"),
@@ -714,16 +758,19 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
                         pass
                     logger.info(f"[avatar_cache_download] kind=url account={account_name} username={user_key}")
                     headers = build_avatar_cache_response_headers(entry)
+                    trace("response:ready", result="remote-download-cache-write", mediaType=media_type, bytes=len(payload2))
                     return FileResponse(str(out_path), media_type=media_type, headers=headers)
 
     if cached_file is not None and user_entry:
         headers = build_avatar_cache_response_headers(user_entry)
+        trace("response:ready", result="stale-user-cache-fallback", mediaType=str(user_entry.get("media_type") or ""))
         return FileResponse(
             str(cached_file),
             media_type=str(user_entry.get("media_type") or "application/octet-stream"),
             headers=headers,
         )
 
+    trace("response:error", result="not-found")
     raise HTTPException(status_code=404, detail="Avatar not found.")
 
 
@@ -1387,6 +1434,7 @@ async def get_chat_image(
     account: Optional[str] = None,
     username: Optional[str] = None,
     deep_scan: bool = False,
+    prefer_live: bool = False,
 ):
     if (not md5) and (not file_id) and (not server_id):
         raise HTTPException(status_code=400, detail="Missing md5/file_id/server_id.")
@@ -1396,6 +1444,18 @@ async def get_chat_image(
         file_id = str(md5)
         md5 = None
     account_dir = _resolve_account_dir(account)
+    _trace_id, trace = create_perf_trace(
+        logger,
+        "chat.image",
+        account=account_dir.name,
+        username=str(username or ""),
+        md5=str(md5 or ""),
+        fileId=str(file_id or ""),
+        serverId=int(server_id or 0),
+        deepScan=bool(deep_scan),
+        preferLive=bool(prefer_live),
+    )
+    trace("request:start")
 
     # Prefer resource md5 derived from message_resource.db for chat history / app messages.
     # This matches how regular image messages are resolved elsewhere in the codebase.
@@ -1409,6 +1469,11 @@ async def get_chat_image(
             )
             if md5_from_msg:
                 md5 = md5_from_msg
+        trace(
+            "server-id:resolved",
+            resourceMd5Found=bool(resource_md5),
+            finalMd5=str(md5 or ""),
+        )
 
     cached_path: Optional[Path] = None
     cached_data = b""
@@ -1430,12 +1495,33 @@ async def get_chat_image(
                     decrypted_path.unlink()
                 except Exception:
                     pass
+    trace(
+        "decrypted-cache:checked",
+        hasCachedPath=bool(cached_path),
+        cachedBytes=len(cached_data or b""),
+        cachedMediaType=cached_media_type,
+    )
+
+    if cached_path and (not prefer_live):
+        trace(
+            "response:ready",
+            result="decrypted-cache-hit",
+            mediaType=cached_media_type,
+            bytes=len(cached_data or b""),
+        )
+        return _build_cached_media_response(request, cached_data, cached_media_type)
 
     # 回退：从微信数据目录实时定位并解密
     wxid_dir = _resolve_account_wxid_dir(account_dir)
     hardlink_db_path = account_dir / "hardlink.db"
     db_storage_dir = _resolve_account_db_storage_dir(account_dir)
     hardlink_has_image_table = _hardlink_has_table_prefix(str(hardlink_db_path), "image_hardlink_info")
+    trace(
+        "roots:resolved",
+        hasWxidDir=bool(wxid_dir),
+        hasDbStorageDir=bool(db_storage_dir),
+        hardlinkHasImageTable=bool(hardlink_has_image_table),
+    )
 
     roots: list[Path] = []
     if wxid_dir:
@@ -1455,9 +1541,11 @@ async def get_chat_image(
 
     p: Optional[Path] = None
     candidates: list[Path] = []
+    allow_deep_scan = False
 
     if md5:
-        p = _resolve_media_path_from_hardlink(
+        p = await asyncio.to_thread(
+            _resolve_media_path_from_hardlink,
             hardlink_db_path,
             roots[0],
             md5=str(md5),
@@ -1471,7 +1559,8 @@ async def get_chat_image(
             for r in [wxid_dir, db_storage_dir]:
                 if not r:
                     continue
-                hit = _fallback_search_media_by_file_id(
+                hit = await asyncio.to_thread(
+                    _fallback_search_media_by_file_id,
                     str(r),
                     str(file_id),
                     kind="image",
@@ -1483,7 +1572,8 @@ async def get_chat_image(
 
         # Fast fallback for thumbnails not indexed by hardlink.db: scan only this chat's attach directory.
         if (not p) and wxid_dir and username:
-            hit = _fast_probe_image_path_in_chat_attach(
+            hit = await asyncio.to_thread(
+                _fast_probe_image_path_in_chat_attach,
                 wxid_dir_str=str(wxid_dir),
                 username=str(username),
                 md5=str(md5),
@@ -1496,11 +1586,11 @@ async def get_chat_image(
         # - hardlink.db doesn't have the image table (older/partial data).
         allow_deep_scan = bool(deep_scan) or (not hardlink_has_image_table)
         if (not p) and wxid_dir and allow_deep_scan:
-            hit = _fallback_search_media_by_md5(str(wxid_dir), str(md5), kind="image")
+            hit = await asyncio.to_thread(_fallback_search_media_by_md5, str(wxid_dir), str(md5), kind="image")
             if hit:
                 p = Path(hit)
                 try:
-                    candidates.extend(_iter_media_source_candidates(Path(hit)))
+                    candidates.extend(await asyncio.to_thread(_iter_media_source_candidates, Path(hit)))
                 except Exception:
                     pass
     elif file_id:
@@ -1508,7 +1598,8 @@ async def get_chat_image(
         for r in [wxid_dir, db_storage_dir]:
             if not r:
                 continue
-            hit = _fallback_search_media_by_file_id(
+            hit = await asyncio.to_thread(
+                _fallback_search_media_by_file_id,
                 str(r),
                 str(file_id),
                 kind="image",
@@ -1520,11 +1611,25 @@ async def get_chat_image(
 
     if not p:
         if cached_path:
+            trace("response:ready", result="decrypted-cache-fallback", mediaType=cached_media_type, bytes=len(cached_data or b""))
             return _build_cached_media_response(request, cached_data, cached_media_type)
+        trace(
+            "response:error",
+            result="source-not-found",
+            allowDeepScan=bool(allow_deep_scan),
+            candidateCount=len(candidates),
+        )
         raise HTTPException(status_code=404, detail="Image not found.")
 
-    candidates.extend(_iter_media_source_candidates(p))
-    candidates = _order_media_candidates(candidates)
+    candidates.extend(await asyncio.to_thread(_iter_media_source_candidates, p))
+    candidates = await asyncio.to_thread(_order_media_candidates, candidates)
+    trace(
+        "candidates:resolved",
+        sourcePath=str(p),
+        candidateCount=len(candidates),
+        hasCachedPath=bool(cached_path),
+        allowDeepScan=bool(allow_deep_scan),
+    )
 
     if cached_path:
         try:
@@ -1554,9 +1659,17 @@ async def get_chat_image(
     data = b""
     media_type = "application/octet-stream"
     chosen: Optional[Path] = None
+    decode_attempts = 0
+    trace("decode:start", candidateCount=len(candidates))
     for src_path in candidates:
+        decode_attempts += 1
         try:
-            data, media_type = _read_and_maybe_decrypt_media(src_path, account_dir=account_dir, weixin_root=wxid_dir)
+            data, media_type = await asyncio.to_thread(
+                _read_and_maybe_decrypt_media,
+                src_path,
+                account_dir=account_dir,
+                weixin_root=wxid_dir,
+            )
         except Exception:
             continue
 
@@ -1568,18 +1681,32 @@ async def get_chat_image(
             break
 
     if not chosen:
+        trace("response:error", result="decode-failed", decodeAttempts=decode_attempts)
         raise HTTPException(status_code=422, detail="Image found but failed to decode/decrypt.")
+
+    trace(
+        "decode:chosen",
+        decodeAttempts=decode_attempts,
+        chosen=str(chosen),
+        mediaType=media_type,
+        bytes=len(data or b""),
+    )
 
     # 仅在 md5 有效时缓存到 resource 目录；file_id 可能非常长，避免写入超长文件名
     if md5 and media_type.startswith("image/"):
         try:
-            _write_cached_chat_image(account_dir, str(md5), data)
+            await asyncio.to_thread(_write_cached_chat_image, account_dir, str(md5), data)
+            trace("decrypted-cache:write", skipped=False)
         except Exception:
+            trace("decrypted-cache:write", skipped=False, error=True)
             pass
+    else:
+        trace("decrypted-cache:write", skipped=True)
 
     logger.info(
         f"chat_image: md5={md5} file_id={file_id} chosen={chosen} media_type={media_type} bytes={len(data)}"
     )
+    trace("response:ready", result="decoded", mediaType=media_type, bytes=len(data or b""))
     return _build_cached_media_response(request, data, media_type)
 
 
