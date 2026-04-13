@@ -31,10 +31,14 @@
           <div class="w-[calc(42px/var(--dpr))] h-[calc(42px/var(--dpr))] rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="[message.isSent ? 'ml-3' : 'mr-3', { 'privacy-blur': privacyMode }]">
             <div v-if="message.avatar" class="w-full h-full">
               <img
-                :src="message.avatar"
+                v-chat-lazy-src="message.avatar"
                 :alt="message.sender + '的头像'"
                 class="w-full h-full object-cover"
+                loading="lazy"
+                decoding="async"
+                fetchpriority="low"
                 referrerpolicy="no-referrer"
+                v-chat-media-perf="{ kind: 'message-avatar', meta: { conversation: selectedContact?.username || '', messageId: message.id, serverId: message.serverIdStr || '', senderUsername: message.senderUsername || '' } }"
                 @error="onAvatarError($event, message)"
               >
             </div>
