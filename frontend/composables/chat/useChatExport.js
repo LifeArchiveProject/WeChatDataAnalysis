@@ -35,7 +35,12 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const exportFolderHandle = ref(null)
   const exportSaveBusy = ref(false)
   const exportSaveMsg = ref('')
+  const exportSaveError = ref('')
+  const exportSaveState = ref('idle')
+  const exportSaveBytesWritten = ref(0)
+  const exportSaveBytesTotal = ref(0)
   const exportAutoSavedFor = ref('')
+  const exportCancelRequested = ref(false)
 
   const exportSearchQuery = ref('')
   const exportListTab = ref('all')
@@ -49,6 +54,27 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const asNumber = (value) => {
     const next = Number(value)
     return Number.isFinite(next) ? next : 0
+  }
+  const formatBytes = (value) => {
+    const bytes = Number(value)
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    let size = bytes
+    let index = 0
+    while (size >= 1024 && index < units.length - 1) {
+      size /= 1024
+      index += 1
+    }
+    const digits = size >= 100 || index === 0 ? 0 : size >= 10 ? 1 : 2
+    return `${size.toFixed(digits)} ${units[index]}`
+  }
+  const resetExportSaveFeedback = ({ resetAutoSavedFor = false } = {}) => {
+    exportSaveMsg.value = ''
+    exportSaveError.value = ''
+    exportSaveState.value = 'idle'
+    exportSaveBytesWritten.value = 0
+    exportSaveBytesTotal.value = 0
+    if (resetAutoSavedFor) exportAutoSavedFor.value = ''
   }
 
   const exportOverallPercent = computed(() => {
@@ -71,6 +97,17 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     const done = asNumber(progress.currentConversationMessagesExported)
     if (total <= 0) return null
     return Math.round(clamp01(done / total) * 100)
+  })
+  const exportBackendZipPath = computed(() => {
+    return String(exportJob.value?.zipPath || '').trim()
+  })
+  const exportSaveProgressText = computed(() => {
+    if (exportSaveState.value !== 'saving') return ''
+    const fileName = guessExportZipName(exportJob.value)
+    if (exportSaveBytesTotal.value > 0) {
+      return `正在保存到浏览器目录：${fileName}（${formatBytes(exportSaveBytesWritten.value)} / ${formatBytes(exportSaveBytesTotal.value)}）`
+    }
+    return `正在保存到浏览器目录：${fileName}（${formatBytes(exportSaveBytesWritten.value)}）`
   })
 
   const normalizeExportSelectedUsernames = (list) => {
@@ -179,7 +216,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
 
   const chooseExportFolder = async () => {
     exportError.value = ''
-    exportSaveMsg.value = ''
+    resetExportSaveFeedback()
     try {
       if (!process.client) {
         exportError.value = '当前环境不支持选择导出目录'
@@ -206,6 +243,10 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
 
       exportError.value = '当前浏览器不支持目录选择，请使用桌面端或 Chromium 新版浏览器'
     } catch (error) {
+      const message = String(error?.message || '').trim()
+      if (error?.name === 'AbortError' || message.includes('The user aborted a request')) {
+        return
+      }
       exportError.value = error?.message || '选择导出目录失败'
     }
   }
@@ -227,7 +268,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const saveExportToSelectedFolder = async (options = {}) => {
     const autoSave = !!options?.auto
     exportError.value = ''
-    exportSaveMsg.value = ''
+    resetExportSaveFeedback()
     if (!process.client || !isWebDirectoryPickerSupported()) {
       exportError.value = '当前环境不支持保存到浏览器目录'
       return
@@ -245,6 +286,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     }
 
     exportSaveBusy.value = true
+    exportSaveState.value = 'saving'
     try {
       const response = await fetch(getExportDownloadUrl(exportId))
       if (!response.ok) {
@@ -256,18 +298,46 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
         })
         throw new Error(`下载导出文件失败（${response.status}）`)
       }
-      const blob = await response.blob()
+      exportSaveBytesTotal.value = asNumber(response.headers.get('Content-Length'))
       const fileName = guessExportZipName(exportJob.value)
       const fileHandle = await handle.getFileHandle(fileName, { create: true })
       const writable = await fileHandle.createWritable()
-      await writable.write(blob)
-      await writable.close()
+      if (response.body && typeof response.body.getReader === 'function') {
+        const reader = response.body.getReader()
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            if (!value || !value.byteLength) continue
+            await writable.write(value)
+            exportSaveBytesWritten.value += value.byteLength
+          }
+          await writable.close()
+        } catch (error) {
+          try {
+            await reader.cancel()
+          } catch {}
+          try {
+            await writable.abort()
+          } catch {}
+          throw error
+        }
+      } else {
+        const blob = await response.blob()
+        exportSaveBytesWritten.value = asNumber(blob.size)
+        if (exportSaveBytesTotal.value <= 0) exportSaveBytesTotal.value = exportSaveBytesWritten.value
+        await writable.write(blob)
+        await writable.close()
+      }
       exportAutoSavedFor.value = String(exportId)
+      exportSaveState.value = 'success'
+      const folderLabel = String(exportFolder.value || '').trim() || '已选目录'
       exportSaveMsg.value = autoSave
-        ? `已自动保存到已选目录：${fileName}`
-        : `已保存到已选目录：${fileName}`
+        ? `浏览器目录自动保存成功：${fileName}\n位置：${folderLabel}`
+        : `浏览器目录保存成功：${fileName}\n位置：${folderLabel}`
     } catch (error) {
-      exportError.value = error?.message || '保存到浏览器目录失败'
+      exportSaveState.value = 'error'
+      exportSaveError.value = `浏览器目录保存失败：${error?.message || '未知错误'}`
     } finally {
       exportSaveBusy.value = false
     }
@@ -337,7 +407,8 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const openExportModal = () => {
     exportModalOpen.value = true
     exportError.value = ''
-    exportSaveMsg.value = ''
+    resetExportSaveFeedback({ resetAutoSavedFor: true })
+    exportCancelRequested.value = false
     exportSearchQuery.value = ''
     exportListTab.value = 'all'
     exportSelectedUsernames.value = []
@@ -354,6 +425,12 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const closeExportModal = () => {
     exportModalOpen.value = false
     exportError.value = ''
+  }
+
+  const clearExportFolderSelection = () => {
+    exportFolder.value = ''
+    exportFolderHandle.value = null
+    resetExportSaveFeedback({ resetAutoSavedFor: true })
   }
 
   watch(exportModalOpen, (open) => {
@@ -382,6 +459,9 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
       status: String(exportJob.value?.status || '')
     }),
     async ({ exportId, status }) => {
+      if (status !== 'queued' && status !== 'running') {
+        exportCancelRequested.value = false
+      }
       if (!process.client || status !== 'done' || !exportId) return
       if (!hasWebExportFolder.value) return
       if (exportAutoSavedFor.value === exportId) return
@@ -392,7 +472,8 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
 
   const startChatExport = async () => {
     exportError.value = ''
-    exportSaveMsg.value = ''
+    resetExportSaveFeedback({ resetAutoSavedFor: true })
+    exportCancelRequested.value = false
     if (!selectedAccount.value) {
       exportError.value = '未选择账号'
       return
@@ -490,13 +571,17 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
 
   const cancelCurrentExport = async () => {
     const exportId = exportJob.value?.exportId
-    if (!exportId) return
+    const status = String(exportJob.value?.status || '')
+    if (!exportId || (status !== 'queued' && status !== 'running') || exportCancelRequested.value) return
 
+    exportError.value = ''
+    exportCancelRequested.value = true
     try {
       await api.cancelChatExport(exportId)
       const response = await api.getChatExport(exportId)
       exportJob.value = response?.job || exportJob.value
     } catch (error) {
+      exportCancelRequested.value = false
       exportError.value = error?.message || '取消导出失败'
     }
   }
@@ -518,7 +603,12 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportFolderHandle,
     exportSaveBusy,
     exportSaveMsg,
+    exportSaveError,
+    exportSaveState,
+    exportSaveProgressText,
+    exportBackendZipPath,
     exportAutoSavedFor,
+    exportCancelRequested,
     exportSearchQuery,
     exportListTab,
     exportSelectedUsernames,
@@ -532,6 +622,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     isExportContactSelected,
     hasWebExportFolder,
     chooseExportFolder,
+    clearExportFolderSelection,
     getExportDownloadUrl,
     saveExportToSelectedFolder,
     openExportModal,
