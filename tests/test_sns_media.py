@@ -15,6 +15,20 @@ from wechat_decrypt_tool import sns_media  # noqa: E402  pylint: disable=wrong-i
 
 
 class TestSnsMedia(unittest.TestCase):
+    def test_weflow_wxisaac64_script_path_uses_bundled_helper(self):
+        sns_media._weflow_wxisaac64_script_path.cache_clear()
+        script = sns_media._weflow_wxisaac64_script_path()
+        self.assertTrue(script)
+
+        script_path = Path(script)
+        normalized = script.replace("\\", "/")
+        self.assertTrue(script_path.exists())
+        self.assertEqual(script_path.name, "weflow_wasm_keystream.js")
+        self.assertIn("/src/wechat_decrypt_tool/native/weflow_wasm/", normalized)
+        self.assertNotIn("/WeFlow/", normalized)
+        self.assertTrue((script_path.parent / "wasm_video_decode.js").exists())
+        self.assertTrue((script_path.parent / "wasm_video_decode.wasm").exists())
+
     def test_fix_sns_cdn_url_image_rewrites_150_and_appends_token(self):
         u = "http://mmsns.qpic.cn/sns/abc/150"
         out = sns_media.fix_sns_cdn_url(u, token="tkn", is_video=False)
@@ -131,7 +145,7 @@ class TestSnsMedia(unittest.TestCase):
             account_dir.mkdir(parents=True, exist_ok=True)
 
             with mock.patch("wechat_decrypt_tool.sns_media._download_sns_remote_bytes", side_effect=fake_download):
-                with mock.patch("wechat_decrypt_tool.sns_media._wcdb_decrypt_sns_image", return_value=decoded):
+                with mock.patch("wechat_decrypt_tool.sns_media.weflow_decrypt_sns_image_bytes", return_value=decoded):
                     res = asyncio.run(
                         sns_media.try_fetch_and_decrypt_sns_image_remote(
                             account_dir=account_dir,
@@ -161,7 +175,7 @@ class TestSnsMedia(unittest.TestCase):
             account_dir.mkdir(parents=True, exist_ok=True)
 
             with mock.patch("wechat_decrypt_tool.sns_media._download_sns_remote_bytes", side_effect=fake_download):
-                with mock.patch("wechat_decrypt_tool.sns_media._wcdb_decrypt_sns_image", return_value=decoded_bad):
+                with mock.patch("wechat_decrypt_tool.sns_media.weflow_decrypt_sns_image_bytes", return_value=decoded_bad):
                     res = asyncio.run(
                         sns_media.try_fetch_and_decrypt_sns_image_remote(
                             account_dir=account_dir,
@@ -177,4 +191,3 @@ class TestSnsMedia(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
