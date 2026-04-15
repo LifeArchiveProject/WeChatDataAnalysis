@@ -1,4 +1,3 @@
-from bisect import bisect_left, bisect_right
 from functools import lru_cache
 from pathlib import Path
 import os
@@ -20,7 +19,6 @@ from starlette.background import BackgroundTask
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, FileResponse  # 返回视频文件
-from pydantic import BaseModel, Field
 
 from ..chat_helpers import _load_contact_rows, _pick_display_name, _resolve_account_dir
 from ..logging_config import get_logger
@@ -43,8 +41,6 @@ except Exception:
 logger = get_logger(__name__)
 
 router = APIRouter(route_class=PathFixRoute)
-
-SNS_MEDIA_PICKS_FILE = "_sns_media_picks.json"
 
 _SNS_VIDEO_KEY_RE = re.compile(r'<enc\s+key="(\d+)"', flags=re.IGNORECASE)
 _MP_BIZ_RE = re.compile(r"__biz=([A-Za-z0-9_=+-]+)")
@@ -860,233 +856,6 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
     return out
 
 
-def _image_size_from_bytes(data: bytes, media_type: str) -> tuple[int, int]:
-    mt = str(media_type or "").lower()
-    if mt == "image/png":
-        # PNG IHDR width/height are stored at byte offsets 16..24
-        if len(data) >= 24 and data.startswith(b"\x89PNG\r\n\x1a\n"):
-            try:
-                w = int.from_bytes(data[16:20], "big")
-                h = int.from_bytes(data[20:24], "big")
-                return w, h
-            except Exception:
-                return 0, 0
-        return 0, 0
-    if mt in {"image/jpeg", "image/jpg"}:
-        # Minimal JPEG SOF parser.
-        if len(data) < 4 or (not data.startswith(b"\xFF\xD8")):
-            return 0, 0
-        i = 2
-        while i + 3 < len(data):
-            if data[i] != 0xFF:
-                i += 1
-                continue
-            # Skip padding 0xFF bytes.
-            while i < len(data) and data[i] == 0xFF:
-                i += 1
-            if i >= len(data):
-                break
-            marker = data[i]
-            i += 1
-            # Markers without a segment length.
-            if marker in (0xD8, 0xD9):
-                continue
-            if marker == 0xDA:  # Start of scan.
-                break
-            if i + 1 >= len(data):
-                break
-            seg_len = (data[i] << 8) + data[i + 1]
-            i += 2
-            if seg_len < 2:
-                break
-            # SOF markers which contain width/height.
-            if marker in {
-                0xC0,
-                0xC1,
-                0xC2,
-                0xC3,
-                0xC5,
-                0xC6,
-                0xC7,
-                0xC9,
-                0xCA,
-                0xCB,
-                0xCD,
-                0xCE,
-                0xCF,
-            }:
-                # segment: [precision(1), height(2), width(2), ...]
-                if i + 4 < len(data):
-                    try:
-                        h = (data[i + 1] << 8) + data[i + 2]
-                        w = (data[i + 3] << 8) + data[i + 4]
-                        return w, h
-                    except Exception:
-                        return 0, 0
-            i += seg_len - 2
-        return 0, 0
-    return 0, 0
-
-
-@lru_cache(maxsize=16)
-def _sns_img_time_index(wxid_dir_str: str) -> tuple[list[float], list[str]]:
-    """Build a (mtime_sorted, path_sorted) index for local Moments cache images.
-
-    WeChat stores encrypted SNS cache images under:
-      `{wxid_dir}/cache/YYYY-MM/Sns/Img/<2hex>/<30hex>`
-    """
-    wxid_dir = Path(str(wxid_dir_str or "").strip())
-    out: list[tuple[float, str]] = []
-
-    cache_root = wxid_dir / "cache"
-    try:
-        month_dirs = [p for p in cache_root.iterdir() if p.is_dir()]
-    except Exception:
-        month_dirs = []
-
-    for mdir in month_dirs:
-        img_root = mdir / "Sns" / "Img"
-        try:
-            if not (img_root.exists() and img_root.is_dir()):
-                continue
-        except Exception:
-            continue
-        # The Img dir uses a 2-level layout; keep this tight (no global rglob).
-        try:
-            for sub in img_root.iterdir():
-                if not sub.is_dir():
-                    continue
-                for f in sub.iterdir():
-                    try:
-                        if not f.is_file():
-                            continue
-                        st = f.stat()
-                        out.append((float(st.st_mtime), str(f)))
-                    except Exception:
-                        continue
-        except Exception:
-            continue
-
-    out.sort(key=lambda x: x[0])
-    mtimes = [m for m, _p in out]
-    paths = [_p for _m, _p in out]
-    return mtimes, paths
-
-
-def _normalize_hex32(value: Optional[str]) -> str:
-    """Return the first 32 hex chars from value, or '' if not present."""
-    s = str(value or "").strip().lower()
-    if not s:
-        return ""
-    # Keep only hex chars. Some attrs may contain separators or be wrapped.
-    s = re.sub(r"[^0-9a-f]", "", s)
-    if len(s) < 32:
-        return ""
-    return s[:32]
-
-
-def _sns_media_picks_path(account_dir: Path) -> Path:
-    return account_dir / SNS_MEDIA_PICKS_FILE
-
-
-def _sns_post_id_from_media_key(media_key: str) -> str:
-    # Frontend stores picks under `${postId}:${idx}`.
-    s = str(media_key or "").strip()
-    if not s:
-        return ""
-    return s.split(":", 1)[0].strip()
-
-
-@lru_cache(maxsize=32)
-def _load_sns_media_picks_cached(path_str: str, mtime: float) -> dict[str, str]:
-    p = Path(str(path_str or "").strip())
-    try:
-        raw = p.read_text(encoding="utf-8")
-    except Exception:
-        return {}
-
-    try:
-        obj = json.loads(raw)
-    except Exception:
-        return {}
-
-    picks_obj = obj.get("picks") if isinstance(obj, dict) else None
-    if not isinstance(picks_obj, dict):
-        return {}
-
-    out: dict[str, str] = {}
-    for k, v in picks_obj.items():
-        mk = str(k or "").strip()
-        if not mk:
-            continue
-        ck = _normalize_hex32(str(v or ""))
-        if not ck:
-            continue
-        out[mk] = ck
-    return out
-
-
-def _load_sns_media_picks(account_dir: Path) -> dict[str, str]:
-    p = _sns_media_picks_path(account_dir)
-    try:
-        st = p.stat()
-        mtime = float(st.st_mtime)
-    except Exception:
-        mtime = 0.0
-    return _load_sns_media_picks_cached(str(p), mtime)
-
-
-def _save_sns_media_picks(account_dir: Path, picks: dict[str, str]) -> int:
-    # Normalize + keep it stable for easier diff/debugging.
-    out: dict[str, str] = {}
-    for k, v in (picks or {}).items():
-        mk = str(k or "").strip()
-        if not mk:
-            continue
-        ck = _normalize_hex32(str(v or ""))
-        if not ck:
-            continue
-        out[mk] = ck
-
-    try:
-        payload = {"updated_at": int(time.time()), "picks": dict(sorted(out.items(), key=lambda x: x[0]))}
-        _sns_media_picks_path(account_dir).write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-    try:
-        _load_sns_media_picks_cached.cache_clear()
-    except Exception:
-        pass
-
-    return len(out)
-
-
-@lru_cache(maxsize=16)
-def _sns_img_roots(wxid_dir_str: str) -> tuple[str, ...]:
-    """List all month cache roots that contain `Sns/Img`."""
-    wxid_dir = Path(str(wxid_dir_str or "").strip())
-    cache_root = wxid_dir / "cache"
-    try:
-        month_dirs = [p for p in cache_root.iterdir() if p.is_dir()]
-    except Exception:
-        month_dirs = []
-
-    roots: list[str] = []
-    for mdir in month_dirs:
-        img_root = mdir / "Sns" / "Img"
-        try:
-            if img_root.exists() and img_root.is_dir():
-                roots.append(str(img_root))
-        except Exception:
-            continue
-    # Keep it stable (helps debugging and caching predictability).
-    roots.sort()
-    return tuple(roots)
-
 @lru_cache(maxsize=16)
 def _sns_video_roots(wxid_dir_str: str) -> tuple[str, ...]:
     """List all month cache roots that contain `Sns/Video`."""
@@ -1138,268 +907,6 @@ def _resolve_sns_cached_video_path(
             continue
 
     return None
-
-
-def _resolve_sns_cached_image_path_by_md5(
-    *,
-    wxid_dir: Path,
-    md5: str,
-    create_time: int,
-) -> Optional[str]:
-    """Try to resolve SNS cache image by md5-based cache path layout."""
-    md5_32 = _normalize_hex32(md5)
-    if not md5_32:
-        return None
-
-    sub = md5_32[:2]
-    rest = md5_32[2:]
-    roots = _sns_img_roots(str(wxid_dir))
-    if not roots:
-        return None
-
-    best: tuple[float, str] | None = None
-    for root_str in roots:
-        try:
-            p = Path(root_str) / sub / rest
-            if not (p.exists() and p.is_file()):
-                continue
-            # Prefer the cache file closest to the post create_time (if provided),
-            # otherwise pick the newest one.
-            st = p.stat()
-            if create_time > 0:
-                score = abs(float(st.st_mtime) - float(create_time))
-            else:
-                score = -float(st.st_mtime)
-            if best is None or score < best[0]:
-                best = (score, str(p))
-        except Exception:
-            continue
-    return best[1] if best else None
-
-
-def _sns_cache_key_from_path(p: Path) -> str:
-    """Return the 32-hex cache key for a SNS cache file path, or ''."""
-    try:
-        # cache/.../Sns/Img/<2hex>/<30hex>
-        key = f"{p.parent.name}{p.name}"
-    except Exception:
-        return ""
-    return _normalize_hex32(key)
-
-
-def _generate_sns_cache_key(tid: str, media_id: str, media_type: int = 2) -> str:
-    """
-    公式: md5(tid_mediaId_type)
-    Example: 14852422213384352392_14852422213963625090_2 -> 6d479249ca5a090fab5c42c79bc56b89
-    """
-    if not tid or not media_id:
-        return ""
-
-    raw_key = f"{tid}_{media_id}_{media_type}"
-
-    try:
-        return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
-    except Exception:
-        return ""
-
-def _resolve_sns_cached_image_path_by_cache_key(
-    *,
-    wxid_dir: Path,
-    cache_key: str,
-    create_time: int,
-) -> Optional[str]:
-    """Resolve SNS cache image by `<2hex>/<30hex>` cache key."""
-    key32 = _normalize_hex32(cache_key)
-    if not key32:
-        return None
-
-    sub = key32[:2]
-    rest = key32[2:]
-    roots = _sns_img_roots(str(wxid_dir))
-    if not roots:
-        return None
-
-    best: tuple[float, str] | None = None
-    for root_str in roots:
-        try:
-            p = Path(root_str) / sub / rest
-            if not (p.exists() and p.is_file()):
-                continue
-            st = p.stat()
-            if create_time > 0:
-                score = abs(float(st.st_mtime) - float(create_time))
-            else:
-                score = -float(st.st_mtime)
-            if best is None or score < best[0]:
-                best = (score, str(p))
-        except Exception:
-            continue
-    return best[1] if best else None
-
-
-@lru_cache(maxsize=4096)
-def _resolve_sns_cached_image_path(
-    *,
-    account_dir_str: str,
-    create_time: int,
-    width: int,
-    height: int,
-    idx: int,
-    total_size: int = 0,
-) -> Optional[str]:
-    """Best-effort resolve a local cached SNS image for a post+media meta."""
-    total_size_i = int(total_size or 0)
-    must_match_size = width > 0 and height > 0
-    # Without size/total_size, time-only matching is too error-prone and can easily mix images.
-    if (not must_match_size) and total_size_i <= 0:
-        return None
-
-    account_dir = Path(str(account_dir_str or "").strip())
-    if not account_dir.exists():
-        return None
-
-    wxid_dir = _resolve_account_wxid_dir(account_dir)
-    if not wxid_dir:
-        return None
-
-    mtimes, paths = _sns_img_time_index(str(wxid_dir))
-    if not mtimes:
-        return None
-
-    create_time_i = int(create_time or 0)
-    if create_time_i > 0:
-        # We don't know when the image was cached (could be close to create_time, could be hours later).
-        # Use a generous window but keep it bounded for performance.
-        window = 72 * 3600  # 72h
-        lo = create_time_i - window
-        hi = create_time_i + window
-
-        l = bisect_left(mtimes, lo)
-        r = bisect_right(mtimes, hi)
-        if l >= r:
-            # Fallback: search the newest N files if time window has no hits.
-            l = max(0, len(mtimes) - 800)
-            r = len(mtimes)
-    else:
-        # Missing createTime: only probe the newest cache entries.
-        l = max(0, len(mtimes) - 800)
-        r = len(mtimes)
-
-    # Rank by time proximity to create_time (or by recency when createTime is missing).
-    candidates: list[tuple[float, str]] = []
-    for j in range(l, r):
-        try:
-            if create_time_i > 0:
-                candidates.append((abs(mtimes[j] - float(create_time_i)), paths[j]))
-            else:
-                candidates.append((-mtimes[j], paths[j]))
-        except Exception:
-            continue
-    candidates.sort(key=lambda x: x[0])
-
-    matched: list[tuple[int, float, str]] = []
-    # Limit the work per request.
-    max_probe = 2000 if (r - l) <= 2000 else 2000
-    for _diff, pstr in candidates[:max_probe]:
-        try:
-            p = Path(pstr)
-            payload, media_type = _read_and_maybe_decrypt_media(p, account_dir)
-            if not payload or not str(media_type or "").startswith("image/"):
-                continue
-            if must_match_size:
-                w0, h0 = _image_size_from_bytes(payload, str(media_type or ""))
-                if (w0, h0) != (width, height):
-                    continue
-
-            size_diff = abs(len(payload) - total_size_i) if total_size_i > 0 else 0
-            # When totalSize is available, it tends to be a stronger discriminator than mtime.
-            matched.append((int(size_diff), float(_diff), pstr))
-        except Exception:
-            continue
-
-    if not matched:
-        return None
-    if must_match_size:
-        matched.sort(key=lambda x: (x[0], x[1], x[2]))
-        # If we have totalSize, treat it as a strong discriminator and always take the best match.
-        if total_size_i > 0:
-            return matched[0][2]
-        idx0 = max(0, int(idx or 0))
-        return matched[idx0][2] if idx0 < len(matched) else None
-    # No size: only return a best-effort match when totalSize is available.
-    if total_size_i > 0:
-        matched.sort(key=lambda x: (x[0], x[1], x[2]))
-        return matched[0][2]
-    return None
-
-
-@lru_cache(maxsize=2048)
-def _list_sns_cached_image_candidate_keys(
-    *,
-    account_dir_str: str,
-    create_time: int,
-    width: int,
-    height: int,
-) -> tuple[str, ...]:
-    """List local SNS cache candidates (as 32-hex cache keys) for a media item.
-
-    The ordering matches `_resolve_sns_cached_image_path()`'s scan order, so `idx`
-    is stable within the same (account, create_time, width, height) input.
-    """
-    if create_time <= 0 or width <= 0 or height <= 0:
-        return tuple()
-
-    account_dir = Path(str(account_dir_str or "").strip())
-    if not account_dir.exists():
-        return tuple()
-
-    wxid_dir = _resolve_account_wxid_dir(account_dir)
-    if not wxid_dir:
-        return tuple()
-
-    mtimes, paths = _sns_img_time_index(str(wxid_dir))
-    if not mtimes:
-        return tuple()
-
-    window = 72 * 3600  # 72h
-    lo = create_time - window
-    hi = create_time + window
-
-    l = bisect_left(mtimes, lo)
-    r = bisect_right(mtimes, hi)
-    if l >= r:
-        l = max(0, len(mtimes) - 800)
-        r = len(mtimes)
-
-    candidates: list[tuple[float, str]] = []
-    for j in range(l, r):
-        try:
-            candidates.append((abs(mtimes[j] - float(create_time)), paths[j]))
-        except Exception:
-            continue
-    candidates.sort(key=lambda x: x[0])
-
-    max_probe = 2000 if (r - l) <= 2000 else 2000
-    out: list[str] = []
-    seen: set[str] = set()
-    for _diff, pstr in candidates[:max_probe]:
-        try:
-            p = Path(pstr)
-            payload, media_type = _read_and_maybe_decrypt_media(p, account_dir)
-            if not payload or not str(media_type or "").startswith("image/"):
-                continue
-            w0, h0 = _image_size_from_bytes(payload, str(media_type or ""))
-            if (w0, h0) != (width, height):
-                continue
-            key = _sns_cache_key_from_path(p)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            out.append(key)
-        except Exception:
-            continue
-
-    return tuple(out)
 
 def _get_sns_covers(account_dir: Path, target_wxid: str, limit: int = 20) -> list[dict[str, Any]]:
     """无论多古老，强行揪出用户的朋友圈封面历史 (type=7)。
@@ -2575,47 +2082,6 @@ def list_sns_users(
     return {"items": items, "count": len(items), "limit": lim}
 
 
-class SnsMediaPicksSaveRequest(BaseModel):
-    account: Optional[str] = Field(None, description="账号目录名（可选，默认使用第一个）")
-    picks: dict[str, str] = Field(default_factory=dict, description="手动匹配表：`${postId}:${idx}` -> 32hex cacheKey")
-
-
-@router.post("/api/sns/media_picks", summary="保存朋友圈图片手动匹配结果（本机）")
-async def save_sns_media_picks(request: SnsMediaPicksSaveRequest):
-    account_dir = _resolve_account_dir(request.account)
-    count = _save_sns_media_picks(account_dir, request.picks or {})
-    return {"status": "success", "count": int(count)}
-
-
-@router.get("/api/sns/media_candidates", summary="获取朋友圈图片本地缓存候选")
-def list_sns_media_candidates(
-    account: Optional[str] = None,
-    create_time: int = 0,
-    width: int = 0,
-    height: int = 0,
-    limit: int = 24,
-    offset: int = 0,
-):
-    if limit <= 0:
-        raise HTTPException(status_code=400, detail="Invalid limit.")
-    if limit > 200:
-        limit = 200
-    if offset < 0:
-        offset = 0
-
-    account_dir = _resolve_account_dir(account)
-    keys = _list_sns_cached_image_candidate_keys(
-        account_dir_str=str(account_dir),
-        create_time=int(create_time or 0),
-        width=int(width or 0),
-        height=int(height or 0),
-    )
-    total = len(keys)
-    end = min(total, offset + limit)
-    items = [{"idx": i, "key": keys[i]} for i in range(offset, end)]
-    return {"count": total, "items": items, "hasMore": end < total, "limit": limit, "offset": offset}
-
-
 def _is_allowed_sns_media_host(host: str) -> bool:
     return _sns_media.is_allowed_sns_media_host(host)
 
@@ -2902,10 +2368,7 @@ async def _try_fetch_and_decrypt_sns_remote(
     token: str,
     use_cache: bool,
 ) -> Optional[Response]:
-    """Try remote download+decrypt first (accurate when keys are present).
-
-    Returns a Response on success, or None on failure so caller can fall back to local cache matching.
-    """
+    """Try remote download+decrypt first (accurate when keys are present)."""
     res = await _sns_media.try_fetch_and_decrypt_sns_image_remote(
         account_dir=account_dir,
         url=str(url or ""),
@@ -2918,34 +2381,18 @@ async def _try_fetch_and_decrypt_sns_remote(
 
     resp = Response(content=res.payload, media_type=res.media_type)
     resp.headers["Cache-Control"] = "public, max-age=86400" if use_cache else "no-store"
-    resp.headers["X-SNS-Source"] = str(res.source or "remote")
-    if res.x_enc:
-        resp.headers["X-SNS-X-Enc"] = str(res.x_enc)
     return resp
 
 
 @router.get("/api/sns/media", summary="获取朋友圈图片（下载解密优先）")
 async def get_sns_media(
         account: Optional[str] = None,
-        create_time: int = 0,
-        width: int = 0,
-        height: int = 0,
-        total_size: int = 0,
-        idx: int = 0,
-        avoid_picked: int = 0,
-        post_id: Optional[str] = None,
-        media_id: Optional[str] = None,
-        post_type: int = 1,
-        media_type: int = 2,
-        pick: Optional[str] = None,
-        md5: Optional[str] = None,
         token: Optional[str] = None,
         key: Optional[str] = None,
         use_cache: int = 1,
         url: Optional[str] = None,
 ):
     account_dir = _resolve_account_dir(account)
-    wxid_dir = _resolve_account_wxid_dir(account_dir)
 
     try:
         use_cache_flag = bool(int(use_cache or 1))
@@ -2963,179 +2410,7 @@ async def get_sns_media(
     if remote_resp is not None:
         return remote_resp
 
-    # Cache disabled: do not fall back to local cache heuristics.
-    if not use_cache_flag:
-        raise HTTPException(status_code=404, detail="SNS media not found (cache disabled).")
-
-    if wxid_dir and post_id and media_id:
-        if int(post_type) == 7:
-            raw_key = f"{post_id}_{media_id}_4"  # 硬编码
-
-            md5_str = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
-            bkg_path = wxid_dir / "business" / "sns" / "bkg" / md5_str[:2] / md5_str
-
-            if bkg_path.exists() and bkg_path.is_file():
-                print(f"===== Hit Bkg Cover ======= {bkg_path}")
-
-                return FileResponse(bkg_path, media_type="image/jpeg",
-                                    headers={"Cache-Control": "public, max-age=31536000", "X-SNS-Source": "bkg-cover"})
-        exact_match_path = None
-        hit_type = ""
-
-        # 尝试 1: 使用 post_type 计算 MD5
-        key_post = _generate_sns_cache_key(post_id, media_id, post_type)
-        exact_match_path = _resolve_sns_cached_image_path_by_cache_key(
-            wxid_dir=wxid_dir,
-            cache_key=key_post,
-            create_time=0
-        )
-        if exact_match_path:
-            hit_type = "post_type"
-
-        # 尝试 2: 如果没找到，并且 media_type 和 post_type 不一样，再试一次
-        if not exact_match_path and post_type != media_type:
-            key_media = _generate_sns_cache_key(post_id, media_id, media_type)
-            exact_match_path = _resolve_sns_cached_image_path_by_cache_key(
-                wxid_dir=wxid_dir,
-                cache_key=key_media,
-                create_time=0
-            )
-            if exact_match_path:
-                hit_type = "media_type"
-
-        # 如果通过这两种精确定位找到了文件，直接返回
-        if exact_match_path:
-            print(f"=====exact_match_path======={exact_match_path}============= (Hit: {hit_type})")
-            try:
-                payload, mtype = _read_and_maybe_decrypt_media(Path(exact_match_path), account_dir)
-                if payload and str(mtype or "").startswith("image/"):
-                    resp = Response(content=payload, media_type=str(mtype or "image/jpeg"))
-                    resp.headers["Cache-Control"] = "public, max-age=31536000"
-                    resp.headers["X-SNS-Source"] = "deterministic-hash"
-                    # 在 Header 里塞入到底是哪个 type 命中的，方便 F12 调试
-                    resp.headers["X-SNS-Hit-Type"] = hit_type
-                    return resp
-            except Exception:
-                pass
-
-        print("no exact match path, falling back...")
-
-    # 0) User-picked cache key override (stable across candidate ordering).
-    pick_key = _normalize_hex32(pick)
-    if pick_key:
-        wxid_dir = _resolve_account_wxid_dir(account_dir)
-        if wxid_dir:
-            local = _resolve_sns_cached_image_path_by_cache_key(
-                wxid_dir=wxid_dir,
-                cache_key=pick_key,
-                create_time=int(create_time or 0),
-            )
-            if local:
-                try:
-                    payload, media_type = _read_and_maybe_decrypt_media(Path(local), account_dir)
-                    if payload and str(media_type or "").startswith("image/"):
-                        resp = Response(content=payload, media_type=str(media_type or "image/jpeg"))
-                        resp.headers["Cache-Control"] = "public, max-age=86400"
-                        resp.headers["X-SNS-Source"] = "manual-pick"
-                        return resp
-                except Exception:
-                    pass
-
-    # Optional: avoid using a cache image that was manually pinned to another post.
-    # Only applies when frontend enables this setting and the current media has no explicit `pick`.
-    try:
-        avoid_flag = bool(int(avoid_picked or 0))
-    except Exception:
-        avoid_flag = False
-    cur_post_id = str(post_id or "").strip()
-    reserved_other: set[str] = set()
-    if avoid_flag and (not pick_key) and cur_post_id:
-        picks_map = _load_sns_media_picks(account_dir)
-        for mk, ck in (picks_map or {}).items():
-            pid = _sns_post_id_from_media_key(mk)
-            if not pid or pid == cur_post_id:
-                continue
-            if ck:
-                reserved_other.add(str(ck))
-
-    # 1) Try local decrypted cache first (works for old posts where CDN URLs return placeholders).
-    local = _resolve_sns_cached_image_path(
-        account_dir_str=str(account_dir),
-        create_time=int(create_time or 0),
-        width=int(width or 0),
-        height=int(height or 0),
-        idx=max(0, int(idx or 0)),
-        total_size=int(total_size or 0),
-    )
-    if local and reserved_other:
-        try:
-            ck0 = _sns_cache_key_from_path(Path(local))
-            if ck0 and ck0 in reserved_other:
-                local = None
-        except Exception:
-            pass
-    if local:
-        try:
-            payload, media_type = _read_and_maybe_decrypt_media(Path(local), account_dir)
-            if payload and str(media_type or "").startswith("image/"):
-                resp = Response(content=payload, media_type=str(media_type or "image/jpeg"))
-                resp.headers["Cache-Control"] = "public, max-age=86400"
-                resp.headers["X-SNS-Source"] = "local-heuristic"
-                return resp
-        except Exception:
-            pass
-
-    # 1.5) If enabled, and the default match was skipped (or not found), pick the next candidate
-    # that is not reserved by a manual pick on another post.
-    if reserved_other and int(create_time or 0) > 0 and int(width or 0) > 0 and int(height or 0) > 0:
-        wxid_dir = _resolve_account_wxid_dir(account_dir)
-        if wxid_dir:
-            keys = _list_sns_cached_image_candidate_keys(
-                account_dir_str=str(account_dir),
-                create_time=int(create_time or 0),
-                width=int(width or 0),
-                height=int(height or 0),
-            )
-            base_idx = max(0, int(idx or 0))
-            for ck in keys[base_idx:]:
-                if not ck or ck in reserved_other:
-                    continue
-                local2 = _resolve_sns_cached_image_path_by_cache_key(
-                    wxid_dir=wxid_dir,
-                    cache_key=str(ck),
-                    create_time=int(create_time or 0),
-                )
-                if not local2:
-                    continue
-                try:
-                    payload, media_type = _read_and_maybe_decrypt_media(Path(local2), account_dir)
-                    if payload and str(media_type or "").startswith("image/"):
-                        resp = Response(content=payload, media_type=str(media_type or "image/jpeg"))
-                        resp.headers["Cache-Control"] = "public, max-age=86400"
-                        resp.headers["X-SNS-Source"] = "local-heuristic-next"
-                        return resp
-                except Exception:
-                    continue
-
-    # 2) Fallback to the remote URL (may still return a Tencent placeholder image).
-    u = str(url or "").strip()
-    if not u:
-        raise HTTPException(status_code=404, detail="SNS media not found.")
-
-    # Delay-import to avoid pulling requests machinery during normal timeline listing.
-    from .chat_media import proxy_image  # pylint: disable=import-outside-toplevel
-
-    try:
-        resp0 = await proxy_image(u)
-        try:
-            resp0.headers["X-SNS-Source"] = "proxy"
-        except Exception:
-            pass
-        return resp0
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Fetch sns media failed: {e}")
+    raise HTTPException(status_code=404, detail="SNS media not found.")
 
 
 @router.get("/api/sns/article_thumb", summary="提取公众号文章封面图")
@@ -3197,8 +2472,7 @@ async def get_sns_video_remote(
     if path is None:
         raise HTTPException(status_code=404, detail="SNS remote video not found.")
 
-    headers = {"X-SNS-Source": "remote-video-cache" if use_cache_flag else "remote-video"}
-    headers["Cache-Control"] = "public, max-age=86400" if use_cache_flag else "no-store"
+    headers = {"Cache-Control": "public, max-age=86400" if use_cache_flag else "no-store"}
 
     if use_cache_flag:
         return FileResponse(str(path), media_type="video/mp4", headers=headers)
