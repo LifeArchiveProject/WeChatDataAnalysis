@@ -114,20 +114,7 @@
                     :src="getSnsMediaUrl(activeCover, activeCover.media[0], 0, activeCover.media[0].url)"
                     class="w-full h-full object-cover"
                     alt="朋友圈封面"
-                    @load="onCoverMediaLoaded(activeCover, $event)"
                 />
-                <div
-                    v-if="snsMediaStageLabel(snsCoverStageKey(activeCover)) || snsMediaStageLoading[snsCoverStageKey(activeCover)]"
-                    class="absolute top-3 left-3 z-20 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
-                >
-                  <div
-                      class="text-[10px] px-2 py-0.5 rounded backdrop-blur-sm shadow-sm"
-                      :class="snsMediaStageBadgeColorClass(snsCoverStageKey(activeCover))"
-                      :title="snsMediaStageBadgeTitle(snsCoverStageKey(activeCover))"
-                  >
-                    {{ snsMediaStageLabel(snsCoverStageKey(activeCover)) || '识别中' }}
-                  </div>
-                </div>
 
                 <div
                     v-if="(activeCover && Number(activeCover.createTime || 0)) || (covers && covers.length > 1)"
@@ -347,7 +334,7 @@
                           loop
                           muted
                           playsinline
-                          @loadeddata="onLocalVideoLoaded(post.id, post.media[0].id); onSnsMediaLoaded(post, post.media[0], 0)"
+                          @loadeddata="onLocalVideoLoaded(post.id, post.media[0].id)"
                           @error="onLocalVideoError(post.id, post.media[0].id)"
                       ></video>
 
@@ -361,7 +348,6 @@
                           loop
                           :muted="livePhotoHoverMuted"
                           playsinline
-                          @loadeddata="onSnsMediaLoaded(post, post.media[0], 0)"
                           @error="onLivePhotoVideoError(post.id, 0)"
                       ></video>
 
@@ -372,22 +358,8 @@
                           alt=""
                           loading="lazy"
                           referrerpolicy="no-referrer"
-                          @load="onSnsMediaLoaded(post, post.media[0], 0, $event)"
                           @error="onMediaError(post.id, 0)"
                       />
-
-                      <div
-                          v-if="snsMediaStageLabel(snsMediaStageKey(post.id, 0, 'thumb')) || snsMediaStageLoading[snsMediaStageKey(post.id, 0, 'thumb')]"
-                          class="absolute top-2 left-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
-                      >
-                        <div
-                            class="text-[10px] px-2 py-0.5 rounded backdrop-blur-sm shadow-sm"
-                            :class="snsMediaStageBadgeColorClass(snsMediaStageKey(post.id, 0, 'thumb'))"
-                            :title="snsMediaStageBadgeTitle(snsMediaStageKey(post.id, 0, 'thumb'))"
-                        >
-                          {{ snsMediaStageLabel(snsMediaStageKey(post.id, 0, 'thumb')) || '识别中' }}
-                        </div>
-                      </div>
                       <div
                           v-if="Number(post.media[0]?.type || 0) === 6 && !isLocalVideoLoaded(post.id, post.media[0].id)"
                           class="absolute inset-0 flex items-center justify-center pointer-events-none"
@@ -451,7 +423,7 @@
                           loop
                           muted
                           playsinline
-                          @loadeddata="onLocalVideoLoaded(post.id, m.id); onSnsMediaLoaded(post, m, idx)"
+                          @loadeddata="onLocalVideoLoaded(post.id, m.id)"
                           @error="onLocalVideoError(post.id, m.id)"
                       ></video>
                       <video
@@ -464,7 +436,6 @@
                           loop
                           :muted="livePhotoHoverMuted"
                           playsinline
-                          @loadeddata="onSnsMediaLoaded(post, m, idx)"
                           @error="onLivePhotoVideoError(post.id, idx)"
                       ></video>
                       <img
@@ -474,22 +445,8 @@
                           alt=""
                           loading="lazy"
                           referrerpolicy="no-referrer"
-                          @load="onSnsMediaLoaded(post, m, idx, $event)"
                           @error="onMediaError(post.id, idx)"
                       />
-
-                      <div
-                          v-if="snsMediaStageLabel(snsMediaStageKey(post.id, idx, 'thumb')) || snsMediaStageLoading[snsMediaStageKey(post.id, idx, 'thumb')]"
-                          class="absolute top-1 left-1 z-20 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
-                      >
-                        <div
-                            class="text-[10px] px-1.5 py-0.5 rounded backdrop-blur-sm shadow-sm"
-                            :class="snsMediaStageBadgeColorClass(snsMediaStageKey(post.id, idx, 'thumb'))"
-                            :title="snsMediaStageBadgeTitle(snsMediaStageKey(post.id, idx, 'thumb'))"
-                        >
-                          {{ snsMediaStageLabel(snsMediaStageKey(post.id, idx, 'thumb')) || '识别中' }}
-                        </div>
-                      </div>
                       <!-- 不知道微信朋友圈可不可以发多视频，先这样写吧-->
                       <span v-else class="text-[10px] text-gray-400">图片失败</span>
 
@@ -630,7 +587,7 @@
       </button>
     </div>
 
-	    <!-- 图片预览弹窗 + 候选匹配选择 -->
+	    <!-- 图片预览弹窗 -->
 	    <div
 	      v-if="previewCtx"
 	      class="fixed inset-0 z-[60] bg-black/90 flex items-center justify-center"
@@ -710,17 +667,6 @@ import { SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting } from '~/lib/desktop-s
 import { reportServerErrorFromError } from '~/lib/server-error-logging'
 
 useHead({ title: '朋友圈 - 微信数据分析助手' })
-
-// Nuxt dev mode can load hundreds of module resources, quickly filling the default
-// ResourceTiming buffer (150). If it overflows, `<img>` requests may not produce
-// entries, making Server-Timing based stage detection always fall back to "unknown".
-if (process.client) {
-  try {
-    if (typeof performance !== 'undefined' && performance?.setResourceTimingBufferSize) {
-      performance.setResourceTimingBufferSize(5000)
-    }
-  } catch {}
-}
 
 const api = useApi()
 
@@ -936,186 +882,6 @@ const hasMediaError = (postId, idx) => !!mediaErrors.value[mediaErrorKey(postId,
 const onMediaError = (postId, idx) => {
   mediaErrors.value[mediaErrorKey(postId, idx)] = true
 }
-
-// Hover badge: show which SNS media pipeline stage produced the image.
-// Backend provides `X-SNS-Source` (and optional `X-SNS-Hit-Type`, `X-SNS-X-Enc`) on `/api/sns/media` responses.
-const snsMediaStage = ref({}) // stageKey -> { source, hitType, xEnc }
-const snsMediaStageLoading = ref({}) // stageKey -> boolean
-const snsMediaStageInFlight = new Set()
-
-const isSnsMediaApiUrl = (url) => {
-  const u = String(url || '').trim()
-  return !!u && u.includes('/api/sns/media')
-}
-
-const snsMediaStageKey = (postId, idx, kind = 'thumb') => {
-  const acc = String(selectedAccount.value || '').trim()
-  const pid = String(postId || '').trim()
-  return `sns:${acc}:${pid}:${String(Number(idx) || 0)}:${String(kind || 'thumb')}`
-}
-
-const snsCoverStageKey = (cover) => {
-  const acc = String(selectedAccount.value || '').trim()
-  const cid = String(cover?.id || cover?.tid || cover?.createTime || '').trim()
-  return `sns:${acc}:cover:${cid || '0'}`
-}
-
-const snsMediaStageLabel = (key) => {
-  const k = String(key || '').trim()
-  if (!k) return ''
-  const info = snsMediaStage.value[k]
-  if (!info || typeof info !== 'object') return ''
-
-  const source = String(info?.source || '').trim()
-  const hitType = String(info?.hitType || '').trim()
-
-  if (source === 'remote-cache') return '远程缓存'
-  if (source === 'remote-decrypt') return '远程解密'
-  if (source === 'remote') return '远程直出'
-  if (source === 'deterministic-hash') return hitType ? `本地命中(${hitType})` : '本地命中'
-  if (source === 'manual-pick') return '手动匹配'
-  if (source === 'local-heuristic') return '本地兜底'
-  if (source === 'local-heuristic-next') return '本地兜底(跳过)'
-  if (source === 'browser-cache') return '浏览器缓存'
-  if (source === 'bkg-cover') return '封面缓存'
-  if (source === 'proxy') return '远程代理'
-  if (source === 'unknown') return '未知'
-  if (source === 'error') return '获取失败'
-  return source || '未知'
-}
-
-const snsMediaStageBadgeColorClass = (key) => {
-  const k = String(key || '').trim()
-  const source = String(snsMediaStage.value?.[k]?.source || '').trim()
-
-  if (source.startsWith('remote')) return 'bg-emerald-600/85 text-white'
-  if (source === 'deterministic-hash') return 'bg-sky-600/85 text-white'
-  if (source.startsWith('local')) return 'bg-blue-600/85 text-white'
-  if (source === 'manual-pick') return 'bg-amber-600/90 text-white'
-  if (source === 'browser-cache') return 'bg-slate-600/85 text-white'
-  if (source === 'proxy') return 'bg-fuchsia-600/85 text-white'
-  if (source === 'bkg-cover') return 'bg-indigo-600/85 text-white'
-  if (source === 'error') return 'bg-red-600/85 text-white'
-  return 'bg-black/50 text-white'
-}
-
-const snsMediaStageBadgeTitle = (key) => {
-  const k = String(key || '').trim()
-  const info = snsMediaStage.value?.[k]
-  if (!info || typeof info !== 'object') return ''
-  const source = String(info?.source || '').trim()
-  const hitType = String(info?.hitType || '').trim()
-  const xEnc = String(info?.xEnc || '').trim()
-
-  const parts = []
-  if (source) parts.push(`source=${source}`)
-  if (hitType) parts.push(`hit=${hitType}`)
-  if (xEnc) parts.push(`x-enc=${xEnc}`)
-  return parts.join(' · ')
-}
-
-const readSnsStageFromResourceTiming = (url) => {
-  try {
-    if (!process.client) return null
-    if (typeof performance === 'undefined' || !performance?.getEntriesByName) return null
-    const u = String(url || '').trim()
-    if (!u) return null
-    const entries = performance.getEntriesByName(u) || []
-    const latest = [...entries].reverse().find((e) => String(e?.entryType || '') === 'resource')
-    if (!latest) return null
-
-    // Prefer backend-injected stage info from `Server-Timing`.
-    const st = latest?.serverTiming
-    if (Array.isArray(st) && st.length > 0) {
-      let source = ''
-      let hitType = ''
-      let xEnc = ''
-      for (const item of st) {
-        const name = String(item?.name || '').trim()
-        const desc = String(item?.description || '').trim()
-        if (name === 'sns_source' && desc) source = desc
-        else if (name.startsWith('sns_source_')) source = name.slice('sns_source_'.length) || desc
-        else if (name === 'sns_hit' && desc) hitType = desc
-        else if (name.startsWith('sns_hit_')) hitType = name.slice('sns_hit_'.length) || desc
-        else if (name === 'sns_xenc' && desc) xEnc = desc
-        else if (name.startsWith('sns_xenc_')) xEnc = name.slice('sns_xenc_'.length) || desc
-      }
-      if (source) return { source, hitType, xEnc }
-    }
-
-    // When DevTools shows "(from disk cache)", browsers may not expose `serverTiming` at all.
-    // Best-effort: infer a browser cache hit from ResourceTiming sizes.
-    const transferSize = Number(latest?.transferSize)
-    if (Number.isFinite(transferSize) && transferSize === 0) {
-      return { source: 'browser-cache', hitType: 'transfer=0', xEnc: '' }
-    }
-
-    return null
-  } catch {
-    return null
-  }
-}
-
-const ensureSnsMediaStage = async (key, url) => {
-  if (!process.client) return
-  const k = String(key || '').trim()
-  const u = String(url || '').trim()
-  if (!k || !u) return
-  if (!isSnsMediaApiUrl(u)) return
-
-  const existingSource = String(snsMediaStage.value?.[k]?.source || '').trim()
-  if (existingSource && existingSource !== 'unknown') return
-  if (snsMediaStageLoading.value[k]) return
-  if (snsMediaStageInFlight.has(k)) return
-
-  snsMediaStageInFlight.add(k)
-  snsMediaStageLoading.value[k] = true
-
-  try {
-    // Prefer stage info from the *same* request that loaded the <img>/<video> element
-    // (via Server-Timing + Timing-Allow-Origin), to avoid a non-idempotent extra fetch.
-    let info = null
-    for (const delayMs of [0, 0, 16, 50, 120, 250, 500]) {
-      if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs))
-      info = readSnsStageFromResourceTiming(u)
-      if (info) break
-    }
-    snsMediaStage.value[k] = info || { source: 'unknown', hitType: '', xEnc: '' }
-  } finally {
-    snsMediaStageLoading.value[k] = false
-    snsMediaStageInFlight.delete(k)
-  }
-}
-
-const eventCurrentSrc = (ev) => {
-  try {
-    const el = ev?.target || ev?.currentTarget
-    return String(el?.currentSrc || el?.src || '').trim()
-  } catch {
-    return ''
-  }
-}
-
-const onSnsMediaLoaded = (post, m, idx = 0, ev) => {
-  const pid = String(post?.id || '').trim()
-  if (!pid) return
-  const key = snsMediaStageKey(pid, idx, 'thumb')
-  const u = eventCurrentSrc(ev) || getMediaThumbSrc(post, m, idx)
-  ensureSnsMediaStage(key, u)
-}
-
-const onCoverMediaLoaded = (cover, ev) => {
-  const c = cover || activeCover.value
-  if (!c || !Array.isArray(c.media) || c.media.length <= 0) return
-  const u = eventCurrentSrc(ev) || getSnsMediaUrl(c, c.media[0], 0, c.media[0].url)
-  ensureSnsMediaStage(snsCoverStageKey(c), u)
-}
-
-watch([selectedAccount, snsUseCache], () => {
-  snsMediaStage.value = {}
-  snsMediaStageLoading.value = {}
-  snsMediaStageInFlight.clear()
-})
 
 // Article card thumbnail is best-effort: try SNS media thumb first, then fall back to
 // extracting the cover from mp.weixin.qq.com HTML. Track per-post stage so we don't
@@ -1504,36 +1270,6 @@ const upgradeTencentHttps = (u) => {
   return raw
 }
 
-const normalizeHex32 = (value) => {
-  const raw = String(value ?? '').trim()
-  if (!raw) return ''
-  const hex = raw.replace(/[^0-9a-fA-F]/g, '').toLowerCase()
-  return hex.length >= 32 ? hex.slice(0, 32) : ''
-}
-
-const mediaSizeKey = (m) => {
-  const t = String(m?.type ?? '')
-  const w = String(m?.size?.width || m?.size?.w || '').trim()
-  const h = String(m?.size?.height || m?.size?.h || '').trim()
-  if (!w || !h) return ''
-  return `${t}:${w}x${h}`
-}
-
-// Our backend matches SNS cache images by width/height and then uses `idx` to
-// pick the N-th match. `idx` must be the index within the same size-group,
-// not the global media index in the post, otherwise images can shift.
-const mediaSizeGroupIndex = (post, m, idx) => {
-  const list = Array.isArray(post?.media) ? post.media : []
-  const key = mediaSizeKey(m)
-  const i0 = Number(idx) || 0
-  if (!key || i0 <= 0) return i0
-  let count = 0
-  for (let i = 0; i < i0; i++) {
-    if (mediaSizeKey(list[i]) === key) count++
-  }
-  return count
-}
-
 const getSnsMediaUrl = (post, m, idx, rawUrl) => {
   const raw = upgradeTencentHttps(String(rawUrl || '').trim())
   if (!raw) return ''
@@ -1550,36 +1286,12 @@ const getSnsMediaUrl = (post, m, idx, rawUrl) => {
       const host = new URL(raw).hostname.toLowerCase()
       if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn') || host.endsWith('.tc.qq.com')) {
         const acc = String(selectedAccount.value || '').trim()
-        const ct = String(post?.createTime || '').trim()
-        const w = String(m?.size?.width || m?.size?.w || '').trim()
-        const h = String(m?.size?.height || m?.size?.h || '').trim()
-        const ts = String(m?.size?.totalSize || m?.size?.total_size || m?.size?.total || '').trim()
-        const sizeIdx = mediaSizeGroupIndex(post, m, idx)
-        // const pick = getSnsMediaOverridePick(post?.id, idx)
-        let md5 = normalizeHex32(m?.urlAttrs?.md5 || m?.thumbAttrs?.md5 || m?.urlAttrs?.MD5 || m?.thumbAttrs?.MD5)
-        if (!md5) {
-          const match = /[?&]md5=([0-9a-fA-F]{16,32})/.exec(raw)
-          if (match?.[1]) md5 = normalizeHex32(match[1])
-        }
+        // Match WeFlow's image pipeline: use a stable URL + key/token and let the
+        // backend handle cache-first remote fetch/decrypt. Avoid attaching legacy
+        // local-match metadata to the main image path so browser caching can reuse
+        // the same request URL for list + preview.
         const parts = new URLSearchParams()
         if (acc) parts.set('account', acc)
-        if (ct) parts.set('create_time', ct)
-        if (w) parts.set('width', w)
-        if (h) parts.set('height', h)
-        if (/^\d+$/.test(ts)) parts.set('total_size', ts)
-        parts.set('idx', String(Number(sizeIdx) || 0))
-        const pid = String(post?.id || '').trim()
-        if (pid) parts.set('post_id', pid)
-
-        const mid = String(m?.id || '').trim()
-        if (mid) parts.set('media_id', mid)
-
-        const postType = String(post?.type || '1').trim()
-        if (postType) parts.set('post_type', postType)
-
-        const mediaType = String(m?.type || '2').trim()
-        if (mediaType) parts.set('media_type', mediaType)
-
         const token = String(m?.token || m?.urlAttrs?.token || m?.thumbAttrs?.token || '').trim()
         if (token) parts.set('token', token)
 
@@ -1589,10 +1301,8 @@ const getSnsMediaUrl = (post, m, idx, rawUrl) => {
         parts.set('use_cache', snsUseCache.value ? '1' : '0')
         // When cache is disabled, bust browser caching so backend really downloads+decrypts each time.
         if (!snsUseCache.value) parts.set('_t', String(Date.now()))
-
-        if (md5) parts.set('md5', md5)
-        // Bump this when changing backend matching logic to avoid stale cached wrong images.
-        parts.set('v', '9')
+        // Bump this when changing the WeFlow-aligned image pipeline to avoid stale browser caches.
+        parts.set('v', '10')
         parts.set('url', raw)
         return `${apiBase}/sns/media?${parts.toString()}`
       }
@@ -1607,7 +1317,9 @@ const getMediaThumbSrc = (post, m, idx = 0) => {
 }
 
 const getMediaPreviewSrc = (post, m, idx = 0) => {
-  return getSnsMediaUrl(post, m, idx, m?.url || m?.thumb)
+  // Align with WeFlow: preview reuses the same prepared image source as the grid
+  // instead of issuing a second "original image" request on click.
+  return getMediaThumbSrc(post, m, idx)
 }
 
 
@@ -1755,26 +1467,8 @@ const getLivePhotoVideoSrc = (post, m, idx = 0) => {
   return `${apiBase}/sns/video_remote?${parts.toString()}`
 }
 
-// 图片预览 + 候选匹配选择
+// 图片预览
 const previewCtx = ref(null) // { post, media, idx }
-const previewCandidatesOpen = ref(false)
-const previewCandidates = reactive({
-  loading: false,
-  loadingMore: false,
-  error: '',
-  items: [],
-  count: 0,
-  hasMore: false
-})
-
-const resetPreviewCandidates = () => {
-  previewCandidates.loading = false
-  previewCandidates.loadingMore = false
-  previewCandidates.error = ''
-  previewCandidates.items = []
-  previewCandidates.count = 0
-  previewCandidates.hasMore = false
-}
 
 const previewSrc = computed(() => {
   const ctx = previewCtx.value
@@ -1897,60 +1591,7 @@ watch(
   }
 )
 
-
-const loadPreviewCandidates = async ({ reset }) => {
-  const ctx = previewCtx.value
-  if (!ctx) return
-  const acc = String(selectedAccount.value || '').trim()
-  if (!acc) return
-
-  const toInt = (v) => Number.parseInt(String(v || '').trim(), 10) || 0
-  const w = toInt(ctx.media?.size?.width || ctx.media?.size?.w)
-  const h = toInt(ctx.media?.size?.height || ctx.media?.size?.h)
-
-  // Without dimensions, local matching is too noisy; keep it empty.
-  if (w <= 0 || h <= 0) {
-    resetPreviewCandidates()
-    return
-  }
-
-  const limit = 24
-  const offset = reset ? 0 : (previewCandidates.items?.length || 0)
-
-  if (reset) {
-    resetPreviewCandidates()
-    previewCandidates.loading = true
-  } else {
-    previewCandidates.loadingMore = true
-  }
-  previewCandidates.error = ''
-
-  try {
-    const resp = await api.listSnsMediaCandidates({
-      account: acc,
-      create_time: Number(ctx.post?.createTime || 0),
-      width: w,
-      height: h,
-      limit,
-      offset
-    })
-    const items = Array.isArray(resp?.items) ? resp.items : []
-    previewCandidates.count = Number(resp?.count || 0)
-    previewCandidates.hasMore = !!resp?.hasMore
-    if (reset) {
-      previewCandidates.items = items
-    } else {
-      previewCandidates.items = [...(previewCandidates.items || []), ...items]
-    }
-  } catch (e) {
-    previewCandidates.error = e?.message || '加载候选失败'
-  } finally {
-    previewCandidates.loading = false
-    previewCandidates.loadingMore = false
-  }
-}
-
-const openImagePreview = async (post, m, idx = 0) => {
+const openImagePreview = (post, m, idx = 0) => {
   if (!process.client) return
   resetPreviewVideo()
   // Stop any background hover-playing live photo when opening the preview.
@@ -1965,11 +1606,7 @@ const openImagePreview = async (post, m, idx = 0) => {
     }
   }
   previewCtx.value = { post, media: m, idx: Number(idx) || 0 }
-  previewCandidatesOpen.value = false
-  resetPreviewCandidates()
   document.body.style.overflow = 'hidden'
-  // Load the first page so we can show the candidate count in the header.
-  await loadPreviewCandidates({ reset: true })
 }
 
 const openVideoPreview = (post, m, idx = 0) => {
@@ -1987,8 +1624,6 @@ const openVideoPreview = (post, m, idx = 0) => {
   else previewVideoError.value = '视频地址缺失。'
 
   previewCtx.value = { post, media: m, idx: Number(idx) || 0 }
-  previewCandidatesOpen.value = false
-  resetPreviewCandidates()
   document.body.style.overflow = 'hidden'
 }
 
@@ -2021,8 +1656,6 @@ const onPreviewVideoError = () => {
 const closeImagePreview = () => {
   if (!process.client) return
   previewCtx.value = null
-  previewCandidatesOpen.value = false
-  resetPreviewCandidates()
   resetPreviewVideo()
   document.body.style.overflow = ''
 }
@@ -2038,7 +1671,7 @@ const onMediaClick = (post, m, idx = 0) => {
   }
 
   // 图片：打开预览
-  void openImagePreview(post, m, idx)
+  openImagePreview(post, m, idx)
 }
 
 const formatRelativeTime = (tsSeconds) => {

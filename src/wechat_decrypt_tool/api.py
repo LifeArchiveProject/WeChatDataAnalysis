@@ -35,7 +35,6 @@ from .routers.sns_export import router as _sns_export_router
 from .routers.wechat_detection import router as _wechat_detection_router
 from .routers.wrapped import router as _wrapped_router
 from .request_logging import log_server_errors_middleware
-from .sns_stage_timing import add_sns_stage_timing_headers
 from .wcdb_realtime import WCDB_REALTIME, shutdown as _wcdb_shutdown
 from .routers.biz import router as _biz_router
 from .routers.system import router as _system_router
@@ -56,29 +55,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-SNS-Source", "X-SNS-Hit-Type", "X-SNS-X-Enc"],
 )
-
-
-@app.middleware("http")
-async def _add_sns_stage_timing_headers(request: Request, call_next):
-    """Expose SNS stage metadata to the frontend without extra requests.
-
-    `<img>` elements can't read response headers, but browsers can surface `Server-Timing`
-    via `performance.getEntriesByName(...).serverTiming` when `Timing-Allow-Origin` is set.
-    """
-
-    response = await call_next(request)
-    try:
-        add_sns_stage_timing_headers(
-            response.headers,
-            source=str(response.headers.get("X-SNS-Source") or ""),
-            hit_type=str(response.headers.get("X-SNS-Hit-Type") or ""),
-            x_enc=str(response.headers.get("X-SNS-X-Enc") or ""),
-        )
-    except Exception:
-        pass
-    return response
 
 
 @app.middleware("http")

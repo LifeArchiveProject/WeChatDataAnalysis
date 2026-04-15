@@ -3,8 +3,10 @@ from __future__ import annotations
 """SNS (Moments) HTML export service (offline ZIP)."""
 
 import asyncio
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import lru_cache
 import hashlib
 import html
 import json
@@ -33,10 +35,6 @@ from .chat_export_service import (  # pylint: disable=protected-access
 
 # Reuse SNS timeline/local cache helpers.
 from .routers.sns import (  # pylint: disable=protected-access
-    _generate_sns_cache_key,
-    _resolve_sns_cached_image_path,
-    _resolve_sns_cached_image_path_by_cache_key,
-    _resolve_sns_cached_image_path_by_md5,
     _resolve_sns_cached_video_path,
     list_sns_timeline,
 )
@@ -54,6 +52,7 @@ ExportStatus = Literal["queued", "running", "done", "error", "cancelled"]
 ExportScope = Literal["selected", "all"]
 
 _INVALID_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_HEX_ONLY_RE = re.compile(r"[^0-9a-fA-F]+")
 
 
 def _safe_name(s: str, max_len: int = 80) -> str:
@@ -99,6 +98,289 @@ def _mime_to_ext(mt: str) -> str:
         "image/heic": ".heic",
         "image/heif": ".heif",
     }.get(m, ".bin")
+
+
+def _normalize_hex32(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    hex_only = _HEX_ONLY_RE.sub("", raw).lower()
+    return hex_only[:32] if len(hex_only) >= 32 else ""
+
+
+def _image_size_from_bytes(data: bytes, media_type: str) -> tuple[int, int]:
+    mt = str(media_type or "").lower()
+    if mt == "image/png":
+        if len(data) >= 24 and data.startswith(b"\x89PNG\r\n\x1a\n"):
+            try:
+                w = int.from_bytes(data[16:20], "big")
+                h = int.from_bytes(data[20:24], "big")
+                return w, h
+            except Exception:
+                return 0, 0
+        return 0, 0
+    if mt in {"image/jpeg", "image/jpg"}:
+        if len(data) < 4 or not data.startswith(b"\xFF\xD8"):
+            return 0, 0
+        i = 2
+        while i + 3 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            while i < len(data) and data[i] == 0xFF:
+                i += 1
+            if i >= len(data):
+                break
+            marker = data[i]
+            i += 1
+            if marker in (0xD8, 0xD9):
+                continue
+            if marker == 0xDA:
+                break
+            if i + 1 >= len(data):
+                break
+            seg_len = (data[i] << 8) + data[i + 1]
+            i += 2
+            if seg_len < 2:
+                break
+            if marker in {
+                0xC0,
+                0xC1,
+                0xC2,
+                0xC3,
+                0xC5,
+                0xC6,
+                0xC7,
+                0xC9,
+                0xCA,
+                0xCB,
+                0xCD,
+                0xCE,
+                0xCF,
+            }:
+                if i + 4 < len(data):
+                    try:
+                        h = (data[i + 1] << 8) + data[i + 2]
+                        w = (data[i + 3] << 8) + data[i + 4]
+                        return w, h
+                    except Exception:
+                        return 0, 0
+            i += seg_len - 2
+        return 0, 0
+    return 0, 0
+
+
+@lru_cache(maxsize=16)
+def _sns_img_roots(wxid_dir_str: str) -> tuple[str, ...]:
+    wxid_dir = Path(str(wxid_dir_str or "").strip())
+    cache_root = wxid_dir / "cache"
+    try:
+        month_dirs = [p for p in cache_root.iterdir() if p.is_dir()]
+    except Exception:
+        month_dirs = []
+
+    roots: list[str] = []
+    for mdir in month_dirs:
+        img_root = mdir / "Sns" / "Img"
+        try:
+            if img_root.exists() and img_root.is_dir():
+                roots.append(str(img_root))
+        except Exception:
+            continue
+    roots.sort()
+    return tuple(roots)
+
+
+@lru_cache(maxsize=16)
+def _sns_img_time_index(wxid_dir_str: str) -> tuple[list[float], list[str]]:
+    wxid_dir = Path(str(wxid_dir_str or "").strip())
+    out: list[tuple[float, str]] = []
+
+    cache_root = wxid_dir / "cache"
+    try:
+        month_dirs = [p for p in cache_root.iterdir() if p.is_dir()]
+    except Exception:
+        month_dirs = []
+
+    for mdir in month_dirs:
+        img_root = mdir / "Sns" / "Img"
+        try:
+            if not (img_root.exists() and img_root.is_dir()):
+                continue
+        except Exception:
+            continue
+        try:
+            for sub in img_root.iterdir():
+                if not sub.is_dir():
+                    continue
+                for f in sub.iterdir():
+                    try:
+                        if not f.is_file():
+                            continue
+                        st = f.stat()
+                        out.append((float(st.st_mtime), str(f)))
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+
+    out.sort(key=lambda x: x[0])
+    mtimes = [m for m, _p in out]
+    paths = [_p for _m, _p in out]
+    return mtimes, paths
+
+
+def _generate_sns_cache_key(tid: str, media_id: str, media_type: int = 2) -> str:
+    if not tid or not media_id:
+        return ""
+    raw_key = f"{tid}_{media_id}_{media_type}"
+    try:
+        return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+    except Exception:
+        return ""
+
+
+def _resolve_sns_cached_image_path_by_cache_key(
+    *,
+    wxid_dir: Path,
+    cache_key: str,
+    create_time: int,
+) -> Optional[str]:
+    key32 = _normalize_hex32(cache_key)
+    if not key32:
+        return None
+
+    sub = key32[:2]
+    rest = key32[2:]
+    roots = _sns_img_roots(str(wxid_dir))
+    if not roots:
+        return None
+
+    best: tuple[float, str] | None = None
+    for root_str in roots:
+        try:
+            p = Path(root_str) / sub / rest
+            if not (p.exists() and p.is_file()):
+                continue
+            st = p.stat()
+            score = abs(float(st.st_mtime) - float(create_time)) if create_time > 0 else -float(st.st_mtime)
+            if best is None or score < best[0]:
+                best = (score, str(p))
+        except Exception:
+            continue
+    return best[1] if best else None
+
+
+def _resolve_sns_cached_image_path_by_md5(
+    *,
+    wxid_dir: Path,
+    md5: str,
+    create_time: int,
+) -> Optional[str]:
+    md5_32 = _normalize_hex32(md5)
+    if not md5_32:
+        return None
+
+    sub = md5_32[:2]
+    rest = md5_32[2:]
+    roots = _sns_img_roots(str(wxid_dir))
+    if not roots:
+        return None
+
+    best: tuple[float, str] | None = None
+    for root_str in roots:
+        try:
+            p = Path(root_str) / sub / rest
+            if not (p.exists() and p.is_file()):
+                continue
+            st = p.stat()
+            score = abs(float(st.st_mtime) - float(create_time)) if create_time > 0 else -float(st.st_mtime)
+            if best is None or score < best[0]:
+                best = (score, str(p))
+        except Exception:
+            continue
+    return best[1] if best else None
+
+
+def _resolve_sns_cached_image_path(
+    *,
+    account_dir_str: str,
+    create_time: int,
+    width: int,
+    height: int,
+    idx: int,
+    total_size: int = 0,
+) -> Optional[str]:
+    total_size_i = int(total_size or 0)
+    must_match_size = width > 0 and height > 0
+    if (not must_match_size) and total_size_i <= 0:
+        return None
+
+    account_dir = Path(str(account_dir_str or "").strip())
+    if not account_dir.exists():
+        return None
+
+    wxid_dir = _resolve_account_wxid_dir(account_dir)
+    if not wxid_dir:
+        return None
+
+    mtimes, paths = _sns_img_time_index(str(wxid_dir))
+    if not mtimes:
+        return None
+
+    create_time_i = int(create_time or 0)
+    if create_time_i > 0:
+        window = 72 * 3600
+        lo = create_time_i - window
+        hi = create_time_i + window
+        l = bisect_left(mtimes, lo)
+        r = bisect_right(mtimes, hi)
+        if l >= r:
+            l = max(0, len(mtimes) - 800)
+            r = len(mtimes)
+    else:
+        l = max(0, len(mtimes) - 800)
+        r = len(mtimes)
+
+    candidates: list[tuple[float, str]] = []
+    for j in range(l, r):
+        try:
+            if create_time_i > 0:
+                candidates.append((abs(mtimes[j] - float(create_time_i)), paths[j]))
+            else:
+                candidates.append((-mtimes[j], paths[j]))
+        except Exception:
+            continue
+    candidates.sort(key=lambda x: x[0])
+
+    matched: list[tuple[int, float, str]] = []
+    for diff, pstr in candidates[:2000]:
+        try:
+            p = Path(pstr)
+            payload, media_type = _read_and_maybe_decrypt_media(p, account_dir)
+            if not payload or not str(media_type or "").startswith("image/"):
+                continue
+            if must_match_size:
+                w0, h0 = _image_size_from_bytes(payload, str(media_type or ""))
+                if (w0, h0) != (width, height):
+                    continue
+            size_diff = abs(len(payload) - total_size_i) if total_size_i > 0 else 0
+            matched.append((int(size_diff), float(diff), pstr))
+        except Exception:
+            continue
+
+    if not matched:
+        return None
+    if must_match_size:
+        matched.sort(key=lambda x: (x[0], x[1], x[2]))
+        if total_size_i > 0:
+            return matched[0][2]
+        idx0 = max(0, int(idx or 0))
+        return matched[idx0][2] if idx0 < len(matched) else None
+    if total_size_i > 0:
+        matched.sort(key=lambda x: (x[0], x[1], x[2]))
+        return matched[0][2]
+    return None
 
 
 def _format_dt(ts_seconds: Any) -> str:
