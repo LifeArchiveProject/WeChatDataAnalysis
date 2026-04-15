@@ -10,9 +10,9 @@ This module provides a pure-Python ISAAC-64 implementation so the backend can
 still attempt to generate a keystream when the WASM helper is unavailable.
 
 Notes:
-- Moments *image* decryption is handled via `wcdb_api.dll` (`wcdb_decrypt_sns_image`)
-  because "ISAAC-64 full-file XOR" is not reliably reproducible for images across
-  different versions/samples.
+- Production Moments image/video decryption should prefer the vendored
+  WxIsaac64/WASM path. This pure-Python implementation is only a fallback when
+  Node/WASM is unavailable.
 - This ISAAC-64 implementation may not perfectly match WxIsaac64; treat it as
   best-effort.
 """

@@ -43,6 +43,9 @@ include = [
     "src/wechat_decrypt_tool/native/VoipEngine.dll",
     "src/wechat_decrypt_tool/native/wcdb_api.dll",
     "src/wechat_decrypt_tool/native/WCDB.dll",
+    "src/wechat_decrypt_tool/native/weflow_wasm/weflow_wasm_keystream.js",
+    "src/wechat_decrypt_tool/native/weflow_wasm/wasm_video_decode.js",
+    "src/wechat_decrypt_tool/native/weflow_wasm/wasm_video_decode.wasm",
 ]
 
 [tool.uv]

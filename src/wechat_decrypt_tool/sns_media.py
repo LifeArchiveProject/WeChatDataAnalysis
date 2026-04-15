@@ -8,8 +8,8 @@ so it can be reused by:
 - Offline export (`sns_export_service.py`)
 
 Important notes (empirical, matches current repo behavior):
-- SNS images: prefer `wcdb_api.dll` export `wcdb_decrypt_sns_image` (black-box). Pure ISAAC64
-  keystream XOR is NOT reliable for images across versions.
+- SNS images: match WeFlow's Electron implementation by generating the WxIsaac64
+  keystream from WASM and XORing the full payload in-memory.
 - SNS videos: encrypted only for the first 128KB; decrypt via WeFlow's WxIsaac64 (WASM keystream)
   and XOR in-place.
 """
@@ -31,9 +31,11 @@ import httpx
 from fastapi import HTTPException
 
 from .logging_config import get_logger
-from .wcdb_realtime import decrypt_sns_image as _wcdb_decrypt_sns_image
 
 logger = get_logger(__name__)
+_PACKAGE_DIR = Path(__file__).resolve().parent
+_NATIVE_DIR = _PACKAGE_DIR / "native"
+_WEFLOW_WASM_DIR = _NATIVE_DIR / "weflow_wasm"
 
 
 def is_allowed_sns_media_host(host: str) -> bool:
@@ -96,11 +98,16 @@ def _detect_mp4_ftyp(head: bytes) -> bool:
 
 @lru_cache(maxsize=1)
 def _weflow_wxisaac64_script_path() -> str:
-    """Locate the Node helper that wraps WeFlow's wasm_video_decode.* assets."""
-    repo_root = Path(__file__).resolve().parents[2]
-    script = repo_root / "tools" / "weflow_wasm_keystream.js"
-    if script.exists() and script.is_file():
-        return str(script)
+    """Locate the bundled Node helper that wraps the vendored wasm_video_decode.* assets."""
+    bundled = _WEFLOW_WASM_DIR / "weflow_wasm_keystream.js"
+    if bundled.exists() and bundled.is_file():
+        return str(bundled)
+
+    # Development fallback: allow the repo-level helper to proxy into the vendored assets.
+    repo_root = _PACKAGE_DIR.parents[1]
+    legacy = repo_root / "tools" / "weflow_wasm_keystream.js"
+    if legacy.exists() and legacy.is_file():
+        return str(legacy)
     return ""
 
 
@@ -416,6 +423,24 @@ def detect_image_mime(data: bytes) -> str:
     return ""
 
 
+def weflow_decrypt_sns_image_bytes(payload: bytes, key: str) -> bytes:
+    """Decrypt a Moments image with the same full-file XOR flow that WeFlow uses."""
+    raw = bytes(payload or b"")
+    key_text = str(key or "").strip()
+    if not raw or not key_text:
+        return raw
+
+    ks = weflow_wxisaac64_keystream(key_text, len(raw))
+    if not ks:
+        return raw
+
+    out = bytearray(raw)
+    n = min(len(out), len(ks))
+    for i in range(n):
+        out[i] ^= ks[i]
+    return bytes(out)
+
+
 _SNS_REMOTE_CACHE_EXTS = [
     ".jpg",
     ".jpeg",
@@ -558,7 +583,7 @@ async def try_fetch_and_decrypt_sns_image_remote(
     token: str,
     use_cache: bool,
 ) -> Optional[SnsRemoteImageResult]:
-    """Try WeFlow-style: download from CDN -> decrypt via wcdb_decrypt_sns_image -> return bytes.
+    """Try WeFlow-style: download from CDN -> WxIsaac64 full-file XOR -> return bytes.
 
     Returns a SnsRemoteImageResult on success, or None on failure so caller can fall back to
     local cache matching logic.
@@ -652,7 +677,7 @@ async def try_fetch_and_decrypt_sns_image_remote(
 
     if need_decrypt:
         try:
-            decoded2 = _wcdb_decrypt_sns_image(raw, k)
+            decoded2 = weflow_decrypt_sns_image_bytes(raw, k)
             mt2 = detect_image_mime(decoded2)
             if mt2:
                 decoded = decoded2
