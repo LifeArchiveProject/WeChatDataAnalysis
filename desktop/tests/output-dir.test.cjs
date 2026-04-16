@@ -5,6 +5,7 @@ const os = require("os");
 const path = require("path");
 
 const {
+  cleanupOutputDirectoryBackup,
   getDefaultOutputDirPath,
   getEffectiveOutputDirPath,
   migrateOutputDirectory,
@@ -55,14 +56,14 @@ test("getEffectiveOutputDirPath prefers env, then settings, then default", () =>
   }
 });
 
-test("migrateOutputDirectory switches empty source to a new directory", () => {
+test("migrateOutputDirectory switches empty source to a new directory", async () => {
   const root = makeTempDir();
   const currentDir = path.join(root, "current-output");
   const nextDir = path.join(root, "custom-output");
 
   try {
     fs.mkdirSync(currentDir, { recursive: true });
-    const result = migrateOutputDirectory({ currentDir, nextDir });
+    const result = await migrateOutputDirectory({ currentDir, nextDir });
     assert.equal(result.changed, true);
     assert.equal(result.sourceWasEmpty, true);
     assert.equal(result.backupDir, "");
@@ -73,7 +74,7 @@ test("migrateOutputDirectory switches empty source to a new directory", () => {
   }
 });
 
-test("migrateOutputDirectory blocks non-empty targets", () => {
+test("migrateOutputDirectory blocks non-empty targets", async () => {
   const root = makeTempDir();
   const currentDir = path.join(root, "current-output");
   const nextDir = path.join(root, "custom-output");
@@ -84,8 +85,8 @@ test("migrateOutputDirectory blocks non-empty targets", () => {
     fs.mkdirSync(nextDir, { recursive: true });
     fs.writeFileSync(path.join(nextDir, "existing.txt"), "occupied");
 
-    assert.throws(
-      () => migrateOutputDirectory({ currentDir, nextDir }),
+    await assert.rejects(
+      migrateOutputDirectory({ currentDir, nextDir }),
       /已有内容/
     );
   } finally {
@@ -93,15 +94,15 @@ test("migrateOutputDirectory blocks non-empty targets", () => {
   }
 });
 
-test("migrateOutputDirectory blocks invalid current paths", () => {
+test("migrateOutputDirectory blocks invalid current paths", async () => {
   const root = makeTempDir();
   const currentDir = path.join(root, "current-output");
   const nextDir = path.join(root, "custom-output");
 
   try {
     fs.writeFileSync(currentDir, "not-a-directory");
-    assert.throws(
-      () => migrateOutputDirectory({ currentDir, nextDir }),
+    await assert.rejects(
+      migrateOutputDirectory({ currentDir, nextDir }),
       /不是目录/
     );
   } finally {
@@ -109,7 +110,7 @@ test("migrateOutputDirectory blocks invalid current paths", () => {
   }
 });
 
-test("migrateOutputDirectory copies data and leaves the old directory as a backup", () => {
+test("migrateOutputDirectory copies data and leaves the old directory as a backup", async () => {
   const root = makeTempDir();
   const currentDir = path.join(root, "current-output");
   const nextDir = path.join(root, "custom-output");
@@ -120,7 +121,13 @@ test("migrateOutputDirectory copies data and leaves the old directory as a backu
     fs.writeFileSync(path.join(currentDir, "databases", "wxid_test", "session.db"), "session");
     fs.writeFileSync(path.join(currentDir, "databases", "wxid_test", "contact.db"), "contact");
 
-    const result = migrateOutputDirectory({ currentDir, nextDir, now: new Date("2026-03-30T08:00:00Z") });
+    const progressEvents = [];
+    const result = await migrateOutputDirectory({
+      currentDir,
+      nextDir,
+      now: new Date("2026-03-30T08:00:00Z"),
+      onProgress: (progress) => progressEvents.push(progress),
+    });
     assert.equal(result.changed, true);
     assert.equal(result.sourceWasEmpty, false);
     assert.match(path.basename(result.backupDir), /^current-output\.backup-\d{14}$/);
@@ -129,6 +136,9 @@ test("migrateOutputDirectory copies data and leaves the old directory as a backu
     assert.ok(fs.existsSync(path.join(nextDir, "databases", "wxid_test", "session.db")));
     assert.ok(fs.existsSync(result.backupDir));
     assert.equal(fs.existsSync(currentDir), false);
+    assert.ok(progressEvents.some((event) => event.stage === "scanning"));
+    assert.ok(progressEvents.some((event) => event.stage === "copying" && event.percent > 0));
+    assert.ok(progressEvents.some((event) => event.stage === "complete" && event.percent === 100));
   } finally {
     cleanupDir(root);
   }
@@ -155,6 +165,21 @@ test("rollbackOutputDirectoryChange restores the previous directory", () => {
 
     assert.equal(fs.existsSync(currentDir), false);
     assert.ok(fs.existsSync(path.join(previousDir, "databases", "session.db")));
+    assert.equal(fs.existsSync(backupDir), false);
+  } finally {
+    cleanupDir(root);
+  }
+});
+
+test("cleanupOutputDirectoryBackup removes a completed migration backup directory", () => {
+  const root = makeTempDir();
+  const backupDir = path.join(root, "current-output.backup-20260330080100");
+
+  try {
+    fs.mkdirSync(path.join(backupDir, "databases"), { recursive: true });
+    fs.writeFileSync(path.join(backupDir, "databases", "session.db"), "restored");
+
+    assert.equal(cleanupOutputDirectoryBackup(backupDir), true);
     assert.equal(fs.existsSync(backupDir), false);
   } finally {
     cleanupDir(root);
