@@ -22,12 +22,12 @@ const fs = require("fs");
 const http = require("http");
 const net = require("net");
 const path = require("path");
+const { Worker } = require("worker_threads");
 const {
+  cleanupOutputDirectoryBackup,
   getDefaultOutputDirPath,
   getEffectiveOutputDirPath,
-  migrateOutputDirectory,
   normalizeDirectoryPath,
-  rollbackOutputDirectoryChange,
 } = require("./output-dir.cjs");
 
 const DEFAULT_BACKEND_HOST = String(process.env.WECHAT_TOOL_HOST || "127.0.0.1").trim() || "127.0.0.1";
@@ -45,6 +45,7 @@ let isQuitting = false;
 let desktopSettings = null;
 let backendPortChangeInProgress = false;
 let outputDirChangeInProgress = false;
+let outputDirChangeProgressState = null;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -279,7 +280,9 @@ function resolveOutputDir() {
   if (!dataDir) return null;
 
   const envOutputDir = safeNormalizeDirectory(process.env.WECHAT_TOOL_OUTPUT_DIR || "");
-  const settingsOutputDir = app.isPackaged ? safeNormalizeDirectory(loadDesktopSettings()?.outputDir || "") : "";
+  // Allow dev-mode desktop runs to persist the chosen output directory too.
+  // An explicit environment variable still wins so local launch overrides keep working.
+  const settingsOutputDir = safeNormalizeDirectory(loadDesktopSettings()?.outputDir || "");
 
   let chosen = null;
   try {
@@ -705,6 +708,7 @@ function getOutputDirInfo() {
   const defaultPath = getDefaultOutputDir() || "";
   const currentPath = resolveOutputDir() || defaultPath;
   const hasPending = desktopSettings.pendingOutputDir !== null;
+  const canChange = !!defaultPath && !!currentPath;
   const pendingPath =
     desktopSettings.pendingOutputDir === null
       ? ""
@@ -718,8 +722,8 @@ function getOutputDirInfo() {
     pendingPath,
     hasPending,
     lastError: String(desktopSettings.lastOutputDirError || "").trim(),
-    canChange: !!app.isPackaged,
-    changeUnavailableReason: app.isPackaged ? "" : "开发模式不支持界面修改 output 目录",
+    canChange,
+    changeUnavailableReason: canChange ? "" : "无法定位 output 目录",
   };
 }
 
@@ -749,10 +753,6 @@ function setIgnoredUpdateVersion(version) {
 }
 
 async function applyOutputDirChange(nextValue) {
-  if (!app.isPackaged) {
-    throw new Error("开发模式不支持界面修改 output 目录");
-  }
-
   const defaultPath = getDefaultOutputDir();
   const currentPath = resolveOutputDir();
   if (!defaultPath || !currentPath) {
@@ -785,15 +785,41 @@ async function applyOutputDirChange(nextValue) {
   const wasBackendRunning = !!backendProc;
   let migration = null;
   let settingsSwitched = false;
+  let retainedBackupPath = "";
+  let backupCleanupWarning = "";
 
   try {
+    setOutputDirChangeProgressState({
+      active: true,
+      stage: "preparing",
+      message: wasBackendRunning ? "正在暂停后端并准备迁移 output 目录" : "正在准备迁移 output 目录",
+      percent: 1,
+    });
+
     if (wasBackendRunning) {
       await stopBackendAndWait({ timeoutMs: 10_000 });
     }
 
-    migration = migrateOutputDirectory({
-      currentDir: currentPath,
-      nextDir: nextPath,
+    migration = await runOutputDirWorker(
+      "migrate",
+      {
+        currentDir: currentPath,
+        nextDir: nextPath,
+      },
+      (progress) => {
+        setOutputDirChangeProgressState({
+          active: true,
+          ...progress,
+        });
+      }
+    );
+
+    setOutputDirChangeProgressState({
+      active: true,
+      stage: "switching",
+      message: "正在应用新的 output 目录设置",
+      percent: 99,
+      currentFile: "",
     });
 
     setOutputDirSetting(nextPath);
@@ -803,11 +829,38 @@ async function applyOutputDirChange(nextValue) {
     ensureOutputLink();
 
     if (wasBackendRunning) {
+      setOutputDirChangeProgressState({
+        active: true,
+        stage: "restarting",
+        message: "正在重启后端并应用新的 output 目录",
+        percent: 99,
+      });
       startBackend();
       await waitForBackend({ timeoutMs: 30_000 });
     }
 
+    retainedBackupPath = migration?.backupDir || "";
+    if (retainedBackupPath) {
+      try {
+        cleanupOutputDirectoryBackup(retainedBackupPath);
+        retainedBackupPath = "";
+      } catch (cleanupErr) {
+        backupCleanupWarning = `；旧 output 目录未能自动删除：${cleanupErr?.message || cleanupErr}`;
+        logMain(
+          `[main] failed to clean output dir backup ${retainedBackupPath}: ${cleanupErr?.message || cleanupErr}`
+        );
+      }
+    }
+
+    setOutputDirChangeProgressState({
+      active: true,
+      stage: "complete",
+      message: migration?.sourceWasEmpty ? "output 目录已切换" : "output 目录已迁移并切换",
+      percent: 100,
+    });
     const info = getOutputDirInfo();
+    const successMessage =
+      (migration?.sourceWasEmpty ? "output 目录已切换" : "output 目录已迁移并切换") + backupCleanupWarning;
     return {
       success: true,
       changed: true,
@@ -815,16 +868,22 @@ async function applyOutputDirChange(nextValue) {
       defaultPath: info.defaultPath,
       isDefault: info.isDefault,
       pendingPath: info.pendingPath,
-      backupPath: migration?.backupDir || "",
+      backupPath: retainedBackupPath,
       sourceWasEmpty: !!migration?.sourceWasEmpty,
-      message: migration?.sourceWasEmpty ? "output 目录已切换" : "output 目录已迁移并切换",
+      message: successMessage,
     };
   } catch (err) {
     const message = err?.message || String(err);
     let rollbackMessage = "";
     if (migration?.changed) {
       try {
-        rollbackOutputDirectoryChange({
+        setOutputDirChangeProgressState({
+          active: true,
+          stage: "rolling-back",
+          message: "迁移失败，正在回滚 output 目录",
+          percent: 99,
+        });
+        await runOutputDirWorker("rollback", {
           previousDir: currentPath,
           currentDir: nextPath,
           backupDir: migration.backupDir,
@@ -967,6 +1026,119 @@ function setWindowProgressBar(value) {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.setProgressBar(value);
   } catch {}
+}
+
+function makeIdleOutputDirChangeProgressState() {
+  return {
+    active: false,
+    stage: "idle",
+    message: "",
+    percent: 0,
+    bytesTransferred: 0,
+    bytesTotal: 0,
+    itemsTransferred: 0,
+    itemsTotal: 0,
+    currentFile: "",
+    error: "",
+  };
+}
+
+function clampOutputDirProgressNumber(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
+function normalizeOutputDirChangeProgressState(next = {}) {
+  const active = next?.active !== false;
+  const percent = Math.max(0, Math.min(100, Math.round(Number(next?.percent || 0))));
+  return {
+    active,
+    stage: String(next?.stage || (active ? "running" : "idle")),
+    message: String(next?.message || ""),
+    percent,
+    bytesTransferred: clampOutputDirProgressNumber(next?.bytesTransferred),
+    bytesTotal: clampOutputDirProgressNumber(next?.bytesTotal),
+    itemsTransferred: clampOutputDirProgressNumber(next?.itemsTransferred),
+    itemsTotal: clampOutputDirProgressNumber(next?.itemsTotal),
+    currentFile: String(next?.currentFile || ""),
+    error: String(next?.error || ""),
+  };
+}
+
+function getOutputDirChangeProgressState() {
+  if (!outputDirChangeProgressState) {
+    outputDirChangeProgressState = makeIdleOutputDirChangeProgressState();
+  }
+  return outputDirChangeProgressState;
+}
+
+function setOutputDirChangeProgressState(next = {}) {
+  outputDirChangeProgressState = normalizeOutputDirChangeProgressState(next);
+  sendToRenderer("app:outputDirChangeProgress", outputDirChangeProgressState);
+
+  if (!outputDirChangeProgressState.active) {
+    setWindowProgressBar(-1);
+    return outputDirChangeProgressState;
+  }
+
+  const ratio =
+    outputDirChangeProgressState.percent > 0
+      ? Math.max(0.02, Math.min(1, outputDirChangeProgressState.percent / 100))
+      : 2;
+  setWindowProgressBar(ratio);
+  return outputDirChangeProgressState;
+}
+
+function clearOutputDirChangeProgressState() {
+  return setOutputDirChangeProgressState({ active: false });
+}
+
+function getOutputDirWorkerScriptPath() {
+  return path.join(__dirname, "output-dir-worker.cjs");
+}
+
+function runOutputDirWorker(action, payload, onProgress) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(getOutputDirWorkerScriptPath(), {
+      workerData: {
+        action: String(action || "migrate"),
+        payload,
+      },
+    });
+
+    let settled = false;
+    const finish = (err, result) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err);
+      else resolve(result);
+    };
+
+    worker.on("message", (message) => {
+      if (!message || typeof message !== "object") return;
+      if (message.type === "progress") {
+        if (typeof onProgress === "function") onProgress(message.progress || {});
+        return;
+      }
+      if (message.type === "result") {
+        finish(null, message.result);
+        return;
+      }
+      if (message.type === "error") {
+        finish(new Error(message.error?.message || "output 目录迁移失败"));
+      }
+    });
+
+    worker.once("error", (err) => {
+      finish(err);
+    });
+
+    worker.once("exit", (code) => {
+      if (settled || code === 0) return;
+      finish(new Error(`output 目录任务异常退出（code=${code}）`));
+    });
+  });
 }
 
 function looksLikeHtml(input) {
@@ -1611,14 +1783,21 @@ function startBackend() {
   if (backendProc) return backendProc;
   startWcdbSidecar();
 
+  const resolvedDataPath = resolveDataDir() || getUserDataDir() || repoRoot();
+  const resolvedOutputPath = resolveOutputDir() || getDefaultOutputDir() || path.join(resolvedDataPath, "output");
   const env = {
     ...process.env,
     WECHAT_TOOL_HOST: getBackendBindHost(),
     WECHAT_TOOL_PORT: String(getBackendPort()),
+    WECHAT_TOOL_DATA_DIR: resolvedDataPath,
+    WECHAT_TOOL_OUTPUT_DIR: resolvedOutputPath,
     // Make sure Python prints UTF-8 to stdout/stderr.
     PYTHONIOENCODING: process.env.PYTHONIOENCODING || "utf-8",
   };
   ensureWcdbSidecarEnv(env);
+  logMain(
+    `[main] startBackend packaged=${app.isPackaged} port=${env.WECHAT_TOOL_PORT} dataDir=${env.WECHAT_TOOL_DATA_DIR} outputDir=${env.WECHAT_TOOL_OUTPUT_DIR}`
+  );
 
   // In packaged mode we expect to provide the generated Nuxt output dir via env.
   if (app.isPackaged && !env.WECHAT_TOOL_UI_DIR) {
@@ -1626,8 +1805,6 @@ function startBackend() {
   }
 
   if (app.isPackaged) {
-    env.WECHAT_TOOL_DATA_DIR = resolveDataDir() || app.getPath("userData");
-    env.WECHAT_TOOL_OUTPUT_DIR = resolveOutputDir() || getDefaultOutputDir() || path.join(env.WECHAT_TOOL_DATA_DIR, "output");
     try {
       fs.mkdirSync(env.WECHAT_TOOL_DATA_DIR, { recursive: true });
       fs.mkdirSync(env.WECHAT_TOOL_OUTPUT_DIR, { recursive: true });
@@ -2156,14 +2333,18 @@ function registerWindowIpc() {
         pendingPath: "",
         hasPending: false,
         lastError: err?.message || String(err),
-        canChange: !!app.isPackaged,
-        changeUnavailableReason: app.isPackaged ? "" : "开发模式不支持界面修改 output 目录",
+        canChange: false,
+        changeUnavailableReason: "无法读取 output 目录信息",
       };
     }
   });
 
   ipcMain.handle("app:getOutputDir", () => {
     return resolveOutputDir() || "";
+  });
+
+  ipcMain.handle("app:getOutputDirChangeProgress", () => {
+    return getOutputDirChangeProgressState();
   });
 
   ipcMain.handle("app:openOutputDir", async () => {
@@ -2202,6 +2383,7 @@ function registerWindowIpc() {
       };
     } finally {
       outputDirChangeInProgress = false;
+      clearOutputDirChangeProgressState();
     }
   });
 

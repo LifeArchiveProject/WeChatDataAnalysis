@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { pipeline } = require("stream/promises");
 
 const SENTINEL_NAMES = [
   "account_keys.json",
@@ -9,6 +10,17 @@ const SENTINEL_NAMES = [
   "exports",
   "logs",
 ];
+
+const PROGRESS_STAGE_MESSAGES = {
+  preparing: "正在准备迁移 output 目录",
+  scanning: "正在扫描 output 目录",
+  copying: "正在复制 output 数据",
+  verifying: "正在校验已复制的数据",
+  switching: "正在切换 output 目录",
+  "rolling-back": "迁移失败，正在回滚 output 目录",
+  restarting: "正在重启后端并应用新的 output 目录",
+  complete: "output 目录迁移完成",
+};
 
 function normalizeDirectoryPath(value) {
   const text = String(value || "").trim();
@@ -136,7 +148,233 @@ function ensureTargetIsUsable(targetDir) {
   }
 }
 
-function migrateOutputDirectory({ currentDir, nextDir, now = new Date() }) {
+function clampNonNegativeNumber(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
+function computeProgressPercent(stage, bytesTransferred, bytesTotal, itemsTransferred, itemsTotal) {
+  if (stage === "preparing") return 1;
+  if (stage === "scanning") return 2;
+  if (stage === "verifying") return 96;
+  if (stage === "switching") return 99;
+  if (stage === "complete") return 100;
+
+  if (stage === "copying") {
+    const ratio =
+      bytesTotal > 0
+        ? Math.min(1, bytesTransferred / bytesTotal)
+        : itemsTotal > 0
+          ? Math.min(1, itemsTransferred / itemsTotal)
+          : 1;
+    return Math.max(5, Math.min(94, Math.round(5 + ratio * 89)));
+  }
+
+  return 0;
+}
+
+function buildProgressSnapshot({
+  stage = "preparing",
+  bytesTransferred = 0,
+  bytesTotal = 0,
+  itemsTransferred = 0,
+  itemsTotal = 0,
+  currentFile = "",
+}) {
+  const normalizedStage = String(stage || "preparing");
+  const safeBytesTransferred = clampNonNegativeNumber(bytesTransferred);
+  const safeBytesTotal = clampNonNegativeNumber(bytesTotal);
+  const safeItemsTransferred = clampNonNegativeNumber(itemsTransferred);
+  const safeItemsTotal = clampNonNegativeNumber(itemsTotal);
+  return {
+    stage: normalizedStage,
+    message: PROGRESS_STAGE_MESSAGES[normalizedStage] || "正在迁移 output 目录",
+    percent: computeProgressPercent(
+      normalizedStage,
+      safeBytesTransferred,
+      safeBytesTotal,
+      safeItemsTransferred,
+      safeItemsTotal
+    ),
+    bytesTransferred: safeBytesTransferred,
+    bytesTotal: safeBytesTotal,
+    itemsTransferred: safeItemsTransferred,
+    itemsTotal: safeItemsTotal,
+    currentFile: String(currentFile || ""),
+  };
+}
+
+function emitProgress(onProgress, payload) {
+  if (typeof onProgress !== "function") return;
+  onProgress(buildProgressSnapshot(payload));
+}
+
+function sortDirectoryEntries(entries) {
+  return entries.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+}
+
+function depthOfRelativePath(relativePath) {
+  const text = String(relativePath || "").trim();
+  if (!text) return 0;
+  return text.split(path.sep).length;
+}
+
+function collectCopyManifest(sourceDir) {
+  const directories = [];
+  const files = [];
+  let totalBytes = 0;
+  const stack = [""];
+
+  while (stack.length > 0) {
+    const relativeDir = stack.pop();
+    const absoluteDir = relativeDir ? path.join(sourceDir, relativeDir) : sourceDir;
+    const dirEntries = sortDirectoryEntries(fs.readdirSync(absoluteDir, { withFileTypes: true }));
+
+    for (const dirent of dirEntries) {
+      const relativePath = relativeDir ? path.join(relativeDir, dirent.name) : dirent.name;
+      const absolutePath = path.join(sourceDir, relativePath);
+      const stat = fs.lstatSync(absolutePath);
+
+      if (dirent.isDirectory()) {
+        directories.push({
+          relativePath,
+          mode: stat.mode,
+          atime: stat.atime,
+          mtime: stat.mtime,
+        });
+        stack.push(relativePath);
+        continue;
+      }
+
+      if (dirent.isFile()) {
+        files.push({
+          relativePath,
+          size: stat.size,
+          mode: stat.mode,
+          atime: stat.atime,
+          mtime: stat.mtime,
+        });
+        totalBytes += stat.size;
+        continue;
+      }
+
+      if (dirent.isSymbolicLink()) {
+        throw new Error(`output 目录包含不支持的符号链接：${relativePath}`);
+      }
+
+      throw new Error(`output 目录包含不支持的文件类型：${relativePath}`);
+    }
+  }
+
+  directories.sort((a, b) => depthOfRelativePath(a.relativePath) - depthOfRelativePath(b.relativePath));
+
+  return {
+    directories,
+    files,
+    totalBytes,
+    totalItems: directories.length + files.length,
+  };
+}
+
+function applyStatMetadata(targetPath, statLike) {
+  try {
+    if (Number.isInteger(statLike?.mode)) {
+      fs.chmodSync(targetPath, statLike.mode);
+    }
+  } catch {}
+
+  try {
+    if (statLike?.atime && statLike?.mtime) {
+      fs.utimesSync(targetPath, statLike.atime, statLike.mtime);
+    }
+  } catch {}
+}
+
+async function copyFileWithProgress({ sourcePath, targetPath, mode, onChunk }) {
+  await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+
+  const readStream = fs.createReadStream(sourcePath);
+  readStream.on("data", (chunk) => {
+    if (typeof onChunk === "function") onChunk(chunk.length);
+  });
+
+  const writeStream = fs.createWriteStream(targetPath, {
+    flags: "w",
+    mode: Number.isInteger(mode) ? mode : undefined,
+  });
+
+  await pipeline(readStream, writeStream);
+}
+
+async function copyOutputTree({ sourceDir, targetDir, manifest, onProgress }) {
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  let bytesTransferred = 0;
+  let itemsTransferred = 0;
+
+  emitProgress(onProgress, {
+    stage: "copying",
+    bytesTransferred,
+    bytesTotal: manifest.totalBytes,
+    itemsTransferred,
+    itemsTotal: manifest.totalItems,
+  });
+
+  for (const dirEntry of manifest.directories) {
+    const targetPath = path.join(targetDir, dirEntry.relativePath);
+    fs.mkdirSync(targetPath, { recursive: true });
+    itemsTransferred += 1;
+    emitProgress(onProgress, {
+      stage: "copying",
+      bytesTransferred,
+      bytesTotal: manifest.totalBytes,
+      itemsTransferred,
+      itemsTotal: manifest.totalItems,
+      currentFile: dirEntry.relativePath,
+    });
+  }
+
+  for (const fileEntry of manifest.files) {
+    const sourcePath = path.join(sourceDir, fileEntry.relativePath);
+    const targetPath = path.join(targetDir, fileEntry.relativePath);
+
+    await copyFileWithProgress({
+      sourcePath,
+      targetPath,
+      mode: fileEntry.mode,
+      onChunk: (delta) => {
+        bytesTransferred += clampNonNegativeNumber(delta);
+        emitProgress(onProgress, {
+          stage: "copying",
+          bytesTransferred,
+          bytesTotal: manifest.totalBytes,
+          itemsTransferred,
+          itemsTotal: manifest.totalItems,
+          currentFile: fileEntry.relativePath,
+        });
+      },
+    });
+
+    applyStatMetadata(targetPath, fileEntry);
+    itemsTransferred += 1;
+    emitProgress(onProgress, {
+      stage: "copying",
+      bytesTransferred,
+      bytesTotal: manifest.totalBytes,
+      itemsTransferred,
+      itemsTotal: manifest.totalItems,
+      currentFile: fileEntry.relativePath,
+    });
+  }
+
+  for (let i = manifest.directories.length - 1; i >= 0; i -= 1) {
+    const dirEntry = manifest.directories[i];
+    applyStatMetadata(path.join(targetDir, dirEntry.relativePath), dirEntry);
+  }
+}
+
+async function migrateOutputDirectory({ currentDir, nextDir, now = new Date(), onProgress } = {}) {
   const currentPath = normalizeDirectoryPath(currentDir);
   const targetPath = normalizeDirectoryPath(nextDir);
   if (!currentPath || !targetPath) {
@@ -155,15 +393,19 @@ function migrateOutputDirectory({ currentDir, nextDir, now = new Date() }) {
     throw new Error("新旧 output 路径不能互相包含");
   }
 
+  emitProgress(onProgress, { stage: "scanning" });
   ensureTargetIsUsable(targetPath);
 
   const sourceExists = pathExists(currentPath);
   if (sourceExists && !isDirectory(currentPath)) {
     throw new Error("当前 output 路径不是目录");
   }
+
   const sourceWasEmpty = !sourceExists || !hasDirectoryContents(currentPath);
   if (sourceWasEmpty) {
+    emitProgress(onProgress, { stage: "switching" });
     fs.mkdirSync(targetPath, { recursive: true });
+    emitProgress(onProgress, { stage: "complete", itemsTransferred: 1, itemsTotal: 1 });
     return {
       changed: true,
       currentDir: currentPath,
@@ -173,18 +415,34 @@ function migrateOutputDirectory({ currentDir, nextDir, now = new Date() }) {
     };
   }
 
+  const manifest = collectCopyManifest(currentPath);
   const tempTarget = makeUniqueSiblingPath(targetPath, "migrating", now);
   const backupDir = makeUniqueSiblingPath(currentPath, "backup", now);
 
-  fs.cpSync(currentPath, tempTarget, {
-    recursive: true,
-    force: false,
-    errorOnExist: true,
-    preserveTimestamps: true,
-  });
-
   try {
+    await copyOutputTree({
+      sourceDir: currentPath,
+      targetDir: tempTarget,
+      manifest,
+      onProgress,
+    });
+
+    emitProgress(onProgress, {
+      stage: "verifying",
+      bytesTransferred: manifest.totalBytes,
+      bytesTotal: manifest.totalBytes,
+      itemsTransferred: manifest.totalItems,
+      itemsTotal: manifest.totalItems,
+    });
     verifyCopiedOutputTree(currentPath, tempTarget);
+
+    emitProgress(onProgress, {
+      stage: "switching",
+      bytesTransferred: manifest.totalBytes,
+      bytesTotal: manifest.totalBytes,
+      itemsTransferred: manifest.totalItems,
+      itemsTotal: manifest.totalItems,
+    });
     if (pathExists(targetPath)) {
       fs.rmSync(targetPath, { recursive: true, force: true });
     }
@@ -209,6 +467,13 @@ function migrateOutputDirectory({ currentDir, nextDir, now = new Date() }) {
     throw err;
   }
 
+  emitProgress(onProgress, {
+    stage: "complete",
+    bytesTransferred: manifest.totalBytes,
+    bytesTotal: manifest.totalBytes,
+    itemsTransferred: manifest.totalItems,
+    itemsTotal: manifest.totalItems,
+  });
   return {
     changed: true,
     currentDir: currentPath,
@@ -242,7 +507,15 @@ function rollbackOutputDirectoryChange({ previousDir, currentDir, backupDir, sou
   } catch {}
 }
 
+function cleanupOutputDirectoryBackup(backupDir) {
+  const backupPath = normalizeDirectoryPath(backupDir);
+  if (!backupPath || !pathExists(backupPath)) return false;
+  fs.rmSync(backupPath, { recursive: true, force: true });
+  return !pathExists(backupPath);
+}
+
 module.exports = {
+  cleanupOutputDirectoryBackup,
   getDefaultOutputDirPath,
   getEffectiveOutputDirPath,
   hasDirectoryContents,

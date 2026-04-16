@@ -214,6 +214,22 @@
                   <div v-if="desktopOutputDirCanChange" class="text-[11px] text-[#909090]">
                     修改后会迁移整个 output 目录；如果目标目录已有内容，会先阻止并提示。
                   </div>
+                  <div v-if="desktopOutputDirProgress" class="rounded-[6px] border border-[#d8efe2] bg-[#f4fbf7] px-2.5 py-2">
+                    <div class="flex items-center justify-between gap-3 text-[11px] text-[#1b6b43]">
+                      <div class="min-w-0 truncate">{{ desktopOutputDirProgressText }}</div>
+                      <div class="shrink-0 tabular-nums">{{ desktopOutputDirProgressPercentText }}</div>
+                    </div>
+                    <div class="mt-1.5 h-2 overflow-hidden rounded-full bg-[#dceee3]">
+                      <div
+                        class="h-full rounded-full bg-[#07b75b] transition-[width] duration-200 ease-out"
+                        :class="desktopOutputDirProgressIndeterminate ? 'animate-pulse' : ''"
+                        :style="{ width: desktopOutputDirProgressBarWidth }"
+                      />
+                    </div>
+                    <div v-if="desktopOutputDirProgressDetail" class="mt-1 text-[10px] text-[#5d7a68] break-all">
+                      {{ desktopOutputDirProgressDetail }}
+                    </div>
+                  </div>
                   <div v-if="desktopOutputDirMessage" class="rounded-[6px] border border-[#d8efe2] bg-[#f4fbf7] px-2.5 py-1.5 text-[11px] text-[#1b6b43] whitespace-pre-wrap">
                     {{ desktopOutputDirMessage }}
                   </div>
@@ -410,6 +426,8 @@ const desktopOutputDirMessage = ref('')
 const desktopOutputDirIsDefault = ref(true)
 const desktopOutputDirCanChange = ref(true)
 const desktopOutputDirUnavailableReason = ref('')
+const desktopOutputDirProgress = ref(null)
+let removeDesktopOutputDirProgressListener = null
 const desktopOutputDirText = computed(() => {
   if (!isDesktopEnv.value) return '仅桌面端可用'
   const v = String(desktopOutputDir.value || '').trim()
@@ -423,6 +441,48 @@ const desktopOutputDirDefaultText = computed(() => {
 const desktopOutputDirPendingText = computed(() => {
   const v = String(desktopOutputDirPending.value || '').trim()
   return v || ''
+})
+const desktopOutputDirProgressPercent = computed(() => {
+  const n = Number(desktopOutputDirProgress.value?.percent || 0)
+  if (!Number.isFinite(n) || n < 0) return 0
+  return Math.max(0, Math.min(100, Math.round(n)))
+})
+const desktopOutputDirProgressPercentText = computed(() => `${desktopOutputDirProgressPercent.value}%`)
+const desktopOutputDirProgressText = computed(() => {
+  const text = String(desktopOutputDirProgress.value?.message || '').trim()
+  return text || '正在迁移 output 目录'
+})
+const desktopOutputDirProgressIndeterminate = computed(() => {
+  const stage = String(desktopOutputDirProgress.value?.stage || '').trim()
+  return stage === 'preparing' || stage === 'scanning' || stage === 'rolling-back' || stage === 'restarting'
+})
+const desktopOutputDirProgressBarWidth = computed(() => {
+  if (!desktopOutputDirProgress.value) return '0%'
+  if (desktopOutputDirProgressIndeterminate.value) return '28%'
+  return `${Math.max(6, desktopOutputDirProgressPercent.value)}%`
+})
+const desktopOutputDirProgressDetail = computed(() => {
+  const progress = desktopOutputDirProgress.value
+  if (!progress) return ''
+
+  const parts = []
+  const bytesTotal = Number(progress.bytesTotal || 0)
+  const bytesTransferred = Number(progress.bytesTransferred || 0)
+  const itemsTotal = Number(progress.itemsTotal || 0)
+  const itemsTransferred = Number(progress.itemsTransferred || 0)
+
+  if (bytesTotal > 0) {
+    parts.push(`${formatBytes(bytesTransferred)} / ${formatBytes(bytesTotal)}`)
+  } else if (itemsTotal > 0) {
+    parts.push(`${Math.min(itemsTransferred, itemsTotal)} / ${itemsTotal} 项`)
+  }
+
+  const currentFile = String(progress.currentFile || '').trim()
+  if (currentFile) {
+    parts.push(currentFile)
+  }
+
+  return parts.join(' · ')
 })
 const desktopOutputDirControlsDisabled = computed(() => (
   !isDesktopEnv.value || !desktopOutputDirCanChange.value || desktopOutputDirLoading.value || desktopOutputDirApplying.value
@@ -440,6 +500,37 @@ const desktopLogFileText = computed(() => {
 const switchTrackClass = (enabled, disabled = false) => {
   if (disabled) return enabled ? 'bg-[#07b75b] opacity-50 cursor-not-allowed' : 'bg-[#d0d0d0] opacity-50 cursor-not-allowed'
   return enabled ? 'bg-[#07b75b] hover:brightness-95' : 'bg-[#d0d0d0] hover:brightness-95'
+}
+
+const formatBytes = (value) => {
+  const n = Number(value || 0)
+  if (!Number.isFinite(n) || n <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let next = n
+  let unitIndex = 0
+  while (next >= 1024 && unitIndex < units.length - 1) {
+    next /= 1024
+    unitIndex += 1
+  }
+  const digits = next >= 100 || unitIndex === 0 ? 0 : next >= 10 ? 1 : 2
+  return `${next.toFixed(digits)} ${units[unitIndex]}`
+}
+
+const applyDesktopOutputDirProgress = (progress) => {
+  if (!progress || progress.active === false) {
+    desktopOutputDirProgress.value = null
+    return
+  }
+  desktopOutputDirProgress.value = { ...progress }
+}
+
+const refreshDesktopOutputDirProgress = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  if (!window.wechatDesktop?.getOutputDirChangeProgress) return
+  try {
+    const progress = await window.wechatDesktop.getOutputDirChangeProgress()
+    applyDesktopOutputDirProgress(progress)
+  } catch {}
 }
 
 const sectionElements = computed(() => [
@@ -676,12 +767,13 @@ const applyDesktopOutputDir = async (nextDir) => {
     return
   }
   if (!desktopOutputDirCanChange.value) {
-    desktopOutputDirError.value = desktopOutputDirUnavailableReason.value || '开发模式不支持界面修改 output 目录'
+    desktopOutputDirError.value = desktopOutputDirUnavailableReason.value || '当前环境不支持修改 output 目录'
     return
   }
   desktopOutputDirApplying.value = true
   desktopOutputDirError.value = ''
   desktopOutputDirMessage.value = ''
+  desktopOutputDirProgress.value = null
   try {
     const res = await window.wechatDesktop.setOutputDir(String(nextDir ?? '').trim())
     if (res?.success === false) {
@@ -856,6 +948,7 @@ watch(() => props.open, async (isOpen) => {
   await refreshBackendLogFileInfo()
   if (isDesktopEnv.value) {
     await refreshDesktopOutputDir()
+    await refreshDesktopOutputDirProgress()
   }
 }, { immediate: true })
 
@@ -864,6 +957,11 @@ onMounted(async () => {
     const isElectron = /electron/i.test(String(navigator.userAgent || ''))
     isDesktopEnv.value = isElectron && !!window.wechatDesktop
     window.addEventListener('keydown', onEscKeydown)
+    if (window.wechatDesktop?.onOutputDirChangeProgress) {
+      removeDesktopOutputDirProgressListener = window.wechatDesktop.onOutputDirChangeProgress((progress) => {
+        applyDesktopOutputDirProgress(progress)
+      })
+    }
   }
 
   desktopAutoRealtime.value = readLocalBoolSetting(DESKTOP_SETTING_AUTO_REALTIME_KEY, false)
@@ -876,6 +974,7 @@ onMounted(async () => {
     await refreshDesktopAutoLaunch()
     await refreshDesktopCloseBehavior()
     await refreshDesktopOutputDir()
+    await refreshDesktopOutputDirProgress()
   }
 
   await nextTick()
@@ -885,6 +984,10 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (!process.client || typeof window === 'undefined') return
   window.removeEventListener('keydown', onEscKeydown)
+  if (typeof removeDesktopOutputDirProgressListener === 'function') {
+    removeDesktopOutputDirProgressListener()
+    removeDesktopOutputDirProgressListener = null
+  }
 })
 </script>
 
