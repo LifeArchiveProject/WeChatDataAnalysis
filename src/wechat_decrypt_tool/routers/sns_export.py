@@ -13,23 +13,26 @@ from ..sns_export_service import SNS_EXPORT_MANAGER
 router = APIRouter(route_class=PathFixRoute)
 
 ExportScope = Literal["selected", "all"]
+ExportFormat = Literal["html", "json", "txt"]
 
 
 class SnsExportCreateRequest(BaseModel):
     account: Optional[str] = Field(None, description="账号目录名（可选，默认使用第一个）")
     scope: ExportScope = Field("selected", description="导出范围：selected=指定联系人；all=全部联系人")
     usernames: list[str] = Field(default_factory=list, description="朋友圈 username 列表（scope=selected 时使用）")
+    format: ExportFormat = Field("html", description="导出格式：html/json/txt")
     use_cache: bool = Field(True, description="是否复用导出过程中的本地缓存（默认开启）")
     output_dir: Optional[str] = Field(None, description="导出目录绝对路径（可选；不填时使用默认目录）")
     file_name: Optional[str] = Field(None, description="导出 zip 文件名（可选，不含/含 .zip 都可）")
 
 
-@router.post("/api/sns/exports", summary="创建朋友圈导出任务（离线 HTML zip）")
+@router.post("/api/sns/exports", summary="创建朋友圈导出任务（离线 ZIP，支持 HTML/JSON/TXT）")
 async def create_sns_export(req: SnsExportCreateRequest):
     job = SNS_EXPORT_MANAGER.create_job(
         account=req.account,
         scope=req.scope,
         usernames=req.usernames,
+        export_format=req.format,
         use_cache=bool(req.use_cache),
         output_dir=req.output_dir,
         file_name=req.file_name,
@@ -111,4 +114,3 @@ async def cancel_sns_export(export_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="Export not found.")
     return {"status": "success"}
-
