@@ -14,13 +14,61 @@
             class="mt-2 w-full px-3 py-2 rounded-md border border-gray-200 bg-white text-sm outline-none focus:ring-2 focus:ring-[#576b95]/30 focus:border-[#576b95]"
         />
 
+        <div class="mt-3">
+          <div class="text-xs font-medium text-gray-700 mb-2">导出格式</div>
+          <div class="flex flex-wrap gap-2">
+            <label
+                v-for="item in exportFormatOptions"
+                :key="item.value"
+                class="px-2.5 py-1 text-xs rounded-md border cursor-pointer transition-colors"
+                :class="exportFormat === item.value ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'"
+            >
+              <input v-model="exportFormat" type="radio" :value="item.value" class="hidden" />
+              <span>{{ item.label }}</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="mt-3 space-y-2">
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-xs font-medium text-gray-700">&#23548;&#20986;&#30446;&#24405;</div>
+            <div class="text-[11px] text-gray-400">{{ exportFolderModeText }}</div>
+          </div>
+          <div class="px-2.5 py-2 rounded-md border border-gray-200 bg-gray-50 text-xs text-gray-600 break-all min-h-[40px] flex items-center">
+            {{ exportFolder || '&#26410;&#36873;&#25321;' }}
+          </div>
+          <div class="flex gap-2">
+            <button
+                type="button"
+                class="flex-1 px-3 py-2 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="exportSaveBusy"
+                @click="chooseExportFolder"
+            >
+              &#36873;&#25321;&#25991;&#20214;&#22841;
+            </button>
+            <button
+                v-if="hasSelectedExportFolder"
+                type="button"
+                class="px-3 py-2 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="exportSaveBusy"
+                @click="clearExportFolderSelection"
+            >
+              &#28165;&#38500;
+            </button>
+          </div>
+          <div v-if="exportFolderHint" class="text-[11px] text-gray-500 whitespace-pre-wrap">{{ exportFolderHint }}</div>
+          <div v-if="exportSaveProgressText" class="text-[11px] text-gray-500 whitespace-pre-wrap">{{ exportSaveProgressText }}</div>
+          <div v-else-if="exportSaveMsg" class="text-[11px] text-green-600 whitespace-pre-wrap">{{ exportSaveMsg }}</div>
+          <div v-else-if="exportSaveError" class="text-[11px] text-red-600 whitespace-pre-wrap">{{ exportSaveError }}</div>
+        </div>
+
         <div class="mt-2 flex gap-2">
           <button
               type="button"
               class="flex-1 px-3 py-2 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               @click="onExportAllClick"
-              :disabled="!selectedAccount || exportJob?.status === 'running'"
-              title="导出全部朋友圈（HTML 离线 ZIP）"
+              :disabled="!selectedAccount || exportJob?.status === 'running' || exportJob?.status === 'queued'"
+              :title="`导出全部朋友圈（${exportFormatLabel} ZIP）`"
           >
             导出全部
           </button>
@@ -28,23 +76,71 @@
               type="button"
               class="flex-1 px-3 py-2 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               @click="onExportCurrentClick"
-              :disabled="!selectedAccount || !selectedSnsUser || exportJob?.status === 'running'"
-              title="导出当前选中联系人（HTML 离线 ZIP）"
+              :disabled="!selectedAccount || !selectedSnsUser || exportJob?.status === 'running' || exportJob?.status === 'queued'"
+              :title="`导出当前选中联系人（${exportFormatLabel} ZIP）`"
           >
             导出此人
           </button>
         </div>
         <div v-if="exportError" class="mt-2 text-xs text-red-600 whitespace-pre-wrap">{{ exportError }}</div>
-        <div v-else-if="exportJob" class="mt-2 text-xs text-gray-500">
-          <span>导出状态：{{ exportJob.status }}</span>
-          <button
-              v-if="exportJob.status === 'done' && exportJob.exportId"
-              type="button"
-              class="ml-2 text-xs text-[#576b95] hover:underline bg-transparent border-0 p-0"
-              @click="downloadSnsExport(exportJob.exportId)"
-          >
-            下载 ZIP
-          </button>
+        <div v-else-if="exportJob" class="mt-3 border border-gray-200 rounded-md bg-gray-50 p-3 text-xs text-gray-700 space-y-2">
+          <div class="flex items-center justify-between gap-2">
+            <div class="font-medium text-gray-900 truncate">任务：{{ exportJob.exportId }}</div>
+            <div class="text-gray-500">状态：{{ exportStatusText }}</div>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <div>动态：{{ exportJob.progress?.postsExported || 0 }}/{{ exportJob.progress?.postsTotal || 0 }}</div>
+            <div class="text-gray-500">{{ exportOverallPercent }}%</div>
+          </div>
+          <div class="h-2 rounded-full bg-white border border-gray-200 overflow-hidden">
+            <div class="h-full bg-[#03C160] transition-all duration-300" :style="{ width: exportOverallPercent + '%' }"></div>
+          </div>
+
+          <div class="flex items-center justify-between text-gray-600">
+            <div>联系人：{{ exportJob.progress?.usersDone || 0 }}/{{ exportJob.progress?.usersTotal || 0 }}</div>
+            <div>格式：{{ exportActiveFormatLabel }}</div>
+          </div>
+
+          <div v-if="exportCurrentTargetLabel" class="space-y-1">
+            <div class="flex items-center justify-between gap-2">
+              <div class="truncate">
+                当前：{{ exportCurrentTargetLabel }}（{{ exportJob.progress?.currentUserPostsDone || 0 }}/{{ exportJob.progress?.currentUserPostsTotal || 0 }}）
+              </div>
+              <div class="text-gray-500">
+                <span v-if="exportCurrentPercent != null">{{ exportCurrentPercent }}%</span>
+                <span v-else>…</span>
+              </div>
+            </div>
+            <div class="h-2 rounded-full bg-white border border-gray-200 overflow-hidden">
+              <div
+                  v-if="exportCurrentPercent != null"
+                  class="h-full bg-sky-500 transition-all duration-300"
+                  :style="{ width: exportCurrentPercent + '%' }"
+              ></div>
+              <div v-else class="h-full bg-sky-500/60 animate-pulse" style="width: 30%"></div>
+            </div>
+          </div>
+
+          <div class="text-gray-500">
+            媒体：{{ exportJob.progress?.mediaCopied || 0 }}；缺失：{{ exportJob.progress?.mediaMissing || 0 }}
+          </div>
+
+          <div v-if="exportOutputPathText" class="text-green-600 break-all">
+            &#24050;&#23548;&#20986;&#21040;&#65306;{{ exportOutputPathText }}
+          </div>
+
+          <div v-if="exportJob.status === 'done'" class="flex flex-wrap gap-3">
+            <button
+                v-if="exportJob.exportId && hasWebExportFolder"
+                type="button"
+                class="text-xs text-[#576b95] hover:underline bg-transparent border-0 p-0 disabled:text-gray-400 disabled:no-underline disabled:cursor-not-allowed"
+                :disabled="exportSaveBusy"
+                @click="saveSnsExportToSelectedFolder()"
+            >
+              {{ exportSaveBusy ? '\u4fdd\u5b58\u4e2d\u2026' : exportSaveState === 'success' ? '\u91cd\u65b0\u4fdd\u5b58\u5230\u6587\u4ef6\u5939' : '\u4fdd\u5b58\u5230\u5df2\u9009\u6587\u4ef6\u5939' }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -664,7 +760,7 @@ import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
 import { parseTextWithEmoji } from '~/lib/wechat-emojis'
 import { SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting } from '~/lib/desktop-settings'
-import { reportServerErrorFromError } from '~/lib/server-error-logging'
+import { reportServerErrorFromError, reportServerErrorFromResponse } from '~/lib/server-error-logging'
 
 useHead({ title: '朋友圈 - 微信数据分析助手' })
 
@@ -762,12 +858,305 @@ const pageSize = 20
 
 const apiBase = useApiBase()
 
-// 朋友圈导出（HTML 离线 ZIP）
+// 朋友圈导出（离线 ZIP）
+const exportFormat = ref('html')
+const exportFormatOptions = [
+  { value: 'html', label: 'HTML' },
+  { value: 'json', label: 'JSON' },
+  { value: 'txt', label: 'TXT' }
+]
+const exportFolder = ref('')
+const exportFolderHandle = ref(null)
+const exportSaveBusy = ref(false)
+const exportSaveMsg = ref('')
+const exportSaveError = ref('')
+const exportSaveState = ref('idle')
+const exportSaveBytesWritten = ref(0)
+const exportSaveBytesTotal = ref(0)
+const exportAutoSavedFor = ref('')
 const exportJob = ref(null)
 const exportError = ref('')
 let exportEventSource = null
 let exportPollTimer = null
 
+const asNumber = (v) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0))
+
+const formatBytes = (value) => {
+  const bytes = Number(value)
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = bytes
+  let index = 0
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index += 1
+  }
+  const digits = size >= 100 || index === 0 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(digits)} ${units[index]}`
+}
+
+const resetExportSaveFeedback = ({ resetAutoSavedFor = false } = {}) => {
+  exportSaveMsg.value = ''
+  exportSaveError.value = ''
+  exportSaveState.value = 'idle'
+  exportSaveBytesWritten.value = 0
+  exportSaveBytesTotal.value = 0
+  if (resetAutoSavedFor) exportAutoSavedFor.value = ''
+}
+
+const isDesktopExportRuntime = () => {
+  return !!(process.client && window?.wechatDesktop?.chooseDirectory)
+}
+
+const isWebDirectoryPickerSupported = () => {
+  return !!(process.client && typeof window.showDirectoryPicker === 'function')
+}
+
+const hasDesktopExportFolder = computed(() => {
+  return !!(isDesktopExportRuntime() && String(exportFolder.value || '').trim())
+})
+
+const hasWebExportFolder = computed(() => {
+  return !!(!isDesktopExportRuntime() && isWebDirectoryPickerSupported() && exportFolderHandle.value)
+})
+
+const hasSelectedExportFolder = computed(() => {
+  return !!(hasDesktopExportFolder.value || hasWebExportFolder.value)
+})
+
+const exportFormatLabel = computed(() => {
+  return exportFormatOptions.find((item) => item.value === exportFormat.value)?.label || 'HTML'
+})
+
+const exportActiveFormat = computed(() => {
+  const raw = String(exportJob.value?.options?.format || exportFormat.value || 'html').trim().toLowerCase()
+  return exportFormatOptions.some((item) => item.value === raw) ? raw : 'html'
+})
+
+const exportActiveFormatLabel = computed(() => {
+  return exportFormatOptions.find((item) => item.value === exportActiveFormat.value)?.label || 'HTML'
+})
+
+const exportStatusText = computed(() => {
+  const status = String(exportJob.value?.status || '').trim()
+  return {
+    queued: '排队中',
+    running: '导出中',
+    done: '已完成',
+    error: '失败',
+    cancelled: '已取消'
+  }[status] || status || '-'
+})
+
+const exportOverallPercent = computed(() => {
+  const status = String(exportJob.value?.status || '').trim()
+  if (status === 'done') return 100
+  const progress = exportJob.value?.progress || {}
+  const postsTotal = asNumber(progress.postsTotal)
+  const postsDone = asNumber(progress.postsExported)
+  if (postsTotal > 0) return Math.round(clamp01(postsDone / postsTotal) * 100)
+  const usersTotal = asNumber(progress.usersTotal)
+  const usersDone = asNumber(progress.usersDone)
+  if (usersTotal > 0) return Math.round(clamp01(usersDone / usersTotal) * 100)
+  return 0
+})
+
+const exportCurrentPercent = computed(() => {
+  const progress = exportJob.value?.progress || {}
+  const total = asNumber(progress.currentUserPostsTotal)
+  const done = asNumber(progress.currentUserPostsDone)
+  if (total <= 0) return null
+  return Math.round(clamp01(done / total) * 100)
+})
+
+const exportCurrentTargetLabel = computed(() => {
+  const progress = exportJob.value?.progress || {}
+  return String(progress.currentDisplayName || progress.currentUsername || '').trim()
+})
+
+const exportBackendZipPath = computed(() => {
+  return String(exportJob.value?.zipPath || '').trim()
+})
+
+const exportFolderModeText = computed(() => {
+  if (isDesktopExportRuntime()) return '\u684c\u9762\u7aef\u76ee\u5f55'
+  if (isWebDirectoryPickerSupported()) return '\u6d4f\u89c8\u5668\u76ee\u5f55'
+  return '\u9700\u9009\u62e9\u6587\u4ef6\u5939'
+})
+
+const exportFolderHint = computed(() => {
+  if (isDesktopExportRuntime()) {
+    return hasDesktopExportFolder.value
+      ? '\u4f1a\u50cf\u666e\u901a\u804a\u5929\u8bb0\u5f55\u5bfc\u51fa\u4e00\u6837\uff0c\u5b8c\u6210\u540e\u76f4\u63a5\u5199\u5165\u4e0a\u9762\u7684\u6587\u4ef6\u5939\u3002'
+      : '\u8bf7\u5148\u9009\u62e9\u6587\u4ef6\u5939\uff0c\u5bfc\u51fa\u5b8c\u6210\u540e\u4f1a\u76f4\u63a5\u5199\u5165\u8be5\u76ee\u5f55\u3002'
+  }
+  if (isWebDirectoryPickerSupported()) {
+    return hasWebExportFolder.value
+      ? '\u5bfc\u51fa\u5b8c\u6210\u540e\u4f1a\u81ea\u52a8\u4fdd\u5b58\u5230\u6240\u9009\u6d4f\u89c8\u5668\u76ee\u5f55\u3002'
+      : '\u8bf7\u5148\u9009\u62e9\u6d4f\u89c8\u5668\u76ee\u5f55\uff0c\u5bfc\u51fa\u5b8c\u6210\u540e\u4f1a\u81ea\u52a8\u4fdd\u5b58\u3002'
+  }
+  return '\u5f53\u524d\u73af\u5883\u4e0d\u652f\u6301\u76ee\u5f55\u9009\u62e9\uff0c\u8bf7\u4f7f\u7528\u684c\u9762\u7aef\u6216 Chromium \u65b0\u7248\u6d4f\u89c8\u5668\u3002'
+})
+
+const guessSnsExportZipName = (job) => {
+  const raw = String(job?.zipPath || '').trim()
+  if (raw) {
+    const name = raw.replace(/\\/g, '/').split('/').pop()
+    if (name && name.toLowerCase().endsWith('.zip')) return name
+  }
+  const format = String(job?.options?.format || exportFormat.value || 'html').trim().toLowerCase() || 'html'
+  const exportId = String(job?.exportId || '').trim() || 'export'
+  return `wechat_sns_export_${format}_${exportId}.zip`
+}
+
+const exportSaveProgressText = computed(() => {
+  if (exportSaveState.value !== 'saving') return ''
+  const fileName = guessSnsExportZipName(exportJob.value)
+  if (exportSaveBytesTotal.value > 0) {
+    return `\u6b63\u5728\u4fdd\u5b58\u5230\u6d4f\u89c8\u5668\u76ee\u5f55\uff1a${fileName}\uff08${formatBytes(exportSaveBytesWritten.value)} / ${formatBytes(exportSaveBytesTotal.value)}\uff09`
+  }
+  return `\u6b63\u5728\u4fdd\u5b58\u5230\u6d4f\u89c8\u5668\u76ee\u5f55\uff1a${fileName}\uff08${formatBytes(exportSaveBytesWritten.value)}\uff09`
+})
+
+const exportOutputPathText = computed(() => {
+  if (String(exportJob.value?.status || '') !== 'done') return ''
+  if (hasWebExportFolder.value) return ''
+  const raw = exportBackendZipPath.value
+  if (!raw) return ''
+  if (isDesktopExportRuntime()) return raw
+  const requestedOutputDir = String(exportJob.value?.options?.outputDir || '').trim()
+  return requestedOutputDir ? raw : ''
+})
+
+const chooseExportFolder = async () => {
+  exportError.value = ''
+  resetExportSaveFeedback()
+  try {
+    if (!process.client) {
+      exportError.value = '\u5f53\u524d\u73af\u5883\u4e0d\u652f\u6301\u9009\u62e9\u5bfc\u51fa\u76ee\u5f55'
+      return
+    }
+
+    if (isDesktopExportRuntime()) {
+      const result = await window.wechatDesktop.chooseDirectory({ title: '\u9009\u62e9\u5bfc\u51fa\u76ee\u5f55' })
+      if (result && !result.canceled && Array.isArray(result.filePaths) && result.filePaths.length > 0) {
+        exportFolder.value = String(result.filePaths[0] || '').trim()
+        exportFolderHandle.value = null
+      }
+      return
+    }
+
+    if (isWebDirectoryPickerSupported()) {
+      const handle = await window.showDirectoryPicker()
+      if (handle) {
+        exportFolderHandle.value = handle
+        exportFolder.value = `\u6d4f\u89c8\u5668\u76ee\u5f55\uff1a${String(handle.name || '\u5df2\u9009\u62e9')}`
+      }
+      return
+    }
+
+    exportError.value = '\u5f53\u524d\u6d4f\u89c8\u5668\u4e0d\u652f\u6301\u76ee\u5f55\u9009\u62e9\uff0c\u8bf7\u4f7f\u7528\u684c\u9762\u7aef\u6216 Chromium \u65b0\u7248\u6d4f\u89c8\u5668'
+  } catch (error) {
+    const message = String(error?.message || '').trim()
+    if (error?.name === 'AbortError' || message.includes('The user aborted a request')) {
+      return
+    }
+    exportError.value = error?.message || '\u9009\u62e9\u5bfc\u51fa\u76ee\u5f55\u5931\u8d25'
+  }
+}
+
+const clearExportFolderSelection = () => {
+  exportFolder.value = ''
+  exportFolderHandle.value = null
+  resetExportSaveFeedback({ resetAutoSavedFor: true })
+}
+
+const getSnsExportDownloadUrl = (exportId) => {
+  return `${apiBase}/sns/exports/${encodeURIComponent(String(exportId || ''))}/download`
+}
+
+const saveSnsExportToSelectedFolder = async (options = {}) => {
+  const autoSave = !!options?.auto
+  exportError.value = ''
+  resetExportSaveFeedback()
+  if (!process.client || !isWebDirectoryPickerSupported()) {
+    exportError.value = '\u5f53\u524d\u73af\u5883\u4e0d\u652f\u6301\u4fdd\u5b58\u5230\u6d4f\u89c8\u5668\u76ee\u5f55'
+    return
+  }
+  const handle = exportFolderHandle.value
+  if (!handle || typeof handle.getFileHandle !== 'function') {
+    exportError.value = '\u8bf7\u5148\u9009\u62e9\u6d4f\u89c8\u5668\u5bfc\u51fa\u76ee\u5f55'
+    return
+  }
+
+  const exportId = exportJob.value?.exportId
+  if (!exportId || String(exportJob.value?.status || '') !== 'done') {
+    exportError.value = '\u5bfc\u51fa\u4efb\u52a1\u5c1a\u672a\u5b8c\u6210'
+    return
+  }
+
+  exportSaveBusy.value = true
+  exportSaveState.value = 'saving'
+  try {
+    const response = await fetch(getSnsExportDownloadUrl(exportId))
+    if (!response.ok) {
+      await reportServerErrorFromResponse(response, {
+        method: 'GET',
+        requestUrl: getSnsExportDownloadUrl(exportId),
+        message: `\u4e0b\u8f7d\u5bfc\u51fa\u6587\u4ef6\u5931\u8d25\uff08${response.status}\uff09`,
+        source: 'sns.exportDownload'
+      })
+      throw new Error(`\u4e0b\u8f7d\u5bfc\u51fa\u6587\u4ef6\u5931\u8d25\uff08${response.status}\uff09`)
+    }
+    exportSaveBytesTotal.value = asNumber(response.headers.get('Content-Length'))
+    const fileName = guessSnsExportZipName(exportJob.value)
+    const fileHandle = await handle.getFileHandle(fileName, { create: true })
+    const writable = await fileHandle.createWritable()
+    if (response.body && typeof response.body.getReader === 'function') {
+      const reader = response.body.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (!value || !value.byteLength) continue
+          await writable.write(value)
+          exportSaveBytesWritten.value += value.byteLength
+        }
+        await writable.close()
+      } catch (error) {
+        try {
+          await reader.cancel()
+        } catch {}
+        try {
+          await writable.abort()
+        } catch {}
+        throw error
+      }
+    } else {
+      const blob = await response.blob()
+      exportSaveBytesWritten.value = asNumber(blob.size)
+      if (exportSaveBytesTotal.value <= 0) exportSaveBytesTotal.value = exportSaveBytesWritten.value
+      await writable.write(blob)
+      await writable.close()
+    }
+    exportAutoSavedFor.value = String(exportId)
+    exportSaveState.value = 'success'
+    const folderLabel = String(exportFolder.value || '').trim() || '\u5df2\u9009\u76ee\u5f55'
+    exportSaveMsg.value = autoSave
+      ? `\u6d4f\u89c8\u5668\u76ee\u5f55\u81ea\u52a8\u4fdd\u5b58\u6210\u529f\uff1a${fileName}\n\u4f4d\u7f6e\uff1a${folderLabel}`
+      : `\u6d4f\u89c8\u5668\u76ee\u5f55\u4fdd\u5b58\u6210\u529f\uff1a${fileName}\n\u4f4d\u7f6e\uff1a${folderLabel}`
+  } catch (error) {
+    exportSaveState.value = 'error'
+    exportSaveError.value = `\u6d4f\u89c8\u5668\u76ee\u5f55\u4fdd\u5b58\u5931\u8d25\uff1a${error?.message || '\u672a\u77e5\u9519\u8bef'}`
+  } finally {
+    exportSaveBusy.value = false
+  }
+}
 const stopSnsExportPolling = () => {
   if (exportEventSource) {
     try {
@@ -828,51 +1217,47 @@ const startSnsExportPolling = (exportId) => {
   startSnsExportHttpPolling(exportId)
 }
 
-const downloadSnsExport = (exportId) => {
-  if (!process.client) return
-  const id = String(exportId || '').trim()
-  if (!id) return
-  const url = `${apiBase}/sns/exports/${encodeURIComponent(id)}/download`
-  window.open(url, '_blank', 'noopener,noreferrer')
+const ensureSnsExportFolderReady = () => {
+  if (hasSelectedExportFolder.value) return true
+  exportError.value = isDesktopExportRuntime() || isWebDirectoryPickerSupported()
+    ? '\u8bf7\u5148\u9009\u62e9\u5bfc\u51fa\u76ee\u5f55'
+    : '\u5f53\u524d\u73af\u5883\u4e0d\u652f\u6301\u76ee\u5f55\u9009\u62e9\uff0c\u8bf7\u4f7f\u7528\u684c\u9762\u7aef\u6216 Chromium \u65b0\u7248\u6d4f\u89c8\u5668'
+  return false
 }
 
-const onExportAllClick = async () => {
+const startSnsExport = async ({ scope, usernames }) => {
   if (!selectedAccount.value) return
   exportError.value = ''
+  resetExportSaveFeedback({ resetAutoSavedFor: true })
+  if (!ensureSnsExportFolderReady()) return
   try {
     const resp = await api.createSnsExport({
       account: selectedAccount.value,
-      scope: 'all',
-      usernames: [],
-      use_cache: snsUseCache.value ? 1 : 0
+      scope,
+      usernames: Array.isArray(usernames) ? usernames : [],
+      format: exportFormat.value,
+      use_cache: snsUseCache.value ? 1 : 0,
+      output_dir: hasDesktopExportFolder.value ? String(exportFolder.value || '').trim() : null
     })
     exportJob.value = resp?.job || null
     const exportId = exportJob.value?.exportId
     if (exportId) startSnsExportPolling(exportId)
   } catch (e) {
-    exportError.value = e?.message || '创建导出任务失败'
+    exportError.value = e?.message || '\u521b\u5efa\u5bfc\u51fa\u4efb\u52a1\u5931\u8d25'
   }
+}
+
+const onExportAllClick = async () => {
+  await startSnsExport({ scope: 'all', usernames: [] })
 }
 
 const onExportCurrentClick = async () => {
   if (!selectedAccount.value) return
   const uname = String(selectedSnsUser.value || '').trim()
   if (!uname) return
-  exportError.value = ''
-  try {
-    const resp = await api.createSnsExport({
-      account: selectedAccount.value,
-      scope: 'selected',
-      usernames: [uname],
-      use_cache: snsUseCache.value ? 1 : 0
-    })
-    exportJob.value = resp?.job || null
-    const exportId = exportJob.value?.exportId
-    if (exportId) startSnsExportPolling(exportId)
-  } catch (e) {
-    exportError.value = e?.message || '创建导出任务失败'
-  }
+  await startSnsExport({ scope: 'selected', usernames: [uname] })
 }
+
 
 // Track failed images per-post, per-index to render placeholders instead of broken <img>.
 const mediaErrors = ref({})
@@ -1809,6 +2194,7 @@ watch(
         stopSnsExportPolling()
         exportJob.value = null
         exportError.value = ''
+        resetExportSaveFeedback({ resetAutoSavedFor: true })
         snsUserQuery.value = ''
         selectedSnsUser.value = ''
         snsUsers.value = []
@@ -1822,6 +2208,21 @@ watch(
     },
     { immediate: true }
 )
+
+watch(
+  () => ({
+    exportId: String(exportJob.value?.exportId || ''),
+    status: String(exportJob.value?.status || '')
+  }),
+  async ({ exportId, status }) => {
+    if (!process.client || status !== 'done' || !exportId) return
+    if (!hasWebExportFolder.value) return
+    if (exportAutoSavedFor.value === exportId) return
+    if (exportSaveBusy.value) return
+    await saveSnsExportToSelectedFolder({ auto: true })
+  }
+)
+
 
 
 onMounted(async () => {

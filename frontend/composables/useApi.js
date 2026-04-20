@@ -453,7 +453,7 @@ export const useApi = () => {
     return await request(`/chat/exports/${encodeURIComponent(String(exportId))}`, { method: 'DELETE' })
   }
 
-  // 朋友圈导出（离线 HTML zip）
+  // 朋友圈导出（离线 ZIP，支持 HTML / JSON / TXT）
   const createSnsExport = async (data = {}) => {
     return await request('/sns/exports', {
       method: 'POST',
@@ -461,6 +461,7 @@ export const useApi = () => {
         account: data.account || null,
         scope: data.scope || 'selected',
         usernames: Array.isArray(data.usernames) ? data.usernames : [],
+        format: data.format || 'html',
         use_cache: data.use_cache == null ? true : !!data.use_cache,
         output_dir: data.output_dir == null ? null : String(data.output_dir || '').trim(),
         file_name: data.file_name || null
