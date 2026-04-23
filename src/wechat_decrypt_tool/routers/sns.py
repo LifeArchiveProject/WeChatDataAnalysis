@@ -2067,6 +2067,8 @@ def list_sns_users(
             post_count = int(r["postCount"] or 0)
         except Exception:
             post_count = 0
+        if post_count <= 0:
+            continue
 
         row = contact_rows.get(uname)
         display = _clean_name(_pick_display_name(row, uname)) or uname
