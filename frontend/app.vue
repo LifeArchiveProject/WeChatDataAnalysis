@@ -101,7 +101,7 @@ const showDesktopTitleBar = computed(() => isDesktop.value)
 
 const showSidebar = computed(() => {
   const path = String(route.path || '')
-  if (path === '/') return false
+  if (path === '/' || path === '/import') return false
   if (path === '/decrypt' || path === '/detection-result' || path === '/decrypt-result') return false
   return !(path === '/wrapped' || path.startsWith('/wrapped/'))
 })

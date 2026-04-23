@@ -34,13 +34,6 @@
           <span>开始检测</span>
         </button>
         
-        <NuxtLink to="/decrypt" 
-          class="group inline-flex items-center px-12 py-4 bg-white text-[#07C160] border border-[#07C160] rounded-lg text-lg font-medium hover:bg-[#F7F7F7] transform hover:scale-105 transition-all duration-200">
-          <svg class="w-6 h-6 mr-3 group-hover:-rotate-12 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/>
-          </svg>
-          <span>直接解密</span>
-        </NuxtLink>
 
         <NuxtLink to="/import" 
           class="group inline-flex items-center px-12 py-4 bg-white text-[#91D300] border border-[#91D300] rounded-lg text-lg font-medium hover:bg-[#F7F7F7] transform hover:scale-105 transition-all duration-200">
