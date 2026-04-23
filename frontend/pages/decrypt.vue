@@ -73,6 +73,12 @@
                 </svg>
                 点击按钮将自动获取【数据库解密密钥】。您也可以手动输入已知的64位密钥。
               </p>
+              <p v-if="formData.wechat_install_path" class="mt-2 text-xs text-[#7F7F7F] flex items-start">
+                <svg class="w-4 h-4 mr-1 mt-0.5 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                <span>当前将使用第一步检测时保存的微信安装目录：<span class="font-mono break-all">{{ formData.wechat_install_path }}</span>。</span>
+              </p>
             </div>
             
             <!-- 数据库路径输入 -->
@@ -655,6 +661,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '~/composables/useApi'
+import { normalizeWechatInstallPath, readStoredWechatInstallPath } from '~/lib/wechat-install-path'
 
 const { decryptDatabase, saveMediaKeys, getSavedKeys, getKeys, getImageKey, getWxStatus } = useApi()
 
@@ -677,7 +684,8 @@ const steps = [
 // 表单数据
 const formData = reactive({
   key: '',
-  db_storage_path: ''
+  db_storage_path: '',
+  wechat_install_path: ''
 })
 
 // 表单错误
@@ -764,7 +772,10 @@ const prefillKeysForAccount = async (account) => {
   if (!acc) return
   logDecryptDebug('prefill:start', { account: acc })
   try {
-    const resp = await getSavedKeys({ account: acc })
+    const resp = await getSavedKeys({
+      account: acc,
+      db_storage_path: String(formData.db_storage_path || '').trim()
+    })
     if (!resp || resp.status !== 'success') return
     const keys = resp.keys || {}
 
@@ -786,6 +797,9 @@ const prefillKeysForAccount = async (account) => {
       request_account: acc,
       response_account: String(resp.account || '').trim(),
       db_key_present: !!dbKey,
+      db_key_store_account: String(keys.db_key_store_account || '').trim(),
+      db_key_source_wxid_dir: String(keys.db_key_source_wxid_dir || '').trim(),
+      db_key_blocked_reason: String(keys.db_key_blocked_reason || '').trim(),
       ...summarizeKeyStateForLog(
         String(keys.image_xor_key || '').trim(),
         String(keys.image_aes_key || '').trim()
@@ -873,6 +887,8 @@ const handleGetDbKey = async () => {
   formErrors.key = ''
 
   try {
+    const wechatInstallPath = normalizeWechatInstallPath(formData.wechat_install_path || readStoredWechatInstallPath())
+    formData.wechat_install_path = wechatInstallPath
     const statusRes = await getWxStatus()
     const wxStatus = statusRes?.wx_status
 
@@ -883,7 +899,9 @@ const handleGetDbKey = async () => {
 
     warning.value = '正在启动微信，请确保微信未开启“自动登录”，并在弹窗中正常登录。'
 
-    const res = await getKeys()
+    const res = await getKeys({
+      wechat_install_path: wechatInstallPath
+    })
 
     if (res && res.status === 0) {
       if (res.data?.db_key) {
@@ -1617,6 +1635,7 @@ const skipToChat = async () => {
 // 页面加载时检查是否有选中的账户
 onMounted(async () => {
   if (process.client && typeof window !== 'undefined') {
+    formData.wechat_install_path = readStoredWechatInstallPath()
     const selectedAccount = sessionStorage.getItem('selectedAccount')
     logDecryptDebug('mounted:selected-account-raw', { raw: selectedAccount || '' })
     if (selectedAccount) {

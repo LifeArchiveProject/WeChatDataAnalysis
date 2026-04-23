@@ -7,6 +7,7 @@ import unittest
 import importlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,35 +65,43 @@ class TestDecryptStreamSSE(unittest.TestCase):
                 client = TestClient(app)
 
                 events: list[dict] = []
-                with client.stream(
-                    "GET",
-                    "/api/decrypt_stream",
-                    params={"key": "00" * 32, "db_storage_path": str(db_storage)},
-                ) as resp:
-                    self.assertEqual(resp.status_code, 200)
-                    self.assertIn("text/event-stream", resp.headers.get("content-type", ""))
+                with mock.patch.object(decrypt_router, "upsert_account_keys_in_store") as upsert_mock:
+                    with client.stream(
+                        "GET",
+                        "/api/decrypt_stream",
+                        params={"key": "00" * 32, "db_storage_path": str(db_storage)},
+                    ) as resp:
+                        self.assertEqual(resp.status_code, 200)
+                        self.assertIn("text/event-stream", resp.headers.get("content-type", ""))
 
-                    for line in resp.iter_lines():
-                        if not line:
-                            continue
-                        if isinstance(line, bytes):
-                            line = line.decode("utf-8", errors="ignore")
-                        line = str(line)
+                        for line in resp.iter_lines():
+                            if not line:
+                                continue
+                            if isinstance(line, bytes):
+                                line = line.decode("utf-8", errors="ignore")
+                            line = str(line)
 
-                        if line.startswith(":"):
-                            continue
-                        if not line.startswith("data: "):
-                            continue
-                        payload = json.loads(line[len("data: ") :])
-                        events.append(payload)
-                        if payload.get("type") in {"complete", "error"}:
-                            break
+                            if line.startswith(":"):
+                                continue
+                            if not line.startswith("data: "):
+                                continue
+                            payload = json.loads(line[len("data: ") :])
+                            events.append(payload)
+                            if payload.get("type") in {"complete", "error"}:
+                                break
 
                 types = {e.get("type") for e in events}
                 self.assertIn("start", types)
                 self.assertIn("progress", types)
                 self.assertEqual(events[-1].get("type"), "complete")
                 self.assertEqual(events[-1].get("status"), "completed")
+                upsert_mock.assert_called_once_with(
+                    "wxid_foo",
+                    db_key="00" * 32,
+                    aliases=["wxid_foo_bar"],
+                    db_key_source_wxid_dir=str(db_storage.parent),
+                    db_key_source_db_storage_path=str(db_storage),
+                )
 
                 out = root / "output" / "databases" / "wxid_foo" / "MSG0.db"
                 self.assertTrue(out.exists())
@@ -135,35 +144,37 @@ class TestDecryptStreamSSE(unittest.TestCase):
                 client = TestClient(app)
 
                 events: list[dict] = []
-                with client.stream(
-                    "GET",
-                    "/api/decrypt_stream",
-                    params={"key": "00" * 32, "db_storage_path": str(db_storage)},
-                ) as resp:
-                    self.assertEqual(resp.status_code, 200)
-                    self.assertIn("text/event-stream", resp.headers.get("content-type", ""))
+                with mock.patch.object(decrypt_router, "upsert_account_keys_in_store") as upsert_mock:
+                    with client.stream(
+                        "GET",
+                        "/api/decrypt_stream",
+                        params={"key": "00" * 32, "db_storage_path": str(db_storage)},
+                    ) as resp:
+                        self.assertEqual(resp.status_code, 200)
+                        self.assertIn("text/event-stream", resp.headers.get("content-type", ""))
 
-                    for line in resp.iter_lines():
-                        if not line:
-                            continue
-                        if isinstance(line, bytes):
-                            line = line.decode("utf-8", errors="ignore")
-                        line = str(line)
+                        for line in resp.iter_lines():
+                            if not line:
+                                continue
+                            if isinstance(line, bytes):
+                                line = line.decode("utf-8", errors="ignore")
+                            line = str(line)
 
-                        if line.startswith(":"):
-                            continue
-                        if not line.startswith("data: "):
-                            continue
-                        payload = json.loads(line[len("data: ") :])
-                        events.append(payload)
-                        if payload.get("type") in {"complete", "error"}:
-                            break
+                            if line.startswith(":"):
+                                continue
+                            if not line.startswith("data: "):
+                                continue
+                            payload = json.loads(line[len("data: ") :])
+                            events.append(payload)
+                            if payload.get("type") in {"complete", "error"}:
+                                break
 
                 self.assertEqual(events[-1].get("type"), "complete")
                 self.assertEqual(events[-1].get("status"), "failed")
                 self.assertEqual(events[-1].get("success_count"), 0)
                 self.assertEqual(events[-1].get("failure_count"), 1)
                 self.assertIn("密钥可能不匹配", str(events[-1].get("message") or ""))
+                upsert_mock.assert_not_called()
 
                 out = root / "output" / "databases" / "wxid_bad" / "MSG0.db"
                 self.assertFalse(out.exists())
