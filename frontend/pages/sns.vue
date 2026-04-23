@@ -593,32 +593,15 @@
                 <div class="text-sm font-medium text-gray-900">&#24403;&#21069;&#23548;&#20986;&#20219;&#21153;</div>
                 <div class="mt-1 text-xs text-gray-500 break-all">ID&#65306;{{ exportJob.exportId || '-' }}</div>
               </div>
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="px-2.5 py-1 rounded-full text-xs border border-gray-200 bg-white text-gray-600">
-                  &#29366;&#24577;&#65306;{{ exportStatusText }}
-                </span>
-                <span class="px-2.5 py-1 rounded-full text-xs border border-gray-200 bg-white text-gray-600">
-                  {{ exportOverallPercent }}%
-                </span>
-                <button
-                    v-if="canCancelSnsExport"
-                    type="button"
-                    class="px-3 py-1.5 rounded-md text-xs border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    :disabled="isExportCancelling"
-                    @click="cancelSnsExportJob"
-                >
-                  {{ isExportCancelling ? '\u53d6\u6d88\u4e2d\u2026' : '\u53d6\u6d88\u5bfc\u51fa' }}
-                </button>
-                <button
-                    v-if="exportJob.status === 'done' && exportJob.exportId && hasWebExportFolder"
-                    type="button"
-                    class="px-3 py-1.5 rounded-md text-xs border border-[#03C160]/20 bg-[#03C160]/10 text-[#027a44] hover:bg-[#03C160]/15 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    :disabled="exportSaveBusy"
-                    @click="saveSnsExportToSelectedFolder()"
-                >
-                  {{ exportSaveBusy ? '\u4fdd\u5b58\u4e2d\u2026' : exportSaveState === 'success' ? '\u91cd\u65b0\u4fdd\u5b58\u5230\u6587\u4ef6\u5939' : '\u4fdd\u5b58\u5230\u5df2\u9009\u6587\u4ef6\u5939' }}
-                </button>
-              </div>
+              <button
+                  v-if="exportJob.status === 'done' && exportJob.exportId && hasWebExportFolder"
+                  type="button"
+                  class="w-fit px-3 py-1.5 rounded-md text-xs border border-[#03C160]/20 bg-[#03C160]/10 text-[#027a44] hover:bg-[#03C160]/15 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="exportSaveBusy"
+                  @click="saveSnsExportToSelectedFolder()"
+              >
+                {{ exportSaveBusy ? '保存中…' : exportSaveState === 'success' ? '重新保存到文件夹' : '保存到已选文件夹' }}
+              </button>
             </div>
 
             <div class="space-y-2">
@@ -816,15 +799,6 @@
           <div class="text-xs text-gray-500">&#24050;&#36873; {{ exportSelectedCount }} &#20154;</div>
           <div class="flex gap-2">
             <button
-                v-if="canCancelSnsExport"
-                type="button"
-                class="px-4 py-2 rounded-md text-sm border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                :disabled="isExportCancelling"
-                @click="cancelSnsExportJob"
-            >
-              {{ isExportCancelling ? '\u53d6\u6d88\u4e2d\u2026' : '\u53d6\u6d88\u5bfc\u51fa' }}
-            </button>
-            <button
                 type="button"
                 class="px-4 py-2 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors"
                 @click="closeExportModal"
@@ -833,11 +807,12 @@
             </button>
             <button
                 type="button"
-                class="px-4 py-2 rounded-md text-sm bg-[#03C160] text-white hover:bg-[#02ad56] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                :disabled="!selectedAccount || !exportSelectedCount || isSnsExportBusy"
-                @click="startSnsExportFromModal"
+                class="px-4 py-2 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                :class="canCancelSnsExport ? 'border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-[#03C160] text-white hover:bg-[#02ad56]'"
+                :disabled="exportPrimaryActionDisabled"
+                @click="handleExportPrimaryAction"
             >
-              {{ isSnsExportBusy ? '导出中…' : '开始导出' }}
+              {{ exportPrimaryActionLabel }}
             </button>
           </div>
         </div>
@@ -1139,17 +1114,6 @@ const exportActiveFormatLabel = computed(() => {
   return exportFormatOptions.find((item) => item.value === exportActiveFormat.value)?.label || 'HTML'
 })
 
-const exportStatusText = computed(() => {
-  const status = String(exportJob.value?.status || '').trim()
-  return {
-    queued: '排队中',
-    running: '导出中',
-    done: '已完成',
-    error: '失败',
-    cancelled: '已取消'
-  }[status] || status || '-'
-})
-
 const exportOverallPercent = computed(() => {
   const status = String(exportJob.value?.status || '').trim()
   if (status === 'done') return 100
@@ -1186,6 +1150,24 @@ const canCancelSnsExport = computed(() => {
   const status = String(exportJob.value?.status || '').trim()
   return status === 'queued' || status === 'running'
 })
+
+const exportPrimaryActionLabel = computed(() => {
+  if (canCancelSnsExport.value) return isExportCancelling.value ? '取消中…' : '取消导出'
+  return isSnsExportBusy.value ? '导出中…' : '开始导出'
+})
+
+const exportPrimaryActionDisabled = computed(() => {
+  if (canCancelSnsExport.value) return isExportCancelling.value
+  return !selectedAccount.value || !exportSelectedCount.value || isSnsExportBusy.value
+})
+
+const handleExportPrimaryAction = async () => {
+  if (canCancelSnsExport.value) {
+    await cancelSnsExportJob()
+    return
+  }
+  await startSnsExportFromModal()
+}
 
 const normalizeExportSelectedUsernames = (list) => {
   const validUsernames = new Set(
