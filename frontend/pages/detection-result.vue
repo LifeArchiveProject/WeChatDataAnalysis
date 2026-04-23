@@ -35,6 +35,30 @@
             <span v-if="customPath">当前指定检测路径：<span class="font-mono bg-gray-50 px-1 rounded text-[#000000e6]">{{ customPath }}</span></span>
             <span v-else>如果自动检测漏了，您可以手动指定微信数据根目录 (通常名为 xwechat_files) 让系统重新扫描。</span>
           </p>
+          <div class="mt-3">
+            <label for="wechatInstallPath" class="block text-xs font-medium text-[#000000e6]">微信安装目录（可选）</label>
+            <div class="mt-2 flex flex-col lg:flex-row gap-3">
+              <input
+                id="wechatInstallPath"
+                v-model="wechatInstallPath"
+                type="text"
+                placeholder="例如: D:\Program Files\Tencent\WeChat 或 D:\Program Files\Tencent\WeChat\Weixin.exe"
+                class="flex-1 px-3 py-2 bg-white border border-[#EDEDED] rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
+                @blur="persistWechatInstallPath"
+              />
+              <button
+                type="button"
+                @click="pickWechatInstallDirectory"
+                :disabled="isPickingWechatInstallPath"
+                class="shrink-0 px-4 py-2 bg-white border border-[#EDEDED] text-[#000000e6] rounded-lg text-xs font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-wait transition-all duration-200"
+              >
+                {{ isPickingWechatInstallPath ? '选择中...' : '选择微信目录' }}
+              </button>
+            </div>
+            <p class="text-xs text-[#7F7F7F] mt-2">
+              一键获取数据库密钥会优先使用这里填写的路径。支持安装目录或 Weixin.exe / WeChat.exe 路径。
+            </p>
+          </div>
         </div>
         <button @click="handlePickDirectory" :disabled="loading"
                 class="shrink-0 px-5 py-2.5 bg-[#07C160] text-white rounded-xl text-sm font-medium hover:bg-[#06AD56] focus:ring-2 focus:ring-[#07C160] focus:ring-offset-1 disabled:opacity-50 transition-all duration-200 flex items-center justify-center">
@@ -238,6 +262,7 @@
 <script setup>
 import {computed, onMounted, ref} from 'vue'
 import {useApi} from '~/composables/useApi'
+import {normalizeWechatInstallPath, readStoredWechatInstallPath, writeStoredWechatInstallPath} from '~/lib/wechat-install-path'
 import {useAppStore} from '~/stores/app'
 
 const { detectWechat, pickSystemDirectory } = useApi()
@@ -245,6 +270,8 @@ const appStore = useAppStore()
 const loading = ref(false)
 const detectionResult = ref(null)
 const customPath = ref('')
+const wechatInstallPath = ref('')
+const isPickingWechatInstallPath = ref(false)
 const STORAGE_KEY = 'wechat_data_root_path'
 
 const isDesktopShell = () => {
@@ -289,6 +316,52 @@ const handlePickDirectory = async () => {
 }
 
 // 计算属性：将当前登录账号排在第一位
+const persistWechatInstallPath = () => {
+  const normalized = normalizeWechatInstallPath(wechatInstallPath.value)
+  wechatInstallPath.value = normalized
+  writeStoredWechatInstallPath(normalized)
+}
+
+const pickWechatInstallDirectory = async () => {
+  if (isPickingWechatInstallPath.value) return
+  isPickingWechatInstallPath.value = true
+
+  try {
+    let path = ''
+
+    if (isDesktopShell()) {
+      const res = await window.wechatDesktop.chooseDirectory({
+        title: '请选择微信安装目录'
+      })
+      if (!res || res.canceled || !res.filePaths?.length) return
+      path = res.filePaths[0]
+    } else {
+      try {
+        const res = await pickSystemDirectory({
+          title: '请选择微信安装目录',
+          initial_dir: normalizeWechatInstallPath(wechatInstallPath.value)
+        })
+        if (!res || !res.path) return
+        path = res.path
+      } catch (e) {
+        console.error('通过API唤起微信安装目录选择器失败:', e)
+        path = window.prompt('无法直接唤起窗口，请输入微信安装目录或 Weixin.exe / WeChat.exe 的绝对路径:')
+        if (!path) return
+      }
+    }
+
+    const normalized = normalizeWechatInstallPath(path)
+    if (!normalized) return
+    wechatInstallPath.value = normalized
+    persistWechatInstallPath()
+  } catch (e) {
+    console.error('选择微信安装目录失败:', e)
+  } finally {
+    isPickingWechatInstallPath.value = false
+  }
+}
+
+// ?????????????????
 const sortedAccounts = computed(() => {
   if (!detectionResult.value?.data?.accounts) return []
   const accounts = [...detectionResult.value.data.accounts]
@@ -384,6 +457,8 @@ const startDetection = async () => {
 
 // 跳转到解密页面并传递账户信息
 const goToDecrypt = (account) => {
+  persistWechatInstallPath()
+
   if (process.client && typeof window !== 'undefined') {
     sessionStorage.setItem('selectedAccount', JSON.stringify({
       account_name: account.account_name,
@@ -412,6 +487,7 @@ onMounted(() => {
       const saved = String(localStorage.getItem(STORAGE_KEY) || '').trim()
       if (saved) customPath.value = saved
     } catch {}
+    wechatInstallPath.value = readStoredWechatInstallPath()
   }
   startDetection()
 })

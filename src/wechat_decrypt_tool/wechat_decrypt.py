@@ -731,6 +731,8 @@ def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> di
             "success": account_success,
             "failed": len(databases) - account_success,
             "output_dir": str(account_output_dir),
+            "source_db_storage_path": str(source_db_storage_path),
+            "source_wxid_dir": str(wxid_dir),
             "processed_files": account_processed,
             "failed_files": account_failed,
             "db_diagnostics": account_db_diagnostics,

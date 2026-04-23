@@ -118,6 +118,38 @@ def _acquire_decrypt_account_guards(accounts: Any, *, reason: str) -> list[tuple
     return guards
 
 
+def _save_db_key_for_account(account: str, key: str, account_result: dict[str, Any] | None) -> None:
+    payload = dict(account_result or {})
+    success_count = int(payload.get("success") or 0)
+    if success_count <= 0:
+        logger.info("[decrypt] skip saving db key for failed account=%s success=%s", account, success_count)
+        return
+
+    source_wxid_dir = str(payload.get("source_wxid_dir") or "").strip()
+    source_db_storage_path = str(payload.get("source_db_storage_path") or "").strip()
+    aliases: list[str] = []
+
+    if source_wxid_dir:
+        wxid_dir_name = str(Path(source_wxid_dir).name or "").strip()
+        if wxid_dir_name and wxid_dir_name != str(account or "").strip():
+            aliases.append(wxid_dir_name)
+
+    upsert_account_keys_in_store(
+        str(account),
+        db_key=key,
+        aliases=aliases,
+        db_key_source_wxid_dir=source_wxid_dir or None,
+        db_key_source_db_storage_path=source_db_storage_path or None,
+    )
+    logger.info(
+        "[decrypt] saved db key account=%s aliases=%s source_wxid_dir=%s source_db_storage_path=%s",
+        str(account),
+        aliases,
+        source_wxid_dir,
+        source_db_storage_path,
+    )
+
+
 class DecryptRequest(BaseModel):
     """解密请求模型"""
 
@@ -170,8 +202,8 @@ async def decrypt_databases(request: DecryptRequest):
 
         # 成功解密后，按账号保存数据库密钥（用于前端自动回填）
         try:
-            for account_name in (results.get("account_results") or {}).keys():
-                upsert_account_keys_in_store(str(account_name), db_key=request.key)
+            for account_name, account_result in (results.get("account_results") or {}).items():
+                _save_db_key_for_account(str(account_name), request.key, account_result)
         except Exception:
             pass
 
@@ -417,6 +449,8 @@ async def decrypt_databases_stream(
                     "success": account_success,
                     "failed": len(dbs) - account_success,
                     "output_dir": str(account_output_dir),
+                    "source_db_storage_path": str(source_db_storage_path),
+                    "source_wxid_dir": str(wxid_dir),
                     "processed_files": account_processed,
                     "failed_files": account_failed,
                     "db_diagnostics": account_db_diagnostics,
@@ -481,8 +515,8 @@ async def decrypt_databases_stream(
 
             # Save db key for frontend autofill.
             try:
-                for account in (account_results or {}).keys():
-                    upsert_account_keys_in_store(str(account), db_key=k)
+                for account, account_result in (account_results or {}).items():
+                    _save_db_key_for_account(str(account), k, account_result)
             except Exception:
                 pass
 
