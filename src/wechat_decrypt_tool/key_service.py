@@ -29,6 +29,8 @@ from .media_helpers import _resolve_account_dir, _resolve_account_wxid_dir
 
 logger = logging.getLogger(__name__)
 
+WECHAT_EXECUTABLE_NAMES = ("Weixin.exe", "WeChat.exe")
+
 
 def _summarize_aes_key(value: Any) -> str:
     raw = str(value or "").strip()
@@ -109,19 +111,72 @@ def _resolve_wxid_dir_for_image_key(
     raise FileNotFoundError("无法定位该账号的 wxid_dir，请传入有效的 db_storage_path 或先完成数据库解密")
 
 
+def _normalize_user_path(value: Any) -> str:
+    raw = str(value or "").strip().strip('"').strip("'")
+    if not raw:
+        return ""
+    try:
+        return os.path.normpath(os.path.expandvars(raw))
+    except Exception:
+        return raw
+
+
+def _read_wechat_version_from_exe(exe_path: str) -> str:
+    normalized = _normalize_user_path(exe_path)
+    if not normalized:
+        return ""
+    try:
+        import win32api
+
+        version_info = win32api.GetFileVersionInfo(normalized, "\\")
+        return (
+            f"{version_info['FileVersionMS'] >> 16}."
+            f"{version_info['FileVersionMS'] & 0xFFFF}."
+            f"{version_info['FileVersionLS'] >> 16}."
+            f"{version_info['FileVersionLS'] & 0xFFFF}"
+        )
+    except Exception:
+        return ""
+
+
+def _resolve_manual_wechat_exe_path(wechat_install_path: Optional[str] = None) -> str:
+    normalized = _normalize_user_path(wechat_install_path)
+    if not normalized:
+        return ""
+
+    candidate = Path(normalized).expanduser()
+    executable_names = {name.lower() for name in WECHAT_EXECUTABLE_NAMES}
+    if candidate.is_file():
+        if candidate.name.lower() not in executable_names:
+            raise RuntimeError("手动路径必须指向微信安装目录，或直接指向 Weixin.exe / WeChat.exe")
+        return str(candidate)
+
+    if candidate.is_dir():
+        for exe_name in WECHAT_EXECUTABLE_NAMES:
+            exe_path = candidate / exe_name
+            if exe_path.is_file():
+                return str(exe_path)
+        raise RuntimeError("手动指定的微信安装目录中未找到 Weixin.exe 或 WeChat.exe")
+
+    raise RuntimeError(f"手动指定的微信安装目录不存在: {candidate}")
+
+
 # ======================  以下是hook逻辑  ======================================
 
 class WeChatKeyFetcher:
     def __init__(self):
-        self.process_name = "Weixin.exe"
+        self.process_names = {name.lower() for name in WECHAT_EXECUTABLE_NAMES}
         self.timeout_seconds = 60
+
+    def _is_wechat_process(self, name: Any) -> bool:
+        return str(name or "").strip().lower() in self.process_names
 
     def kill_wechat(self):
         """检测并查杀微信进程"""
         killed = False
         for proc in psutil.process_iter(['pid', 'name']):
             try:
-                if proc.info['name'] == self.process_name:
+                if self._is_wechat_process(proc.info['name']):
                     logger.info(f"Killing WeChat process: {proc.info['pid']}")
                     proc.terminate()
                     killed = True
@@ -134,11 +189,14 @@ class WeChatKeyFetcher:
     def launch_wechat(self, exe_path: str) -> int:
         """启动微信并返回 PID"""
         try:
-            process = subprocess.Popen(exe_path)
+            normalized_exe_path = _normalize_user_path(exe_path)
+            process = subprocess.Popen(normalized_exe_path)
             time.sleep(2)
             candidates = []
+            target_process_name = Path(normalized_exe_path).name.lower()
             for proc in psutil.process_iter(['pid', 'name', 'create_time']):
-                if proc.info['name'] == self.process_name:
+                proc_name = str(proc.info.get('name') or "").strip().lower()
+                if proc_name == target_process_name or self._is_wechat_process(proc_name):
                     candidates.append(proc)
 
             if candidates:
@@ -152,19 +210,32 @@ class WeChatKeyFetcher:
             logger.error(f"启动微信失败: {e}")
             raise RuntimeError(f"无法启动微信: {e}")
 
-    def fetch_db_key(self) -> dict:
+    def fetch_db_key(self, wechat_install_path: Optional[str] = None) -> dict:
         """调用 wx_key 仅获取数据库密钥 (Hook 模式)"""
         if wx_key is None:
             raise RuntimeError("wx_key 模块未安装或加载失败")
 
-        install_info = detect_wechat_installation()
-        exe_path = install_info.get('wechat_exe_path')
-        version = install_info.get('wechat_version')
+        manual_path = _normalize_user_path(wechat_install_path)
+        if manual_path:
+            exe_path = _resolve_manual_wechat_exe_path(manual_path)
+            version = _read_wechat_version_from_exe(exe_path)
+            logger.info(
+                "[db_key] 使用手动指定的微信安装路径: input=%s exe_path=%s version=%s",
+                manual_path,
+                exe_path,
+                version or "unknown",
+            )
+        else:
+            install_info = detect_wechat_installation()
+            exe_path = _normalize_user_path(install_info.get('wechat_exe_path'))
+            version = str(install_info.get('wechat_version') or "").strip()
 
-        if not exe_path or not version:
-            raise RuntimeError("无法自动定位微信安装路径或版本")
+        if not exe_path:
+            raise RuntimeError("无法自动定位微信安装路径，请手动填写微信安装目录")
+        if not Path(exe_path).is_file():
+            raise RuntimeError(f"微信可执行文件不存在: {exe_path}")
 
-        logger.info(f"Detect WeChat: {version} at {exe_path}")
+        logger.info(f"Detect WeChat: {version or 'unknown'} at {exe_path}")
 
         self.kill_wechat()
         pid = self.launch_wechat(exe_path)
@@ -204,9 +275,9 @@ class WeChatKeyFetcher:
             "db_key": found_db_key
         }
 
-def get_db_key_workflow():
+def get_db_key_workflow(wechat_install_path: Optional[str] = None):
     fetcher = WeChatKeyFetcher()
-    return fetcher.fetch_db_key()
+    return fetcher.fetch_db_key(wechat_install_path=wechat_install_path)
 
 
 # ==============================   以下是图片密钥逻辑  =====================================

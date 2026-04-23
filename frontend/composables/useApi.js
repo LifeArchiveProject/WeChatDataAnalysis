@@ -397,6 +397,7 @@ export const useApi = () => {
   const getSavedKeys = async (params = {}) => {
     const query = new URLSearchParams()
     if (params && params.account) query.set('account', params.account)
+    if (params && params.db_storage_path) query.set('db_storage_path', params.db_storage_path)
     const url = '/keys' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
@@ -547,8 +548,11 @@ export const useApi = () => {
   }
 
   // 获取数据库密钥
-  const getKeys = async () => {
-    return await request('/get_keys')
+  const getKeys = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.wechat_install_path) query.set('wechat_install_path', params.wechat_install_path)
+    const url = '/get_keys' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
   }
 
   // 获取图片密钥
