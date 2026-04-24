@@ -3051,14 +3051,26 @@ def _try_find_decrypted_resource(account_dir: Path, md5: str) -> Optional[Path]:
     if not resource_dir.exists():
         return None
     sub_dir = md5[:2] if len(md5) >= 2 else "00"
+
+    # Prefer the standard layout: resource/{md5-prefix}/{md5}.{ext}
     target_dir = resource_dir / sub_dir
-    if not target_dir.exists():
-        return None
-    # 查找匹配MD5的文件（可能有不同扩展名）
-    for ext in ["jpg", "png", "gif", "webp", "mp4", "dat"]:
-        p = target_dir / f"{md5}.{ext}"
-        if p.exists():
-            return p
+    search_dirs = [target_dir]
+
+    # Support wxdump flat media layout after it is imported as resource.
+    # Typical files: resource/{md5}.jpg, resource/{md5}_t.jpg, or resource/{md5}.wxgf.
+    if resource_dir not in search_dirs:
+        search_dirs.append(resource_dir)
+
+    exts = ["jpg", "png", "gif", "webp", "mp4", "dat", "wxgf", "wxgf.jpg"]
+    suffixes = ["", "_t", "_b", "_h"]
+    for directory in search_dirs:
+        if not directory.exists():
+            continue
+        for suffix in suffixes:
+            for ext in exts:
+                candidate = directory / f"{md5}{suffix}.{ext}"
+                if candidate.exists():
+                    return candidate
     return None
 
 
