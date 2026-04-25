@@ -195,31 +195,14 @@ npm run dist
 
 ## 致谢
 
-本项目的开发过程中参考了以下优秀的开源项目和资源：
-
-1. **[echotrace](https://github.com/ycccccccy/echotrace)** - 微信数据解析/取证工具
-   - 本项目大量功能参考并复用其实现思路，提供了重要技术支持
-
-2. **[WeFlow](https://github.com/hicccc77/WeFlow)** - 微信数据分析工具
-   - 提供了重要的功能参考和技术支持
-
-3. **[wx_key](https://github.com/ycccccccy/wx_key)** - 微信数据库与图片密钥提取工具
-   - 支持获取微信 4.x 数据库密钥与缓存图片密钥
-   - 本项目推荐使用此工具获取密钥
-
-4. **[wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs)** - Rust实现的微信数据库解密工具
-   - 提供了SQLCipher 4.0解密的正确实现参考
-   - 本项目的HMAC验证和页面处理逻辑基于此项目的实现
-
-5. **[oh-my-wechat](https://github.com/chclt/oh-my-wechat)** - 微信聊天记录查看工具
-   - 提供了优秀的聊天记录界面设计参考
-   - 本项目的聊天界面风格参考了此项目的实现
-
-6. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)** - 微信聊天记录工具（Vue3）
-   - 提供了聊天记录展示与交互的实现参考
-
-7. **[wx-dat](https://github.com/waaaaashi/wx-dat)** - 微信图片密钥获取工具
-   - 实现真正的无头获取图片密钥，不再依赖扫描微信内存与点击朋友圈大图
+1. **[echotrace](https://github.com/ycccccccy/echotrace)**
+2. **[WeFlow](https://github.com/hicccc77/WeFlow)**
+3. **[wx_key](https://github.com/ycccccccy/wx_key)** 
+4. **[wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs)** 
+5. **[oh-my-wechat](https://github.com/chclt/oh-my-wechat)** 
+6. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)** 
+7. **[wx-dat](https://github.com/waaaaashi/wx-dat)**
+8. **[Ritsu](https://xhslink.com/m/7YJUsd1sgyF)**
 
 ## Star History
 
