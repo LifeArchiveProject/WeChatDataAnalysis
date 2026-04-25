@@ -1,296 +1,288 @@
 <template>
-  <div class="detection-result-page min-h-screen relative overflow-hidden">
-    <!-- 网格背景 -->
-    <div class="absolute inset-0 bg-grid-pattern opacity-5 pointer-events-none"></div>
-    
-    <!-- 装饰元素 -->
-    <div class="absolute top-20 left-20 w-72 h-72 bg-[#07C160] opacity-5 rounded-full blur-3xl pointer-events-none"></div>
-    <div class="absolute top-40 right-20 w-96 h-96 bg-[#10AEEF] opacity-5 rounded-full blur-3xl pointer-events-none"></div>
-    <div class="absolute -bottom-8 left-40 w-80 h-80 bg-[#91D300] opacity-5 rounded-full blur-3xl pointer-events-none"></div>
-    
-    <!-- 主要内容 -->
-    <div class="relative z-10 w-full max-w-5xl mx-auto px-4 sm:px-5 py-6 sm:py-8 animate-fade-in">
-      <!-- 顶部操作栏 -->
-      <div class="flex items-center justify-between mb-4">
-        <div>
-          <h2 class="text-[22px] font-bold leading-none">
-            <span class="bg-gradient-to-r from-[#07C160] to-[#10AEEF] bg-clip-text text-transparent">检测结果</span>
-          </h2>
+  <div class="detection-result-page relative min-h-screen overflow-hidden px-3 py-4 text-[#000000e6] sm:px-5 sm:py-5">
+    <div class="pointer-events-none absolute inset-0 bg-grid-pattern opacity-5"></div>
+    <div class="pointer-events-none absolute left-20 top-20 h-72 w-72 rounded-full bg-[#07C160] opacity-5 blur-3xl"></div>
+    <div class="pointer-events-none absolute right-20 top-40 h-96 w-96 rounded-full bg-[#10AEEF] opacity-5 blur-3xl"></div>
+    <div class="pointer-events-none absolute -bottom-8 left-40 h-80 w-80 rounded-full bg-[#91D300] opacity-5 blur-3xl"></div>
+
+    <main class="relative z-10 mx-auto w-full max-w-6xl">
+      <div class="mb-3 flex flex-col gap-3 rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-4 backdrop-blur sm:p-5 lg:flex-row lg:items-start lg:justify-between">
+        <div class="min-w-0">
+          <p class="text-[12px] font-medium tracking-[0.16em] text-[#07C160]">本地检测</p>
+          <h1 class="mt-1.5 text-[30px] font-semibold leading-tight tracking-[-0.04em] text-[#000000e6] sm:text-[38px]">
+            {{ loading ? '正在检测微信数据' : detectionResult?.error ? '需要手动指定目录' : '找到可操作的微信账号' }}
+          </h1>
+          <p class="mt-2 max-w-3xl text-[14px] leading-6 text-[#6B7280]">
+            {{ loading ? '正在检查微信安装信息、账号目录和数据库文件。' : detectionResult?.error ? '自动检测没有找到可用数据，可以在下方手动选择 xwechat_files 目录后重试。' : '选择要处理的账号进入解密提取。如果结果不完整，可以手动指定数据根目录后重新检测。' }}
+          </p>
         </div>
-        <NuxtLink to="/" 
-          class="inline-flex items-center px-3 py-1.5 rounded-lg text-xs text-[#07C160] hover:text-[#06AD56] hover:bg-white/80 font-medium transition-colors">
-          <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+
+        <NuxtLink
+          to="/"
+          class="inline-flex shrink-0 items-center rounded-lg border border-[#CFEEDB] bg-[#F7FDF9]/82 px-2.5 py-1.5 text-xs font-medium text-[#07C160] transition hover:border-[#CFEEDB] hover:bg-[#F7FDF9] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20"
+        >
+          <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
           </svg>
           返回首页
         </NuxtLink>
       </div>
 
-      <div
-        v-if="detectionResult && !loading && !detectionResult.error"
-        class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-4"
-      >
-        <div class="bg-white/90 backdrop-blur rounded-xl px-4 py-3 border border-[#EDEDED]">
-          <div class="flex items-center justify-between gap-3">
-            <div class="min-w-0">
-              <p class="text-[11px] tracking-[0.08em] uppercase text-[#7F7F7F]">微信版本</p>
-              <p class="mt-1 text-lg font-semibold text-[#000000e6] truncate">{{ detectionResult.data?.wechat_version || '未知' }}</p>
+      <div v-if="loading" class="flex min-h-[48vh] items-center justify-center">
+        <div class="w-full max-w-3xl rounded-lg border border-[#DDF4E7] bg-[#F7FDF9]/76 p-4 backdrop-blur sm:p-5">
+          <div class="flex flex-col gap-4">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2 text-[13px] font-medium text-[#07C160]">
+                  <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" class="opacity-20"></circle>
+                    <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"></path>
+                  </svg>
+                  <span>正在检测</span>
+                </div>
+                <h3 class="mt-2 text-[22px] font-semibold leading-tight tracking-[-0.03em] text-[#000000e6] sm:text-[28px]">
+                  正在寻找可用的微信数据
+                </h3>
+                <p class="mt-1.5 max-w-2xl text-[14px] leading-6 text-[#6B7280]">
+                  这一步会自动检查本机环境、匹配账号并统计数据库文件。检测期间请保持当前页面打开。
+                </p>
+              </div>
+              <span class="hidden shrink-0 rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2.5 py-1 text-[12px] font-medium text-[#07C160] sm:inline-flex">
+                自动进行
+              </span>
             </div>
-            <div class="w-9 h-9 shrink-0 bg-[#07C160]/10 rounded-lg flex items-center justify-center">
-              <svg class="w-[18px] h-[18px] text-[#07C160]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-              </svg>
-            </div>
-          </div>
-        </div>
 
-        <div class="bg-white/90 backdrop-blur rounded-xl px-4 py-3 border border-[#EDEDED]">
-          <div class="flex items-center justify-between gap-3">
-            <div class="min-w-0">
-              <p class="text-[11px] tracking-[0.08em] uppercase text-[#7F7F7F]">检测账号</p>
-              <p class="mt-1 text-lg font-semibold text-[#000000e6]">{{ detectionResult.data?.total_accounts || 0 }} 个</p>
-            </div>
-            <div class="w-9 h-9 shrink-0 bg-[#10AEEF]/10 rounded-lg flex items-center justify-center">
-              <svg class="w-[18px] h-[18px] text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283-.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
-              </svg>
-            </div>
-          </div>
-        </div>
+            <div class="space-y-2.5 rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-3">
+              <div class="h-2 overflow-hidden rounded-full border border-[#DDF4E7] bg-[#F7FCF8]/86">
+                <div class="h-full w-1/2 rounded-full bg-[#07C160] animate-pulse"></div>
+              </div>
 
-        <div class="bg-white/90 backdrop-blur rounded-xl px-4 py-3 border border-[#EDEDED]">
-          <div class="flex items-center justify-between gap-3">
-            <div class="min-w-0">
-              <p class="text-[11px] tracking-[0.08em] uppercase text-[#7F7F7F]">数据库文件</p>
-              <p class="mt-1 text-lg font-semibold text-[#000000e6]">{{ detectionResult.data?.total_databases || 0 }} 个</p>
+              <div class="grid gap-2 sm:grid-cols-3">
+                <div class="rounded-md border border-[#E1EFE5] bg-[#F7FCF8]/86 px-2.5 py-2.5">
+                  <div class="flex items-center gap-2 text-[13px] font-medium text-[#000000e6]">
+                    <span class="h-1.5 w-1.5 rounded-full bg-[#07C160]"></span>
+                    <span>检查环境</span>
+                  </div>
+                  <p class="mt-1 text-[12px] leading-5 text-[#7F7F7F]">读取微信安装与数据目录</p>
+                </div>
+
+                <div class="rounded-md border border-[#E1EFE5] bg-[#F7FCF8]/86 px-2.5 py-2.5">
+                  <div class="flex items-center gap-2 text-[13px] font-medium text-[#000000e6]">
+                    <span class="h-1.5 w-1.5 rounded-full bg-[#07C160]"></span>
+                    <span>匹配账号</span>
+                  </div>
+                  <p class="mt-1 text-[12px] leading-5 text-[#7F7F7F]">找到可操作的本地账号</p>
+                </div>
+
+                <div class="rounded-md border border-[#E1EFE5] bg-[#F7FCF8]/86 px-2.5 py-2.5">
+                  <div class="flex items-center gap-2 text-[13px] font-medium text-[#000000e6]">
+                    <span class="h-1.5 w-1.5 rounded-full bg-[#07C160]"></span>
+                    <span>汇总数据</span>
+                  </div>
+                  <p class="mt-1 text-[12px] leading-5 text-[#7F7F7F]">整理后续解密所需信息</p>
+                </div>
+              </div>
             </div>
-            <div class="w-9 h-9 shrink-0 bg-[#91D300]/10 rounded-lg flex items-center justify-center">
-              <svg class="w-[18px] h-[18px] text-[#91D300]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/>
-              </svg>
+
+            <div class="flex flex-col gap-2 border-t border-[#DDF4E7] pt-3 text-[12px] leading-5 text-[#7F7F7F] sm:flex-row sm:items-center sm:justify-between">
+              <span>如果等待时间较长，通常是本地文件较多或磁盘读取较慢。</span>
+              <span class="font-medium text-[#07C160]">请稍候</span>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- 第一步检测：数据目录与微信安装目录都在这里设置 -->
-      <div v-if="!loading" class="bg-white/90 backdrop-blur rounded-xl p-3.5 md:p-4 border border-[#EDEDED] mb-4 space-y-3">
-        <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div>
-            <h3 class="text-[13px] font-semibold text-[#000000e6] flex items-center">
-              未找到想要的账号？
-<!--            <span class="ml-2 px-2 py-0.5 bg-gray-100 text-gray-500 rounded text-xs font-normal">深度检测兜底</span>-->
-            </h3>
-            <p class="text-[11px] text-[#7F7F7F] mt-1">
-              <span v-if="customPath">当前指定检测路径：<span class="font-mono bg-gray-50 px-1 rounded text-[#000000e6]">{{ customPath }}</span></span>
-              <span v-else>如果自动检测漏了，您可以手动指定微信数据根目录 (通常名为 xwechat_files) 让系统重新扫描。</span>
-            </p>
+      <section v-else class="grid gap-4 lg:grid-cols-[0.82fr_1.18fr]">
+        <aside class="space-y-3">
+          <div
+            v-if="detectionResult && !detectionResult.error"
+            class="grid grid-cols-1 gap-2.5 sm:grid-cols-3 lg:grid-cols-3"
+          >
+            <div class="rounded-lg border border-[#CFEEDB] bg-[#EFFAF3]/82 p-3 backdrop-blur">
+              <p class="text-[12px] font-medium text-[#5F6F66]">微信版本</p>
+              <p class="mt-1.5 truncate text-[22px] font-semibold tracking-[-0.03em] text-[#000000e6]">{{ detectionResult.data?.wechat_version || '未知' }}</p>
+            </div>
+            <div class="rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-3 backdrop-blur">
+              <p class="text-[12px] font-medium text-[#5F6F66]">检测账号</p>
+              <p class="mt-1.5 text-[22px] font-semibold tracking-[-0.03em] text-[#000000e6]">{{ detectionResult.data?.total_accounts || 0 }} 个</p>
+            </div>
+            <div class="rounded-lg border border-[#CFEEDB] bg-[#F1FAF4]/82 p-3 backdrop-blur">
+              <p class="text-[12px] font-medium text-[#5F6F66]">数据库文件</p>
+              <p class="mt-1.5 text-[22px] font-semibold tracking-[-0.03em] text-[#000000e6]">{{ detectionResult.data?.total_databases || 0 }} 个</p>
+            </div>
           </div>
-          <button @click="handlePickDirectory" :disabled="loading"
-                  class="shrink-0 px-4 py-2.5 bg-[#07C160] text-white rounded-xl text-xs font-medium hover:bg-[#06AD56] focus:ring-2 focus:ring-[#07C160] focus:ring-offset-1 disabled:opacity-50 transition-all duration-200 flex items-center justify-center">
-            <svg v-if="!loading" class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-            </svg>
-            <svg v-else class="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 48 48" aria-hidden="true">
-              <circle class="opacity-20" cx="24" cy="24" r="18" stroke="currentColor" stroke-width="6"></circle>
-              <circle
-                cx="24"
-                cy="24"
-                r="18"
-                stroke="currentColor"
-                stroke-width="6"
-                stroke-linecap="round"
-                stroke-dasharray="28 72"
-                pathLength="100"
-                transform="rotate(-90 24 24)"
-              ></circle>
-            </svg>
-            {{ loading ? '检测中...' : '手动选择目录检测' }}
-          </button>
-        </div>
 
-        <div class="pt-3 border-t border-[#F3F3F3]">
-          <label for="wechatInstallPath" class="block text-[13px] font-medium text-[#000000e6] mb-2">
-            微信安装目录（第一步先填这里）
-          </label>
-          <div class="flex flex-col lg:flex-row gap-3">
+          <div class="rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-4 backdrop-blur sm:p-5">
+            <div class="flex items-center justify-between gap-2.5">
+              <div>
+                <div class="text-[15px] font-medium text-[#000000e6]">手动补充路径</div>
+                <p class="mt-1 text-[12px] leading-5 text-[#7F7F7F]">自动检测不完整时，可以指定微信数据根目录重新扫描。</p>
+              </div>
+            </div>
+
+            <div v-if="customPath" class="mt-3 rounded-md border border-[#E1EFE5] bg-[#F7FCF8]/86 px-2.5 py-2.5">
+              <p class="text-[12px] font-medium text-[#5F6F66]">当前检测路径</p>
+              <p class="mt-1 break-all font-mono text-[12px] leading-5 text-[#000000d9]">{{ customPath }}</p>
+            </div>
+
+            <button
+              type="button"
+              :disabled="loading"
+              class="mt-3 inline-flex w-full items-center justify-center rounded-lg bg-[#07C160] px-3 py-2.5 text-sm font-medium text-white transition hover:bg-[#06AD56] focus:outline-none focus:ring-2 focus:ring-[#07C160]/25 disabled:opacity-50"
+              @click="handlePickDirectory"
+            >
+              <svg v-if="!loading" class="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              <svg v-else class="mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+                <circle class="opacity-20" cx="24" cy="24" r="18" stroke="currentColor" stroke-width="6"></circle>
+                <circle cx="24" cy="24" r="18" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-dasharray="28 72" pathLength="100" transform="rotate(-90 24 24)"></circle>
+              </svg>
+              {{ loading ? '检测中...' : '选择 xwechat_files 目录' }}
+            </button>
+          </div>
+
+          <div class="rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-4 backdrop-blur sm:p-5">
+            <label for="wechatInstallPath" class="block text-[15px] font-medium text-[#000000e6]">
+              微信安装目录
+            </label>
+            <p class="mt-1 text-[12px] leading-5 text-[#7F7F7F]">
+              一键获取数据库密钥会优先使用这里的路径。
+            </p>
             <input
               id="wechatInstallPath"
               v-model="wechatInstallPath"
               type="text"
               placeholder="例如: D:\Program Files\Tencent\WeChat 或 D:\Program Files\Tencent\WeChat\Weixin.exe"
-              class="flex-1 px-4 py-2.5 bg-white border border-[#EDEDED] rounded-lg font-mono text-[13px] focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
+              class="mt-3 w-full rounded-lg border border-[#DDEBE0] bg-[#F7FCF8]/86 px-3 py-2 font-mono text-[13px] text-[#000000d9] transition focus:border-[#07C160] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20"
               @blur="persistWechatInstallPath"
             />
             <button
               type="button"
-              @click="pickWechatInstallDirectory"
               :disabled="isPickingWechatInstallPath"
-              class="shrink-0 px-4 py-2.5 bg-white border border-[#EDEDED] text-[#000000e6] rounded-xl text-xs font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-wait transition-all duration-200"
+              class="mt-2 inline-flex w-full items-center justify-center rounded-lg border border-[#DDEBE0] bg-[#F7FCF8]/86 px-3 py-2 text-sm font-medium text-[#4A4A4A] transition hover:bg-[#F1FAF4] focus:outline-none focus:ring-2 focus:ring-[#07C160]/15 disabled:cursor-wait disabled:opacity-50"
+              @click="pickWechatInstallDirectory"
             >
               {{ isPickingWechatInstallPath ? '选择中...' : '选择微信目录' }}
             </button>
           </div>
-          <p class="text-[11px] text-[#7F7F7F] mt-2">
-            一键获取数据库密钥会优先使用这里填写的路径。支持填写安装目录，也支持直接填写 <span class="font-mono">Weixin.exe</span> / <span class="font-mono">WeChat.exe</span> 路径。
-          </p>
-        </div>
-      </div>
-      
-      <!-- 主内容区域 -->
-      <div :class="loading ? 'flex min-h-[52vh] items-center justify-center' : ''">
-        <!-- 检测中状态 -->
-        <div v-if="loading" class="w-full max-w-3xl rounded-[24px] border border-[#EDEDED] bg-white/92 px-5 py-6 sm:px-8 sm:py-7">
-          <div class="flex flex-col items-center text-center">
-            <div class="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-[#07C160]/10">
-              <span class="absolute inset-0 rounded-2xl border border-[#07C160]/10"></span>
-              <svg class="h-5 w-5 animate-spin text-[#07C160]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" class="opacity-20"></circle>
-                <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"></path>
-              </svg>
-            </div>
+        </aside>
 
-            <div class="mt-4 flex flex-wrap items-center justify-center gap-2">
-              <span class="inline-flex items-center rounded-full bg-[#07C160]/10 px-2.5 py-1 text-[11px] font-medium text-[#07C160]">
-                检测中
-              </span>
-              <span class="text-[11px] text-[#7F7F7F]">正在自动读取本机微信环境</span>
-            </div>
-
-            <h3 class="mt-3 text-[20px] font-semibold text-[#000000e6] leading-tight">正在检查账号与数据库文件</h3>
-            <p class="mt-2 max-w-[560px] text-[13px] leading-6 text-[#7F7F7F]">
-              会依次确认微信安装信息、最近登录账号以及可用数据库，通常几秒内完成。
-            </p>
-
-            <div class="mt-5 h-1.5 w-full max-w-[620px] overflow-hidden rounded-full bg-[#F3F4F6]">
-              <div class="h-full w-2/5 rounded-full bg-gradient-to-r from-[#07C160] via-[#34D17A] to-[#8CE0AF] animate-pulse"></div>
-            </div>
-
-            <div class="mt-5 flex flex-wrap items-center justify-center gap-2.5">
-              <div class="inline-flex items-center gap-2 rounded-full border border-[#EDEDED] bg-[#FAFAFA] px-3 py-2 text-[12px] text-[#000000d9]">
-                <span class="h-2 w-2 rounded-full bg-[#07C160] animate-pulse"></span>
-                <span>安装信息</span>
+        <div class="rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-4 backdrop-blur sm:p-5">
+          <div v-if="detectionResult?.error" class="flex min-h-[340px] flex-col justify-between gap-4">
+            <div>
+              <div class="flex items-center gap-2 text-[13px] font-medium text-[#D64A4A]">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>未找到微信数据</span>
               </div>
-              <div class="inline-flex items-center gap-2 rounded-full border border-[#EDEDED] bg-[#FAFAFA] px-3 py-2 text-[12px] text-[#000000d9]">
-                <span class="h-2 w-2 rounded-full bg-[#07C160] animate-pulse"></span>
-                <span>账号匹配</span>
-              </div>
-              <div class="inline-flex items-center gap-2 rounded-full border border-[#EDEDED] bg-[#FAFAFA] px-3 py-2 text-[12px] text-[#000000d9]">
-                <span class="h-2 w-2 rounded-full bg-[#07C160] animate-pulse"></span>
-                <span>数据库汇总</span>
-              </div>
+              <h2 class="mt-3 text-[22px] font-semibold tracking-[-0.03em] text-[#000000e6] sm:text-[28px]">可以手动指定目录重试</h2>
+              <p class="mt-2 text-[14px] leading-6 text-[#9C5F5F]">{{ detectionResult.error }}</p>
             </div>
+
+            <div class="rounded-lg border border-[#F4D6D6] bg-[#FFF7F7] p-3 text-[13px] leading-6 text-[#9C5F5F]">
+              请尝试选择微信数据根目录，通常名为 <span class="font-mono">xwechat_files</span>。
+            </div>
+
+            <button
+              type="button"
+              class="inline-flex w-full items-center justify-center rounded-lg bg-[#07C160] px-3 py-2.5 text-sm font-medium text-white transition hover:bg-[#06AD56] focus:outline-none focus:ring-2 focus:ring-[#07C160]/25"
+              @click="handlePickDirectory"
+            >
+              重新选择目录
+            </button>
           </div>
-        </div>
 
-        <!-- detection result content -->
-        <div v-if="detectionResult && !loading">
-          <!-- 错误信息 -->
-          <div v-if="detectionResult.error" class="bg-red-50 rounded-2xl border border-red-100 p-6">
-            <div class="flex items-center">
-              <svg class="w-8 h-8 text-red-500 mr-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-              </svg>
+          <div v-else-if="detectionResult?.data?.accounts && detectionResult.data.accounts.length > 0" class="space-y-3">
+            <div class="flex flex-col gap-2 border-b border-[#DDEBE0] pb-3 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <p class="text-lg font-bold text-red-800">未找到微信数据</p>
-                <p class="text-red-600 mt-1 text-sm">{{ detectionResult.error }}</p>
+                <h2 class="text-[22px] font-semibold tracking-[-0.03em] text-[#000000e6]">可操作的微信账号</h2>
+                <p class="mt-1 text-[13px] leading-6 text-[#7F7F7F]">点击解密提取，会将该账号信息带入下一步。</p>
               </div>
+              <span class="rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2.5 py-1 text-[12px] font-medium text-[#07C160]">
+                {{ sortedAccounts.length }} 个账号
+              </span>
             </div>
-          </div>
-          
-          <!-- 成功结果 -->
-          <div v-else class="space-y-3">
-            <!-- 账户列表 -->
-            <div v-if="detectionResult.data?.accounts && detectionResult.data.accounts.length > 0"
-                 class="bg-white/92 backdrop-blur rounded-2xl border border-[#EDEDED] overflow-hidden">
-              <div class="px-4 py-3 border-b border-[#EDEDED] bg-[#fafafa] flex items-center justify-between">
-                <h3 class="text-[15px] font-semibold text-[#000000e6]">可操作的微信账户</h3>
-                <span class="text-[11px] text-gray-500">点击解密即可提取数据</span>
-              </div>
-              <div class="divide-y divide-[#EDEDED] max-h-[420px] overflow-y-auto">
-                <div v-for="(account, index) in sortedAccounts" :key="index"
-                     :class="['px-4 py-3.5 transition-all duration-200 relative overflow-hidden', isCurrentAccount(account.account_name) ? 'bg-[#07C160]/5 border border-[#07C160]/20' : 'hover:bg-[#F9F9F9]']">
 
-                  <div v-if="isCurrentAccount(account.account_name)" class="absolute top-0 right-0 bg-gradient-to-l from-[#07C160]/20 to-transparent px-3 py-1 rounded-bl-xl flex items-center">
-    <span class="text-xs text-[#07C160] font-bold flex items-center">
-      <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-      最近登录账户
-    </span>
-                  </div>
+            <div class="max-h-[460px] space-y-2.5 overflow-y-auto pr-1">
+              <div
+                v-for="(account, index) in sortedAccounts"
+                :key="index"
+                :class="[
+                  'rounded-lg border p-3 transition',
+                  isCurrentAccount(account.account_name)
+                    ? 'border-[#AEE6C4] bg-[#EAF8EF]/86'
+                    : 'border-[#E1EFE5] bg-[#F7FCF8]/86 hover:border-[#CFEEDB] hover:bg-[#F1FAF4]'
+                ]"
+              >
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="flex min-w-0 items-center gap-2.5">
+                    <template v-if="isCurrentAccount(account.account_name) && currentAccountInfo?.avatar">
+                      <img :src="currentAccountInfo.avatar" class="h-12 w-12 shrink-0 rounded-md border border-[#AEE6C4] bg-white object-cover" alt="" />
+                    </template>
+                    <template v-else>
+                      <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86">
+                        <span class="text-[17px] font-semibold text-[#07C160]">{{ account.account_name?.charAt(0)?.toUpperCase() || 'U' }}</span>
+                      </div>
+                    </template>
 
-                  <div class="flex items-center justify-between gap-3 mt-1">
-                    <div class="flex-1">
-                      <div class="flex items-center">
-                        <template v-if="isCurrentAccount(account.account_name) && currentAccountInfo?.avatar">
-                          <img :src="currentAccountInfo.avatar" class="w-12 h-12 rounded-xl border-2 border-[#07C160]/30 mr-3 object-cover bg-white"  alt=""/>
+                    <div class="min-w-0">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <template v-if="isCurrentAccount(account.account_name) && currentAccountInfo?.nickname">
+                          <p class="truncate text-[18px] font-semibold tracking-[-0.03em] text-[#000000e6]">{{ currentAccountInfo.nickname }}</p>
                         </template>
                         <template v-else>
-                          <div class="w-12 h-12 bg-gradient-to-br from-[#07C160]/10 to-[#91D300]/10 rounded-xl flex items-center justify-center mr-3">
-                            <span class="text-[#07C160] font-bold text-lg">{{ account.account_name?.charAt(0)?.toUpperCase() || 'U' }}</span>
-                          </div>
+                          <p class="truncate text-[16px] font-semibold text-[#000000e6]">{{ account.account_name || '未知账户' }}</p>
                         </template>
+                      </div>
 
-                        <div>
-                          <div class="flex flex-col">
-                            <template v-if="isCurrentAccount(account.account_name) && currentAccountInfo?.nickname">
-                              <p class="text-lg font-bold text-[#000000e6] leading-tight">{{ currentAccountInfo.nickname }}</p>
-                              <p class="text-[11px] text-[#7F7F7F] mt-0.5 font-mono">wxid: {{ account.account_name }}</p>
-                            </template>
-                            <template v-else>
-                              <p class="text-[15px] font-semibold text-[#000000e6]">{{ account.account_name || '未知账户' }}</p>
-                            </template>
-                          </div>
+                      <p v-if="isCurrentAccount(account.account_name) && currentAccountInfo?.nickname" class="mt-1 truncate font-mono text-[12px] text-[#7F7F7F]">
+                        wxid: {{ account.account_name }}
+                      </p>
 
-                          <div class="flex items-center mt-1.5 space-x-3 text-[12px] text-[#7F7F7F]">
-            <span class="flex items-center">
-              <svg class="w-4 h-4 mr-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
-              </svg>
-              {{ account.database_count }} 个库文件
-            </span>
-                            <span v-if="account.data_dir" class="flex items-center">
-              <svg class="w-4 h-4 mr-1 text-[#07C160]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-              </svg>
-              路径已确认
-            </span>
-                          </div>
-                        </div>
+                      <div class="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-[#7F7F7F]">
+                        <span class="rounded-md border border-[#E1EFE5] bg-[#F4FAF6]/82 px-2 py-1">{{ account.database_count }} 个库文件</span>
+                        <span v-if="isCurrentAccount(account.account_name)" class="rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2 py-1 font-medium text-[#07C160]">最近登录</span>
+                        <span v-if="account.data_dir" class="rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2 py-1 text-[#07C160]">路径已确认</span>
                       </div>
                     </div>
-
-                    <button @click="goToDecrypt(account)"
-                            class="inline-flex items-center px-4 py-2 bg-[#07C160] text-white rounded-lg font-semibold hover:bg-[#06AD56] hover:-translate-y-0.5 transition-all duration-200 text-xs shrink-0 z-10">
-                      解密提取
-                      <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                      </svg>
-                    </button>
                   </div>
 
-                  <div class="mt-3 pt-2.5 border-t border-dashed border-gray-200 text-sm text-gray-400">
-                    <p v-if="account.data_dir" class="font-mono text-[11px] truncate" title="复制路径">
-                      📂 {{ account.data_dir }}
-                    </p>
-                  </div>
+                  <button
+                    type="button"
+                    class="inline-flex shrink-0 items-center justify-center rounded-lg bg-[#07C160] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#06AD56] focus:outline-none focus:ring-2 focus:ring-[#07C160]/25"
+                    @click="goToDecrypt(account)"
+                  >
+                    解密提取
+                    <svg class="ml-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div v-if="account.data_dir" class="mt-3 border-t border-dashed border-[#DDEBE0] pt-2.5">
+                  <p class="truncate font-mono text-[12px] text-[#7F7F7F]" :title="account.data_dir">
+                    {{ account.data_dir }}
+                  </p>
                 </div>
               </div>
             </div>
+          </div>
 
-            <!-- 无账户提示 -->
-            <div v-else class="bg-white rounded-2xl p-8 text-center border border-[#EDEDED]">
-              <svg class="w-12 h-12 mx-auto text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-              </svg>
-              <p class="text-base text-[#000000e6] font-medium">没有在这台设备上发现微信数据</p>
-              <p class="text-sm text-gray-500 mt-2">您可以尝试通过上方的按钮手动指定 "xwechat_files" 文件夹路径。</p>
-            </div>
+          <div v-else class="flex min-h-[340px] flex-col items-center justify-center rounded-lg border border-[#DDEBE0] bg-[#F7FCF8]/86 p-5 text-center">
+            <svg class="mb-3 h-10 w-10 text-[#9CA3AF]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p class="text-[18px] font-semibold tracking-[-0.03em] text-[#000000e6]">没有发现微信数据</p>
+            <p class="mt-1.5 max-w-md text-[13px] leading-6 text-[#7F7F7F]">可以尝试手动指定 <span class="font-mono">xwechat_files</span> 文件夹后重新检测。</p>
           </div>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   </div>
 </template>
+
 
 <script setup>
 import {computed, onMounted, ref} from 'vue'
