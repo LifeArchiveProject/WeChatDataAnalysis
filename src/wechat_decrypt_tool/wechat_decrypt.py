@@ -16,9 +16,7 @@ import json
 from pathlib import Path
 
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from .app_paths import get_output_databases_dir
 from .database_filters import should_skip_source_database
@@ -28,6 +26,75 @@ from .sqlite_diagnostics import collect_sqlite_diagnostics, sqlite_diagnostics_s
 
 # SQLite文件头
 SQLITE_HEADER = b"SQLite format 3\x00"
+PAGE_SIZE = 4096
+KEY_SIZE = 32
+SALT_SIZE = 16
+IV_SIZE = 16
+HMAC_SIZE = 64
+# WeChat 4.x SQLCipher/WCDB pages reserve IV + HMAC at the tail.
+# When exporting to plain SQLite, do not keep encrypted IV/HMAC bytes in output pages.
+RESERVE_SIZE = IV_SIZE + HMAC_SIZE
+
+
+def _derive_mac_key(enc_key: bytes, salt: bytes) -> bytes:
+    """Derive SQLCipher/WCDB page HMAC key."""
+    mac_salt = bytes(b ^ 0x3A for b in salt)
+    return hashlib.pbkdf2_hmac("sha512", enc_key, mac_salt, 2, dklen=KEY_SIZE)
+
+
+def _derive_sqlcipher_enc_key(key_material: bytes, salt: bytes) -> bytes:
+    """Derive AES enc_key from SQLCipher passphrase/base key."""
+    return hashlib.pbkdf2_hmac("sha512", key_material, salt, 256000, dklen=KEY_SIZE)
+
+
+def _compute_page_hmac(mac_key: bytes, page: bytes, page_num: int) -> bytes:
+    offset = SALT_SIZE if page_num == 1 else 0
+    data_end = PAGE_SIZE - RESERVE_SIZE + IV_SIZE
+    mac = hmac.new(mac_key, digestmod=hashlib.sha512)
+    mac.update(page[offset:data_end])
+    mac.update(page_num.to_bytes(4, "little"))
+    return mac.digest()
+
+
+def _resolve_page1_key_material(key_material: bytes, page1: bytes) -> tuple[bytes, bytes, str] | None:
+    """Detect whether input key is raw enc_key or SQLCipher passphrase by page-1 HMAC."""
+    if len(page1) < PAGE_SIZE:
+        return None
+
+    salt = page1[:SALT_SIZE]
+    stored_page1_hmac = page1[PAGE_SIZE - HMAC_SIZE: PAGE_SIZE]
+    candidates = [
+        ("raw_enc_key", key_material, _derive_mac_key(key_material, salt)),
+    ]
+
+    derived_key = _derive_sqlcipher_enc_key(key_material, salt)
+    candidates.append(("sqlcipher_passphrase", derived_key, _derive_mac_key(derived_key, salt)))
+
+    for mode, enc_key, mac_key in candidates:
+        if hmac.compare_digest(stored_page1_hmac, _compute_page_hmac(mac_key, page1, 1)):
+            return enc_key, mac_key, mode
+
+    return None
+
+
+def _decrypt_page(enc_key: bytes, page: bytes, page_num: int) -> bytes:
+    iv = page[PAGE_SIZE - RESERVE_SIZE: PAGE_SIZE - RESERVE_SIZE + IV_SIZE]
+    offset = SALT_SIZE if page_num == 1 else 0
+    encrypted_page = page[offset: PAGE_SIZE - RESERVE_SIZE]
+
+    cipher = Cipher(
+        algorithms.AES(enc_key),
+        modes.CBC(iv),
+        backend=default_backend(),
+    )
+    decryptor = cipher.decryptor()
+    decrypted_page = decryptor.update(encrypted_page) + decryptor.finalize()
+
+    # Plain SQLite pages do not carry SQLCipher/WCDB IV/HMAC reserve bytes.
+    # Keep page size stable by zero-filling the reserve tail.
+    if page_num == 1:
+        return SQLITE_HEADER + decrypted_page + (b"\x00" * RESERVE_SIZE)
+    return decrypted_page + (b"\x00" * RESERVE_SIZE)
 
 
 def _normalize_account_name(name: str) -> str:
@@ -398,113 +465,57 @@ class WeChatDatabaseDecryptor:
                 result["copied_as_sqlite"] = True
                 return _finalize(True)
             
-            # 提取salt (前16字节)
-            salt = encrypted_data[:16]
-            
-            # 计算mac_salt (salt XOR 0x3a)
-            mac_salt = bytes(b ^ 0x3a for b in salt)
-            
-            # 使用PBKDF2-SHA512派生密钥
-            kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA512(),
-                length=32,
-                salt=salt,
-                iterations=256000,
-                backend=default_backend()
-            )
-            derived_key = kdf.derive(self.key_bytes)
-            
-            # 派生MAC密钥
-            mac_kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA512(),
-                length=32,
-                salt=mac_salt,
-                iterations=2,
-                backend=default_backend()
-            )
-            mac_key = mac_kdf.derive(derived_key)
-            
-            # 解密数据
+            page1 = encrypted_data[:PAGE_SIZE]
+            resolved_key_material = _resolve_page1_key_material(self.key_bytes, page1)
+            if resolved_key_material is None:
+                _append_failed_page(1, "hmac")
+                result["total_pages"] = int(len(encrypted_data) // PAGE_SIZE)
+                result["failed_pages"] = 1
+                logger.warning("Page 1 HMAC verification failed; key does not match database: %s", db_path)
+                return _finalize(False, "key_mismatch")
+
+            enc_key, mac_key, key_mode = resolved_key_material
+            result["key_mode"] = key_mode
+            logger.info("Page 1 HMAC verification passed: mode=%s path=%s", key_mode, db_path)
+
             decrypted_data = bytearray()
-            decrypted_data.extend(SQLITE_HEADER)
-            
-            page_size = 4096
-            iv_size = 16
-            hmac_size = 64  # SHA512的HMAC是64字节
-            
-            # 计算保留区域大小 (对齐到AES块大小)
-            reserve_size = iv_size + hmac_size
-            if reserve_size % 16 != 0:
-                reserve_size = ((reserve_size // 16) + 1) * 16
-            
-            total_pages = len(encrypted_data) // page_size
+            total_pages = (len(encrypted_data) + PAGE_SIZE - 1) // PAGE_SIZE
             successful_pages = 0
             failed_pages = 0
             result["total_pages"] = int(total_pages)
-            
-            # 逐页解密
+
             for cur_page in range(total_pages):
-                start = cur_page * page_size
-                end = start + page_size
-                page = encrypted_data[start:end]
-                
-                page_num = cur_page + 1  # 页面编号从1开始
-                
-                if len(page) < page_size:
-                    logger.warning(f"页面 {page_num} 大小不足: {len(page)} bytes")
+                page_num = cur_page + 1
+                start = cur_page * PAGE_SIZE
+                page = encrypted_data[start:start + PAGE_SIZE]
+                if not page:
                     break
-                
-                # 确定偏移量：第一页(cur_page == 0)需要跳过salt
-                offset = 16 if cur_page == 0 else 0  # SALT_SIZE = 16
-                
-                # 提取存储的HMAC
-                hmac_start = page_size - reserve_size + iv_size
-                hmac_end = hmac_start + hmac_size
-                stored_hmac = page[hmac_start:hmac_end]
-                
-                # 按照wechat-dump-rs的方式验证HMAC
-                data_end = page_size - reserve_size + iv_size
-                hmac_data = page[offset:data_end]
-                
-                # 分步计算HMAC：先更新数据，再更新页面编号
-                mac = hmac.new(mac_key, digestmod=hashlib.sha512)
-                mac.update(hmac_data)  # 包含加密数据+IV
-                mac.update(page_num.to_bytes(4, 'little'))  # 页面编号(小端序)
-                expected_hmac = mac.digest()
-                
-                if stored_hmac != expected_hmac:
-                    logger.warning(f"页面 {page_num} HMAC验证失败")
+                if len(page) < PAGE_SIZE:
+                    logger.warning(
+                        "Page %s is short: %s bytes; padding to %s bytes",
+                        page_num,
+                        len(page),
+                        PAGE_SIZE,
+                    )
+                    page = page + (b"\x00" * (PAGE_SIZE - len(page)))
+
+                stored_hmac = page[PAGE_SIZE - HMAC_SIZE: PAGE_SIZE]
+                expected_hmac = _compute_page_hmac(mac_key, page, page_num)
+                if not hmac.compare_digest(stored_hmac, expected_hmac):
+                    logger.warning("Page %s HMAC verification failed", page_num)
                     failed_pages += 1
                     _append_failed_page(page_num, "hmac")
                     continue
-                
-                # 提取IV和加密数据用于AES解密
-                iv = page[page_size - reserve_size:page_size - reserve_size + iv_size]
-                encrypted_page = page[offset:page_size - reserve_size]
-                
-                # AES-CBC解密
+
                 try:
-                    cipher = Cipher(
-                        algorithms.AES(derived_key),
-                        modes.CBC(iv),
-                        backend=default_backend()
-                    )
-                    decryptor = cipher.decryptor()
-                    decrypted_page = decryptor.update(encrypted_page) + decryptor.finalize()
-                    
-                    # 按照wechat-dump-rs的方式重组页面数据
-                    decrypted_data.extend(decrypted_page)
-                    decrypted_data.extend(page[page_size - reserve_size:])  # 保留区域
-                    
+                    decrypted_data.extend(_decrypt_page(enc_key, page, page_num))
                     successful_pages += 1
-                
                 except Exception as e:
-                    logger.error(f"页面 {page_num} AES解密失败: {e}")
+                    logger.error("Page %s AES decryption failed: %s", page_num, e)
                     failed_pages += 1
                     _append_failed_page(page_num, "aes", str(e))
                     continue
 
-            logger.info(f"解密完成: 成功 {successful_pages} 页, 失败 {failed_pages} 页")
             result["successful_pages"] = int(successful_pages)
             result["failed_pages"] = int(failed_pages)
 
