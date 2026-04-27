@@ -195,6 +195,33 @@
         </div>
       </div>
 
+      <!-- ImgHelper (Auto download large images) -->
+      <div
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center group"
+        :class="imgHelperBusy ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'"
+        :title="imgHelperTitle"
+        @click="toggleImgHelper"
+      >
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <svg
+            class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]"
+            :class="{ 'sidebar-rail-icon-active': imgHelperEnabled }"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <polyline points="21 15 16 10 5 21" />
+            <path d="M12 9v5m-2-2l2 2 2-2" />
+          </svg>
+        </div>
+      </div>
+
       <!-- Privacy -->
       <div
         class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
@@ -368,6 +395,7 @@
 import { storeToRefs } from 'pinia'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { useChatRealtimeStore } from '~/stores/chatRealtime'
+import { useImgHelperStore } from '~/stores/imgHelper'
 import { usePrivacyStore } from '~/stores/privacy'
 import { useThemeStore } from '~/stores/theme'
 
@@ -384,6 +412,10 @@ themeStore.init()
 
 const realtimeStore = useChatRealtimeStore()
 const { enabled: realtimeEnabled, available: realtimeAvailable, checking: realtimeChecking, statusError: realtimeStatusError, toggling: realtimeToggling } = storeToRefs(realtimeStore)
+
+const imgHelperStore = useImgHelperStore()
+const { enabled: imgHelperEnabled, checking: imgHelperChecking, toggling: imgHelperToggling, error: imgHelperError } = storeToRefs(imgHelperStore)
+
 const { open: settingsDialogOpen, openDialog: openSettingsDialog } = useSettingsDialog()
 const { getChatAccountInfo, deleteChatAccount } = useApi()
 
@@ -619,6 +651,18 @@ const realtimeTitle = computed(() => {
 const toggleRealtime = async () => {
   if (realtimeBusy.value) return
   await realtimeStore.toggle({ silent: false })
+}
+
+const imgHelperBusy = computed(() => !!imgHelperChecking.value || !!imgHelperToggling.value)
+
+const imgHelperTitle = computed(() => {
+  if (imgHelperEnabled.value) return '关闭自动下载大图'
+  return imgHelperError.value || '开启自动下载大图'
+})
+
+const toggleImgHelper = async () => {
+  if (imgHelperBusy.value) return
+  await imgHelperStore.toggle()
 }
 </script>
 
