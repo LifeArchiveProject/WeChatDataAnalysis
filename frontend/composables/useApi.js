@@ -636,8 +636,21 @@ export const useApi = () => {
     return await request(url)
   }
 
+  const getImgHelperStatus = async () => {
+    return await request('/system/img_helper/status')
+  }
+
+  const toggleImgHelper = async (enabled) => {
+    return await request('/system/img_helper/toggle', {
+      method: 'POST',
+      body: { enabled: !!enabled }
+    })
+  }
+
   return {
     pickSystemDirectory,
+    getImgHelperStatus,
+    toggleImgHelper,
     detectWechat,
     detectCurrentAccount,
     decryptDatabase,

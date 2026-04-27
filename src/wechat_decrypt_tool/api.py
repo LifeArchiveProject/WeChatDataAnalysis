@@ -37,6 +37,7 @@ from .routers.wechat_detection import router as _wechat_detection_router
 from .routers.wrapped import router as _wrapped_router
 from .request_logging import log_server_errors_middleware
 from .wcdb_realtime import WCDB_REALTIME, shutdown as _wcdb_shutdown
+from .img_helper import IMG_HELPER
 from .routers.biz import router as _biz_router
 from .routers.system import router as _system_router
 
@@ -188,6 +189,13 @@ async def _shutdown_wcdb_realtime() -> None:
         CHAT_REALTIME_AUTOSYNC.stop()
     except Exception:
         pass
+    
+    # Uninstall img_helper hook if enabled
+    try:
+        IMG_HELPER.disable()
+    except Exception:
+        pass
+
     close_ok = False
     lock_timeout_s: float | None = 0.2
     try:
