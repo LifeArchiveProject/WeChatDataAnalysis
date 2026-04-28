@@ -53,16 +53,16 @@ async def toggle_img_helper(req: ImgHelperToggleRequest):
     if not req.enabled:
         IMG_HELPER.disable()
         return {"status": "success", "enabled": False}
-    
+
     # Attempt to enable
     status_res = await check_wechat_status()
     wx_status = status_res.get("wx_status", {})
     if not wx_status.get("is_running") or not wx_status.get("pid"):
         raise HTTPException(status_code=400, detail="未检测到微信正在运行，请先打开微信再尝试！")
-    
+
     pid = wx_status["pid"]
     ok, err = IMG_HELPER.enable(pid)
     if not ok:
         raise HTTPException(status_code=500, detail=f"开启失败: {err}")
-    
+
     return {"status": "success", "enabled": True}

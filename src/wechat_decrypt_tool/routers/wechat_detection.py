@@ -90,8 +90,11 @@ async def detect_current_account(data_root_path: Optional[str] = None):
 @router.get("/api/wechat/status", summary="检查微信运行状态")
 async def check_wechat_status():
     """
-    检查系统中是否有 Weixin.exe 或 WeChat.exe 进程在运行
-    返回: status=0 成功, wx_status={is_running: bool, pid: int, ...}
+    检查系统微信主进程状态
+    逻辑：
+    1. 匹配进程名 Weixin.exe 或 WeChat.exe
+    2. 校验命令行必须包含 exe 名称（排除崩溃后的残留/无效进程）
+    3. 在有效进程中选择命令行最短的一个作为主进程
     """
     process_name_targets = ["Weixin.exe", "WeChat.exe"]
 
@@ -103,20 +106,36 @@ async def check_wechat_status():
     }
 
     try:
-        for proc in psutil.process_iter(['pid', 'name', 'exe', 'memory_info']):
+        candidates = []
+
+        for proc in psutil.process_iter(['pid', 'name', 'exe', 'memory_info', 'cmdline']):
             try:
-                if proc.info['name'] and proc.info['name'] in process_name_targets:
-                    wx_status["is_running"] = True
-                    wx_status["pid"] = proc.info['pid']
-                    wx_status["exe_path"] = proc.info['exe']
+                p_name = proc.info.get('name')
+                if p_name and p_name in process_name_targets:
+                    # 获取命令行并合并为字符串
+                    cmdline_list = proc.info.get('cmdline') or []
+                    cmdline_str = " ".join(cmdline_list).lower()
 
-                    mem = proc.info['memory_info']
-                    if mem:
-                        wx_status["memory_usage_mb"] = round(mem.rss / (1024 * 1024), 2)
-
-                    break
+                    if any(target.lower() in cmdline_str for target in process_name_targets):
+                        candidates.append({
+                            "pid": proc.info['pid'],
+                            "exe_path": proc.info['exe'],
+                            "cmd_len": len(cmdline_str),
+                            "memory_info": proc.info['memory_info']
+                        })
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
+
+        if candidates:
+            main_proc = min(candidates, key=lambda x: x['cmd_len'])
+
+            wx_status["is_running"] = True
+            wx_status["pid"] = main_proc["pid"]
+            wx_status["exe_path"] = main_proc["exe_path"]
+
+            mem = main_proc["memory_info"]
+            if mem:
+                wx_status["memory_usage_mb"] = round(mem.rss / (1024 * 1024), 2)
 
         return {
             "status": 0,
@@ -125,9 +144,8 @@ async def check_wechat_status():
         }
 
     except Exception as e:
-        # 即使出错也返回 JSON，但 status 非 0
         return {
             "status": -1,
-            "errmsg": f"检查进程失败: {str(e)}",
+            "errmsg": f"检查微信主进程失败: {str(e)}",
             "wx_status": wx_status
         }
