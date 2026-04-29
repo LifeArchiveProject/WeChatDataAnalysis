@@ -4512,9 +4512,10 @@ def _collect_chat_messages(
             contact_conn = None
 
     for db_path in db_paths:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
+        conn: Optional[sqlite3.Connection] = None
         try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
             table_name = _resolve_msg_table_name(conn, username)
             if not table_name:
                 continue
@@ -5024,8 +5025,20 @@ def _collect_chat_messages(
                         "_rawText": raw_text if local_type in (10000, 266287972401) else "",
                     }
                 )
+        except sqlite3.DatabaseError as e:
+            # 单个解密库损坏时不要让整个聊天详情接口 500；保留诊断日志，继续尝试其他 message_*.db。
+            logger.warning(
+                "[chat.messages] malformed message db skipped account=%s username=%s db=%s error=%s diag=%s",
+                account_dir.name,
+                username,
+                str(db_path),
+                str(e),
+                format_sqlite_diagnostics(collect_sqlite_diagnostics(db_path, quick_check=True)),
+            )
+            continue
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     if contact_conn is not None:
         try:
