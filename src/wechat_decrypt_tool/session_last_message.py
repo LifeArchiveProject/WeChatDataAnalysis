@@ -18,6 +18,7 @@ from .chat_helpers import (
     _should_keep_session,
 )
 from .logging_config import get_logger
+from .sqlite_diagnostics import collect_sqlite_diagnostics, format_sqlite_diagnostics
 
 logger = get_logger(__name__)
 
@@ -241,11 +242,13 @@ def build_session_last_message_table(
 
     best: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
 
+    skipped_dbs = 0
     for db_path in db_paths:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        conn.text_factory = bytes
+        conn: Optional[sqlite3.Connection] = None
         try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            conn.text_factory = bytes
             trows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
             md5_to_table: dict[str, str] = {}
             for tr in trows:
@@ -414,11 +417,22 @@ def build_session_last_message_table(
                             "table_name": str(table_name),
                         },
                     )
+        except sqlite3.DatabaseError as e:
+            skipped_dbs += 1
+            logger.warning(
+                "[session_last_message] malformed message db skipped account=%s db=%s error=%s diag=%s",
+                account_dir.name,
+                str(db_path),
+                str(e),
+                format_sqlite_diagnostics(collect_sqlite_diagnostics(db_path, quick_check=True)),
+            )
+            continue
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     # Fallback: always have a non-empty preview for UI.
     for r in sessions:
@@ -493,7 +507,7 @@ def build_session_last_message_table(
     duration = max(0.0, time.time() - started)
     logger.info(
         f"[session_last_message] build done account={account_dir.name} sessions={len(best)} "
-        f"durationSec={round(duration, 3)} table={_TABLE_NAME}"
+        f"durationSec={round(duration, 3)} table={_TABLE_NAME} skippedDbs={skipped_dbs}"
     )
     return {
         "status": "success",
@@ -501,4 +515,5 @@ def build_session_last_message_table(
         "built": len(best),
         "table": _TABLE_NAME,
         "durationSec": round(duration, 3),
+        "skippedDbs": int(skipped_dbs),
     }
