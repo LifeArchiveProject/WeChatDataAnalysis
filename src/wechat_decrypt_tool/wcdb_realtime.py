@@ -26,6 +26,46 @@ class WCDBRealtimeError(RuntimeError):
     pass
 
 
+def _clean_weflow_account_dir_name(dir_name: str) -> str:
+    """调用 WCDB 前使用与 WeFlow 相同的账号/wxid 清理规则。"""
+    trimmed = str(dir_name or "").strip()
+    if not trimmed:
+        return trimmed
+
+    if trimmed.lower().startswith("wxid_"):
+        match = re.match(r"^(wxid_[^_]+)", trimmed, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+        return trimmed
+
+    suffix_match = re.match(r"^(.+)_([a-zA-Z0-9]{4})$", trimmed)
+    return suffix_match.group(1) if suffix_match else trimmed
+
+
+def _derive_weflow_wcdb_wxid(account: str, db_storage_dir: Optional[Path] = None) -> str:
+    """推导传给 native WCDB 的 wxid，语义对齐 WeFlow。
+
+    output 账号目录可能带随机后缀，例如 `Murderers_0e5d`。
+    WeFlow 在调用 `wcdb_set_my_wxid` 前会去掉这个后缀；如果传带后缀的名字，
+    native 会话/消息查询可能只返回很少结果。
+    """
+    candidates: list[str] = []
+    if db_storage_dir is not None:
+        try:
+            parent_name = Path(db_storage_dir).parent.name
+            if parent_name:
+                candidates.append(parent_name)
+        except Exception:
+            pass
+    candidates.append(str(account or ""))
+
+    for item in candidates:
+        cleaned = _clean_weflow_account_dir_name(item)
+        if cleaned:
+            return cleaned
+    return str(account or "").strip()
+
+
 _NATIVE_DIR = Path(__file__).resolve().parent / "native"
 _DEFAULT_WCDB_API_DLL = _NATIVE_DIR / "wcdb_api.dll"
 _WCDB_API_DLL_SELECTED: Optional[Path] = None
@@ -1459,6 +1499,7 @@ def _resolve_session_db_path(db_storage_dir: Path) -> Path:
 @dataclass(frozen=True)
 class WCDBRealtimeConnection:
     account: str
+    native_wxid: str
     handle: int
     db_storage_dir: Path
     session_db_path: Path
@@ -1484,13 +1525,16 @@ class WCDBRealtimeManager:
 
         db_storage_dir = None
         session_db_path = None
+        native_wxid = ""
         err = ""
         try:
             db_storage_dir = _resolve_account_db_storage_dir(account_dir)
             if db_storage_dir is not None:
+                native_wxid = _derive_weflow_wcdb_wxid(account, db_storage_dir)
                 session_db_path = _resolve_session_db_path(db_storage_dir)
         except Exception as e:
             err = str(e)
+            native_wxid = _derive_weflow_wcdb_wxid(account, db_storage_dir)
 
         dll_path = _resolve_wcdb_api_dll_path()
         try:
@@ -1503,6 +1547,7 @@ class WCDBRealtimeManager:
             "dll_present": bool(dll_ok),
             "wcdb_api_dll": str(dll_path),
             "key_present": bool(key_ok),
+            "native_wxid": native_wxid,
             "db_storage_dir": str(db_storage_dir) if db_storage_dir else "",
             "session_db_path": str(session_db_path) if session_db_path else "",
             "connected": bool(connected),
@@ -1565,6 +1610,7 @@ class WCDBRealtimeManager:
                 raise WCDBRealtimeError("Cannot resolve db_storage directory for this account.")
 
             session_db_path = _resolve_session_db_path(db_storage_dir)
+            native_wxid = _derive_weflow_wcdb_wxid(account, db_storage_dir)
 
             # Run open_account in a daemon thread with a timeout to avoid
             # blocking indefinitely when the native library hangs (locked DB).
@@ -1609,14 +1655,16 @@ class WCDBRealtimeManager:
                 raise WCDBRealtimeError("open_account returned no handle.")
 
             handle = _handle_box[0]
-            # Some WCDB APIs (e.g. exec_query on non-session DBs) may require this context.
+            # 对齐 WeFlow：传清理后的 wxid/account 名称给 native WCDB，
+            # 不传带 4 位随机后缀的导出目录名。
             try:
-                set_my_wxid(handle, account)
+                set_my_wxid(handle, native_wxid)
             except Exception:
                 pass
 
             conn = WCDBRealtimeConnection(
                 account=account,
+                native_wxid=native_wxid,
                 handle=handle,
                 db_storage_dir=db_storage_dir,
                 session_db_path=session_db_path,
@@ -1627,7 +1675,13 @@ class WCDBRealtimeManager:
             with self._mu:
                 self._conns[account] = conn
                 self._failed.pop(account, None)
-            logger.info("[wcdb] connected account=%s handle=%s session_db=%s", account, int(handle), session_db_path)
+            logger.info(
+                "[wcdb] connected account=%s native_wxid=%s handle=%s session_db=%s",
+                account,
+                native_wxid,
+                int(handle),
+                session_db_path,
+            )
             return conn
         finally:
             with self._mu:
