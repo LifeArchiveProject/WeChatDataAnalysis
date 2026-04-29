@@ -1,4 +1,4 @@
-import { createPerfTrace, getLatestResourceTiming } from '~/lib/chat/perf-logger'
+import { createPerfTrace, getLatestResourceTiming, logPerfChannel, nowPerfMs } from '~/lib/chat/perf-logger'
 
 const CHAT_LAZY_SRC_EVENT = 'chat-lazy-src:start'
 const CHAT_LAZY_ROOT_MARGIN = '240px 0px 520px 0px'
@@ -15,6 +15,12 @@ const nextRenderTick = (callback) => {
   window.requestAnimationFrame(() => {
     window.setTimeout(callback, 0)
   })
+}
+
+const roundPerfMs = (value) => {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return null
+  return Number(numeric.toFixed(1))
 }
 
 const readImageSrc = (element) => {
@@ -44,7 +50,8 @@ const ensurePerfState = (element) => {
       finalized: true,
       onLoad: null,
       onError: null,
-      onLazyStart: null
+      onLazyStart: null,
+      lazyPendingLoggedSrc: ''
     }
   }
   return element.__chatMediaPerfState
@@ -63,7 +70,11 @@ const ensureLazySrcState = (element) => {
       src: '',
       loadedSrc: '',
       observer: null,
-      timer: null
+      timer: null,
+      requestedAt: 0,
+      observerStartedAt: 0,
+      appliedAt: 0,
+      lastApplyReason: ''
     }
   }
   return element.__chatLazySrcState
@@ -88,11 +99,22 @@ const applyLazySrc = (element, reason = '') => {
   if (!element || !src) return
   if (state.loadedSrc === src && readImageSrc(element) === src) return
 
+  const appliedAt = nowPerfMs()
   state.loadedSrc = src
+  state.appliedAt = appliedAt
+  state.lastApplyReason = String(reason || '')
   element.setAttribute('src', src)
   try {
     element.dispatchEvent(new CustomEvent(CHAT_LAZY_SRC_EVENT, {
-      detail: { src, reason }
+      detail: {
+        src,
+        reason,
+        requestedAt: state.requestedAt || 0,
+        observerStartedAt: state.observerStartedAt || 0,
+        appliedAt,
+        waitSinceRequestMs: state.requestedAt ? roundPerfMs(appliedAt - state.requestedAt) : null,
+        waitSinceObserverMs: state.observerStartedAt ? roundPerfMs(appliedAt - state.observerStartedAt) : null
+      }
     }))
   } catch {}
 }
@@ -103,6 +125,10 @@ const updateLazySrc = (element, binding, reason = '') => {
 
   cleanupLazySrcObserver(element)
   state.src = nextSrc
+  state.requestedAt = nowPerfMs()
+  state.observerStartedAt = 0
+  state.appliedAt = 0
+  state.lastApplyReason = ''
 
   if (!nextSrc) {
     state.loadedSrc = ''
@@ -121,6 +147,7 @@ const updateLazySrc = (element, binding, reason = '') => {
     return
   }
 
+  state.observerStartedAt = nowPerfMs()
   state.observer = new window.IntersectionObserver((entries) => {
     const entry = entries?.[0]
     if (!entry?.isIntersecting) return
@@ -150,7 +177,30 @@ const finalizeTracking = (element, status, reason = '') => {
   state.finalized = true
 }
 
-const beginTracking = (element, binding, reason = '') => {
+const logPendingLazy = (element, binding, reason = '') => {
+  const perfState = ensurePerfState(element)
+  const lazyState = element?.__chatLazySrcState
+  const src = String(lazyState?.src || '').trim()
+  if (!src || readImageSrc(element)) return
+  const logKey = `${src}:${reason}`
+  if (perfState.lazyPendingLoggedSrc === logKey) return
+  perfState.lazyPendingLoggedSrc = logKey
+
+  const { kind, meta } = normalizeBindingValue(binding?.value)
+  const now = nowPerfMs()
+  logPerfChannel('chat-media-ui', 'lazy:pending', {
+    kind,
+    src,
+    ...meta,
+    reason,
+    hasObserver: !!lazyState?.observer,
+    hasTimer: !!lazyState?.timer,
+    waitSinceRequestMs: lazyState?.requestedAt ? roundPerfMs(now - lazyState.requestedAt) : null,
+    waitSinceObserverMs: lazyState?.observerStartedAt ? roundPerfMs(now - lazyState.observerStartedAt) : null
+  })
+}
+
+const beginTracking = (element, binding, reason = '', lazyDetail = null) => {
   const state = ensurePerfState(element)
   const src = readImageSrc(element)
   if (!src) return
@@ -164,11 +214,16 @@ const beginTracking = (element, binding, reason = '') => {
     src,
     ...meta
   })
+  const lazyState = element?.__chatLazySrcState
   state.trace.log('resource:start', {
     reason,
     complete: !!element?.complete,
     loading: String(element?.getAttribute?.('loading') || '').trim(),
-    decoding: String(element?.getAttribute?.('decoding') || '').trim()
+    decoding: String(element?.getAttribute?.('decoding') || '').trim(),
+    lazyTriggerReason: String(lazyDetail?.reason || lazyState?.lastApplyReason || '').trim(),
+    waitSinceLazyRequestMs: lazyDetail?.waitSinceRequestMs ?? (lazyState?.requestedAt ? roundPerfMs(nowPerfMs() - lazyState.requestedAt) : null),
+    waitSinceLazyObserverMs: lazyDetail?.waitSinceObserverMs ?? (lazyState?.observerStartedAt ? roundPerfMs(nowPerfMs() - lazyState.observerStartedAt) : null),
+    waitSinceLazyApplyMs: lazyState?.appliedAt ? roundPerfMs(nowPerfMs() - lazyState.appliedAt) : null
   })
 
   if (element?.complete) {
@@ -182,16 +237,20 @@ export default defineNuxtPlugin((nuxtApp) => {
       const state = ensurePerfState(element)
       state.onLoad = () => finalizeTracking(element, 'load', 'load-event')
       state.onError = () => finalizeTracking(element, 'error', 'error-event')
-      state.onLazyStart = () => beginTracking(element, binding, 'lazy-src')
+      state.onLazyStart = (event) => beginTracking(element, binding, 'lazy-src', event?.detail || null)
       element.addEventListener('load', state.onLoad)
       element.addEventListener('error', state.onError)
       element.addEventListener(CHAT_LAZY_SRC_EVENT, state.onLazyStart)
       beginTracking(element, binding, 'mounted')
+      logPendingLazy(element, binding, 'mounted')
     },
     updated(element, binding) {
       const state = ensurePerfState(element)
       const nextSrc = readImageSrc(element)
-      if (!nextSrc) return
+      if (!nextSrc) {
+        logPendingLazy(element, binding, 'updated-no-src')
+        return
+      }
       if (nextSrc !== state.src) {
         beginTracking(element, binding, 'updated-src')
         return
@@ -199,6 +258,7 @@ export default defineNuxtPlugin((nuxtApp) => {
       if (element?.complete && !state.finalized) {
         nextRenderTick(() => finalizeTracking(element, 'load', 'updated-complete'))
       }
+      logPendingLazy(element, binding, 'updated')
     },
     beforeUnmount(element) {
       const state = element?.__chatMediaPerfState

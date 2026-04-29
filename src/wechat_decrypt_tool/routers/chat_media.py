@@ -7,6 +7,8 @@ import mimetypes
 import os
 import sqlite3
 import subprocess
+import time
+import re
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -61,7 +63,7 @@ from ..media_helpers import (
 from ..chat_helpers import _extract_md5_from_packed_info, _load_contact_rows, _pick_avatar_url
 from ..path_fix import PathFixRoute
 from ..perf_trace import create_perf_trace
-from ..wcdb_realtime import WCDB_REALTIME, get_avatar_urls as _wcdb_get_avatar_urls
+from ..wcdb_realtime import WCDB_REALTIME, exec_query as _wcdb_exec_query, get_avatar_urls as _wcdb_get_avatar_urls
 
 logger = get_logger(__name__)
 
@@ -69,6 +71,244 @@ router = APIRouter(route_class=PathFixRoute)
 
 
 CHAT_MEDIA_BROWSER_CACHE_SECONDS = 24 * 60 * 60
+
+VIDEO_DIR_INDEX_TTL_SECONDS = 90.0
+_VIDEO_DIR_INDEX_CACHE: dict[str, tuple[float, dict[str, dict[str, str]]]] = {}
+_VIDEO_DIR_INDEX_MAX_ENTRIES = 32
+
+
+def _normalize_video_lookup_key(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = text.replace("\\", "/").split("/")[-1]
+    text = re.sub(r"\.(?:mp4|mov|m4v|avi|mkv|flv|jpg|jpeg|png|gif|webp|dat)$", "", text, flags=re.I)
+    text = re.sub(r"_thumb$", "", text, flags=re.I)
+    direct = re.fullmatch(r"([a-f0-9]{16,64})(?:_raw)?", text, flags=re.I)
+    if direct:
+        suffix = "_raw" if text.endswith("_raw") else ""
+        return f"{direct.group(1).lower()}{suffix}"
+    preferred32 = re.search(r"([a-f0-9]{32})(?![a-f0-9])", text, flags=re.I)
+    if preferred32:
+        return preferred32.group(1).lower()
+    fallback = re.search(r"([a-f0-9]{16,64})(?![a-f0-9])", text, flags=re.I)
+    return fallback.group(1).lower() if fallback else ""
+
+
+def _is_video_month_dir_name(name: str) -> bool:
+    n = str(name or "")
+    return len(n) == 7 and n[4] == "-" and n[:4].isdigit() and n[5:7].isdigit()
+
+
+def _get_or_build_video_dir_index(video_base_dir: Path) -> dict[str, dict[str, str]]:
+    """Build a WeFlow-style index for msg/video/YYYY-MM files."""
+    try:
+        base = video_base_dir.resolve()
+    except Exception:
+        base = video_base_dir
+    cache_key = str(base)
+    now = time.monotonic()
+    cached = _VIDEO_DIR_INDEX_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < VIDEO_DIR_INDEX_TTL_SECONDS:
+        return cached[1]
+
+    index: dict[str, dict[str, str]] = {}
+
+    def ensure_entry(key: str) -> dict[str, str]:
+        entry = index.get(key)
+        if entry is None:
+            entry = {}
+            index[key] = entry
+        return entry
+
+    try:
+        if not base.exists() or not base.is_dir():
+            return {}
+        month_dirs: list[Path] = []
+        try:
+            for child in base.iterdir():
+                try:
+                    if child.is_dir() and _is_video_month_dir_name(child.name):
+                        month_dirs.append(child)
+                except Exception:
+                    continue
+        except Exception:
+            month_dirs = []
+        month_dirs.sort(key=lambda x: x.name, reverse=True)
+        dirs_to_scan = [*month_dirs, base]
+        for d in dirs_to_scan:
+            try:
+                files = list(d.iterdir())
+            except Exception:
+                continue
+            for file_path in files:
+                try:
+                    if not file_path.is_file():
+                        continue
+                except Exception:
+                    continue
+                lower = file_path.name.lower()
+                if lower.endswith((".mp4", ".m4v", ".mov")):
+                    stem = lower.rsplit(".", 1)[0]
+                    key = _normalize_video_lookup_key(stem)
+                    if not key:
+                        continue
+                    entry = ensure_entry(key)
+                    entry.setdefault("video", str(file_path))
+                    if key.endswith("_raw"):
+                        base_key = key[:-4]
+                        ensure_entry(base_key).setdefault("video", str(file_path))
+                    else:
+                        ensure_entry(f"{key}_raw").setdefault("video", str(file_path))
+                    continue
+
+                if not lower.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                    continue
+                stem = lower.rsplit(".", 1)[0]
+                is_thumb = stem.endswith("_thumb")
+                if is_thumb:
+                    stem = stem[:-6]
+                key = _normalize_video_lookup_key(stem)
+                if not key:
+                    continue
+                entry = ensure_entry(key)
+                entry.setdefault("thumb" if is_thumb else "cover", str(file_path))
+                if key.endswith("_raw"):
+                    base_key = key[:-4]
+                    ensure_entry(base_key).setdefault("thumb" if is_thumb else "cover", str(file_path))
+    finally:
+        if len(_VIDEO_DIR_INDEX_CACHE) >= _VIDEO_DIR_INDEX_MAX_ENTRIES:
+            try:
+                oldest_key = min(_VIDEO_DIR_INDEX_CACHE.items(), key=lambda kv: kv[1][0])[0]
+                _VIDEO_DIR_INDEX_CACHE.pop(oldest_key, None)
+            except Exception:
+                _VIDEO_DIR_INDEX_CACHE.clear()
+        _VIDEO_DIR_INDEX_CACHE[cache_key] = (now, index)
+    return index
+
+
+def _resolve_video_path_from_weflow_index(
+    *,
+    md5: str,
+    wxid_dir: Optional[Path],
+    db_storage_dir: Optional[Path],
+    want_thumb: bool,
+) -> Optional[Path]:
+    lookup_key = _normalize_video_lookup_key(md5)
+    if not lookup_key:
+        return None
+    bases: list[Path] = []
+    for root in [wxid_dir, db_storage_dir]:
+        if not root:
+            continue
+        bases.extend([root / "msg" / "video", root / "video"])
+
+    seen: set[str] = set()
+    keys = [lookup_key]
+    if lookup_key.endswith("_raw"):
+        keys.append(lookup_key[:-4])
+    else:
+        keys.append(f"{lookup_key}_raw")
+
+    for base in bases:
+        try:
+            base_key = str(base.resolve())
+        except Exception:
+            base_key = str(base)
+        if base_key in seen:
+            continue
+        seen.add(base_key)
+        try:
+            if not base.exists() or not base.is_dir():
+                continue
+        except Exception:
+            continue
+        index = _get_or_build_video_dir_index(base)
+        for key in keys:
+            entry = index.get(key) or {}
+            candidates = [entry.get("thumb"), entry.get("cover")] if want_thumb else [entry.get("video")]
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                p = Path(candidate)
+                try:
+                    if p.exists() and p.is_file():
+                        return p
+                except Exception:
+                    continue
+    return None
+
+
+_REALTIME_VIDEO_HARDLINK_CACHE_TTL_SECONDS = 120.0
+_REALTIME_VIDEO_HARDLINK_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
+
+
+def _sql_quote(value: str) -> str:
+    return "'" + str(value or "").replace("'", "''") + "'"
+
+
+def _resolve_video_file_token_from_realtime_hardlink(account_dir: Path, md5: str) -> str:
+    """Resolve XML video md5 to the real local msg/video basename via encrypted hardlink.db."""
+    md5_norm = _normalize_video_lookup_key(md5)
+    if not md5_norm:
+        return ""
+
+    cache_key = (str(account_dir.name), md5_norm)
+    now = time.monotonic()
+    cached = _REALTIME_VIDEO_HARDLINK_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _REALTIME_VIDEO_HARDLINK_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    resolved = ""
+    try:
+        conn = WCDB_REALTIME.ensure_connected(account_dir, timeout=5.0)
+        hardlink_db_path = Path(conn.db_storage_dir) / "hardlink" / "hardlink.db"
+        if not hardlink_db_path.exists():
+            return ""
+        md5_lit = _sql_quote(md5_norm)
+        sql = (
+            "SELECT md5, file_name, file_size, modify_time, dir1, dir2 "
+            "FROM video_hardlink_info_v4 "
+            f"WHERE md5 = {md5_lit} OR file_name LIKE '%' || {md5_lit} || '%' "
+            "ORDER BY modify_time DESC, dir1 DESC, rowid DESC LIMIT 1"
+        )
+        rows = _wcdb_exec_query(conn.handle, kind="hardlink", path=str(hardlink_db_path), sql=sql) or []
+        if rows:
+            file_name = str((rows[0] or {}).get("file_name") or "").strip()
+            resolved = _normalize_video_lookup_key(file_name) or file_name.lower()
+    except Exception:
+        resolved = ""
+
+    _REALTIME_VIDEO_HARDLINK_CACHE[cache_key] = (now, resolved)
+    return resolved
+
+
+def _resolve_video_path_from_realtime_hardlink(
+    *,
+    account_dir: Path,
+    md5: str,
+    wxid_dir: Optional[Path],
+    db_storage_dir: Optional[Path],
+    want_thumb: bool,
+) -> tuple[Optional[Path], str]:
+    token = _resolve_video_file_token_from_realtime_hardlink(account_dir, md5)
+    if not token:
+        return None, ""
+    path = _resolve_video_path_from_weflow_index(
+        md5=token,
+        wxid_dir=wxid_dir,
+        db_storage_dir=db_storage_dir,
+        want_thumb=want_thumb,
+    )
+    if path is not None:
+        return path, token
+    path = _fast_probe_video_path_by_md5(
+        md5=token,
+        wxid_dir=wxid_dir,
+        db_storage_dir=db_storage_dir,
+        want_thumb=want_thumb,
+    )
+    return path, token
 
 
 def _build_cached_media_response(request: Optional[Request], data: bytes, media_type: str) -> Response:
@@ -1481,11 +1721,28 @@ async def get_chat_image(
 
     # md5 模式：优先检查解密资源目录；如果微信目录里已经有更高质量版本，会在后面自动升级。
     if md5:
+        cache_started_at = time.perf_counter()
         decrypted_path = _try_find_decrypted_resource(account_dir, str(md5).lower())
+        trace(
+            "decrypted-cache:path-lookup",
+            hasPath=bool(decrypted_path),
+            path=str(decrypted_path or ""),
+            elapsedMsLocal=round((time.perf_counter() - cache_started_at) * 1000.0, 1),
+        )
         if decrypted_path:
+            read_started_at = time.perf_counter()
             data = decrypted_path.read_bytes()
             media_type = _detect_image_media_type(data[:32])
-            if media_type != "application/octet-stream" and _is_probably_valid_image(data, media_type):
+            valid_image = bool(media_type != "application/octet-stream" and _is_probably_valid_image(data, media_type))
+            trace(
+                "decrypted-cache:read-validate",
+                path=str(decrypted_path),
+                bytes=len(data or b""),
+                mediaType=media_type,
+                validImage=valid_image,
+                elapsedMsLocal=round((time.perf_counter() - read_started_at) * 1000.0, 1),
+            )
+            if valid_image:
                 cached_path = decrypted_path
                 cached_data = data
                 cached_media_type = media_type
@@ -1512,6 +1769,7 @@ async def get_chat_image(
         return _build_cached_media_response(request, cached_data, cached_media_type)
 
     # 回退：从微信数据目录实时定位并解密
+    roots_started_at = time.perf_counter()
     wxid_dir = _resolve_account_wxid_dir(account_dir)
     hardlink_db_path = account_dir / "hardlink.db"
     db_storage_dir = _resolve_account_db_storage_dir(account_dir)
@@ -1521,6 +1779,7 @@ async def get_chat_image(
         hasWxidDir=bool(wxid_dir),
         hasDbStorageDir=bool(db_storage_dir),
         hardlinkHasImageTable=bool(hardlink_has_image_table),
+        elapsedMsLocal=round((time.perf_counter() - roots_started_at) * 1000.0, 1),
     )
 
     roots: list[Path] = []
@@ -1544,6 +1803,7 @@ async def get_chat_image(
     allow_deep_scan = False
 
     if md5:
+        hardlink_started_at = time.perf_counter()
         p = await asyncio.to_thread(
             _resolve_media_path_from_hardlink,
             hardlink_db_path,
@@ -1553,12 +1813,42 @@ async def get_chat_image(
             username=username,
             extra_roots=roots[1:],
         )
+        trace(
+            "source:hardlink-lookup",
+            found=bool(p),
+            path=str(p or ""),
+            elapsedMsLocal=round((time.perf_counter() - hardlink_started_at) * 1000.0, 1),
+        )
+
+        # Fast fallback for thumbnails not indexed by hardlink.db: scan only this chat's attach directory.
+        # Keep this before the file_id fallback: file_id search can be very expensive on large WeChat folders,
+        # while md5 + conversation-scoped attach probing usually resolves current chat images in milliseconds.
+        if (not p) and wxid_dir and username:
+            fast_probe_started_at = time.perf_counter()
+            hit = await asyncio.to_thread(
+                _fast_probe_image_path_in_chat_attach,
+                wxid_dir_str=str(wxid_dir),
+                username=str(username),
+                md5=str(md5),
+            )
+            if hit:
+                p = Path(hit)
+            trace(
+                "source:chat-attach-fast-probe",
+                found=bool(hit),
+                path=str(hit or ""),
+                elapsedMsLocal=round((time.perf_counter() - fast_probe_started_at) * 1000.0, 1),
+            )
 
         # Some WeChat versions send both md5 + file_id; md5 may be missing from hardlink.db while file_id still works.
+        # Only run this broader fallback after the scoped md5 probe misses.
         if (not p) and file_id:
+            file_id_started_at = time.perf_counter()
+            file_id_roots_checked = 0
             for r in [wxid_dir, db_storage_dir]:
                 if not r:
                     continue
+                file_id_roots_checked += 1
                 hit = await asyncio.to_thread(
                     _fallback_search_media_by_file_id,
                     str(r),
@@ -1569,24 +1859,27 @@ async def get_chat_image(
                 if hit:
                     p = Path(hit)
                     break
-
-        # Fast fallback for thumbnails not indexed by hardlink.db: scan only this chat's attach directory.
-        if (not p) and wxid_dir and username:
-            hit = await asyncio.to_thread(
-                _fast_probe_image_path_in_chat_attach,
-                wxid_dir_str=str(wxid_dir),
-                username=str(username),
-                md5=str(md5),
+            trace(
+                "source:file-id-fallback-after-md5",
+                found=bool(p),
+                rootsChecked=file_id_roots_checked,
+                path=str(p or ""),
+                elapsedMsLocal=round((time.perf_counter() - file_id_started_at) * 1000.0, 1),
             )
-            if hit:
-                p = Path(hit)
 
         # Deep scan is extremely expensive for misses (~seconds per md5). Only enable when:
         # - user explicitly requests `deep_scan=1`, OR
         # - hardlink.db doesn't have the image table (older/partial data).
         allow_deep_scan = bool(deep_scan) or (not hardlink_has_image_table)
         if (not p) and wxid_dir and allow_deep_scan:
+            deep_scan_started_at = time.perf_counter()
             hit = await asyncio.to_thread(_fallback_search_media_by_md5, str(wxid_dir), str(md5), kind="image")
+            trace(
+                "source:deep-scan",
+                found=bool(hit),
+                path=str(hit or ""),
+                elapsedMsLocal=round((time.perf_counter() - deep_scan_started_at) * 1000.0, 1),
+            )
             if hit:
                 p = Path(hit)
                 try:
@@ -1594,10 +1887,13 @@ async def get_chat_image(
                 except Exception:
                     pass
     elif file_id:
-        # 一些版本图片消息无 MD5，仅提供 cdnthumburl 等“文件标识”
+        # Some image messages have no MD5 and only provide a cdnthumburl-like file identifier.
+        file_id_started_at = time.perf_counter()
+        file_id_roots_checked = 0
         for r in [wxid_dir, db_storage_dir]:
             if not r:
                 continue
+            file_id_roots_checked += 1
             hit = await asyncio.to_thread(
                 _fallback_search_media_by_file_id,
                 str(r),
@@ -1608,6 +1904,13 @@ async def get_chat_image(
             if hit:
                 p = Path(hit)
                 break
+        trace(
+            "source:file-id-lookup",
+            found=bool(p),
+            rootsChecked=file_id_roots_checked,
+            path=str(p or ""),
+            elapsedMsLocal=round((time.perf_counter() - file_id_started_at) * 1000.0, 1),
+        )
 
     if not p:
         if cached_path:
@@ -1621,7 +1924,9 @@ async def get_chat_image(
         )
         raise HTTPException(status_code=404, detail="Image not found.")
 
+    candidates_started_at = time.perf_counter()
     candidates.extend(await asyncio.to_thread(_iter_media_source_candidates, p))
+    candidate_count_before_order = len(candidates)
     candidates = await asyncio.to_thread(_order_media_candidates, candidates)
     trace(
         "candidates:resolved",
@@ -1629,6 +1934,8 @@ async def get_chat_image(
         candidateCount=len(candidates),
         hasCachedPath=bool(cached_path),
         allowDeepScan=bool(allow_deep_scan),
+        candidateCountBeforeOrder=candidate_count_before_order,
+        elapsedMsLocal=round((time.perf_counter() - candidates_started_at) * 1000.0, 1),
     )
 
     if cached_path:
@@ -1661,8 +1968,11 @@ async def get_chat_image(
     chosen: Optional[Path] = None
     decode_attempts = 0
     trace("decode:start", candidateCount=len(candidates))
+    slow_decode_logged = 0
     for src_path in candidates:
         decode_attempts += 1
+        decode_one_started_at = time.perf_counter()
+        decode_error = ""
         try:
             data, media_type = await asyncio.to_thread(
                 _read_and_maybe_decrypt_media,
@@ -1670,10 +1980,30 @@ async def get_chat_image(
                 account_dir=account_dir,
                 weixin_root=wxid_dir,
             )
-        except Exception:
+        except Exception as e:
+            decode_error = str(e)
+            data = b""
+            media_type = "application/octet-stream"
+
+        decode_elapsed_ms = round((time.perf_counter() - decode_one_started_at) * 1000.0, 1)
+        valid_image = not (media_type.startswith("image/") and (not _is_probably_valid_image(data, media_type)))
+        should_log_attempt = bool(decode_error) or decode_attempts <= 3 or decode_elapsed_ms >= 100 or media_type != "application/octet-stream"
+        if should_log_attempt and slow_decode_logged < 8:
+            trace(
+                "decode:attempt",
+                attempt=decode_attempts,
+                path=str(src_path),
+                mediaType=media_type,
+                bytes=len(data or b""),
+                validImage=bool(valid_image),
+                error=decode_error[:200],
+                elapsedMsLocal=decode_elapsed_ms,
+            )
+            slow_decode_logged += 1
+        if decode_error:
             continue
 
-        if media_type.startswith("image/") and (not _is_probably_valid_image(data, media_type)):
+        if not valid_image:
             continue
 
         if media_type != "application/octet-stream":
@@ -1803,7 +2133,7 @@ async def get_chat_emoji(
     return Response(content=data, media_type=media_type)
 
 
-@router.get("/api/chat/media/video_thumb", summary="获取视频缩略图资源")
+@router.get("/api/chat/media/video_thumb", summary="Get video thumbnail media")
 async def get_chat_video_thumb(
     md5: Optional[str] = None,
     file_id: Optional[str] = None,
@@ -1814,16 +2144,47 @@ async def get_chat_video_thumb(
     if (not md5) and (not file_id):
         raise HTTPException(status_code=400, detail="Missing md5/file_id.")
     account_dir = _resolve_account_dir(account)
+    md5_norm = str(md5 or "").strip().lower() if md5 else ""
+    file_id_norm = str(file_id or "").strip()
+    _trace_id, trace = create_perf_trace(
+        logger,
+        "chat.video_thumb",
+        account=account_dir.name,
+        username=str(username or ""),
+        md5=md5_norm,
+        fileId=file_id_norm,
+        deepScan=bool(deep_scan),
+    )
+    trace("request:start")
 
-    # 优先从解密资源目录读取（更快）
-    if md5:
-        decrypted_path = _try_find_decrypted_resource(account_dir, str(md5).lower())
+    # Fast path: cached decoded thumbnail resource.
+    if md5_norm:
+        cache_started_at = time.perf_counter()
+        decrypted_path = _try_find_decrypted_resource(account_dir, md5_norm)
+        trace(
+            "decrypted-cache:path-lookup",
+            hasPath=bool(decrypted_path),
+            path=str(decrypted_path or ""),
+            elapsedMsLocal=round((time.perf_counter() - cache_started_at) * 1000.0, 1),
+        )
         if decrypted_path:
+            read_started_at = time.perf_counter()
             data = decrypted_path.read_bytes()
             media_type = _detect_image_media_type(data[:32])
+            trace(
+                "decrypted-cache:read-validate",
+                path=str(decrypted_path),
+                bytes=len(data or b""),
+                mediaType=media_type,
+                elapsedMsLocal=round((time.perf_counter() - read_started_at) * 1000.0, 1),
+            )
+            trace("response:ready", result="decrypted-cache-hit", mediaType=media_type, bytes=len(data or b""))
             return Response(content=data, media_type=media_type)
+    else:
+        trace("decrypted-cache:skipped", reason="missing-md5")
 
-    # 回退到原始逻辑
+    # Fallback: locate and decode from WeChat data directories.
+    roots_started_at = time.perf_counter()
     wxid_dir = _resolve_account_wxid_dir(account_dir)
     hardlink_db_path = account_dir / "hardlink.db"
     extra_roots: list[Path] = []
@@ -1837,53 +2198,149 @@ async def get_chat_video_thumb(
         roots.append(wxid_dir)
     if db_storage_dir:
         roots.append(db_storage_dir)
+    trace(
+        "roots:resolved",
+        hasWxidDir=bool(wxid_dir),
+        wxidDir=str(wxid_dir or ""),
+        hasDbStorageDir=bool(db_storage_dir),
+        dbStorageDir=str(db_storage_dir or ""),
+        hardlinkHasVideoTable=bool(hardlink_has_video_table),
+        elapsedMsLocal=round((time.perf_counter() - roots_started_at) * 1000.0, 1),
+    )
     if not roots:
+        trace("response:error", result="roots-not-found")
         raise HTTPException(
             status_code=404,
             detail="wxid_dir/db_storage_path not found. Please decrypt with db_storage_path to enable media lookup.",
         )
+
     p: Optional[Path] = None
-    if md5:
-        p = _resolve_media_path_from_hardlink(
+    allow_deep_scan = False
+    if md5_norm:
+        hardlink_started_at = time.perf_counter()
+        p = await asyncio.to_thread(
+            _resolve_media_path_from_hardlink,
             hardlink_db_path,
             roots[0],
-            md5=str(md5),
+            md5=md5_norm,
             kind="video_thumb",
             username=username,
             extra_roots=roots[1:],
         )
+        trace(
+            "source:hardlink-lookup",
+            found=bool(p),
+            path=str(p or ""),
+            elapsedMsLocal=round((time.perf_counter() - hardlink_started_at) * 1000.0, 1),
+        )
 
-        # Many WeChat builds store video thumbnails directly as `{md5}_thumb.jpg` under msg/video/YYYY-MM.
-        # This fast probe avoids an expensive recursive scan on misses.
+        # WeFlow-style lookup: build a short-lived index of msg/video/YYYY-MM and resolve by local file token.
         if (not p) and (wxid_dir or db_storage_dir):
-            p = _fast_probe_video_path_by_md5(
-                md5=str(md5),
+            index_started_at = time.perf_counter()
+            p = await asyncio.to_thread(
+                _resolve_video_path_from_weflow_index,
+                md5=md5_norm,
                 wxid_dir=wxid_dir,
                 db_storage_dir=db_storage_dir,
                 want_thumb=True,
             )
+            trace(
+                "source:weflow-video-index",
+                found=bool(p),
+                path=str(p or ""),
+                elapsedMsLocal=round((time.perf_counter() - index_started_at) * 1000.0, 1),
+            )
+
+        # Many WeChat builds store video thumbnails directly as `{md5}_thumb.jpg` under msg/video/YYYY-MM.
+        # This direct probe is retained as a cheap fallback when the index misses.
+        if (not p) and (wxid_dir or db_storage_dir):
+            fast_probe_started_at = time.perf_counter()
+            p = await asyncio.to_thread(
+                _fast_probe_video_path_by_md5,
+                md5=md5_norm,
+                wxid_dir=wxid_dir,
+                db_storage_dir=db_storage_dir,
+                want_thumb=True,
+            )
+            trace(
+                "source:fast-probe",
+                found=bool(p),
+                path=str(p or ""),
+                elapsedMsLocal=round((time.perf_counter() - fast_probe_started_at) * 1000.0, 1),
+            )
+
+        if (not p) and (wxid_dir or db_storage_dir):
+            realtime_started_at = time.perf_counter()
+            p, resolved_token = await asyncio.to_thread(
+                _resolve_video_path_from_realtime_hardlink,
+                account_dir=account_dir,
+                md5=md5_norm,
+                wxid_dir=wxid_dir,
+                db_storage_dir=db_storage_dir,
+                want_thumb=True,
+            )
+            trace(
+                "source:realtime-hardlink",
+                found=bool(p),
+                resolvedToken=str(resolved_token or ""),
+                path=str(p or ""),
+                elapsedMsLocal=round((time.perf_counter() - realtime_started_at) * 1000.0, 1),
+            )
 
         allow_deep_scan = bool(deep_scan) or (not hardlink_has_video_table)
         if (not p) and wxid_dir and allow_deep_scan:
-            hit = _fallback_search_media_by_md5(str(wxid_dir), str(md5), kind="video_thumb")
+            deep_scan_started_at = time.perf_counter()
+            hit = await asyncio.to_thread(_fallback_search_media_by_md5, str(wxid_dir), md5_norm, kind="video_thumb")
             if hit:
                 p = Path(hit)
-    if (not p) and file_id:
+            trace(
+                "source:deep-scan",
+                found=bool(hit),
+                path=str(hit or ""),
+                elapsedMsLocal=round((time.perf_counter() - deep_scan_started_at) * 1000.0, 1),
+            )
+    if (not p) and file_id_norm:
+        file_id_started_at = time.perf_counter()
+        file_id_roots_checked = 0
         for r in [wxid_dir, db_storage_dir]:
             if not r:
                 continue
-            hit = _fallback_search_media_by_file_id(str(r), str(file_id), kind="video_thumb", username=str(username or ""))
+            file_id_roots_checked += 1
+            hit = await asyncio.to_thread(
+                _fallback_search_media_by_file_id,
+                str(r),
+                file_id_norm,
+                kind="video_thumb",
+                username=str(username or ""),
+            )
             if hit:
                 p = Path(hit)
                 break
+        trace(
+            "source:file-id-lookup",
+            found=bool(p),
+            rootsChecked=file_id_roots_checked,
+            path=str(p or ""),
+            elapsedMsLocal=round((time.perf_counter() - file_id_started_at) * 1000.0, 1),
+        )
     if not p:
+        trace("response:error", result="source-not-found", allowDeepScan=bool(allow_deep_scan))
         raise HTTPException(status_code=404, detail="Video thumbnail not found.")
 
-    data, media_type = _read_and_maybe_decrypt_media(p, account_dir=account_dir, weixin_root=wxid_dir)
+    read_started_at = time.perf_counter()
+    data, media_type = await asyncio.to_thread(_read_and_maybe_decrypt_media, p, account_dir=account_dir, weixin_root=wxid_dir)
+    trace(
+        "decode:done",
+        path=str(p),
+        mediaType=media_type,
+        bytes=len(data or b""),
+        elapsedMsLocal=round((time.perf_counter() - read_started_at) * 1000.0, 1),
+    )
+    trace("response:ready", result="decoded", mediaType=media_type, bytes=len(data or b""))
     return Response(content=data, media_type=media_type)
 
 
-@router.get("/api/chat/media/video", summary="获取视频资源")
+@router.get("/api/chat/media/video", summary="Get video media")
 async def get_chat_video(
     md5: Optional[str] = None,
     file_id: Optional[str] = None,
@@ -1895,14 +2352,36 @@ async def get_chat_video(
         raise HTTPException(status_code=400, detail="Missing md5/file_id.")
     account_dir = _resolve_account_dir(account)
     md5_norm = str(md5 or "").strip().lower() if md5 else ""
+    file_id_norm = str(file_id or "").strip()
+    _trace_id, trace = create_perf_trace(
+        logger,
+        "chat.video",
+        account=account_dir.name,
+        username=str(username or ""),
+        md5=md5_norm,
+        fileId=file_id_norm,
+        deepScan=bool(deep_scan),
+    )
+    trace("request:start")
 
     if md5_norm:
-        # 优先从解密资源目录读取（更快，且支持 Range）
+        # Fast path Range?
+        cache_started_at = time.perf_counter()
         decrypted_path = _try_find_decrypted_resource(account_dir, md5_norm)
+        trace(
+            "decrypted-cache:path-lookup",
+            hasPath=bool(decrypted_path),
+            path=str(decrypted_path or ""),
+            elapsedMsLocal=round((time.perf_counter() - cache_started_at) * 1000.0, 1),
+        )
         if decrypted_path:
             mt = _guess_media_type_by_path(decrypted_path, fallback="video/mp4")
+            trace("response:ready", result="decrypted-cache-hit", mediaType=mt, path=str(decrypted_path))
             return FileResponse(str(decrypted_path), media_type=mt)
+    else:
+        trace("decrypted-cache:skipped", reason="missing-md5")
 
+    roots_started_at = time.perf_counter()
     wxid_dir = _resolve_account_wxid_dir(account_dir)
     hardlink_db_path = account_dir / "hardlink.db"
     extra_roots: list[Path] = []
@@ -1916,14 +2395,28 @@ async def get_chat_video(
         roots.append(wxid_dir)
     if db_storage_dir:
         roots.append(db_storage_dir)
+    trace(
+        "roots:resolved",
+        hasWxidDir=bool(wxid_dir),
+        wxidDir=str(wxid_dir or ""),
+        hasDbStorageDir=bool(db_storage_dir),
+        dbStorageDir=str(db_storage_dir or ""),
+        hardlinkHasVideoTable=bool(hardlink_has_video_table),
+        elapsedMsLocal=round((time.perf_counter() - roots_started_at) * 1000.0, 1),
+    )
     if not roots:
+        trace("response:error", result="roots-not-found")
         raise HTTPException(
             status_code=404,
             detail="wxid_dir/db_storage_path not found. Please decrypt with db_storage_path to enable media lookup.",
         )
+
     p: Optional[Path] = None
+    allow_deep_scan = False
     if md5_norm:
-        p = _resolve_media_path_from_hardlink(
+        hardlink_started_at = time.perf_counter()
+        p = await asyncio.to_thread(
+            _resolve_media_path_from_hardlink,
             hardlink_db_path,
             roots[0],
             md5=md5_norm,
@@ -1931,58 +2424,163 @@ async def get_chat_video(
             username=username,
             extra_roots=roots[1:],
         )
+        trace(
+            "source:hardlink-lookup",
+            found=bool(p),
+            path=str(p or ""),
+            elapsedMsLocal=round((time.perf_counter() - hardlink_started_at) * 1000.0, 1),
+        )
         if (not p) and (wxid_dir or db_storage_dir):
-            p = _fast_probe_video_path_by_md5(
+            index_started_at = time.perf_counter()
+            p = await asyncio.to_thread(
+                _resolve_video_path_from_weflow_index,
                 md5=md5_norm,
                 wxid_dir=wxid_dir,
                 db_storage_dir=db_storage_dir,
                 want_thumb=False,
             )
+            trace(
+                "source:weflow-video-index",
+                found=bool(p),
+                path=str(p or ""),
+                elapsedMsLocal=round((time.perf_counter() - index_started_at) * 1000.0, 1),
+            )
+        if (not p) and (wxid_dir or db_storage_dir):
+            fast_probe_started_at = time.perf_counter()
+            p = await asyncio.to_thread(
+                _fast_probe_video_path_by_md5,
+                md5=md5_norm,
+                wxid_dir=wxid_dir,
+                db_storage_dir=db_storage_dir,
+                want_thumb=False,
+            )
+            trace(
+                "source:fast-probe",
+                found=bool(p),
+                path=str(p or ""),
+                elapsedMsLocal=round((time.perf_counter() - fast_probe_started_at) * 1000.0, 1),
+            )
+        if (not p) and (wxid_dir or db_storage_dir):
+            realtime_started_at = time.perf_counter()
+            p, resolved_token = await asyncio.to_thread(
+                _resolve_video_path_from_realtime_hardlink,
+                account_dir=account_dir,
+                md5=md5_norm,
+                wxid_dir=wxid_dir,
+                db_storage_dir=db_storage_dir,
+                want_thumb=False,
+            )
+            trace(
+                "source:realtime-hardlink",
+                found=bool(p),
+                resolvedToken=str(resolved_token or ""),
+                path=str(p or ""),
+                elapsedMsLocal=round((time.perf_counter() - realtime_started_at) * 1000.0, 1),
+            )
         allow_deep_scan = bool(deep_scan) or (not hardlink_has_video_table)
         if (not p) and wxid_dir and allow_deep_scan:
-            hit = _fallback_search_media_by_md5(str(wxid_dir), md5_norm, kind="video")
+            deep_scan_started_at = time.perf_counter()
+            hit = await asyncio.to_thread(_fallback_search_media_by_md5, str(wxid_dir), md5_norm, kind="video")
             if hit:
                 p = Path(hit)
-    if (not p) and file_id:
+            trace(
+                "source:deep-scan",
+                found=bool(hit),
+                path=str(hit or ""),
+                elapsedMsLocal=round((time.perf_counter() - deep_scan_started_at) * 1000.0, 1),
+            )
+    if (not p) and file_id_norm:
+        file_id_started_at = time.perf_counter()
+        file_id_roots_checked = 0
         for r in [wxid_dir, db_storage_dir]:
             if not r:
                 continue
-            hit = _fallback_search_media_by_file_id(str(r), str(file_id), kind="video", username=str(username or ""))
+            file_id_roots_checked += 1
+            hit = await asyncio.to_thread(
+                _fallback_search_media_by_file_id,
+                str(r),
+                file_id_norm,
+                kind="video",
+                username=str(username or ""),
+            )
             if hit:
                 p = Path(hit)
                 break
+        trace(
+            "source:file-id-lookup",
+            found=bool(p),
+            rootsChecked=file_id_roots_checked,
+            path=str(p or ""),
+            elapsedMsLocal=round((time.perf_counter() - file_id_started_at) * 1000.0, 1),
+        )
     if not p:
+        trace("response:error", result="source-not-found", allowDeepScan=bool(allow_deep_scan))
         raise HTTPException(status_code=404, detail="Video not found.")
 
-    # 直接可播放的 MP4：直接 FileResponse（支持 Range）
+    # Fast path MP4??? FileResponse??? Range?
+    probe_started_at = time.perf_counter()
     try:
         with open(p, "rb") as f:
             head = f.read(8)
-        if len(head) >= 8 and head[4:8] == b"ftyp":
+        is_plain_mp4 = bool(len(head) >= 8 and head[4:8] == b"ftyp")
+        trace(
+            "decode:probe-plain-mp4",
+            path=str(p),
+            isPlainMp4=is_plain_mp4,
+            elapsedMsLocal=round((time.perf_counter() - probe_started_at) * 1000.0, 1),
+        )
+        if is_plain_mp4:
             media_type = _guess_media_type_by_path(p, fallback="video/mp4")
+            trace("response:ready", result="plain-file", mediaType=media_type, path=str(p))
             return FileResponse(str(p), media_type=media_type)
-    except Exception:
-        pass
+    except Exception as e:
+        trace(
+            "decode:probe-plain-mp4",
+            path=str(p),
+            error=str(e)[:200],
+            elapsedMsLocal=round((time.perf_counter() - probe_started_at) * 1000.0, 1),
+        )
 
-    # 尝试解密/去前缀并落盘（避免一次性返回大文件 bytes）
+    # Fast path/????????????????? bytes?
     if md5_norm:
+        materialize_started_at = time.perf_counter()
         try:
-            materialized = _ensure_decrypted_resource_for_md5(
+            materialized = await asyncio.to_thread(
+                _ensure_decrypted_resource_for_md5,
                 account_dir,
                 md5=md5_norm,
                 source_path=p,
                 weixin_root=wxid_dir,
             )
-        except Exception:
+            materialize_error = ""
+        except Exception as e:
             materialized = None
+            materialize_error = str(e)
+        trace(
+            "decode:materialize",
+            found=bool(materialized),
+            path=str(materialized or ""),
+            error=materialize_error[:200],
+            elapsedMsLocal=round((time.perf_counter() - materialize_started_at) * 1000.0, 1),
+        )
         if materialized:
             media_type = _guess_media_type_by_path(materialized, fallback="video/mp4")
+            trace("response:ready", result="materialized", mediaType=media_type, path=str(materialized))
             return FileResponse(str(materialized), media_type=media_type)
 
-    # 最后兜底：直接返回处理后的 bytes（不支持 Range）
-    data, media_type = _read_and_maybe_decrypt_media(p, account_dir=account_dir, weixin_root=wxid_dir)
+    # Fast path bytes???? Range?
+    read_started_at = time.perf_counter()
+    data, media_type = await asyncio.to_thread(_read_and_maybe_decrypt_media, p, account_dir=account_dir, weixin_root=wxid_dir)
     if media_type == "application/octet-stream":
         media_type = _guess_media_type_by_path(p, fallback="video/mp4")
+    trace(
+        "decode:bytes-fallback",
+        path=str(p),
+        mediaType=media_type,
+        bytes=len(data or b""),
+        elapsedMsLocal=round((time.perf_counter() - read_started_at) * 1000.0, 1),
+    )
+    trace("response:ready", result="bytes-fallback", mediaType=media_type, bytes=len(data or b""))
     return Response(content=data, media_type=media_type)
 
 

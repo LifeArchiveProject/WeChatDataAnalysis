@@ -3246,19 +3246,20 @@ def _append_full_messages_from_rows(
                     create_time=create_time,
                 )
 
-            # Some WeChat builds store the on-disk thumbnail basename (32-hex) in packed_info_data (protobuf),
-            # while the message XML only carries a long cdnthumburl file_id. Prefer packed_info_data when present.
-            if not _is_hex_md5(video_thumb_md5):
+            # Match WeFlow's video strategy: packed_info_data often stores the local msg/video basename.
+            # Prefer this token for video lookup; keep XML CDN/file_id as fallback query parameters.
+            try:
+                packed_val = r["packed_info_data"]
+            except Exception:
                 try:
-                    packed_val = r["packed_info_data"]
+                    packed_val = r.get("packed_info_data")  # type: ignore[attr-defined]
                 except Exception:
-                    try:
-                        packed_val = r.get("packed_info_data")  # type: ignore[attr-defined]
-                    except Exception:
-                        packed_val = None
-                packed_md5 = _extract_md5_from_packed_info(packed_val)
-                if packed_md5:
-                    video_thumb_md5 = packed_md5
+                    packed_val = None
+            packed_video_token = _extract_md5_from_packed_info(packed_val)
+            if packed_video_token:
+                video_md5 = packed_video_token
+                if not _is_hex_md5(video_thumb_md5):
+                    video_thumb_md5 = packed_video_token
             content_text = "[视频]"
         elif local_type == 47:
             render_type = "emoji"
@@ -3823,6 +3824,7 @@ def _postprocess_full_messages(
                         m["videoThumbUrl"] = (
                             base_url
                             + f"/api/chat/media/video_thumb?account={quote(account_dir.name)}&md5={quote(video_thumb_md5)}&username={quote(username)}"
+                            + (f"&file_id={quote(video_thumb_file_id)}" if video_thumb_file_id else "")
                         )
                     elif video_thumb_file_id:
                         m["videoThumbUrl"] = (
@@ -3838,6 +3840,7 @@ def _postprocess_full_messages(
                         m["videoUrl"] = (
                             base_url
                             + f"/api/chat/media/video?account={quote(account_dir.name)}&md5={quote(video_md5)}&username={quote(username)}"
+                            + (f"&file_id={quote(video_file_id)}" if video_file_id else "")
                         )
                     elif video_file_id:
                         m["videoUrl"] = (
@@ -4830,6 +4833,20 @@ def _collect_chat_messages(
                         packed_md5 = _extract_md5_from_packed_info(r["packed_info_data"])
                         if packed_md5:
                             video_thumb_md5 = packed_md5
+                    # Match WeFlow video lookup: packed_info_data may be the local msg/video basename.
+                    # Keep XML md5/file_id as fallback, but prefer the packed token for local playback.
+                    try:
+                        packed_val = r["packed_info_data"]
+                    except Exception:
+                        try:
+                            packed_val = r.get("packed_info_data")  # type: ignore[attr-defined]
+                        except Exception:
+                            packed_val = None
+                    packed_video_token = _extract_md5_from_packed_info(packed_val)
+                    if packed_video_token:
+                        video_md5 = packed_video_token
+                        if not _is_hex_md5(video_thumb_md5):
+                            video_thumb_md5 = packed_video_token
                     content_text = "[视频]"
                 elif local_type == 47:
                     render_type = "emoji"
@@ -5782,6 +5799,20 @@ def list_chat_messages(
                             local_id=local_id,
                             create_time=create_time,
                         )
+                    # Match WeFlow video lookup: packed_info_data may be the local msg/video basename.
+                    # Keep XML md5/file_id as fallback, but prefer the packed token for local playback.
+                    try:
+                        packed_val = r["packed_info_data"]
+                    except Exception:
+                        try:
+                            packed_val = r.get("packed_info_data")  # type: ignore[attr-defined]
+                        except Exception:
+                            packed_val = None
+                    packed_video_token = _extract_md5_from_packed_info(packed_val)
+                    if packed_video_token:
+                        video_md5 = packed_video_token
+                        if not _is_hex_md5(video_thumb_md5):
+                            video_thumb_md5 = packed_video_token
                     content_text = "[视频]"
                 elif local_type == 47:
                     render_type = "emoji"
@@ -6214,6 +6245,7 @@ def list_chat_messages(
                         m["videoThumbUrl"] = (
                             base_url
                             + f"/api/chat/media/video_thumb?account={quote(account_dir.name)}&md5={quote(video_thumb_md5)}&username={quote(username)}"
+                            + (f"&file_id={quote(video_thumb_file_id)}" if video_thumb_file_id else "")
                         )
                     elif video_thumb_file_id:
                         m["videoThumbUrl"] = (
@@ -6229,6 +6261,7 @@ def list_chat_messages(
                         m["videoUrl"] = (
                             base_url
                             + f"/api/chat/media/video?account={quote(account_dir.name)}&md5={quote(video_md5)}&username={quote(username)}"
+                            + (f"&file_id={quote(video_file_id)}" if video_file_id else "")
                         )
                     elif video_file_id:
                         m["videoUrl"] = (
