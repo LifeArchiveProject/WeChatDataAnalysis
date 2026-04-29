@@ -403,6 +403,7 @@ async def decrypt_databases_stream(
                     if (
                         (not bool(db_diagnostic.get("success", ok)))
                         or int(db_diagnostic.get("failed_pages") or 0) > 0
+                        or int(db_diagnostic.get("hmac_warning_pages") or 0) > 0
                         or str(db_diagnostic.get("diagnostic_status") or "") != "ok"
                     ):
                         account_diagnostic_warning_count += 1
@@ -434,8 +435,11 @@ async def decrypt_databases_stream(
                     if db_diagnostic:
                         payload["diagnostic_status"] = str(db_diagnostic.get("diagnostic_status") or "")
                         payload["page_failures"] = int(db_diagnostic.get("failed_pages") or 0)
+                        payload["hmac_warning_pages"] = int(db_diagnostic.get("hmac_warning_pages") or 0)
                         if db_diagnostic.get("failed_page_samples"):
                             payload["failed_page_samples"] = db_diagnostic.get("failed_page_samples")
+                        if db_diagnostic.get("hmac_warning_samples"):
+                            payload["hmac_warning_samples"] = db_diagnostic.get("hmac_warning_samples")
                         if db_diagnostic.get("diagnostics"):
                             payload["diagnostics"] = db_diagnostic.get("diagnostics")
 

@@ -80,3 +80,28 @@ def test_decrypt_database_keeps_sqlcipher_passphrase_compatibility(monkeypatch):
     encrypted_db += _encrypt_page(passphrase_key, page2, 2, salt, bytes.fromhex("3132333435363738393a3b3c3d3e3f40"), passphrase=True)
 
     assert _decrypt_sample(passphrase_key.hex(), encrypted_db, monkeypatch) == page1 + page2
+
+
+def test_decrypt_database_keeps_page_when_non_first_hmac_mismatch(monkeypatch):
+    raw_key = bytes.fromhex("00112233445566778899aabbccddeefffedcba98765432100123456789abcdef")
+    salt = bytes.fromhex("60f4090ef6897e146f94109f13743e34")
+    page1 = _build_plain_page(0x61, first_page=True)
+    page2 = _build_plain_page(0x62, first_page=False)
+
+    encrypted_db = _encrypt_page(raw_key, page1, 1, salt, bytes.fromhex("4142434445464748494a4b4c4d4e4f50"))
+    encrypted_page2 = bytearray(_encrypt_page(raw_key, page2, 2, salt, bytes.fromhex("5152535455565758595a5b5c5d5e5f60")))
+    encrypted_page2[-1] ^= 0x01  # 只破坏 HMAC，不破坏密文和 IV。
+    encrypted_db += bytes(encrypted_page2)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src = Path(tmpdir) / "source.db"
+        dst = Path(tmpdir) / "out.db"
+        src.write_bytes(encrypted_db)
+        monkeypatch.setattr(wechat_decrypt, "collect_sqlite_diagnostics", lambda *args, **kwargs: {"quick_check_ok": True})
+        monkeypatch.setattr(wechat_decrypt, "sqlite_diagnostics_status", lambda diagnostics: "ok")
+
+        decryptor = WeChatDatabaseDecryptor(raw_key.hex())
+        assert decryptor.decrypt_database(str(src), str(dst))
+        assert dst.read_bytes() == page1 + page2
+        assert decryptor.last_result["failed_pages"] == 0
+        assert decryptor.last_result["hmac_warning_pages"] == 1
