@@ -1,3 +1,4 @@
+from bisect import bisect_left, bisect_right
 from functools import lru_cache
 from pathlib import Path
 import os
@@ -876,6 +877,305 @@ def _sns_video_roots(wxid_dir_str: str) -> tuple[str, ...]:
             continue
     roots.sort()
     return tuple(roots)
+
+
+def _image_size_from_bytes(data: bytes, media_type: str) -> tuple[int, int]:
+    mt = str(media_type or "").lower()
+    if mt == "image/png":
+        if len(data) >= 24 and data.startswith(b"\x89PNG\r\n\x1a\n"):
+            try:
+                w = int.from_bytes(data[16:20], "big")
+                h = int.from_bytes(data[20:24], "big")
+                return w, h
+            except Exception:
+                return 0, 0
+        return 0, 0
+
+    if mt in {"image/jpeg", "image/jpg"}:
+        if len(data) < 4 or data[0:2] != b"\xff\xd8":
+            return 0, 0
+        i = 2
+        n = len(data)
+        while i + 9 < n:
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            i += 2
+            while marker == 0xFF and i < n:
+                marker = data[i]
+                i += 1
+            if marker in {0xD8, 0xD9}:
+                continue
+            if i + 2 > n:
+                return 0, 0
+            seg_len = (data[i] << 8) + data[i + 1]
+            i += 2
+            if seg_len < 2 or i + seg_len - 2 > n:
+                return 0, 0
+            if marker in {
+                0xC0,
+                0xC1,
+                0xC2,
+                0xC3,
+                0xC5,
+                0xC6,
+                0xC7,
+                0xC9,
+                0xCA,
+                0xCB,
+                0xCD,
+                0xCE,
+                0xCF,
+            }:
+                if i + 4 < len(data):
+                    try:
+                        h = (data[i + 1] << 8) + data[i + 2]
+                        w = (data[i + 3] << 8) + data[i + 4]
+                        return w, h
+                    except Exception:
+                        return 0, 0
+            i += seg_len - 2
+        return 0, 0
+    return 0, 0
+
+
+@lru_cache(maxsize=16)
+def _sns_img_roots(wxid_dir_str: str) -> tuple[str, ...]:
+    """列出包含 `Sns/Img` 的月份缓存目录。"""
+    wxid_dir = Path(str(wxid_dir_str or "").strip())
+    cache_root = wxid_dir / "cache"
+    try:
+        month_dirs = [p for p in cache_root.iterdir() if p.is_dir()]
+    except Exception:
+        month_dirs = []
+
+    roots: list[str] = []
+    for mdir in month_dirs:
+        img_root = mdir / "Sns" / "Img"
+        try:
+            if img_root.exists() and img_root.is_dir():
+                roots.append(str(img_root))
+        except Exception:
+            continue
+    roots.sort()
+    return tuple(roots)
+
+
+@lru_cache(maxsize=16)
+def _sns_img_time_index(wxid_dir_str: str) -> tuple[list[float], list[str]]:
+    """为朋友圈本地图片缓存构建按修改时间排序的索引。"""
+    wxid_dir = Path(str(wxid_dir_str or "").strip())
+    out: list[tuple[float, str]] = []
+
+    cache_root = wxid_dir / "cache"
+    try:
+        month_dirs = [p for p in cache_root.iterdir() if p.is_dir()]
+    except Exception:
+        month_dirs = []
+
+    for mdir in month_dirs:
+        img_root = mdir / "Sns" / "Img"
+        try:
+            if not (img_root.exists() and img_root.is_dir()):
+                continue
+        except Exception:
+            continue
+        try:
+            for sub in img_root.iterdir():
+                if not sub.is_dir():
+                    continue
+                for f in sub.iterdir():
+                    try:
+                        if not f.is_file():
+                            continue
+                        st = f.stat()
+                        out.append((float(st.st_mtime), str(f)))
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+
+    out.sort(key=lambda x: x[0])
+    mtimes = [m for m, _p in out]
+    paths = [_p for _m, _p in out]
+    return mtimes, paths
+
+
+def _normalize_hex32(value: Optional[str]) -> str:
+    """提取前 32 位十六进制字符，不存在则返回空字符串。"""
+    s = str(value or "").strip().lower()
+    if not s:
+        return ""
+    s = re.sub(r"[^0-9a-f]", "", s)
+    if len(s) < 32:
+        return ""
+    return s[:32]
+
+
+def _sns_cache_key_from_path(p: Path) -> str:
+    """从 `cache/.../Sns/Img/<2hex>/<30hex>` 路径还原 32 位缓存 key。"""
+    try:
+        key = f"{p.parent.name}{p.name}"
+    except Exception:
+        return ""
+    return _normalize_hex32(key)
+
+
+def _generate_sns_cache_key(tid: str, media_id: str, media_type: int = 2) -> str:
+    if not tid or not media_id:
+        return ""
+    raw_key = f"{tid}_{media_id}_{media_type}"
+    try:
+        return hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+    except Exception:
+        return ""
+
+
+def _resolve_sns_cached_image_path_by_cache_key(
+    *,
+    wxid_dir: Path,
+    cache_key: str,
+    create_time: int,
+) -> Optional[str]:
+    key32 = _normalize_hex32(cache_key)
+    if not key32:
+        return None
+
+    sub = key32[:2]
+    rest = key32[2:]
+    roots = _sns_img_roots(str(wxid_dir))
+    if not roots:
+        return None
+
+    best: tuple[float, str] | None = None
+    for root_str in roots:
+        try:
+            p = Path(root_str) / sub / rest
+            if not (p.exists() and p.is_file()):
+                continue
+            st = p.stat()
+            score = abs(float(st.st_mtime) - float(create_time)) if create_time > 0 else -float(st.st_mtime)
+            if best is None or score < best[0]:
+                best = (score, str(p))
+        except Exception:
+            continue
+    return best[1] if best else None
+
+
+def _resolve_sns_cached_image_path_by_md5(
+    *,
+    wxid_dir: Path,
+    md5: str,
+    create_time: int,
+) -> Optional[str]:
+    md5_32 = _normalize_hex32(md5)
+    if not md5_32:
+        return None
+
+    sub = md5_32[:2]
+    rest = md5_32[2:]
+    roots = _sns_img_roots(str(wxid_dir))
+    if not roots:
+        return None
+
+    best: tuple[float, str] | None = None
+    for root_str in roots:
+        try:
+            p = Path(root_str) / sub / rest
+            if not (p.exists() and p.is_file()):
+                continue
+            st = p.stat()
+            score = abs(float(st.st_mtime) - float(create_time)) if create_time > 0 else -float(st.st_mtime)
+            if best is None or score < best[0]:
+                best = (score, str(p))
+        except Exception:
+            continue
+    return best[1] if best else None
+
+
+@lru_cache(maxsize=4096)
+def _resolve_sns_cached_image_path(
+    *,
+    account_dir_str: str,
+    create_time: int,
+    width: int,
+    height: int,
+    idx: int,
+    total_size: int = 0,
+) -> Optional[str]:
+    """根据朋友圈动态和媒体元数据尽力匹配本地图片缓存。"""
+    total_size_i = int(total_size or 0)
+    must_match_size = width > 0 and height > 0
+    if (not must_match_size) and total_size_i <= 0:
+        return None
+
+    account_dir = Path(str(account_dir_str or "").strip())
+    if not account_dir.exists():
+        return None
+
+    wxid_dir = _resolve_account_wxid_dir(account_dir)
+    if not wxid_dir:
+        return None
+
+    mtimes, paths = _sns_img_time_index(str(wxid_dir))
+    if not mtimes:
+        return None
+
+    create_time_i = int(create_time or 0)
+    if create_time_i > 0:
+        window = 72 * 3600
+        lo = create_time_i - window
+        hi = create_time_i + window
+        l = bisect_left(mtimes, lo)
+        r = bisect_right(mtimes, hi)
+        if l >= r:
+            l = max(0, len(mtimes) - 800)
+            r = len(mtimes)
+    else:
+        l = max(0, len(mtimes) - 800)
+        r = len(mtimes)
+
+    candidates: list[tuple[float, str]] = []
+    for j in range(l, r):
+        try:
+            if create_time_i > 0:
+                candidates.append((abs(mtimes[j] - float(create_time_i)), paths[j]))
+            else:
+                candidates.append((-mtimes[j], paths[j]))
+        except Exception:
+            continue
+    candidates.sort(key=lambda x: x[0])
+
+    matched: list[tuple[int, float, str]] = []
+    for diff, pstr in candidates[:2000]:
+        try:
+            p = Path(pstr)
+            payload, media_type = _read_and_maybe_decrypt_media(p, account_dir)
+            if not payload or not str(media_type or "").startswith("image/"):
+                continue
+            if must_match_size:
+                w0, h0 = _image_size_from_bytes(payload, str(media_type or ""))
+                if (w0, h0) != (width, height):
+                    continue
+            size_diff = abs(len(payload) - total_size_i) if total_size_i > 0 else 0
+            matched.append((int(size_diff), float(diff), pstr))
+        except Exception:
+            continue
+
+    if not matched:
+        return None
+    if must_match_size:
+        matched.sort(key=lambda x: (x[0], x[1], x[2]))
+        if total_size_i > 0:
+            return matched[0][2]
+        idx0 = max(0, int(idx or 0))
+        return matched[idx0][2] if idx0 < len(matched) else None
+    if total_size_i > 0:
+        matched.sort(key=lambda x: (x[0], x[1], x[2]))
+        return matched[0][2]
+    return None
+
 
 def _resolve_sns_cached_video_path(
     wxid_dir: Path,
@@ -2386,22 +2686,109 @@ async def _try_fetch_and_decrypt_sns_remote(
     return resp
 
 
-@router.get("/api/sns/media", summary="获取朋友圈图片（下载解密优先）")
+@router.get("/api/sns/media", summary="获取朋友圈图片（本地缓存优先）")
 async def get_sns_media(
         account: Optional[str] = None,
+        create_time: int = 0,
+        width: int = 0,
+        height: int = 0,
+        total_size: int = 0,
+        idx: int = 0,
+        post_id: Optional[str] = None,
+        media_id: Optional[str] = None,
+        post_type: int = 1,
+        media_type: int = 2,
+        md5: Optional[str] = None,
         token: Optional[str] = None,
         key: Optional[str] = None,
         use_cache: int = 1,
         url: Optional[str] = None,
 ):
     account_dir = _resolve_account_dir(account)
+    wxid_dir = _resolve_account_wxid_dir(account_dir)
 
     try:
         use_cache_flag = bool(int(use_cache or 1))
     except Exception:
         use_cache_flag = True
 
-    # 0) Prefer WeFlow-style remote download + decrypt (accurate, avoids local cache mismatch).
+    if use_cache_flag:
+        if wxid_dir and post_id and media_id and int(post_type or 1) == 7:
+            try:
+                raw_key = f"{post_id}_{media_id}_4"
+                bkg_md5 = hashlib.md5(raw_key.encode("utf-8", errors="ignore")).hexdigest()
+                bkg_path = wxid_dir / "business" / "sns" / "bkg" / bkg_md5[:2] / bkg_md5
+                if bkg_path.exists() and bkg_path.is_file():
+                    return FileResponse(
+                        str(bkg_path),
+                        media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=31536000", "X-SNS-Source": "local-cover-cache"},
+                    )
+            except Exception:
+                pass
+
+        local_path = ""
+
+        # 1) 精确路径匹配：md5(tid_mediaId_type)。
+        if wxid_dir and post_id and media_id:
+            try:
+                key_post = _generate_sns_cache_key(str(post_id), str(media_id), int(post_type or 1))
+                local_path = _resolve_sns_cached_image_path_by_cache_key(
+                    wxid_dir=wxid_dir,
+                    cache_key=key_post,
+                    create_time=0,
+                ) or ""
+            except Exception:
+                local_path = ""
+
+            if (not local_path) and int(post_type or 1) != int(media_type or 2):
+                try:
+                    key_media = _generate_sns_cache_key(str(post_id), str(media_id), int(media_type or 2))
+                    local_path = _resolve_sns_cached_image_path_by_cache_key(
+                        wxid_dir=wxid_dir,
+                        cache_key=key_media,
+                        create_time=0,
+                    ) or ""
+                except Exception:
+                    local_path = ""
+
+        # 2) 使用 XML 或 URL 里携带的 md5 匹配缓存布局。
+        if (not local_path) and wxid_dir and _normalize_hex32(md5):
+            try:
+                local_path = _resolve_sns_cached_image_path_by_md5(
+                    wxid_dir=wxid_dir,
+                    md5=str(md5 or ""),
+                    create_time=int(create_time or 0),
+                ) or ""
+            except Exception:
+                local_path = ""
+
+        # 3) 旧版启发式匹配：发布时间、尺寸、文件大小和同尺寸组内序号。
+        if not local_path:
+            try:
+                local_path = _resolve_sns_cached_image_path(
+                    account_dir_str=str(account_dir),
+                    create_time=int(create_time or 0),
+                    width=int(width or 0),
+                    height=int(height or 0),
+                    idx=max(0, int(idx or 0)),
+                    total_size=int(total_size or 0),
+                ) or ""
+            except Exception:
+                local_path = ""
+
+        if local_path:
+            try:
+                payload, local_media_type = _read_and_maybe_decrypt_media(Path(local_path), account_dir)
+                if payload and str(local_media_type or "").startswith("image/"):
+                    resp = Response(content=payload, media_type=str(local_media_type or "image/jpeg"))
+                    resp.headers["Cache-Control"] = "public, max-age=31536000"
+                    resp.headers["X-SNS-Source"] = "local-cache"
+                    return resp
+            except Exception:
+                pass
+
+    # 4) 最后再走远程：WeFlow 风格下载、解密和远程缓存。
     remote_resp = await _try_fetch_and_decrypt_sns_remote(
         account_dir=account_dir,
         url=str(url or ""),

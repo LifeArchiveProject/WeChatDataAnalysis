@@ -1964,6 +1964,33 @@ const upgradeTencentHttps = (u) => {
   return raw
 }
 
+const normalizeHex32 = (value) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  const hex = raw.replace(/[^0-9a-fA-F]/g, '').toLowerCase()
+  return hex.length >= 32 ? hex.slice(0, 32) : ''
+}
+
+const mediaSizeKey = (m) => {
+  const t = String(m?.type ?? '')
+  const w = String(m?.size?.width || m?.size?.w || '').trim()
+  const h = String(m?.size?.height || m?.size?.h || '').trim()
+  const total = String(m?.size?.totalSize || m?.size?.total_size || m?.size?.total || '').trim()
+  return `${t}:${w}:${h}:${total}`
+}
+
+const mediaSizeGroupIndex = (post, m, idx) => {
+  const list = Array.isArray(post?.media) ? post.media : []
+  const key = mediaSizeKey(m)
+  const i0 = Number(idx) || 0
+  if (!key || i0 <= 0) return i0
+  let count = 0
+  for (let i = 0; i < i0; i++) {
+    if (mediaSizeKey(list[i]) === key) count++
+  }
+  return count
+}
+
 const getSnsMediaUrl = (post, m, idx, rawUrl) => {
   const raw = upgradeTencentHttps(String(rawUrl || '').trim())
   if (!raw) return ''
@@ -1980,12 +2007,37 @@ const getSnsMediaUrl = (post, m, idx, rawUrl) => {
       const host = new URL(raw).hostname.toLowerCase()
       if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn') || host.endsWith('.tc.qq.com')) {
         const acc = String(selectedAccount.value || '').trim()
-        // Match WeFlow's image pipeline: use a stable URL + key/token and let the
-        // backend handle cache-first remote fetch/decrypt. Avoid attaching legacy
-        // local-match metadata to the main image path so browser caching can reuse
-        // the same request URL for list + preview.
+        const ct = String(post?.createTime || '').trim()
+        const w = String(m?.size?.width || m?.size?.w || '').trim()
+        const h = String(m?.size?.height || m?.size?.h || '').trim()
+        const ts = String(m?.size?.totalSize || m?.size?.total_size || m?.size?.total || '').trim()
+        const sizeIdx = mediaSizeGroupIndex(post, m, idx)
+        let md5 = normalizeHex32(m?.urlAttrs?.md5 || m?.thumbAttrs?.md5 || m?.urlAttrs?.MD5 || m?.thumbAttrs?.MD5)
+        if (!md5) {
+          const match = /[?&]md5=([0-9a-fA-F]{16,32})/.exec(raw)
+          if (match?.[1]) md5 = normalizeHex32(match[1])
+        }
+
         const parts = new URLSearchParams()
         if (acc) parts.set('account', acc)
+        if (ct) parts.set('create_time', ct)
+        if (w) parts.set('width', w)
+        if (h) parts.set('height', h)
+        if (/^\d+$/.test(ts)) parts.set('total_size', ts)
+        parts.set('idx', String(Number(sizeIdx) || 0))
+
+        const pid = String(post?.id || post?.tid || '').trim()
+        if (pid) parts.set('post_id', pid)
+
+        const mid = String(m?.id || '').trim()
+        if (mid) parts.set('media_id', mid)
+
+        const postType = String(post?.type || '1').trim()
+        if (postType) parts.set('post_type', postType)
+
+        const mediaType = String(m?.type || '2').trim()
+        if (mediaType) parts.set('media_type', mediaType)
+
         const token = String(m?.token || m?.urlAttrs?.token || m?.thumbAttrs?.token || '').trim()
         if (token) parts.set('token', token)
 
@@ -1995,8 +2047,9 @@ const getSnsMediaUrl = (post, m, idx, rawUrl) => {
         parts.set('use_cache', snsUseCache.value ? '1' : '0')
         // When cache is disabled, bust browser caching so backend really downloads+decrypts each time.
         if (!snsUseCache.value) parts.set('_t', String(Date.now()))
-        // Bump this when changing the WeFlow-aligned image pipeline to avoid stale browser caches.
-        parts.set('v', '10')
+        if (md5) parts.set('md5', md5)
+        // 修改后端媒体匹配逻辑时递增版本号，避免浏览器复用旧的错误缓存。
+        parts.set('v', '11')
         parts.set('url', raw)
         return `${apiBase}/sns/media?${parts.toString()}`
       }
