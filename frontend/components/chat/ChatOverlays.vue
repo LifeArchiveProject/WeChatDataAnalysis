@@ -1311,7 +1311,7 @@
                     :class="exportScope === 'all' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'"
                     @click="onExportBatchScopeClick('all')"
                   >
-                    全部 {{ exportContactCounts.total }}
+                    全部 {{ exportTargetsLoading ? '...' : exportContactCounts.total }}
                   </button>
                   <button
                     type="button"
@@ -1319,7 +1319,7 @@
                     :class="exportScope === 'groups' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'"
                     @click="onExportBatchScopeClick('groups')"
                   >
-                    群聊 {{ exportContactCounts.groups }}
+                    群聊 {{ exportTargetsLoading ? '...' : exportContactCounts.groups }}
                   </button>
                   <button
                     type="button"
@@ -1327,7 +1327,7 @@
                     :class="exportScope === 'singles' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'"
                     @click="onExportBatchScopeClick('singles')"
                   >
-                    单聊 {{ exportContactCounts.singles }}
+                    单聊 {{ exportTargetsLoading ? '...' : exportContactCounts.singles }}
                   </button>
                   <button
                     type="button"
@@ -1338,6 +1338,8 @@
                     自定义
                   </button>
                 </div>
+                <div v-if="exportTargetsLoading" class="mt-1 text-[11px] text-gray-400">正在同步导出范围...</div>
+                <div v-else-if="exportTargetsError" class="mt-1 text-[11px] text-red-500">{{ exportTargetsError }}</div>
               </div>
 
               <div>
@@ -1432,6 +1434,7 @@
                     <div class="text-sm text-gray-800 truncate">
                       {{ c.name }}
                       <span class="text-xs text-gray-500">{{ c.isGroup ? '（群）' : '' }}</span>
+                      <span v-if="!c.inSessionList" class="ml-1 text-[10px] text-[#03C160]">补充</span>
                     </div>
                     <div class="text-xs text-gray-500 truncate">{{ c.username }}</div>
                   </div>

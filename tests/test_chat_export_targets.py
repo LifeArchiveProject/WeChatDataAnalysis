@@ -48,6 +48,7 @@ class TestChatExportTargets(unittest.TestCase):
                 ("wxid_no_session", "", "No session friend", "", 1, 0, "", ""),
                 ("wxid_session_hidden", "", "Hidden session friend", "", 1, 0, "", ""),
                 ("room_no_session@chatroom", "", "No session group", "", 1, 0, "", ""),
+                ("room_hidden@chatroom", "", "Hidden session group", "", 1, 0, "", ""),
                 ("gh_official_no_session", "", "Official account", "", 1, 24, "", ""),
                 ("wxid_no_messages", "", "No messages friend", "", 1, 0, "", ""),
             ]
@@ -70,6 +71,7 @@ class TestChatExportTargets(unittest.TestCase):
             )
             conn.execute("INSERT INTO SessionTable VALUES (?, ?, ?)", ("wxid_visible", 0, 100))
             conn.execute("INSERT INTO SessionTable VALUES (?, ?, ?)", ("wxid_session_hidden", 1, 200))
+            conn.execute("INSERT INTO SessionTable VALUES (?, ?, ?)", ("room_hidden@chatroom", 1, 250))
             conn.commit()
         finally:
             conn.close()
@@ -84,6 +86,7 @@ class TestChatExportTargets(unittest.TestCase):
                 "wxid_no_session",
                 "wxid_session_hidden",
                 "room_no_session@chatroom",
+                "room_hidden@chatroom",
                 "gh_official_no_session",
                 "wxid_no_messages",
             ]
@@ -95,6 +98,7 @@ class TestChatExportTargets(unittest.TestCase):
                 "wxid_no_session": 300,
                 "wxid_session_hidden": 400,
                 "room_no_session@chatroom": 350,
+                "room_hidden@chatroom": 450,
                 "gh_official_no_session": 360,
             }
             for username, create_time in message_usernames.items():
@@ -148,6 +152,7 @@ class TestChatExportTargets(unittest.TestCase):
             self.assertIn("wxid_no_session", targets)
             self.assertIn("room_no_session@chatroom", targets)
             self.assertNotIn("wxid_session_hidden", targets)
+            self.assertNotIn("room_hidden@chatroom", targets)
             self.assertNotIn("gh_official_no_session", targets)
             self.assertNotIn("wxid_no_messages", targets)
 
@@ -183,6 +188,37 @@ class TestChatExportTargets(unittest.TestCase):
             self.assertIn("wxid_no_session", singles)
             self.assertNotIn("room_no_session@chatroom", singles)
             self.assertIn("gh_official_no_session", with_official)
+
+    def test_preview_counts_match_bulk_export_targets_including_hidden_sessions(self):
+        import wechat_decrypt_tool.chat_export_service as svc
+
+        with TemporaryDirectory() as td:
+            account_dir = self._prepare_account(Path(td))
+
+            preview = svc.build_chat_export_targets_preview(
+                account_dir=account_dir,
+                include_hidden=True,
+                include_official=False,
+                base_url="http://example.test",
+            )
+            actual_targets = svc._resolve_export_targets(
+                account_dir=account_dir,
+                scope="all",
+                usernames=[],
+                include_hidden=True,
+                include_official=False,
+            )
+
+            preview_targets = preview["targets"]
+            preview_usernames = [item["username"] for item in preview_targets]
+            by_username = {item["username"]: item for item in preview_targets}
+
+            self.assertEqual(preview_usernames, actual_targets)
+            self.assertEqual(preview["counts"], {"total": 5, "groups": 2, "singles": 3})
+            self.assertTrue(by_username["room_hidden@chatroom"]["isHidden"])
+            self.assertTrue(by_username["room_hidden@chatroom"]["inSessionList"])
+            self.assertFalse(by_username["room_no_session@chatroom"]["inSessionList"])
+            self.assertTrue(by_username["room_no_session@chatroom"]["avatar"].startswith("http://example.test/api/chat/avatar?"))
 
 
 if __name__ == "__main__":

@@ -45,6 +45,10 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const exportSearchQuery = ref('')
   const exportListTab = ref('all')
   const exportSelectedUsernames = ref([])
+  const exportTargetContacts = ref([])
+  const exportTargetsLoading = ref(false)
+  const exportTargetsLoaded = ref(false)
+  const exportTargetsError = ref('')
 
   const exportJob = ref(null)
   let exportPollTimer = null
@@ -121,9 +125,35 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     }, [])
   }
 
+  const normalizeExportTargetContact = (item) => {
+    const username = String(item?.username || '').trim()
+    const name = String(item?.name || item?.displayName || username).trim() || username
+    return {
+      ...item,
+      username,
+      name,
+      displayName: name,
+      avatar: String(item?.avatar || '').trim(),
+      isGroup: item?.isGroup != null ? !!item.isGroup : username.endsWith('@chatroom'),
+      isHidden: !!item?.isHidden,
+      inSessionList: item?.inSessionList == null ? true : !!item.inSessionList
+    }
+  }
+
+  const getLocalExportContacts = () => {
+    return (Array.isArray(contacts.value) ? contacts.value : [])
+      .map(normalizeExportTargetContact)
+      .filter((contact) => !!contact.username)
+  }
+
+  const getExportBaseContacts = () => {
+    if (exportTargetsLoaded.value) return exportTargetContacts.value
+    return getLocalExportContacts()
+  }
+
   const getExportFilteredContacts = ({ tab = exportListTab.value, query = exportSearchQuery.value } = {}) => {
     const normalizedQuery = String(query || '').trim().toLowerCase()
-    let list = Array.isArray(contacts.value) ? contacts.value : []
+    let list = getExportBaseContacts()
 
     const normalizedTab = String(tab || 'all')
     if (normalizedTab === 'groups') list = list.filter((contact) => !!contact?.isGroup)
@@ -142,7 +172,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   })
 
   const exportContactCounts = computed(() => {
-    const list = Array.isArray(contacts.value) ? contacts.value : []
+    const list = getExportBaseContacts()
     const total = list.length
     const groups = list.filter((contact) => !!contact?.isGroup).length
     return { total, groups, singles: total - groups }
@@ -208,6 +238,52 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportScope.value = 'selected'
     if (exportSelectedUsernames.value.length === 0) {
       selectExportFilteredContacts(exportListTab.value)
+    }
+  }
+
+  const loadExportTargets = async ({ selectFiltered = false } = {}) => {
+    if (!selectedAccount.value) return
+    const selectedBeforeLoad = normalizeExportSelectedUsernames(exportSelectedUsernames.value)
+    const filteredBeforeLoad = getExportFilteredUsernames(exportListTab.value)
+    const selectedWasCurrentFiltered =
+      filteredBeforeLoad.length > 0 &&
+      filteredBeforeLoad.length === selectedBeforeLoad.length &&
+      filteredBeforeLoad.every((username) => selectedBeforeLoad.includes(username))
+    exportTargetsLoading.value = true
+    exportTargetsError.value = ''
+    try {
+      const response = await api.getChatExportTargets({
+        account: selectedAccount.value,
+        include_hidden: true,
+        include_official: false
+      })
+      const selectedNow = normalizeExportSelectedUsernames(exportSelectedUsernames.value)
+      const filteredNowBeforeLoad = getExportFilteredUsernames(exportListTab.value)
+      const selectedNowMatchesPreloadFilter =
+        filteredBeforeLoad.length > 0 &&
+        filteredBeforeLoad.length === selectedNow.length &&
+        filteredBeforeLoad.every((username) => selectedNow.includes(username))
+      const selectedNowMatchesCurrentFilter =
+        filteredNowBeforeLoad.length > 0 &&
+        filteredNowBeforeLoad.length === selectedNow.length &&
+        filteredNowBeforeLoad.every((username) => selectedNow.includes(username))
+      const targets = Array.isArray(response?.targets) ? response.targets : []
+      exportTargetContacts.value = targets
+        .map(normalizeExportTargetContact)
+        .filter((contact) => !!contact.username)
+      exportTargetsLoaded.value = true
+      if (selectFiltered || selectedWasCurrentFiltered || selectedNowMatchesPreloadFilter || selectedNowMatchesCurrentFilter) {
+        selectExportFilteredContacts(exportListTab.value)
+      }
+    } catch (error) {
+      exportTargetsLoaded.value = false
+      exportTargetContacts.value = []
+      exportTargetsError.value = error?.message || '加载导出范围失败'
+      if (!exportError.value) {
+        exportError.value = `加载导出范围失败：${exportTargetsError.value}`
+      }
+    } finally {
+      exportTargetsLoading.value = false
     }
   }
 
@@ -416,6 +492,9 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const openExportModal = () => {
     exportModalOpen.value = true
     exportError.value = ''
+    exportTargetsError.value = ''
+    exportTargetsLoaded.value = false
+    exportTargetContacts.value = []
     resetExportSaveFeedback({ resetAutoSavedFor: true })
     exportCancelRequested.value = false
     exportSearchQuery.value = ''
@@ -426,9 +505,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportMessageTypes.value = exportMessageTypeOptions.map((item) => item.value)
     exportAutoSavedFor.value = ''
     exportScope.value = selectedContact.value?.username ? 'current' : 'selected'
-    if (!selectedContact.value?.username) {
-      selectExportFilteredContacts('all')
-    }
+    loadExportTargets({ selectFiltered: !selectedContact.value?.username })
   }
 
   const closeExportModal = () => {
@@ -627,6 +704,9 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportJob,
     exportOverallPercent,
     exportCurrentPercent,
+    exportTargetsLoading,
+    exportTargetsLoaded,
+    exportTargetsError,
     exportFilteredContacts,
     exportContactCounts,
     onExportBatchScopeClick,

@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..chat_export_service import CHAT_EXPORT_MANAGER
+from ..chat_export_service import CHAT_EXPORT_MANAGER, get_chat_export_targets_preview
 from ..path_fix import PathFixRoute
 
 router = APIRouter(route_class=PathFixRoute)
@@ -99,6 +99,22 @@ async def list_chat_exports():
     jobs = [j.to_public_dict() for j in CHAT_EXPORT_MANAGER.list_jobs()]
     jobs.sort(key=lambda x: int(x.get("createdAt") or 0), reverse=True)
     return {"status": "success", "jobs": jobs}
+
+
+@router.get("/api/chat/exports/targets", summary="获取聊天记录导出目标预览")
+async def preview_chat_export_targets(
+    request: Request,
+    account: Optional[str] = None,
+    include_hidden: bool = True,
+    include_official: bool = False,
+):
+    base_url = str(request.base_url).rstrip("/")
+    return get_chat_export_targets_preview(
+        account=account,
+        include_hidden=bool(include_hidden),
+        include_official=bool(include_official),
+        base_url=base_url,
+    )
 
 
 @router.get("/api/chat/exports/{export_id}", summary="获取导出任务状态")

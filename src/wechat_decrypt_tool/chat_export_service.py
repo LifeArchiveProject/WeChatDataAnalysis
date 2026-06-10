@@ -43,6 +43,7 @@ from .chat_helpers import (
     _parse_location_message,
     _parse_system_message_content,
     _parse_pat_message,
+    _build_avatar_url,
     _pick_display_name,
     _quote_ident,
     _resolve_account_dir,
@@ -3743,6 +3744,73 @@ def _load_message_backed_export_targets(*, account_dir: Path, seed_usernames: se
                 except Exception:
                     pass
     return out
+
+
+def build_chat_export_targets_preview(
+    *,
+    account_dir: Path,
+    include_hidden: bool = True,
+    include_official: bool = False,
+    base_url: str = "",
+) -> dict[str, Any]:
+    targets = _resolve_export_targets(
+        account_dir=account_dir,
+        scope="all",
+        usernames=[],
+        include_hidden=bool(include_hidden),
+        include_official=bool(include_official),
+    )
+    session_rows, session_hidden_by_username = _load_export_session_targets(account_dir)
+    session_usernames = {u for u, _sort_ts in session_rows}
+    contact_rows = _load_contact_rows(account_dir / "contact.db", targets)
+    base = str(base_url or "").rstrip("/")
+
+    conversations: list[dict[str, Any]] = []
+    for u in targets:
+        row = contact_rows.get(u)
+        display_name = _pick_display_name(row, u) if row is not None else u
+        avatar_path = _build_avatar_url(account_dir.name, u)
+        conversations.append(
+            {
+                "username": u,
+                "name": display_name,
+                "displayName": display_name,
+                "isGroup": bool(u.endswith("@chatroom")),
+                "isHidden": bool(int(session_hidden_by_username.get(u) or 0) == 1),
+                "inSessionList": bool(u in session_usernames),
+                "avatar": f"{base}{avatar_path}" if base else avatar_path,
+            }
+        )
+
+    group_count = sum(1 for item in conversations if bool(item.get("isGroup")))
+    return {
+        "status": "success",
+        "account": account_dir.name,
+        "includeHidden": bool(include_hidden),
+        "includeOfficial": bool(include_official),
+        "targets": conversations,
+        "counts": {
+            "total": len(conversations),
+            "groups": group_count,
+            "singles": len(conversations) - group_count,
+        },
+    }
+
+
+def get_chat_export_targets_preview(
+    *,
+    account: Optional[str],
+    include_hidden: bool = True,
+    include_official: bool = False,
+    base_url: str = "",
+) -> dict[str, Any]:
+    account_dir = _resolve_account_dir(account)
+    return build_chat_export_targets_preview(
+        account_dir=account_dir,
+        include_hidden=include_hidden,
+        include_official=include_official,
+        base_url=base_url,
+    )
 
 
 def _conversation_dir_name(

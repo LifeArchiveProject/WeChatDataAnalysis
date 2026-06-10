@@ -449,6 +449,15 @@ export const useApi = () => {
     return await request('/chat/exports')
   }
 
+  const getChatExportTargets = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.include_hidden != null) query.set('include_hidden', String(!!params.include_hidden))
+    if (params && params.include_official != null) query.set('include_official', String(!!params.include_official))
+    const url = '/chat/exports/targets' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
   const cancelChatExport = async (exportId) => {
     if (!exportId) throw new Error('Missing exportId')
     return await request(`/chat/exports/${encodeURIComponent(String(exportId))}`, { method: 'DELETE' })
@@ -693,6 +702,7 @@ export const useApi = () => {
     createChatExport,
     getChatExport,
     listChatExports,
+    getChatExportTargets,
     cancelChatExport,
     createSnsExport,
     getSnsExport,
