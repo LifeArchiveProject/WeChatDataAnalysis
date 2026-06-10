@@ -18,7 +18,7 @@ from .logging_config import get_logger
 
 logger = get_logger(__name__)
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _INDEX_DB_NAME = "chat_search_index.db"
 _INDEX_DB_TMP_NAME = "chat_search_index.tmp.db"
 _LEGACY_INDEX_DB_NAME = "message_fts.db"
@@ -188,7 +188,24 @@ def _update_build_state(account_key: str, **kwargs: Any) -> None:
         st.update(kwargs)
 
 
-def _load_sessions_for_index(account_dir: Path) -> dict[str, dict[str, Any]]:
+def _sqlite_table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({_quote_ident(table_name)})").fetchall()
+    except Exception:
+        return set()
+
+    columns: set[str] = set()
+    for row in rows:
+        try:
+            name = str(row["name"] if isinstance(row, sqlite3.Row) else row[1] or "").strip().lower()
+        except Exception:
+            name = ""
+        if name:
+            columns.add(name)
+    return columns
+
+
+def _load_session_table_targets(account_dir: Path) -> dict[str, dict[str, Any]]:
     session_db_path = account_dir / "session.db"
     if not session_db_path.exists():
         return {}
@@ -196,7 +213,11 @@ def _load_sessions_for_index(account_dir: Path) -> dict[str, dict[str, Any]]:
     conn = sqlite3.connect(str(session_db_path))
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute("SELECT username, is_hidden FROM SessionTable").fetchall()
+        columns = _sqlite_table_columns(conn, "SessionTable")
+        if "username" not in columns:
+            return {}
+        hidden_expr = "is_hidden" if "is_hidden" in columns else "0"
+        rows = conn.execute(f"SELECT username, {hidden_expr} AS is_hidden FROM SessionTable").fetchall()
     finally:
         conn.close()
 
@@ -212,6 +233,108 @@ def _load_sessions_for_index(account_dir: Path) -> dict[str, dict[str, Any]]:
             "is_official": 1 if u.startswith("gh_") else 0,
         }
     return out
+
+
+def _load_contact_usernames_for_index(account_dir: Path) -> set[str]:
+    contact_db_path = account_dir / "contact.db"
+    if not contact_db_path.exists():
+        return set()
+
+    out: set[str] = set()
+    conn = sqlite3.connect(str(contact_db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        for table in ("contact", "stranger"):
+            columns = _sqlite_table_columns(conn, table)
+            if "username" not in columns:
+                continue
+            try:
+                rows = conn.execute(f"SELECT username FROM {_quote_ident(table)}").fetchall()
+            except Exception:
+                continue
+            for row in rows:
+                username = _decode_sqlite_text(row["username"]).strip()
+                if username:
+                    out.add(username)
+    finally:
+        conn.close()
+    return out
+
+
+def _load_name2id_usernames_for_index(conn: sqlite3.Connection) -> set[str]:
+    columns = _sqlite_table_columns(conn, "Name2Id")
+    username_col = "user_name" if "user_name" in columns else ("username" if "username" in columns else "")
+    if not username_col:
+        return set()
+
+    out: set[str] = set()
+    try:
+        rows = conn.execute(f"SELECT {_quote_ident(username_col)} AS username FROM Name2Id").fetchall()
+    except Exception:
+        return out
+
+    for row in rows:
+        try:
+            raw = row["username"] if isinstance(row, sqlite3.Row) else row[0]
+        except Exception:
+            raw = ""
+        username = _decode_sqlite_text(raw).strip()
+        if username:
+            out.add(username)
+    return out
+
+
+def _load_message_backed_index_targets(*, account_dir: Path, seed_usernames: set[str]) -> set[str]:
+    out: set[str] = set()
+    for db_path in _iter_message_db_paths(account_dir):
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            table_names = [_decode_sqlite_text(r["name"] if isinstance(r, sqlite3.Row) else r[0]).strip() for r in rows]
+            lower_to_actual = {name.lower(): name for name in table_names if name}
+            if not lower_to_actual:
+                continue
+
+            candidates = set(seed_usernames)
+            candidates.update(_load_name2id_usernames_for_index(conn))
+            for username in candidates:
+                u = str(username or "").strip()
+                if not u or u == account_dir.name:
+                    continue
+                if not _should_keep_session(u, include_official=True):
+                    continue
+                if _resolve_msg_table_name_by_map(lower_to_actual, u):
+                    out.add(u)
+        except Exception:
+            continue
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    return out
+
+
+def _load_sessions_for_index(account_dir: Path) -> dict[str, dict[str, Any]]:
+    sessions = _load_session_table_targets(account_dir)
+    contact_usernames = _load_contact_usernames_for_index(account_dir)
+    message_backed_usernames = _load_message_backed_index_targets(
+        account_dir=account_dir,
+        seed_usernames=contact_usernames,
+    )
+
+    for u in sorted(message_backed_usernames):
+        if u in sessions:
+            continue
+        sessions[u] = {
+            "is_hidden": 0,
+            "is_official": 1 if u.startswith("gh_") else 0,
+        }
+
+    return sessions
 
 
 def _init_index_db(conn: sqlite3.Connection) -> None:
