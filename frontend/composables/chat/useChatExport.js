@@ -198,8 +198,17 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   }
 
   const onExportBatchScopeClick = (tab) => {
+    const nextTab = String(tab || 'all')
+    exportListTab.value = nextTab
+    exportScope.value = nextTab === 'groups' || nextTab === 'singles' ? nextTab : 'all'
+    selectExportFilteredContacts(nextTab)
+  }
+
+  const onExportCustomScopeClick = () => {
     exportScope.value = 'selected'
-    onExportListTabClick(tab)
+    if (exportSelectedUsernames.value.length === 0) {
+      selectExportFilteredContacts(exportListTab.value)
+    }
   }
 
   const isDesktopExportRuntime = () => {
@@ -488,6 +497,9 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
       }
     } else if (scope === 'selected') {
       usernames = Array.isArray(exportSelectedUsernames.value) ? exportSelectedUsernames.value.filter(Boolean) : []
+    } else if (scope !== 'all' && scope !== 'groups' && scope !== 'singles') {
+      scope = 'selected'
+      usernames = Array.isArray(exportSelectedUsernames.value) ? exportSelectedUsernames.value.filter(Boolean) : []
     }
 
     if (scope === 'selected' && (!usernames || usernames.length === 0)) {
@@ -547,7 +559,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
         format: exportFormat.value,
         start_time: startTime,
         end_time: endTime,
-        include_hidden: false,
+        include_hidden: scope === 'all' || scope === 'groups' || scope === 'singles',
         include_official: false,
         message_types: messageTypes,
         include_media: includeMedia,
@@ -618,6 +630,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportFilteredContacts,
     exportContactCounts,
     onExportBatchScopeClick,
+    onExportCustomScopeClick,
     onExportListTabClick,
     isExportContactSelected,
     hasWebExportFolder,
