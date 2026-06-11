@@ -15,7 +15,19 @@ from starlette.requests import Request
 
 from ..logging_config import get_log_file_path, get_logger
 from ..path_fix import PathFixRoute
-from ..runtime_settings import read_effective_backend_port, write_backend_port_env_file, write_backend_port_setting
+from ..runtime_settings import (
+    LAN_BACKEND_HOST,
+    LOOPBACK_BACKEND_HOST,
+    read_effective_backend_host,
+    read_effective_mcp_token,
+    read_effective_backend_port,
+    reset_mcp_token,
+    write_backend_host_env_file,
+    write_backend_host_setting,
+    write_backend_port_env_file,
+    write_backend_port_setting,
+    write_mcp_token_env_file,
+)
 
 
 router = APIRouter(route_class=PathFixRoute)
@@ -33,7 +45,8 @@ def _format_host_for_url(host: str) -> str:
 
 
 def _get_backend_bind_host() -> str:
-    return str(os.environ.get("WECHAT_TOOL_HOST", "127.0.0.1") or "").strip() or "127.0.0.1"
+    host, _ = read_effective_backend_host(default=LOOPBACK_BACKEND_HOST)
+    return host
 
 
 def _get_backend_access_host() -> str:
@@ -116,10 +129,10 @@ async def _wait_for_backend_ready(health_url: str, timeout_s: float = 30.0) -> b
     return False
 
 
-def _spawn_backend_process(next_port: int) -> subprocess.Popen:
+def _spawn_backend_process(next_port: int, next_host: str | None = None) -> subprocess.Popen:
     env = os.environ.copy()
     env["WECHAT_TOOL_PORT"] = str(int(next_port))
-    env.setdefault("WECHAT_TOOL_HOST", _get_backend_bind_host())
+    env["WECHAT_TOOL_HOST"] = str(next_host or _get_backend_bind_host())
 
     # Keep the same working directory so output paths remain consistent.
     # (When `WECHAT_TOOL_DATA_DIR` is not set, the app uses `Path.cwd()`.)
@@ -148,6 +161,40 @@ def _spawn_backend_process(next_port: int) -> subprocess.Popen:
             spawn_cwd = cwd
 
     return subprocess.Popen(cmd, cwd=spawn_cwd, env=env)
+
+
+def _spawn_backend_process_after_delay(next_port: int, next_host: str, delay_s: float = 0.8) -> subprocess.Popen:
+    env = os.environ.copy()
+    env["WECHAT_TOOL_PORT"] = str(int(next_port))
+    env["WECHAT_TOOL_HOST"] = str(next_host or _get_backend_bind_host())
+
+    cwd = os.getcwd()
+    cwd_path = Path(cwd)
+    src_dir = cwd_path / "src"
+    try:
+        existing_pp = str(env.get("PYTHONPATH", "") or "").strip()
+        if src_dir.is_dir():
+            env["PYTHONPATH"] = str(src_dir) if not existing_pp else f"{src_dir}{os.pathsep}{existing_pp}"
+    except Exception:
+        pass
+
+    if getattr(sys, "frozen", False):
+        target = [sys.executable]
+    else:
+        main_py = cwd_path / "main.py"
+        if main_py.is_file():
+            target = [sys.executable, str(main_py)]
+        else:
+            target = [sys.executable, "-m", "wechat_decrypt_tool.backend_entry"]
+
+    # Keep the launcher independent from this process; it starts the backend after
+    # the current process has released its listening socket.
+    launcher_code = (
+        "import os,subprocess,sys,time;"
+        f"time.sleep({max(0.0, float(delay_s))!r});"
+        "subprocess.Popen(sys.argv[1:], cwd=os.getcwd(), env=os.environ)"
+    )
+    return subprocess.Popen([sys.executable, "-c", launcher_code, *target], cwd=cwd, env=env)
 
 
 async def _exit_process_after(delay_s: float) -> None:
@@ -210,6 +257,58 @@ async def log_frontend_server_error(payload: dict) -> dict:
 async def get_backend_port() -> dict:
     port, source = read_effective_backend_port(default=DEFAULT_BACKEND_PORT)
     return {"port": port, "source": source, "default_port": DEFAULT_BACKEND_PORT}
+
+
+@router.get("/api/admin/mcp-access", summary="获取 MCP 局域网接入状态")
+async def get_mcp_access() -> dict:
+    host, source = read_effective_backend_host(default=LOOPBACK_BACKEND_HOST)
+    port, port_source = read_effective_backend_port(default=DEFAULT_BACKEND_PORT)
+    return {
+        "enabled": host == LAN_BACKEND_HOST,
+        "host": host,
+        "source": source,
+        "port": port,
+        "port_source": port_source,
+        "default_host": LOOPBACK_BACKEND_HOST,
+        "lan_host": LAN_BACKEND_HOST,
+        "restart_required": False,
+    }
+
+
+@router.get("/api/admin/mcp-token", summary="获取 MCP token（仅允许本机访问）")
+async def get_mcp_token(request: Request) -> dict:
+    if not _is_loopback_client(request):
+        raise HTTPException(status_code=403, detail="仅允许本机访问该接口")
+
+    from ..runtime_settings import ensure_mcp_token
+
+    token, source = ensure_mcp_token()
+    env_file = write_mcp_token_env_file(token)
+    return {
+        "success": True,
+        "token": token,
+        "source": source,
+        "env_file": str(env_file) if env_file else None,
+    }
+
+
+@router.post("/api/admin/mcp-token/reset", summary="重置 MCP token（仅允许本机访问）")
+async def reset_mcp_token_endpoint(request: Request) -> dict:
+    if not _is_loopback_client(request):
+        raise HTTPException(status_code=403, detail="仅允许本机访问该接口")
+
+    previous, previous_source = read_effective_mcp_token()
+    token = reset_mcp_token()
+    os.environ["WECHAT_TOOL_MCP_TOKEN"] = token
+    env_file = write_mcp_token_env_file(token)
+    return {
+        "success": True,
+        "changed": token != previous,
+        "token": token,
+        "previous_source": previous_source,
+        "source": "reset",
+        "env_file": str(env_file) if env_file else None,
+    }
 
 
 @router.post("/api/admin/port", summary="修改后端端口并重启（仅允许本机访问）")
@@ -278,6 +377,57 @@ async def set_backend_port(payload: dict, request: Request, background_tasks: Ba
             "port": next_port,
             "ui_url": f"http://{host}:{next_port}/",
             "env_file": str(env_file) if env_file else None,
+        }
+    finally:
+        _PORT_CHANGE_IN_PROGRESS = False
+
+
+@router.post("/api/admin/mcp-access", summary="开启或关闭 MCP 局域网接入并重启后端（仅允许本机访问）")
+async def set_mcp_access(payload: dict, request: Request, background_tasks: BackgroundTasks) -> dict:
+    if not _is_loopback_client(request):
+        raise HTTPException(status_code=403, detail="仅允许本机访问该接口")
+
+    global _PORT_CHANGE_IN_PROGRESS
+    if _PORT_CHANGE_IN_PROGRESS:
+        raise HTTPException(status_code=409, detail="后端切换中，请稍后重试")
+
+    enabled = bool(payload.get("enabled")) if isinstance(payload, dict) else False
+    next_host = LAN_BACKEND_HOST if enabled else LOOPBACK_BACKEND_HOST
+    current_host = _get_backend_bind_host()
+    current_port, _ = read_effective_backend_port(default=DEFAULT_BACKEND_PORT)
+
+    if next_host == current_host:
+        write_backend_host_setting(next_host)
+        env_file = write_backend_host_env_file(next_host)
+        return {
+            "success": True,
+            "changed": False,
+            "enabled": enabled,
+            "host": next_host,
+            "port": int(current_port),
+            "ui_url": f"http://{_format_host_for_url(_get_backend_access_host())}:{int(current_port)}/",
+            "env_file": str(env_file) if env_file else None,
+        }
+
+    _PORT_CHANGE_IN_PROGRESS = True
+    try:
+        write_backend_host_setting(next_host)
+        env_file = write_backend_host_env_file(next_host)
+
+        # Host changes keep the same port. The old socket must close before the
+        # new process can bind, so start a detached launcher and then exit.
+        background_tasks.add_task(_spawn_backend_process_after_delay, int(current_port), next_host, 0.8)
+        background_tasks.add_task(_exit_process_after, 0.2)
+
+        return {
+            "success": True,
+            "changed": True,
+            "enabled": enabled,
+            "host": next_host,
+            "port": int(current_port),
+            "ui_url": f"http://{_format_host_for_url(LOOPBACK_BACKEND_HOST)}:{int(current_port)}/",
+            "env_file": str(env_file) if env_file else None,
+            "restart_scheduled": True,
         }
     finally:
         _PORT_CHANGE_IN_PROGRESS = False

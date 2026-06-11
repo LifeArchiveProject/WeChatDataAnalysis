@@ -30,7 +30,8 @@ const {
   normalizeDirectoryPath,
 } = require("./output-dir.cjs");
 
-const DEFAULT_BACKEND_HOST = String(process.env.WECHAT_TOOL_HOST || "127.0.0.1").trim() || "127.0.0.1";
+const DEFAULT_BACKEND_HOST = "127.0.0.1";
+const LAN_BACKEND_HOST = "0.0.0.0";
 const DEFAULT_BACKEND_PORT = parsePort(process.env.WECHAT_TOOL_PORT) ?? 10392;
 
 let backendProc = null;
@@ -86,7 +87,11 @@ function formatHostForUrl(host) {
 }
 
 function getBackendBindHost() {
-  return DEFAULT_BACKEND_HOST;
+  const envHost = String(process.env.WECHAT_TOOL_HOST || "").trim();
+  if (envHost === LAN_BACKEND_HOST || envHost === "::") return LAN_BACKEND_HOST;
+  if (envHost === DEFAULT_BACKEND_HOST || envHost === "localhost" || envHost === "::1") return DEFAULT_BACKEND_HOST;
+  if (!app.isPackaged) return DEFAULT_BACKEND_HOST;
+  return loadDesktopSettings()?.mcpLanAccessEnabled ? LAN_BACKEND_HOST : DEFAULT_BACKEND_HOST;
 }
 
 function getBackendAccessHost() {
@@ -116,6 +121,18 @@ function setBackendPortSetting(nextPort) {
   return p;
 }
 
+function getMcpLanAccessEnabled() {
+  return getBackendBindHost() === LAN_BACKEND_HOST;
+}
+
+function setMcpLanAccessSetting(enabled) {
+  loadDesktopSettings();
+  desktopSettings.mcpLanAccessEnabled = !!enabled;
+  persistDesktopSettings();
+  process.env.WECHAT_TOOL_HOST = desktopSettings.mcpLanAccessEnabled ? LAN_BACKEND_HOST : DEFAULT_BACKEND_HOST;
+  return desktopSettings.mcpLanAccessEnabled;
+}
+
 function getBackendHealthUrl() {
   const host = formatHostForUrl(getBackendAccessHost());
   const port = getBackendPort();
@@ -126,6 +143,12 @@ function getBackendUiUrl() {
   const host = formatHostForUrl(getBackendAccessHost());
   const port = getBackendPort();
   return `http://${host}:${port}/`;
+}
+
+function getDesktopUiUrl() {
+  const explicit = String(process.env.ELECTRON_START_URL || "").trim();
+  if (explicit) return explicit;
+  return app.isPackaged ? getBackendUiUrl() : "http://localhost:3000";
 }
 
 function isPortAvailable(port, host) {
@@ -597,6 +620,8 @@ function loadDesktopSettings() {
     ignoredUpdateVersion: "",
     // Backend (FastAPI) listens on this port. Used in packaged builds.
     backendPort: DEFAULT_BACKEND_PORT,
+    // When enabled, the backend binds to 0.0.0.0 so phone clients can reach /mcp.
+    mcpLanAccessEnabled: false,
     // Custom output dir; empty string means use the default dataDir/output.
     outputDir: "",
     // Pending output dir written by the installer before the next app startup.
@@ -623,6 +648,7 @@ function loadDesktopSettings() {
     const parsed = JSON.parse(raw || "{}");
     desktopSettings = { ...defaults, ...(parsed && typeof parsed === "object" ? parsed : {}) };
     desktopSettings.backendPort = parsePort(desktopSettings.backendPort) ?? defaults.backendPort;
+    desktopSettings.mcpLanAccessEnabled = !!desktopSettings.mcpLanAccessEnabled;
     desktopSettings.outputDir = safeNormalizeDirectory(desktopSettings.outputDir || "");
     desktopSettings.pendingOutputDir =
       parsed && typeof parsed === "object" && Object.prototype.hasOwnProperty.call(parsed, "pendingOutputDir")
@@ -2275,7 +2301,7 @@ function registerWindowIpc() {
 
     const prevPort = getBackendPort();
     if (nextPort === prevPort) {
-      return { success: true, changed: false, port: prevPort, uiUrl: getBackendUiUrl() };
+      return { success: true, changed: false, port: prevPort, uiUrl: getDesktopUiUrl() };
     }
 
     const bindHost = getBackendBindHost();
@@ -2296,7 +2322,7 @@ function registerWindowIpc() {
         throw err;
       }
 
-      const uiUrl = getBackendUiUrl();
+      const uiUrl = getDesktopUiUrl();
       setTimeout(() => {
         try {
           if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -2307,6 +2333,70 @@ function registerWindowIpc() {
       }, 50);
 
       return { success: true, changed: true, port: nextPort, uiUrl };
+    } finally {
+      backendPortChangeInProgress = false;
+    }
+  });
+
+  ipcMain.handle("backend:getMcpLanAccess", () => {
+    try {
+      return {
+        enabled: getMcpLanAccessEnabled(),
+        host: getBackendBindHost(),
+        port: getBackendPort(),
+        uiUrl: getDesktopUiUrl(),
+      };
+    } catch (err) {
+      logMain(`[main] backend:getMcpLanAccess failed: ${err?.message || err}`);
+      return {
+        enabled: false,
+        host: DEFAULT_BACKEND_HOST,
+        port: DEFAULT_BACKEND_PORT,
+        uiUrl: getDesktopUiUrl(),
+      };
+    }
+  });
+
+  ipcMain.handle("backend:setMcpLanAccess", async (_event, enabled) => {
+    if (backendPortChangeInProgress) throw new Error("后端切换中，请稍后重试");
+
+    const nextEnabled = !!enabled;
+    const prevEnabled = getMcpLanAccessEnabled();
+    if (nextEnabled === prevEnabled) {
+      return {
+        success: true,
+        changed: false,
+        enabled: prevEnabled,
+        host: getBackendBindHost(),
+        port: getBackendPort(),
+        uiUrl: getDesktopUiUrl(),
+      };
+    }
+
+    backendPortChangeInProgress = true;
+    try {
+      setMcpLanAccessSetting(nextEnabled);
+      try {
+        await restartBackend({ timeoutMs: 30_000 });
+      } catch (err) {
+        setMcpLanAccessSetting(prevEnabled);
+        try {
+          await restartBackend({ timeoutMs: 30_000 });
+        } catch {}
+        throw err;
+      }
+
+      const uiUrl = getDesktopUiUrl();
+      logMain(`[main] MCP access changed enabled=${nextEnabled}; backend restarted without UI reload`);
+
+      return {
+        success: true,
+        changed: true,
+        enabled: nextEnabled,
+        host: getBackendBindHost(),
+        port: getBackendPort(),
+        uiUrl,
+      };
     } finally {
       backendPortChangeInProgress = false;
     }
@@ -2510,9 +2600,7 @@ async function main() {
   mainWindow = win;
   ensureTrayForCloseBehavior();
 
-  const startUrl =
-    process.env.ELECTRON_START_URL ||
-    (app.isPackaged ? getBackendUiUrl() : "http://localhost:3000");
+  const startUrl = getDesktopUiUrl();
 
   logMain(`[main] debugEnabled=${debugEnabled()} startUrl=${startUrl}`);
   await loadWithRetry(win, startUrl);

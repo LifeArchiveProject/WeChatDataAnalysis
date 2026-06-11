@@ -261,6 +261,104 @@
             </div>
           </section>
 
+          <section ref="mcpSectionRef">
+            <div class="mb-2.5 text-[12px] font-bold text-[#999] tracking-widest">MCP 接入</div>
+            <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
+              <div class="px-3.5 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">允许手机局域网接入 MCP</div>
+                    <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">开启后后端监听 0.0.0.0，手机可通过接入提示词中的地址接入。</div>
+                    <div v-if="mcpLanAccessMessage" class="mt-1 text-[11px] leading-relaxed text-[#1b6b43]">{{ mcpLanAccessMessage }}</div>
+                    <div v-if="mcpLanAccessError" class="mt-1 text-[11px] leading-relaxed text-red-600">{{ mcpLanAccessError }}</div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    :aria-checked="mcpLanAccessEnabled"
+                    class="settings-switch shrink-0"
+                    :class="switchTrackClass(mcpLanAccessEnabled, mcpLanAccessLoading)"
+                    :disabled="mcpLanAccessLoading"
+                    @click="toggleMcpLanAccess"
+                  >
+                    <span class="settings-switch-thumb" :class="mcpLanAccessEnabled ? 'translate-x-[20px]' : 'translate-x-0'" />
+                  </button>
+                </div>
+              </div>
+
+              <div class="px-3.5 py-3">
+                <div class="flex flex-col gap-2">
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div class="min-w-0 flex-1">
+                      <div class="text-[13px] font-medium text-[#222]">MCP Token</div>
+                      <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">手机端请求 MCP 时使用 Bearer token。</div>
+                      <div v-if="mcpTokenError" class="mt-1 text-[11px] leading-relaxed text-red-600">{{ mcpTokenError }}</div>
+                    </div>
+                    <div class="flex shrink-0 gap-1.5">
+                      <button
+                        type="button"
+                        class="rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9]"
+                        :disabled="mcpTokenLoading || !mcpToken"
+                        @click="copyMcpText('token', mcpToken)"
+                      >
+                        {{ mcpCopiedKey === 'token' ? '已复制' : (mcpTokenLoading ? '加载中...' : '复制 Token') }}
+                      </button>
+                      <button
+                        type="button"
+                        class="rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9]"
+                        :disabled="mcpTokenLoading"
+                        @click="resetMcpToken"
+                      >
+                        {{ mcpCopiedKey === 'token-reset' ? '已重置' : '重置' }}
+                      </button>
+                    </div>
+                  </div>
+                  <pre class="max-h-[92px] overflow-auto rounded-[6px] bg-[#f7f7f7] px-2.5 py-2 text-[11px] leading-relaxed text-[#333] scrollbar-custom whitespace-pre-wrap">{{ mcpTokenText }}</pre>
+                </div>
+              </div>
+
+              <div class="px-3.5 py-3">
+                <div class="flex flex-col gap-2">
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div class="min-w-0 flex-1">
+                      <div class="text-[13px] font-medium text-[#222]">AI 接入提示词</div>
+                      <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">复制到手机端 AI 的系统提示词或连接说明里。</div>
+                    </div>
+                    <button
+                      type="button"
+                      class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9]"
+                      @click="copyMcpText('ai-prompt', mcpAiPrompt)"
+                    >
+                      {{ mcpCopiedKey === 'ai-prompt' ? '已复制' : '复制提示词' }}
+                    </button>
+                  </div>
+                  <pre class="max-h-[220px] overflow-auto rounded-[6px] bg-[#f7f7f7] px-2.5 py-2 text-[11px] leading-relaxed text-[#333] scrollbar-custom whitespace-pre-wrap">{{ mcpAiPrompt }}</pre>
+                </div>
+              </div>
+
+              <div class="px-3.5 py-3">
+                <div class="flex flex-col gap-2">
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div class="min-w-0 flex-1">
+                      <div class="text-[13px] font-medium text-[#222]">Skill Markdown</div>
+                      <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">单独复制到手机端 AI 的 skill 或知识配置。</div>
+                      <div v-if="mcpSkillBundleError" class="mt-1 text-[11px] leading-relaxed text-red-600">{{ mcpSkillBundleError }}</div>
+                    </div>
+                    <button
+                      type="button"
+                      class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9]"
+                      :disabled="mcpSkillBundleLoading"
+                      @click="copyMcpText('skill', mcpSkillText)"
+                    >
+                      {{ mcpCopiedKey === 'skill' ? '已复制' : (mcpSkillBundleLoading ? '加载中...' : '复制 Skill') }}
+                    </button>
+                  </div>
+                  <pre class="max-h-[420px] overflow-auto rounded-[6px] bg-[#f7f7f7] px-2.5 py-2 text-[11px] leading-relaxed text-[#333] scrollbar-custom whitespace-pre-wrap">{{ mcpSkillText }}</pre>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section ref="startupSectionRef">
             <div class="mb-2.5 text-[12px] font-bold text-[#999] tracking-widest">启动偏好</div>
             <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
@@ -376,6 +474,7 @@ const emit = defineEmits(['close'])
 
 const settingNavItems = [
   { key: 'desktop', label: '桌面行为', hint: '启动 / 关闭 / 端口' },
+  { key: 'mcp', label: 'MCP 接入', hint: '手机 / Skill / 工具' },
   { key: 'startup', label: '启动偏好', hint: '自动实时 / 默认页面' },
   { key: 'updates', label: '更新', hint: '版本信息 / 检查更新' },
   { key: 'sns', label: '朋友圈', hint: '图片缓存策略' },
@@ -384,6 +483,7 @@ const settingNavItems = [
 const activeSection = ref(settingNavItems[0].key)
 const contentScrollRef = ref(null)
 const desktopSectionRef = ref(null)
+const mcpSectionRef = ref(null)
 const startupSectionRef = ref(null)
 const updatesSectionRef = ref(null)
 const snsSectionRef = ref(null)
@@ -497,6 +597,65 @@ const desktopLogFileText = computed(() => {
   return v || '—'
 })
 
+const mcpLanAccessEnabled = ref(false)
+const mcpLanAccessLoading = ref(false)
+const mcpLanAccessError = ref('')
+const mcpLanAccessMessage = ref('')
+const mcpToken = ref('')
+const mcpTokenLoading = ref(false)
+const mcpTokenError = ref('')
+const mcpSkillBundleText = ref('')
+const mcpSkillBundleLoading = ref(false)
+const mcpSkillBundleError = ref('')
+const mcpCopiedKey = ref('')
+let mcpCopiedTimer = null
+
+const mcpPortText = computed(() => {
+  const n = Number(String(desktopBackendPortInput.value || '').trim())
+  if (Number.isInteger(n) && n >= 1 && n <= 65535) return String(n)
+  return '10392'
+})
+
+const mcpEndpoint = computed(() => {
+  if (!process.client || typeof window === 'undefined') return `http://127.0.0.1:${mcpPortText.value}/mcp`
+  const apiBase = useApiBase()
+  if (/^https?:\/\//i.test(apiBase)) {
+    try {
+      const u = new URL(apiBase)
+      return `${u.origin}/mcp`
+    } catch {}
+  }
+  const protocol = window.location?.protocol === 'https:' ? 'https:' : 'http:'
+  const host = String(window.location?.hostname || '127.0.0.1').trim() || '127.0.0.1'
+  return `${protocol}//${host}:${mcpPortText.value}/mcp`
+})
+
+const mcpSkillFallback = [
+  '# WeChat MCP Copilot',
+  '',
+  'Use WeChatDataAnalysis MCP like an investigator: start broad, resolve fuzzy targets, then fetch only the context needed to answer.',
+  '',
+  'Core rules:',
+  '1. Start with initialize and tools/list.',
+  '2. Prefer compact mobile facade tools before low-level tools.',
+  '3. Keep limits small, page results, and expand only when needed.',
+  '4. Use returned URLs for media and exports instead of inlining binary content.',
+].join('\n')
+const mcpAiPrompt = computed(() => [
+  '你现在可以通过 WeChatDataAnalysis MCP 访问本机微信数据。',
+  `MCP endpoint: ${mcpEndpoint.value}`,
+  `Authorization: Bearer ${mcpToken.value || '<MCP_TOKEN>'}`,
+  '',
+  '接入要求：',
+  '1. 使用 JSON-RPC 2.0 POST 到 MCP endpoint，Content-Type 为 application/json，并带上 Authorization Bearer token。',
+  '2. 先调用 initialize，再用 tools/list 分页读取工具 schema。',
+  '3. 工具调用使用 tools/call，优先读取 result.structuredContent。',
+  '4. 不要一次性请求大结果；按下方 skill 的分页和上下文预算逐步扩展。',
+  '5. 媒体、导出和 SSE 进度按返回 URL 在 App 侧加载，不要让模型内联二进制内容。',
+].join('\n'))
+const mcpSkillText = computed(() => mcpSkillBundleText.value || mcpSkillFallback)
+const mcpTokenText = computed(() => mcpToken.value || '加载中...')
+
 const switchTrackClass = (enabled, disabled = false) => {
   if (disabled) return enabled ? 'bg-[#07b75b] opacity-50 cursor-not-allowed' : 'bg-[#d0d0d0] opacity-50 cursor-not-allowed'
   return enabled ? 'bg-[#07b75b] hover:brightness-95' : 'bg-[#d0d0d0] hover:brightness-95'
@@ -535,6 +694,7 @@ const refreshDesktopOutputDirProgress = async () => {
 
 const sectionElements = computed(() => [
   { key: 'desktop', el: desktopSectionRef.value },
+  { key: 'mcp', el: mcpSectionRef.value },
   { key: 'startup', el: startupSectionRef.value },
   { key: 'updates', el: updatesSectionRef.value },
   { key: 'sns', el: snsSectionRef.value },
@@ -589,6 +749,164 @@ const fetchAdminEndpoint = async (url, options = {}) => {
     })
     throw e
   }
+}
+
+const waitForBackendHealth = async (timeoutMs = 30_000) => {
+  if (!process.client || typeof window === 'undefined') return
+  const apiBase = useApiBase()
+  const healthUrl = `${String(apiBase || '').replace(/\/api\/?$/, '')}/api/health`
+  const startedAt = Date.now()
+  while (true) {
+    try {
+      const r = await fetch(healthUrl, { method: 'GET' })
+      if (r && r.status < 500) return
+    } catch {}
+    if (Date.now() - startedAt > timeoutMs) throw new Error(`后端启动超时：${healthUrl}`)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+  }
+}
+
+const copyMcpText = async (key, text) => {
+  if (!process.client || typeof window === 'undefined') return
+  const value = String(text || '').trim()
+  if (!value) return
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+    } else {
+      const el = document.createElement('textarea')
+      el.value = value
+      el.setAttribute('readonly', '')
+      el.style.position = 'fixed'
+      el.style.left = '-9999px'
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand('copy')
+      document.body.removeChild(el)
+    }
+    mcpCopiedKey.value = key
+    if (mcpCopiedTimer) clearTimeout(mcpCopiedTimer)
+    mcpCopiedTimer = setTimeout(() => {
+      if (mcpCopiedKey.value === key) mcpCopiedKey.value = ''
+    }, 1600)
+  } catch {}
+}
+
+const refreshMcpLanAccess = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  mcpLanAccessLoading.value = true
+  mcpLanAccessError.value = ''
+  try {
+    if (window.wechatDesktop?.getMcpLanAccess) {
+      const resp = await window.wechatDesktop.getMcpLanAccess()
+      mcpLanAccessEnabled.value = !!resp?.enabled
+      return
+    }
+    const resp = await fetchAdminEndpoint('/admin/mcp-access')
+    mcpLanAccessEnabled.value = !!resp?.enabled
+  } catch (e) {
+    mcpLanAccessError.value = e?.message || '读取 MCP 接入状态失败'
+  } finally {
+    mcpLanAccessLoading.value = false
+  }
+}
+
+const refreshMcpToken = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  mcpTokenLoading.value = true
+  mcpTokenError.value = ''
+  try {
+    const resp = await fetchAdminEndpoint('/admin/mcp-token')
+    const token = String(resp?.token || '').trim()
+    if (!token) throw new Error('MCP token is empty')
+    mcpToken.value = token
+  } catch (e) {
+    mcpTokenError.value = e?.message || '读取 MCP Token 失败'
+  } finally {
+    mcpTokenLoading.value = false
+  }
+}
+
+const resetMcpToken = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  mcpTokenLoading.value = true
+  mcpTokenError.value = ''
+  try {
+    const resp = await fetchAdminEndpoint('/admin/mcp-token/reset', { method: 'POST' })
+    const token = String(resp?.token || '').trim()
+    if (!token) throw new Error('MCP token is empty')
+    mcpToken.value = token
+    mcpCopiedKey.value = 'token-reset'
+    if (mcpCopiedTimer) clearTimeout(mcpCopiedTimer)
+    mcpCopiedTimer = setTimeout(() => {
+      if (mcpCopiedKey.value === 'token-reset') mcpCopiedKey.value = ''
+    }, 1600)
+    await refreshMcpSkillBundle()
+  } catch (e) {
+    mcpTokenError.value = e?.message || '重置 MCP Token 失败'
+  } finally {
+    mcpTokenLoading.value = false
+  }
+}
+
+const refreshMcpSkillBundle = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  mcpSkillBundleLoading.value = true
+  mcpSkillBundleError.value = ''
+  try {
+    if (!mcpToken.value) await refreshMcpToken()
+    const resp = await $fetch('/mcp/skill/bundle', {
+      baseURL: mcpEndpoint.value.replace(/\/mcp$/, ''),
+      headers: mcpToken.value ? { Authorization: `Bearer ${mcpToken.value}` } : {},
+    })
+    const bundleText = String(resp?.bundleText || '').trim()
+    if (!bundleText) throw new Error('Skill bundle is empty')
+    mcpSkillBundleText.value = bundleText
+  } catch (e) {
+    mcpSkillBundleError.value = e?.message || '读取 skill 失败，当前显示内置精简版'
+    if (!mcpSkillBundleText.value) mcpSkillBundleText.value = ''
+  } finally {
+    mcpSkillBundleLoading.value = false
+  }
+}
+
+const setMcpLanAccess = async (enabled) => {
+  if (!process.client || typeof window === 'undefined') return
+  mcpLanAccessLoading.value = true
+  mcpLanAccessError.value = ''
+  mcpLanAccessMessage.value = ''
+  const previous = mcpLanAccessEnabled.value
+  mcpLanAccessEnabled.value = !!enabled
+  try {
+    if (window.wechatDesktop?.setMcpLanAccess) {
+      const resp = await window.wechatDesktop.setMcpLanAccess(!!enabled)
+      mcpLanAccessEnabled.value = !!resp?.enabled
+      mcpLanAccessMessage.value = resp?.changed ? 'MCP 局域网接入已更新，后端已重启。' : 'MCP 局域网接入状态未变化。'
+      return
+    }
+
+    const resp = await fetchAdminEndpoint('/admin/mcp-access', {
+      method: 'POST',
+      body: { enabled: !!enabled },
+    })
+    mcpLanAccessEnabled.value = !!resp?.enabled
+    mcpLanAccessMessage.value = resp?.changed ? 'MCP 局域网接入已更新，正在等待后端重启。' : 'MCP 局域网接入状态未变化。'
+    if (resp?.changed) {
+      await waitForBackendHealth(30_000)
+      mcpLanAccessMessage.value = 'MCP 局域网接入已更新，后端已恢复。'
+    }
+  } catch (e) {
+    mcpLanAccessEnabled.value = previous
+    mcpLanAccessError.value = e?.message || '设置 MCP 接入状态失败'
+    await refreshMcpLanAccess()
+  } finally {
+    mcpLanAccessLoading.value = false
+  }
+}
+
+const toggleMcpLanAccess = async () => {
+  if (mcpLanAccessLoading.value) return
+  await setMcpLanAccess(!mcpLanAccessEnabled.value)
 }
 
 const refreshDesktopAutoLaunch = async () => {
@@ -945,6 +1263,9 @@ const onDesktopCheckUpdates = async () => {
 
 watch(() => props.open, async (isOpen) => {
   if (!isOpen) return
+  await refreshMcpLanAccess()
+  await refreshMcpToken()
+  await refreshMcpSkillBundle()
   await refreshBackendLogFileInfo()
   if (isDesktopEnv.value) {
     await refreshDesktopOutputDir()
@@ -969,6 +1290,9 @@ onMounted(async () => {
   snsUseCache.value = readLocalBoolSetting(SNS_SETTING_USE_CACHE_KEY, true)
 
   await refreshDesktopBackendPort()
+  await refreshMcpLanAccess()
+  await refreshMcpToken()
+  await refreshMcpSkillBundle()
   if (isDesktopEnv.value) {
     void desktopUpdate.initListeners()
     await refreshDesktopAutoLaunch()
@@ -984,6 +1308,10 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (!process.client || typeof window === 'undefined') return
   window.removeEventListener('keydown', onEscKeydown)
+  if (mcpCopiedTimer) {
+    clearTimeout(mcpCopiedTimer)
+    mcpCopiedTimer = null
+  }
   if (typeof removeDesktopOutputDirProgressListener === 'function') {
     removeDesktopOutputDirProgressListener()
     removeDesktopOutputDirProgressListener = null

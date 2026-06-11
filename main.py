@@ -11,11 +11,11 @@
 import uvicorn
 import os
 from pathlib import Path
-from wechat_decrypt_tool.runtime_settings import read_effective_backend_port
+from wechat_decrypt_tool.runtime_settings import read_effective_backend_host, read_effective_backend_port
 
 def main():
     """启动微信解密工具API服务"""
-    host = os.environ.get("WECHAT_TOOL_HOST", "127.0.0.1")
+    host, host_source = read_effective_backend_host(default="127.0.0.1")
     port, port_source = read_effective_backend_port(default=10392)
     access_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
 
@@ -29,6 +29,13 @@ def main():
         print("端口来源: 配置文件 output/runtime_settings.json（由网页/桌面设置写入）")
     else:
         print("端口来源: 默认值")
+    if host_source == "env":
+        print("监听地址来源: 环境变量 WECHAT_TOOL_HOST")
+    elif host_source == "settings":
+        print("监听地址来源: 配置文件 output/runtime_settings.json（由网页/桌面设置写入）")
+    else:
+        print("监听地址来源: 默认值")
+    print(f"监听地址: {host}")
     print(f"API文档: http://{access_host}:{port}/docs")
     print(f"健康检查: http://{access_host}:{port}/api/health")
     print("按 Ctrl+C 停止服务")

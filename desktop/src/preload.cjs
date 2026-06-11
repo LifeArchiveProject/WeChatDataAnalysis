@@ -78,6 +78,8 @@ contextBridge.exposeInMainWorld("wechatDesktop", {
 
   getBackendPort: () => ipcRenderer.invoke("backend:getPort"),
   setBackendPort: (port) => ipcRenderer.invoke("backend:setPort", Number(port)),
+  getMcpLanAccess: () => ipcRenderer.invoke("backend:getMcpLanAccess"),
+  setMcpLanAccess: (enabled) => ipcRenderer.invoke("backend:setMcpLanAccess", !!enabled),
 
   chooseDirectory: (options = {}) => ipcRenderer.invoke("dialog:chooseDirectory", options),
 
