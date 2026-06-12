@@ -14,5 +14,4 @@ Use this for 朋友圈, posts, likes, comments, shared links, and Moments media.
 - Person names must be resolved to username before filtering timeline by `usernames`.
 - Keyword search is for post content/topic, not poster identity.
 - Do not request raw XML by default.
-- Use `wechat.moments.sync_latest` only when the user explicitly wants fresh local sync or status indicates data is stale.
-
+- Realtime/local sync tools are not exposed through MCP; ask the user to refresh data in the app when Moments data looks stale.

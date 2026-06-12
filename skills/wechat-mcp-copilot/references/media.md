@@ -13,7 +13,6 @@ Use this for image, video, emoji, file, link, and voice resources.
 - `wechat.media.get_decrypted_resource_url`
 - `wechat.media.get_proxy_image_url`
 - `wechat.media.get_favicon_url`
-- `wechat.media.open_chat_media_folder`
 - `wechat.biz.get_proxy_image_url`
 - `wechat.moments.get_media_url`
 - `wechat.moments.get_article_thumb_url`
@@ -25,6 +24,6 @@ Use this for image, video, emoji, file, link, and voice resources.
 - Media tools return URLs or resource metadata; they do not inline large binary payloads.
 - Voice resources are files only. Do not transcribe voice messages.
 - For phone clients, prefer `wechat.mobile.get_media_links` first.
-- `open_chat_media_folder` is a desktop-host action; do not use it for phone-only flows.
+- MCP does not open local folders or download media into cache; use returned URLs in the client.
 - Locate the message first, then fetch media URL by message fields such as `server_id`, `username`, `md5`, or returned media references.
 - For Moments, prefer local media URL fields from timeline records. Use remote video/article helpers only when the timeline record has a remote URL or article URL.

@@ -13,18 +13,18 @@ Use this for phone, ScreenMemo, and external MCP clients unless the user needs a
 - `wechat.mobile.search_moments`: compact Moments search.
 - `wechat.mobile.get_media_links`: URL-only media lookup.
 - `wechat.mobile.get_analytics`: compact analytics by metric.
-- `wechat.mobile.export_job`: preview/create/status/download/cancel export jobs.
 
 ## Budget Rules
 
 - Keep `limit` at 10-20 for first calls.
 - Use `offset` or returned cursor fields for paging.
-- Do not call full annual analytics by default; use `metric=digest` or a single card.
+- Do not call full annual analytics by default; use `metric=digest` or a single card. Wrapped annual data is cache-only through MCP.
 - Do not fetch binary media through MCP. Use returned URLs in the app.
-- Use low-level tools only for debugging, editing, raw fields, unusual media, or exact export control.
+- Use low-level tools only for debugging, raw fields, or unusual media URL construction.
+- Data preparation, index/cache build, export, realtime sync, local editing, system settings, and data deletion tools are not exposed through MCP.
 
 ## Recovery
 
-- If `ready=false`, load `setup-system.md`.
+- If `ready=false`, stop content tools and direct the user to the desktop/web app for data preparation or backend diagnostics.
 - If target resolution is ambiguous, ask for one clarifying clue or show top candidates.
 - If search returns nothing, try `resolve_target` and then `get_chat_context` before declaring no data.
