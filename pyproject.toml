@@ -1,6 +1,6 @@
 [project]
 name = "wechat-decrypt-tool"
-version = "1.9.0"
+version = "1.9.1"
 description = "Modern WeChat database decryption tool with React frontend"
 readme = "README.md"
 requires-python = ">=3.11"
