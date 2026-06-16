@@ -1992,45 +1992,93 @@ def _load_latest_message_previews(account_dir: Path, usernames: list[str]) -> di
     return previews
 
 
-def _pick_display_name(contact_row: Optional[sqlite3.Row], fallback_username: str) -> str:
+def _row_get_value(row: Any, key: str, default: Any = None) -> Any:
+    if row is None:
+        return default
+    try:
+        return row[key]
+    except Exception:
+        pass
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return default
+
+
+def _normalize_contact_text(value: Any) -> str:
+    return _decode_sqlite_text(value).strip()
+
+
+def _normalize_avatar_url(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+        if not raw:
+            return ""
+        # Avatar URLs should be ASCII/UTF-8 HTTP(S) URLs. If invalid bytes were
+        # stored in the TEXT column, ignore that avatar instead of failing the
+        # surrounding chat/contact response.
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return ""
+    else:
+        text = str(value or "")
+
+    text = text.strip()
+    if text.lower().startswith(("http://", "https://")):
+        return text
+    return ""
+
+
+def _contact_row_to_dict(row: Any) -> dict[str, Any]:
+    username = _normalize_contact_text(_row_get_value(row, "username", ""))
+    return {
+        "username": username,
+        "remark": _normalize_contact_text(_row_get_value(row, "remark", "")),
+        "nick_name": _normalize_contact_text(_row_get_value(row, "nick_name", "")),
+        "alias": _normalize_contact_text(_row_get_value(row, "alias", "")),
+        "big_head_url": _normalize_avatar_url(_row_get_value(row, "big_head_url", "")),
+        "small_head_url": _normalize_avatar_url(_row_get_value(row, "small_head_url", "")),
+    }
+
+
+def _pick_display_name(contact_row: Optional[Any], fallback_username: str) -> str:
     if contact_row is None:
         return fallback_username
 
     for key in ("remark", "nick_name", "alias"):
-        try:
-            v = contact_row[key]
-        except Exception:
-            v = None
-        if isinstance(v, str) and v.strip():
-            return v.strip()
+        v = _normalize_contact_text(_row_get_value(contact_row, key, ""))
+        if v:
+            return v
 
     return fallback_username
 
 
-def _pick_avatar_url(contact_row: Optional[sqlite3.Row]) -> Optional[str]:
+def _pick_avatar_url(contact_row: Optional[Any]) -> Optional[str]:
     if contact_row is None:
         return None
 
     for key in ("big_head_url", "small_head_url"):
-        try:
-            v = contact_row[key]
-        except Exception:
-            v = None
-        if isinstance(v, str) and v.strip():
-            return v.strip()
+        v = _normalize_avatar_url(_row_get_value(contact_row, key, ""))
+        if v:
+            return v
 
     return None
 
 
-def _load_contact_rows(contact_db_path: Path, usernames: list[str]) -> dict[str, sqlite3.Row]:
+def _load_contact_rows(contact_db_path: Path, usernames: list[str]) -> dict[str, dict[str, Any]]:
     uniq = list(dict.fromkeys([u for u in usernames if u]))
     if not uniq:
         return {}
 
-    result: dict[str, sqlite3.Row] = {}
+    result: dict[str, dict[str, Any]] = {}
 
     conn = sqlite3.connect(str(contact_db_path))
     conn.row_factory = sqlite3.Row
+    conn.text_factory = bytes
     try:
         def query_table(table: str, targets: list[str]) -> None:
             if not targets:
@@ -2043,7 +2091,10 @@ def _load_contact_rows(contact_db_path: Path, usernames: list[str]) -> dict[str,
             """
             rows = conn.execute(sql, targets).fetchall()
             for r in rows:
-                result[r["username"]] = r
+                item = _contact_row_to_dict(r)
+                username = str(item.get("username") or "").strip()
+                if username:
+                    result[username] = item
 
         query_table("contact", uniq)
         missing = [u for u in uniq if u not in result]

@@ -1,5 +1,6 @@
 import sys
 import threading
+import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -97,7 +98,101 @@ class TestChatSessionsRealtimeSenderPreview(unittest.TestCase):
         self.assertEqual(len(sessions), 1)
         self.assertEqual(sessions[0].get("lastMessage"), "群名片B: https://example.com/x")
 
+    def test_sessions_ignore_invalid_utf8_avatar_url(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+
+            session_conn = sqlite3.connect(str(account_dir / "session.db"))
+            try:
+                session_conn.execute(
+                    """
+                    CREATE TABLE SessionTable (
+                        username TEXT,
+                        unread_count INTEGER,
+                        is_hidden INTEGER,
+                        summary TEXT,
+                        draft TEXT,
+                        last_timestamp INTEGER,
+                        sort_timestamp INTEGER,
+                        last_msg_locald_id INTEGER,
+                        last_msg_type INTEGER,
+                        last_msg_sub_type INTEGER,
+                        last_msg_sender TEXT,
+                        last_sender_display_name TEXT
+                    )
+                    """
+                )
+                session_conn.execute(
+                    "INSERT INTO SessionTable VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    ("wxid_bad_avatar", 0, 0, "hello", "", 100, 100, 1, 1, 0, "", ""),
+                )
+                session_conn.commit()
+            finally:
+                session_conn.close()
+
+            contact_conn = sqlite3.connect(str(account_dir / "contact.db"))
+            try:
+                contact_conn.execute(
+                    """
+                    CREATE TABLE contact (
+                        username TEXT,
+                        remark TEXT,
+                        nick_name TEXT,
+                        alias TEXT,
+                        flag INTEGER,
+                        big_head_url TEXT,
+                        small_head_url TEXT
+                    )
+                    """
+                )
+                contact_conn.execute(
+                    """
+                    CREATE TABLE stranger (
+                        username TEXT,
+                        remark TEXT,
+                        nick_name TEXT,
+                        alias TEXT,
+                        flag INTEGER,
+                        big_head_url TEXT,
+                        small_head_url TEXT
+                    )
+                    """
+                )
+                contact_conn.execute(
+                    """
+                    INSERT INTO contact
+                    (username, remark, nick_name, alias, flag, big_head_url, small_head_url)
+                    VALUES (?, ?, ?, ?, ?, CAST(x'fffe687474703a2f2f6578616d706c652e746573742f612e706e67' AS TEXT), ?)
+                    """,
+                    ("wxid_bad_avatar", "", "坏头像好友", "", 0, ""),
+                )
+                contact_conn.commit()
+            finally:
+                contact_conn.close()
+
+            with (
+                patch.object(chat_router, "_resolve_account_dir", return_value=account_dir),
+                patch.object(chat_router.WCDB_REALTIME, "get_status", return_value={}),
+                patch.object(chat_router, "load_session_last_messages", return_value={}),
+                patch.object(chat_router, "_load_latest_message_previews", return_value={}),
+            ):
+                resp = chat_router.list_chat_sessions(
+                    _DummyRequest(),
+                    account="acc",
+                    limit=50,
+                    include_hidden=True,
+                    include_official=True,
+                    preview="session",
+                )
+
+            self.assertEqual(resp.get("status"), "success")
+            sessions = resp.get("sessions") or []
+            self.assertEqual(len(sessions), 1)
+            self.assertEqual(sessions[0].get("name"), "坏头像好友")
+            self.assertEqual(sessions[0].get("lastMessage"), "hello")
+            self.assertIn("/api/chat/avatar", sessions[0].get("avatar") or "")
+
 
 if __name__ == "__main__":
     unittest.main()
-
