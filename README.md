@@ -13,6 +13,7 @@
     <img src="https://img.shields.io/badge/Python-3776AB?logo=Python&logoColor=white" alt="Python" />
     <img src="https://img.shields.io/badge/Vue.js-4FC08D?logo=Vue.js&logoColor=white" alt="Vue.js" />
     <img src="https://img.shields.io/badge/SQLite-003B57?logo=SQLite&logoColor=white" alt="SQLite" />
+    <p><b>本项目推荐</b>：如果你需要 QQ 侧的数据解密、分析或年度总结类工具，欢迎体验 <a href="https://github.com/H3CoF6/WeQ">H3CoF6/WeQ</a>；WeQ 作者也是本项目开发成员之一，更方便大家信任和了解其维护背景。</p>
 </div>
 
 ## 界面预览
@@ -94,7 +95,6 @@ npm run dev
 - 前端界面: http://localhost:3000
 - API服务(默认): http://localhost:10392 （可通过环境变量 WECHAT_TOOL_PORT 修改）
 - API文档(默认): http://localhost:10392/docs
-- 也可在应用内“设置 -> 后端端口”修改（支持“恢复默认”一键回到 10392）：网页端会尝试重启本机后端到新端口并刷新（并写入 `output/runtime_settings.json`，开发模式下也会写入项目根目录 `.env` 供 `uv run` 下次启动使用）；桌面端会重启内置后端并刷新
 
 ## 打包为 EXE（Windows 桌面端）
 
@@ -110,16 +110,6 @@ npm run dist
 ```
 
 输出位置：`desktop/dist/WeChatDataAnalysis Setup <version>.exe`
-
-## 使用指南
-
-### 获取解密密钥
-
-在使用本工具之前，您需要先获取微信数据库的解密密钥。推荐使用以下工具：
-
-**wx_key** (推荐)
-   - 项目地址: https://github.com/ycccccccy/wx_key
-   - 支持获取微信 4.x 数据库密钥
 
 ## 安全说明
 
@@ -140,6 +130,7 @@ npm run dist
 6. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)** 
 7. **[wx-dat](https://github.com/waaaaashi/wx-dat)**
 8. **[Ritsu](https://xhslink.com/m/7YJUsd1sgyF)**
+9. **[recarto404](https://github.com/recarto404)**
 
 ## Star History
 
