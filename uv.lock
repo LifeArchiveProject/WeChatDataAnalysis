@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 
 [[package]]
@@ -533,6 +533,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pymem"
+version = "1.14.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1f/fd/1906f383fd9697c0da599580c58f5cd5af48edb55429f6ef994c447fb94e/pymem-1.14.0.tar.gz", hash = "sha256:29f6c32bcad0032888afabadf97d1e4c7757f88873de4d79f7f4c1df9b9e7ef1", size = 24890, upload-time = "2024-10-27T18:59:50.369Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/a5/23907a4b55d67cd4c0e4b9a37e32f5f1ffaf7e286dcf172a2a1bb9e12444/pymem-1.14.0-py3-none-any.whl", hash = "sha256:2b9cc64b49d0685f73d616ab1f638611f87e8d649869e7a556f050f677c42a7e", size = 29833, upload-time = "2024-10-27T18:59:48.911Z" },
+]
+
+[[package]]
 name = "pypinyin"
 version = "0.55.0"
 source = { registry = "https://pypi.org/simple" }
@@ -882,9 +891,11 @@ dependencies = [
     { name = "jieba" },
     { name = "loguru" },
     { name = "packaging" },
+    { name = "pefile", marker = "sys_platform == 'win32'" },
     { name = "pilk" },
     { name = "psutil" },
     { name = "pycryptodome" },
+    { name = "pymem", marker = "sys_platform == 'win32'" },
     { name = "pypinyin" },
     { name = "python-multipart" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
@@ -892,6 +903,7 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "wx-key" },
+    { name = "yara-python", marker = "sys_platform == 'win32'" },
     { name = "zstandard" },
 ]
 
@@ -909,10 +921,12 @@ requires-dist = [
     { name = "jieba", specifier = ">=0.42.1" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "packaging" },
+    { name = "pefile", marker = "sys_platform == 'win32'", specifier = ">=2024.8.26" },
     { name = "pilk", specifier = ">=0.2.4" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pycryptodome", specifier = ">=3.23.0" },
     { name = "pyinstaller", marker = "extra == 'build'", specifier = ">=6.0.0" },
+    { name = "pymem", marker = "sys_platform == 'win32'", specifier = ">=1.14.0" },
     { name = "pypinyin", specifier = ">=0.53.0" },
     { name = "python-multipart", specifier = ">=0.0.6" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=310" },
@@ -920,6 +934,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.8.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
     { name = "wx-key", specifier = ">=2.0.1" },
+    { name = "yara-python", marker = "sys_platform == 'win32'", specifier = ">=4.5.2" },
     { name = "zstandard", specifier = ">=0.23.0" },
 ]
 provides-extras = ["build"]
@@ -942,6 +957,20 @@ wheels = [
     { path = "wx_key-2.0.1-cp312-cp312-win_amd64.whl" },
     { path = "wx_key-2.0.1-cp313-cp313-win_amd64.whl" },
     { path = "wx_key-2.0.1-cp314-cp314-win_amd64.whl" },
+]
+
+[[package]]
+name = "yara-python"
+version = "4.5.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/51/38/347d1fcde4edabd338d5872ca5759ccfb95ff1cf5207dafded981fd08c4f/yara_python-4.5.4.tar.gz", hash = "sha256:4c682170f3d5cb3a73aa1bd0dc9ab1c0957437b937b7a83ff6d7ffd366415b9c", size = 551142, upload-time = "2025-05-27T14:15:49.035Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/74/9d/e208dd3ffc38a163d18476d2f758c24de8ece67c9d59c654a6b5b400fd96/yara_python-4.5.4-cp311-cp311-win32.whl", hash = "sha256:491c9de854e4a47dfbef7b3a38686c574459779915be19dcf4421b65847a57ce", size = 1447300, upload-time = "2025-05-27T14:14:44.091Z" },
+    { url = "https://files.pythonhosted.org/packages/85/ad/23ed18900f6024d5c1de567768c12a53c5759ac90d08624c87c816cd7249/yara_python-4.5.4-cp311-cp311-win_amd64.whl", hash = "sha256:2a1bf52cb7b9178cc1ee2acd1697a0c8468af0c76aa1beffe22534bd4f62698b", size = 1825566, upload-time = "2025-05-27T14:14:45.879Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/5c/edacbd11db432ac04a37c9e3a7c569986256d9659d1859c6f828268dfeed/yara_python-4.5.4-cp312-cp312-win32.whl", hash = "sha256:d12e57101683e9270738a1bccf676747f93e86b5bc529e7a7fb7adf94f20bd77", size = 1447403, upload-time = "2025-05-27T14:15:04.193Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/e1/f6a72c155f3241360da890c218911d09bf63329eca9cfa1af64b1498339b/yara_python-4.5.4-cp312-cp312-win_amd64.whl", hash = "sha256:bf14a8af06b2b980a889bdc3f9e8ccd6e703d2b3fa1c98da5fd3a1c3b551eb47", size = 1825743, upload-time = "2025-05-27T14:15:05.678Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/37/e8f2b9a2287070f39fa6a5afbcf1ed6762f60ab3b1fb08018732838ccc25/yara_python-4.5.4-cp313-cp313-win32.whl", hash = "sha256:7707b144c8fcdb30c069ea57b94799cd7601f694ba01b696bbd1832721f37fd0", size = 1447395, upload-time = "2025-05-27T14:15:25.237Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/a0/40b0291c8b24d13daf0e26538c9f3a0d843c38c6446dd17f36335bdd5b5f/yara_python-4.5.4-cp313-cp313-win_amd64.whl", hash = "sha256:5f1288448991d63c1f6351c9f6d112916b0177ceefaa27d1419427a6ff09f829", size = 1825779, upload-time = "2025-05-27T14:15:26.802Z" },
 ]
 
 [[package]]
