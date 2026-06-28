@@ -23,7 +23,6 @@ except Exception:
 
 logger = get_logger(__name__)
 
-_OUTPUT_DATABASES_DIR = get_output_databases_dir()
 _DEBUG_SESSIONS = os.environ.get("WECHAT_TOOL_DEBUG_SESSIONS", "0") == "1"
 _SQLITE_HEADER = b"SQLite format 3\x00"
 
@@ -33,11 +32,12 @@ def _is_valid_decrypted_sqlite(path: Path) -> bool:
 
 
 def _list_decrypted_accounts() -> list[str]:
-    if not _OUTPUT_DATABASES_DIR.exists():
+    output_databases_dir = get_output_databases_dir()
+    if not output_databases_dir.exists():
         return []
 
     accounts: list[str] = []
-    for p in _OUTPUT_DATABASES_DIR.iterdir():
+    for p in output_databases_dir.iterdir():
         if not p.is_dir():
             continue
         if _is_valid_decrypted_sqlite(p / "session.db") and _is_valid_decrypted_sqlite(p / "contact.db"):
@@ -58,8 +58,9 @@ def _resolve_account_dir(account: Optional[str]) -> Path:
     selected = str(account or "").strip() or accounts[0]
     if selected not in accounts:
         raise HTTPException(status_code=404, detail="Account not found.")
-    base = _OUTPUT_DATABASES_DIR.resolve()
-    candidate = (_OUTPUT_DATABASES_DIR / selected).resolve()
+    output_databases_dir = get_output_databases_dir()
+    base = output_databases_dir.resolve()
+    candidate = (output_databases_dir / selected).resolve()
 
     if candidate != base and base not in candidate.parents:
         raise HTTPException(status_code=400, detail="Invalid account path.")

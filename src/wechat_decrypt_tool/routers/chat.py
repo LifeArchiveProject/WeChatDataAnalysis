@@ -769,9 +769,29 @@ def _normalize_chat_source(value: Optional[str]) -> str:
     v = str(value or "").strip().lower()
     if not v or v in {"decrypted", "local", "sqlite"}:
         return "decrypted"
+    if v in {"auto", "default", "wechat"}:
+        return "auto"
     if v in {"realtime", "real-time", "wcdb"}:
         return "realtime"
-    raise HTTPException(status_code=400, detail="Invalid source, use 'decrypted' or 'realtime'.")
+    raise HTTPException(status_code=400, detail="Invalid source, use 'auto', 'decrypted' or 'realtime'.")
+
+
+def _is_chat_realtime_available(account_dir: Path) -> bool:
+    """Best-effort capability check for reading the live WeChat WCDB store."""
+
+    try:
+        info = WCDB_REALTIME.get_status(account_dir)
+    except Exception:
+        return False
+    return bool(info.get("dll_present") and info.get("key_present") and info.get("db_storage_dir"))
+
+
+def _resolve_chat_source_for_account(source_norm: str, account_dir: Path) -> str:
+    """Resolve `source=auto` to realtime when possible, otherwise decrypted snapshot."""
+
+    if source_norm == "auto":
+        return "realtime" if _is_chat_realtime_available(account_dir) else "decrypted"
+    return source_norm
 
 
 def _lookup_contact_alias(
@@ -2742,7 +2762,6 @@ async def chat_search_index_senders(
 
     account_dir = _resolve_account_dir(account)
     contact_db_path = account_dir / "contact.db"
-
     index_status = get_chat_search_index_status(account_dir)
     index = dict(index_status.get("index") or {})
     build = dict(index.get("build") or {})
@@ -3260,6 +3279,7 @@ def _append_full_messages_from_rows(
                 video_md5 = packed_video_token
                 if not _is_hex_md5(video_thumb_md5):
                     video_thumb_md5 = packed_video_token
+                    video_thumb_file_id = ""
             content_text = "[视频]"
         elif local_type == 47:
             render_type = "emoji"
@@ -3997,8 +4017,9 @@ def list_chat_sessions(
     if limit > 2000:
         limit = 2000
 
-    source_norm = _normalize_chat_source(source)
     account_dir = _resolve_account_dir(account)
+    source_requested = _normalize_chat_source(source)
+    source_norm = _resolve_chat_source_for_account(source_requested, account_dir)
     contact_db_path = account_dir / "contact.db"
     head_image_db_path = account_dir / "head_image.db"
     base_url = str(request.base_url).rstrip("/")
@@ -4045,50 +4066,60 @@ def list_chat_sessions(
                 wcdb_ms,
             )
         except WCDBRealtimeError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-        norm: list[dict[str, Any]] = []
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            uname = str(item.get("username") or item.get("user_name") or item.get("UserName") or "").strip()
-            if not uname:
-                continue
-            norm.append(
-                {
-                    "username": uname,
-                    "unread_count": item.get("unread_count", item.get("unreadCount", 0)),
-                    "is_hidden": item.get("is_hidden", item.get("isHidden", 0)),
-                    "summary": item.get("summary", ""),
-                    "draft": item.get("draft", ""),
-                    "last_timestamp": item.get("last_timestamp", item.get("lastTimestamp", 0)),
-                    "sort_timestamp": item.get("sort_timestamp", item.get("sortTimestamp", item.get("last_timestamp", 0))),
-                    "last_msg_type": item.get("last_msg_type", item.get("lastMsgType", 0)),
-                    "last_msg_sub_type": item.get("last_msg_sub_type", item.get("lastMsgSubType", 0)),
-                    # Keep these fields so group session previews can render "sender: content" without
-                    # crashing (realtime rows are dicts, not sqlite Rows).
-                    "last_msg_sender": item.get("last_msg_sender", item.get("lastMsgSender", "")),
-                    "last_sender_display_name": item.get(
-                        "last_sender_display_name",
-                        item.get("lastSenderDisplayName", ""),
-                    ),
-                    "last_msg_locald_id": item.get(
-                        "last_msg_locald_id",
-                        item.get("lastMsgLocaldId", item.get("lastMsgLocalId", 0)),
-                    ),
-                }
+            if source_requested != "auto":
+                raise HTTPException(status_code=400, detail=str(e))
+            logger.warning(
+                "[%s] list_sessions auto realtime failed; fallback decrypted account=%s error=%s",
+                trace_id,
+                account_dir.name,
+                e,
             )
+            source_norm = "decrypted"
+            rt_conn = None
+        else:
+            norm: list[dict[str, Any]] = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                uname = str(item.get("username") or item.get("user_name") or item.get("UserName") or "").strip()
+                if not uname:
+                    continue
+                norm.append(
+                    {
+                        "username": uname,
+                        "unread_count": item.get("unread_count", item.get("unreadCount", 0)),
+                        "is_hidden": item.get("is_hidden", item.get("isHidden", 0)),
+                        "summary": item.get("summary", ""),
+                        "draft": item.get("draft", ""),
+                        "last_timestamp": item.get("last_timestamp", item.get("lastTimestamp", 0)),
+                        "sort_timestamp": item.get("sort_timestamp", item.get("sortTimestamp", item.get("last_timestamp", 0))),
+                        "last_msg_type": item.get("last_msg_type", item.get("lastMsgType", 0)),
+                        "last_msg_sub_type": item.get("last_msg_sub_type", item.get("lastMsgSubType", 0)),
+                        # Keep these fields so group session previews can render "sender: content" without
+                        # crashing (realtime rows are dicts, not sqlite Rows).
+                        "last_msg_sender": item.get("last_msg_sender", item.get("lastMsgSender", "")),
+                        "last_sender_display_name": item.get(
+                            "last_sender_display_name",
+                            item.get("lastSenderDisplayName", ""),
+                        ),
+                        "last_msg_locald_id": item.get(
+                            "last_msg_locald_id",
+                            item.get("lastMsgLocaldId", item.get("lastMsgLocalId", 0)),
+                        ),
+                    }
+                )
 
-        def _ts(v: Any) -> int:
-            try:
-                return int(v or 0)
-            except Exception:
-                return 0
+            def _ts(v: Any) -> int:
+                try:
+                    return int(v or 0)
+                except Exception:
+                    return 0
 
-        norm.sort(key=lambda r: _ts(r.get("sort_timestamp")), reverse=True)
-        rows = norm
-        logger.info("[%s] list_sessions realtime normalized account=%s rows=%s", trace_id, account_dir.name, len(rows))
-    else:
+            norm.sort(key=lambda r: _ts(r.get("sort_timestamp")), reverse=True)
+            rows = norm
+            logger.info("[%s] list_sessions realtime normalized account=%s rows=%s", trace_id, account_dir.name, len(rows))
+
+    if source_norm != "realtime":
         session_db_path = account_dir / "session.db"
         sconn = sqlite3.connect(str(session_db_path))
         sconn.row_factory = sqlite3.Row
@@ -4474,6 +4505,7 @@ def list_chat_sessions(
     return {
         "status": "success",
         "account": account_dir.name,
+        "source": source_norm,
         "total": len(sessions),
         "sessions": sessions,
     }
@@ -4848,6 +4880,7 @@ def _collect_chat_messages(
                         video_md5 = packed_video_token
                         if not _is_hex_md5(video_thumb_md5):
                             video_thumb_md5 = packed_video_token
+                            video_thumb_file_id = ""
                     content_text = "[视频]"
                 elif local_type == 47:
                     render_type = "emoji"
@@ -5245,8 +5278,9 @@ def list_chat_messages(
     if offset < 0:
         offset = 0
 
-    source_norm = _normalize_chat_source(source)
     account_dir = _resolve_account_dir(account)
+    source_requested = _normalize_chat_source(source)
+    source_norm = _resolve_chat_source_for_account(source_requested, account_dir)
     contact_db_path = account_dir / "contact.db"
     head_image_db_path = account_dir / "head_image.db"
     message_resource_db_path = account_dir / "message_resource.db"
@@ -5273,6 +5307,7 @@ def list_chat_messages(
                 "status": "error",
                 "account": account_dir.name,
                 "username": username,
+                "source": source_norm,
                 "total": 0,
                 "messages": [],
                 "message": "No message databases found for this account.",
@@ -5324,8 +5359,12 @@ def list_chat_messages(
         try:
             rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
         except WCDBRealtimeError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            if source_requested != "auto":
+                raise HTTPException(status_code=400, detail=str(e))
+            trace("realtime:fallback-decrypted", error=str(e))
+            source_norm = "decrypted"
 
+    if source_norm == "realtime":
         def _normalize_wcdb_message_row(item: dict[str, Any]) -> dict[str, Any]:
             def pick(*keys: str) -> Any:
                 for k in keys:
@@ -5410,6 +5449,19 @@ def list_chat_messages(
             scan_take = next_take
 
     else:
+        if not db_paths:
+            db_paths = _iter_message_db_paths(account_dir)
+            if not db_paths:
+                trace("response:error", reason="no-message-dbs")
+                return {
+                    "status": "error",
+                    "account": account_dir.name,
+                    "username": username,
+                    "source": source_norm,
+                    "total": 0,
+                    "messages": [],
+                    "message": "No message databases found for this account.",
+                }
         while True:
             (
                 merged,
@@ -5826,6 +5878,7 @@ def list_chat_messages(
                         video_md5 = packed_video_token
                         if not _is_hex_md5(video_thumb_md5):
                             video_thumb_md5 = packed_video_token
+                            video_thumb_file_id = ""
                     content_text = "[视频]"
                 elif local_type == 47:
                     render_type = "emoji"
@@ -6035,6 +6088,7 @@ def list_chat_messages(
             "status": "success",
             "account": account_dir.name,
             "username": username,
+            "source": source_norm,
             "total": int(offset) + (1 if has_more_global else 0),
             "hasMore": bool(has_more_global),
             "messages": [],
@@ -6322,6 +6376,7 @@ def list_chat_messages(
         "status": "success",
         "account": account_dir.name,
         "username": username,
+        "source": source_norm,
         "total": int(offset) + len(page) + (1 if has_more_global else 0),
         "hasMore": bool(has_more_global),
         "messages": page,
@@ -6519,6 +6574,7 @@ async def _search_chat_messages_via_fts(
             total_row = conn.execute(f"SELECT COUNT(*) AS c FROM message_fts WHERE {where_sql}", params).fetchone()
             total = int(total_row[0] or 0) if total_row is not None else 0
 
+
             rows = conn.execute(
                 f"""
                 SELECT
@@ -6550,7 +6606,7 @@ async def _search_chat_messages_via_fts(
                 "q": q,
                 "tokens": tokens,
                 "scope": "conversation" if username else "global",
-                "username": username,
+                    "username": username,
                 "offset": int(offset),
                 "limit": int(limit),
                 "baseUrl": base_url,
@@ -6578,8 +6634,9 @@ async def _search_chat_messages_via_fts(
         db_path = stem_to_path.get(db_stem)
         if db_path is None:
             continue
+        key4 = (db_path, table_name, conv_username, local_id)
         groups.setdefault((db_path, table_name, conv_username), []).append(local_id)
-        ordered_keys.append((db_path, table_name, conv_username, local_id))
+        ordered_keys.append(key4)
 
     hit_by_key: dict[tuple[Path, str, str, int], dict[str, Any]] = {}
 
@@ -6662,8 +6719,9 @@ async def _search_chat_messages_via_fts(
                     or str(hit.get("title") or "").strip()
                     or haystack
                 )
+                key4 = (db_path, table_name, conv_username, local_id)
                 hit["snippet"] = _make_snippet(snippet_src, tokens)
-                hit_by_key[(db_path, table_name, conv_username, local_id)] = hit
+                hit_by_key[key4] = hit
         finally:
             msg_conn.close()
 

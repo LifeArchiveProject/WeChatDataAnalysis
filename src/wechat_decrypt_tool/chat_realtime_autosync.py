@@ -1,10 +1,10 @@
-"""Background auto-sync from WCDB realtime (db_storage) into decrypted sqlite.
+"""Optional background auto-sync from WCDB realtime (db_storage) into decrypted sqlite.
 
 Why:
-- The UI can read "latest" messages from WCDB realtime (`source=realtime`), but most APIs default to the
-  decrypted sqlite snapshot (`source=decrypted`).
-- Previously we only synced realtime -> decrypted when the UI toggled realtime off, which caused `/api/chat/messages`
-  to lag behind while realtime was enabled.
+- The chat UI now defaults to reading from WCDB realtime (`source=auto`), so it does not need a second
+  always-updated decrypted copy for display.
+- This service is kept as an opt-in compatibility bridge for workflows that still require the decrypted
+  sqlite snapshot to be incrementally updated.
 
 This module runs a lightweight background poller that watches db_storage mtime changes and triggers an incremental
 sync_all into decrypted sqlite. It is intentionally conservative (debounced + rate-limited) to avoid hammering the
@@ -105,7 +105,7 @@ class _AccountState:
 
 class ChatRealtimeAutoSyncService:
     def __init__(self) -> None:
-        self._enabled = _env_bool("WECHAT_TOOL_REALTIME_AUTOSYNC", True)
+        self._enabled = _env_bool("WECHAT_TOOL_REALTIME_AUTOSYNC", False)
         self._interval_ms = _env_int("WECHAT_TOOL_REALTIME_AUTOSYNC_INTERVAL_MS", 1000, min_v=200, max_v=10_000)
         self._debounce_ms = _env_int("WECHAT_TOOL_REALTIME_AUTOSYNC_DEBOUNCE_MS", 600, min_v=0, max_v=10_000)
         self._min_sync_interval_ms = _env_int(
@@ -181,7 +181,7 @@ class ChatRealtimeAutoSyncService:
 
     def start(self) -> None:
         if not self._enabled:
-            logger.info("[realtime-autosync] disabled by env WECHAT_TOOL_REALTIME_AUTOSYNC=0")
+            logger.info("[realtime-autosync] disabled (set WECHAT_TOOL_REALTIME_AUTOSYNC=1 to enable)")
             return
 
         with self._mu:
