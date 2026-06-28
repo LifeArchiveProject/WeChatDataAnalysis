@@ -48,6 +48,8 @@ class TestDatabaseFilters(unittest.TestCase):
             _seed_sqlite(db_storage / "contact_fts.db")
             _seed_sqlite(db_storage / "favorite_fts.db")
             _seed_sqlite(db_storage / "message_fts.db")
+            _seed_sqlite(db_storage / "chat_search_index.db")
+            _seed_sqlite(db_storage / "chat_search_index.tmp.db")
             _seed_sqlite(db_storage / "key_info.db")
 
             result = scan_account_databases_from_path(str(db_storage))
@@ -68,6 +70,8 @@ class TestDatabaseFilters(unittest.TestCase):
             _seed_sqlite(data_dir / "contact_fts.db")
             _seed_sqlite(data_dir / "favorite_fts.db")
             _seed_sqlite(data_dir / "message_fts.db")
+            _seed_sqlite(data_dir / "chat_search_index.db")
+            _seed_sqlite(data_dir / "chat_search_index.tmp.db")
 
             databases = collect_account_databases(str(data_dir), "wxid_demo")
             db_names = sorted(db["name"] for db in databases)
@@ -93,6 +97,7 @@ class TestDatabaseFilters(unittest.TestCase):
                 _seed_sqlite(account_dir / "session.db", "session_table")
                 _seed_sqlite(account_dir / "message_fts.db")
                 _seed_sqlite(account_dir / "chat_search_index.db")
+                _seed_sqlite(account_dir / "chat_search_index.tmp.db")
                 _seed_sqlite(account_dir / "session_last_message.db")
 
                 result = chat_router.get_chat_account_info("wxid_demo")

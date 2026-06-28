@@ -4,7 +4,12 @@ from pathlib import Path
 
 
 _IGNORED_SOURCE_DATABASE_NAMES = frozenset({"key_info.db"})
-_INDEX_DATABASE_NAMES = frozenset({"chat_search_index.db", "chat_search_index.tmp.db"})
+_INDEX_DATABASE_NAMES = frozenset(
+    {
+        "chat_search_index.db",
+        "chat_search_index.tmp.db",
+    }
+)
 _INDEX_DATABASE_SUFFIXES = ("_fts.db",)
 _INTERNAL_OUTPUT_DATABASE_NAMES = frozenset(
     {
