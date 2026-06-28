@@ -1,7 +1,10 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from __future__ import annotations
+
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
 from ..img_helper import IMG_HELPER
 from .wechat_detection import check_wechat_status
 
@@ -39,9 +42,7 @@ async def pick_directory(title: str = "请选择目录", initial_dir: str = ""):
 
 @router.get("/api/system/img_helper/status", summary="获取大图下载辅助插件状态")
 async def get_img_helper_status():
-    return {
-        "enabled": IMG_HELPER.is_enabled
-    }
+    return {"enabled": IMG_HELPER.is_enabled}
 
 
 class ImgHelperToggleRequest(BaseModel):
