@@ -7,6 +7,7 @@ const SESSION_LIST_WIDTH_KEY_LEGACY = 'ui.chat.session_list_width'
 const SESSION_LIST_WIDTH_DEFAULT = 295
 const SESSION_LIST_WIDTH_MIN = 220
 const SESSION_LIST_WIDTH_MAX = 520
+const DEFAULT_CHAT_SOURCE = 'auto'
 
 export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled, api }) => {
   const showSearchAccountSwitcher = false
@@ -176,6 +177,7 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
       action: 'loadSessionsForSelectedAccount'
     })
     trace.log('loadSessions:start', {
+      source: DEFAULT_CHAT_SOURCE,
       realtimeEnabled: !!realtimeEnabled?.value
     })
 
@@ -191,22 +193,20 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
     }
 
     let sessionsResp = null
-    if (realtimeEnabled?.value) {
-      try {
-        trace.log('loadSessions:request:start', {
-          source: 'realtime'
-        })
-        sessionsResp = await fetchSessions('realtime')
-        trace.log('loadSessions:request:end', {
-          source: 'realtime',
-          rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
-        })
-      } catch {
-        sessionsResp = null
-        trace.log('loadSessions:request:error', {
-          source: 'realtime'
-        })
-      }
+    try {
+      trace.log('loadSessions:request:start', {
+        source: DEFAULT_CHAT_SOURCE
+      })
+      sessionsResp = await fetchSessions(DEFAULT_CHAT_SOURCE)
+      trace.log('loadSessions:request:end', {
+        source: sessionsResp?.source || DEFAULT_CHAT_SOURCE,
+        rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
+      })
+    } catch {
+      sessionsResp = null
+      trace.log('loadSessions:request:error', {
+        source: DEFAULT_CHAT_SOURCE
+      })
     }
     if (!sessionsResp) {
       trace.log('loadSessions:request:start', {
@@ -236,7 +236,7 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
     const previousUsername = selectedContact.value?.username || ''
     const desiredSource = (sourceOverride != null)
       ? String(sourceOverride || '').trim()
-      : (realtimeEnabled?.value ? 'realtime' : '')
+      : DEFAULT_CHAT_SOURCE
     const trace = createPerfTrace('chat-sessions', {
       account: String(selectedAccount.value || '').trim(),
       action: 'refreshSessionsForSelectedAccount',

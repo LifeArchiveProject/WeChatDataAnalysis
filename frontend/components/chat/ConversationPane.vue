@@ -18,12 +18,12 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
             </svg>
           </button>
-          <button class="header-btn-icon" :class="{ 'header-btn-icon-active': reverseMessageSides }" @click="toggleReverseMessageSides" :disabled="!selectedContact" :title="reverseMessageSides ? '取消反转消息位置' : '反转消息位置'">
+          <button class="header-btn-icon" :class="{ 'header-btn-icon-active': resourceSidebarOpen }" @click="toggleResourceSidebar" :disabled="!selectedContact" title="查看图片和视频资源">
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 7h14" />
-              <path d="M14 3l4 4-4 4" />
-              <path d="M20 17H6" />
-              <path d="M10 13l-4 4 4 4" />
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <circle cx="8.5" cy="9" r="1.5" />
+              <path d="M21 15l-5-5L5 20" />
+              <path d="M14 7l4 2.5-4 2.5V7z" />
             </svg>
           </button>
           <button class="header-btn-icon" :class="{ 'header-btn-icon-active': messageSearchOpen }" @click="toggleMessageSearch" :title="messageSearchOpen ? '关闭搜索 (Esc)' : '搜索聊天记录 (Ctrl+F)'">

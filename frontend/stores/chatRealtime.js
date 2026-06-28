@@ -38,6 +38,8 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
       available.value = false
       statusInfo.value = null
       statusError.value = '未检测到已解密账号，请先解密数据库。'
+      enabled.value = false
+      stopStream()
       return
     }
 
@@ -49,10 +51,16 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
       available.value = !!resp?.available
       statusInfo.value = resp?.realtime || null
       statusError.value = ''
+      if (!available.value) {
+        enabled.value = false
+        stopStream()
+      }
     } catch (e) {
       available.value = false
       statusInfo.value = null
       statusError.value = e?.message || '实时状态获取失败'
+      enabled.value = false
+      stopStream()
     } finally {
       checking.value = false
     }
@@ -124,6 +132,8 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
           window.alert('未检测到已解密账号，请先解密数据库。')
         }
         statusError.value = '未检测到已解密账号，请先解密数据库。'
+        enabled.value = false
+        stopStream()
         return false
       }
 
@@ -132,6 +142,8 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
         if (!silent && process.client && typeof window !== 'undefined') {
           window.alert(statusError.value || '实时模式不可用：缺少密钥或 db_storage 路径。')
         }
+        enabled.value = false
+        stopStream()
         return false
       }
 
@@ -157,22 +169,6 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
         lastToggleAction.value = 'disabled'
         toggleSeq.value += 1
         return true
-      }
-
-      try {
-        const api = useApi()
-        await api.syncChatRealtimeAll({
-          account,
-          max_scan: 200,
-          priority_username: priorityUsername.value || '',
-          priority_max_scan: 5000,
-          include_hidden: true,
-          include_official: true,
-        })
-      } catch (e) {
-        if (!silent && process.client && typeof window !== 'undefined') {
-          window.alert(e?.message || '关闭实时模式时同步失败')
-        }
       }
 
       lastToggleAction.value = 'disabled'

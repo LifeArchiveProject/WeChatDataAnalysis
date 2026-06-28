@@ -144,7 +144,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 
 import { useApi } from '~/composables/useApi'
 const api = useApi()
@@ -170,6 +170,7 @@ const messages = ref([])
 const loadingMessages = ref(false)
 const offset = ref(0)
 const limit = 20
+const DEFAULT_BIZ_SOURCE = 'auto'
 const hasMore = ref(true)
 
 const messageListRef = ref(null)
@@ -195,7 +196,7 @@ const fetchAccounts = async ({ preserveSelection = true } = {}) => {
   loadingAccounts.value = true
   const previousUsername = preserveSelection ? String(selectedBizAccount.value?.username || '').trim() : ''
   try {
-    const res = await api.listBizAccounts({ account: getCurrentAccountParam() })
+    const res = await api.listBizAccounts({ account: getCurrentAccountParam(), source: DEFAULT_BIZ_SOURCE })
     const nextAccounts = Array.isArray(res?.data) ? res.data : []
     accounts.value = nextAccounts
 
@@ -246,6 +247,7 @@ const loadMessages = async () => {
       username,
       offset: offset.value,
       limit,
+      source: DEFAULT_BIZ_SOURCE,
     }
 
     let res
@@ -277,36 +279,17 @@ const reloadSelectedMessages = async () => {
 }
 
 const syncAllBizRealtime = async ({ forceReload = false } = {}) => {
-  const priorityUsername = String(selectedBizAccount.value?.username || '').trim()
-  if (!realtimeEnabled.value) {
-    if (forceReload) {
-      await reloadSelectedMessages()
-    }
-    return
-  }
-
+  // 服务号页面现在默认直接读取 WCDB realtime（source=auto），不再依赖先同步到本地 output 库。
+  // 因此收到 db_storage 变化后直接刷新服务号列表和当前服务号消息，避免 sync_all 没有插入本地库时漏刷。
   try {
-    const result = await api.syncChatRealtimeAll({
-      account: getCurrentAccountParam(),
-      max_scan: 200,
-      priority_username: priorityUsername,
-      priority_max_scan: 400,
-      include_hidden: true,
-      include_official: true,
-      only_official: true,
-      backfill_limit: 0,
-    })
-    const hasDelta = Number(result?.insertedTotal || 0) > 0 || Number(result?.sessionsUpdated || 0) > 0
     await fetchAccounts({ preserveSelection: true })
     if (selectedBizAccount.value?.username) {
-      if (hasDelta || forceReload) {
-        await reloadSelectedMessages()
-      }
+      await reloadSelectedMessages()
     } else if (forceReload) {
       resetMessagesState()
     }
   } catch (err) {
-    console.error('实时同步服务号失败:', err)
+    console.error('实时刷新服务号失败:', err)
     if (forceReload) {
       await fetchAccounts({ preserveSelection: true })
       await reloadSelectedMessages()
@@ -344,6 +327,7 @@ const handleScroll = (e) => {
 
 watch(selectedDbAccount, async (next, prev) => {
   if (String(next || '').trim() === String(prev || '').trim()) return
+  await realtimeStore.enable({ silent: true })
   selectedBizAccount.value = null
   resetMessagesState()
   searchQuery.value = ''
@@ -372,10 +356,15 @@ watch(realtimeEnabled, async (enabled, wasEnabled) => {
 
 onMounted(async () => {
   await chatAccountsStore.ensureLoaded()
+  await realtimeStore.enable({ silent: true })
   await fetchAccounts({ preserveSelection: false })
   if (realtimeEnabled.value) {
     await syncAllBizRealtime({ forceReload: true })
   }
+})
+
+onUnmounted(() => {
+  void realtimeStore.disable({ silent: true })
 })
 </script>
 
