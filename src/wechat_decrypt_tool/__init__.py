@@ -1,5 +1,5 @@
 """微信数据库解密工具
 """
 
-__version__ = "1.9.2"
+__version__ = "1.10.0"
 __author__ = "WeChat Decrypt Tool"
