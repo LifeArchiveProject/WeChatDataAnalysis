@@ -84,8 +84,31 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', updateDprVar)
 })
 
+const setupShellBackgroundRoutes = new Set([
+  '/',
+  '/import',
+  '/decrypt',
+  '/detection-result',
+  '/decrypt-result'
+])
+
+const useSetupShellBackground = computed(() => {
+  const path = String(route.path || '')
+  return setupShellBackgroundRoutes.has(path)
+})
+
+const useWrappedShellBackground = computed(() => {
+  const path = String(route.path || '')
+  return path === '/wrapped' || path.startsWith('/wrapped/')
+})
+
 const rootClass = computed(() => {
-  const base = 'theme-app-shell'
+  let base = 'theme-app-shell'
+  if (useSetupShellBackground.value) {
+    base += ' theme-app-shell-setup'
+  } else if (useWrappedShellBackground.value) {
+    base += ' theme-app-shell-wrapped'
+  }
   return isDesktop.value
     ? `wechat-desktop h-screen flex overflow-hidden ${base}`
     : `h-screen flex overflow-hidden ${base}`
@@ -116,7 +139,7 @@ const showSidebar = computed(() => {
   --sidebar-rail-icon: 24px;
 }
 
-/* Electron 桌面端使用自绘标题栏（frame: false）。
+/* Electron 桌面端使用隐藏标题栏 + 原生窗口控制按钮 overlay。
  * 页面里如果继续用 Tailwind 的 h-screen/min-h-screen（100vh），会把标题栏高度叠加进去，从而出现外层滚动条。
  * 这里把 “screen” 在桌面端视为内容区高度（100%），让标题栏高度自然内嵌在布局里。 */
 .wechat-desktop {
@@ -135,13 +158,23 @@ const showSidebar = computed(() => {
 }
 
 .theme-app-shell {
+  background: var(--app-shell-bg);
+}
+
+.theme-app-shell-setup {
   background:
     radial-gradient(circle at top left, rgba(7, 193, 96, 0.08), transparent 32%),
     radial-gradient(circle at top right, rgba(16, 174, 239, 0.08), transparent 36%),
     linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 45%, #dcfce7 100%);
 }
 
-html[data-theme='dark'] .theme-app-shell {
+.theme-app-shell-wrapped {
+  background: #fffdf7;
+}
+
+html[data-theme='dark'] .theme-app-shell,
+html[data-theme='dark'] .theme-app-shell-setup,
+html[data-theme='dark'] .theme-app-shell-wrapped {
   background: var(--app-shell-bg);
 }
 </style>

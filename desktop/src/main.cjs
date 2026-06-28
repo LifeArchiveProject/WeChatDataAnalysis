@@ -34,6 +34,7 @@ const {
 const DEFAULT_BACKEND_HOST = "127.0.0.1";
 const LAN_BACKEND_HOST = "0.0.0.0";
 const DEFAULT_BACKEND_PORT = parsePort(process.env.WECHAT_TOOL_PORT) ?? 10392;
+const DESKTOP_TITLEBAR_HEIGHT = 32;
 
 let backendProc = null;
 let wcdbSidecarProc = null;
@@ -48,6 +49,32 @@ let desktopSettings = null;
 let backendPortChangeInProgress = false;
 let outputDirChangeInProgress = false;
 let outputDirChangeProgressState = null;
+
+function normalizeTitleBarTheme(value) {
+  return String(value || "").trim().toLowerCase() === "dark" ? "dark" : "light";
+}
+
+function getTitleBarOverlayOptions(theme) {
+  const normalized = normalizeTitleBarTheme(theme);
+  return {
+    // Keep native window controls, but let the renderer/theme show through instead of
+    // Electron painting the default gray title-bar strip behind the buttons.
+    color: "rgba(0, 0, 0, 0)",
+    symbolColor: normalized === "dark" ? "#d0d0d0" : "#111111",
+    height: DESKTOP_TITLEBAR_HEIGHT,
+  };
+}
+
+function setWindowTitleBarTheme(win, theme) {
+  if (!win || typeof win.setTitleBarOverlay !== "function") return false;
+  try {
+    win.setTitleBarOverlay(getTitleBarOverlayOptions(theme));
+    return true;
+  } catch (err) {
+    logMain(`[main] setTitleBarOverlay failed: ${err?.message || err}`);
+    return false;
+  }
+}
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -2207,7 +2234,8 @@ function createMainWindow() {
     height: 800,
     minWidth: 980,
     minHeight: 700,
-    frame: false,
+    titleBarStyle: "hidden",
+    titleBarOverlay: getTitleBarOverlayOptions("light"),
     backgroundColor: "#EDEDED",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -2293,6 +2321,11 @@ function registerWindowIpc() {
   ipcMain.handle("window:isMaximized", (event) => {
     const win = getWin(event);
     return !!win?.isMaximized();
+  });
+
+  ipcMain.handle("window:setTitleBarTheme", (event, theme) => {
+    const win = getWin(event);
+    return setWindowTitleBarTheme(win, theme);
   });
 
   ipcMain.handle("app:getAutoLaunch", () => {

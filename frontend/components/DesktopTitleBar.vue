@@ -2,7 +2,7 @@
   <div v-if="isDesktop" class="desktop-titlebar" @dblclick="toggleMaximize">
     <div class="flex-1" />
 
-    <div class="desktop-titlebar-controls">
+    <div v-if="!usesNativeWindowControls" class="desktop-titlebar-controls">
       <button
         class="desktop-titlebar-btn"
         type="button"
@@ -39,9 +39,12 @@
 <script setup>
 // Keep SSR/client initial DOM consistent; enable desktop titlebar after mount.
 const isDesktop = ref(false)
+const usesNativeWindowControls = ref(false)
 
 onMounted(() => {
-  isDesktop.value = !!window?.wechatDesktop
+  const api = window?.wechatDesktop
+  isDesktop.value = !!api
+  usesNativeWindowControls.value = api?.windowControlsMode === 'overlay'
 })
 
 const minimize = () => {
@@ -60,7 +63,7 @@ const closeWindow = () => {
 <style scoped>
 .desktop-titlebar {
   height: var(--desktop-titlebar-height, 32px);
-  background: var(--desktop-titlebar-bg);
+  background: transparent;
   display: flex;
   align-items: stretch;
   flex-shrink: 0;
@@ -92,19 +95,19 @@ const closeWindow = () => {
 }
 
 .desktop-titlebar-btn:hover {
-  background: var(--desktop-titlebar-hover);
+  background: transparent;
 }
 
 .desktop-titlebar-btn:active {
-  background: var(--desktop-titlebar-active);
+  background: transparent;
 }
 
 .desktop-titlebar-btn-close:hover {
-  background: #e81123;
+  background: transparent;
 }
 
 .desktop-titlebar-btn-close:active {
-  background: #c50f1f;
+  background: transparent;
 }
 
 .desktop-titlebar-icon {
@@ -158,6 +161,6 @@ const closeWindow = () => {
 
 .desktop-titlebar-btn-close:hover .desktop-titlebar-icon-close::before,
 .desktop-titlebar-btn-close:hover .desktop-titlebar-icon-close::after {
-  background: #fff;
+  background: #e81123;
 }
 </style>

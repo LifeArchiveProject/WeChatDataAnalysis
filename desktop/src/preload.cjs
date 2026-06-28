@@ -63,10 +63,12 @@ if (typeof window !== "undefined") {
 contextBridge.exposeInMainWorld("wechatDesktop", {
   // Marker used by the frontend to distinguish the Electron desktop shell from the pure web build.
   __brand: "WeChatDataAnalysisDesktop",
+  windowControlsMode: "overlay",
   minimize: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximize: () => ipcRenderer.invoke("window:toggleMaximize"),
   close: () => ipcRenderer.invoke("window:close"),
   isMaximized: () => ipcRenderer.invoke("window:isMaximized"),
+  setTitleBarTheme: (theme) => ipcRenderer.invoke("window:setTitleBarTheme", String(theme || "")),
   isDebugEnabled: () => ipcRenderer.invoke("app:isDebugEnabled"),
   logDebug: (scope, message, details = {}) => sendDebugLog(scope, message, details),
 

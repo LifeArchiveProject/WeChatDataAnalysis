@@ -1,6 +1,6 @@
 <template>
   <!-- Shared backdrop for modern "Wrapped" slides (keeps cover + cards visually consistent). -->
-  <div class="absolute inset-0 pointer-events-none select-none z-0" aria-hidden="true">
+  <div class="fixed inset-0 pointer-events-none select-none z-0" aria-hidden="true">
     <!-- Soft color blobs (brand + warm highlights) -->
     <div class="absolute -top-24 -left-24 w-80 h-80 bg-[#07C160] opacity-[0.08] rounded-full blur-3xl"></div>
     <div class="absolute -top-24 -right-24 w-96 h-96 bg-[#F2AA00] opacity-[0.06] rounded-full blur-3xl"></div>

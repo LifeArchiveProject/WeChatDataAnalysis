@@ -366,25 +366,6 @@
               <div class="px-3.5 py-3">
                 <div class="flex items-center justify-between gap-3">
                   <div class="min-w-0 flex-1">
-                    <div class="text-[13px] font-medium text-[#222]">启动后自动开启实时获取</div>
-                    <div class="mt-0.5 text-[11px] text-[#909090]">进入聊天页后自动打开“实时开关”</div>
-                  </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    :aria-checked="desktopAutoRealtime"
-                    class="settings-switch shrink-0"
-                    :class="switchTrackClass(desktopAutoRealtime)"
-                    @click="toggleDesktopAutoRealtime"
-                  >
-                    <span class="settings-switch-thumb" :class="desktopAutoRealtime ? 'translate-x-[20px]' : 'translate-x-0'" />
-                  </button>
-                </div>
-              </div>
-
-              <div class="px-3.5 py-3">
-                <div class="flex items-center justify-between gap-3">
-                  <div class="min-w-0 flex-1">
                     <div class="text-[13px] font-medium text-[#222]">有数据时默认进入聊天页</div>
                     <div class="mt-0.5 text-[11px] text-[#909090]">有已解密账号时，打开应用跳转到 /chat</div>
                   </div>
@@ -459,7 +440,7 @@
 </template>
 
 <script setup>
-import { DESKTOP_SETTING_AUTO_REALTIME_KEY, DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting, writeLocalBoolSetting } from '~/lib/desktop-settings'
+import { DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting, writeLocalBoolSetting } from '~/lib/desktop-settings'
 import { readApiBaseOverride, writeApiBaseOverride } from '~/lib/api-settings'
 import { invalidateApiBaseCache } from '~/composables/useApiBase'
 import { reportServerErrorFromError } from '~/lib/server-error-logging'
@@ -472,11 +453,12 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close'])
+const api = useApi()
 
 const settingNavItems = [
   { key: 'desktop', label: '桌面行为', hint: '启动 / 关闭 / 端口' },
   { key: 'mcp', label: 'MCP 接入', hint: '手机 / Skill / 工具' },
-  { key: 'startup', label: '启动偏好', hint: '自动实时 / 默认页面' },
+  { key: 'startup', label: '启动偏好', hint: '默认页面' },
   { key: 'updates', label: '更新', hint: '版本信息 / 检查更新' },
   { key: 'sns', label: '朋友圈', hint: '图片缓存策略' },
 ]
@@ -498,7 +480,6 @@ const desktopVersionText = computed(() => {
   return v || '—'
 })
 
-const desktopAutoRealtime = ref(false)
 const desktopDefaultToChatWhenData = ref(false)
 const snsUseCache = ref(true)
 
@@ -1261,12 +1242,6 @@ const onDesktopBackendPortReset = async () => {
   await applyDesktopBackendPort()
 }
 
-const toggleDesktopAutoRealtime = () => {
-  const next = !desktopAutoRealtime.value
-  desktopAutoRealtime.value = next
-  writeLocalBoolSetting(DESKTOP_SETTING_AUTO_REALTIME_KEY, next)
-}
-
 const toggleDesktopDefaultToChat = () => {
   const next = !desktopDefaultToChatWhenData.value
   desktopDefaultToChatWhenData.value = next
@@ -1283,17 +1258,35 @@ const onDesktopCheckUpdates = async () => {
   await desktopUpdate.manualCheck()
 }
 
+const refreshSettingsDialogData = async () => {
+  if (!process.client || typeof window === 'undefined') return
+
+  const tasks = [
+    refreshDesktopBackendPort(),
+    refreshMcpLanAccess(),
+    refreshMcpToken(),
+    refreshBackendLogFileInfo(),
+  ]
+
+
+  if (isDesktopEnv.value) {
+    void desktopUpdate.initListeners()
+    tasks.push(refreshDesktopAutoLaunch())
+    tasks.push(refreshDesktopCloseBehavior())
+    tasks.push(refreshDesktopOutputDir())
+    tasks.push(refreshDesktopOutputDirProgress())
+  }
+
+  await Promise.allSettled(tasks)
+
+  // skill bundle 依赖 token / access host；先让弹窗可交互，再后台补齐这块文本。
+  void refreshMcpSkillBundle()
+}
+
 watch(() => props.open, async (isOpen) => {
   if (!isOpen) return
-  await refreshMcpLanAccess()
-  await refreshMcpToken()
-  await refreshMcpSkillBundle()
-  await refreshBackendLogFileInfo()
-  if (isDesktopEnv.value) {
-    await refreshDesktopOutputDir()
-    await refreshDesktopOutputDirProgress()
-  }
-}, { immediate: true })
+  await refreshSettingsDialogData()
+}, { immediate: false })
 
 onMounted(async () => {
   if (process.client && typeof window !== 'undefined') {
@@ -1307,21 +1300,10 @@ onMounted(async () => {
     }
   }
 
-  desktopAutoRealtime.value = readLocalBoolSetting(DESKTOP_SETTING_AUTO_REALTIME_KEY, false)
   desktopDefaultToChatWhenData.value = readLocalBoolSetting(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, false)
   snsUseCache.value = readLocalBoolSetting(SNS_SETTING_USE_CACHE_KEY, true)
 
-  await refreshDesktopBackendPort()
-  await refreshMcpLanAccess()
-  await refreshMcpToken()
-  await refreshMcpSkillBundle()
-  if (isDesktopEnv.value) {
-    void desktopUpdate.initListeners()
-    await refreshDesktopAutoLaunch()
-    await refreshDesktopCloseBehavior()
-    await refreshDesktopOutputDir()
-    await refreshDesktopOutputDirProgress()
-  }
+  if (props.open) await refreshSettingsDialogData()
 
   await nextTick()
   onContentScroll()

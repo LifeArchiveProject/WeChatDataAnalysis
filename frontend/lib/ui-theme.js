@@ -33,4 +33,7 @@ export const applyUiTheme = (theme) => {
   root.dataset.theme = normalized
   root.classList.toggle('theme-dark', normalized === UI_THEME_DARK)
   root.style.colorScheme = normalized === UI_THEME_DARK ? 'dark' : 'light'
+  try {
+    window.wechatDesktop?.setTitleBarTheme?.(normalized)
+  } catch {}
 }

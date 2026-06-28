@@ -303,7 +303,8 @@ const slides = computed(() => {
   return out
 })
 
-const currentBg = '#F3FFF8'
+// 年度总结使用独立的暖纸面底色，避免继承聊天页灰底或引导页绿底。
+const currentBg = '#FFFDF7'
 const deckTrackClass = computed(() => 'z-10')
 
 const applyViewportBg = () => {
