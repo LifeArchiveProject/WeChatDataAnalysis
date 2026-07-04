@@ -560,6 +560,8 @@ def _extract_md5_from_packed_info(packed_info: Any) -> str:
         s = packed_info.strip()
         if s.lower().startswith("0x"):
             s = s[2:]
+        if len(s) == 32 and _PACKED_INFO_HEX_RE.fullmatch(s):
+            return s.lower()
         if s and _PACKED_INFO_HEX_RE.fullmatch(s) and (len(s) % 2 == 0):
             try:
                 data = bytes.fromhex(s)
