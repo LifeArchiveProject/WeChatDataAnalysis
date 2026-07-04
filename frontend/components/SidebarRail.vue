@@ -328,14 +328,18 @@
             </div>
           </div>
 
-          <div class="rounded-[8px] border border-[#ededed] bg-[#fafafa] px-3 py-2 text-[12px] text-[#5f5f5f] space-y-1.5">
+            <div class="rounded-[8px] border border-[#ededed] bg-[#fafafa] px-3 py-2 text-[12px] text-[#5f5f5f] space-y-1.5">
             <div class="flex items-start justify-between gap-3">
-              <span class="text-[#8a8a8a] shrink-0">数据库数量</span>
+              <span class="text-[#8a8a8a] shrink-0">读取模式</span>
+              <span class="font-medium text-[#333]">{{ accountModeText }}</span>
+            </div>
+            <div class="flex items-start justify-between gap-3">
+              <span class="text-[#8a8a8a] shrink-0">本地解密库数量</span>
               <span class="font-medium text-[#333]">{{ accountInfo?.database_count ?? '—' }}</span>
             </div>
             <div class="flex items-start justify-between gap-3">
               <span class="text-[#8a8a8a] shrink-0">数据目录</span>
-              <span class="break-all text-right text-[#444]">{{ accountInfo?.path || (selectedAccount ? `output/databases/${selectedAccount}` : '—') }}</span>
+              <span class="break-all text-right text-[#444]">{{ accountDataPath }}</span>
             </div>
             <div class="flex items-start justify-between gap-3">
               <span class="text-[#8a8a8a] shrink-0">最近会话库更新时间</span>
@@ -401,6 +405,25 @@ const accountDeleteLoading = ref(false)
 const accountDeleteError = ref('')
 const accountInfoApiUnsupported = ref(false)
 const deleteAccountApiUnsupported = ref(false)
+
+const accountModeText = computed(() => {
+  const mode = String(accountInfo.value?.mode || '').trim()
+  const realtimeAvailable = !!accountInfo.value?.realtimeAvailable || !!accountInfo.value?.realtime?.available
+  if (mode === 'direct' || realtimeAvailable) return '原始 WCDB 实时读取'
+  if (mode === 'decrypted' || accountInfo.value?.hasDecryptedDbs) return '旧本地解密库'
+  return '—'
+})
+
+const accountDataPath = computed(() => {
+  const info = accountInfo.value || {}
+  return String(
+    info.dataSourcePath
+    || info.dbStoragePath
+    || info.wxidDir
+    || info.path
+    || (selectedAccount.value ? `output/databases/${selectedAccount.value}` : '—')
+  )
+})
 
 const sessionUpdatedAtText = computed(() => {
   const ts = Number(accountInfo.value?.session_updated_at || 0)

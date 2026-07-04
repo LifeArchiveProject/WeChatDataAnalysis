@@ -1,8 +1,63 @@
 export const normalizeSessionPreview = (value) => {
   const text = String(value || '').trim()
-  if (/^\[location\]/i.test(text)) return text.replace(/^\[location\]/i, '[位置]')
-  if (/:\s*\[location\]$/i.test(text)) return text.replace(/\[location\]$/i, '[位置]')
-  return text
+  if (!text) return ''
+  const labelMap = {
+    text: '文本',
+    message: '消息',
+    appmessage: '消息',
+    'app message': '消息',
+    image: '图片',
+    img: '图片',
+    picture: '图片',
+    voice: '语音',
+    audio: '语音',
+    'contact card': '名片',
+    contact: '名片',
+    card: '名片',
+    video: '视频',
+    emoji: '动画表情',
+    sticker: '动画表情',
+    emoticon: '动画表情',
+    location: '位置',
+    miniprogram: '小程序',
+    'mini program': '小程序',
+    'mini-program': '小程序',
+    link: '链接',
+    url: '链接',
+    article: '文章',
+    music: '音乐',
+    quote: '引用消息',
+    live: '直播',
+    announcement: '群公告',
+    transfer: '转账',
+    redpacket: '红包',
+    'red packet': '红包',
+    system: '系统消息',
+    pat: '拍一拍',
+    file: '文件',
+    voip: '通话',
+    chathistory: '聊天记录',
+    'chat history': '聊天记录',
+    聊天记录: '聊天记录'
+  }
+  const keyOf = (label) => String(label || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ')
+  const asLabel = (label) => {
+    const zh = labelMap[keyOf(label)]
+    return zh ? `[${zh}]` : ''
+  }
+
+  let out = text
+    .replace(/\[([A-Za-z][A-Za-z0-9 _-]{0,40}|聊天记录)\]/g, (m, label) => asLabel(label) || m)
+    .replace('[表情]', '[动画表情]')
+
+  const direct = asLabel(out)
+  if (direct) return direct
+
+  out = out.replace(/^(.{1,128}?:\s*)([A-Za-z][A-Za-z0-9 _-]{0,40})$/, (m, prefix, label) => {
+    const mapped = asLabel(label)
+    return mapped ? `${prefix}${mapped}` : m
+  })
+  return out
 }
 
 export const formatSmartTime = (ts) => {

@@ -303,8 +303,8 @@ const slides = computed(() => {
   return out
 })
 
-// 年度总结使用独立的暖纸面底色，避免继承聊天页灰底或引导页绿底。
-const currentBg = '#FFFDF7'
+// 年度总结沿用旧版浅绿色底色，避免继承聊天页灰底或引导页绿底。
+const currentBg = '#F3FFF8'
 const deckTrackClass = computed(() => 'z-10')
 
 const applyViewportBg = () => {
@@ -615,7 +615,7 @@ onMounted(async () => {
   deckEl.value?.addEventListener('touchend', onTouchEnd, { passive: true })
 
   await loadAccounts()
-  // Auto-generate once if we already have decrypted accounts, to match "one click" expectations.
+  // Auto-generate once if we already have chat accounts (direct WCDB or legacy), to match "one click" expectations.
   if (accounts.value.length > 0) {
     await reload()
   }

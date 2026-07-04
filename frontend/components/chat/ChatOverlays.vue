@@ -235,7 +235,8 @@
                   class="search-filter-select w-full flex items-center justify-between gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
                   title="按发送者筛选"
                   :disabled="messageSearchSenderDisabled"
-                  @click="toggleMessageSearchSenderDropdown"
+                  @mousedown.stop
+                  @click.stop.prevent="toggleMessageSearchSenderDropdown"
                 >
                     <span class="flex items-center gap-1 min-w-0">
                       <span class="w-4 h-4 rounded overflow-hidden bg-gray-200 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
@@ -276,7 +277,8 @@
                       type="button"
                       class="chat-overlay-option w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs"
                       :class="!messageSearchSender ? 'chat-overlay-option--active' : ''"
-                      @click="selectMessageSearchSender('')"
+                      @mousedown.stop
+                      @click.stop.prevent="selectMessageSearchSender('')"
                     >
                       <span class="w-6 h-6 rounded-md overflow-hidden bg-gray-200 flex-shrink-0 flex items-center justify-center text-[10px] text-gray-500">
                         全
@@ -291,7 +293,7 @@
                       {{ messageSearchSenderError }}
                     </div>
                     <div v-else-if="filteredMessageSearchSenderOptions.length === 0" class="px-2 py-3 text-xs text-gray-500">
-                      {{ messageSearchScope === 'global' && String(messageSearchQuery || '').trim().length < 2 ? '请输入关键词后再筛选发送者' : '暂无发送者' }}
+                      暂无发送者
                     </div>
                     <template v-else>
                       <button
@@ -300,7 +302,8 @@
                         type="button"
                         class="chat-overlay-option w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs"
                         :class="messageSearchSender === s.username ? 'chat-overlay-option--active' : ''"
-                        @click="selectMessageSearchSender(s.username)"
+                        @mousedown.stop
+                        @click.stop.prevent="selectMessageSearchSender(s.username)"
                       >
                         <div class="w-6 h-6 rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
                           <img v-if="s.avatar" :src="s.avatar" :alt="(s.displayName || s.username) + '头像'" class="w-full h-full object-cover" />
@@ -430,7 +433,7 @@
                 :class="{ 'sidebar-result-card-selected': idx === messageSearchSelectedIndex }"
                 @pointerdown="onSearchHitPointerDown(hit, idx, $event)"
                 @click.capture="onSearchHitClickCapture(hit, idx, $event)"
-                @click="onSearchHitClick(hit, idx)"
+                @click="onSearchHitClick(hit, idx, $event)"
               >
                 <div class="sidebar-result-row">
                   <div class="sidebar-result-avatar" :class="{ 'privacy-blur': privacyMode }">
@@ -451,8 +454,18 @@
                       </span>
                       <span class="sidebar-result-time">{{ formatMessageFullTime(hit.createTime) }}</span>
                     </div>
-                    <div class="sidebar-result-sender">
+                    <button
+                      v-if="hit.senderUsername"
+                      type="button"
+                      class="sidebar-result-sender sidebar-result-sender-clickable"
+                      title="按此发送者筛选"
+                      @mousedown.stop
+                      @click.stop.prevent="onSearchResultSenderClick(hit, $event)"
+                    >
                       {{ hit.senderDisplayName || hit.senderUsername || (hit.isSent ? '我' : '') }}
+                    </button>
+                    <div v-else class="sidebar-result-sender">
+                      {{ hit.isSent ? '我' : '' }}
                     </div>
                     <div class="sidebar-result-content" v-html="highlightKeyword(hit.snippet || hit.content || hit.title || '', messageSearchQuery)"></div>
                   </div>
@@ -1377,7 +1390,7 @@
     <!-- 导出弹窗 -->
     <div v-if="exportModalOpen" class="fixed inset-0 z-[11000] flex items-center justify-center">
       <div class="absolute inset-0 bg-black/40" @click="closeExportModal"></div>
-      <div class="chat-export-modal relative w-[960px] max-w-[95vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
+      <div class="chat-export-modal relative w-[1320px] max-w-[99vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
         <div class="px-5 py-4 border-b border-gray-200 flex items-center">
           <div class="text-base font-medium text-gray-900">导出聊天记录（离线 ZIP）</div>
           <button class="ml-auto text-gray-400 hover:text-gray-700" type="button" @click="closeExportModal">
@@ -1394,8 +1407,8 @@
           </div>
 
           <div class="space-y-5">
-            <div class="flex flex-wrap items-end gap-3 xl:flex-nowrap">
-              <div>
+            <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(440px,1fr)_minmax(190px,auto)_minmax(500px,500px)] xl:items-start">
+              <div class="min-w-0">
                 <div class="text-sm font-medium text-gray-800 mb-2">范围</div>
                 <div class="flex flex-wrap items-center gap-2 text-sm text-gray-700">
                   <button
@@ -1440,11 +1453,13 @@
                     自定义
                   </button>
                 </div>
-                <div v-if="exportTargetsLoading" class="mt-1 text-[11px] text-gray-400">正在同步导出范围...</div>
-                <div v-else-if="exportTargetsError" class="mt-1 text-[11px] text-red-500">{{ exportTargetsError }}</div>
+                <div class="mt-1 min-h-[16px] text-[11px] leading-4">
+                  <span v-if="exportTargetsLoading" class="text-gray-400">正在加载导出范围...</span>
+                  <span v-else-if="exportTargetsError" class="text-red-500">{{ exportTargetsError }}</span>
+                </div>
               </div>
 
-              <div>
+              <div class="min-w-[190px]">
                 <div class="text-sm font-medium text-gray-800 mb-2">格式</div>
                 <div class="flex items-center gap-2 text-sm text-gray-700">
                   <label class="flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border cursor-pointer transition-colors" :class="exportFormat === 'json' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'">
@@ -1462,19 +1477,19 @@
                 </div>
               </div>
 
-              <div class="flex-1 min-w-[280px]">
-                <div class="text-sm font-medium text-gray-800 mb-2">时间范围（可选）</div>
-                <div class="flex items-center gap-1.5 flex-wrap">
+              <div class="min-w-0 xl:min-w-[500px]">
+                <div class="text-sm font-medium text-gray-800 mb-2 whitespace-nowrap">时间范围（可选）</div>
+                <div class="chat-export-time-range-row">
                   <input
                     v-model="exportStartLocal"
                     type="datetime-local"
-                    class="px-2 py-1 text-xs rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
+                    class="chat-export-datetime-input px-2 py-1 text-xs rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
                   />
-                  <span class="text-gray-400">-</span>
+                  <span class="text-gray-400 shrink-0 text-center">-</span>
                   <input
                     v-model="exportEndLocal"
                     type="datetime-local"
-                    class="px-2 py-1 text-xs rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
+                    class="chat-export-datetime-input px-2 py-1 text-xs rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
                   />
                 </div>
               </div>

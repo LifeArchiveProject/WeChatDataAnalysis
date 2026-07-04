@@ -1034,6 +1034,7 @@ export const useChatMessages = ({
     try {
       const response = await api.listChatContacts({
         account,
+        source: DEFAULT_CHAT_SOURCE,
         include_friends: true,
         include_groups: true,
         include_officials: true

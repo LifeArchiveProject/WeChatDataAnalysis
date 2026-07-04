@@ -18,10 +18,6 @@
                     </svg>
                   </button>
                 </div>
-
-                <select v-if="availableAccounts.length > 1" v-model="selectedAccount" class="account-select">
-                  <option v-for="acc in availableAccounts" :key="acc" :value="acc">{{ acc }}</option>
-                </select>
               </div>
             </div>
 
@@ -138,7 +134,7 @@ useHead({ title: '联系人 - 微信数据分析助手' })
 const api = useApi()
 
 const chatAccounts = useChatAccountsStore()
-const { accounts: availableAccounts, selectedAccount } = storeToRefs(chatAccounts)
+const { selectedAccount } = storeToRefs(chatAccounts)
 
 const privacyStore = usePrivacyStore()
 const { privacyMode } = storeToRefs(privacyStore)
@@ -272,6 +268,7 @@ const escapeCsvCell = (value) => {
 const buildExportContactsPayload = async () => {
   const resp = await api.listChatContacts({
     account: selectedAccount.value,
+    source: 'auto',
     keyword: searchKeyword.value || '',
     include_friends: exportTypes.friends,
     include_groups: exportTypes.groups,
@@ -394,6 +391,7 @@ const loadContacts = async () => {
   try {
     const resp = await api.listChatContacts({
       account: selectedAccount.value,
+      source: 'auto',
       keyword: searchKeyword.value || '',
       include_friends: contactTypes.friends,
       include_groups: contactTypes.groups,
@@ -472,6 +470,7 @@ const startExport = async () => {
     const resp = isDesktopExportRuntime()
       ? await api.exportChatContacts({
           account: selectedAccount.value,
+          source: 'auto',
           output_dir: exportFolder.value,
           format: exportFormat.value,
           include_avatar_link: includeAvatarLink.value,

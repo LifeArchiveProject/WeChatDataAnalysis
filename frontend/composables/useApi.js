@@ -246,6 +246,7 @@ export const useApi = () => {
     if (params && params.session_limit != null) query.set('session_limit', String(params.session_limit))
     if (params && params.per_chat_scan != null) query.set('per_chat_scan', String(params.per_chat_scan))
     if (params && params.scan_limit != null) query.set('scan_limit', String(params.scan_limit))
+    if (params && params.source) query.set('source', params.source)
     const url = '/chat/search' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
@@ -263,6 +264,7 @@ export const useApi = () => {
     if (params && params.render_types) query.set('render_types', params.render_types)
     if (params && params.include_hidden != null) query.set('include_hidden', String(!!params.include_hidden))
     if (params && params.include_official != null) query.set('include_official', String(!!params.include_official))
+    if (params && params.source) query.set('source', params.source)
     const url = '/chat/search-index/senders' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
@@ -270,6 +272,7 @@ export const useApi = () => {
   const getChatSearchIndexStatus = async (params = {}) => {
     const query = new URLSearchParams()
     if (params && params.account) query.set('account', params.account)
+    if (params && params.source) query.set('source', params.source)
     const url = '/chat/search-index/status' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
@@ -278,6 +281,7 @@ export const useApi = () => {
     const query = new URLSearchParams()
     if (params && params.account) query.set('account', params.account)
     if (params && params.rebuild != null) query.set('rebuild', String(!!params.rebuild))
+    if (params && params.source) query.set('source', params.source)
     const url = '/chat/search-index/build' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url, { method: 'POST' })
   }
@@ -290,6 +294,7 @@ export const useApi = () => {
     if (params && params.anchor_id) query.set('anchor_id', params.anchor_id)
     if (params && params.before != null) query.set('before', String(params.before))
     if (params && params.after != null) query.set('after', String(params.after))
+    if (params && params.source) query.set('source', params.source)
     const url = '/chat/messages/around' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
@@ -301,6 +306,7 @@ export const useApi = () => {
     if (params && params.username) query.set('username', params.username)
     if (params && params.year != null) query.set('year', String(params.year))
     if (params && params.month != null) query.set('month', String(params.month))
+    if (params && params.source) query.set('source', params.source)
     const url = '/chat/messages/daily_counts' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
@@ -312,6 +318,7 @@ export const useApi = () => {
     if (params && params.username) query.set('username', params.username)
     if (params && params.kind) query.set('kind', String(params.kind))
     if (params && params.date) query.set('date', String(params.date))
+    if (params && params.source) query.set('source', params.source)
     const url = '/chat/messages/anchor' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
@@ -423,6 +430,7 @@ export const useApi = () => {
       method: 'POST',
       body: {
         account: data.account || null,
+        source: data.source || 'auto',
         scope: data.scope || 'selected',
         usernames: Array.isArray(data.usernames) ? data.usernames : [],
         format: data.format || 'json',
@@ -457,6 +465,7 @@ export const useApi = () => {
     if (params && params.account) query.set('account', params.account)
     if (params && params.include_hidden != null) query.set('include_hidden', String(!!params.include_hidden))
     if (params && params.include_official != null) query.set('include_official', String(!!params.include_official))
+    if (params && params.source) query.set('source', params.source)
     const url = '/chat/exports/targets' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url)
   }
@@ -496,6 +505,7 @@ export const useApi = () => {
   const listChatContacts = async (params = {}) => {
     const query = new URLSearchParams()
     if (params && params.account) query.set('account', params.account)
+    if (params && params.source) query.set('source', params.source)
     if (params && params.keyword) query.set('keyword', params.keyword)
     if (params && params.include_friends != null) query.set('include_friends', String(!!params.include_friends))
     if (params && params.include_groups != null) query.set('include_groups', String(!!params.include_groups))
@@ -509,6 +519,7 @@ export const useApi = () => {
       method: 'POST',
       body: {
         account: payload.account || null,
+        source: payload.source || 'auto',
         output_dir: payload.output_dir || '',
         format: payload.format || 'json',
         include_avatar_link: payload.include_avatar_link == null ? true : !!payload.include_avatar_link,

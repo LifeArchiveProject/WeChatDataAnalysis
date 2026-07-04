@@ -46,7 +46,7 @@
               @change="onAccountChange"
               class="account-select"
             >
-              <option v-if="!availableAccounts.length" disabled value="">{{ chatAccounts.loading ? '加载中...' : (chatAccounts.error || '无数据库') }}</option>
+              <option v-if="!availableAccounts.length" disabled value="">{{ chatAccounts.loading ? '加载中...' : (chatAccounts.error || '无账号') }}</option>
               <option v-for="acc in availableAccounts" :key="acc" :value="acc">{{ acc }}</option>
             </select>
           </div>

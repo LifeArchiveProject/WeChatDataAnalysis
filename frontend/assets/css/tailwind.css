@@ -1312,6 +1312,10 @@
     @apply text-[11px] text-gray-500 mb-1;
   }
 
+  .sidebar-result-sender-clickable {
+    @apply block p-0 bg-transparent border-0 text-left cursor-pointer hover:text-[#03C160] hover:underline;
+  }
+
   .sidebar-result-content {
     @apply text-xs text-gray-700 line-clamp-2 leading-relaxed;
   }
@@ -1763,6 +1767,24 @@
 
   .chat-overlay-option--active:hover {
     background-color: var(--app-neutral-btn-hover);
+  }
+
+  .chat-export-time-range-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr);
+    align-items: center;
+    column-gap: 8px;
+    width: 100%;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .chat-export-datetime-input {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    white-space: nowrap;
   }
 
   .chat-context-menu__item {

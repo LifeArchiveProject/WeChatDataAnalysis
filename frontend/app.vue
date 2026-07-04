@@ -169,7 +169,7 @@ const showSidebar = computed(() => {
 }
 
 .theme-app-shell-wrapped {
-  background: #fffdf7;
+  background: #F3FFF8;
 }
 
 html[data-theme='dark'] .theme-app-shell,
