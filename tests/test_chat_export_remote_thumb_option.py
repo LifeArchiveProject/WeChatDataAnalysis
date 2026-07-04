@@ -186,6 +186,7 @@ class TestChatExportRemoteThumbOption(unittest.TestCase):
     def _create_job(self, manager, *, account: str, username: str, download_remote_media: bool):
         job = manager.create_job(
             account=account,
+            source="decrypted",
             scope="selected",
             usernames=[username],
             export_format="html",

@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, quote, urlparse
 
-from fastapi import HTTPException
-
-from .app_paths import get_output_databases_dir
+from .chat_accounts import list_chat_account_names, resolve_chat_account_context
 from .logging_config import get_logger
 from .sqlite_diagnostics import collect_sqlite_diagnostics, format_sqlite_diagnostics, is_usable_sqlite_db
 
@@ -26,54 +24,100 @@ logger = get_logger(__name__)
 _DEBUG_SESSIONS = os.environ.get("WECHAT_TOOL_DEBUG_SESSIONS", "0") == "1"
 _SQLITE_HEADER = b"SQLite format 3\x00"
 
+_SESSION_PREVIEW_LABELS_ZH: dict[str, str] = {
+    "text": "文本",
+    "message": "消息",
+    "app message": "消息",
+    "appmessage": "消息",
+    "image": "图片",
+    "img": "图片",
+    "picture": "图片",
+    "voice": "语音",
+    "audio": "语音",
+    "contact card": "名片",
+    "contact": "名片",
+    "card": "名片",
+    "video": "视频",
+    "emoji": "动画表情",
+    "sticker": "动画表情",
+    "emoticon": "动画表情",
+    "location": "位置",
+    "mini program": "小程序",
+    "miniprogram": "小程序",
+    "mini-program": "小程序",
+    "link": "链接",
+    "url": "链接",
+    "article": "文章",
+    "music": "音乐",
+    "quote": "引用消息",
+    "live": "直播",
+    "announcement": "群公告",
+    "transfer": "转账",
+    "red packet": "红包",
+    "redpacket": "红包",
+    "system": "系统消息",
+    "pat": "拍一拍",
+    "file": "文件",
+    "voip": "通话",
+    "chat history": "聊天记录",
+    "chathistory": "聊天记录",
+    "聊天记录": "聊天记录",
+}
+
+
+def _canonical_preview_label_key(label: str) -> str:
+    return re.sub(r"[\s_-]+", " ", str(label or "").strip().lower()).strip()
+
+
+def _preview_label_to_zh(label: str) -> str:
+    key = _canonical_preview_label_key(label)
+    if not key:
+        return ""
+    return _SESSION_PREVIEW_LABELS_ZH.get(key, "")
+
+
+def _format_preview_label(label: str) -> str:
+    zh = _preview_label_to_zh(label)
+    return f"[{zh}]" if zh else ""
+
+
+def _localize_session_preview_labels(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+
+    def bracket_repl(match: re.Match[str]) -> str:
+        raw = str(match.group(1) or "").strip()
+        mapped = _format_preview_label(raw)
+        return mapped or match.group(0)
+
+    value = re.sub(r"\[([A-Za-z][A-Za-z0-9 _-]{0,40}|聊天记录)\]", bracket_repl, value)
+
+    stripped = value.strip()
+    mapped = _format_preview_label(stripped)
+    if mapped:
+        return mapped
+
+    # Common realtime summaries can be `sender: image` instead of `sender: [image]`.
+    m = re.match(r"^(.{1,128}?:\s*)([A-Za-z][A-Za-z0-9 _-]{0,40})$", stripped)
+    if m:
+        body_mapped = _format_preview_label(m.group(2))
+        if body_mapped:
+            return f"{m.group(1)}{body_mapped}"
+
+    return value
+
 
 def _is_valid_decrypted_sqlite(path: Path) -> bool:
     return is_usable_sqlite_db(path)
 
 
 def _list_decrypted_accounts() -> list[str]:
-    output_databases_dir = get_output_databases_dir()
-    if not output_databases_dir.exists():
-        return []
-
-    accounts: list[str] = []
-    for p in output_databases_dir.iterdir():
-        if not p.is_dir():
-            continue
-        if _is_valid_decrypted_sqlite(p / "session.db") and _is_valid_decrypted_sqlite(p / "contact.db"):
-            accounts.append(p.name)
-
-    accounts.sort()
-    return accounts
+    return list_chat_account_names()
 
 
 def _resolve_account_dir(account: Optional[str]) -> Path:
-    accounts = _list_decrypted_accounts()
-    if not accounts:
-        raise HTTPException(
-            status_code=404,
-            detail="No decrypted databases found. Please decrypt first.",
-        )
-
-    selected = str(account or "").strip() or accounts[0]
-    if selected not in accounts:
-        raise HTTPException(status_code=404, detail="Account not found.")
-    output_databases_dir = get_output_databases_dir()
-    base = output_databases_dir.resolve()
-    candidate = (output_databases_dir / selected).resolve()
-
-    if candidate != base and base not in candidate.parents:
-        raise HTTPException(status_code=400, detail="Invalid account path.")
-
-    if not candidate.exists() or not candidate.is_dir():
-        raise HTTPException(status_code=404, detail="Account not found.")
-
-    if not (candidate / "session.db").exists():
-        raise HTTPException(status_code=404, detail="session.db not found for this account.")
-    if not (candidate / "contact.db").exists():
-        raise HTTPException(status_code=404, detail="contact.db not found for this account.")
-
-    return candidate
+    return resolve_chat_account_context(account).account_dir
 
 
 def _should_keep_session(username: str, include_official: bool) -> bool:
@@ -149,42 +193,42 @@ def _infer_last_message_brief(msg_type: Optional[int], sub_type: Optional[int]) 
     s = int(sub_type or 0)
 
     if t == 1:
-        return "[Text]"
+        return "[文本]"
     if t == 3:
-        return "[Image]"
+        return "[图片]"
     if t == 34:
-        return "[Voice]"
+        return "[语音]"
     if t == 42:
-        return "[Contact Card]"
+        return "[名片]"
     if t == 43:
-        return "[Video]"
+        return "[视频]"
     if t == 47:
-        return "[Emoji]"
+        return "[动画表情]"
     if t == 48:
-        return "[Location]"
+        return "[位置]"
     if t == 49:
         if s == 5:
-            return "[Link]"
+            return "[链接]"
         if s == 6:
-            return "[File]"
+            return "[文件]"
         if s in (33, 36):
-            return "[Mini Program]"
+            return "[小程序]"
         if s == 57:
-            return "[Quote]"
+            return "[引用消息]"
         if s in (63, 88):
-            return "[Live]"
+            return "[直播]"
         if s == 87:
-            return "[Announcement]"
+            return "[群公告]"
         if s == 2000:
-            return "[Transfer]"
+            return "[转账]"
         if s == 2003:
-            return "[Red Packet]"
+            return "[红包]"
         if s == 19:
             return "[聊天记录]"
-        return "[App Message]"
+        return "[消息]"
     if t == 10000:
-        return "[System]"
-    return "[Message]"
+        return "[系统消息]"
+    return "[消息]"
 
 
 def _infer_message_brief_by_local_type(local_type: Optional[int]) -> str:
@@ -192,42 +236,42 @@ def _infer_message_brief_by_local_type(local_type: Optional[int]) -> str:
     if t == 1:
         return ""
     if t == 3:
-        return "[Image]"
+        return "[图片]"
     if t == 34:
-        return "[Voice]"
+        return "[语音]"
     if t == 43:
-        return "[Video]"
+        return "[视频]"
     if t == 47:
-        return "[Emoji]"
+        return "[动画表情]"
     if t == 48:
-        return "[Location]"
+        return "[位置]"
     if t == 50:
-        return "[VoIP]"
+        return "[通话]"
     if t == 10000:
-        return "[System]"
+        return "[系统消息]"
     if t == 244813135921:
-        return "[Quote]"
+        return "[引用消息]"
     if t == 17179869233:
-        return "[Link]"
+        return "[链接]"
     if t == 21474836529:
-        return "[Article]"
+        return "[文章]"
     if t == 154618822705:
-        return "[Mini Program]"
+        return "[小程序]"
     if t == 12884901937:
-        return "[Music]"
+        return "[音乐]"
     if t == 8594229559345:
-        return "[Red Packet]"
+        return "[红包]"
     if t == 81604378673:
         return "[聊天记录]"
     if t == 266287972401:
-        return "[Pat]"
+        return "[拍一拍]"
     if t == 8589934592049:
-        return "[Transfer]"
+        return "[转账]"
     if t == 270582939697:
-        return "[Live]"
+        return "[直播]"
     if t == 25769803825:
-        return "[File]"
-    return "[Message]"
+        return "[文件]"
+    return "[消息]"
 
 
 def _quote_ident(ident: str) -> str:
@@ -1683,6 +1727,7 @@ def _normalize_session_preview_text(
 
     text = text.replace("[表情]", "[动画表情]")
     text = re.sub(r"\[location\]", "[位置]", text, flags=re.IGNORECASE)
+    text = _localize_session_preview_labels(text)
     if (not is_group) or text.startswith("[草稿]"):
         return text
 
@@ -2077,6 +2122,9 @@ def _load_contact_rows(contact_db_path: Path, usernames: list[str]) -> dict[str,
 
     result: dict[str, dict[str, Any]] = {}
 
+    if not contact_db_path.exists():
+        return result
+
     conn = sqlite3.connect(str(contact_db_path))
     conn.row_factory = sqlite3.Row
     conn.text_factory = bytes
@@ -2084,13 +2132,25 @@ def _load_contact_rows(contact_db_path: Path, usernames: list[str]) -> dict[str,
         def query_table(table: str, targets: list[str]) -> None:
             if not targets:
                 return
+            try:
+                exists = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+                    (table,),
+                ).fetchone()
+            except Exception:
+                exists = None
+            if not exists:
+                return
             placeholders = ",".join(["?"] * len(targets))
             sql = f"""
                 SELECT username, remark, nick_name, alias, big_head_url, small_head_url
                 FROM {table}
                 WHERE username IN ({placeholders})
             """
-            rows = conn.execute(sql, targets).fetchall()
+            try:
+                rows = conn.execute(sql, targets).fetchall()
+            except Exception:
+                return
             for r in rows:
                 item = _contact_row_to_dict(r)
                 username = str(item.get("username") or "").strip()

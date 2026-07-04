@@ -100,6 +100,12 @@ def _compute_best_buddy_extras_from_index(*, account_dir: Path, year: int, buddy
         return {}
 
     index_path = get_chat_search_index_db_path(account_dir)
+    try:
+        index_status = get_chat_search_index_status(account_dir, source="auto")
+        if not bool((index_status.get("index") or {}).get("ready")):
+            return {}
+    except Exception:
+        return {}
     if not index_path.exists():
         return {}
 
@@ -320,7 +326,12 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
 
     # -------- Preferred path: unified search index --------
     index_path = get_chat_search_index_db_path(account_dir)
-    if index_path.exists():
+    index_status: dict[str, Any] | None = None
+    try:
+        index_status = get_chat_search_index_status(account_dir, source="auto")
+    except Exception:
+        index_status = None
+    if index_path.exists() and bool(((index_status or {}).get("index") or {}).get("ready")):
         conn = sqlite3.connect(str(index_path))
         try:
             has_fts = (
@@ -477,7 +488,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
     index_status: dict[str, Any] | None = None
     if not used_index:
         try:
-            index_status = get_chat_search_index_status(account_dir)
+            index_status = get_chat_search_index_status(account_dir, source="auto")
             index = dict(index_status.get("index") or {})
             build = dict(index.get("build") or {})
             index_ready = bool(index.get("ready"))
@@ -485,8 +496,8 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
             index_exists = bool(index.get("exists"))
 
             if (not index_ready) and build_status not in {"building", "error"}:
-                start_chat_search_index_build(account_dir, rebuild=bool(index_exists))
-                index_status = get_chat_search_index_status(account_dir)
+                start_chat_search_index_build(account_dir, rebuild=bool(index_exists), source="auto")
+                index_status = get_chat_search_index_status(account_dir, source="auto")
         except Exception:
             index_status = None
 

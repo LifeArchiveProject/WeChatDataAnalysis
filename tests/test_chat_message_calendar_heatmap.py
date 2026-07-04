@@ -1,6 +1,7 @@
 import hashlib
 import sqlite3
 import sys
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,13 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 from wechat_decrypt_tool.routers import chat as chat_router
+
+
+class _FakeRealtimeConnection:
+    handle = 1
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
 
 
 def _msg_table_name(username: str) -> str:
@@ -136,6 +144,7 @@ class TestChatMessageCalendarHeatmap(unittest.TestCase):
                     year=2026,
                     month=2,
                     account="acc",
+                    source="decrypted",
                 )
 
             self.assertEqual(resp.get("status"), "success")
@@ -177,6 +186,7 @@ class TestChatMessageCalendarHeatmap(unittest.TestCase):
                     kind="day",
                     account="acc",
                     date="2026-02-01",
+                    source="decrypted",
                 )
 
             self.assertEqual(resp.get("status"), "success")
@@ -210,6 +220,7 @@ class TestChatMessageCalendarHeatmap(unittest.TestCase):
                     username=username,
                     kind="first",
                     account="acc",
+                    source="decrypted",
                 )
 
             self.assertEqual(resp.get("status"), "success")
@@ -234,6 +245,7 @@ class TestChatMessageCalendarHeatmap(unittest.TestCase):
                     kind="day",
                     account="acc",
                     date="2026-02-02",
+                    source="decrypted",
                 )
 
             self.assertEqual(resp.get("status"), "empty")
@@ -276,6 +288,7 @@ class TestChatMessageCalendarHeatmap(unittest.TestCase):
                         "anchor_id": f"message:{table}:1",
                         "before": 0,
                         "after": 10,
+                        "source": "decrypted",
                     },
                 )
 
@@ -290,3 +303,166 @@ class TestChatMessageCalendarHeatmap(unittest.TestCase):
             self.assertEqual(len(msgs), 2)
             self.assertEqual(msgs[0].get("id"), f"message:{table}:1")
             self.assertEqual(msgs[1].get("id"), f"message_1:{table}:1")
+
+    def test_realtime_daily_counts_uses_wcdb_rows(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            username = "wxid_test_user"
+
+            ts_feb01_10 = int(datetime(2026, 2, 1, 10, 0, 0).timestamp())
+            ts_feb01_11 = int(datetime(2026, 2, 1, 11, 0, 0).timestamp())
+            ts_feb14_12 = int(datetime(2026, 2, 14, 12, 0, 0).timestamp())
+            ts_mar01_00 = int(datetime(2026, 3, 1, 0, 0, 0).timestamp())
+            rows = [
+                {"local_id": 4, "create_time": ts_mar01_00},
+                {"local_id": 3, "create_time": ts_feb14_12},
+                {"local_id": 2, "create_time": ts_feb01_11},
+                {"local_id": 1, "create_time": ts_feb01_10},
+            ]
+
+            def fake_get_messages(_handle, _username, *, limit=50, offset=0):
+                return rows[int(offset) : int(offset) + int(limit)]
+
+            with (
+                patch.object(chat_router, "_resolve_account_dir", return_value=account_dir),
+                patch.object(chat_router.WCDB_REALTIME, "ensure_connected", return_value=_FakeRealtimeConnection()),
+                patch.object(chat_router, "_wcdb_get_messages", side_effect=fake_get_messages),
+            ):
+                resp = chat_router.get_chat_message_daily_counts(
+                    username=username,
+                    year=2026,
+                    month=2,
+                    account="acc",
+                    source="realtime",
+                )
+
+            self.assertEqual(resp.get("status"), "success")
+            self.assertEqual(resp.get("source"), "realtime")
+            self.assertEqual(resp.get("counts"), {"2026-02-14": 1, "2026-02-01": 2})
+            self.assertEqual(resp.get("total"), 3)
+            self.assertEqual(resp.get("max"), 2)
+
+    def test_realtime_anchor_day_and_around_use_wcdb_rows(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            _seed_contact_db_minimal(account_dir / "contact.db")
+            username = "wxid_test_user"
+            table = f"msg_{hashlib.md5(username.encode('utf-8')).hexdigest()}"
+            ts_feb01_10 = int(datetime(2026, 2, 1, 10, 0, 0).timestamp())
+            ts_feb01_11 = int(datetime(2026, 2, 1, 11, 0, 0).timestamp())
+            ts_feb01_12 = int(datetime(2026, 2, 1, 12, 0, 0).timestamp())
+            ts_feb01_13 = int(datetime(2026, 2, 1, 13, 0, 0).timestamp())
+
+            rows = [
+                {"local_id": 4, "server_id": 0, "local_type": 1, "sort_seq": 0, "real_sender_id": 0, "create_time": ts_feb01_13, "message_content": "D", "compress_content": None, "sender_username": ""},
+                {"local_id": 3, "server_id": 0, "local_type": 1, "sort_seq": 0, "real_sender_id": 0, "create_time": ts_feb01_12, "message_content": "C", "compress_content": None, "sender_username": ""},
+                {"local_id": 2, "server_id": 0, "local_type": 1, "sort_seq": 0, "real_sender_id": 0, "create_time": ts_feb01_11, "message_content": "B", "compress_content": None, "sender_username": ""},
+                {"local_id": 1, "server_id": 0, "local_type": 1, "sort_seq": 0, "real_sender_id": 0, "create_time": ts_feb01_10, "message_content": "A", "compress_content": None, "sender_username": ""},
+            ]
+
+            def fake_get_messages(_handle, _username, *, limit=50, offset=0):
+                return rows[int(offset) : int(offset) + int(limit)]
+
+            fake_rt = _FakeRealtimeConnection()
+            with (
+                patch.object(chat_router, "_resolve_account_dir", return_value=account_dir),
+                patch.object(chat_router.WCDB_REALTIME, "ensure_connected", return_value=fake_rt),
+                patch.object(chat_router, "_wcdb_get_messages", side_effect=fake_get_messages),
+                patch.object(chat_router, "_wcdb_get_display_names", return_value={}),
+                patch.object(chat_router, "_wcdb_get_avatar_urls", return_value={}),
+            ):
+                anchor = chat_router.get_chat_message_anchor(
+                    username=username,
+                    kind="day",
+                    account="acc",
+                    date="2026-02-01",
+                    source="realtime",
+                )
+
+                app = FastAPI()
+                app.include_router(chat_router.router)
+                client = TestClient(app)
+                resp = client.get(
+                    "/api/chat/messages/around",
+                    params={
+                        "account": "acc",
+                        "username": username,
+                        "anchor_id": anchor.get("anchorId"),
+                        "before": 1,
+                        "after": 1,
+                        "source": "realtime",
+                    },
+                )
+
+            self.assertEqual(anchor.get("status"), "success")
+            self.assertEqual(anchor.get("source"), "realtime")
+            self.assertEqual(anchor.get("anchorId"), f"realtime_acc:{table}:1")
+            self.assertEqual(resp.status_code, 200, resp.text)
+            data = resp.json()
+            self.assertEqual(data.get("source"), "realtime")
+            self.assertEqual(data.get("anchorId"), f"realtime_acc:{table}:1")
+            self.assertEqual(data.get("anchorIndex"), 0)
+            self.assertEqual([m.get("content") for m in data.get("messages") or []], ["A", "B"])
+
+    def test_realtime_search_uses_decrypted_index_rows(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            _seed_contact_db_minimal(account_dir / "contact.db")
+            username = "wxid_test_user"
+
+            conn = sqlite3.connect(str(account_dir / "session.db"))
+            try:
+                conn.execute("CREATE TABLE SessionTable (username TEXT, is_hidden INTEGER)")
+                conn.execute("INSERT INTO SessionTable(username, is_hidden) VALUES (?, ?)", (username, 0))
+                conn.commit()
+            finally:
+                conn.close()
+            _seed_message_db_full(
+                account_dir / "message_0.db",
+                username=username,
+                rows=[
+                    (2000, 2, "newest needle message"),
+                    (1000, 1, "older unrelated"),
+                ],
+            )
+
+            import wechat_decrypt_tool.chat_search_index as idx
+
+            idx._build_worker(account_dir, rebuild=True, source="realtime")
+
+            app = FastAPI()
+            app.include_router(chat_router.router)
+            client = TestClient(app)
+            with (
+                patch.object(chat_router, "_resolve_account_dir", return_value=account_dir),
+                patch.object(chat_router.WCDB_REALTIME, "ensure_connected", return_value=_FakeRealtimeConnection()),
+                patch.object(chat_router, "_wcdb_get_messages", side_effect=AssertionError("search must use decrypted index")),
+                patch.object(chat_router, "_wcdb_get_display_names", return_value={}),
+                patch.object(chat_router, "_wcdb_get_avatar_urls", return_value={}),
+            ):
+                resp = client.get(
+                    "/api/chat/search",
+                    params={
+                        "account": "acc",
+                        "username": username,
+                        "q": "needle",
+                        "source": "realtime",
+                    },
+                )
+
+            self.assertEqual(resp.status_code, 200, resp.text)
+            data = resp.json()
+            self.assertEqual(data.get("source"), "decrypted_index")
+            self.assertEqual(data.get("freshness", {}).get("kind"), "snapshot")
+            hits = data.get("hits") or []
+            self.assertEqual(len(hits), 1)
+            self.assertEqual(hits[0].get("content"), "newest needle message")
