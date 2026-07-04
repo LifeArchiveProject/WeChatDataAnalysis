@@ -196,6 +196,7 @@ class TestChatExportMessageTypesSemantics(unittest.TestCase):
 
         job = manager.create_job(
             account=account,
+            source="decrypted",
             scope="selected",
             usernames=[username],
             export_format="json",

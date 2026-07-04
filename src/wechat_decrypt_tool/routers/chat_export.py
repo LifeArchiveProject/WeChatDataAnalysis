@@ -14,6 +14,7 @@ router = APIRouter(route_class=PathFixRoute)
 
 ExportFormat = Literal["json", "txt", "html"]
 ExportScope = Literal["selected", "all", "groups", "singles"]
+ChatSource = Literal["auto", "decrypted", "realtime"]
 MediaKind = Literal["image", "emoji", "video", "video_thumb", "voice", "file"]
 MessageType = Literal[
     "text",
@@ -34,6 +35,7 @@ MessageType = Literal[
 
 class ChatExportCreateRequest(BaseModel):
     account: Optional[str] = Field(None, description="账号目录名（可选，默认使用第一个）")
+    source: ChatSource = Field("auto", description="数据源：auto/realtime=直接读取原始 WCDB；decrypted=兼容旧本地解密库")
     scope: ExportScope = Field("selected", description="导出范围：selected=指定会话；all=全部；groups=仅群聊；singles=仅单聊")
     usernames: list[str] = Field(default_factory=list, description="会话 username 列表（scope=selected 时使用）")
     format: ExportFormat = Field("json", description="导出格式：json/txt/html（zip 内每个会话一个文件；html 可离线打开 index.html 查看）")
@@ -72,25 +74,29 @@ class ChatExportCreateRequest(BaseModel):
 
 @router.post("/api/chat/exports", summary="创建聊天记录导出任务（离线 zip）")
 async def create_chat_export(req: ChatExportCreateRequest):
-    job = CHAT_EXPORT_MANAGER.create_job(
-        account=req.account,
-        scope=req.scope,
-        usernames=req.usernames,
-        export_format=req.format,
-        start_time=req.start_time,
-        end_time=req.end_time,
-        include_hidden=req.include_hidden,
-        include_official=req.include_official,
-        include_media=req.include_media,
-        media_kinds=req.media_kinds,
-        message_types=req.message_types,
-        output_dir=req.output_dir,
-        allow_process_key_extract=req.allow_process_key_extract,
-        download_remote_media=req.download_remote_media,
-        html_page_size=req.html_page_size,
-        privacy_mode=req.privacy_mode,
-        file_name=req.file_name,
-    )
+    try:
+        job = CHAT_EXPORT_MANAGER.create_job(
+            account=req.account,
+            source=req.source,
+            scope=req.scope,
+            usernames=req.usernames,
+            export_format=req.format,
+            start_time=req.start_time,
+            end_time=req.end_time,
+            include_hidden=req.include_hidden,
+            include_official=req.include_official,
+            include_media=req.include_media,
+            media_kinds=req.media_kinds,
+            message_types=req.message_types,
+            output_dir=req.output_dir,
+            allow_process_key_extract=req.allow_process_key_extract,
+            download_remote_media=req.download_remote_media,
+            html_page_size=req.html_page_size,
+            privacy_mode=req.privacy_mode,
+            file_name=req.file_name,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"status": "success", "job": job.to_public_dict()}
 
 
@@ -105,16 +111,21 @@ async def list_chat_exports():
 async def preview_chat_export_targets(
     request: Request,
     account: Optional[str] = None,
+    source: ChatSource = "auto",
     include_hidden: bool = True,
     include_official: bool = False,
 ):
     base_url = str(request.base_url).rstrip("/")
-    return get_chat_export_targets_preview(
-        account=account,
-        include_hidden=bool(include_hidden),
-        include_official=bool(include_official),
-        base_url=base_url,
-    )
+    try:
+        return get_chat_export_targets_preview(
+            account=account,
+            source=source,
+            include_hidden=bool(include_hidden),
+            include_official=bool(include_official),
+            base_url=base_url,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/api/chat/exports/{export_id}", summary="获取导出任务状态")

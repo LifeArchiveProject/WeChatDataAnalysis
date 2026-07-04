@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 
 from .app_paths import get_output_databases_dir
+from .chat_accounts import list_chat_account_names, resolve_chat_account_context
 from .chat_helpers import _decode_message_content
 from .logging_config import get_logger
 from .sqlite_diagnostics import is_usable_sqlite_db
@@ -66,50 +67,13 @@ def _is_valid_decrypted_sqlite(path: Path) -> bool:
 
 
 def _list_decrypted_accounts() -> list[str]:
-    """列出已解密输出的账号目录名（仅保留包含 session.db + contact.db 的账号）"""
-    output_db_dir = get_output_databases_dir()
-    if not output_db_dir.exists():
-        return []
-
-    accounts: list[str] = []
-    for p in output_db_dir.iterdir():
-        if not p.is_dir():
-            continue
-        if _is_valid_decrypted_sqlite(p / "session.db") and _is_valid_decrypted_sqlite(p / "contact.db"):
-            accounts.append(p.name)
-
-    accounts.sort()
-    return accounts
+    """列出可用聊天账号名（direct WCDB + legacy decrypted 兼容）。"""
+    return list_chat_account_names()
 
 
 def _resolve_account_dir(account: Optional[str]) -> Path:
-    """解析账号目录，并进行路径安全校验（防止路径穿越）"""
-    output_db_dir = get_output_databases_dir()
-    accounts = _list_decrypted_accounts()
-    if not accounts:
-        raise HTTPException(
-            status_code=404,
-            detail="No decrypted databases found. Please decrypt first.",
-        )
-
-    selected = str(account or "").strip() or accounts[0]
-    if selected not in accounts:
-        raise HTTPException(status_code=404, detail="Account not found.")
-    base = output_db_dir.resolve()
-    candidate = (output_db_dir / selected).resolve()
-
-    if candidate != base and base not in candidate.parents:
-        raise HTTPException(status_code=400, detail="Invalid account path.")
-
-    if not candidate.exists() or not candidate.is_dir():
-        raise HTTPException(status_code=404, detail="Account not found.")
-
-    if not (candidate / "session.db").exists():
-        raise HTTPException(status_code=404, detail="session.db not found for this account.")
-    if not (candidate / "contact.db").exists():
-        raise HTTPException(status_code=404, detail="contact.db not found for this account.")
-
-    return candidate
+    """解析账号的项目目录；direct 模式会保留原始 db_storage/wxid_dir 来源信息。"""
+    return resolve_chat_account_context(account).account_dir
 
 
 def _detect_image_media_type(data: bytes) -> str:
@@ -1176,12 +1140,28 @@ def _try_strip_media_prefix(data: bytes) -> tuple[bytes, str]:
 
 def _load_account_source_info(account_dir: Path) -> dict[str, Any]:
     p = account_dir / "_source.json"
-    if not p.exists():
-        return {}
+    data: dict[str, Any] = {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        if p.exists():
+            loaded = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data.update(loaded)
     except Exception:
-        return {}
+        data = {}
+    try:
+        from .key_store import get_account_keys_from_store, normalize_key_store_path
+
+        keys = get_account_keys_from_store(Path(account_dir).name)
+        if isinstance(keys, dict):
+            db_storage_path = normalize_key_store_path(keys.get("db_key_source_db_storage_path"))
+            wxid_dir = normalize_key_store_path(keys.get("db_key_source_wxid_dir"))
+            if db_storage_path and not str(data.get("db_storage_path") or "").strip():
+                data["db_storage_path"] = db_storage_path
+            if wxid_dir and not str(data.get("wxid_dir") or "").strip():
+                data["wxid_dir"] = wxid_dir
+    except Exception:
+        pass
+    return data
 
 
 def _clean_weflow_account_dir_name(dir_name: str) -> str:

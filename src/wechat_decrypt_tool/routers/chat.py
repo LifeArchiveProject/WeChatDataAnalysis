@@ -20,6 +20,7 @@ from ..chat_search_index import (
     get_chat_search_index_status,
     start_chat_search_index_build,
 )
+from ..chat_accounts import list_chat_account_contexts, resolve_chat_account_context
 from ..chat_helpers import (
     _build_avatar_url,
     _build_latest_message_preview,
@@ -767,7 +768,9 @@ def _realtime_sync_all_lock(account: str) -> threading.Lock:
 
 def _normalize_chat_source(value: Optional[str]) -> str:
     v = str(value or "").strip().lower()
-    if not v or v in {"decrypted", "local", "sqlite"}:
+    if not v:
+        return "auto"
+    if v in {"decrypted", "local", "sqlite"}:
         return "decrypted"
     if v in {"auto", "default", "wechat"}:
         return "auto"
@@ -787,11 +790,25 @@ def _is_chat_realtime_available(account_dir: Path) -> bool:
 
 
 def _resolve_chat_source_for_account(source_norm: str, account_dir: Path) -> str:
-    """Resolve `source=auto` to realtime when possible, otherwise decrypted snapshot."""
+    """Resolve `source=auto` to the direct WCDB reader.
+
+    Legacy decrypted SQLite is now opt-in via `source=decrypted`; this avoids silently
+    showing stale output/databases snapshots when direct mode is misconfigured.
+    """
 
     if source_norm == "auto":
-        return "realtime" if _is_chat_realtime_available(account_dir) else "decrypted"
+        return "realtime"
     return source_norm
+
+
+def _realtime_message_table_name(username: str) -> str:
+    import hashlib
+
+    return f"msg_{hashlib.md5(str(username or '').strip().encode('utf-8')).hexdigest()}"
+
+
+def _realtime_message_db_path(account_dir: Path) -> Path:
+    return Path(f"realtime_{account_dir.name}.db")
 
 
 def _lookup_contact_alias(
@@ -1457,6 +1474,12 @@ def _normalize_realtime_message_item(item: dict[str, Any]) -> dict[str, Any]:
     def _pick(*keys: str) -> Any:
         return _pick_case_insensitive_value(item, *keys)
 
+    def _to_int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except Exception:
+            return 0
+
     message_content = _coerce_realtime_blobish_value(
         _pick("message_content", "messageContent", "MessageContent")
     )
@@ -1464,12 +1487,12 @@ def _normalize_realtime_message_item(item: dict[str, Any]) -> dict[str, Any]:
         message_content = ""
 
     return {
-        "local_id": int(_pick("local_id", "localId") or 0),
-        "server_id": int(_pick("server_id", "serverId", "MsgSvrID") or 0),
-        "local_type": int(_pick("local_type", "localType", "Type", "type") or 0),
-        "sort_seq": int(_pick("sort_seq", "sortSeq", "SortSeq") or 0),
-        "real_sender_id": int(_pick("real_sender_id", "realSenderId") or 0),
-        "create_time": int(_pick("create_time", "createTime", "CreateTime") or 0),
+        "local_id": _to_int(_pick("local_id", "localId")),
+        "server_id": _to_int(_pick("server_id", "serverId", "MsgSvrID")),
+        "local_type": _to_int(_pick("local_type", "localType", "Type", "type")),
+        "sort_seq": _to_int(_pick("sort_seq", "sortSeq", "SortSeq")),
+        "real_sender_id": _to_int(_pick("real_sender_id", "realSenderId")),
+        "create_time": _to_int(_pick("create_time", "createTime", "CreateTime")),
         "message_content": message_content,
         "compress_content": _coerce_realtime_blobish_value(
             _pick("compress_content", "compressContent", "CompressContent")
@@ -1480,6 +1503,8 @@ def _normalize_realtime_message_item(item: dict[str, Any]) -> dict[str, Any]:
         "sender_username": str(
             _pick("sender_username", "senderUsername", "sender", "SenderUsername") or ""
         ).strip(),
+        "computed_is_send": _pick("computed_is_send", "computed_isSend", "computed_is_sent", "is_send", "isSent"),
+        "debug_my_rowid": _pick("debug_my_rowid", "debugMyRowid", "my_rowid", "myRowid"),
     }
 
 
@@ -2694,15 +2719,15 @@ def _normalize_render_type_key(value: Any) -> str:
 
 
 @router.get("/api/chat/search-index/status", summary="消息搜索索引状态")
-async def chat_search_index_status(account: Optional[str] = None):
+async def chat_search_index_status(account: Optional[str] = None, source: Optional[str] = None):
     account_dir = _resolve_account_dir(account)
-    return get_chat_search_index_status(account_dir)
+    return get_chat_search_index_status(account_dir, source=_normalize_chat_source(source))
 
 
 @router.post("/api/chat/search-index/build", summary="构建/重建消息搜索索引")
-async def chat_search_index_build(account: Optional[str] = None, rebuild: bool = False):
+async def chat_search_index_build(account: Optional[str] = None, rebuild: bool = False, source: Optional[str] = None):
     account_dir = _resolve_account_dir(account)
-    return start_chat_search_index_build(account_dir, rebuild=bool(rebuild))
+    return start_chat_search_index_build(account_dir, rebuild=bool(rebuild), source=_normalize_chat_source(source))
 
 
 @router.get("/api/chat/session-last-message/status", summary="会话最后一条消息缓存表状态")
@@ -2740,6 +2765,7 @@ async def chat_search_index_senders(
     render_types: Optional[str] = None,
     include_hidden: bool = False,
     include_official: bool = False,
+    source: Optional[str] = None,
 ):
     if limit <= 0:
         limit = 200
@@ -2762,7 +2788,8 @@ async def chat_search_index_senders(
 
     account_dir = _resolve_account_dir(account)
     contact_db_path = account_dir / "contact.db"
-    index_status = get_chat_search_index_status(account_dir)
+    source_requested = _normalize_chat_source(source)
+    index_status = get_chat_search_index_status(account_dir, source=source_requested)
     index = dict(index_status.get("index") or {})
     build = dict(index.get("build") or {})
 
@@ -2771,8 +2798,8 @@ async def chat_search_index_senders(
     build_status = str(build.get("status") or "").strip()
 
     if (not index_ready) and build_status not in {"building", "error"}:
-        start_chat_search_index_build(account_dir, rebuild=bool(index_exists))
-        index_status = get_chat_search_index_status(account_dir)
+        start_chat_search_index_build(account_dir, rebuild=bool(index_exists), source=source_requested)
+        index_status = get_chat_search_index_status(account_dir, source=source_requested)
         index = dict(index_status.get("index") or {})
         build = dict(index.get("build") or {})
         build_status = str(build.get("status") or "").strip()
@@ -2799,17 +2826,6 @@ async def chat_search_index_senders(
             "senders": [],
             "index": index,
             "message": "Search index is building. Please retry in a moment.",
-        }
-
-    if username is None and message_q is None:
-        return {
-            "status": "success",
-            "account": account_dir.name,
-            "username": None,
-            "scope": "global",
-            "senders": [],
-            "index": index,
-            "message": "Provide message_q to list global senders.",
         }
 
     index_db_path = get_chat_search_index_db_path(account_dir)
@@ -3903,28 +3919,83 @@ def _postprocess_full_messages(
         )
 
 
-@router.get("/api/chat/accounts", summary="列出已解密账号")
+@router.get("/api/chat/accounts", summary="列出聊天账号")
 async def list_chat_accounts():
-    """列出 output/databases 下可用于聊天预览的账号目录"""
-    accounts = _list_decrypted_accounts()
-    if not accounts:
+    """列出可用于聊天预览的账号（direct WCDB + legacy decrypted 兼容）。"""
+    contexts = list_chat_account_contexts()
+    accounts = [ctx.name for ctx in contexts]
+    account_infos = [_chat_account_context_public(ctx) for ctx in contexts]
+    if not contexts:
         return {
             "status": "error",
             "accounts": [],
             "default_account": None,
-            "message": "No decrypted databases found. Please decrypt first.",
+            "accountInfos": [],
+            "items": [],
+            "message": "No chat accounts found. Please save a db key/db_storage path or decrypt first.",
         }
 
     return {
         "status": "success",
         "accounts": accounts,
         "default_account": accounts[0],
+        "accountInfos": account_infos,
+        "items": account_infos,
+    }
+
+
+def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
+    account_dir = Path(ctx.account_dir)
+    db_files = list_countable_database_names(account_dir)
+    realtime_status: dict[str, Any] = {}
+    try:
+        realtime_status = WCDB_REALTIME.get_status(account_dir)
+    except Exception as e:
+        realtime_status = {"error": str(e)}
+
+    db_storage_path = str(getattr(ctx, "db_storage_path", "") or "").strip()
+    wxid_dir = str(getattr(ctx, "wxid_dir", "") or "").strip()
+    realtime_db_storage = str(realtime_status.get("db_storage_dir") or "").strip()
+    realtime_session_db = str(realtime_status.get("session_db_path") or "").strip()
+    data_source_path = realtime_db_storage or db_storage_path or wxid_dir or str(account_dir)
+    realtime_available = bool(
+        realtime_status.get("dll_present")
+        and realtime_status.get("key_present")
+        and realtime_db_storage
+        and realtime_session_db
+    )
+
+    return {
+        "account": ctx.name,
+        "name": ctx.name,
+        "mode": getattr(ctx, "mode", "unknown"),
+        "defaultSource": "realtime" if (db_storage_path or wxid_dir or realtime_db_storage) else "decrypted",
+        "path": data_source_path,
+        "dataSourcePath": data_source_path,
+        "accountDir": str(account_dir),
+        "dbStoragePath": db_storage_path or realtime_db_storage,
+        "wxidDir": wxid_dir,
+        "hasDecryptedDbs": bool(getattr(ctx, "has_decrypted_dbs", False)),
+        "database_count": len(db_files),
+        "databases": db_files,
+        "dbKeyPresent": bool(getattr(ctx, "db_key_present", False) or realtime_status.get("key_present")),
+        "realtimeAvailable": bool(realtime_available),
+        "realtime": {
+            "available": bool(realtime_available),
+            "connected": bool(realtime_status.get("connected")),
+            "dllPresent": bool(realtime_status.get("dll_present")),
+            "keyPresent": bool(realtime_status.get("key_present")),
+            "dbStorageDir": realtime_db_storage,
+            "sessionDbPath": realtime_session_db,
+            "error": str(realtime_status.get("error") or ""),
+        },
     }
 
 
 @router.get("/api/chat/account_info", summary="获取当前账号信息")
 def get_chat_account_info(account: Optional[str] = None):
-    account_dir = _resolve_account_dir(account)
+    ctx = resolve_chat_account_context(account)
+    account_dir = ctx.account_dir
     db_files = list_countable_database_names(account_dir)
 
     session_db = account_dir / "session.db"
@@ -3934,14 +4005,22 @@ def get_chat_account_info(account: Optional[str] = None):
     except Exception:
         session_updated_at = 0
 
-    return {
+    info = _chat_account_context_public(ctx)
+    if not session_updated_at:
+        try:
+            rt_session_db = Path(str((info.get("realtime") or {}).get("sessionDbPath") or ""))
+            if rt_session_db.exists():
+                session_updated_at = int(rt_session_db.stat().st_mtime)
+        except Exception:
+            session_updated_at = 0
+    info.update({
         "status": "success",
         "account": account_dir.name,
-        "path": str(account_dir),
         "database_count": len(db_files),
         "databases": db_files,
         "session_updated_at": session_updated_at,
-    }
+    })
+    return info
 
 
 @router.delete("/api/chat/account", summary="删除当前账号在本项目中的数据")
@@ -4066,16 +4145,13 @@ def list_chat_sessions(
                 wcdb_ms,
             )
         except WCDBRealtimeError as e:
-            if source_requested != "auto":
-                raise HTTPException(status_code=400, detail=str(e))
             logger.warning(
-                "[%s] list_sessions auto realtime failed; fallback decrypted account=%s error=%s",
+                "[%s] list_sessions realtime failed account=%s error=%s",
                 trace_id,
                 account_dir.name,
                 e,
             )
-            source_norm = "decrypted"
-            rt_conn = None
+            raise HTTPException(status_code=400, detail=str(e))
         else:
             norm: list[dict[str, Any]] = []
             for item in raw:
@@ -5082,12 +5158,115 @@ def _collect_chat_messages(
     return merged, has_more_any, sender_usernames, quote_usernames, pat_usernames
 
 
+def _connect_realtime_for_chat_source(
+    *,
+    account_dir: Path,
+    source_requested: str,
+) -> tuple[str, Any | None, str]:
+    """Return (resolved_source, connection, error_message)."""
+
+    source_norm = _resolve_chat_source_for_account(source_requested, account_dir)
+    if source_norm != "realtime":
+        return source_norm, None, ""
+    try:
+        return "realtime", WCDB_REALTIME.ensure_connected(account_dir), ""
+    except WCDBRealtimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _fetch_realtime_message_rows(
+    *,
+    rt_conn: Any,
+    username: str,
+    max_scan: int = 50000,
+    stop_before_ts: Optional[int] = None,
+    stop_after_local_id: Optional[int] = None,
+    min_rows_after_anchor: int = 0,
+) -> tuple[list[dict[str, Any]], bool, int]:
+    """Fetch newest-first live WCDB rows and normalize them for the chat render helpers."""
+
+    max_scan = max(1, min(int(max_scan or 0), 200000))
+    batch_size = min(1000, max_scan)
+    offset = 0
+    scanned = 0
+    rows: list[dict[str, Any]] = []
+    truncated = False
+    found_anchor_index: Optional[int] = None
+
+    while scanned < max_scan:
+        take = min(batch_size, max_scan - scanned)
+        with rt_conn.lock:
+            raw_rows = _wcdb_get_messages(rt_conn.handle, username, limit=take, offset=offset)
+        if not raw_rows:
+            break
+
+        scanned += len(raw_rows)
+        offset += len(raw_rows)
+        batch_norm: list[dict[str, Any]] = []
+        for item in raw_rows:
+            if not isinstance(item, dict):
+                continue
+            norm = _normalize_realtime_message_item(item)
+            if int(norm.get("local_id") or 0) <= 0:
+                continue
+            if stop_after_local_id is not None and int(norm.get("local_id") or 0) == int(stop_after_local_id):
+                found_anchor_index = len(rows) + len(batch_norm)
+            batch_norm.append(norm)
+
+        rows.extend(batch_norm)
+
+        if stop_after_local_id is not None and found_anchor_index is not None:
+            # get_messages returns newest-first. Once we have the anchor and enough older rows after it,
+            # the requested chronological context window can be rendered without scanning the whole chat.
+            if len(rows) >= int(found_anchor_index) + int(min_rows_after_anchor) + 1:
+                break
+
+        if stop_before_ts is not None and batch_norm:
+            newest_in_batch = max(int(r.get("create_time") or 0) for r in batch_norm)
+            if newest_in_batch < int(stop_before_ts):
+                break
+
+        if len(raw_rows) < take:
+            break
+
+    if scanned >= max_scan:
+        truncated = True
+    return rows, truncated, scanned
+
+
+def _sort_realtime_rows_chronological(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        rows,
+        key=lambda r: (
+            int(r.get("create_time") or 0),
+            int(r.get("sort_seq") or 0),
+            int(r.get("local_id") or 0),
+        ),
+    )
+
+
+def _parse_message_anchor_local_id(anchor_id: str) -> tuple[str, str, int]:
+    parts = str(anchor_id or "").split(":", 2)
+    if len(parts) != 3:
+        raise HTTPException(status_code=400, detail="Invalid anchor_id.")
+    db_stem = str(parts[0] or "").strip()
+    table_name = str(parts[1] or "").strip()
+    try:
+        local_id = int(parts[2])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid anchor_id.")
+    if not db_stem or local_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid anchor_id.")
+    return db_stem, table_name, local_id
+
+
 @router.get("/api/chat/messages/daily_counts", summary="获取某月每日消息数（热力图）")
 def get_chat_message_daily_counts(
     username: str,
     year: int,
     month: int,
     account: Optional[str] = None,
+    source: Optional[str] = None,
 ):
     username = str(username or "").strip()
     if not username:
@@ -5106,6 +5285,46 @@ def get_chat_message_daily_counts(
         raise HTTPException(status_code=400, detail="Invalid year or month.")
 
     account_dir = _resolve_account_dir(account)
+    source_requested = _normalize_chat_source(source)
+    source_norm, rt_conn, _rt_error = _connect_realtime_for_chat_source(
+        account_dir=account_dir,
+        source_requested=source_requested,
+    )
+
+    if source_norm == "realtime":
+        rows, scan_limited, scanned = _fetch_realtime_message_rows(
+            rt_conn=rt_conn,
+            username=username,
+            max_scan=200000,
+            stop_before_ts=int(start_ts),
+        )
+        counts: dict[str, int] = {}
+        for row in rows:
+            try:
+                create_time = int(row.get("create_time") or 0)
+            except Exception:
+                create_time = 0
+            if create_time < int(start_ts) or create_time >= int(end_ts):
+                continue
+            day = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d")
+            counts[day] = int(counts.get(day, 0)) + 1
+
+        total = int(sum(int(v) for v in counts.values())) if counts else 0
+        max_count = int(max(counts.values())) if counts else 0
+        return {
+            "status": "success",
+            "account": account_dir.name,
+            "username": username,
+            "source": "realtime",
+            "year": int(y),
+            "month": int(m),
+            "counts": counts,
+            "total": total,
+            "max": max_count,
+            "scanLimited": bool(scan_limited),
+            "scannedMessages": int(scanned),
+        }
+
     db_paths = _iter_message_db_paths(account_dir)
 
     counts: dict[str, int] = {}
@@ -5149,6 +5368,7 @@ def get_chat_message_daily_counts(
         "status": "success",
         "account": account_dir.name,
         "username": username,
+        "source": source_norm,
         "year": int(y),
         "month": int(m),
         "counts": counts,
@@ -5163,6 +5383,7 @@ def get_chat_message_anchor(
     kind: str,
     account: Optional[str] = None,
     date: Optional[str] = None,
+    source: Optional[str] = None,
 ):
     username = str(username or "").strip()
     if not username:
@@ -5184,6 +5405,64 @@ def get_chat_message_anchor(
             raise HTTPException(status_code=400, detail="Invalid date.")
 
     account_dir = _resolve_account_dir(account)
+    source_requested = _normalize_chat_source(source)
+    source_norm, rt_conn, _rt_error = _connect_realtime_for_chat_source(
+        account_dir=account_dir,
+        source_requested=source_requested,
+    )
+
+    if source_norm == "realtime":
+        rows, scan_limited, scanned = _fetch_realtime_message_rows(
+            rt_conn=rt_conn,
+            username=username,
+            max_scan=200000,
+            stop_before_ts=start_ts if kind_norm == "day" else None,
+        )
+        best_row: Optional[dict[str, Any]] = None
+        best_key: Optional[tuple[int, int, int]] = None
+        for row in rows:
+            try:
+                local_id = int(row.get("local_id") or 0)
+                create_time = int(row.get("create_time") or 0)
+                sort_seq = int(row.get("sort_seq") or 0)
+            except Exception:
+                continue
+            if local_id <= 0:
+                continue
+            if kind_norm == "day" and not (int(start_ts or 0) <= create_time < int(end_ts or 0)):
+                continue
+            key = (int(create_time), int(sort_seq), int(local_id))
+            if best_key is None or key < best_key:
+                best_key = key
+                best_row = row
+
+        if best_row is None:
+            return {
+                "status": "empty",
+                "anchorId": "",
+                "source": "realtime",
+                "scanLimited": bool(scan_limited),
+                "scannedMessages": int(scanned),
+            }
+
+        local_id = int(best_row.get("local_id") or 0)
+        create_time = int(best_row.get("create_time") or 0)
+        anchor_id = f"{_realtime_message_db_path(account_dir).stem}:{_realtime_message_table_name(username)}:{local_id}"
+        resp: dict[str, Any] = {
+            "status": "success",
+            "account": account_dir.name,
+            "username": username,
+            "source": "realtime",
+            "kind": kind_norm,
+            "anchorId": anchor_id,
+            "createTime": int(create_time),
+            "scanLimited": bool(scan_limited),
+            "scannedMessages": int(scanned),
+        }
+        if date_norm is not None:
+            resp["date"] = date_norm
+        return resp
+
     db_paths = _iter_message_db_paths(account_dir)
 
     best_key: Optional[tuple[int, int, int]] = None
@@ -5243,12 +5522,14 @@ def get_chat_message_anchor(
         return {
             "status": "empty",
             "anchorId": "",
+            "source": source_norm,
         }
 
     resp: dict[str, Any] = {
         "status": "success",
         "account": account_dir.name,
         "username": username,
+        "source": source_norm,
         "kind": kind_norm,
         "anchorId": best_anchor_id,
         "createTime": int(best_create_time),
@@ -5359,45 +5640,13 @@ def list_chat_messages(
         try:
             rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
         except WCDBRealtimeError as e:
-            if source_requested != "auto":
-                raise HTTPException(status_code=400, detail=str(e))
-            trace("realtime:fallback-decrypted", error=str(e))
-            source_norm = "decrypted"
+            trace("realtime:error", error=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
 
     if source_norm == "realtime":
-        def _normalize_wcdb_message_row(item: dict[str, Any]) -> dict[str, Any]:
-            def pick(*keys: str) -> Any:
-                for k in keys:
-                    if k in item and item[k] is not None:
-                        return item[k]
-                    lk = k.lower()
-                    for kk in item.keys():
-                        if str(kk).lower() == lk:
-                            v = item.get(kk)
-                            if v is not None:
-                                return v
-                return None
-
-            return {
-                "local_id": pick("local_id", "localId") or 0,
-                "server_id": pick("server_id", "serverId", "MsgSvrID") or 0,
-                "local_type": pick("local_type", "localType", "Type", "type") or 0,
-                "sort_seq": pick("sort_seq", "sortSeq", "SortSeq") or 0,
-                "real_sender_id": pick("real_sender_id", "realSenderId") or 0,
-                "create_time": pick("create_time", "createTime", "CreateTime") or 0,
-                "message_content": pick("message_content", "messageContent", "MessageContent") or "",
-                "compress_content": pick("compress_content", "compressContent", "CompressContent") or None,
-                "packed_info_data": pick("packed_info_data", "packedInfoData") or None,
-                "sender_username": pick("sender_username", "senderUsername", "sender", "SenderUsername") or "",
-                "computed_is_send": pick("computed_is_send", "computed_isSend", "computed_is_sent", "is_send", "isSent"),
-                "debug_my_rowid": pick("debug_my_rowid", "debugMyRowid", "my_rowid", "myRowid"),
-            }
-
         # Realtime mode: fetch from newest (offset handled after render_type filtering).
-        import hashlib
-
-        table_name = f"msg_{hashlib.md5(username.encode('utf-8')).hexdigest()}"
-        rt_db_path = Path(f"realtime_{account_dir.name}.db")
+        table_name = _realtime_message_table_name(username)
+        rt_db_path = _realtime_message_db_path(account_dir)
 
         while True:
             probe = int(scan_take) + 1
@@ -5416,7 +5665,7 @@ def list_chat_messages(
             quote_usernames = []
             pat_usernames = set()
 
-            norm_rows = [_normalize_wcdb_message_row(r) for r in raw_rows if isinstance(r, dict)]
+            norm_rows = [_normalize_realtime_message_item(r) for r in raw_rows if isinstance(r, dict)]
             _append_full_messages_from_rows(
                 merged=merged,
                 sender_usernames=sender_usernames,
@@ -6383,6 +6632,62 @@ def list_chat_messages(
     }
 
 
+def _chat_search_env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    raw = os.environ.get(name)
+    try:
+        value = int(str(raw or "").strip() or default)
+    except Exception:
+        value = int(default)
+    return max(int(min_value), min(int(max_value), int(value)))
+
+
+def _single_char_recent_probe_min_docs() -> int:
+    return _chat_search_env_int(
+        "WECHAT_CHAT_SEARCH_SINGLE_CHAR_RECENT_MIN_DOCS",
+        2000,
+        min_value=1,
+        max_value=1_000_000,
+    )
+
+
+def _index_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (str(table_name or "").strip(),),
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _single_char_recent_probe_token(q: str, tokens: list[str]) -> str:
+    if len(tokens or []) != 1:
+        return ""
+    token = str((tokens or [""])[0] or "").strip().lower()
+    if len(token) != 1:
+        return ""
+    token_text = _to_char_token_text(token)
+    if len(token_text) != 1:
+        return ""
+    if str(q or "").strip().lower() != token:
+        return ""
+    return token_text
+
+
+def _should_use_single_char_recent_probe(conn: sqlite3.Connection, token: str) -> bool:
+    if not token:
+        return False
+    if not _index_table_exists(conn, "message_meta") or not _index_table_exists(conn, "message_token_stats"):
+        return False
+    try:
+        row = conn.execute("SELECT doc_count FROM message_token_stats WHERE token=? LIMIT 1", (token,)).fetchone()
+        doc_count = int((row[0] if row else 0) or 0)
+    except Exception:
+        return False
+    return doc_count >= _single_char_recent_probe_min_docs()
+
+
 async def _search_chat_messages_via_fts(
     request: Request,
     *,
@@ -6398,6 +6703,7 @@ async def _search_chat_messages_via_fts(
     render_types: Optional[str],
     include_hidden: bool,
     include_official: bool,
+    source: Optional[str] = None,
 ) -> dict[str, Any]:
     tokens = _make_search_tokens(q)
     if not tokens:
@@ -6452,12 +6758,16 @@ async def _search_chat_messages_via_fts(
         bool(include_official),
     )
 
+    source_requested = _normalize_chat_source(source)
+    # 搜索索引恢复为旧模式：索引只从 output/databases/{account} 下的解密 SQLite
+    # 构建。聊天列表/详情仍可走 realtime，但 search index 不再直接全量拉 WCDB sidecar。
+    index_source = "decrypted"
     account_dir = _resolve_account_dir(account)
     contact_db_path = account_dir / "contact.db"
     head_image_db_path = account_dir / "head_image.db"
     base_url = str(request.base_url).rstrip("/")
 
-    index_status = get_chat_search_index_status(account_dir)
+    index_status = get_chat_search_index_status(account_dir, source=index_source)
     index = dict(index_status.get("index") or {})
     build = dict(index.get("build") or {})
 
@@ -6466,8 +6776,8 @@ async def _search_chat_messages_via_fts(
     build_status = str(build.get("status") or "").strip()
 
     if (not index_ready) and build_status not in {"building", "error"}:
-        start_chat_search_index_build(account_dir, rebuild=bool(index_exists))
-        index_status = get_chat_search_index_status(account_dir)
+        start_chat_search_index_build(account_dir, rebuild=bool(index_exists), source=index_source)
+        index_status = get_chat_search_index_status(account_dir, source=index_source)
         index = dict(index_status.get("index") or {})
         build = dict(index.get("build") or {})
         build_status = str(build.get("status") or "").strip()
@@ -6533,65 +6843,142 @@ async def _search_chat_messages_via_fts(
     index_db_path = get_chat_search_index_db_path(account_dir)
     conn = sqlite3.connect(str(index_db_path))
     conn.row_factory = sqlite3.Row
+    index_query_mode = "fts"
     try:
         try:
-            where_parts: list[str] = ["message_fts MATCH ?"]
-            params: list[Any] = [fts_query]
+            single_char_token = _single_char_recent_probe_token(q, tokens)
+            if _should_use_single_char_recent_probe(conn, single_char_token):
+                # 高频单字（如“奶”）在 FTS 命中后再按时间排序会把大量命中项全部取出排序。
+                # 新索引同步维护 message_meta 的时间顺序索引；对高频单字改为从最近消息向前探测，
+                # 只取 limit+1 条，避免单字搜索被全量排序拖慢。低频/旧索引仍走 FTS。
+                index_query_mode = "single_char_recent_probe"
+                where_parts: list[str] = ["instr(m.text, ?) > 0"]
+                params: list[Any] = [single_char_token]
 
-            if username:
-                where_parts.append("username = ?")
-                params.append(str(username))
-            elif session_type_norm == "group":
-                where_parts.append("username LIKE ?")
-                params.append("%@chatroom")
-            elif session_type_norm == "single":
-                where_parts.append("username NOT LIKE ?")
-                params.append("%@chatroom")
+                if username:
+                    where_parts.append("m.username = ?")
+                    params.append(str(username))
+                elif session_type_norm == "group":
+                    where_parts.append("m.username LIKE ?")
+                    params.append("%@chatroom")
+                elif session_type_norm == "single":
+                    where_parts.append("m.username NOT LIKE ?")
+                    params.append("%@chatroom")
 
-            if sender:
-                where_parts.append("sender_username = ?")
-                params.append(str(sender))
+                if sender:
+                    where_parts.append("m.sender_username = ?")
+                    params.append(str(sender))
 
-            if want_types is not None:
-                types_sorted = sorted(want_types)
-                placeholders = ",".join(["?"] * len(types_sorted))
-                where_parts.append(f"render_type IN ({placeholders})")
-                params.extend(types_sorted)
+                if want_types is not None:
+                    types_sorted = sorted(want_types)
+                    placeholders = ",".join(["?"] * len(types_sorted))
+                    where_parts.append(f"m.render_type IN ({placeholders})")
+                    params.extend(types_sorted)
 
-            if start_ts is not None:
-                where_parts.append("CAST(create_time AS INTEGER) >= ?")
-                params.append(int(start_ts))
-            if end_ts is not None:
-                where_parts.append("CAST(create_time AS INTEGER) <= ?")
-                params.append(int(end_ts))
+                if start_ts is not None:
+                    where_parts.append("m.create_time >= ?")
+                    params.append(int(start_ts))
+                if end_ts is not None:
+                    where_parts.append("m.create_time <= ?")
+                    params.append(int(end_ts))
 
-            if not include_hidden:
-                where_parts.append("CAST(is_hidden AS INTEGER) = 0")
-            if not include_official:
-                where_parts.append("CAST(is_official AS INTEGER) = 0")
+                if not include_hidden:
+                    where_parts.append("m.is_hidden = 0")
+                if not include_official:
+                    where_parts.append("m.is_official = 0")
 
-            where_sql = " AND ".join(where_parts)
-            total_row = conn.execute(f"SELECT COUNT(*) AS c FROM message_fts WHERE {where_sql}", params).fetchone()
-            total = int(total_row[0] or 0) if total_row is not None else 0
+                where_sql = " AND ".join(where_parts)
+                rows_probe = conn.execute(
+                    f"""
+                    SELECT
+                        f.username,
+                        f.db_stem,
+                        f.table_name,
+                        f.local_id,
+                        f.payload_json,
+                        f.render_type,
+                        f.create_time,
+                        f.sort_seq,
+                        f.server_id,
+                        f.local_type,
+                        f.sender_username
+                    FROM message_meta m
+                    JOIN message_fts f ON f.rowid = m.rowid
+                    WHERE {where_sql}
+                    ORDER BY
+                        m.create_time DESC,
+                        m.sort_seq DESC,
+                        m.local_id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    params + [int(limit) + 1, int(offset)],
+                ).fetchall()
+            else:
+                where_parts = ["message_fts MATCH ?"]
+                params = [fts_query]
 
+                if username:
+                    where_parts.append("username = ?")
+                    params.append(str(username))
+                elif session_type_norm == "group":
+                    where_parts.append("username LIKE ?")
+                    params.append("%@chatroom")
+                elif session_type_norm == "single":
+                    where_parts.append("username NOT LIKE ?")
+                    params.append("%@chatroom")
 
-            rows = conn.execute(
-                f"""
-                SELECT
-                    username,
-                    db_stem,
-                    table_name,
-                    local_id
-                FROM message_fts
-                WHERE {where_sql}
-                ORDER BY
-                    CAST(create_time AS INTEGER) DESC,
-                    CAST(sort_seq AS INTEGER) DESC,
-                    CAST(local_id AS INTEGER) DESC
-                LIMIT ? OFFSET ?
-                """,
-                params + [int(limit), int(offset)],
-            ).fetchall()
+                if sender:
+                    where_parts.append("sender_username = ?")
+                    params.append(str(sender))
+
+                if want_types is not None:
+                    types_sorted = sorted(want_types)
+                    placeholders = ",".join(["?"] * len(types_sorted))
+                    where_parts.append(f"render_type IN ({placeholders})")
+                    params.extend(types_sorted)
+
+                if start_ts is not None:
+                    where_parts.append("CAST(create_time AS INTEGER) >= ?")
+                    params.append(int(start_ts))
+                if end_ts is not None:
+                    where_parts.append("CAST(create_time AS INTEGER) <= ?")
+                    params.append(int(end_ts))
+
+                if not include_hidden:
+                    where_parts.append("CAST(is_hidden AS INTEGER) = 0")
+                if not include_official:
+                    where_parts.append("CAST(is_official AS INTEGER) = 0")
+
+                where_sql = " AND ".join(where_parts)
+                # 单字高频词（如“奶”）的精确 COUNT(*) 会强制 FTS 扫完所有命中项；
+                # 搜索侧只需要当前页和是否还有下一页，所以用 limit+1 作为快路径。
+                rows_probe = conn.execute(
+                    f"""
+                    SELECT
+                        username,
+                        db_stem,
+                        table_name,
+                        local_id,
+                        payload_json,
+                        render_type,
+                        create_time,
+                        sort_seq,
+                        server_id,
+                        local_type,
+                        sender_username
+                    FROM message_fts
+                    WHERE {where_sql}
+                    ORDER BY
+                        CAST(create_time AS INTEGER) DESC,
+                        CAST(sort_seq AS INTEGER) DESC,
+                        CAST(local_id AS INTEGER) DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    params + [int(limit) + 1, int(offset)],
+                ).fetchall()
+            has_more_index = len(rows_probe) > int(limit)
+            rows = rows_probe[: int(limit)]
+            total = int(offset) + len(rows) + (1 if has_more_index else 0)
         except Exception as e:
             logger.exception(
                 "[%s] chat search index query failed account=%s scope=%s username=%s",
@@ -6920,8 +7307,10 @@ async def _search_chat_messages_via_fts(
         "limit": int(limit),
         "baseUrl": base_url,
         "total": int(total),
-        "hasMore": bool(int(offset) + int(limit) < int(total)),
+        "totalExact": False,
+        "hasMore": bool(has_more_index),
         "index": index,
+        "indexQueryMode": index_query_mode,
         "hits": hits,
     }
     logger.info(
@@ -6939,6 +7328,7 @@ async def _search_chat_messages_via_fts(
     return response
 
 
+
 @router.get("/api/chat/search", summary="搜索聊天记录（消息）")
 async def search_chat_messages(
     request: Request,
@@ -6954,11 +7344,14 @@ async def search_chat_messages(
     render_types: Optional[str] = None,
     include_hidden: bool = False,
     include_official: bool = False,
+    source: Optional[str] = None,
     session_limit: int = 200,
     per_chat_scan: int = 200,
     scan_limit: int = 20000,
 ):
-    return await _search_chat_messages_via_fts(
+    source_requested = _normalize_chat_source(source)
+
+    response = await _search_chat_messages_via_fts(
         request,
         q=q,
         account=account,
@@ -6972,379 +7365,21 @@ async def search_chat_messages(
         render_types=render_types,
         include_hidden=include_hidden,
         include_official=include_official,
+        source=source_requested,
     )
-
-    tokens = _make_search_tokens(q)
-    if not tokens:
-        raise HTTPException(status_code=400, detail="Missing q.")
-
-    if limit <= 0:
-        raise HTTPException(status_code=400, detail="Invalid limit.")
-    if limit > 200:
-        limit = 200
-    if offset < 0:
-        offset = 0
-
-    if session_limit <= 0:
-        session_limit = 200
-    if session_limit > 2000:
-        session_limit = 2000
-
-    if per_chat_scan <= 0:
-        per_chat_scan = 200
-    if per_chat_scan > 5000:
-        per_chat_scan = 5000
-
-    if scan_limit <= 0:
-        scan_limit = 20000
-    if scan_limit > 200000:
-        scan_limit = 200000
-
-    start_ts = int(start_time) if start_time is not None else None
-    end_ts = int(end_time) if end_time is not None else None
-    if start_ts is not None and start_ts < 0:
-        start_ts = 0
-    if end_ts is not None and end_ts < 0:
-        end_ts = 0
-
-    want_types: Optional[set[str]] = None
-    if render_types is not None:
-        parts = [p.strip() for p in str(render_types or "").split(",") if p.strip()]
-        want_types = {p for p in parts if p}
-        if not want_types:
-            want_types = None
-
-    account_dir = _resolve_account_dir(account)
-    db_paths = _iter_message_db_paths(account_dir)
-    contact_db_path = account_dir / "contact.db"
-    session_db_path = account_dir / "session.db"
-
-    if not db_paths:
-        return {
-            "status": "error",
-            "account": account_dir.name,
-            "q": q,
-            "hits": [],
-            "hasMore": False,
-            "scanLimited": False,
-            "scannedMessages": 0,
-            "message": "No message databases found for this account.",
-        }
-
-    def build_haystack(hit: dict[str, Any]) -> str:
-        items = [
-            str(hit.get("content") or ""),
-            str(hit.get("title") or ""),
-            str(hit.get("url") or ""),
-            str(hit.get("quoteTitle") or ""),
-            str(hit.get("quoteContent") or ""),
-            str(hit.get("amount") or ""),
-        ]
-        return "\n".join([x for x in items if x.strip()])
-
-    def scan_conversation(conv_username: str, *, per_db_limit: int, max_hits: Optional[int] = None) -> tuple[list[dict[str, Any]], int, bool]:
-        is_group = bool(conv_username.endswith("@chatroom"))
-        scanned = 0
-        truncated = False
-        hits: list[dict[str, Any]] = []
-        seen_ids: set[str] = set()
-
-        for db_path in db_paths:
-            conn = sqlite3.connect(str(db_path))
-            conn.row_factory = sqlite3.Row
-            try:
-                table_name = _resolve_msg_table_name(conn, conv_username)
-                if not table_name:
-                    continue
-
-                my_wxid = account_dir.name
-                my_rowid = None
-                try:
-                    r2 = conn.execute(
-                        "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
-                        (my_wxid,),
-                    ).fetchone()
-                    if r2 is not None:
-                        my_rowid = int(r2[0])
-                except Exception:
-                    my_rowid = None
-
-                where_parts: list[str] = []
-                params: list[Any] = []
-                if start_ts is not None:
-                    where_parts.append("m.create_time >= ?")
-                    params.append(int(start_ts))
-                if end_ts is not None:
-                    where_parts.append("m.create_time <= ?")
-                    params.append(int(end_ts))
-
-                where_sql = ""
-                if where_parts:
-                    where_sql = "WHERE " + " AND ".join(where_parts)
-
-                quoted_table = _quote_ident(table_name)
-                sql_with_join = (
-                    "SELECT "
-                    "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
-                    "m.message_content, m.compress_content, n.user_name AS sender_username "
-                    f"FROM {quoted_table} m "
-                    "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
-                    f"{where_sql} "
-                    "ORDER BY m.create_time DESC, m.sort_seq DESC, m.local_id DESC "
-                    "LIMIT ?"
-                )
-                sql_no_join = (
-                    "SELECT "
-                    "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
-                    "m.message_content, m.compress_content, '' AS sender_username "
-                    f"FROM {quoted_table} m "
-                    f"{where_sql} "
-                    "ORDER BY m.create_time DESC, m.sort_seq DESC, m.local_id DESC "
-                    "LIMIT ?"
-                )
-
-                conn.text_factory = bytes
-
-                per_db_probe = int(per_db_limit) + 1
-                params_probe = list(params) + [per_db_probe]
-                try:
-                    rows = conn.execute(sql_with_join, params_probe).fetchall()
-                except Exception:
-                    rows = conn.execute(sql_no_join, params_probe).fetchall()
-
-                if len(rows) > per_db_limit:
-                    truncated = True
-                    rows = rows[:per_db_limit]
-
-                scanned += len(rows)
-
-                for rr in rows:
-                    hit = _row_to_search_hit(
-                        rr,
-                        db_path=db_path,
-                        table_name=table_name,
-                        username=conv_username,
-                        account_dir=account_dir,
-                        is_group=is_group,
-                        my_rowid=my_rowid,
-                    )
-                    if want_types is not None and str(hit.get("renderType") or "") not in want_types:
-                        continue
-
-                    haystack = build_haystack(hit)
-                    if not _match_tokens(haystack, tokens):
-                        continue
-
-                    mid = str(hit.get("id") or "")
-                    if not mid or mid in seen_ids:
-                        continue
-                    seen_ids.add(mid)
-
-                    snippet_src = str(hit.get("content") or "").strip() or str(hit.get("title") or "").strip() or haystack
-                    hit["snippet"] = _make_snippet(snippet_src, tokens)
-                    hits.append(hit)
-
-                    if max_hits is not None and len(hits) >= int(max_hits):
-                        return hits, scanned, True
-            finally:
-                conn.close()
-
-        return hits, scanned, truncated
-
-    base_url = str(request.base_url).rstrip("/")
-
-    hits: list[dict[str, Any]] = []
-    scanned_messages = 0
-    scan_limited = False
-
-    if username:
-        conv_hits, scanned, truncated = scan_conversation(username, per_db_limit=scan_limit)
-        scanned_messages = scanned
-        scan_limited = bool(truncated)
-
-        conv_hits.sort(
-            key=lambda h: (
-                int(h.get("createTime") or 0),
-                int(h.get("sortSeq") or 0),
-                int(h.get("localId") or 0),
-            ),
-            reverse=True,
-        )
-        total_in_scan = len(conv_hits)
-        page = conv_hits[int(offset) : int(offset) + int(limit)]
-
-        system_usernames = [
-            str(_extract_chatroom_top_message_metadata(str(x.get("_rawText") or "")).get("operatorUsername") or "").strip()
-            for x in page
-            if int(x.get("type") or 0) == 10000
-        ]
-        uniq_usernames = list(
-            dict.fromkeys([username] + [str(x.get("senderUsername") or "") for x in page] + system_usernames)
-        )
-        contact_rows = _load_contact_rows(contact_db_path, uniq_usernames)
-        conv_row = contact_rows.get(username)
-        conv_name = _pick_display_name(conv_row, username)
-        group_nicknames = _load_group_nickname_map(
-            account_dir=account_dir,
-            contact_db_path=contact_db_path,
-            chatroom_id=username,
-            sender_usernames=[str(x.get("senderUsername") or "") for x in page],
-        )
-
-        for h in page:
-            su = str(h.get("senderUsername") or "").strip()
-            h["conversationName"] = conv_name
-            if su:
-                h["senderDisplayName"] = _resolve_sender_display_name(
-                    sender_username=su,
-                    sender_contact_rows=contact_rows,
-                    wcdb_display_names={},
-                    group_nicknames=group_nicknames,
-                )
-            _postprocess_special_message_content(
-                message=h,
-                sender_contact_rows=contact_rows,
-                wcdb_display_names={},
+    if isinstance(response, dict):
+        if source_requested in {"auto", "realtime", "decrypted"}:
+            response.setdefault("source", "decrypted_index")
+            response.setdefault(
+                "freshness",
+                {
+                    "kind": "snapshot",
+                    "latestRealtimeIncluded": False,
+                    "message": "Chat search index is built from the local decrypted SQLite snapshot.",
+                },
             )
+    return response
 
-        return {
-            "status": "success",
-            "account": account_dir.name,
-            "scope": "conversation",
-            "username": username,
-            "q": q,
-            "tokens": tokens,
-            "offset": int(offset),
-            "limit": int(limit),
-            "totalInScan": total_in_scan,
-            "hasMore": bool((int(offset) + int(limit) < total_in_scan) or scan_limited),
-            "scanLimited": bool(scan_limited),
-            "scannedMessages": int(scanned_messages),
-            "hits": page,
-        }
-
-    # Global: scan recent conversations (session.db), then keep only top K newest hits within the scanned window.
-    if not session_db_path.exists():
-        raise HTTPException(status_code=404, detail="session.db not found for this account.")
-
-    sconn = sqlite3.connect(str(session_db_path))
-    sconn.row_factory = sqlite3.Row
-    try:
-        rows = sconn.execute(
-            """
-            SELECT
-                username,
-                is_hidden,
-                sort_timestamp,
-                last_timestamp
-            FROM SessionTable
-            ORDER BY sort_timestamp DESC
-            LIMIT ?
-            """,
-            (int(session_limit),),
-        ).fetchall()
-    finally:
-        sconn.close()
-
-    conv_usernames: list[str] = []
-    for r in rows:
-        u = str(r["username"] or "").strip()
-        if not u:
-            continue
-        if not include_hidden and int(r["is_hidden"] or 0) == 1:
-            continue
-        if not _should_keep_session(u, include_official=include_official):
-            continue
-        conv_usernames.append(u)
-
-    top_k = min(5000, int(offset) + int(limit) + 2000)
-    heap: list[tuple[tuple[int, int, int], dict[str, Any]]] = []
-
-    for conv in conv_usernames:
-        conv_hits, scanned, truncated = scan_conversation(conv, per_db_limit=per_chat_scan, max_hits=50)
-        scanned_messages += int(scanned)
-        if truncated:
-            scan_limited = True
-        for h in conv_hits:
-            k = (
-                int(h.get("createTime") or 0),
-                int(h.get("sortSeq") or 0),
-                int(h.get("localId") or 0),
-            )
-            heapq.heappush(heap, (k, h))
-            if len(heap) > top_k:
-                heapq.heappop(heap)
-
-    heap.sort(key=lambda x: x[0], reverse=True)
-    hits_all = [x[1] for x in heap]
-    total_in_scan = len(hits_all)
-    page = hits_all[int(offset) : int(offset) + int(limit)]
-
-    uniq_contacts = list(
-        dict.fromkeys(
-            [str(x.get("username") or "") for x in page]
-            + [str(x.get("senderUsername") or "") for x in page]
-            + [
-                str(_extract_chatroom_top_message_metadata(str(x.get("_rawText") or "")).get("operatorUsername") or "").strip()
-                for x in page
-                if int(x.get("type") or 0) == 10000
-            ]
-        )
-    )
-    contact_rows = _load_contact_rows(contact_db_path, uniq_contacts)
-
-    group_senders_by_room: dict[str, list[str]] = {}
-    for h in page:
-        cu = str(h.get("username") or "").strip()
-        su = str(h.get("senderUsername") or "").strip()
-        if (not cu.endswith("@chatroom")) or (not su):
-            continue
-        group_senders_by_room.setdefault(cu, []).append(su)
-
-    group_nickname_cache: dict[str, dict[str, str]] = {}
-    for cu, senders in group_senders_by_room.items():
-        group_nickname_cache[cu] = _load_group_nickname_map(
-            account_dir=account_dir,
-            contact_db_path=contact_db_path,
-            chatroom_id=cu,
-            sender_usernames=senders,
-        )
-
-    for h in page:
-        cu = str(h.get("username") or "").strip()
-        su = str(h.get("senderUsername") or "").strip()
-        crow = contact_rows.get(cu)
-        conv_name = _pick_display_name(crow, cu) if cu else ""
-        h["conversationName"] = conv_name or cu
-        if su:
-            h["senderDisplayName"] = _resolve_sender_display_name(
-                sender_username=su,
-                sender_contact_rows=contact_rows,
-                wcdb_display_names={},
-                group_nicknames=group_nickname_cache.get(cu, {}),
-            )
-        _postprocess_special_message_content(
-            message=h,
-            sender_contact_rows=contact_rows,
-            wcdb_display_names={},
-        )
-
-    return {
-        "status": "success",
-        "account": account_dir.name,
-        "scope": "global",
-        "q": q,
-        "tokens": tokens,
-        "offset": int(offset),
-        "limit": int(limit),
-        "baseUrl": base_url,
-        "totalInScan": total_in_scan,
-        "hasMore": bool((int(offset) + int(limit) < total_in_scan) or scan_limited or (total_in_scan >= top_k)),
-        "scanLimited": bool(scan_limited),
-        "scannedMessages": int(scanned_messages),
-        "conversationsScanned": len(conv_usernames),
-        "hits": page,
-    }
 
 
 @router.get("/api/chat/messages/around", summary="定位到某条消息并返回上下文")
@@ -7355,6 +7390,7 @@ async def get_chat_messages_around(
     account: Optional[str] = None,
     before: int = 20,
     after: int = 20,
+    source: Optional[str] = None,
 ):
     if not username:
         raise HTTPException(status_code=400, detail="Missing username.")
@@ -7381,23 +7417,152 @@ async def get_chat_messages_around(
         int(after),
     )
 
-    parts = str(anchor_id).split(":", 2)
-    if len(parts) != 3:
-        logger.warning("[%s] chat messages around invalid anchor format anchor_id=%s", trace_id, str(anchor_id or "").strip())
-        raise HTTPException(status_code=400, detail="Invalid anchor_id.")
-    anchor_db_stem, anchor_table_name_in, anchor_local_id_str = parts
     try:
-        anchor_local_id = int(anchor_local_id_str)
-    except Exception:
-        logger.warning("[%s] chat messages around invalid anchor local_id anchor_id=%s", trace_id, str(anchor_id or "").strip())
-        raise HTTPException(status_code=400, detail="Invalid anchor_id.")
+        anchor_db_stem, anchor_table_name_in, anchor_local_id = _parse_message_anchor_local_id(anchor_id)
+    except HTTPException:
+        logger.warning("[%s] chat messages around invalid anchor format anchor_id=%s", trace_id, str(anchor_id or "").strip())
+        raise
 
     account_dir = _resolve_account_dir(account)
-    db_paths = _iter_message_db_paths(account_dir)
     contact_db_path = account_dir / "contact.db"
     head_image_db_path = account_dir / "head_image.db"
     message_resource_db_path = account_dir / "message_resource.db"
     base_url = str(request.base_url).rstrip("/")
+    source_requested = _normalize_chat_source(source)
+    source_norm, rt_conn, _rt_error = _connect_realtime_for_chat_source(
+        account_dir=account_dir,
+        source_requested=source_requested,
+    )
+
+    if source_norm == "realtime":
+        rows, scan_limited, scanned = _fetch_realtime_message_rows(
+            rt_conn=rt_conn,
+            username=username,
+            max_scan=200000,
+            stop_after_local_id=int(anchor_local_id),
+            min_rows_after_anchor=int(before),
+        )
+        rows_asc = _sort_realtime_rows_chronological(rows)
+        anchor_index_all = -1
+        for i, row in enumerate(rows_asc):
+            try:
+                if int(row.get("local_id") or 0) == int(anchor_local_id):
+                    anchor_index_all = i
+                    break
+            except Exception:
+                continue
+
+        if anchor_index_all >= 0:
+            start = max(0, int(anchor_index_all) - int(before))
+            end = min(len(rows_asc), int(anchor_index_all) + int(after) + 1)
+            window_rows = rows_asc[start:end]
+
+            resource_conn: Optional[sqlite3.Connection] = None
+            resource_chat_id: Optional[int] = None
+            try:
+                if message_resource_db_path.exists():
+                    resource_conn = sqlite3.connect(str(message_resource_db_path))
+                    resource_conn.row_factory = sqlite3.Row
+                    resource_chat_id = _resource_lookup_chat_id(resource_conn, username)
+            except Exception:
+                if resource_conn is not None:
+                    try:
+                        resource_conn.close()
+                    except Exception:
+                        pass
+                resource_conn = None
+                resource_chat_id = None
+
+            return_messages: list[dict[str, Any]] = []
+            sender_usernames_win: list[str] = []
+            quote_usernames_win: list[str] = []
+            pat_usernames_win: set[str] = set()
+            rt_db_path = _realtime_message_db_path(account_dir)
+            rt_table_name = _realtime_message_table_name(username)
+            try:
+                _append_full_messages_from_rows(
+                    merged=return_messages,
+                    sender_usernames=sender_usernames_win,
+                    quote_usernames=quote_usernames_win,
+                    pat_usernames=pat_usernames_win,
+                    rows=window_rows,
+                    db_path=rt_db_path,
+                    table_name=rt_table_name,
+                    username=username,
+                    account_dir=account_dir,
+                    is_group=bool(username.endswith("@chatroom")),
+                    my_rowid=None,
+                    resource_conn=resource_conn,
+                    resource_chat_id=resource_chat_id,
+                )
+            finally:
+                if resource_conn is not None:
+                    try:
+                        resource_conn.close()
+                    except Exception:
+                        pass
+
+            _postprocess_full_messages(
+                merged=return_messages,
+                sender_usernames=sender_usernames_win,
+                quote_usernames=quote_usernames_win,
+                pat_usernames=pat_usernames_win,
+                account_dir=account_dir,
+                username=username,
+                base_url=base_url,
+                contact_db_path=contact_db_path,
+                head_image_db_path=head_image_db_path,
+            )
+
+            anchor_id_canon = f"{rt_db_path.stem}:{rt_table_name}:{int(anchor_local_id)}"
+            anchor_index = -1
+            for i, msg in enumerate(return_messages):
+                if str(msg.get("id") or "") == anchor_id_canon:
+                    anchor_index = i
+                    break
+            if anchor_index < 0:
+                for i, msg in enumerate(return_messages):
+                    try:
+                        if int(msg.get("localId") or 0) == int(anchor_local_id):
+                            anchor_index = i
+                            break
+                    except Exception:
+                        continue
+
+            logger.info(
+                "[%s] chat messages around realtime done account=%s username=%s anchor_id=%s canonical_anchor=%s anchor_index=%s returned=%s scanned=%s",
+                trace_id,
+                account_dir.name,
+                username,
+                str(anchor_id or "").strip(),
+                anchor_id_canon,
+                int(anchor_index),
+                len(return_messages),
+                int(scanned),
+            )
+            return {
+                "status": "success",
+                "account": account_dir.name,
+                "username": username,
+                "source": "realtime",
+                "anchorId": anchor_id_canon,
+                "anchorIndex": int(anchor_index),
+                "scanLimited": bool(scan_limited),
+                "scannedMessages": int(scanned),
+                "messages": return_messages,
+            }
+
+        logger.warning(
+            "[%s] chat messages around realtime anchor missing account=%s username=%s anchor_id=%s scanned=%s",
+            trace_id,
+            account_dir.name,
+            username,
+            str(anchor_id or "").strip(),
+            int(scanned),
+        )
+        raise HTTPException(status_code=404, detail="Anchor message not found.")
+
+    db_paths = _iter_message_db_paths(account_dir)
 
     anchor_db_path: Optional[Path] = None
     for p in db_paths:
@@ -7826,6 +7991,7 @@ async def get_chat_messages_around(
         "status": "success",
         "account": account_dir.name,
         "username": username,
+        "source": source_norm,
         "anchorId": anchor_id_canon,
         "anchorIndex": anchor_index,
         "messages": return_messages,

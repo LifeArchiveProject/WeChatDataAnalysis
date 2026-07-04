@@ -142,6 +142,7 @@ class TestChatExportHtmlPaging(unittest.TestCase):
     def _create_job(self, manager, *, account: str, username: str, html_page_size: int):
         job = manager.create_job(
             account=account,
+            source="decrypted",
             scope="selected",
             usernames=[username],
             export_format="html",

@@ -264,6 +264,7 @@ class TestChatExportHtmlFormat(unittest.TestCase):
     def _create_job(self, manager, *, account: str, username: str):
         job = manager.create_job(
             account=account,
+            source="decrypted",
             scope="selected",
             usernames=[username],
             export_format="html",

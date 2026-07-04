@@ -4,8 +4,11 @@ import sqlite3
 import sys
 import unittest
 import importlib
+import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -306,6 +309,7 @@ class TestContactsExport(unittest.TestCase):
                     "/api/chat/contacts",
                     params={
                         "account": account,
+                        "source": "decrypted",
                         "include_friends": True,
                         "include_groups": True,
                         "include_officials": True,
@@ -345,6 +349,7 @@ class TestContactsExport(unittest.TestCase):
                     "/api/chat/contacts/export",
                     json={
                         "account": account,
+                        "source": "decrypted",
                         "output_dir": str(export_dir),
                         "format": "json",
                         "include_avatar_link": True,
@@ -387,6 +392,7 @@ class TestContactsExport(unittest.TestCase):
                     "/api/chat/contacts/export",
                     json={
                         "account": account,
+                        "source": "decrypted",
                         "output_dir": str(export_dir),
                         "format": "csv",
                         "include_avatar_link": False,
@@ -447,6 +453,7 @@ class TestContactsExport(unittest.TestCase):
                     "/api/chat/contacts/export",
                     json={
                         "account": account,
+                        "source": "decrypted",
                         "output_dir": str(root / "exports"),
                         "format": "vcf",
                         "include_avatar_link": True,
@@ -492,8 +499,86 @@ class TestContactsExport(unittest.TestCase):
                 app.include_router(chat_contacts.router)
                 client = TestClient(app)
 
-                resp = client.get("/api/chat/contacts", params={"account": account})
+                resp = client.get("/api/chat/contacts", params={"account": account, "source": "decrypted"})
                 self.assertEqual(resp.status_code, 404)
+            finally:
+                if prev is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev
+
+    def test_auto_contacts_uses_realtime_without_local_contact_or_session_db(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        with TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            account = "wxid_direct"
+            account_dir = root / "output" / "databases" / account
+            account_dir.mkdir(parents=True, exist_ok=True)
+            (account_dir / "_source.json").write_text(
+                json.dumps({"db_storage_path": str(root / "WeChat" / "db_storage")}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            prev = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+            try:
+                import wechat_decrypt_tool.chat_accounts as chat_accounts
+                import wechat_decrypt_tool.chat_helpers as chat_helpers
+                import wechat_decrypt_tool.routers.chat_contacts as chat_contacts
+
+                importlib.reload(chat_accounts)
+                importlib.reload(chat_helpers)
+                importlib.reload(chat_contacts)
+
+                app = FastAPI()
+                app.include_router(chat_contacts.router)
+                client = TestClient(app)
+
+                rt_conn = SimpleNamespace(handle=1, lock=threading.Lock())
+                sessions = [
+                    {"username": "wxid_friend", "is_hidden": 0, "sort_timestamp": 300},
+                    {"username": "room@chatroom", "is_hidden": 0, "sort_timestamp": 200},
+                    {"username": "gh_service", "is_hidden": 0, "sort_timestamp": 100},
+                ]
+                with (
+                    patch.object(chat_contacts.WCDB_REALTIME, "ensure_connected", return_value=rt_conn),
+                    patch.object(chat_contacts, "_wcdb_get_sessions", return_value=sessions),
+                    patch.object(
+                        chat_contacts,
+                        "_wcdb_get_display_names",
+                        return_value={
+                            "wxid_friend": "好友A",
+                            "room@chatroom": "群A",
+                            "gh_service": "服务号A",
+                        },
+                    ),
+                    patch.object(chat_contacts, "_wcdb_get_avatar_urls", return_value={"wxid_friend": "https://avatar/a.jpg"}),
+                ):
+                    resp = client.get(
+                        "/api/chat/contacts",
+                        params={
+                            "account": account,
+                            "source": "auto",
+                            "include_friends": True,
+                            "include_groups": True,
+                            "include_officials": True,
+                        },
+                    )
+
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.json()
+                self.assertEqual(payload.get("source"), "realtime")
+                self.assertEqual(payload.get("total"), 3)
+                self.assertEqual(payload.get("counts", {}).get("friends"), 1)
+                self.assertEqual(payload.get("counts", {}).get("groups"), 1)
+                self.assertEqual(payload.get("counts", {}).get("officials"), 1)
+                self.assertFalse((account_dir / "contact.db").exists())
+                self.assertFalse((account_dir / "session.db").exists())
+                names = {x.get("username"): x.get("displayName") for x in payload.get("contacts", [])}
+                self.assertEqual(names.get("wxid_friend"), "好友A")
+                self.assertEqual(names.get("room@chatroom"), "群A")
             finally:
                 if prev is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
@@ -532,6 +617,7 @@ class TestContactsExport(unittest.TestCase):
                     "/api/chat/contacts",
                     params={
                         "account": account,
+                        "source": "decrypted",
                         "include_friends": True,
                         "include_groups": False,
                         "include_officials": False,

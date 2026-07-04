@@ -77,7 +77,7 @@ class TestChatSourceAuto(unittest.TestCase):
         self.assertEqual((resp.get("sessions") or [])[0].get("username"), "wxid_realtime")
         self.assertEqual((resp.get("sessions") or [])[0].get("lastMessage"), "from realtime")
 
-    def test_sessions_auto_falls_back_to_decrypted_when_realtime_unavailable(self):
+    def test_sessions_auto_reports_realtime_error_when_unavailable(self):
         with TemporaryDirectory() as td:
             account_dir = Path(td) / "acc"
             account_dir.mkdir(parents=True, exist_ok=True)
@@ -112,25 +112,28 @@ class TestChatSourceAuto(unittest.TestCase):
             with (
                 patch.object(chat_router, "_resolve_account_dir", return_value=account_dir),
                 patch.object(chat_router.WCDB_REALTIME, "get_status", return_value={}),
-                patch.object(chat_router.WCDB_REALTIME, "ensure_connected", side_effect=AssertionError("should not connect")),
+                patch.object(
+                    chat_router.WCDB_REALTIME,
+                    "ensure_connected",
+                    side_effect=chat_router.WCDBRealtimeError("Cannot resolve db_storage directory for this account."),
+                ),
                 patch.object(chat_router, "_load_contact_rows", return_value={}),
                 patch.object(chat_router, "_query_head_image_usernames", return_value=set()),
                 patch.object(chat_router, "_avatar_url_unified", return_value=""),
             ):
-                resp = chat_router.list_chat_sessions(
-                    _DummyRequest(),
-                    account="acc",
-                    limit=50,
-                    include_hidden=True,
-                    include_official=True,
-                    preview="session",
-                    source="auto",
-                )
+                with self.assertRaises(chat_router.HTTPException) as cm:
+                    chat_router.list_chat_sessions(
+                        _DummyRequest(),
+                        account="acc",
+                        limit=50,
+                        include_hidden=True,
+                        include_official=True,
+                        preview="session",
+                        source="auto",
+                    )
 
-        self.assertEqual(resp.get("status"), "success")
-        self.assertEqual(resp.get("source"), "decrypted")
-        self.assertEqual((resp.get("sessions") or [])[0].get("username"), "wxid_local")
-        self.assertEqual((resp.get("sessions") or [])[0].get("lastMessage"), "from decrypted")
+        self.assertEqual(cm.exception.status_code, 400)
+        self.assertIn("Cannot resolve db_storage", str(cm.exception.detail))
 
     def test_messages_auto_reads_realtime_rows_when_available(self):
         with TemporaryDirectory() as td:

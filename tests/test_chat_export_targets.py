@@ -1,13 +1,21 @@
 import hashlib
 import sqlite3
 import sys
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+
+
+class _DummyRealtimeConn:
+    def __init__(self) -> None:
+        self.handle = 1
+        self.lock = threading.Lock()
 
 
 class TestChatExportTargets(unittest.TestCase):
@@ -197,6 +205,7 @@ class TestChatExportTargets(unittest.TestCase):
 
             preview = svc.build_chat_export_targets_preview(
                 account_dir=account_dir,
+                source="decrypted",
                 include_hidden=True,
                 include_official=False,
                 base_url="http://example.test",
@@ -219,6 +228,92 @@ class TestChatExportTargets(unittest.TestCase):
             self.assertTrue(by_username["room_hidden@chatroom"]["inSessionList"])
             self.assertFalse(by_username["room_no_session@chatroom"]["inSessionList"])
             self.assertTrue(by_username["room_no_session@chatroom"]["avatar"].startswith("http://example.test/api/chat/avatar?"))
+
+    def test_realtime_preview_does_not_require_decrypted_databases(self):
+        import wechat_decrypt_tool.chat_export_service as svc
+
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "wxid_account"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            rt_conn = _DummyRealtimeConn()
+            sessions = [
+                {"username": "wxid_visible", "is_hidden": 0, "sort_timestamp": 300},
+                {"username": "room_visible@chatroom", "is_hidden": 0, "sort_timestamp": 200},
+                {"username": "wxid_hidden", "is_hidden": 1, "sort_timestamp": 100},
+                {"username": "gh_official", "is_hidden": 0, "sort_timestamp": 50},
+            ]
+
+            with (
+                patch.object(svc, "_wcdb_get_sessions", return_value=sessions),
+                patch.object(
+                    svc,
+                    "_wcdb_get_display_names",
+                    return_value={
+                        "wxid_visible": "Realtime friend",
+                        "room_visible@chatroom": "Realtime group",
+                    },
+                ),
+                patch.object(svc, "_load_contact_rows", return_value={}),
+            ):
+                preview = svc.build_chat_export_targets_preview(
+                    account_dir=account_dir,
+                    source="realtime",
+                    rt_conn=rt_conn,
+                    include_hidden=False,
+                    include_official=False,
+                    base_url="http://example.test",
+                )
+
+            self.assertFalse((account_dir / "session.db").exists())
+            self.assertFalse((account_dir / "contact.db").exists())
+            self.assertFalse((account_dir / "message_0.db").exists())
+            self.assertEqual(preview["source"], "realtime")
+            self.assertEqual(preview["counts"], {"total": 2, "groups": 1, "singles": 1})
+            self.assertEqual([item["username"] for item in preview["targets"]], ["wxid_visible", "room_visible@chatroom"])
+            self.assertEqual(preview["targets"][0]["displayName"], "Realtime friend")
+            self.assertNotIn("wxid_hidden", [item["username"] for item in preview["targets"]])
+
+    def test_realtime_message_iterator_does_not_require_message_databases(self):
+        import wechat_decrypt_tool.chat_export_service as svc
+
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "wxid_account"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            rt_conn = _DummyRealtimeConn()
+            with patch.object(
+                svc,
+                "_wcdb_get_messages",
+                side_effect=[
+                    [
+                        {
+                            "localId": 7,
+                            "serverId": 700,
+                            "localType": 1,
+                            "sortSeq": 1700000000000,
+                            "createTime": 1700000000,
+                            "messageContent": "hello from realtime",
+                            "compressContent": None,
+                            "senderUsername": "wxid_friend",
+                        }
+                    ],
+                    [],
+                ],
+            ):
+                rows = list(
+                    svc._iter_rows_for_conversation(
+                        account_dir=account_dir,
+                        conv_username="wxid_friend",
+                        start_time=None,
+                        end_time=None,
+                        source="realtime",
+                        rt_conn=rt_conn,
+                    )
+                )
+
+            self.assertFalse(list(account_dir.glob("message_*.db")))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].raw_text, "hello from realtime")
+            self.assertEqual(rows[0].sender_username, "wxid_friend")
 
 
 if __name__ == "__main__":

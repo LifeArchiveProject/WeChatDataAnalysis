@@ -1,10 +1,11 @@
-import os
 import hashlib
+import importlib
+import os
 import sqlite3
 import sys
+import time
 import unittest
 import zipfile
-import importlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -13,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 
-class TestChatExportImageMd5CandidateFallback(unittest.TestCase):
+class TestChatExportImagePackedInfo(unittest.TestCase):
     def _reload_export_modules(self):
         import wechat_decrypt_tool.app_paths as app_paths
         import wechat_decrypt_tool.chat_helpers as chat_helpers
@@ -26,8 +27,11 @@ class TestChatExportImageMd5CandidateFallback(unittest.TestCase):
         importlib.reload(chat_export_service)
         return chat_export_service
 
-    def _seed_contact_db(self, path: Path, *, account: str, username: str) -> None:
-        conn = sqlite3.connect(str(path))
+    def _prepare_account(self, root: Path, *, account: str, username: str, image_md5: str) -> None:
+        account_dir = root / "output" / "databases" / account
+        account_dir.mkdir(parents=True, exist_ok=True)
+
+        conn = sqlite3.connect(str(account_dir / "contact.db"))
         try:
             conn.execute(
                 """
@@ -57,46 +61,29 @@ class TestChatExportImageMd5CandidateFallback(unittest.TestCase):
                 )
                 """
             )
+            conn.execute("INSERT INTO contact VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (account, "", "我", "", 1, 0, "", ""))
             conn.execute(
                 "INSERT INTO contact VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (account, "", "我", "", 1, 0, "", ""),
-            )
-            conn.execute(
-                "INSERT INTO contact VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (username, "", "测试好友", "", 1, 0, "", ""),
+                (username, "", "文件传输助手", "", 1, 0, "", ""),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def _seed_session_db(self, path: Path, *, username: str) -> None:
-        conn = sqlite3.connect(str(path))
+        conn = sqlite3.connect(str(account_dir / "session.db"))
         try:
-            conn.execute(
-                """
-                CREATE TABLE SessionTable (
-                    username TEXT,
-                    is_hidden INTEGER,
-                    sort_timestamp INTEGER
-                )
-                """
-            )
-            conn.execute(
-                "INSERT INTO SessionTable VALUES (?, ?, ?)",
-                (username, 0, 1735689600),
-            )
+            conn.execute("CREATE TABLE SessionTable (username TEXT, is_hidden INTEGER, sort_timestamp INTEGER)")
+            conn.execute("INSERT INTO SessionTable VALUES (?, ?, ?)", (username, 0, 1783152107))
             conn.commit()
         finally:
             conn.close()
 
-    def _seed_message_db(self, path: Path, *, account: str, username: str) -> None:
-        conn = sqlite3.connect(str(path))
+        table_name = f"msg_{hashlib.md5(username.encode('utf-8')).hexdigest()}"
+        conn = sqlite3.connect(str(account_dir / "message_0.db"))
         try:
             conn.execute("CREATE TABLE Name2Id (rowid INTEGER PRIMARY KEY, user_name TEXT)")
             conn.execute("INSERT INTO Name2Id(rowid, user_name) VALUES (?, ?)", (1, account))
             conn.execute("INSERT INTO Name2Id(rowid, user_name) VALUES (?, ?)", (2, username))
-
-            table_name = f"msg_{hashlib.md5(username.encode('utf-8')).hexdigest()}"
             conn.execute(
                 f"""
                 CREATE TABLE {table_name} (
@@ -107,37 +94,33 @@ class TestChatExportImageMd5CandidateFallback(unittest.TestCase):
                     real_sender_id INTEGER,
                     create_time INTEGER,
                     message_content TEXT,
-                    compress_content BLOB
+                    compress_content BLOB,
+                    packed_info_data BLOB
                 )
                 """
             )
-
-            good_md5 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            bad_md5 = "ffffffffffffffffffffffffffffffff"
-            image_xml = f'<msg><img md5="{bad_md5}" hdmd5="{good_md5}" cdnthumburl="img_file_id_1" /></msg>'
-
+            # Clipboard/pasted images can have sparse XML while the usable local basename lives in packed_info_data.
             conn.execute(
-                f"INSERT INTO {table_name} (local_id, server_id, local_type, sort_seq, real_sender_id, create_time, message_content, compress_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (1, 1001, 3, 1, 2, 1735689601, image_xml, None),
+                f"INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    44,
+                    3327480211342082097,
+                    3,
+                    44,
+                    1,
+                    1783152107,
+                    "<msg><img /></msg>",
+                    None,
+                    f"{image_md5}_t.dat".encode("ascii"),
+                ),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def _seed_decrypted_resource(self, account_dir: Path) -> None:
-        resource_root = account_dir / "resource"
-        (resource_root / "aa").mkdir(parents=True, exist_ok=True)
-        (resource_root / "aa" / "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg").write_bytes(b"\xff\xd8\xff\xd9")
-
-    def _prepare_account(self, root: Path, *, account: str, username: str) -> Path:
-        account_dir = root / "output" / "databases" / account
-        account_dir.mkdir(parents=True, exist_ok=True)
-
-        self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
-        self._seed_session_db(account_dir / "session.db", username=username)
-        self._seed_message_db(account_dir / "message_0.db", account=account, username=username)
-        self._seed_decrypted_resource(account_dir)
-        return account_dir
+        resource_dir = account_dir / "resource" / image_md5[:2]
+        resource_dir.mkdir(parents=True, exist_ok=True)
+        resource_dir.joinpath(f"{image_md5}.jpg").write_bytes(b"\xff\xd8\xff\xd9")
 
     def _create_job(self, manager, *, account: str, username: str):
         job = manager.create_job(
@@ -152,7 +135,7 @@ class TestChatExportImageMd5CandidateFallback(unittest.TestCase):
             include_official=False,
             include_media=True,
             media_kinds=["image"],
-            message_types=[],
+            message_types=["image"],
             output_dir=None,
             allow_process_key_extract=False,
             download_remote_media=False,
@@ -164,17 +147,16 @@ class TestChatExportImageMd5CandidateFallback(unittest.TestCase):
             latest = manager.get_job(job.export_id)
             if latest and latest.status in {"done", "error", "cancelled"}:
                 return latest
-            import time as _time
-
-            _time.sleep(0.05)
+            time.sleep(0.05)
         self.fail("export job did not finish in time")
 
-    def test_falls_back_to_secondary_md5_candidate(self):
-        with TemporaryDirectory() as td:
+    def test_html_export_materializes_image_md5_from_packed_info_data(self):
+        with TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td)
             account = "wxid_test"
-            username = "wxid_friend"
-            self._prepare_account(root, account=account, username=username)
+            username = "filehelper"
+            image_md5 = "4c5a64f5aff224ae5c04ce0df516a425"
+            self._prepare_account(root, account=account, username=username, image_md5=image_md5)
 
             prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
             try:
@@ -182,19 +164,18 @@ class TestChatExportImageMd5CandidateFallback(unittest.TestCase):
                 svc = self._reload_export_modules()
                 job = self._create_job(svc.CHAT_EXPORT_MANAGER, account=account, username=username)
                 self.assertEqual(job.status, "done", msg=job.error)
+                self.assertEqual(job.progress.media_missing, 0)
 
                 with zipfile.ZipFile(job.zip_path, "r") as zf:
                     names = set(zf.namelist())
-                    self.assertIn("media/images/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", names)
-                    self.assertFalse(any("ffffffffffffffffffffffffffffffff" in n for n in names if n.startswith("media/images/")))
+                    self.assertIn(f"media/images/{image_md5}.jpg", names)
 
                     html_path = next((n for n in names if n.endswith("/messages.html")), "")
                     self.assertTrue(html_path)
                     html_text = zf.read(html_path).decode("utf-8", errors="ignore")
-                    self.assertIn("../../media/images/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg", html_text)
+                    self.assertIn(f"../../media/images/{image_md5}.jpg", html_text)
             finally:
                 if prev_data is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
                 else:
                     os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
-

@@ -20,6 +20,20 @@ class TestChatSessionPreviewFormatting(unittest.TestCase):
         out = _normalize_session_preview_text("[表情]", is_group=False, sender_display_names={})
         self.assertEqual(out, "[动画表情]")
 
+    def test_normalize_session_preview_english_media_labels(self):
+        cases = [
+            ("image", "[图片]"),
+            ("[Image]", "[图片]"),
+            ("Bob: [Video]", "Bob: [视频]"),
+            ("[location]", "[位置]"),
+            ("mini program", "[小程序]"),
+            ("Alice: voice", "Alice: [语音]"),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                out = _normalize_session_preview_text(raw, is_group=False, sender_display_names={})
+                self.assertEqual(out, expected)
+
     def test_normalize_group_preview_sender_display_name(self):
         out = _normalize_session_preview_text(
             "wxid_u3gwceqvne2m22: [表情]",
