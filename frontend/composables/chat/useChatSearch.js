@@ -5,6 +5,8 @@ import {
   highlightKeyword
 } from '~/lib/chat/formatters'
 
+const DEFAULT_CHAT_SOURCE = 'auto'
+
 export const createEmptySearchContext = () => ({
   active: false,
   kind: 'search',
@@ -212,8 +214,17 @@ return Number(v || 0)
 
 const messageSearchIndexProgressText = computed(() => {
 if (messageSearchIndexBuildStatus.value !== 'building') return ''
+const build = messageSearchIndexInfo.value?.build || {}
 const n = Number(messageSearchIndexBuildIndexed.value || 0)
-return n > 0 ? `已索引 ${n.toLocaleString()} 条` : '准备中...'
+const completed = Number(build.completedConversations || 0)
+const total = Number(build.totalConversations || 0)
+const speed = Number(build.messagesPerSec || 0)
+const parts = []
+if (n > 0) parts.push(`已索引 ${n.toLocaleString()} 条`)
+else parts.push('准备中')
+if (total > 0) parts.push(`会话 ${completed.toLocaleString()}/${total.toLocaleString()}`)
+if (speed > 0) parts.push(`${Math.round(speed).toLocaleString()} 条/秒`)
+return parts.join('，')
 })
 
 const messageSearchIndexText = computed(() => {
@@ -246,13 +257,7 @@ try {
 
 const messageSearchSenderDisabled = computed(() => {
 if (!selectedAccount.value) return true
-const scope = String(messageSearchScope.value || 'conversation')
-if (scope === 'conversation') {
-  return !selectedContact.value?.username
-}
-const q = String(messageSearchQuery.value || '').trim()
-if (q.length >= 2) return false
-return !String(messageSearchSender.value || '').trim()
+return false
 })
 
 const messageSearchSelectedSenderInfo = computed(() => {
@@ -274,9 +279,6 @@ return n ? n.charAt(0) : '人'
 const messageSearchSenderLabel = computed(() => {
 const cur = String(messageSearchSender.value || '').trim()
 if (!cur) {
-  if (String(messageSearchScope.value || '') === 'global' && String(messageSearchQuery.value || '').trim().length < 2) {
-    return '发送者'
-  }
   return '不限发送者'
 }
 const info = messageSearchSelectedSenderInfo.value
@@ -346,7 +348,7 @@ logSearchPhase('search-index-status:start', {
   queryLength: String(messageSearchQuery.value || '').trim().length
 })
 try {
-  const resp = await api.getChatSearchIndexStatus({ account: selectedAccount.value })
+  const resp = await api.getChatSearchIndexStatus({ account: selectedAccount.value, source: DEFAULT_CHAT_SOURCE })
   messageSearchIndexInfo.value = resp?.index || null
   logSearchPhase('search-index-status:end', {
     exists: !!messageSearchIndexInfo.value?.exists,
@@ -376,28 +378,17 @@ const msgQ = String(messageSearchQuery.value || '').trim()
 
 const params = {
   account: selectedAccount.value,
+  source: DEFAULT_CHAT_SOURCE,
   limit: 200
 }
 
 if (scope === 'conversation') {
   if (!selectedContact.value?.username) {
-    messageSearchSenderOptions.value = []
-    messageSearchSenderOptionsKey.value = ''
-    logSearchPhase('search-senders:skip:no-selected-contact', {
-      scope
-    })
-    return []
-  }
-  params.username = selectedContact.value.username
-} else {
-  if (msgQ.length < 2) {
-    messageSearchSenderOptions.value = []
-    messageSearchSenderOptionsKey.value = ''
-    logSearchPhase('search-senders:skip:query-too-short', {
-      scope,
-      queryLength: msgQ.length
-    })
-    return []
+    // 没有当前会话时，“发送者”筛选仍应可点开；按全局索引加载发送者，
+    // 避免按钮在搜索前/结果后看起来失效。
+    logSearchPhase('search-senders:fallback-global:no-selected-contact', { scope })
+  } else {
+    params.username = selectedContact.value.username
   }
 }
 
@@ -520,7 +511,7 @@ const onMessageSearchIndexAction = async () => {
 if (!selectedAccount.value) return
 const rebuild = messageSearchIndexExists.value
 try {
-  const resp = await api.buildChatSearchIndex({ account: selectedAccount.value, rebuild })
+  const resp = await api.buildChatSearchIndex({ account: selectedAccount.value, rebuild, source: DEFAULT_CHAT_SOURCE })
   messageSearchIndexInfo.value = resp?.index || null
   messageSearchBackendStatus.value = 'index_building'
   ensureMessageSearchIndexPolling()
@@ -807,7 +798,8 @@ try {
     account: selectedAccount.value,
     username: selectedContact.value.username,
     year: y,
-    month: m
+    month: m,
+    source: DEFAULT_CHAT_SOURCE
   })
   if (reqId !== timeSidebarReqId) return
   if (String(resp?.status || '') !== 'success') {
@@ -983,6 +975,7 @@ const scope = String(messageSearchScope.value || 'conversation')
 
 const params = {
   account: selectedAccount.value,
+  source: DEFAULT_CHAT_SOURCE,
   q,
   limit: messageSearchLimit,
   offset: messageSearchOffset.value
@@ -1300,7 +1293,8 @@ try {
     username: targetUsername,
     anchor_id: String(hit.id),
     before: 35,
-    after: 35
+    after: 35,
+    source: DEFAULT_CHAT_SOURCE
   })
 
   const raw = resp?.messages || []
@@ -1399,7 +1393,8 @@ try {
     username: u,
     anchor_id: anchor,
     before: 35,
-    after: 35
+    after: 35,
+    source: DEFAULT_CHAT_SOURCE
   })
 
   const raw = resp?.messages || []
@@ -1431,7 +1426,8 @@ try {
     account: selectedAccount.value,
     username: selectedContact.value.username,
     kind: 'day',
-    date: ds
+    date: ds,
+    source: DEFAULT_CHAT_SOURCE
   })
   const status = String(resp?.status || '')
   const anchorId = String(resp?.anchorId || '').trim()
@@ -1454,7 +1450,8 @@ try {
   const resp = await api.getChatMessageAnchor({
     account: selectedAccount.value,
     username: selectedContact.value.username,
-    kind: 'first'
+    kind: 'first',
+    source: DEFAULT_CHAT_SOURCE
   })
   const status = String(resp?.status || '')
   const anchorId = String(resp?.anchorId || '').trim()
@@ -1518,7 +1515,8 @@ try {
     username: ctxUsername,
     anchor_id: anchorId,
     before: 0,
-    after: messagePageSize
+    after: messagePageSize,
+    source: DEFAULT_CHAT_SOURCE
   })
 
   if (!searchContext.value?.active || String(searchContext.value.username || '').trim() !== ctxUsername) return
@@ -1580,7 +1578,8 @@ try {
     username: ctxUsername,
     anchor_id: anchorId,
     before: messagePageSize,
-    after: 0
+    after: 0,
+    source: DEFAULT_CHAT_SOURCE
   })
 
   if (!searchContext.value?.active || String(searchContext.value.username || '').trim() !== ctxUsername) return
@@ -1640,7 +1639,21 @@ logSearchPhase('search-result:click-capture', {
 })
 }
 
-const onSearchHitClick = async (hit, idx) => {
+const isSearchResultSenderEvent = (event) => {
+try {
+  const target = event?.target
+  if (!target || typeof target.closest !== 'function') return false
+  return !!target.closest('.sidebar-result-sender-clickable')
+} catch {
+  return false
+}
+}
+
+const onSearchHitClick = async (hit, idx, event) => {
+if (isSearchResultSenderEvent(event)) {
+  logSearchPhase('onSearchHitClick:ignored-sender', summarizeHitForLog(hit, idx))
+  return
+}
 messageSearchSelectedIndex.value = Number(idx || 0)
 logSearchPhase('onSearchHitClick', {
   ...summarizeHitForLog(hit, idx),
@@ -1651,6 +1664,26 @@ logSearchPhase('onSearchHitClick:done', {
   ...summarizeHitForLog(hit, idx),
   selectedIndex: Number(messageSearchSelectedIndex.value || 0)
 })
+}
+
+const onSearchResultSenderClick = async (hit, event) => {
+try {
+  event?.stopPropagation?.()
+  event?.preventDefault?.()
+} catch {}
+const senderUsername = String(hit?.senderUsername || '').trim()
+if (!senderUsername) return
+logSearchPhase('search-result-sender:click', {
+  hitId: String(hit?.id || '').trim(),
+  senderUsername
+})
+if (String(messageSearchSender.value || '').trim() === senderUsername) {
+  if (String(messageSearchQuery.value || '').trim()) {
+    await runMessageSearch({ reset: true, source: 'result-sender-click-same' })
+  }
+  return
+}
+messageSearchSender.value = senderUsername
 }
 
 const onSearchNext = async () => {
@@ -1806,8 +1839,8 @@ if (!messageSearchOpen.value) return
 if (messageSearchDebounceTimer) clearTimeout(messageSearchDebounceTimer)
 messageSearchDebounceTimer = null
 const q = String(messageSearchQuery.value || '').trim()
-if (q.length < 2) {
-  logSearchPhase('message-search-query:debounce:skip-short', {
+if (!q) {
+  logSearchPhase('message-search-query:debounce:skip-empty', {
     queryLength: q.length
   })
   return
@@ -2079,6 +2112,7 @@ if (c.scrollTop <= 60 && autoLoadReady.value && hasMoreMessages.value && !isLoad
     onSearchHitPointerDown,
     onSearchHitClickCapture,
     onSearchHitClick,
+    onSearchResultSenderClick,
     onSearchNext,
     onSearchPrev,
     syncTimeSidebarSelectedDateFromScroll,

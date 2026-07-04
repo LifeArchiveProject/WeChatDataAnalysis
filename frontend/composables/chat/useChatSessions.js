@@ -192,40 +192,30 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
       return api.listChatSessions(params)
     }
 
-    let sessionsResp = null
     try {
       trace.log('loadSessions:request:start', {
         source: DEFAULT_CHAT_SOURCE
       })
-      sessionsResp = await fetchSessions(DEFAULT_CHAT_SOURCE)
+      const sessionsResp = await fetchSessions(DEFAULT_CHAT_SOURCE)
       trace.log('loadSessions:request:end', {
         source: sessionsResp?.source || DEFAULT_CHAT_SOURCE,
         rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
       })
-    } catch {
-      sessionsResp = null
+      const sessions = Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions : []
+      contacts.value = mapSessions(sessions)
+      contactsError.value = ''
+      trace.log('loadSessions:end', {
+        contactCount: contacts.value.length
+      })
+      return contacts.value
+    } catch (error) {
       trace.log('loadSessions:request:error', {
-        source: DEFAULT_CHAT_SOURCE
+        source: DEFAULT_CHAT_SOURCE,
+        message: error?.message || ''
       })
+      clearContactsState(error?.message || '加载会话失败')
+      return []
     }
-    if (!sessionsResp) {
-      trace.log('loadSessions:request:start', {
-        source: 'default'
-      })
-      sessionsResp = await fetchSessions('')
-      trace.log('loadSessions:request:end', {
-        source: 'default',
-        rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
-      })
-    }
-
-    const sessions = Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions : []
-    contacts.value = mapSessions(sessions)
-    contactsError.value = ''
-    trace.log('loadSessions:end', {
-      contactCount: contacts.value.length
-    })
-    return contacts.value
   }
 
   const refreshSessionsForSelectedAccount = async ({ sourceOverride } = {}) => {
@@ -254,39 +244,22 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
     }
 
     let sessionsResp = null
-    if (desiredSource) {
-      try {
-        trace.log('refreshSessions:request:start', {
-          source: desiredSource
-        })
-        sessionsResp = await api.listChatSessions({ ...params, source: desiredSource })
-        trace.log('refreshSessions:request:end', {
-          source: desiredSource,
-          rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
-        })
-      } catch {
-        sessionsResp = null
-        trace.log('refreshSessions:request:error', {
-          source: desiredSource
-        })
-      }
-    }
-    if (!sessionsResp) {
-      try {
-        trace.log('refreshSessions:request:start', {
-          source: 'default'
-        })
-        sessionsResp = await api.listChatSessions(params)
-        trace.log('refreshSessions:request:end', {
-          source: 'default',
-          rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
-        })
-      } catch {
-        trace.log('refreshSessions:request:error', {
-          source: 'default'
-        })
-        return
-      }
+    try {
+      trace.log('refreshSessions:request:start', {
+        source: desiredSource || DEFAULT_CHAT_SOURCE
+      })
+      sessionsResp = await api.listChatSessions({ ...params, source: desiredSource || DEFAULT_CHAT_SOURCE })
+      trace.log('refreshSessions:request:end', {
+        source: sessionsResp?.source || desiredSource || DEFAULT_CHAT_SOURCE,
+        rawCount: Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions.length : 0
+      })
+    } catch (error) {
+      trace.log('refreshSessions:request:error', {
+        source: desiredSource || DEFAULT_CHAT_SOURCE,
+        message: error?.message || ''
+      })
+      contactsError.value = error?.message || '刷新会话失败'
+      return
     }
 
     const sessions = Array.isArray(sessionsResp?.sessions) ? sessionsResp.sessions : []
@@ -330,7 +303,7 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
       }
 
       if (!selectedAccount.value) {
-        clearContactsState(chatAccounts.error || '未检测到已解密账号，请先解密数据库。')
+        clearContactsState(chatAccounts.error || '未检测到聊天账号，请先保存密钥/db_storage 路径或使用旧模式解密数据库。')
         trace.log('loadContacts:no-account', {
           error: contactsError.value
         })

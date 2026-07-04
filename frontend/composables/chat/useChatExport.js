@@ -254,6 +254,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     try {
       const response = await api.getChatExportTargets({
         account: selectedAccount.value,
+        source: 'auto',
         include_hidden: true,
         include_official: false
       })
@@ -631,6 +632,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     try {
       const response = await api.createChatExport({
         account: selectedAccount.value,
+        source: 'auto',
         scope,
         usernames,
         format: exportFormat.value,
