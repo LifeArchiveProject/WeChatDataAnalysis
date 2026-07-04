@@ -59,7 +59,12 @@ class TestChatListMessagesReScope(unittest.TestCase):
                 chat, "_load_contact_rows", side_effect=sentinel
             ):
                 with self.assertRaises(_Sentinel):
-                    chat.list_chat_messages(request=request, username="44372432598@chatroom", account="acc")
+                    chat.list_chat_messages(
+                        request=request,
+                        username="44372432598@chatroom",
+                        account="acc",
+                        source="decrypted",
+                    )
 
 
 if __name__ == "__main__":

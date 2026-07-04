@@ -68,7 +68,7 @@ from ..chat_helpers import (
     _split_group_sender_prefix,
     _to_char_token_text,
 )
-from ..media_helpers import _resolve_account_db_storage_dir, _try_find_decrypted_resource
+from ..media_helpers import _clean_weflow_account_dir_name, _resolve_account_db_storage_dir, _try_find_decrypted_resource
 from .. import chat_edit_store
 from ..app_paths import get_output_dir
 from ..database_filters import list_countable_database_names
@@ -1470,6 +1470,28 @@ def _coerce_realtime_blobish_value(value: Any) -> Any:
     return value
 
 
+def _coerce_realtime_packed_info_value(value: Any) -> Any:
+    """Normalize realtime packed_info_data without losing plain md5 tokens."""
+
+    raw = value
+    if isinstance(raw, memoryview):
+        raw = raw.tobytes()
+    if isinstance(raw, bytearray):
+        raw = bytes(raw)
+    if isinstance(raw, bytes):
+        try:
+            s = raw.decode("ascii").strip()
+        except Exception:
+            s = ""
+        if _is_hex_md5(s):
+            return s.lower()
+    if isinstance(raw, str):
+        s = raw.strip()
+        if _is_hex_md5(s):
+            return s.lower()
+    return _coerce_realtime_blobish_value(value)
+
+
 def _normalize_realtime_message_item(item: dict[str, Any]) -> dict[str, Any]:
     def _pick(*keys: str) -> Any:
         return _pick_case_insensitive_value(item, *keys)
@@ -1497,7 +1519,7 @@ def _normalize_realtime_message_item(item: dict[str, Any]) -> dict[str, Any]:
         "compress_content": _coerce_realtime_blobish_value(
             _pick("compress_content", "compressContent", "CompressContent")
         ),
-        "packed_info_data": _coerce_realtime_blobish_value(
+        "packed_info_data": _coerce_realtime_packed_info_value(
             _pick("packed_info_data", "packedInfoData", "PackedInfoData")
         ),
         "sender_username": str(
@@ -5234,6 +5256,199 @@ def _fetch_realtime_message_rows(
     return rows, truncated, scanned
 
 
+def _iter_realtime_message_db_paths(account_dir: Path, username: str) -> list[Path]:
+    """Return live db_storage/message DB candidates for a conversation.
+
+    This stays in realtime scope: it only looks under the original db_storage path,
+    not the decrypted output snapshot.
+    """
+
+    db_storage_dir = _resolve_account_db_storage_dir(account_dir)
+    if db_storage_dir is None:
+        return []
+    message_dir = Path(db_storage_dir) / "message"
+    try:
+        if not message_dir.exists() or not message_dir.is_dir():
+            return []
+    except Exception:
+        return []
+
+    normal: list[Path] = []
+    biz: list[Path] = []
+    other: list[Path] = []
+    try:
+        for p in message_dir.iterdir():
+            try:
+                if not p.is_file():
+                    continue
+            except Exception:
+                continue
+            ln = p.name.lower()
+            if re.match(r"^message(_\d+)?\.db$", ln):
+                normal.append(p)
+            elif re.match(r"^biz_message(_\d+)?\.db$", ln):
+                biz.append(p)
+            elif ln.endswith(".db") and "message" in ln:
+                other.append(p)
+    except Exception:
+        return []
+
+    normal.sort(key=lambda x: x.name.lower())
+    biz.sort(key=lambda x: x.name.lower())
+    other.sort(key=lambda x: x.name.lower())
+
+    uname = str(username or "").strip()
+    if uname.startswith("gh_"):
+        return biz + normal + other
+    return normal + biz + other
+
+
+def _resolve_realtime_message_db_table_via_exec(
+    *,
+    rt_conn: Any,
+    account_dir: Path,
+    username: str,
+) -> Optional[tuple[Path, str]]:
+    """Resolve the live message DB/table with explicit WCDB exec_query.
+
+    The high-level native `wcdb_get_messages` path has its own message-db cache
+    and can return an empty list even when db_storage/message/message_*.db has
+    the Msg_<md5> table. This resolver bypasses that cache by specifying the
+    exact live DB path.
+    """
+
+    uname = str(username or "").strip()
+    if not uname:
+        return None
+    import hashlib
+
+    expected = f"Msg_{hashlib.md5(uname.encode('utf-8')).hexdigest()}"
+    sql = (
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND lower(name)=lower("
+        + _sql_literal(expected)
+        + ") LIMIT 1"
+    )
+
+    for db_path in _iter_realtime_message_db_paths(account_dir, uname):
+        try:
+            rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=sql)
+        except Exception:
+            continue
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            actual = str(_pick_case_insensitive_value(row, "name") or "").strip()
+            if actual:
+                return db_path, actual
+    return None
+
+
+def _lookup_realtime_my_rowid_via_exec(
+    *,
+    rt_conn: Any,
+    db_path: Path,
+    account_dir: Path,
+) -> Optional[int]:
+    candidates: list[str] = []
+    for value in (
+        getattr(rt_conn, "native_wxid", ""),
+        account_dir.name,
+        _clean_weflow_account_dir_name(account_dir.name),
+    ):
+        v = str(value or "").strip()
+        if v and v not in candidates:
+            candidates.append(v)
+    if not candidates:
+        return None
+
+    values = ", ".join(_sql_literal(v) for v in candidates)
+    order = " ".join(
+        f"WHEN user_name = {_sql_literal(v)} THEN {i}" for i, v in enumerate(candidates)
+    )
+    sql = (
+        "SELECT rowid AS rowid FROM Name2Id "
+        f"WHERE user_name IN ({values}) "
+        f"ORDER BY CASE {order} ELSE {len(candidates)} END "
+        "LIMIT 1"
+    )
+    try:
+        rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=sql)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    try:
+        rowid = int(_pick_case_insensitive_value(rows[0], "rowid") or 0)
+    except Exception:
+        rowid = 0
+    return rowid if rowid > 0 else None
+
+
+def _fetch_realtime_message_rows_via_exec(
+    *,
+    rt_conn: Any,
+    account_dir: Path,
+    username: str,
+    take: int,
+) -> tuple[list[dict[str, Any]], bool, Optional[Path], str, Optional[int]]:
+    """Fetch newest-first live rows via explicit db_storage/message SQL.
+
+    Returns (rows, has_more, db_path, table_name, my_rowid).
+    """
+
+    if int(take) <= 0:
+        return [], False, None, "", None
+    resolved = _resolve_realtime_message_db_table_via_exec(
+        rt_conn=rt_conn,
+        account_dir=account_dir,
+        username=username,
+    )
+    if resolved is None:
+        return [], False, None, "", None
+
+    db_path, table_name = resolved
+    my_rowid = _lookup_realtime_my_rowid_via_exec(rt_conn=rt_conn, db_path=db_path, account_dir=account_dir)
+
+    quoted_table = _quote_ident(table_name)
+    limit_probe = int(take) + 1
+    base_cols = (
+        "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
+        "m.message_content, m.compress_content, "
+    )
+    packed_select = "m.packed_info_data AS packed_info_data, "
+    sender_join = "n.user_name AS sender_username "
+    sql_with_join = (
+        "SELECT "
+        + base_cols
+        + packed_select
+        + sender_join
+        + f"FROM {quoted_table} m "
+        + "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
+        + "ORDER BY m.create_time DESC, m.sort_seq DESC, m.local_id DESC "
+        + f"LIMIT {int(limit_probe)}"
+    )
+    sql_no_packed = (
+        "SELECT "
+        + base_cols
+        + "NULL AS packed_info_data, "
+        + sender_join
+        + f"FROM {quoted_table} m "
+        + "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
+        + "ORDER BY m.create_time DESC, m.sort_seq DESC, m.local_id DESC "
+        + f"LIMIT {int(limit_probe)}"
+    )
+    try:
+        raw_rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=sql_with_join)
+    except Exception:
+        raw_rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=sql_no_packed)
+
+    has_more = len(raw_rows or []) > int(take)
+    raw_rows = list(raw_rows or [])[: int(take)]
+    rows = [_normalize_realtime_message_item(r) for r in raw_rows if isinstance(r, dict)]
+    return rows, bool(has_more), db_path, table_name, my_rowid
+
+
 def _sort_realtime_rows_chronological(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         rows,
@@ -5647,6 +5862,8 @@ def list_chat_messages(
         # Realtime mode: fetch from newest (offset handled after render_type filtering).
         table_name = _realtime_message_table_name(username)
         rt_db_path = _realtime_message_db_path(account_dir)
+        my_rowid_realtime: Optional[int] = None
+        used_exec_query = False
 
         while True:
             probe = int(scan_take) + 1
@@ -5655,17 +5872,44 @@ def list_chat_messages(
             if probe > 50000:
                 probe = 50000
 
-            with rt_conn.lock:
-                raw_rows = _wcdb_get_messages(rt_conn.handle, username, limit=probe, offset=0)
-            has_more_any = len(raw_rows) > int(scan_take)
-            raw_rows = raw_rows[: int(scan_take)] if int(scan_take) > 0 else []
+            norm_rows: list[dict[str, Any]] = []
+            try:
+                with rt_conn.lock:
+                    (
+                        norm_rows,
+                        has_more_any,
+                        exec_db_path,
+                        exec_table_name,
+                        my_rowid_realtime,
+                    ) = _fetch_realtime_message_rows_via_exec(
+                        rt_conn=rt_conn,
+                        account_dir=account_dir,
+                        username=username,
+                        take=int(scan_take),
+                    )
+                if exec_db_path is not None:
+                    used_exec_query = True
+                    rt_db_path = exec_db_path
+                    table_name = exec_table_name or table_name
+                else:
+                    used_exec_query = False
+            except Exception as e:
+                trace("realtime:exec-query:error", error=str(e))
+                norm_rows = []
+                used_exec_query = False
+
+            if not used_exec_query:
+                with rt_conn.lock:
+                    raw_rows = _wcdb_get_messages(rt_conn.handle, username, limit=probe, offset=0)
+                has_more_any = len(raw_rows) > int(scan_take)
+                raw_rows = raw_rows[: int(scan_take)] if int(scan_take) > 0 else []
+                norm_rows = [_normalize_realtime_message_item(r) for r in raw_rows if isinstance(r, dict)]
 
             merged = []
             sender_usernames = []
             quote_usernames = []
             pat_usernames = set()
 
-            norm_rows = [_normalize_realtime_message_item(r) for r in raw_rows if isinstance(r, dict)]
             _append_full_messages_from_rows(
                 merged=merged,
                 sender_usernames=sender_usernames,
@@ -5677,7 +5921,7 @@ def list_chat_messages(
                 username=username,
                 account_dir=account_dir,
                 is_group=bool(username.endswith("@chatroom")),
-                my_rowid=None,
+                my_rowid=my_rowid_realtime if used_exec_query else None,
                 resource_conn=resource_conn,
                 resource_chat_id=resource_chat_id,
             )
