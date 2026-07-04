@@ -55,8 +55,12 @@ VSVersionInfo(
 `;
 }
 
+function pyInstallerAddData(sourcePath, targetPath) {
+  return `${sourcePath}${path.delimiter}${targetPath}`;
+}
+
 const nativeDir = path.join(repoRoot, "src", "wechat_decrypt_tool", "native");
-const addData = `${nativeDir};wechat_decrypt_tool/native`;
+const skillDir = path.join(repoRoot, "skills", "wechat-mcp-copilot");
 const projectToml = path.join(repoRoot, "pyproject.toml");
 
 const desktopPackageJsonPath = path.join(repoRoot, "desktop", "package.json");
@@ -88,7 +92,9 @@ const args = [
   "--version-file",
   versionFilePath,
   "--add-data",
-  addData,
+  pyInstallerAddData(nativeDir, "wechat_decrypt_tool/native"),
+  "--add-data",
+  pyInstallerAddData(skillDir, "skills/wechat-mcp-copilot"),
   entry,
 ];
 

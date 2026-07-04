@@ -148,6 +148,13 @@ FunctionEnd
 Function WDA_OutputDirPageCreate
   Call WDA_InitOutputDirSelection
 
+  ; If the user already moved output away from the default AppData location,
+  ; keep that choice silently on install/update. Only show this migration prompt
+  ; while the effective output directory is still the default.
+  ${If} $WDA_SelectedOutputDir != "${WDA_DEFAULT_OUTPUT_DIR}"
+    Abort
+  ${EndIf}
+
   nsDialogs::Create 1018
   Pop $WDA_OutputDirPage
 
