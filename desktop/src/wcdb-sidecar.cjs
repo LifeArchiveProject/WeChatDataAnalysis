@@ -169,6 +169,18 @@ function loadNative() {
   funcs.wcdb_get_messages = tryFunc(
     "int32 wcdb_get_messages(int64 handle, const char* username, int32 limit, int32 offset, _Out_ void** outJson)"
   );
+  funcs.wcdb_open_message_cursor = tryFunc(
+    "int32 wcdb_open_message_cursor(int64 handle, const char* sessionId, int32 batchSize, int32 ascending, int32 beginTimestamp, int32 endTimestamp, _Out_ int64* cursor)"
+  );
+  funcs.wcdb_open_message_cursor_lite = tryFunc(
+    "int32 wcdb_open_message_cursor_lite(int64 handle, const char* sessionId, int32 batchSize, int32 ascending, int32 beginTimestamp, int32 endTimestamp, _Out_ int64* cursor)"
+  );
+  funcs.wcdb_fetch_message_batch = tryFunc(
+    "int32 wcdb_fetch_message_batch(int64 handle, int64 cursor, _Out_ void** outJson, _Out_ int32* hasMore)"
+  );
+  funcs.wcdb_close_message_cursor = tryFunc(
+    "int32 wcdb_close_message_cursor(int64 handle, int64 cursor)"
+  );
   funcs.wcdb_get_message_count = tryFunc(
     "int32 wcdb_get_message_count(int64 handle, const char* username, _Out_ int32* count)"
   );
@@ -177,6 +189,9 @@ function loadNative() {
   );
   funcs.wcdb_get_avatar_urls = tryFunc(
     "int32 wcdb_get_avatar_urls(int64 handle, const char* usernamesJson, _Out_ void** outJson)"
+  );
+  funcs.wcdb_get_contact = tryFunc(
+    "int32 wcdb_get_contact(int64 handle, const char* username, _Out_ void** outJson)"
   );
   funcs.wcdb_get_group_member_count = tryFunc(
     "int32 wcdb_get_group_member_count(int64 handle, const char* chatroomId, _Out_ int32* count)"
@@ -362,6 +377,48 @@ function handleAction(action, payload) {
         ]),
       };
 
+    case "open_message_cursor":
+    case "open_message_cursor_lite": {
+      const fnName = action === "open_message_cursor_lite" ? "wcdb_open_message_cursor_lite" : "wcdb_open_message_cursor";
+      const out = [0];
+      const rc = Number(
+        requireFunc(fnName)(
+          normalizeHandle(data.handle),
+          String(data.session_id || "").trim(),
+          Number.parseInt(String(data.batch_size || 0), 10) || 1,
+          data.ascending ? 1 : 0,
+          Number.parseInt(String(data.begin_timestamp || 0), 10) || 0,
+          Number.parseInt(String(data.end_timestamp || 0), 10) || 0,
+          out
+        )
+      );
+      const cursor = Number(out[0] || 0);
+      if (rc !== 0 || cursor <= 0) throw new ApiError(`${fnName} failed`, rc);
+      return { cursor, rc };
+    }
+
+    case "fetch_message_batch": {
+      const fn = requireFunc("wcdb_fetch_message_batch");
+      const out = [null];
+      const outHasMore = [0];
+      const rc = Number(fn(normalizeHandle(data.handle), normalizeHandle(data.cursor), out, outHasMore));
+      try {
+        if (rc !== 0 || !out[0]) throw new ApiError("wcdb_fetch_message_batch failed", rc);
+        return {
+          payload: ptrToString(out[0]),
+          hasMore: Number(outHasMore[0] || 0) === 1,
+          rc,
+        };
+      } finally {
+        freeStringPtr(out[0]);
+      }
+    }
+
+    case "close_message_cursor": {
+      const rc = Number(requireFunc("wcdb_close_message_cursor")(normalizeHandle(data.handle), normalizeHandle(data.cursor)));
+      return { closed: rc === 0, rc };
+    }
+
     case "get_message_count": {
       const out = [0];
       const rc = Number(
@@ -383,6 +440,14 @@ function handleAction(action, payload) {
         payload: callOutJson("wcdb_get_avatar_urls", [
           normalizeHandle(data.handle),
           JSON.stringify(Array.isArray(data.usernames) ? data.usernames : []),
+        ]),
+      };
+
+    case "get_contact":
+      return {
+        payload: callOutJson("wcdb_get_contact", [
+          normalizeHandle(data.handle),
+          String(data.username || "").trim(),
         ]),
       };
 

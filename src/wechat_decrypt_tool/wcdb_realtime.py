@@ -609,6 +609,13 @@ def _load_wcdb_lib() -> ctypes.CDLL:
         lib.wcdb_get_avatar_urls.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_char_p)]
         lib.wcdb_get_avatar_urls.restype = ctypes.c_int
 
+        # Optional (newer DLLs): wcdb_get_contact(handle, username, out_json)
+        try:
+            lib.wcdb_get_contact.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_char_p)]
+            lib.wcdb_get_contact.restype = ctypes.c_int
+        except Exception:
+            pass
+
         lib.wcdb_get_group_member_count.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int32)]
         lib.wcdb_get_group_member_count.restype = ctypes.c_int
 
@@ -637,6 +644,50 @@ def _load_wcdb_lib() -> ctypes.CDLL:
                 ctypes.POINTER(ctypes.c_char_p),
             ]
             lib.wcdb_exec_query.restype = ctypes.c_int
+        except Exception:
+            pass
+
+        # Optional (newer DLLs): native message cursor used by WeFlow for stable
+        # latest/history paging across message_*.db shards.
+        try:
+            lib.wcdb_open_message_cursor.argtypes = [
+                ctypes.c_int64,
+                ctypes.c_char_p,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.POINTER(ctypes.c_int64),
+            ]
+            lib.wcdb_open_message_cursor.restype = ctypes.c_int
+        except Exception:
+            pass
+        try:
+            lib.wcdb_open_message_cursor_lite.argtypes = [
+                ctypes.c_int64,
+                ctypes.c_char_p,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.c_int32,
+                ctypes.POINTER(ctypes.c_int64),
+            ]
+            lib.wcdb_open_message_cursor_lite.restype = ctypes.c_int
+        except Exception:
+            pass
+        try:
+            lib.wcdb_fetch_message_batch.argtypes = [
+                ctypes.c_int64,
+                ctypes.c_int64,
+                ctypes.POINTER(ctypes.c_char_p),
+                ctypes.POINTER(ctypes.c_int32),
+            ]
+            lib.wcdb_fetch_message_batch.restype = ctypes.c_int
+        except Exception:
+            pass
+        try:
+            lib.wcdb_close_message_cursor.argtypes = [ctypes.c_int64, ctypes.c_int64]
+            lib.wcdb_close_message_cursor.restype = ctypes.c_int
         except Exception:
             pass
 
@@ -1086,6 +1137,31 @@ def get_avatar_urls(handle: int, usernames: list[str]) -> dict[str, str]:
     return {}
 
 
+def get_contact(handle: int, username: str) -> dict[str, Any]:
+    _ensure_initialized()
+    u = str(username or "").strip()
+    if not u:
+        return {}
+
+    if _sidecar_enabled():
+        out_json = _sidecar_payload(
+            "get_contact",
+            {"handle": int(handle), "username": u},
+            timeout=30.0,
+        )
+        decoded = _safe_load_json(out_json)
+        return decoded if isinstance(decoded, dict) else {}
+
+    lib = _load_wcdb_lib()
+    fn = getattr(lib, "wcdb_get_contact", None)
+    if not fn:
+        raise WCDBRealtimeError("Current wcdb_api.dll does not support get_contact.")
+
+    out_json = _call_out_json(fn, ctypes.c_int64(int(handle)), u.encode("utf-8"))
+    decoded = _safe_load_json(out_json)
+    return decoded if isinstance(decoded, dict) else {}
+
+
 def get_group_members(handle: int, chatroom_id: str) -> list[dict[str, Any]]:
     _ensure_initialized()
     cid = str(chatroom_id or "").strip()
@@ -1198,6 +1274,138 @@ def exec_query(handle: int, *, kind: str, path: Optional[str], sql: str) -> list
                 out.append(x)
         return out
     return []
+
+
+def open_message_cursor(
+    handle: int,
+    session_id: str,
+    *,
+    batch_size: int,
+    ascending: bool = False,
+    begin_timestamp: int = 0,
+    end_timestamp: int = 0,
+    lite: bool = False,
+) -> int:
+    """Open the native WeFlow-style message cursor.
+
+    The cursor API is important for live chat paging because the native layer
+    owns cross-`message_*.db` discovery/merge and can see the same live view
+    WeFlow uses instead of a single explicit SQL table.
+    """
+
+    _ensure_initialized()
+    sid = str(session_id or "").strip()
+    if not sid:
+        return 0
+    size = max(1, int(batch_size or 1))
+    asc = 1 if ascending else 0
+    begin = max(0, int(begin_timestamp or 0))
+    end = max(0, int(end_timestamp or 0))
+
+    action = "open_message_cursor_lite" if lite else "open_message_cursor"
+    if _sidecar_enabled():
+        result = _sidecar_call(
+            action,
+            {
+                "handle": int(handle),
+                "session_id": sid,
+                "batch_size": int(size),
+                "ascending": bool(ascending),
+                "begin_timestamp": int(begin),
+                "end_timestamp": int(end),
+            },
+            timeout=30.0,
+        )
+        try:
+            return int(result.get("cursor") or 0)
+        except Exception:
+            return 0
+
+    lib = _load_wcdb_lib()
+    fn = getattr(lib, "wcdb_open_message_cursor_lite" if lite else "wcdb_open_message_cursor", None)
+    if not fn:
+        if lite:
+            fn = getattr(lib, "wcdb_open_message_cursor", None)
+        if not fn:
+            return 0
+
+    out_cursor = ctypes.c_int64(0)
+    rc = int(
+        fn(
+            ctypes.c_int64(int(handle)),
+            sid.encode("utf-8"),
+            ctypes.c_int32(int(size)),
+            ctypes.c_int32(int(asc)),
+            ctypes.c_int32(int(begin)),
+            ctypes.c_int32(int(end)),
+            ctypes.byref(out_cursor),
+        )
+    )
+    if rc != 0 or int(out_cursor.value) <= 0:
+        return 0
+    return int(out_cursor.value)
+
+
+def fetch_message_batch(handle: int, cursor: int) -> tuple[list[dict[str, Any]], bool]:
+    _ensure_initialized()
+    cur = int(cursor or 0)
+    if cur <= 0:
+        return [], False
+
+    if _sidecar_enabled():
+        result = _sidecar_call(
+            "fetch_message_batch",
+            {"handle": int(handle), "cursor": int(cur)},
+            timeout=30.0,
+        )
+        decoded = _safe_load_json(str(result.get("payload") or ""))
+        rows = [x for x in decoded if isinstance(x, dict)] if isinstance(decoded, list) else []
+        return rows, bool(result.get("hasMore"))
+
+    lib = _load_wcdb_lib()
+    fn = getattr(lib, "wcdb_fetch_message_batch", None)
+    if not fn:
+        return [], False
+
+    out_json = ctypes.c_char_p()
+    out_has_more = ctypes.c_int32(0)
+    rc = int(fn(ctypes.c_int64(int(handle)), ctypes.c_int64(cur), ctypes.byref(out_json), ctypes.byref(out_has_more)))
+    try:
+        if rc != 0 or not out_json.value:
+            return [], False
+        payload = out_json.value.decode("utf-8", errors="replace")
+    finally:
+        try:
+            if out_json.value:
+                lib.wcdb_free_string(out_json)
+        except Exception:
+            pass
+    decoded = _safe_load_json(payload)
+    rows = [x for x in decoded if isinstance(x, dict)] if isinstance(decoded, list) else []
+    return rows, bool(int(out_has_more.value or 0) == 1)
+
+
+def close_message_cursor(handle: int, cursor: int) -> None:
+    _ensure_initialized()
+    cur = int(cursor or 0)
+    if cur <= 0:
+        return
+
+    if _sidecar_enabled():
+        try:
+            _sidecar_call("close_message_cursor", {"handle": int(handle), "cursor": int(cur)}, timeout=5.0)
+        except Exception:
+            pass
+        return
+
+    lib = _load_wcdb_lib()
+    fn = getattr(lib, "wcdb_close_message_cursor", None)
+    if not fn:
+        return
+    try:
+        fn(ctypes.c_int64(int(handle)), ctypes.c_int64(cur))
+    except Exception:
+        return
 
 
 def update_message(handle: int, *, session_id: str, local_id: int, create_time: int, new_content: str) -> None:
