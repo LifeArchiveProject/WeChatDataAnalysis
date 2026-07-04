@@ -95,6 +95,10 @@ const args = [
   pyInstallerAddData(nativeDir, "wechat_decrypt_tool/native"),
   "--add-data",
   pyInstallerAddData(skillDir, "skills/wechat-mcp-copilot"),
+  "--hidden-import",
+  "wechat_decrypt_tool.key_v4",
+  "--hidden-import",
+  "yara",
   entry,
 ];
 

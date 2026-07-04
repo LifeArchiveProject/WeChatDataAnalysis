@@ -13,13 +13,11 @@ import psutil
 import subprocess
 import hashlib
 import os
-import sys
 import json
 import re
 import random
 import logging
 import asyncio
-import importlib
 import httpx
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -442,15 +440,12 @@ def _get_db_key_with_v4(
         candidate_plan.extend((candidate, "scan.py") for candidate in scan_candidates)
 
     try:
-        root_dir = Path(__file__).resolve().parents[2]
-        if str(root_dir) not in sys.path:
-            sys.path.insert(0, str(root_dir))
-        key_v4_module = importlib.import_module("key_v4")
+        from . import key_v4 as key_v4_module
     except Exception as e:
-        raise RuntimeError(f"根目录 key_v4.py 加载失败: {e}") from e
+        raise RuntimeError(f"包内 key_v4.py 加载失败: {e}") from e
 
     if not hasattr(key_v4_module, "recover_key"):
-        raise RuntimeError("根目录 key_v4.py 缺少 recover_key 函数")
+        raise RuntimeError("包内 key_v4.py 缺少 recover_key 函数")
 
     try:
         import pymem as _pymem
