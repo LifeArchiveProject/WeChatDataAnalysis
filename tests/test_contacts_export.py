@@ -585,6 +585,151 @@ class TestContactsExport(unittest.TestCase):
                 else:
                     os.environ["WECHAT_TOOL_DATA_DIR"] = prev
 
+    def test_contact_profile_auto_reads_realtime_contact_table_without_session_match(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        with TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            root = Path(td)
+            account = "wxid_direct"
+            account_dir = root / "output" / "databases" / account
+            account_dir.mkdir(parents=True, exist_ok=True)
+            (account_dir / "_source.json").write_text(
+                json.dumps({"db_storage_path": str(root / "WeChat" / "db_storage")}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            prev = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+            try:
+                import wechat_decrypt_tool.chat_accounts as chat_accounts
+                import wechat_decrypt_tool.chat_helpers as chat_helpers
+                import wechat_decrypt_tool.routers.chat_contacts as chat_contacts
+
+                importlib.reload(chat_accounts)
+                importlib.reload(chat_helpers)
+                importlib.reload(chat_contacts)
+
+                app = FastAPI()
+                app.include_router(chat_contacts.router)
+                client = TestClient(app)
+
+                username = "wxid_group_member"
+                extra_buffer = self._build_extra_buffer(
+                    country="CN",
+                    province="Jiangsu",
+                    city="Nanjing",
+                    source_scene=14,
+                    gender=2,
+                    signature="签名来自 extra_buffer",
+                )
+                contact_row = {
+                    "username": username,
+                    "remark": "",
+                    "nick_name": "群成员昵称",
+                    "alias": "member_alias",
+                    "local_type": 3,
+                    "verify_flag": 0,
+                    "big_head_url": "https://cdn.example.com/member_big.jpg",
+                    "small_head_url": "",
+                    # realtime exec_query JSON 通常把 BLOB 转成十六进制字符串。
+                    "extra_buffer": extra_buffer.hex(),
+                }
+
+                def fake_exec_query(_handle, *, kind, path, sql):
+                    self.assertEqual(kind, "contact")
+                    self.assertIsNone(path)
+                    if "FROM contact" in sql and username in sql:
+                        return [contact_row]
+                    return []
+
+                rt_conn = SimpleNamespace(handle=1, lock=threading.Lock())
+                with (
+                    patch.object(chat_contacts.WCDB_REALTIME, "ensure_connected", return_value=rt_conn),
+                    patch.object(chat_contacts, "_wcdb_get_contact", side_effect=RuntimeError("native API missing")),
+                    patch.object(chat_contacts, "_wcdb_exec_query", side_effect=fake_exec_query),
+                    patch.object(chat_contacts, "_wcdb_get_sessions", side_effect=AssertionError("profile must not depend on sessions")),
+                ):
+                    resp = client.get(
+                        "/api/chat/contacts/profile",
+                        params={
+                            "account": account,
+                            "source": "auto",
+                            "username": username,
+                        },
+                    )
+
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.json()
+                self.assertEqual(payload.get("source"), "realtime")
+                self.assertTrue(payload.get("found"))
+                contact = payload.get("contact") or {}
+                self.assertEqual(contact.get("username"), username)
+                self.assertEqual(contact.get("displayName"), "群成员昵称")
+                self.assertEqual(contact.get("nickname"), "群成员昵称")
+                self.assertEqual(contact.get("alias"), "member_alias")
+                self.assertEqual(contact.get("type"), "friend")
+                self.assertEqual(contact.get("gender"), 2)
+                self.assertEqual(contact.get("signature"), "签名来自 extra_buffer")
+                self.assertEqual(contact.get("region"), "中国大陆·Jiangsu·Nanjing")
+                self.assertEqual(contact.get("sourceScene"), 14)
+                self.assertEqual(contact.get("source"), "通过群聊添加")
+                self.assertEqual(contact.get("avatarLink"), "https://cdn.example.com/member_big.jpg")
+            finally:
+                if prev is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev
+
+    def test_contact_profile_decrypted_does_not_reuse_contact_list_filters(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            account_dir = root / "output" / "databases" / account
+            account_dir.mkdir(parents=True, exist_ok=True)
+
+            self._seed_contact_db(account_dir / "contact.db")
+            self._seed_session_db(account_dir / "session.db")
+
+            prev = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+            try:
+                import wechat_decrypt_tool.chat_helpers as chat_helpers
+                import wechat_decrypt_tool.routers.chat_contacts as chat_contacts
+
+                importlib.reload(chat_helpers)
+                importlib.reload(chat_contacts)
+
+                app = FastAPI()
+                app.include_router(chat_contacts.router)
+                client = TestClient(app)
+
+                resp = client.get(
+                    "/api/chat/contacts/profile",
+                    params={
+                        "account": account,
+                        "source": "decrypted",
+                        "username": "wxid_local_type_3",
+                    },
+                )
+
+                self.assertEqual(resp.status_code, 200)
+                payload = resp.json()
+                self.assertTrue(payload.get("found"))
+                contact = payload.get("contact") or {}
+                self.assertEqual(contact.get("username"), "wxid_local_type_3")
+                self.assertEqual(contact.get("displayName"), "不应计入联系人")
+                self.assertEqual(contact.get("nickname"), "不应计入联系人")
+                self.assertEqual(contact.get("type"), "friend")
+            finally:
+                if prev is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev
+
     def test_legacy_schema_without_extra_buffer_is_compatible(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
