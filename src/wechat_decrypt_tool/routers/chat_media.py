@@ -378,6 +378,45 @@ def _should_prefer_live_image_candidates(
     return False
 
 
+def _detect_image_payload_dimensions(data: bytes, media_type: str) -> tuple[int, int]:
+    payload = bytes(data or b"")
+    mt = str(media_type or "").strip().lower()
+    try:
+        if mt == "image/png" and len(payload) >= 24 and payload.startswith(b"\x89PNG\r\n\x1a\n"):
+            return int.from_bytes(payload[16:20], "big"), int.from_bytes(payload[20:24], "big")
+        if mt == "image/gif" and len(payload) >= 10 and payload.startswith((b"GIF87a", b"GIF89a")):
+            return int.from_bytes(payload[6:8], "little"), int.from_bytes(payload[8:10], "little")
+        if mt == "image/jpeg" and len(payload) >= 4 and payload.startswith(b"\xff\xd8"):
+            i = 2
+            while i < len(payload) - 9:
+                if payload[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = payload[i + 1]
+                i += 2
+                if marker in (0xD8, 0xD9):
+                    continue
+                if i + 2 > len(payload):
+                    break
+                seg_len = int.from_bytes(payload[i : i + 2], "big")
+                if seg_len < 2:
+                    break
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                    if i + 7 <= len(payload):
+                        return int.from_bytes(payload[i + 5 : i + 7], "big"), int.from_bytes(payload[i + 3 : i + 5], "big")
+                    break
+                i += seg_len
+    except Exception:
+        return 0, 0
+    return 0, 0
+
+
+def _image_payload_score(data: bytes, media_type: str) -> tuple[int, int]:
+    width, height = _detect_image_payload_dimensions(data, media_type)
+    area = int(width or 0) * int(height or 0)
+    return area, len(data or b"")
+
+
 def _write_cached_chat_image(account_dir: Path, md5: str, data: bytes) -> None:
     md5_norm = str(md5 or "").strip().lower()
     if (not md5_norm) or (not data):
@@ -1150,6 +1189,153 @@ def _lookup_image_md5_by_server_id_from_messages(account_dir_str: str, server_id
     return ""
 
 
+def _quote_sql_identifier(value: str) -> str:
+    return '"' + str(value or "").replace('"', '""') + '"'
+
+
+def _pick_row_value(row: dict[str, Any], *names: str) -> Any:
+    if not isinstance(row, dict):
+        return None
+    lowered = {str(k).lower(): v for k, v in row.items()}
+    for name in names:
+        key = str(name or "").lower()
+        if key in lowered:
+            return lowered[key]
+    return None
+
+
+def _iter_realtime_message_db_paths_for_lookup(account_dir: Path, username: str) -> list[Path]:
+    db_storage_dir = _resolve_account_db_storage_dir(account_dir)
+    if db_storage_dir is None:
+        return []
+    message_dir = Path(db_storage_dir) / "message"
+    try:
+        if not message_dir.exists() or not message_dir.is_dir():
+            return []
+    except Exception:
+        return []
+
+    normal: list[Path] = []
+    biz: list[Path] = []
+    other: list[Path] = []
+    try:
+        for p in message_dir.iterdir():
+            try:
+                if not p.is_file():
+                    continue
+            except Exception:
+                continue
+            name = p.name.lower()
+            if re.match(r"^message(_\d+)?\.db$", name):
+                normal.append(p)
+            elif re.match(r"^biz_message(_\d+)?\.db$", name):
+                biz.append(p)
+            elif name.endswith(".db") and "message" in name:
+                other.append(p)
+    except Exception:
+        return []
+
+    normal.sort(key=lambda x: x.name.lower())
+    biz.sort(key=lambda x: x.name.lower())
+    other.sort(key=lambda x: x.name.lower())
+    return (biz + normal + other) if str(username or "").strip().startswith("gh_") else (normal + biz + other)
+
+
+@lru_cache(maxsize=4096)
+def _lookup_image_md5_by_server_id_from_realtime_messages(account_dir_str: str, server_id: int, username: str) -> str:
+    account_dir_str = str(account_dir_str or "").strip()
+    username = str(username or "").strip()
+    if not account_dir_str or not username:
+        return ""
+
+    try:
+        sid = int(server_id or 0)
+    except Exception:
+        sid = 0
+    if not sid:
+        return ""
+
+    try:
+        table_name = f"Msg_{hashlib.md5(username.encode()).hexdigest()}"
+    except Exception:
+        return ""
+
+    account_dir = Path(account_dir_str)
+    try:
+        rt_conn = WCDB_REALTIME.ensure_connected(account_dir, timeout=3.0)
+    except Exception:
+        return ""
+
+    table_literal = _sql_quote(table_name)
+    table_sql = (
+        "SELECT name FROM sqlite_master "
+        f"WHERE type = 'table' AND lower(name) = lower({table_literal}) LIMIT 1"
+    )
+    sid_lit = str(int(sid))
+
+    for db_path in _iter_realtime_message_db_paths_for_lookup(account_dir, username):
+        try:
+            with rt_conn.lock:
+                table_rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=table_sql) or []
+        except Exception:
+            continue
+        actual_table = ""
+        for item in table_rows:
+            if isinstance(item, dict):
+                actual_table = str(_pick_row_value(item, "name") or "").strip()
+                if actual_table:
+                    break
+        if not actual_table:
+            continue
+
+        quoted_table = _quote_sql_identifier(actual_table)
+        sql = (
+            "SELECT local_type, message_content, compress_content, "
+            "hex(packed_info_data) AS packed_info_hex "
+            f"FROM {quoted_table} "
+            f"WHERE server_id = {sid_lit} "
+            "ORDER BY create_time DESC, local_id DESC LIMIT 1"
+        )
+        try:
+            with rt_conn.lock:
+                rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=sql) or []
+        except Exception:
+            continue
+        if not rows or not isinstance(rows[0], dict):
+            continue
+
+        row = rows[0]
+        try:
+            local_type = int(_pick_row_value(row, "local_type") or 0)
+        except Exception:
+            local_type = 0
+        if local_type != 3:
+            continue
+
+        packed_hex = str(_pick_row_value(row, "packed_info_hex") or "").strip()
+        packed_bytes = b""
+        if packed_hex:
+            try:
+                packed_bytes = bytes.fromhex(packed_hex)
+            except Exception:
+                packed_bytes = b""
+
+        md5 = _extract_md5_from_packed_info(packed_bytes)
+        if not md5:
+            text = "\n".join(
+                str(_pick_row_value(row, key) or "")
+                for key in ("message_content", "compress_content")
+            )
+            found = re.search(r"(?i)([0-9a-f]{32})", text)
+            md5 = found.group(1) if found else ""
+
+        md5_norm = str(md5 or "").strip().lower()
+        if _is_valid_md5(md5_norm):
+            return md5_norm
+
+    return ""
+
+
 def _is_safe_http_url(url: str) -> bool:
     u = str(url or "").strip()
     if not u:
@@ -1697,20 +1883,30 @@ async def get_chat_image(
     )
     trace("request:start")
 
-    # Prefer resource md5 derived from message_resource.db for chat history / app messages.
-    # This matches how regular image messages are resolved elsewhere in the codebase.
+    # Prefer the original image message's packed md5 when resolving a quote by server_id.
+    # For realtime/live messages the decrypted output DB can lag behind db_storage, so also
+    # query the live message shard before falling back to message_resource.db.
     if server_id:
-        resource_md5 = _lookup_resource_md5_by_server_id(str(account_dir), int(server_id), want_local_type=3)
-        if resource_md5:
-            md5 = resource_md5
-        elif username:
+        md5_from_msg = ""
+        md5_from_realtime = ""
+        if username:
             md5_from_msg = _lookup_image_md5_by_server_id_from_messages(
                 str(account_dir), int(server_id), str(username)
             )
-            if md5_from_msg:
-                md5 = md5_from_msg
+            if not md5_from_msg:
+                md5_from_realtime = _lookup_image_md5_by_server_id_from_realtime_messages(
+                    str(account_dir), int(server_id), str(username)
+                )
+                md5_from_msg = md5_from_realtime
+        resource_md5 = "" if md5_from_msg else _lookup_resource_md5_by_server_id(str(account_dir), int(server_id), want_local_type=3)
+        if md5_from_msg:
+            md5 = md5_from_msg
+        elif resource_md5:
+            md5 = resource_md5
         trace(
             "server-id:resolved",
+            messageMd5Found=bool(md5_from_msg),
+            realtimeMessageMd5Found=bool(md5_from_realtime),
             resourceMd5Found=bool(resource_md5),
             finalMd5=str(md5 or ""),
         )
@@ -1733,7 +1929,11 @@ async def get_chat_image(
             read_started_at = time.perf_counter()
             data = decrypted_path.read_bytes()
             media_type = _detect_image_media_type(data[:32])
-            valid_image = bool(media_type != "application/octet-stream" and _is_probably_valid_image(data, media_type))
+            valid_image = bool(
+                media_type != "application/octet-stream"
+                and _is_probably_valid_image(data, media_type)
+                and len(data or b"") >= 16
+            )
             trace(
                 "decrypted-cache:read-validate",
                 path=str(decrypted_path),
@@ -1967,6 +2167,10 @@ async def get_chat_image(
     media_type = "application/octet-stream"
     chosen: Optional[Path] = None
     decode_attempts = 0
+    best_score: Optional[tuple[int, int]] = None
+    best_data = b""
+    best_media_type = "application/octet-stream"
+    best_chosen: Optional[Path] = None
     trace("decode:start", candidateCount=len(candidates))
     slow_decode_logged = 0
     for src_path in candidates:
@@ -2007,8 +2211,21 @@ async def get_chat_image(
             continue
 
         if media_type != "application/octet-stream":
+            if prefer_live:
+                score = _image_payload_score(data, media_type)
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_data = data
+                    best_media_type = media_type
+                    best_chosen = src_path
+                continue
             chosen = src_path
             break
+
+    if prefer_live and best_chosen is not None:
+        chosen = best_chosen
+        data = best_data
+        media_type = best_media_type
 
     if not chosen:
         trace("response:error", result="decode-failed", decodeAttempts=decode_attempts)
@@ -2020,6 +2237,7 @@ async def get_chat_image(
         chosen=str(chosen),
         mediaType=media_type,
         bytes=len(data or b""),
+        score=list(best_score or _image_payload_score(data, media_type)),
     )
 
     # 仅在 md5 有效时缓存到 resource 目录；file_id 可能非常长，避免写入超长文件名

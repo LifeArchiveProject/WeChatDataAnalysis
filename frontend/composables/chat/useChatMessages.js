@@ -88,6 +88,7 @@ export const useChatMessages = ({
 
   const messageTypeFilter = ref('all')
   const localMediaVersion = ref(0)
+  const largeImagePreferences = ref({})
   const messageTypeFilterOptions = [
     { value: 'all', label: '全部' },
     { value: 'text', label: '文本' },
@@ -110,8 +111,84 @@ export const useChatMessages = ({
     apiBase,
     getSelectedAccount: () => selectedAccount.value,
     getSelectedContact: () => selectedContact.value,
-    getLocalMediaVersion: () => localMediaVersion.value
+    getLocalMediaVersion: () => localMediaVersion.value,
+    shouldPreferLargeImage: (message) => shouldPreferLargeImageByPreference(message),
+    getLargeImageVersion: (message) => getLargeImagePreferenceVersion(message)
   })
+
+  const getLargeImagePreferenceStorageKey = () => {
+    const account = String(selectedAccount.value || '').trim()
+    const username = String(selectedContact.value?.username || '').trim()
+    if (!account || !username) return ''
+    return `wechatda:large_image_preferences:${account}:${username}`
+  }
+
+  const makeLargeImagePreferenceKeys = (message) => {
+    const keys = []
+    const serverId = String(message?.serverIdStr || message?.serverId || '').trim()
+    const md5 = String(message?.imageMd5 || '').trim().toLowerCase()
+    const fileId = String(message?.imageFileId || '').trim()
+    const id = String(message?.id || '').trim()
+    const localId = Number(message?.localId || 0)
+    if (serverId) keys.push(`server:${serverId}`)
+    if (md5) keys.push(`md5:${md5}`)
+    if (fileId) keys.push(`file:${fileId}`)
+    if (id) keys.push(`id:${id}`)
+    if (localId) keys.push(`local:${localId}`)
+    return keys
+  }
+
+  const loadLargeImagePreferences = () => {
+    if (!process.client || typeof window === 'undefined') {
+      largeImagePreferences.value = {}
+      return {}
+    }
+    const key = getLargeImagePreferenceStorageKey()
+    if (!key) {
+      largeImagePreferences.value = {}
+      return {}
+    }
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(key) || '{}')
+      largeImagePreferences.value = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      largeImagePreferences.value = {}
+    }
+    return largeImagePreferences.value
+  }
+
+  const saveLargeImagePreferences = () => {
+    if (!process.client || typeof window === 'undefined') return
+    const key = getLargeImagePreferenceStorageKey()
+    if (!key) return
+    try {
+      window.localStorage.setItem(key, JSON.stringify(largeImagePreferences.value || {}))
+    } catch {}
+  }
+
+  const getLargeImagePreferenceValue = (message) => {
+    const prefs = largeImagePreferences.value || {}
+    for (const key of makeLargeImagePreferenceKeys(message)) {
+      const value = Number(prefs[key] || 0)
+      if (value > 0) return value
+    }
+    return 0
+  }
+
+  const shouldPreferLargeImageByPreference = (message) => getLargeImagePreferenceValue(message) > 0
+  const getLargeImagePreferenceVersion = (message) => getLargeImagePreferenceValue(message) || localMediaVersion.value
+
+  const rememberLargeImagePreference = (message, triedAt = Date.now()) => {
+    const keys = makeLargeImagePreferenceKeys(message)
+    if (!keys.length) return
+    const stamp = Number(triedAt || Date.now())
+    const next = { ...(largeImagePreferences.value || {}) }
+    for (const key of keys) next[key] = stamp
+    largeImagePreferences.value = next
+    saveLargeImagePreferences()
+  }
+
+  loadLargeImagePreferences()
 
   const bumpLocalMediaVersion = () => {
     localMediaVersion.value = (localMediaVersion.value + 1) % 1000000000
@@ -124,17 +201,21 @@ export const useChatMessages = ({
     const existing = allMessages.value[key]
     if (!Array.isArray(existing) || !existing.length) return
 
-    const refreshed = dedupeMessagesById(existing.map((message) => {
+    loadLargeImagePreferences()
+    const refreshed = hydrateQuoteImageUrls(dedupeMessagesById(existing.map((message) => {
       const normalized = normalizeMessage(message)
       return {
         ...message,
         ...normalized,
         _emojiDownloading: !!message?._emojiDownloading,
         _emojiDownloaded: typeof message?._emojiDownloaded === 'boolean' ? message._emojiDownloaded : normalized._emojiDownloaded,
+        _imageLargeLoading: !!message?._imageLargeLoading,
+        _imageLargeError: String(message?._imageLargeError || ''),
+        _imageLargeLastTriedAt: Number(message?._imageLargeLastTriedAt || 0),
         _quoteImageError: false,
         _quoteThumbError: false
       }
-    }))
+    })))
 
     allMessages.value = {
       ...allMessages.value,
@@ -409,6 +490,7 @@ export const useChatMessages = ({
         source: DEFAULT_CHAT_SOURCE
       })
       const raw = Array.isArray(response?.messages) ? response.messages : []
+      loadLargeImagePreferences()
       const mapped = raw.map(normalizeMessage).map(toResourceItem).filter(Boolean)
       const seen = new Set((reset ? [] : resourceItems.value).map((item) => String(item?.id || '')))
       const deduped = mapped.filter((item) => {
@@ -677,6 +759,211 @@ export const useChatMessages = ({
     }
   }
 
+  const shouldShowImageLargeReload = (message) => {
+    if (!message || String(message?.renderType || '').trim() !== 'image') return false
+    if (!String(message?.imageUrl || '').trim()) return false
+    return !!(
+      String(message?.imageMd5 || '').trim()
+      || String(message?.imageFileId || '').trim()
+      || String(message?.serverIdStr || message?.serverId || '').trim()
+    )
+  }
+
+  const buildManualLargeImageUrl = (message, version = Date.now()) => {
+    const account = String(selectedAccount.value || '').trim()
+    const username = String(selectedContact.value?.username || '').trim()
+    if (!account || !username || !message) return ''
+
+    const md5 = String(message?.imageMd5 || '').trim()
+    const fileId = String(message?.imageFileId || '').trim()
+    const serverId = String(message?.serverIdStr || message?.serverId || '').trim()
+    if (!md5 && !fileId && !serverId) return ''
+
+    const query = new URLSearchParams()
+    query.set('account', account)
+    query.set('username', username)
+    if (md5) query.set('md5', md5)
+    if (fileId) query.set('file_id', fileId)
+    // Only fall back to server_id when the message has no direct local resource key.
+    // Passing server_id together with md5 can override a good full-image md5 with a thumbnail resource md5.
+    if (!md5 && !fileId && serverId) query.set('server_id', serverId)
+    query.set('prefer_live', 'true')
+    query.set('deep_scan', 'true')
+    query.set('v', String(Number(version || Date.now())))
+    return `${apiBase}/chat/media/image?${query.toString()}`
+  }
+
+  const isSameMessageIdentity = (left, right) => {
+    if (!left || !right) return false
+    const leftId = String(left?.id || '').trim()
+    const rightId = String(right?.id || '').trim()
+    if (leftId && rightId && leftId === rightId) return true
+
+    const leftLocalId = Number(left?.localId || 0)
+    const rightLocalId = Number(right?.localId || 0)
+    if (leftLocalId && rightLocalId && leftLocalId === rightLocalId) return true
+
+    const leftServerId = String(left?.serverIdStr || left?.serverId || '').trim()
+    const rightServerId = String(right?.serverIdStr || right?.serverId || '').trim()
+    if (leftServerId && rightServerId && leftServerId === rightServerId) return true
+
+    return false
+  }
+
+  const hydrateQuoteImageUrls = (list, extraSources = []) => {
+    const input = Array.isArray(list) ? list : []
+    if (!input.length) return input
+
+    const imageByServerId = new Map()
+    const sources = [
+      ...(Array.isArray(extraSources) ? extraSources : []),
+      ...input
+    ]
+    for (const item of sources) {
+      if (String(item?.renderType || '').trim() !== 'image') continue
+      const serverId = String(item?.serverIdStr || item?.serverId || '').trim()
+      if (!serverId) continue
+      if (!String(item?.imageUrl || item?.imageMd5 || item?.imageFileId || '').trim()) continue
+      imageByServerId.set(serverId, item)
+    }
+    if (!imageByServerId.size) return input
+
+    let changed = false
+    const output = input.map((message) => {
+      const quoteServerId = String(message?.quoteServerId || '').trim()
+      if (!quoteServerId) return message
+      const quoteType = String(message?.quoteType || '').trim()
+      const quoteContent = String(message?.quoteContent || '').trim()
+      if (quoteType !== '3' && quoteContent !== '[图片]') return message
+
+      const original = imageByServerId.get(quoteServerId)
+      if (!original) return message
+
+      const nextUrl = String(original?.imageUrl || '').trim()
+      if (!nextUrl || nextUrl === String(message?.quoteImageUrl || '').trim()) return message
+
+      changed = true
+      return {
+        ...message,
+        quoteImageUrl: nextUrl,
+        _quoteImageError: false
+      }
+    })
+
+    return changed ? output : input
+  }
+
+  const persistLargeImageUrlForLoadedMessage = (message, nextUrl, triedAt) => {
+    const username = String(selectedContact.value?.username || '').trim()
+    const url = String(nextUrl || '').trim()
+    if (!username || !url || !message) return false
+
+    const list = allMessages.value[username]
+    if (!Array.isArray(list) || !list.length) return false
+
+    const index = list.findIndex((item) => isSameMessageIdentity(item, message))
+    if (index < 0) return false
+
+    const nextList = [...list]
+    nextList[index] = {
+      ...nextList[index],
+      imageUrl: url,
+      _imageLargeLoading: false,
+      _imageLargeError: '',
+      _imageLargeLastTriedAt: Number(triedAt || Date.now())
+    }
+    const hydrated = hydrateQuoteImageUrls(nextList)
+    allMessages.value = {
+      ...allMessages.value,
+      [username]: hydrated
+    }
+    return true
+  }
+
+  const preloadImageUrl = (url) => {
+    const src = String(url || '').trim()
+    if (!src) return Promise.reject(new Error('缺少图片地址'))
+    if (!process.client || typeof window === 'undefined') return Promise.resolve()
+
+    return new Promise((resolve, reject) => {
+      const img = new window.Image()
+      let timer = null
+      let settled = false
+      const cleanup = () => {
+        if (timer) {
+          window.clearTimeout(timer)
+          timer = null
+        }
+        img.onload = null
+        img.onerror = null
+      }
+      const finish = (ok, value) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        if (ok) resolve(value)
+        else reject(value instanceof Error ? value : new Error(String(value || '图片加载失败')))
+      }
+
+      img.onload = () => {
+        const width = Number(img.naturalWidth || 0)
+        const height = Number(img.naturalHeight || 0)
+        if (!width || !height) {
+          finish(false, new Error('图片加载失败'))
+          return
+        }
+        finish(true, { width, height })
+      }
+      img.onerror = () => finish(false, new Error('暂未找到可用大图'))
+      timer = window.setTimeout(() => finish(false, new Error('查找大图超时')), 45000)
+      try { img.decoding = 'async' } catch {}
+      try { img.referrerPolicy = 'no-referrer' } catch {}
+      img.src = src
+    })
+  }
+
+  const onTryLoadLargeImageClick = async (message) => {
+    if (!process.client) return
+    if (!message || message._imageLargeLoading) return
+
+    const triedAt = Date.now()
+    const nextUrl = buildManualLargeImageUrl(message, triedAt)
+    if (!nextUrl) {
+      message._imageLargeError = '缺少图片定位信息，无法重新查找'
+      return
+    }
+
+    const previousUrl = String(message?.imageUrl || '').trim()
+    message._imageLargeLoading = true
+    message._imageLargeError = ''
+
+    try {
+      await preloadImageUrl(nextUrl)
+      rememberLargeImagePreference(message, triedAt)
+      message.imageUrl = nextUrl
+      message._imageLargeLastTriedAt = triedAt
+      message._imageLargeError = ''
+      persistLargeImageUrlForLoadedMessage(message, nextUrl, triedAt)
+
+      if (previewImageUrl.value && String(previewImageUrl.value || '').trim() === previousUrl) {
+        previewImageUrl.value = nextUrl
+      }
+      if (Array.isArray(previewImageItems.value) && previousUrl) {
+        previewImageItems.value = previewImageItems.value.map((item) => {
+          const itemUrl = String(item?.url || '').trim()
+          const itemId = String(item?.id || '').trim()
+          const messageId = String(message?.id || '').trim()
+          if (itemUrl !== previousUrl && (!itemId || !messageId || itemId !== messageId)) return item
+          return { ...item, url: nextUrl, thumbUrl: nextUrl }
+        })
+      }
+    } catch (error) {
+      message._imageLargeError = error?.message || '暂未找到可用大图'
+    } finally {
+      message._imageLargeLoading = false
+    }
+  }
+
   const onFileClick = async (message) => {
     if (!message?.fileMd5) return
     try {
@@ -747,6 +1034,7 @@ export const useChatMessages = ({
       trace.log('loadMessages:normalize:start', {
         rawCount: raw.length
       })
+      loadLargeImagePreferences()
       const mapped = dedupeMessagesById(raw.map(normalizeMessage))
       trace.log('loadMessages:normalize:end', {
         mappedCount: mapped.length,
@@ -764,7 +1052,7 @@ export const useChatMessages = ({
         mappedCount: mapped.length
       })
       if (reset) {
-        allMessages.value = { ...allMessages.value, [username]: mapped }
+        allMessages.value = { ...allMessages.value, [username]: hydrateQuoteImageUrls(mapped) }
       } else {
         const existingIds = new Set(existing.map((message) => String(message?.id || '')))
         const older = mapped.filter((message) => {
@@ -774,9 +1062,10 @@ export const useChatMessages = ({
           existingIds.add(id)
           return true
         })
+        const nextMessages = hydrateQuoteImageUrls([...older, ...existing])
         allMessages.value = {
           ...allMessages.value,
-          [username]: [...older, ...existing]
+          [username]: nextMessages
         }
       }
       trace.log('loadMessages:state-commit:end', {
@@ -898,7 +1187,8 @@ export const useChatMessages = ({
       if (selectedContact.value?.username !== username) return
 
       const rawMessages = response?.messages || []
-      const latest = rawMessages.map(normalizeMessage)
+      loadLargeImagePreferences()
+      const latest = hydrateQuoteImageUrls(dedupeMessagesById(rawMessages.map(normalizeMessage)), existing)
 
       const seenIds = new Set(existing.map((message) => String(message?.id || '')))
       const newOnes = []
@@ -910,7 +1200,7 @@ export const useChatMessages = ({
       }
       if (!newOnes.length) return
 
-      allMessages.value = { ...allMessages.value, [username]: [...existing, ...newOnes] }
+      allMessages.value = { ...allMessages.value, [username]: hydrateQuoteImageUrls([...existing, ...newOnes]) }
 
       await nextTick()
       const nextContainer = messageContainerRef.value
@@ -1145,13 +1435,6 @@ export const useChatMessages = ({
     await fetchContactProfile({ username, displayName: senderName, avatar: senderAvatar })
   }
 
-  const onMessageAvatarMouseLeave = () => {
-    clearContactProfileHoverHideTimer()
-    contactProfileHoverHideTimer = setTimeout(() => {
-      closeContactProfileCard()
-    }, 120)
-  }
-
   const onMentionMouseEnter = async (message, user) => {
     const username = String(user?.username || '').trim()
     if (!username) return
@@ -1190,6 +1473,13 @@ export const useChatMessages = ({
     await fetchContactProfile({ username, displayName, avatar })
   }
 
+  const onMessageAvatarMouseLeave = () => {
+    clearContactProfileHoverHideTimer()
+    contactProfileHoverHideTimer = setTimeout(() => {
+      closeContactProfileCard()
+    }, 120)
+  }
+
   const onMentionMouseLeave = () => {
     onMessageAvatarMouseLeave()
   }
@@ -1201,6 +1491,7 @@ export const useChatMessages = ({
   watch(
     () => selectedContact.value?.username,
     () => {
+      loadLargeImagePreferences()
       clearContactProfileHoverHideTimer()
       closeContactProfileCard()
       contactProfileError.value = ''
@@ -1215,6 +1506,7 @@ export const useChatMessages = ({
   watch(
     () => selectedAccount.value,
     () => {
+      loadLargeImagePreferences()
       clearContactProfileHoverHideTimer()
       closeContactProfileCard()
       contactProfileError.value = ''
@@ -1316,6 +1608,8 @@ export const useChatMessages = ({
     onAvatarError,
     shouldShowEmojiDownload,
     onEmojiDownloadClick,
+    shouldShowImageLargeReload,
+    onTryLoadLargeImageClick,
     onFileClick,
     toggleReverseMessageSides,
     loadMessages,

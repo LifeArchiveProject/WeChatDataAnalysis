@@ -29,8 +29,9 @@
                     </div>
                   </div>
                   <div v-else-if="message.renderType === 'image'"
-                    class="max-w-sm">
-                  <div class="msg-radius overflow-hidden cursor-pointer" :class="message.isSent ? '' : ''" @click="message.imageUrl && openImagePreview(message.imageUrl)" @contextmenu="openMediaContextMenu($event, message, 'image')">
+                    class="max-w-sm flex items-center group"
+                    :class="message.isSent ? 'flex-row-reverse' : ''">
+                  <div class="msg-radius overflow-hidden cursor-pointer flex-shrink-0" :class="message.isSent ? '' : ''" @click="message.imageUrl && openImagePreview(message.imageUrl)" @contextmenu="openMediaContextMenu($event, message, 'image')">
                       <img
                         v-if="message.imageUrl"
                         v-chat-lazy-src="message.imageUrl"
@@ -46,6 +47,17 @@
                         {{ message.content }}
                       </div>
                     </div>
+                    <button
+                      v-if="shouldShowImageLargeReload(message)"
+                      type="button"
+                      class="text-xs px-2 py-1 rounded bg-white border border-gray-200 text-gray-700 shadow-sm opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity hover:bg-gray-50 disabled:cursor-wait disabled:opacity-60 whitespace-nowrap"
+                      :class="message.isSent ? 'mr-2' : 'ml-2'"
+                      :disabled="!!message._imageLargeLoading"
+                      :title="message._imageLargeError || '手动从微信本地目录重新查找更高清图片；如果微信后来已缓存大图，会替换当前缩略图。'"
+                      @click.stop.prevent="onTryLoadLargeImageClick(message)"
+                    >
+                      {{ message._imageLargeLoading ? '查找中...' : '尝试加载大图' }}
+                    </button>
                   </div>
                   <div v-else-if="message.renderType === 'video'" class="max-w-sm">
                     <div class="msg-radius overflow-hidden relative bg-black/5" @contextmenu="openMediaContextMenu($event, message, 'video')">

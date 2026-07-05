@@ -6,6 +6,8 @@ import os
 import sqlite3
 import sys
 import unittest
+import struct
+import zlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -103,6 +105,24 @@ class TestChatMediaImageCacheUpgrade(unittest.TestCase):
         target.write_bytes(payload)
         return target
 
+    def _png_payload(self, width: int, height: int) -> bytes:
+        def chunk(kind: bytes, data: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(data))
+                + kind
+                + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+            )
+
+        row = b"\x00" + (b"\x00\x00\x00" * int(width))
+        raw = row * int(height)
+        return (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", int(width), int(height), 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"IEND", b"")
+        )
+
     def _build_client(self):
         import wechat_decrypt_tool.logging_config as logging_config
         import wechat_decrypt_tool.app_paths as app_paths
@@ -198,6 +218,50 @@ class TestChatMediaImageCacheUpgrade(unittest.TestCase):
                 self.assertEqual(resp.content, cached_original)
                 self.assert_cacheable_chat_image_response(resp)
                 self.assertEqual(cache_path.read_bytes(), cached_original)
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_prefer_live_picks_largest_decoded_candidate_not_variant_name(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            md5 = "dddddddddddddddddddddddddddddddd"
+
+            account_dir = root / "output" / "databases" / account
+            wxid_dir = root / "wxid_source"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            wxid_dir.mkdir(parents=True, exist_ok=True)
+
+            self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
+            self._seed_session_db(account_dir / "session.db", username=username)
+            self._seed_source_info(account_dir, wxid_dir=wxid_dir)
+
+            small_bubble = self._png_payload(8, 8)
+            large_high = self._png_payload(32, 32)
+            self._seed_live_variant(wxid_dir, username=username, md5=md5, suffix="_b", payload=small_bubble)
+            self._seed_live_variant(wxid_dir, username=username, md5=md5, suffix="_h", payload=large_high)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            client = None
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                client = self._build_client()
+                resp = client.get(
+                    "/api/chat/media/image",
+                    params={"account": account, "md5": md5, "username": username, "prefer_live": "true"},
+                )
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.content, large_high)
+                self.assert_cacheable_chat_image_response(resp)
             finally:
                 try:
                     client.close()
