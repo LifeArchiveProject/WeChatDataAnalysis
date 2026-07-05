@@ -48,7 +48,28 @@ const buildAccountMediaUrl = (apiBase, path, parts) => {
   return `${apiBase}${path}?${parts.filter(Boolean).join('&')}`
 }
 
-export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelectedContact, getLocalMediaVersion }) => {
+const isManualLargeImageUrl = (value) => {
+  const text = normalizeMaybeUrl(value)
+  if (!/\/api\/chat\/media\/image\b/i.test(text)) return false
+  try {
+    const url = new URL(text, 'http://wechat-data-analysis.local')
+    return (
+      String(url.searchParams.get('prefer_live') || '').toLowerCase() === 'true'
+      || String(url.searchParams.get('deep_scan') || '').toLowerCase() === 'true'
+    )
+  } catch {
+    return /\b(?:prefer_live|deep_scan)=true\b/i.test(text)
+  }
+}
+
+export const createMessageNormalizer = ({
+  apiBase,
+  getSelectedAccount,
+  getSelectedContact,
+  getLocalMediaVersion,
+  shouldPreferLargeImage,
+  getLargeImageVersion
+}) => {
   return (msg) => {
     const account = String(getSelectedAccount?.() || '').trim()
     const contact = getSelectedContact?.() || null
@@ -126,9 +147,31 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
       ])
     })()
 
+    const preferLargeImage = !!shouldPreferLargeImage?.(msg)
+    const localLargeImageUrl = (() => {
+      if (!preferLargeImage) return ''
+      if (!msg.imageMd5 && !msg.imageFileId && !serverIdStr) return ''
+      const version = Number(getLargeImageVersion?.(msg) || localMediaVersion || 0)
+      return buildAccountMediaUrl(apiBase, '/chat/media/image', [
+        `account=${encodeURIComponent(account)}`,
+        msg.imageMd5 ? `md5=${encodeURIComponent(msg.imageMd5)}` : '',
+        msg.imageFileId ? `file_id=${encodeURIComponent(msg.imageFileId)}` : '',
+        `username=${encodeURIComponent(username)}`,
+        (!msg.imageMd5 && !msg.imageFileId && serverIdStr) ? `server_id=${encodeURIComponent(serverIdStr)}` : '',
+        'prefer_live=true',
+        'deep_scan=true',
+        version > 0 ? `v=${encodeURIComponent(String(version))}` : ''
+      ])
+    })()
+
     const normalizedImageUrl = (() => {
       const current = isUsableMediaUrl(msg.imageUrl) ? normalizeMaybeUrl(msg.imageUrl) : ''
+      if (preferLargeImage && localLargeImageUrl) {
+        if (current && isManualLargeImageUrl(current)) return current
+        return localLargeImageUrl
+      }
       if (current && /\/api\/chat\/media\/image\b/i.test(current) && localImageUrl) {
+        if (isManualLargeImageUrl(current)) return current
         return localImageUrl
       }
       return current || localImageUrl || ''
@@ -215,6 +258,8 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
         `account=${encodeURIComponent(account)}`,
         `server_id=${encodeURIComponent(quoteServerIdStr)}`,
         username ? `username=${encodeURIComponent(username)}` : '',
+        'prefer_live=true',
+        'deep_scan=true',
         localMediaVersion > 0 ? `v=${encodeURIComponent(String(localMediaVersion))}` : ''
       ])
     })()
