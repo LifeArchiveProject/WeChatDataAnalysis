@@ -823,6 +823,127 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
             if u0:
                 out["contentUrl"] = u0
 
+    def _tag_lower(el: Optional[ET.Element]) -> str:
+        if el is None:
+            return ""
+        try:
+            return str(el.tag or "").strip().lower()
+        except Exception:
+            return ""
+
+    def _direct_child_text(node: ET.Element, *names: str) -> str:
+        wanted = {str(n or "").strip().lower() for n in names if str(n or "").strip()}
+        if not wanted:
+            return ""
+        try:
+            children = list(node)
+        except Exception:
+            children = []
+        for child in children:
+            if _tag_lower(child) not in wanted:
+                continue
+            v = str(child.text or "").strip()
+            if v:
+                return html.unescape(v).replace("&amp;", "&").strip()
+        return ""
+
+    def _has_descendant(node: ET.Element, *names: str) -> bool:
+        wanted = {str(n or "").strip().lower() for n in names if str(n or "").strip()}
+        if not wanted:
+            return False
+        try:
+            return any(_tag_lower(el) in wanted for el in node.iter())
+        except Exception:
+            return False
+
+    def _iter_comment_nodes() -> list[ET.Element]:
+        nodes: list[ET.Element] = []
+        seen: set[int] = set()
+        comment_tags = {"comment", "commentuser", "user_comment", "commentitem"}
+        for el in root.iter():
+            if id(el) in seen:
+                continue
+            if _tag_lower(el) not in comment_tags:
+                continue
+            if not (
+                _direct_child_text(el, "username", "user_name")
+                or _direct_child_text(el, "content")
+                or _direct_child_text(el, "nickname", "nickName", "displayName")
+                or _has_descendant(el, "imageinfo")
+            ):
+                continue
+            seen.add(id(el))
+            nodes.append(el)
+        return nodes
+
+    def _parse_comment_images(comment_node: ET.Element) -> list[dict[str, Any]]:
+        images: list[dict[str, Any]] = []
+        try:
+            image_nodes = [el for el in comment_node.iter() if _tag_lower(el) == "imageinfo"]
+        except Exception:
+            image_nodes = []
+
+        for img in image_nodes:
+            url = _clean_url(_direct_child_text(img, "url", "cdn_url", "origin_url", "originurl"))
+            thumb_url = _clean_url(_direct_child_text(img, "thumb_url", "thumburl", "thumb", "thumb_url_v", "thumburlv"))
+            token = _direct_child_text(img, "token")
+            key = _direct_child_text(img, "key")
+            enc_idx = _direct_child_text(img, "enc_idx", "encidx")
+            thumb_token = _direct_child_text(img, "thumb_url_token", "thumb_token", "thumburltoken") or token
+            thumb_key = _direct_child_text(img, "thumb_key", "thumbkey") or key
+            thumb_enc_idx = _direct_child_text(img, "thumb_enc_idx", "thumbencidx")
+            media_id = _direct_child_text(img, "media_id", "mediaid", "id")
+            md5 = _direct_child_text(img, "md5")
+            width = _safe_int(_direct_child_text(img, "width", "w"))
+            height = _safe_int(_direct_child_text(img, "height", "h"))
+            file_size = _safe_int(_direct_child_text(img, "file_size", "filesize", "total_size", "totalsize"))
+            height_percentage = _safe_int(_direct_child_text(img, "height_percentage", "heightpercentage"))
+            min_area = _safe_int(_direct_child_text(img, "min_area", "minarea"))
+
+            if not url and not thumb_url:
+                continue
+
+            images.append(
+                {
+                    "type": 2,
+                    "id": media_id,
+                    "mediaId": media_id,
+                    "url": url,
+                    "thumb": thumb_url or url,
+                    "thumbUrl": thumb_url,
+                    "token": token,
+                    "key": key,
+                    "encIdx": enc_idx,
+                    "thumbUrlToken": thumb_token,
+                    "thumbKey": thumb_key,
+                    "thumbEncIdx": thumb_enc_idx,
+                    "md5": md5,
+                    "width": width,
+                    "height": height,
+                    "heightPercentage": height_percentage,
+                    "fileSize": file_size,
+                    "minArea": min_area,
+                    "urlAttrs": {
+                        "token": token,
+                        "key": key,
+                        "enc_idx": enc_idx,
+                        "md5": md5,
+                    },
+                    "thumbAttrs": {
+                        "token": thumb_token,
+                        "key": thumb_key,
+                        "enc_idx": thumb_enc_idx,
+                        "md5": md5,
+                    },
+                    "size": {
+                        "width": width,
+                        "height": height,
+                        "totalSize": file_size,
+                    },
+                }
+            )
+        return images
+
     likes: list[str] = []
     try:
         for u in root.findall(".//likeList//like//username"):
@@ -837,17 +958,20 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
 
     comments: list[dict[str, Any]] = []
     try:
-        for c in root.findall(".//commentList//comment"):
-            content = str(c.findtext("content") or "").strip()
-            if not content:
+        for c in _iter_comment_nodes():
+            content = _direct_child_text(c, "content")
+            images = _parse_comment_images(c)
+            if not content and not images:
                 continue
             comments.append(
                 {
-                    "username": str(c.findtext("username") or "").strip(),
-                    "nickname": str(c.findtext("nickName") or "").strip(),
+                    "id": _direct_child_text(c, "cmtid", "commentId", "comment_id", "id"),
+                    "username": _direct_child_text(c, "username", "user_name"),
+                    "nickname": _direct_child_text(c, "nickName", "nickname", "displayName"),
                     "content": content,
-                    "refUsername": str(c.findtext("refUserName") or "").strip(),
-                    "refNickname": str(c.findtext("refNickName") or "").strip(),
+                    "refUsername": _direct_child_text(c, "refUserName", "ref_username", "replyUsername", "reply_user_name"),
+                    "refNickname": _direct_child_text(c, "refNickName", "refNickname", "replyNickname", "reply_nickname"),
+                    "images": images,
                 }
             )
     except Exception:
@@ -2142,6 +2266,10 @@ def list_sns_timeline(
                     title = parsed.get("title", "")
                     content_url = parsed.get("contentUrl", "")
                     finder_feed = parsed.get("finderFeed", {})
+
+                    pcomments = parsed.get("comments") or []
+                    if isinstance(pcomments, list) and pcomments:
+                        comments = pcomments
 
                     pmedia = parsed.get("media") or []
                     if isinstance(pmedia, list) and isinstance(media, list) and pmedia:
