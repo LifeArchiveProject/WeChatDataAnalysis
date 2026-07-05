@@ -1094,6 +1094,19 @@ export const useChatMessages = ({
     contactProfileCardMessageId.value = ''
   }
 
+  const getMentionContactProfileCardId = (message, user) => {
+    const messageId = String(message?.id ?? '').trim()
+    const username = String(user?.username || '').trim()
+    if (!messageId || !username) return ''
+    return `mention:${messageId}:${username}`
+  }
+
+  const isMentionContactProfileCardForMessage = (message) => {
+    const messageId = String(message?.id ?? '').trim()
+    if (!messageId) return false
+    return String(contactProfileCardMessageId.value || '').startsWith(`mention:${messageId}:`)
+  }
+
   const onMessageAvatarMouseEnter = async (message) => {
     if (!!message?.isSent) return
     const messageId = String(message?.id ?? '').trim()
@@ -1137,6 +1150,48 @@ export const useChatMessages = ({
     contactProfileHoverHideTimer = setTimeout(() => {
       closeContactProfileCard()
     }, 120)
+  }
+
+  const onMentionMouseEnter = async (message, user) => {
+    const username = String(user?.username || '').trim()
+    if (!username) return
+    if (username === 'notify@all') return
+    const cardId = getMentionContactProfileCardId(message, user)
+    if (!cardId) return
+
+    const displayName = String(user?.displayName || user?.nickname || user?.remark || username).trim()
+    const avatar = String(user?.avatar || '').trim()
+    if (!contactProfileData.value || String(contactProfileData.value?.username || '').trim() !== username) {
+      contactProfileData.value = {
+        username,
+        displayName: displayName || username,
+        avatar,
+        nickname: '',
+        alias: '',
+        gender: null,
+        region: '',
+        remark: '',
+        signature: '',
+        source: '',
+        sourceScene: null
+      }
+    } else {
+      if (!String(contactProfileData.value?.displayName || '').trim() && displayName) {
+        contactProfileData.value.displayName = displayName
+      }
+      if (!String(contactProfileData.value?.avatar || '').trim() && avatar) {
+        contactProfileData.value.avatar = avatar
+      }
+    }
+
+    clearContactProfileHoverHideTimer()
+    contactProfileCardMessageId.value = cardId
+    contactProfileCardOpen.value = true
+    await fetchContactProfile({ username, displayName, avatar })
+  }
+
+  const onMentionMouseLeave = () => {
+    onMessageAvatarMouseLeave()
   }
 
   const onContactCardMouseEnter = () => {
@@ -1273,8 +1328,12 @@ export const useChatMessages = ({
     fetchContactProfile,
     clearContactProfileHoverHideTimer,
     closeContactProfileCard,
+    getMentionContactProfileCardId,
+    isMentionContactProfileCardForMessage,
     onMessageAvatarMouseEnter,
     onMessageAvatarMouseLeave,
+    onMentionMouseEnter,
+    onMentionMouseLeave,
     onContactCardMouseEnter,
     formatFileSize
   }

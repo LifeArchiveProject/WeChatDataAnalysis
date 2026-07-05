@@ -2,6 +2,37 @@ import { formatMessageFullTime, formatMessageTime } from '~/lib/chat/formatters'
 
 const normalizeMaybeUrl = (value) => (typeof value === 'string' ? value.trim() : '')
 
+const normalizeAtUsernames = (value) => {
+  if (!Array.isArray(value)) return []
+  const seen = new Set()
+  const output = []
+  for (const item of value) {
+    const username = String(item || '').trim()
+    if (!username || seen.has(username)) continue
+    seen.add(username)
+    output.push(username)
+  }
+  return output
+}
+
+const normalizeAtUsers = (value) => {
+  if (!Array.isArray(value)) return []
+  const seen = new Set()
+  const output = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const username = String(item.username || item.userName || item.wxid || '').trim()
+    if (!username || seen.has(username)) continue
+    seen.add(username)
+    output.push({
+      username,
+      displayName: String(item.displayName || item.name || item.nickname || item.remark || username).trim(),
+      avatar: normalizeMaybeUrl(item.avatar || item.avatarUrl || '')
+    })
+  }
+  return output
+}
+
 const isUsableMediaUrl = (value) => {
   const text = normalizeMaybeUrl(value)
   if (!text) return false
@@ -23,9 +54,32 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
     const contact = getSelectedContact?.() || null
     const username = String(contact?.username || '').trim()
     const localMediaVersion = Number(getLocalMediaVersion?.() || 0)
+    const serverIdStr = String(msg.serverIdStr || (msg.serverId != null ? String(msg.serverId) : '')).trim()
     const isSent = !!msg.isSent
-    const sender = isSent ? '我' : (msg.senderDisplayName || msg.senderUsername || contact?.name || '')
-    const fallbackAvatar = (!isSent && !contact?.isGroup) ? (contact?.avatar || null) : null
+    const rawSenderDisplayName = String(msg.senderDisplayName || '').trim()
+    const rawSenderUsername = String(msg.senderUsername || '').trim()
+    const rawSender = String(msg.sender || '').trim()
+    const messageConversationUsername = String(msg.username || msg.chatUsername || msg.sessionId || '').trim()
+    const conversationIsGroup = !!(
+      contact?.isGroup
+      || username.endsWith('@chatroom')
+      || messageConversationUsername.endsWith('@chatroom')
+      || msg.isGroup
+    )
+    const senderDisplayName = isSent
+      ? ''
+      : (
+          rawSenderDisplayName
+          || (conversationIsGroup && rawSender && rawSender !== rawSenderUsername ? rawSender : '')
+          || rawSenderUsername
+        )
+    const sender = isSent ? '我' : (senderDisplayName || contact?.name || '')
+    const fallbackAvatar = (!isSent && !conversationIsGroup) ? (contact?.avatar || null) : null
+    const atUsers = normalizeAtUsers(msg.atUsers)
+    const atUsernamesFromUsers = atUsers.map((item) => item.username)
+    const atUsernames = normalizeAtUsernames(
+      Array.isArray(msg.atUsernames) && msg.atUsernames.length ? msg.atUsernames : atUsernamesFromUsers
+    )
 
     const normalizedThumbUrl = (() => {
       const candidates = [msg.thumbUrl, msg.preview]
@@ -105,7 +159,6 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
 
     const normalizedVideoThumbUrl = (isUsableMediaUrl(msg.videoThumbUrl) ? normalizeMaybeUrl(msg.videoThumbUrl) : '') || localVideoThumbUrl
     const normalizedVideoUrl = (isUsableMediaUrl(msg.videoUrl) ? normalizeMaybeUrl(msg.videoUrl) : '') || localVideoUrl
-    const serverIdStr = String(msg.serverIdStr || (msg.serverId != null ? String(msg.serverId) : '')).trim()
     const normalizedVoiceUrl = (() => {
       if (msg.voiceUrl) return msg.voiceUrl
       if (!serverIdStr) return ''
@@ -187,8 +240,8 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
       serverIdStr,
       type: Number(msg.type || 0),
       sender,
-      senderUsername: msg.senderUsername || '',
-      senderDisplayName: msg.senderDisplayName || '',
+      senderUsername: rawSenderUsername,
+      senderDisplayName,
       content: msg.content || '',
       time: formatMessageTime(msg.createTime),
       fullTime: formatMessageFullTime(msg.createTime),
@@ -196,6 +249,8 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
       isSent,
       renderType: msg.renderType || 'text',
       voipType: msg.voipType || '',
+      atUsernames,
+      atUsers,
       title: msg.title || '',
       url: msg.url || '',
       recordItem: msg.recordItem || '',
@@ -247,7 +302,7 @@ export const createMessageNormalizer = ({ apiBase, getSelectedAccount, getSelect
       from: String(msg.from || '').trim(),
       fromUsername,
       fromAvatar,
-      isGroup: !!contact?.isGroup,
+      isGroup: conversationIsGroup,
       avatar: msg.senderAvatar || msg.avatar || fallbackAvatar || null,
       avatarColor: null
     }

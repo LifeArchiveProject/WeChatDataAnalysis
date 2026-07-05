@@ -146,8 +146,14 @@
                     <div
                       class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                       :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
-                      <span v-for="(seg, idx) in parseTextWithEmoji(message.content)" :key="idx">
+                      <span v-for="(seg, idx) in parseMessageTextSegments(message)" :key="idx">
                         <span v-if="seg.type === 'text'">{{ seg.content }}</span>
+                        <span
+                          v-else-if="seg.type === 'mention'"
+                          class="chat-mention"
+                          @mouseenter="handleMentionMouseEnter(message, seg.user)"
+                          @mouseleave="handleMentionMouseLeave"
+                        >{{ seg.content }}</span>
                         <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px" loading="lazy" decoding="async">
                       </span>
                     </div>
@@ -307,8 +313,14 @@
                   <div v-else-if="message.renderType === 'text'"
                     class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                     :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
-                    <span v-for="(seg, idx) in parseTextWithEmoji(message.content)" :key="idx">
+                    <span v-for="(seg, idx) in parseMessageTextSegments(message)" :key="idx">
                       <span v-if="seg.type === 'text'">{{ seg.content }}</span>
+                      <span
+                        v-else-if="seg.type === 'mention'"
+                        class="chat-mention"
+                        @mouseenter="handleMentionMouseEnter(message, seg.user)"
+                        @mouseleave="handleMentionMouseLeave"
+                      >{{ seg.content }}</span>
                       <img v-else :src="seg.emojiSrc" :alt="seg.content" class="inline-block w-[1.25em] h-[1.25em] align-text-bottom mx-px">
                     </span>
                   </div>
@@ -328,6 +340,99 @@ import ChatLocationCard from '~/components/ChatLocationCard.vue'
 import FileTypeIcon from '~/components/chat/FileTypeIcon.vue'
 import LinkCard from '~/components/chat/LinkCard.vue'
 
+const MENTION_SEPARATOR_RE = /[\s\u00a0\u1680\u180e\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]/
+const MENTION_TRAILING_BOUNDARY_RE = /[\s\u00a0\u1680\u180e\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff,，.。!！?？:：;；、)]/
+const MENTION_LEADING_BOUNDARY_RE = /[\s\u00a0\u1680\u180e\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff([（{]/
+
+const normalizeMentionLabel = (value) => String(value || '').trim().replace(/^@+/, '')
+
+const getMentionUsers = (message) => {
+  const users = []
+  const seen = new Set()
+  const pushUser = (item) => {
+    if (!item || typeof item !== 'object') return
+    const username = String(item.username || item.userName || item.wxid || '').trim()
+    if (!username || seen.has(username)) return
+    seen.add(username)
+    users.push({
+      ...item,
+      username,
+      displayName: String(item.displayName || item.name || item.nickname || item.remark || username).trim(),
+      avatar: String(item.avatar || item.avatarUrl || '').trim()
+    })
+  }
+
+  if (Array.isArray(message?.atUsers)) {
+    for (const item of message.atUsers) pushUser(item)
+  }
+
+  if (!users.length && Array.isArray(message?.atUsernames)) {
+    for (const usernameRaw of message.atUsernames) {
+      const username = String(usernameRaw || '').trim()
+      if (!username || seen.has(username)) continue
+      seen.add(username)
+      users.push({
+        username,
+        displayName: username === 'notify@all' ? '所有人' : username,
+        avatar: ''
+      })
+    }
+  }
+
+  return users
+}
+
+const findNextMentionStart = (text, fromIndex) => {
+  let idx = text.indexOf('@', Math.max(0, fromIndex || 0))
+  while (idx >= 0) {
+    const before = idx > 0 ? text.charAt(idx - 1) : ''
+    const beforeOk = !before || MENTION_LEADING_BOUNDARY_RE.test(before)
+    if (beforeOk) return idx
+    idx = text.indexOf('@', idx + 1)
+  }
+  return -1
+}
+
+const findNextMentionRange = (text, fromIndex) => {
+  const start = findNextMentionStart(text, fromIndex)
+  if (start < 0) return null
+  let end = start + 1
+  while (end < text.length && !MENTION_SEPARATOR_RE.test(text.charAt(end))) {
+    end += 1
+  }
+  return end > start + 1 ? { start, end } : null
+}
+
+const buildMentionRanges = (message) => {
+  const text = String(message?.content || '')
+  const users = getMentionUsers(message)
+  if (!text || !users.length) return []
+
+  const ranges = []
+  let cursor = 0
+  for (const user of users) {
+    const fallback = findNextMentionRange(text, cursor)
+    if (!fallback) break
+
+    const label = normalizeMentionLabel(user.displayName)
+    let start = fallback.start
+    let end = fallback.end
+    if (label) {
+      const token = `@${label}`
+      const exactEnd = start + token.length
+      const after = text.charAt(exactEnd)
+      if (text.startsWith(token, start) && (!after || MENTION_TRAILING_BOUNDARY_RE.test(after))) {
+        end = exactEnd
+      }
+    }
+    if (start < cursor || end <= start) continue
+    ranges.push({ start, end, user })
+    cursor = end
+  }
+
+  return ranges
+}
+
 export default defineComponent({
   name: 'MessageContent',
   components: { ChatLocationCard, FileTypeIcon, LinkCard },
@@ -336,11 +441,76 @@ export default defineComponent({
     message: { type: Object, required: true }
   },
   setup(props) {
+    const parseEmojiSegments = (text) => {
+      const fn = props.state?.parseTextWithEmoji
+      if (typeof fn === 'function') return fn(String(text || ''))
+      return [{ type: 'text', content: String(text || '') }]
+    }
+
+    const appendEmojiSegments = (output, text) => {
+      if (!text) return
+      const segments = parseEmojiSegments(text)
+      for (const seg of segments) output.push(seg)
+    }
+
+    const parseMessageTextSegments = (message) => {
+      const text = String(message?.content || '')
+      const mentionRanges = buildMentionRanges(message)
+      if (!mentionRanges.length) return parseEmojiSegments(text)
+
+      const output = []
+      let pos = 0
+      for (const range of mentionRanges) {
+        if (range.start > pos) appendEmojiSegments(output, text.slice(pos, range.start))
+        output.push({
+          type: 'mention',
+          content: text.slice(range.start, range.end),
+          user: range.user
+        })
+        pos = range.end
+      }
+      if (pos < text.length) appendEmojiSegments(output, text.slice(pos))
+      return output
+    }
+
+    const handleMentionMouseEnter = (message, user) => {
+      if (typeof props.state?.onMentionMouseEnter === 'function') {
+        props.state.onMentionMouseEnter(message, user)
+      }
+    }
+
+    const handleMentionMouseLeave = () => {
+      if (typeof props.state?.onMentionMouseLeave === 'function') {
+        props.state.onMentionMouseLeave()
+      } else if (typeof props.state?.onMessageAvatarMouseLeave === 'function') {
+        props.state.onMessageAvatarMouseLeave()
+      }
+    }
+
     return {
       ...props.state,
       message: props.message,
+      parseMessageTextSegments,
+      handleMentionMouseEnter,
+      handleMentionMouseLeave,
       wechatPcLogoUrl
     }
   }
 })
 </script>
+
+<style scoped>
+.chat-mention {
+  color: #576b95;
+  font-weight: 500;
+  border-radius: 3px;
+  padding: 0 1px;
+  cursor: default;
+}
+
+.chat-mention:hover {
+  background: rgba(87, 107, 149, 0.1);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+</style>

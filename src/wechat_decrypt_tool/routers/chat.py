@@ -749,6 +749,50 @@ def _postprocess_special_message_content(
     message.pop("_rawText", None)
 
 
+def _row_get_value(row: Any, *keys: str) -> Any:
+    if isinstance(row, dict):
+        return _pick_case_insensitive_value(row, *keys)
+    for key in keys:
+        try:
+            return row[key]
+        except Exception:
+            continue
+    return None
+
+
+def _decode_msg_source(value: Any) -> str:
+    """Decode Msg.source / msg_source.
+
+    In recent PC WeChat message DBs this field is often a zstd-compressed
+    `<msgsource>...</msgsource>` XML payload. Reuse the message-content decoder
+    so live WCDB hex/base64/raw-blob representations are handled consistently.
+    """
+
+    try:
+        return _decode_message_content(None, value).strip()
+    except Exception:
+        return _decode_sqlite_text(value).strip()
+
+
+def _extract_at_usernames_from_source(value: Any) -> list[str]:
+    source_xml = _decode_msg_source(value)
+    if not source_xml:
+        return []
+    at_raw = _extract_xml_tag_text(source_xml, "atuserlist")
+    if not at_raw:
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[,;\s]+", str(at_raw or "")):
+        username = part.strip()
+        if not username or username in seen:
+            continue
+        seen.add(username)
+        out.append(username)
+    return out
+
+
 def _realtime_sync_lock(account: str, username: str) -> threading.Lock:
     key = (str(account or "").strip(), str(username or "").strip())
     with _REALTIME_SYNC_MU:
@@ -1544,6 +1588,9 @@ def _normalize_realtime_message_item(item: dict[str, Any]) -> dict[str, Any]:
     )
     if message_content is None:
         message_content = ""
+    msg_source = _coerce_realtime_blobish_value(
+        _pick("msg_source", "msgSource", "source", "Source")
+    )
 
     return {
         "local_id": _to_int(_pick("local_id", "localId")),
@@ -1556,6 +1603,7 @@ def _normalize_realtime_message_item(item: dict[str, Any]) -> dict[str, Any]:
         "compress_content": _coerce_realtime_blobish_value(
             _pick("compress_content", "compressContent", "CompressContent")
         ),
+        "msg_source": msg_source,
         "packed_info_data": _coerce_realtime_blobish_value(
             _pick("packed_info_data", "packedInfoData", "PackedInfoData")
         ),
@@ -3111,6 +3159,7 @@ def _append_full_messages_from_rows(
 
         raw_text = _decode_message_content(r["compress_content"], r["message_content"])
         raw_text = raw_text.strip()
+        at_usernames = _extract_at_usernames_from_source(_row_get_value(r, "msg_source", "source"))
 
         sender_prefix = ""
         if is_group and raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
@@ -3506,6 +3555,8 @@ def _append_full_messages_from_rows(
                 "isSent": bool(is_sent),
                 "renderType": render_type,
                 "content": content_text,
+                "atUsernames": at_usernames,
+                "atUsers": [],
                 "title": title,
                 "url": url,
                 "linkType": link_type,
@@ -3794,9 +3845,26 @@ def _postprocess_full_messages(
             system_usernames.add(operator_username)
 
     from_usernames = [str(m.get("fromUsername") or "").strip() for m in merged]
+    at_usernames = [
+        str(u or "").strip()
+        for m in merged
+        for u in (m.get("atUsernames") or [])
+        if str(u or "").strip()
+    ]
     uniq_senders = list(
         dict.fromkeys(
-            [u for u in (sender_usernames + list(pat_usernames) + quote_usernames + from_usernames + list(system_usernames)) if u]
+            [
+                u
+                for u in (
+                    sender_usernames
+                    + list(pat_usernames)
+                    + quote_usernames
+                    + from_usernames
+                    + at_usernames
+                    + list(system_usernames)
+                )
+                if u
+            ]
         )
     )
     sender_contact_rows = _load_contact_rows(contact_db_path, uniq_senders)
@@ -3864,6 +3932,43 @@ def _postprocess_full_messages(
                 local_avatar_usernames=local_sender_avatars,
             )
             m["senderAvatar"] = avatar_url
+
+        msg_at_usernames = list(
+            dict.fromkeys([str(u or "").strip() for u in (m.get("atUsernames") or []) if str(u or "").strip()])
+        )
+        m["atUsernames"] = msg_at_usernames
+        if msg_at_usernames:
+            at_users: list[dict[str, Any]] = []
+            for au in msg_at_usernames:
+                if au == "notify@all":
+                    at_users.append(
+                        {
+                            "username": au,
+                            "displayName": "所有人",
+                            "avatar": "",
+                        }
+                    )
+                    continue
+                at_users.append(
+                    {
+                        "username": au,
+                        "displayName": _resolve_sender_display_name(
+                            sender_username=au,
+                            sender_contact_rows=sender_contact_rows,
+                            wcdb_display_names=wcdb_display_names,
+                            group_nicknames=group_nicknames,
+                        ),
+                        "avatar": base_url
+                        + _avatar_url_unified(
+                            account_dir=account_dir,
+                            username=au,
+                            local_avatar_usernames=local_sender_avatars,
+                        ),
+                    }
+                )
+            m["atUsers"] = at_users
+        else:
+            m["atUsers"] = []
 
         qu = str(m.get("quoteUsername") or "").strip()
         if qu:
@@ -4762,20 +4867,26 @@ def _collect_chat_messages(
 
             quoted_table = _quote_ident(table_name)
             has_packed_info_data = False
+            has_msg_source = False
             try:
                 cols = conn.execute(f"PRAGMA table_info({quoted_table})").fetchall()
-                has_packed_info_data = any(str(c[1] or "").strip().lower() == "packed_info_data" for c in cols)
+                col_names = {str(c[1] or "").strip().lower() for c in cols}
+                has_packed_info_data = "packed_info_data" in col_names
+                has_msg_source = "source" in col_names
             except Exception:
                 has_packed_info_data = False
+                has_msg_source = False
 
             packed_select = (
                 "m.packed_info_data AS packed_info_data, " if has_packed_info_data else "NULL AS packed_info_data, "
             )
+            source_select = "m.source AS msg_source, " if has_msg_source else "NULL AS msg_source, "
             sql_with_join = (
                 "SELECT "
                 "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
                 "m.message_content, m.compress_content, "
                 + packed_select
+                + source_select
                 + "n.user_name AS sender_username "
                 f"FROM {quoted_table} m "
                 "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
@@ -4787,6 +4898,7 @@ def _collect_chat_messages(
                 "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
                 "m.message_content, m.compress_content, "
                 + packed_select
+                + source_select
                 + "'' AS sender_username "
                 f"FROM {quoted_table} m "
                 "ORDER BY m.create_time DESC, m.sort_seq DESC, m.local_id DESC "
@@ -4821,6 +4933,7 @@ def _collect_chat_messages(
 
                 raw_text = _decode_message_content(r["compress_content"], r["message_content"])
                 raw_text = raw_text.strip()
+                at_usernames = _extract_at_usernames_from_source(_row_get_value(r, "msg_source", "source"))
 
                 sender_prefix = ""
                 if is_group and raw_text and (not raw_text.startswith("<")) and (not raw_text.startswith('"<')):
@@ -5210,6 +5323,8 @@ def _collect_chat_messages(
                         "isSent": bool(is_sent),
                         "renderType": render_type,
                         "content": content_text,
+                        "atUsernames": at_usernames,
+                        "atUsers": [],
                         "title": title,
                         "url": url,
                         "linkType": link_type,
@@ -5523,6 +5638,7 @@ def _fetch_realtime_message_rows_via_exec(
         "m.message_content, m.compress_content, "
     )
     packed_select = "m.packed_info_data AS packed_info_data, "
+    source_select = "m.source AS msg_source, "
     sender_join = "n.user_name AS sender_username "
 
     for db_path, table_name in resolved:
@@ -5535,10 +5651,33 @@ def _fetch_realtime_message_rows_via_exec(
             first_my_rowid = my_rowid
 
         quoted_table = _quote_ident(table_name)
-        sql_with_join = (
+        sql_with_source = (
             "SELECT "
             + base_cols
             + packed_select
+            + source_select
+            + sender_join
+            + f"FROM {quoted_table} m "
+            + "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
+            + "ORDER BY m.create_time DESC, m.sort_seq DESC, m.local_id DESC "
+            + f"LIMIT {int(limit_probe)}"
+        )
+        sql_no_source = (
+            "SELECT "
+            + base_cols
+            + packed_select
+            + "NULL AS msg_source, "
+            + sender_join
+            + f"FROM {quoted_table} m "
+            + "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
+            + "ORDER BY m.create_time DESC, m.sort_seq DESC, m.local_id DESC "
+            + f"LIMIT {int(limit_probe)}"
+        )
+        sql_no_packed_with_source = (
+            "SELECT "
+            + base_cols
+            + "NULL AS packed_info_data, "
+            + source_select
             + sender_join
             + f"FROM {quoted_table} m "
             + "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
@@ -5549,16 +5688,25 @@ def _fetch_realtime_message_rows_via_exec(
             "SELECT "
             + base_cols
             + "NULL AS packed_info_data, "
+            + "NULL AS msg_source, "
             + sender_join
             + f"FROM {quoted_table} m "
             + "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
             + "ORDER BY m.create_time DESC, m.sort_seq DESC, m.local_id DESC "
             + f"LIMIT {int(limit_probe)}"
         )
-        try:
-            raw_rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=sql_with_join)
-        except Exception:
-            raw_rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=sql_no_packed)
+        raw_rows = None
+        last_error: Optional[Exception] = None
+        for sql_candidate in (sql_with_source, sql_no_source, sql_no_packed_with_source, sql_no_packed):
+            try:
+                raw_rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=sql_candidate)
+                break
+            except Exception as e:
+                last_error = e
+        if raw_rows is None:
+            if last_error is not None:
+                raise last_error
+            raw_rows = []
 
         raw_list = list(raw_rows or [])
         if len(raw_list) > take_int:
@@ -8079,6 +8227,7 @@ async def get_chat_messages_around(
     anchor_table_name = str(anchor_table_name_in or "").strip()
     anchor_row: Optional[sqlite3.Row] = None
     anchor_packed_select = "NULL AS packed_info_data, "
+    anchor_source_select = "NULL AS msg_source, "
     try:
         conn_a = sqlite3.connect(str(anchor_db_path))
         conn_a.row_factory = sqlite3.Row
@@ -8101,20 +8250,26 @@ async def get_chat_messages_around(
 
             quoted_table_a = _quote_ident(anchor_table_name)
             has_packed_info_data = False
+            has_msg_source = False
             try:
                 cols = conn_a.execute(f"PRAGMA table_info({quoted_table_a})").fetchall()
-                has_packed_info_data = any(str(c[1] or "").strip().lower() == "packed_info_data" for c in cols)
+                col_names = {str(c[1] or "").strip().lower() for c in cols}
+                has_packed_info_data = "packed_info_data" in col_names
+                has_msg_source = "source" in col_names
             except Exception:
                 has_packed_info_data = False
+                has_msg_source = False
             anchor_packed_select = (
                 "m.packed_info_data AS packed_info_data, " if has_packed_info_data else "NULL AS packed_info_data, "
             )
+            anchor_source_select = "m.source AS msg_source, " if has_msg_source else "NULL AS msg_source, "
 
             sql_anchor_with_join = (
                 "SELECT "
                 "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
                 "m.message_content, m.compress_content, "
                 + anchor_packed_select
+                + anchor_source_select
                 + "n.user_name AS sender_username "
                 f"FROM {quoted_table_a} m "
                 "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
@@ -8126,6 +8281,7 @@ async def get_chat_messages_around(
                 "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
                 "m.message_content, m.compress_content, "
                 + anchor_packed_select
+                + anchor_source_select
                 + "'' AS sender_username "
                 f"FROM {quoted_table_a} m "
                 "WHERE m.local_id = ? "
@@ -8187,14 +8343,19 @@ async def get_chat_messages_around(
 
             quoted_table = _quote_ident(table_name)
             has_packed_info_data = False
+            has_msg_source = False
             try:
                 cols = conn.execute(f"PRAGMA table_info({quoted_table})").fetchall()
-                has_packed_info_data = any(str(c[1] or "").strip().lower() == "packed_info_data" for c in cols)
+                col_names = {str(c[1] or "").strip().lower() for c in cols}
+                has_packed_info_data = "packed_info_data" in col_names
+                has_msg_source = "source" in col_names
             except Exception:
                 has_packed_info_data = False
+                has_msg_source = False
             packed_select = (
                 "m.packed_info_data AS packed_info_data, " if has_packed_info_data else "NULL AS packed_info_data, "
             )
+            source_select = "m.source AS msg_source, " if has_msg_source else "NULL AS msg_source, "
 
             # Stable cross-db ordering: (create_time, sort_seq, db_stem, local_id)
             stem = db_path.stem
@@ -8234,6 +8395,7 @@ async def get_chat_messages_around(
                 "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
                 "m.message_content, m.compress_content, "
                 + packed_select
+                + source_select
                 + "n.user_name AS sender_username "
                 f"FROM {quoted_table} m "
                 "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
@@ -8246,6 +8408,7 @@ async def get_chat_messages_around(
                 "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
                 "m.message_content, m.compress_content, "
                 + packed_select
+                + source_select
                 + "'' AS sender_username "
                 f"FROM {quoted_table} m "
                 f"{where_before} "
@@ -8258,6 +8421,7 @@ async def get_chat_messages_around(
                 "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
                 "m.message_content, m.compress_content, "
                 + packed_select
+                + source_select
                 + "n.user_name AS sender_username "
                 f"FROM {quoted_table} m "
                 "LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
@@ -8270,6 +8434,7 @@ async def get_chat_messages_around(
                 "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
                 "m.message_content, m.compress_content, "
                 + packed_select
+                + source_select
                 + "'' AS sender_username "
                 f"FROM {quoted_table} m "
                 f"{where_after} "

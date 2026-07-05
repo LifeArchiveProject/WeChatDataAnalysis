@@ -51,62 +51,12 @@
             </div>
           </div>
 
-          <div
+          <ContactProfileCard
             v-if="contactProfileCardOpen && contactProfileCardMessageId === String(message.id ?? '')"
-            class="chat-contact-card absolute z-40 w-[360px] max-w-[88vw] rounded-lg overflow-hidden"
+            :state="state"
+            class="absolute z-40 w-[360px] max-w-[88vw]"
             :class="message.isSent ? 'right-0 top-[calc(100%+8px)]' : 'left-0 top-[calc(100%+8px)]'"
-            @mouseenter="onContactCardMouseEnter"
-            @mouseleave="onMessageAvatarMouseLeave"
-          >
-            <div class="px-3 py-2 border-b border-gray-200 text-sm font-medium text-gray-900">联系人资料</div>
-            <div class="p-3 space-y-3 bg-[#F6F6F6]">
-              <div v-if="contactProfileLoading" class="text-sm text-gray-500 text-center py-4">资料加载中...</div>
-              <div v-else-if="contactProfileError" class="text-sm text-red-500 whitespace-pre-wrap">{{ contactProfileError }}</div>
-              <div v-else class="bg-white rounded-md border border-gray-100 overflow-hidden">
-                <div class="p-3 flex items-center gap-3 border-b border-gray-100">
-                  <div class="w-12 h-12 rounded-md overflow-hidden bg-gray-200 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
-                    <img v-if="contactProfileResolvedAvatar" :src="contactProfileResolvedAvatar" alt="头像" class="w-full h-full object-cover" referrerpolicy="no-referrer" />
-                    <div v-else class="w-full h-full flex items-center justify-center text-white text-sm font-bold" style="background-color:#4B5563">{{ contactProfileResolvedName.charAt(0) || '?' }}</div>
-                  </div>
-                  <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
-                    <div class="text-sm text-gray-900 truncate">{{ contactProfileResolvedName || '未知联系人' }}</div>
-                    <div class="text-xs text-gray-500 truncate">{{ contactProfileResolvedUsername }}</div>
-                  </div>
-                </div>
-
-                <div class="text-sm">
-                  <div class="px-3 py-2.5 flex items-start gap-3 border-b border-gray-100">
-                    <div class="w-12 text-gray-500 shrink-0">昵称</div>
-                    <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedNickname || '-' }}</div>
-                  </div>
-                  <div class="px-3 py-2.5 flex items-start gap-3 border-b border-gray-100">
-                    <div class="w-12 text-gray-500 shrink-0">微信号</div>
-                    <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedAlias || '-' }}</div>
-                  </div>
-                  <div class="px-3 py-2.5 flex items-start gap-3 border-b border-gray-100">
-                    <div class="w-12 text-gray-500 shrink-0">性别</div>
-                    <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedGender || '-' }}</div>
-                  </div>
-                  <div class="px-3 py-2.5 flex items-start gap-3 border-b border-gray-100">
-                    <div class="w-12 text-gray-500 shrink-0">地区</div>
-                    <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedRegion || '-' }}</div>
-                  </div>
-                  <div class="px-3 py-2.5 flex items-start gap-3 border-b border-gray-100">
-                    <div class="w-12 text-gray-500 shrink-0">备注</div>
-                    <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedRemark || '-' }}</div>
-                  </div>
-                  <div class="px-3 py-2.5 flex items-start gap-3 border-b border-gray-100">
-                    <div class="w-12 text-gray-500 shrink-0">签名</div>
-                    <div class="text-gray-900 whitespace-pre-wrap break-words" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedSignature || '-' }}</div>
-                  </div>
-                  <div class="px-3 py-2.5 flex items-start gap-3" :title="contactProfileResolvedSourceScene != null ? `来源场景码：${contactProfileResolvedSourceScene}` : ''">
-                    <div class="w-12 text-gray-500 shrink-0">来源</div>
-                    <div class="text-gray-900 break-all" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedSource || '-' }}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          />
         </div>
 
         <div
@@ -125,6 +75,13 @@
           </div>
 
           <MessageContent :message="message" :state="state" />
+
+          <ContactProfileCard
+            v-if="isMentionContactProfileCardForMessage && isMentionContactProfileCardForMessage(message)"
+            :state="state"
+            class="absolute z-40 w-[360px] max-w-[88vw]"
+            :class="message.isSent ? 'right-0 top-[calc(100%+8px)]' : 'left-0 top-[calc(100%+8px)]'"
+          />
         </div>
       </div>
     </div>
@@ -133,11 +90,12 @@
 
 <script>
 import { defineComponent } from 'vue'
+import ContactProfileCard from '~/components/chat/ContactProfileCard.vue'
 import MessageContent from '~/components/chat/MessageContent.vue'
 
 export default defineComponent({
   name: 'MessageItem',
-  components: { MessageContent },
+  components: { ContactProfileCard, MessageContent },
   props: {
     state: { type: Object, required: true },
     message: { type: Object, required: true }
