@@ -4,6 +4,8 @@ const SELECTED_ACCOUNT_KEY = 'ui.selected_account'
 
 export const useChatAccountsStore = defineStore('chatAccounts', () => {
   const accounts = ref([])
+  const accountInfos = ref([])
+  const switchableAccounts = ref([])
   const selectedAccount = ref(null)
   const loading = ref(false)
   const error = ref('')
@@ -44,6 +46,78 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
     writeSelectedAccount(selectedAccount.value)
   }
 
+  const normalizeAccountName = (value) => String(value || '').trim()
+
+  const uniqueAccounts = (values = []) => {
+    const out = []
+    const seen = new Set()
+    for (const value of Array.isArray(values) ? values : []) {
+      const account = normalizeAccountName(value)
+      if (!account || seen.has(account)) continue
+      seen.add(account)
+      out.push(account)
+    }
+    return out
+  }
+
+  const normalizeAccountInfos = (resp, nextAccounts) => {
+    const raw = Array.isArray(resp?.accountInfos)
+      ? resp.accountInfos
+      : (Array.isArray(resp?.items) ? resp.items : [])
+    const infos = []
+    const seen = new Set()
+
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue
+      const account = normalizeAccountName(item.account || item.name)
+      if (!account || seen.has(account)) continue
+      seen.add(account)
+      infos.push({ ...item, account, name: normalizeAccountName(item.name || account) || account })
+    }
+
+    for (const account of nextAccounts) {
+      if (!account || seen.has(account)) continue
+      seen.add(account)
+      infos.push({ account, name: account })
+    }
+
+    return infos
+  }
+
+  const deriveSwitchableAccounts = (resp, infos, nextAccounts) => {
+    const explicit = uniqueAccounts(
+      resp?.switchableAccounts
+      || resp?.switchable_accounts
+      || resp?.keyReadyAccounts
+      || []
+    )
+    const accountSet = new Set(nextAccounts)
+    if (explicit.length) {
+      return explicit.filter((account) => !accountSet.size || accountSet.has(account))
+    }
+
+    return uniqueAccounts(
+      infos
+        .filter((info) => {
+          const keysReady = !!(info.keysReady || info.keyReady || info.switchable)
+          const hasDbKey = !!(info.dbKeyPresent || info.db_key_present)
+          const hasImageKey = !!(info.imageKeyPresent || info.image_key_present)
+          return keysReady || (hasDbKey && hasImageKey)
+        })
+        .map((info) => info.account || info.name)
+    ).filter((account) => !accountSet.size || accountSet.has(account))
+  }
+
+  const accountInfoByName = computed(() => {
+    const out = {}
+    for (const info of Array.isArray(accountInfos.value) ? accountInfos.value : []) {
+      const account = normalizeAccountName(info?.account || info?.name)
+      if (!account) continue
+      out[account] = info
+    }
+    return out
+  })
+
   if (process.client) {
     watch(selectedAccount, (next) => {
       writeSelectedAccount(next)
@@ -70,19 +144,25 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
 
       try {
         const resp = await $fetch('/chat/accounts', { baseURL: _apiBase })
-        const nextAccounts = Array.isArray(resp?.accounts) ? resp.accounts : []
+        const nextAccounts = uniqueAccounts(Array.isArray(resp?.accounts) ? resp.accounts : [])
         accounts.value = nextAccounts
+        accountInfos.value = normalizeAccountInfos(resp, nextAccounts)
+        switchableAccounts.value = deriveSwitchableAccounts(resp, accountInfos.value, nextAccounts)
 
         const preferred = String(selectedAccount.value || '').trim()
         const defaultAccount = String(resp?.default_account || '').trim()
-        const fallback = defaultAccount || nextAccounts[0] || ''
-        const nextSelected = preferred && nextAccounts.includes(preferred) ? preferred : (fallback || null)
+        const defaultSwitchable = String(resp?.defaultSwitchableAccount || resp?.default_switchable_account || '').trim()
+        const fallback = defaultSwitchable || defaultAccount || nextAccounts[0] || ''
+        const selectableAccounts = uniqueAccounts([...nextAccounts, ...switchableAccounts.value])
+        const nextSelected = preferred && selectableAccounts.includes(preferred) ? preferred : (fallback || null)
 
         selectedAccount.value = nextSelected
         writeSelectedAccount(nextSelected)
         loaded.value = true
       } catch (e) {
         accounts.value = []
+        accountInfos.value = []
+        switchableAccounts.value = []
         selectedAccount.value = null
         writeSelectedAccount(null)
         loaded.value = true
@@ -101,6 +181,9 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
 
   return {
     accounts,
+    accountInfos,
+    accountInfoByName,
+    switchableAccounts,
     selectedAccount,
     loading,
     error,

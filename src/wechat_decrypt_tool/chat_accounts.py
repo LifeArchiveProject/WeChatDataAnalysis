@@ -20,6 +20,10 @@ class ChatAccountContext:
     has_decrypted_dbs: bool
     source_info: dict[str, Any]
     db_key_present: bool = False
+    image_key_present: bool = False
+    image_xor_key_present: bool = False
+    image_aes_key_present: bool = False
+    keys_updated_at: str = ""
 
     @property
     def db_storage_path(self) -> str:
@@ -34,6 +38,10 @@ class ChatAccountContext:
         if self.db_storage_path or self.wxid_dir:
             return "direct"
         return "decrypted" if self.has_decrypted_dbs else "unknown"
+
+    @property
+    def keys_ready(self) -> bool:
+        return bool(self.db_key_present and self.image_key_present)
 
 
 def _safe_account_name(value: Any) -> str:
@@ -83,6 +91,47 @@ def _source_info_from_key_store(account: str) -> tuple[dict[str, Any], bool]:
     return source, len(str(keys.get("db_key") or "").strip()) == 64
 
 
+def _key_state_from_key_store(account: str) -> dict[str, Any]:
+    keys = get_account_keys_from_store(account)
+    if not isinstance(keys, dict):
+        keys = {}
+
+    image_xor = str(keys.get("image_xor_key") or "").strip()
+    image_aes = str(keys.get("image_aes_key") or "").strip()
+    return {
+        "db_key_present": len(str(keys.get("db_key") or "").strip()) == 64,
+        "image_xor_key_present": bool(image_xor),
+        "image_aes_key_present": bool(image_aes),
+        "image_key_present": bool(image_xor),
+        "keys_updated_at": str(keys.get("updated_at") or "").strip(),
+    }
+
+
+def _key_state_from_media_keys_file(account_dir: Path) -> dict[str, Any]:
+    p = Path(account_dir) / "_media_keys.json"
+    if not p.exists():
+        return {
+            "image_xor_key_present": False,
+            "image_aes_key_present": False,
+            "image_key_present": False,
+        }
+
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+
+    xor_present = data.get("xor") is not None or bool(str(data.get("image_xor_key") or data.get("xor_key") or "").strip())
+    aes_present = bool(str(data.get("aes") or data.get("image_aes_key") or data.get("aes_key") or "").strip())
+    return {
+        "image_xor_key_present": bool(xor_present),
+        "image_aes_key_present": bool(aes_present),
+        "image_key_present": bool(xor_present),
+    }
+
+
 def _merge_source_info(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
     out = dict(primary or {})
     for k in ("db_storage_path", "wxid_dir"):
@@ -129,6 +178,8 @@ def _context_for_name(account: str) -> Optional[ChatAccountContext]:
         source_from_dir = {}
 
     source_from_keys, key_present = _source_info_from_key_store(account_name)
+    key_state = _key_state_from_key_store(account_name)
+    media_key_state = _key_state_from_media_keys_file(account_dir)
     source_info = _merge_source_info(source_from_dir, source_from_keys)
     if not has_dbs and not source_info and not key_present:
         return None
@@ -139,6 +190,10 @@ def _context_for_name(account: str) -> Optional[ChatAccountContext]:
         has_decrypted_dbs=bool(has_dbs),
         source_info=source_info,
         db_key_present=bool(key_present),
+        image_key_present=bool(key_state.get("image_key_present") or media_key_state.get("image_key_present")),
+        image_xor_key_present=bool(key_state.get("image_xor_key_present") or media_key_state.get("image_xor_key_present")),
+        image_aes_key_present=bool(key_state.get("image_aes_key_present") or media_key_state.get("image_aes_key_present")),
+        keys_updated_at=str(key_state.get("keys_updated_at") or ""),
     )
 
 
@@ -162,11 +217,12 @@ def list_chat_account_contexts() -> list[ChatAccountContext]:
             if not n or not isinstance(item, dict):
                 continue
             has_key = len(str(item.get("db_key") or "").strip()) == 64
+            has_image_key = bool(str(item.get("image_xor_key") or "").strip())
             has_source = bool(
                 str(item.get("db_key_source_db_storage_path") or "").strip()
                 or str(item.get("db_key_source_wxid_dir") or "").strip()
             )
-            if has_key or has_source:
+            if has_key or has_source or has_image_key:
                 names.add(n)
 
     contexts: list[ChatAccountContext] = []
@@ -215,9 +271,12 @@ def resolve_chat_account_context(account: Optional[str]) -> ChatAccountContext:
         has_decrypted_dbs=ctx.has_decrypted_dbs,
         source_info=ctx.source_info,
         db_key_present=ctx.db_key_present,
+        image_key_present=ctx.image_key_present,
+        image_xor_key_present=ctx.image_xor_key_present,
+        image_aes_key_present=ctx.image_aes_key_present,
+        keys_updated_at=ctx.keys_updated_at,
     )
 
 
 def is_decrypted_chat_account_dir(account_dir: Path) -> bool:
     return _has_decrypted_chat_dbs(Path(account_dir))
-
