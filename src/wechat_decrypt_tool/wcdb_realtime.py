@@ -616,6 +616,17 @@ def _load_wcdb_lib() -> ctypes.CDLL:
         except Exception:
             pass
 
+        # Optional (newer DLLs): compact contact list API exported by our bundled WCDB DLL.
+        try:
+            lib.wcdb_get_contacts_compact.argtypes = [
+                ctypes.c_int64,
+                ctypes.c_char_p,
+                ctypes.POINTER(ctypes.c_char_p),
+            ]
+            lib.wcdb_get_contacts_compact.restype = ctypes.c_int
+        except Exception:
+            pass
+
         lib.wcdb_get_group_member_count.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int32)]
         lib.wcdb_get_group_member_count.restype = ctypes.c_int
 
@@ -1160,6 +1171,40 @@ def get_contact(handle: int, username: str) -> dict[str, Any]:
     out_json = _call_out_json(fn, ctypes.c_int64(int(handle)), u.encode("utf-8"))
     decoded = _safe_load_json(out_json)
     return decoded if isinstance(decoded, dict) else {}
+
+
+def get_contacts_compact(handle: int, usernames: Optional[list[str]] = None) -> list[dict[str, Any]]:
+    """Return contacts through the bundled native compact contact API.
+
+    Passing no usernames intentionally uses NULL for the native `usernamesJson`
+    argument, which requests the full compact contact list.
+    """
+    _ensure_initialized()
+    uniq = [str(u or "").strip() for u in (usernames or []) if str(u or "").strip()]
+    uniq = list(dict.fromkeys(uniq))
+
+    if _sidecar_enabled():
+        out_json = _sidecar_payload(
+            "get_contacts_compact",
+            {"handle": int(handle), "usernames": uniq},
+            timeout=60.0,
+        )
+        decoded = _safe_load_json(out_json)
+        if isinstance(decoded, list):
+            return [x for x in decoded if isinstance(x, dict)]
+        return []
+
+    lib = _load_wcdb_lib()
+    fn = getattr(lib, "wcdb_get_contacts_compact", None)
+    if not fn:
+        raise WCDBRealtimeError("Current wcdb_api.dll does not support get_contacts_compact.")
+
+    payload = json.dumps(uniq, ensure_ascii=False).encode("utf-8") if uniq else None
+    out_json = _call_out_json(fn, ctypes.c_int64(int(handle)), payload)
+    decoded = _safe_load_json(out_json)
+    if isinstance(decoded, list):
+        return [x for x in decoded if isinstance(x, dict)]
+    return []
 
 
 def get_group_members(handle: int, chatroom_id: str) -> list[dict[str, Any]]:

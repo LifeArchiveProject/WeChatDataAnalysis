@@ -20,6 +20,7 @@ wheels/
 .ace-tool/
 pnpm-lock.yaml
 /tools/tmp_isaac64_compare.js
+/native/wce_integrity/
 /.claude/settings.local.json
 .env
 .env.*

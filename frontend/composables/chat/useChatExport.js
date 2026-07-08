@@ -7,8 +7,8 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const isExportCreating = ref(false)
   const exportError = ref('')
 
-  const exportScope = ref('current')
-  const exportFormat = ref('json')
+  const exportScope = ref('selected')
+  const exportFormat = ref('html')
   const exportDownloadRemoteMedia = ref(true)
   const exportHtmlPageSize = ref(1000)
   const exportMessageTypeOptions = [
@@ -27,6 +27,14 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     { value: 'voip', label: '通话' }
   ]
   const exportMessageTypes = ref(exportMessageTypeOptions.map((item) => item.value))
+  const exportMessageTypeValues = exportMessageTypeOptions.map((item) => item.value)
+  const areAllExportMessageTypesSelected = computed(() => {
+    const selected = new Set((Array.isArray(exportMessageTypes.value) ? exportMessageTypes.value : []).map((item) => String(item || '').trim()).filter(Boolean))
+    return exportMessageTypeValues.length > 0 && exportMessageTypeValues.every((value) => selected.has(value))
+  })
+  const toggleAllExportMessageTypes = () => {
+    exportMessageTypes.value = areAllExportMessageTypesSelected.value ? [] : exportMessageTypeValues.slice()
+  }
 
   const exportStartLocal = ref('')
   const exportEndLocal = ref('')
@@ -156,6 +164,15 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     let list = getExportBaseContacts()
 
     const normalizedTab = String(tab || 'all')
+    if (normalizedTab === 'current') {
+      const currentUsername = String(selectedContact.value?.username || '').trim()
+      if (!currentUsername) {
+        list = []
+      } else {
+        const found = list.find((contact) => String(contact?.username || '').trim() === currentUsername)
+        list = [found || normalizeExportTargetContact(selectedContact.value)].filter((contact) => !!contact?.username)
+      }
+    }
     if (normalizedTab === 'groups') list = list.filter((contact) => !!contact?.isGroup)
     if (normalizedTab === 'singles') list = list.filter((contact) => !contact?.isGroup)
 
@@ -175,7 +192,12 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     const list = getExportBaseContacts()
     const total = list.length
     const groups = list.filter((contact) => !!contact?.isGroup).length
-    return { total, groups, singles: total - groups }
+    return {
+      current: selectedContact.value?.username ? 1 : 0,
+      total,
+      groups,
+      singles: total - groups
+    }
   })
 
   const exportSelectedUsernameSet = computed(() => {
@@ -196,14 +218,36 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     setExportSelectedUsernames(getExportFilteredUsernames(tab))
   }
 
-  const clearExportFilteredContacts = () => {
-    setExportSelectedUsernames([])
+  const clearExportFilteredContacts = (tab = exportListTab.value) => {
+    const removeSet = new Set(getExportFilteredUsernames(tab))
+    if (removeSet.size === 0) return
+    setExportSelectedUsernames(
+      normalizeExportSelectedUsernames(exportSelectedUsernames.value)
+        .filter((username) => !removeSet.has(username))
+    )
   }
 
-  const areExportFilteredContactsAllSelected = (tab = exportListTab.value) => {
+  const isExportFilteredContactsAllSelected = (tab = exportListTab.value) => {
     const usernames = getExportFilteredUsernames(tab)
-    if (usernames.length !== exportSelectedUsernameSet.value.size) return false
+    if (usernames.length === 0) return false
     return usernames.every((username) => exportSelectedUsernameSet.value.has(username))
+  }
+
+  const areExportFilteredContactsAllSelected = computed(() => {
+    return isExportFilteredContactsAllSelected(exportListTab.value)
+  })
+
+  const toggleExportFilteredContactsSelection = () => {
+    const usernames = getExportFilteredUsernames(exportListTab.value)
+    if (usernames.length === 0) return
+    if (areExportFilteredContactsAllSelected.value) {
+      clearExportFilteredContacts(exportListTab.value)
+      return
+    }
+    setExportSelectedUsernames([
+      ...normalizeExportSelectedUsernames(exportSelectedUsernames.value),
+      ...usernames
+    ])
   }
 
   const onExportListTabClick = (tab) => {
@@ -212,7 +256,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportListTab.value = nextTab
 
     if (isSameTab) {
-      if (areExportFilteredContactsAllSelected(nextTab)) {
+      if (isExportFilteredContactsAllSelected(nextTab)) {
         clearExportFilteredContacts(nextTab)
       } else {
         selectExportFilteredContacts(nextTab)
@@ -225,6 +269,24 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
 
   const isExportContactSelected = (username) => {
     return exportSelectedUsernameSet.value.has(String(username || '').trim())
+  }
+
+  const toggleExportContactSelection = (username) => {
+    const normalizedUsername = String(username || '').trim()
+    if (!normalizedUsername) return
+    const selected = normalizeExportSelectedUsernames(exportSelectedUsernames.value)
+    if (selected.includes(normalizedUsername)) {
+      setExportSelectedUsernames(selected.filter((item) => item !== normalizedUsername))
+      return
+    }
+    setExportSelectedUsernames([...selected, normalizedUsername])
+  }
+
+  const onExportListScopeChange = (tab) => {
+    const nextTab = String(tab || 'all')
+    exportScope.value = 'selected'
+    exportListTab.value = nextTab
+    selectExportFilteredContacts(nextTab)
   }
 
   const onExportBatchScopeClick = (tab) => {
@@ -503,10 +565,14 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportSelectedUsernames.value = []
     exportStartLocal.value = ''
     exportEndLocal.value = ''
-    exportMessageTypes.value = exportMessageTypeOptions.map((item) => item.value)
+    exportMessageTypes.value = exportMessageTypeValues.slice()
     exportAutoSavedFor.value = ''
-    exportScope.value = selectedContact.value?.username ? 'current' : 'selected'
-    loadExportTargets({ selectFiltered: !selectedContact.value?.username })
+    exportFormat.value = 'html'
+    const defaultListTab = selectedContact.value?.username ? 'current' : 'all'
+    exportScope.value = 'selected'
+    exportListTab.value = defaultListTab
+    selectExportFilteredContacts(defaultListTab)
+    loadExportTargets({ selectFiltered: true })
   }
 
   const closeExportModal = () => {
@@ -687,6 +753,8 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportHtmlPageSize,
     exportMessageTypeOptions,
     exportMessageTypes,
+    areAllExportMessageTypesSelected,
+    toggleAllExportMessageTypes,
     exportStartLocal,
     exportEndLocal,
     exportFileName,
@@ -703,6 +771,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportSearchQuery,
     exportListTab,
     exportSelectedUsernames,
+    areExportFilteredContactsAllSelected,
     exportJob,
     exportOverallPercent,
     exportCurrentPercent,
@@ -711,10 +780,13 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportTargetsError,
     exportFilteredContacts,
     exportContactCounts,
+    toggleExportFilteredContactsSelection,
+    onExportListScopeChange,
     onExportBatchScopeClick,
     onExportCustomScopeClick,
     onExportListTabClick,
     isExportContactSelected,
+    toggleExportContactSelection,
     hasWebExportFolder,
     chooseExportFolder,
     clearExportFolderSelection,

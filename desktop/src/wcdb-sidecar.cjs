@@ -193,6 +193,9 @@ function loadNative() {
   funcs.wcdb_get_contact = tryFunc(
     "int32 wcdb_get_contact(int64 handle, const char* username, _Out_ void** outJson)"
   );
+  funcs.wcdb_get_contacts_compact = tryFunc(
+    "int32 wcdb_get_contacts_compact(int64 handle, const char* usernamesJson, _Out_ void** outJson)"
+  );
   funcs.wcdb_get_group_member_count = tryFunc(
     "int32 wcdb_get_group_member_count(int64 handle, const char* chatroomId, _Out_ int32* count)"
   );
@@ -448,6 +451,14 @@ function handleAction(action, payload) {
         payload: callOutJson("wcdb_get_contact", [
           normalizeHandle(data.handle),
           String(data.username || "").trim(),
+        ]),
+      };
+
+    case "get_contacts_compact":
+      return {
+        payload: callOutJson("wcdb_get_contacts_compact", [
+          normalizeHandle(data.handle),
+          Array.isArray(data.usernames) && data.usernames.length > 0 ? JSON.stringify(data.usernames) : null,
         ]),
       };
 

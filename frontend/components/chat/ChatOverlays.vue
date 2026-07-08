@@ -96,6 +96,7 @@
               @click="onTimeSidebarDayClick(cell)"
             >
               <span v-if="cell.day" class="calendar-day-number">{{ cell.day }}</span>
+              <span v-if="cell.day" class="calendar-day-count">{{ cell.countText }}</span>
             </button>
           </div>
 
@@ -1388,322 +1389,389 @@
     </div>
 
     <!-- 导出弹窗 -->
-    <div v-if="exportModalOpen" class="fixed inset-0 z-[11000] flex items-center justify-center">
-      <div class="absolute inset-0 bg-black/40" @click="closeExportModal"></div>
-      <div class="chat-export-modal relative w-[1320px] max-w-[99vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
-        <div class="px-5 py-4 border-b border-gray-200 flex items-center">
-          <div class="text-base font-medium text-gray-900">导出聊天记录（离线 ZIP）</div>
-          <button class="ml-auto text-gray-400 hover:text-gray-700" type="button" @click="closeExportModal">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+    <div v-if="exportModalOpen" class="fixed inset-0 z-[11000] flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-6">
+      <div class="absolute inset-0" @click="closeExportModal"></div>
+      <div class="chat-export-modal relative flex max-h-[90vh] w-full max-w-[1320px] flex-col overflow-hidden rounded-lg border border-[#e5e7eb] bg-white">
+        <header class="flex shrink-0 items-start gap-3 border-b border-[#e5e7eb] px-5 py-4">
+          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#d9f3e3] bg-[#f0fdf4] text-[#07C160]">
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3v11" />
+              <path d="M7.5 10.5L12 15l4.5-4.5" />
+              <path d="M4 19h16" />
             </svg>
-          </button>
-        </div>
-
-        <div class="p-5 max-h-[75vh] overflow-y-auto space-y-5">
-          <div v-if="exportError" class="text-sm text-red-600 whitespace-pre-wrap">{{ exportError }}</div>
-          <div v-if="privacyMode" class="text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-md px-3 py-2">
-            已开启隐私模式：导出将隐藏会话/用户名/内容，并且不会打包头像与媒体。
           </div>
 
-          <div class="space-y-5">
-            <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(440px,1fr)_minmax(190px,auto)_minmax(500px,500px)] xl:items-start">
-              <div class="min-w-0">
-                <div class="text-sm font-medium text-gray-800 mb-2">范围</div>
-                <div class="flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                  <button
-                    type="button"
-                    class="px-2.5 py-1 text-xs rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    :class="exportScope === 'current' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'"
-                    :disabled="!selectedContact?.username"
-                    @click="exportScope = 'current'"
-                  >
-                    当前会话
-                  </button>
-                  <button
-                    type="button"
-                    class="px-2.5 py-1 text-xs rounded-md border transition-colors"
-                    :class="exportScope === 'all' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'"
-                    @click="onExportBatchScopeClick('all')"
-                  >
-                    全部 {{ exportTargetsLoading ? '...' : exportContactCounts.total }}
-                  </button>
-                  <button
-                    type="button"
-                    class="px-2.5 py-1 text-xs rounded-md border transition-colors"
-                    :class="exportScope === 'groups' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'"
-                    @click="onExportBatchScopeClick('groups')"
-                  >
-                    群聊 {{ exportTargetsLoading ? '...' : exportContactCounts.groups }}
-                  </button>
-                  <button
-                    type="button"
-                    class="px-2.5 py-1 text-xs rounded-md border transition-colors"
-                    :class="exportScope === 'singles' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'"
-                    @click="onExportBatchScopeClick('singles')"
-                  >
-                    单聊 {{ exportTargetsLoading ? '...' : exportContactCounts.singles }}
-                  </button>
-                  <button
-                    type="button"
-                    class="px-2.5 py-1 text-xs rounded-md border transition-colors"
-                    :class="exportScope === 'selected' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'"
-                    @click="onExportCustomScopeClick"
-                  >
-                    自定义
-                  </button>
-                </div>
-                <div class="mt-1 min-h-[16px] text-[11px] leading-4">
-                  <span v-if="exportTargetsLoading" class="text-gray-400">正在加载导出范围...</span>
-                  <span v-else-if="exportTargetsError" class="text-red-500">{{ exportTargetsError }}</span>
-                </div>
-              </div>
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 class="text-[16px] font-semibold text-[#111827]">导出聊天记录</h2>
+              <span class="rounded-md border border-[#d1fae5] bg-[#f0fdf4] px-2 py-0.5 text-[11px] font-medium text-[#047857]">普通导出</span>
+            </div>
+            <p class="mt-1 text-[12px] leading-5 text-[#6b7280]">
+              生成 HTML / JSON / TXT 等可阅读结果，并可按会话列表、时间和消息类型控制导出内容。
+            </p>
+          </div>
 
-              <div class="min-w-[190px]">
-                <div class="text-sm font-medium text-gray-800 mb-2">格式</div>
-                <div class="flex items-center gap-2 text-sm text-gray-700">
-                  <label class="flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border cursor-pointer transition-colors" :class="exportFormat === 'json' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'">
-                    <input type="radio" value="json" v-model="exportFormat" class="hidden" />
-                    <span>JSON</span>
-                  </label>
-                  <label class="flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border cursor-pointer transition-colors" :class="exportFormat === 'txt' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'">
-                    <input type="radio" value="txt" v-model="exportFormat" class="hidden" />
-                    <span>TXT</span>
-                  </label>
-                  <label class="flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border cursor-pointer transition-colors" :class="exportFormat === 'html' ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'">
-                    <input type="radio" value="html" v-model="exportFormat" class="hidden" />
-                    <span>HTML</span>
-                  </label>
-                </div>
-              </div>
+          <button
+            type="button"
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#111827]"
+            title="关闭"
+            @click="closeExportModal"
+          >
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
+          </button>
+        </header>
 
-              <div class="min-w-0 xl:min-w-[500px]">
-                <div class="text-sm font-medium text-gray-800 mb-2 whitespace-nowrap">时间范围（可选）</div>
-                <div class="chat-export-time-range-row">
-                  <input
-                    v-model="exportStartLocal"
-                    type="datetime-local"
-                    class="chat-export-datetime-input px-2 py-1 text-xs rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
-                  />
-                  <span class="text-gray-400 shrink-0 text-center">-</span>
-                  <input
-                    v-model="exportEndLocal"
-                    type="datetime-local"
-                    class="chat-export-datetime-input px-2 py-1 text-xs rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
-                  />
-                </div>
-              </div>
+        <main class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div class="space-y-4">
+            <div v-if="exportError" class="rounded-md border border-[#fecaca] bg-[#fef2f2] px-3 py-2.5 text-[13px] leading-5 text-[#b91c1c] whitespace-pre-wrap">
+              {{ exportError }}
+            </div>
+            <div v-if="privacyMode" class="rounded-md border border-[#fde68a] bg-[#fffbeb] px-3 py-2.5 text-[13px] leading-5 text-[#92400e]">
+              已开启隐私模式：导出将隐藏会话/用户名/内容，并且不会打包头像与媒体。
             </div>
 
-            <div v-if="exportFormat === 'html'" class="mt-3">
-              <div class="text-sm font-medium text-gray-800 mb-2">HTML 选项</div>
-              <div class="p-3 bg-gray-50 rounded-md border border-gray-200">
-                <label class="flex items-start gap-2 text-sm text-gray-700">
-                  <input type="checkbox" v-model="exportDownloadRemoteMedia" :disabled="privacyMode" />
-                  <span>允许联网下载链接/引用缩略图（提高离线完整性）</span>
-                </label>
-                <div class="mt-1 text-xs text-gray-500">
-                  仅 HTML 生效；会在导出时尝试下载远程缩略图并写入 ZIP（已做安全限制）。隐私模式下自动忽略。
+            <section class="rounded-lg border border-[#e5e7eb] bg-white">
+              <div class="border-b border-[#e5e7eb] px-4 py-3">
+                <div class="text-[14px] font-medium text-[#111827]">导出设置</div>
+                <div class="mt-0.5 text-[12px] text-[#6b7280]">选择格式和可选时间窗口，会话范围在下方列表右侧切换。</div>
+              </div>
+
+              <div
+                class="grid grid-cols-1 gap-3 p-3 lg:items-start"
+                :class="exportFormat === 'html' ? 'xl:grid-cols-[220px_minmax(360px,1fr)_minmax(460px,1.15fr)]' : 'lg:grid-cols-[220px_minmax(0,1fr)]'"
+              >
+                <div class="min-w-0">
+                  <div class="mb-2 text-[13px] font-medium text-[#111827]">格式</div>
+                  <div class="grid grid-cols-3 gap-2">
+                    <label
+                      class="flex cursor-pointer items-center justify-center rounded-md border px-3 py-2 text-[13px] font-medium transition"
+                      :class="exportFormat === 'html' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
+                    >
+                      <input type="radio" value="html" v-model="exportFormat" class="sr-only" />
+                      <span>HTML</span>
+                    </label>
+                    <label
+                      class="flex cursor-pointer items-center justify-center rounded-md border px-3 py-2 text-[13px] font-medium transition"
+                      :class="exportFormat === 'json' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
+                    >
+                      <input type="radio" value="json" v-model="exportFormat" class="sr-only" />
+                      <span>JSON</span>
+                    </label>
+                    <label
+                      class="flex cursor-pointer items-center justify-center rounded-md border px-3 py-2 text-[13px] font-medium transition"
+                      :class="exportFormat === 'txt' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
+                    >
+                      <input type="radio" value="txt" v-model="exportFormat" class="sr-only" />
+                      <span>TXT</span>
+                    </label>
+                  </div>
                 </div>
 
-                <div class="mt-3 flex flex-wrap items-center gap-3">
-                  <div class="text-sm text-gray-700">每页消息数</div>
+                <div v-if="exportFormat === 'html'" class="min-w-0">
+                  <div class="mb-2 flex items-center gap-2 text-[13px] font-medium text-[#111827]">
+                    <span class="h-1.5 w-1.5 rounded-full bg-[#07C160]"></span>
+                    <span>HTML 选项</span>
+                  </div>
+                  <div class="flex min-w-0 items-center gap-2 rounded-md border border-[#e5e7eb] bg-white px-2.5 py-1.5">
+                    <label
+                      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
+                      :class="exportDownloadRemoteMedia && !privacyMode ? 'text-[#047857]' : 'text-[#374151]'"
+                    >
+                      <input type="checkbox" v-model="exportDownloadRemoteMedia" :disabled="privacyMode" class="sr-only" />
+                      <span
+                        class="flex h-5 w-5 shrink-0 items-center justify-center rounded border transition"
+                        :class="exportDownloadRemoteMedia && !privacyMode ? 'border-[#22c55e] bg-[#07C160] text-white' : 'border-[#d1d5db] bg-[#f9fafb] text-transparent'"
+                      >
+                        <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="M20 6L9 17l-5-5" />
+                        </svg>
+                      </span>
+                      <span class="min-w-0 truncate text-[13px] font-medium">
+                        下载缩略图
+                        <span class="ml-1 text-[12px] font-normal text-[#6b7280]">需联网，打包链接/引用缩略图</span>
+                      </span>
+                    </label>
+
+                    <div class="flex shrink-0 items-center gap-1.5">
+                      <span class="text-[12px] text-[#6b7280]">每页</span>
+                      <input
+                        v-model.number="exportHtmlPageSize"
+                        type="number"
+                        min="0"
+                        step="100"
+                        class="h-7 w-20 rounded-md border border-[#d1d5db] bg-white px-2 text-[13px] text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="min-w-0">
+                  <div class="mb-2 text-[13px] font-medium text-[#111827]">时间范围（可选）</div>
+                  <div class="chat-export-time-range-row">
+                    <input
+                      v-model="exportStartLocal"
+                      type="datetime-local"
+                      class="chat-export-datetime-input rounded-md border border-[#d1d5db] bg-white px-3 py-2 text-[13px] text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20"
+                    />
+                    <span class="shrink-0 text-center text-[#9ca3af]">-</span>
+                    <input
+                      v-model="exportEndLocal"
+                      type="datetime-local"
+                      class="chat-export-datetime-input rounded-md border border-[#d1d5db] bg-white px-3 py-2 text-[13px] text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20"
+                    />
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="rounded-lg border border-[#e5e7eb] bg-white">
+              <div class="border-b border-[#e5e7eb] px-4 py-3">
+                <div class="text-[14px] font-medium text-[#111827]">自定义会话</div>
+                <div class="mt-0.5 text-[12px] text-[#6b7280]">进入会话后默认当前会话；也可搜索、按范围筛选，或手动取消不需要导出的会话。</div>
+              </div>
+              <div class="space-y-3 p-4">
+                <div class="flex flex-col gap-2 lg:flex-row lg:items-center">
                   <input
-                    v-model.number="exportHtmlPageSize"
-                    type="number"
-                    min="0"
-                    step="100"
-                    class="w-32 px-2.5 py-1.5 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
+                    v-model="exportSearchQuery"
+                    type="text"
+                    placeholder="搜索会话（名称/username）"
+                    class="min-w-0 flex-1 rounded-md border border-[#d1d5db] bg-white px-3 py-2 text-[13px] text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20"
+                    :class="{ 'privacy-blur': privacyMode }"
                   />
-                  <div class="text-xs text-gray-500">推荐 1000；0=单文件（打开大聊天可能很卡）</div>
+                  <select
+                    v-model="exportListTab"
+                    class="h-[38px] rounded-md border border-[#d1d5db] bg-white px-3 text-[13px] font-medium text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20 lg:w-[168px]"
+                    @change="onExportListScopeChange(exportListTab)"
+                  >
+                    <option value="current" :disabled="!selectedContact?.username">当前会话 {{ selectedContact?.username ? exportContactCounts.current : 0 }}</option>
+                    <option value="all">全部 {{ exportTargetsLoading ? '...' : exportContactCounts.total }}</option>
+                    <option value="groups">群聊 {{ exportTargetsLoading ? '...' : exportContactCounts.groups }}</option>
+                    <option value="singles">单聊 {{ exportTargetsLoading ? '...' : exportContactCounts.singles }}</option>
+                  </select>
+                  <button
+                    type="button"
+                    class="h-[38px] rounded-md border border-[#d1d5db] bg-white px-3 text-[13px] font-medium text-[#374151] transition hover:bg-[#f9fafb] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="exportFilteredContacts.length === 0"
+                    @click="toggleExportFilteredContactsSelection"
+                  >
+                    {{ areExportFilteredContactsAllSelected ? '取消全选' : '全选' }}
+                  </button>
                 </div>
-              </div>
-            </div>
 
-            <div v-if="exportScope === 'selected'" class="mt-3">
-              <div class="mb-2 text-xs text-gray-500">
-                下方整行可点选会话；搜索只影响当前自定义列表
+                <div class="min-h-[16px] text-[11px] leading-4">
+                  <span v-if="exportTargetsLoading" class="text-[#9ca3af]">正在加载会话列表...</span>
+                  <span v-else-if="exportTargetsError" class="text-[#b91c1c]">{{ exportTargetsError }}</span>
+                </div>
+
+                <div class="max-h-64 overflow-y-auto rounded-md border border-[#e5e7eb]">
+                  <button
+                    v-for="c in exportFilteredContacts"
+                    :key="c.username"
+                    type="button"
+                    class="flex w-full cursor-pointer items-center gap-2 border-b border-[#f3f4f6] px-3 py-2 text-left transition last:border-b-0"
+                    :class="isExportContactSelected(c.username) ? 'bg-[#f0fdf4] hover:bg-[#dcfce7]' : 'hover:bg-[#f9fafb]'"
+                    @click="toggleExportContactSelection(c.username)"
+                  >
+                    <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border" :class="isExportContactSelected(c.username) ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] bg-white text-transparent'">
+                      <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                        <path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" />
+                      </svg>
+                    </span>
+                    <div class="h-9 w-9 flex-shrink-0 overflow-hidden rounded-md bg-[#e5e7eb]" :class="{ 'privacy-blur': privacyMode }">
+                      <img v-if="c.avatar" :src="c.avatar" :alt="c.name + '头像'" class="h-full w-full object-cover" referrerpolicy="no-referrer" @error="onAvatarError($event, c)" />
+                      <div v-else class="flex h-full w-full items-center justify-center text-xs font-bold text-[#4b5563]">
+                        {{ (c.name || c.username || '?').charAt(0) }}
+                      </div>
+                    </div>
+                    <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
+                      <div class="truncate text-[13px] font-medium text-[#111827]">
+                        {{ c.name }}
+                        <span class="text-[12px] font-normal text-[#6b7280]">{{ c.isGroup ? '（群）' : '' }}</span>
+                        <span v-if="!c.inSessionList" class="ml-1 text-[10px] text-[#047857]">补充</span>
+                      </div>
+                      <div class="truncate text-[12px] text-[#6b7280]">{{ c.username }}</div>
+                    </div>
+                  </button>
+                  <div v-if="exportFilteredContacts.length === 0" class="px-3 py-3 text-[13px] text-[#6b7280]">
+                    无匹配会话
+                  </div>
+                </div>
+                <div class="text-[12px] text-[#6b7280]">已选 {{ exportSelectedUsernames.length }} 个会话</div>
               </div>
-              <div class="flex items-center gap-2 mb-2">
-                <input
-                  v-model="exportSearchQuery"
-                  type="text"
-                  placeholder="搜索会话（名称/username）"
-                  class="w-full px-3 py-2 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
-                  :class="{ 'privacy-blur': privacyMode }"
-                />
-              </div>
-              <div class="border border-gray-200 rounded-md max-h-56 overflow-y-auto">
-                <label
-                  v-for="c in exportFilteredContacts"
-                  :key="c.username"
-                  class="px-3 py-2 border-b border-gray-100 flex items-center gap-2 cursor-pointer transition-colors"
-                  :class="isExportContactSelected(c.username) ? 'bg-[#03C160]/5 hover:bg-[#03C160]/10' : 'hover:bg-gray-50'"
+            </section>
+
+            <section class="rounded-lg border border-[#e5e7eb] bg-white">
+              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] px-4 py-3">
+                <div>
+                  <div class="text-[14px] font-medium text-[#111827]">消息类型（导出内容）</div>
+                  <div class="mt-0.5 text-[12px] text-[#6b7280]">勾选图片/表情/视频/语音/文件时，会导出对应多媒体文件。</div>
+                </div>
+                <button
+                  type="button"
+                  class="rounded-md border border-[#d1d5db] bg-white px-3 py-2 text-[13px] font-medium text-[#374151] transition hover:bg-[#f9fafb]"
+                  @click="toggleAllExportMessageTypes"
                 >
-                  <input type="checkbox" :value="c.username" v-model="exportSelectedUsernames" class="cursor-pointer" />
-                  <div class="w-9 h-9 rounded-md overflow-hidden bg-gray-200 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
-                    <img v-if="c.avatar" :src="c.avatar" :alt="c.name + '头像'" class="w-full h-full object-cover" referrerpolicy="no-referrer" @error="onAvatarError($event, c)" />
-                    <div v-else class="w-full h-full flex items-center justify-center text-xs font-bold text-gray-600">
-                      {{ (c.name || c.username || '?').charAt(0) }}
-                    </div>
-                  </div>
-                  <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
-                    <div class="text-sm text-gray-800 truncate">
-                      {{ c.name }}
-                      <span class="text-xs text-gray-500">{{ c.isGroup ? '（群）' : '' }}</span>
-                      <span v-if="!c.inSessionList" class="ml-1 text-[10px] text-[#03C160]">补充</span>
-                    </div>
-                    <div class="text-xs text-gray-500 truncate">{{ c.username }}</div>
-                  </div>
-                </label>
-                <div v-if="exportFilteredContacts.length === 0" class="px-3 py-3 text-sm text-gray-500">
-                  无匹配会话
-                </div>
+                  {{ areAllExportMessageTypesSelected ? '取消全选' : '全选' }}
+                </button>
               </div>
-              <div class="mt-2 text-xs text-gray-500">
-                已选 {{ exportSelectedUsernames.length }} 个会话
-              </div>
-            </div>
 
-            <div>
-              <div class="text-sm font-medium text-gray-800 mb-2">消息类型（导出内容）</div>
-              <div class="mt-2 p-3 bg-gray-50 rounded-md border border-gray-200">
-                <div class="grid grid-cols-2 gap-x-2 gap-y-2 text-[13px] text-gray-700 md:grid-cols-[repeat(13,max-content)] md:justify-between md:gap-x-3 md:gap-y-0">
+              <div class="p-4">
+                <div class="grid grid-cols-2 gap-2 text-[13px] md:grid-cols-4 xl:grid-cols-7 2xl:grid-cols-[repeat(13,minmax(0,1fr))]">
                   <label
                     v-for="opt in exportMessageTypeOptions"
                     :key="opt.value"
-                    class="flex items-center gap-1.5 whitespace-nowrap md:flex-shrink-0"
+                    class="flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border px-2.5 py-2 transition"
+                    :class="exportMessageTypes.includes(opt.value) ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
                   >
-                    <input type="checkbox" :value="opt.value" v-model="exportMessageTypes" />
-                    <span>{{ opt.label }}</span>
+                    <input type="checkbox" :value="opt.value" v-model="exportMessageTypes" class="sr-only" />
+                    <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border" :class="exportMessageTypes.includes(opt.value) ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
+                      <svg class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                        <path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" />
+                      </svg>
+                    </span>
+                    <span class="min-w-0 truncate">{{ opt.label }}</span>
                   </label>
                 </div>
               </div>
-              <div class="mt-1 text-xs text-gray-500">
-                仅导出已勾选的消息类型；勾选图片/表情/视频/语音/文件时，会导出对应多媒体文件。
-              </div>
-            </div>
+            </section>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <div class="text-sm font-medium text-gray-800 mb-2">文件名（可选）</div>
-                <input
-                  v-model="exportFileName"
-                  type="text"
-                  placeholder="例如：我的微信导出_2025-12-23.zip"
-                  class="w-full px-3 py-2 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
-                />
-                <div class="mt-1 text-xs text-gray-500">不填则自动生成</div>
+            <section class="rounded-lg border border-[#e5e7eb] bg-white">
+              <div class="border-b border-[#e5e7eb] px-4 py-3">
+                <div class="text-[14px] font-medium text-[#111827]">输出位置</div>
+                <div class="mt-0.5 text-[12px] text-[#6b7280]">设置文件名和 ZIP 保存目录。</div>
               </div>
-
-              <div>
-                <div class="text-sm font-medium text-gray-800 mb-2">导出目录</div>
-                <div class="flex items-center gap-2">
-                  <div class="px-3 py-2 rounded-md border border-gray-200 bg-gray-50 text-xs break-all min-h-[38px] min-w-0 flex-1">
-                    {{ exportFolder || '未选择' }}
+              <div class="grid grid-cols-1 gap-4 p-4 lg:grid-cols-2">
+                <div>
+                  <div class="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span class="text-[13px] font-medium text-[#111827]">文件名（可选）</span>
+                    <span class="text-[12px] text-[#6b7280]">不填则自动生成</span>
                   </div>
-                  <button
-                    type="button"
-                    class="text-sm px-3 py-2 rounded-md bg-white border border-gray-200 hover:bg-gray-50"
-                    @click="chooseExportFolder"
+                  <input
+                    v-model="exportFileName"
+                    type="text"
+                    placeholder="例如：我的微信导出_2025-12-23.zip"
+                    class="w-full rounded-md border border-[#d1d5db] bg-white px-3 py-2 text-[13px] text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20"
+                  />
+                </div>
+
+                <div>
+                  <div class="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span class="text-[13px] font-medium text-[#111827]">导出目录</span>
+                    <span class="text-[12px] text-[#6b7280]">桌面端或支持目录写入的浏览器可选</span>
+                  </div>
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div class="min-w-0 flex-1 rounded-md border border-dashed px-3 py-2.5 text-[12px] leading-5" :class="exportFolder ? 'border-[#86efac] bg-[#f0fdf4] text-[#166534]' : 'border-[#d1d5db] bg-[#f9fafb] text-[#6b7280]'">
+                      <div class="truncate" :title="exportFolder || '尚未选择导出目录'">{{ exportFolder || '尚未选择导出目录' }}</div>
+                    </div>
+                    <div class="flex shrink-0 gap-2">
+                      <button
+                        type="button"
+                        class="rounded-md border border-[#d1d5db] bg-white px-3 py-2.5 text-[13px] font-medium text-[#111827] transition hover:bg-[#f9fafb]"
+                        @click="chooseExportFolder"
+                      >
+                        选择目录
+                      </button>
+                      <button
+                        v-if="exportFolder"
+                        type="button"
+                        class="rounded-md border border-[#d1d5db] bg-white px-3 py-2.5 text-[13px] font-medium text-[#374151] transition hover:bg-[#f9fafb]"
+                        @click="clearExportFolderSelection"
+                      >
+                        清空
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="exportJob" class="rounded-lg border border-[#e5e7eb] bg-white">
+              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] px-4 py-3">
+                <div>
+                  <div class="text-[14px] font-medium text-[#111827]">任务：{{ exportJob.exportId }}</div>
+                  <div class="mt-0.5 text-[12px] text-[#6b7280]">消息：{{ exportJob.progress?.messagesExported || 0 }}；媒体：{{ exportJob.progress?.mediaCopied || 0 }}；缺失：{{ exportJob.progress?.mediaMissing || 0 }}</div>
+                </div>
+                <span class="rounded-md bg-[#f3f4f6] px-2 py-1 text-[12px] text-[#4b5563]">{{ exportJob.status }}</span>
+              </div>
+              <div class="space-y-3 p-4 text-[12px] leading-5 text-[#374151]">
+                <div class="space-y-1.5">
+                  <div class="flex items-center justify-between gap-2 text-[#6b7280]">
+                    <span>会话：{{ exportJob.progress?.conversationsDone || 0 }}/{{ exportJob.progress?.conversationsTotal || 0 }}</span>
+                    <span class="font-medium text-[#374151]">{{ exportOverallPercent }}%</span>
+                  </div>
+                  <div class="h-2 overflow-hidden rounded-sm bg-[#f3f4f6]">
+                    <div
+                      class="h-full rounded-sm bg-[#07C160] transition-all duration-300"
+                      :style="{ width: exportOverallPercent + '%' }"
+                    ></div>
+                  </div>
+                </div>
+
+                <div v-if="exportJob.status === 'running' && exportJob.progress?.currentConversationUsername" class="space-y-1.5">
+                  <div class="flex items-center justify-between gap-2 text-[#6b7280]">
+                    <div class="truncate">
+                      当前：{{ exportJob.progress?.currentConversationName || exportJob.progress?.currentConversationUsername }}
+                      （{{ exportJob.progress?.currentConversationMessagesExported || 0 }}/{{ exportJob.progress?.currentConversationMessagesTotal || 0 }}）
+                    </div>
+                    <div class="font-medium text-[#374151]">
+                      <span v-if="exportCurrentPercent != null">{{ exportCurrentPercent }}%</span>
+                      <span v-else>…</span>
+                    </div>
+                  </div>
+                  <div class="h-2 overflow-hidden rounded-sm bg-[#f3f4f6]">
+                    <div
+                      v-if="exportCurrentPercent != null"
+                      class="h-full rounded-sm bg-[#38bdf8] transition-all duration-300"
+                      :style="{ width: exportCurrentPercent + '%' }"
+                    ></div>
+                    <div v-else class="h-full animate-pulse rounded-sm bg-[#38bdf8]/60" style="width: 30%"></div>
+                  </div>
+                </div>
+
+                <div v-if="exportJob.status === 'done'" class="space-y-2 rounded-md border border-[#e5e7eb] bg-[#f9fafb] px-3 py-2 text-[#374151]">
+                  <div>
+                    <span class="font-medium text-[#111827]">实际生成位置：</span>
+                    <div class="mt-1 break-all">{{ exportBackendZipPath || '未生成' }}</div>
+                  </div>
+                  <div v-if="hasWebExportFolder">
+                    <span class="font-medium text-[#111827]">浏览器目录：</span>
+                    <div class="mt-1 break-all">{{ exportFolder || '未选择' }}</div>
+                  </div>
+                  <div v-if="exportSaveState === 'saving'" class="text-[#0284c7] whitespace-pre-wrap">{{ exportSaveProgressText }}</div>
+                  <div v-else-if="exportSaveMsg" class="text-[#15803d] whitespace-pre-wrap">{{ exportSaveMsg }}</div>
+                  <div v-else-if="exportSaveError" class="text-[#b91c1c] whitespace-pre-wrap">{{ exportSaveError }}</div>
+                  <div v-if="hasWebExportFolder" class="text-[#6b7280]">
+                    浏览器模式通常会在写入完成后才显示文件，且出于安全限制，这里只能显示目录名，不能显示完整磁盘路径。
+                  </div>
+                </div>
+
+                <div v-if="exportJob.status === 'done' && !hasWebExportFolder" class="flex items-center gap-2">
+                  <a
+                    class="inline-flex items-center justify-center rounded-md bg-[#07C160] px-3 py-2 text-[13px] font-medium text-white transition hover:bg-[#06ad56]"
+                    :href="getExportDownloadUrl(exportJob.exportId)"
+                    target="_blank"
                   >
-                    选择文件夹
-                  </button>
-                  <button
-                    v-if="exportFolder"
-                    type="button"
-                    class="text-sm px-3 py-2 rounded-md bg-white border border-gray-200 hover:bg-gray-50"
-                    @click="clearExportFolderSelection"
-                  >
-                    清空
-                  </button>
+                    下载 ZIP
+                  </a>
                 </div>
-                <div class="mt-1 text-xs text-gray-500">桌面端与支持 File System Access API 的浏览器均可选择目录。</div>
+
+                <div v-if="exportJob.status === 'error'" class="rounded-md border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[13px] leading-5 text-[#b91c1c] whitespace-pre-wrap">
+                  {{ exportJob.error || '导出失败' }}
+                </div>
               </div>
-            </div>
+            </section>
           </div>
+        </main>
 
-          <div v-if="exportJob" class="border border-gray-200 rounded-md bg-gray-50 p-4">
-            <div class="flex items-center justify-between">
-              <div class="text-sm font-medium text-gray-900">任务：{{ exportJob.exportId }}</div>
-              <div class="text-xs text-gray-600">状态：{{ exportJob.status }}</div>
-            </div>
-            <div class="mt-2 text-xs text-gray-700 space-y-2">
-              <div class="flex items-center justify-between">
-                <div>会话：{{ exportJob.progress?.conversationsDone || 0 }}/{{ exportJob.progress?.conversationsTotal || 0 }}</div>
-                <div class="text-gray-600">{{ exportOverallPercent }}%</div>
-              </div>
-              <div class="h-2 rounded-full bg-white border border-gray-200 overflow-hidden">
-                <div
-                  class="h-full bg-[#03C160] transition-all duration-300"
-                  :style="{ width: exportOverallPercent + '%' }"
-                ></div>
-              </div>
-
-              <div v-if="exportJob.status === 'running' && exportJob.progress?.currentConversationUsername" class="space-y-1">
-                <div class="flex items-center justify-between gap-2">
-                  <div class="truncate">
-                    当前：{{ exportJob.progress?.currentConversationName || exportJob.progress?.currentConversationUsername }}
-                    （{{ exportJob.progress?.currentConversationMessagesExported || 0 }}/{{ exportJob.progress?.currentConversationMessagesTotal || 0 }}）
-                  </div>
-                  <div class="text-gray-600">
-                    <span v-if="exportCurrentPercent != null">{{ exportCurrentPercent }}%</span>
-                    <span v-else>…</span>
-                  </div>
-                </div>
-                <div class="h-2 rounded-full bg-white border border-gray-200 overflow-hidden">
-                  <div
-                    v-if="exportCurrentPercent != null"
-                    class="h-full bg-sky-500 transition-all duration-300"
-                    :style="{ width: exportCurrentPercent + '%' }"
-                  ></div>
-                  <div v-else class="h-full bg-sky-500/60 animate-pulse" style="width: 30%"></div>
-                </div>
-              </div>
-
-              <div>消息：{{ exportJob.progress?.messagesExported || 0 }}；媒体：{{ exportJob.progress?.mediaCopied || 0 }}；缺失：{{ exportJob.progress?.mediaMissing || 0 }}</div>
-            </div>
-
-            <div v-if="exportJob.status === 'done'" class="mt-3 rounded-md border border-gray-200 bg-white/80 px-3 py-2 text-xs text-gray-700 space-y-2">
-              <div>
-                <span class="font-medium text-gray-900">实际生成位置：</span>
-                <div class="mt-1 break-all">{{ exportBackendZipPath || '未生成' }}</div>
-              </div>
-              <div v-if="hasWebExportFolder">
-                <span class="font-medium text-gray-900">浏览器目录：</span>
-                <div class="mt-1 break-all">{{ exportFolder || '未选择' }}</div>
-              </div>
-              <div v-if="exportSaveState === 'saving'" class="text-sky-600 whitespace-pre-wrap">{{ exportSaveProgressText }}</div>
-              <div v-else-if="exportSaveMsg" class="text-green-600 whitespace-pre-wrap">{{ exportSaveMsg }}</div>
-              <div v-else-if="exportSaveError" class="text-red-600 whitespace-pre-wrap">{{ exportSaveError }}</div>
-              <div v-if="hasWebExportFolder" class="text-gray-500">
-                浏览器模式通常会在写入完成后才显示文件，且出于安全限制，这里只能显示目录名，不能显示完整磁盘路径。
-              </div>
-            </div>
-
-            <div v-if="exportJob.status === 'done' && !hasWebExportFolder" class="mt-3 flex items-center gap-2">
-              <a
-                class="text-sm px-3 py-2 rounded-md bg-[#03C160] text-white hover:bg-[#02a650]"
-                :href="getExportDownloadUrl(exportJob.exportId)"
-                target="_blank"
-              >
-                下载 ZIP
-              </a>
-            </div>
-
-            <div v-if="exportJob.status === 'error'" class="mt-2 text-sm text-red-600 whitespace-pre-wrap">
-              {{ exportJob.error || '导出失败' }}
-            </div>
-          </div>
-        </div>
-
-        <div class="px-5 py-4 border-t border-gray-200 flex items-center justify-end gap-2">
-          <button class="text-sm px-3 py-2 rounded-md bg-white border border-gray-200 hover:bg-gray-50" type="button" @click="closeExportModal">
+        <footer class="flex shrink-0 items-center justify-end gap-2 border-t border-[#e5e7eb] bg-white px-5 py-4">
+          <button class="rounded-md border border-[#d1d5db] bg-white px-3 py-2 text-[13px] font-medium text-[#374151] transition hover:bg-[#f9fafb]" type="button" @click="closeExportModal">
             关闭
           </button>
           <button
             v-if="!(exportJob && (exportJob.status === 'queued' || exportJob.status === 'running'))"
-            class="text-sm px-3 py-2 rounded-md bg-[#03C160] text-white hover:bg-[#02a650] disabled:opacity-60"
+            class="inline-flex min-w-[96px] items-center justify-center rounded-md bg-[#07C160] px-4 py-2 text-[13px] font-medium text-white transition hover:bg-[#06ad56] disabled:cursor-not-allowed disabled:opacity-60"
             type="button"
             @click="startChatExport"
             :disabled="isExportCreating"
@@ -1712,14 +1780,14 @@
           </button>
           <button
             v-else
-            class="text-sm px-3 py-2 rounded-md bg-white border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-60"
+            class="inline-flex min-w-[96px] items-center justify-center rounded-md border border-[#fecaca] bg-white px-4 py-2 text-[13px] font-medium text-[#b91c1c] transition hover:bg-[#fef2f2] disabled:cursor-not-allowed disabled:opacity-60"
             type="button"
             @click="cancelCurrentExport"
             :disabled="exportCancelRequested"
           >
             {{ exportCancelRequested ? '取消中...' : '取消任务' }}
           </button>
-        </div>
+        </footer>
       </div>
     </div>
 </template>

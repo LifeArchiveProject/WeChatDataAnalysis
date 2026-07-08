@@ -36,8 +36,8 @@ import {
   isTransferOverdue,
   isTransferReturned
 } from '~/lib/chat/formatters'
-import { parseTextWithEmoji } from '~/lib/wechat-emojis'
 import { heatColor } from '~/lib/wrapped/heatmap'
+import { parseTextWithEmoji } from '~/lib/wechat-emojis'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { useChatRealtimeStore } from '~/stores/chatRealtime'
 import { usePrivacyStore } from '~/stores/privacy'

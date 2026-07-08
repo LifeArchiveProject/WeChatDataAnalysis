@@ -1,5 +1,8 @@
 import { reportServerError } from '~/lib/server-error-logging'
 
+const chatContactsListCache = new Map()
+const CHAT_CONTACTS_LIST_CACHE_TTL_MS = 3000
+
 // API请求组合式函数
 export const useApi = () => {
   const baseURL = useApiBase()
@@ -510,8 +513,33 @@ export const useApi = () => {
     if (params && params.include_friends != null) query.set('include_friends', String(!!params.include_friends))
     if (params && params.include_groups != null) query.set('include_groups', String(!!params.include_groups))
     if (params && params.include_officials != null) query.set('include_officials', String(!!params.include_officials))
+    if (params && params.include_official_subscriptions != null) query.set('include_official_subscriptions', String(!!params.include_official_subscriptions))
+    if (params && params.include_official_services != null) query.set('include_official_services', String(!!params.include_official_services))
+    if (params && params.include_former_friends != null) query.set('include_former_friends', String(!!params.include_former_friends))
+    if (params && params.include_blocked != null) query.set('include_blocked', String(!!params.include_blocked))
     const url = '/chat/contacts' + (query.toString() ? `?${query.toString()}` : '')
-    return await request(url)
+    const cacheKey = `${baseURL}::${url}`
+    const now = Date.now()
+    const cached = chatContactsListCache.get(cacheKey)
+    if (!params?.refresh && cached && now - cached.updatedAt < CHAT_CONTACTS_LIST_CACHE_TTL_MS) {
+      if (cached.promise) return await cached.promise
+      return cached.data
+    }
+    const promise = request(url)
+    chatContactsListCache.set(cacheKey, { updatedAt: now, promise })
+    let data
+    try {
+      data = await promise
+    } catch (error) {
+      chatContactsListCache.delete(cacheKey)
+      throw error
+    }
+    chatContactsListCache.set(cacheKey, { updatedAt: Date.now(), data })
+    if (chatContactsListCache.size > 24) {
+      const firstKey = chatContactsListCache.keys().next().value
+      if (firstKey) chatContactsListCache.delete(firstKey)
+    }
+    return data
   }
 
   const getChatContactProfile = async (params = {}) => {
@@ -537,6 +565,10 @@ export const useApi = () => {
           friends: payload?.contact_types?.friends == null ? true : !!payload.contact_types.friends,
           groups: payload?.contact_types?.groups == null ? true : !!payload.contact_types.groups,
           officials: payload?.contact_types?.officials == null ? true : !!payload.contact_types.officials,
+          official_subscriptions: payload?.contact_types?.official_subscriptions == null ? null : !!payload.contact_types.official_subscriptions,
+          official_services: payload?.contact_types?.official_services == null ? null : !!payload.contact_types.official_services,
+          former_friends: payload?.contact_types?.former_friends == null ? false : !!payload.contact_types.former_friends,
+          blocked: payload?.contact_types?.blocked == null ? false : !!payload.contact_types.blocked,
         }
       }
     })

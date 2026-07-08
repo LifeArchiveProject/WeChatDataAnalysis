@@ -77,6 +77,10 @@ _VIDEO_DIR_INDEX_CACHE: dict[str, tuple[float, dict[str, dict[str, str]]]] = {}
 _VIDEO_DIR_INDEX_MAX_ENTRIES = 32
 
 
+def _avatar_trace_enabled() -> bool:
+    return str(os.environ.get("WECHAT_TOOL_AVATAR_TRACE", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _normalize_video_lookup_key(value: str) -> str:
     text = str(value or "").strip().lower()
     if not text:
@@ -704,12 +708,15 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
     account_dir = _resolve_account_dir(account)
     account_name = str(account_dir.name or "").strip()
     user_key = str(username or "").strip()
-    _trace_id, trace = create_perf_trace(
-        logger,
-        "chat.avatar",
-        account=account_name,
-        username=user_key,
-    )
+    if _avatar_trace_enabled():
+        _trace_id, trace = create_perf_trace(
+            logger,
+            "chat.avatar",
+            account=account_name,
+            username=user_key,
+        )
+    else:
+        trace = lambda *args, **kwargs: None
     trace("request:start")
 
     # 1) Try on-disk cache first (fast path)
@@ -720,7 +727,7 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
             user_entry = get_avatar_cache_user_entry(account_name, user_key)
             cached_file = avatar_cache_entry_file_exists(account_name, user_entry)
             if cached_file is not None:
-                logger.info(f"[avatar_cache_hit] kind=user account={account_name} username={user_key}")
+                logger.debug(f"[avatar_cache_hit] kind=user account={account_name} username={user_key}")
         except Exception as e:
             logger.warning(f"[avatar_cache_error] read user cache failed account={account_name} username={user_key} err={e}")
     trace(
@@ -803,7 +810,7 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
                         ttl_seconds=AVATAR_CACHE_TTL_SECONDS,
                     )
                     if entry and out_path:
-                        logger.info(
+                        logger.debug(
                             f"[avatar_cache_download] kind=user account={account_name} username={user_key} src=head_image"
                         )
                         headers = build_avatar_cache_response_headers(entry)
@@ -835,7 +842,7 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
             isFresh=bool(avatar_cache_entry_is_fresh(url_entry) if url_entry else False),
         )
         if url_entry and url_file and avatar_cache_entry_is_fresh(url_entry):
-            logger.info(f"[avatar_cache_hit] kind=url account={account_name} username={user_key}")
+            logger.debug(f"[avatar_cache_hit] kind=url account={account_name} username={user_key}")
             touch_avatar_cache_entry(account_name, str(url_entry.get("cache_key") or ""))
             # Keep user-key mapping aligned, so next user lookup is direct.
             try:
@@ -983,7 +990,7 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
                     )
                 except Exception:
                     pass
-            logger.info(f"[avatar_cache_revalidate] kind=url account={account_name} username={user_key} status=304")
+            logger.debug(f"[avatar_cache_revalidate] kind=url account={account_name} username={user_key} status=304")
             headers = build_avatar_cache_response_headers(url_entry)
             trace("response:ready", result="remote-not-modified", mediaType=str(url_entry.get("media_type") or ""))
             return FileResponse(
@@ -1035,7 +1042,7 @@ async def get_chat_avatar(username: str, account: Optional[str] = None):
                         )
                     except Exception:
                         pass
-                    logger.info(f"[avatar_cache_download] kind=url account={account_name} username={user_key}")
+                    logger.debug(f"[avatar_cache_download] kind=url account={account_name} username={user_key}")
                     headers = build_avatar_cache_response_headers(entry)
                     trace("response:ready", result="remote-download-cache-write", mediaType=media_type, bytes=len(payload2))
                     return FileResponse(str(out_path), media_type=media_type, headers=headers)
