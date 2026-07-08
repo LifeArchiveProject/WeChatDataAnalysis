@@ -19,8 +19,9 @@ class TestWcdbRealtimeDllPathSelection(unittest.TestCase):
         wcdb_realtime._WCDB_API_DLL_SELECTED = None
 
     def test_resolve_prefers_project_dll_over_weflow(self) -> None:
-        weflow_dll = ROOT / "WeFlow" / "resources" / "wcdb_api.dll"
-        self.assertTrue(weflow_dll.exists())
+        weflow_candidates = sorted((ROOT / "WeFlow").glob("**/wcdb_api.dll"))
+        self.assertTrue(weflow_candidates)
+        weflow_dll = weflow_candidates[0]
         self.assertTrue(wcdb_realtime._DEFAULT_WCDB_API_DLL.exists())
 
         with patch.dict(os.environ, {"WECHAT_TOOL_WCDB_API_DLL_PATH": str(weflow_dll)}, clear=False):

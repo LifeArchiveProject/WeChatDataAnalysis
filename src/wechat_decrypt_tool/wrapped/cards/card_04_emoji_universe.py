@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import html
+import json
 import re
 import sqlite3
 from collections import Counter, defaultdict
@@ -30,7 +31,6 @@ from ...logging_config import get_logger
 logger = get_logger(__name__)
 
 
-_TS_WECHAT_EMOJI_ENTRY_RE = re.compile(r'^\s*"(?P<key>[^"]+)"\s*:\s*"(?P<value>[^"]+)"\s*,?\s*$')
 _MD5_HEX_RE = re.compile(r"(?i)[0-9a-f]{32}")
 _EXPRESSION_ASSET_RE = re.compile(r"^Expression_(\d+)@2x\.png$")
 _EMOJI_VS16 = "\ufe0f"
@@ -322,26 +322,24 @@ def _list_session_usernames(session_db_path: Path) -> list[str]:
 
 @functools.lru_cache(maxsize=1)
 def _load_wechat_emoji_table() -> dict[str, str]:
-    repo_root = Path(__file__).resolve().parents[4]
-    path = repo_root / "frontend" / "utils" / "wechat-emojis.ts"
-    try:
-        text = path.read_text(encoding="utf-8")
-    except Exception:
+    from ...chat_export_service import _resolve_ui_public_dir
+
+    ui_public_dir = _resolve_ui_public_dir()
+    if ui_public_dir is None:
         return {}
 
-    table: dict[str, str] = {}
-    for line in text.splitlines():
-        stripped = line.strip()
-        if (not stripped) or stripped.startswith("//"):
-            continue
-        m = _TS_WECHAT_EMOJI_ENTRY_RE.match(line)
-        if not m:
-            continue
-        key = str(m.group("key") or "")
-        value = str(m.group("value") or "")
-        if key and value:
-            table[key] = value
-    return table
+    path = Path(ui_public_dir) / "wxemoji" / "wechat-emojis.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in payload.items()
+        if str(key or "").strip() and str(value or "").strip()
+    }
 
 
 @functools.lru_cache(maxsize=1)

@@ -191,7 +191,7 @@ class TestChatExportHtmlFormat(unittest.TestCase):
             )
             rows = [
                 (1, 1001, 3, 1, 2, 1735689601, image_xml, None),
-                (2, 1002, 1, 2, 2, 1735689602, "普通文本消息[微笑]", None),
+                (2, 1002, 1, 2, 2, 1735689602, "普通文本消息[微笑][叹气]", None),
                 (3, 1003, 49, 3, 1, 1735689603, transfer_xml, None),
                 (4, 1004, 49, 4, 2, 1735689604, red_packet_xml, None),
                 (5, 1005, 49, 5, 1, 1735689605, file_xml, None),
@@ -317,8 +317,14 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     names = set(zf.namelist())
 
                     self.assertIn("index.html", names)
-                    self.assertIn("assets/wechat-chat-export.css", names)
-                    self.assertIn("assets/wechat-chat-export.js", names)
+                    css_asset = next((n for n in names if n.startswith("assets/_wce/c-") and n.endswith(".css")), "")
+                    js_asset = next((n for n in names if n.startswith("assets/_wce/r-") and n.endswith(".js")), "")
+                    integrity_asset = next((n for n in names if n.startswith("assets/_wce/i-") and n.endswith(".js")), "")
+                    self.assertTrue(css_asset)
+                    self.assertTrue(js_asset)
+                    self.assertTrue(integrity_asset)
+                    self.assertNotIn("assets/wechat-chat-export.css", names)
+                    self.assertNotIn("assets/wechat-chat-export.js", names)
 
                     manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
                     self.assertEqual(manifest.get("format"), "html")
@@ -339,7 +345,13 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     self.assertIn('data-wce-quote-voice-btn="1"', html_text)
                     self.assertNotIn('title="刷新消息"', html_text)
                     self.assertNotIn('title="导出聊天记录"', html_text)
-                    self.assertNotIn("搜索聊天记录", html_text)
+                    self.assertIn("搜索聊天记录", html_text)
+                    self.assertIn('id="wceDateJumpInput"', html_text)
+                    self.assertIn('id="wceBrandAttribution"', html_text)
+                    self.assertNotIn("校验</button>", html_text)
+                    self.assertIn(f"../../{integrity_asset}", html_text)
+                    self.assertIn("data-wce-sri=", html_text)
+                    self.assertNotIn(" integrity=", html_text)
                     self.assertNotIn("朋友圈", html_text)
                     self.assertNotIn("年度总结", html_text)
                     self.assertNotIn("设置", html_text)
@@ -356,23 +368,33 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     self.assertIn("wechat-file-card", html_text)
                     self.assertIn("wechat-voice-wrapper", html_text)
 
-                    css_text = zf.read("assets/wechat-chat-export.css").decode("utf-8", errors="ignore")
+                    css_text = zf.read(css_asset).decode("utf-8", errors="ignore")
                     self.assertIn("wechat-transfer-card", css_text)
                     self.assertRegex(css_text, re.compile(r"\.wechat-voice-sent(?::|::)after"))
                     self.assertRegex(css_text, re.compile(r"\.wechat-voice-received(?::|::)before"))
                     self.assertNotIn("wechat-transfer-card[data-v-", css_text)
                     self.assertNotIn("bento-container", css_text)
 
-                    js_text = zf.read("assets/wechat-chat-export.js").decode("utf-8", errors="ignore")
-                    self.assertIn("wechat-voice-bubble", js_text)
-                    self.assertIn("voice-playing", js_text)
-                    self.assertIn("data-wce-quote-voice-btn", js_text)
+                    js_text = zf.read(js_asset).decode("utf-8", errors="ignore")
+                    self.assertIn("Function", js_text)
+                    self.assertIn("atob", js_text)
+                    self.assertNotIn("wechat-voice-bubble", js_text)
+                    self.assertNotIn("voice-playing", js_text)
+                    self.assertNotIn("data-wce-quote-voice-btn", js_text)
+
+                    integrity_text = zf.read(integrity_asset).decode("utf-8", errors="ignore")
+                    self.assertIn("__','WCE','_I", integrity_text)
+                    self.assertNotIn("manifest.json", integrity_text)
+                    self.assertNotIn("messages.html", integrity_text)
 
                     self.assertIn("assets/images/wechat/wechat-trans-icon1.png", names)
                     self.assertIn("assets/images/wechat/zip.png", names)
                     self.assertIn("assets/images/wechat/WeChat-Icon-Logo.wine.svg", names)
+                    self.assertIn("wxemoji/wechat-emojis.json", names)
                     self.assertIn("wxemoji/Expression_1@2x.png", names)
+                    self.assertIn("wxemoji/new/Sigh.png", names)
                     self.assertIn("../../wxemoji/Expression_1@2x.png", html_text)
+                    self.assertIn("../../wxemoji/new/Sigh.png", html_text)
             finally:
                 logging.shutdown()
                 if prev_data is None:

@@ -640,88 +640,87 @@ return keys.length
 const _pad2 = (n) => String(n).padStart(2, '0')
 
 const _dateStrFromEpochSeconds = (ts) => {
-const t = Number(ts || 0)
-if (!t) return ''
-try {
-  const d = new Date(t * 1000)
-  return `${d.getFullYear()}-${_pad2(d.getMonth() + 1)}-${_pad2(d.getDate())}`
-} catch {
-  return ''
-}
+  const t = Number(ts || 0)
+  if (!t) return ''
+  try {
+    const d = new Date(t * 1000)
+    return `${d.getFullYear()}-${_pad2(d.getMonth() + 1)}-${_pad2(d.getDate())}`
+  } catch {
+    return ''
+  }
 }
 
-// Calendar heatmap color: reuse Wrapped heat palette, but bucket to Wrapped-like legend levels
-// so ">=1 message" is always visibly tinted (instead of being almost white when max is huge).
+// Calendar heatmap color: keep the date readable while still showing activity intensity.
 const _calendarHeatColor = (count, maxV) => {
-const v = Math.max(0, Number(count || 0))
-const m = Math.max(0, Number(maxV || 0))
-if (!(v > 0)) return ''
-if (!(m > 0)) return heatColor(1, 1)
-const levels = 6
-const ratio = Math.max(0, Math.min(1, v / m))
-const level = Math.min(levels, Math.max(1, Math.ceil(ratio * levels)))
-const valueForLevel = Math.max(1, Math.round(level * (m / levels)))
-return heatColor(valueForLevel, m)
+  const v = Math.max(0, Number(count || 0))
+  const m = Math.max(0, Number(maxV || 0))
+  if (!(v > 0)) return ''
+  if (!(m > 0) || typeof heatColor !== 'function') return 'rgba(3, 193, 96, 0.12)'
+  const levels = 6
+  const ratio = Math.max(0, Math.min(1, v / m))
+  const level = Math.min(levels, Math.max(1, Math.ceil(ratio * levels)))
+  const valueForLevel = Math.max(1, Math.round(level * (m / levels)))
+  return heatColor(valueForLevel, m)
 }
 
 const timeSidebarCalendarCells = computed(() => {
-const y = Number(timeSidebarYear.value || 0)
-const m = Number(timeSidebarMonth.value || 0) // 1-12
-if (!y || !m) return []
+  const y = Number(timeSidebarYear.value || 0)
+  const m = Number(timeSidebarMonth.value || 0) // 1-12
+  if (!y || !m) return []
 
-const daysInMonth = new Date(y, m, 0).getDate()
-const firstDow = new Date(y, m - 1, 1).getDay() // 0=Sun..6=Sat
-const offset = (firstDow + 6) % 7 // Monday=0
+  const daysInMonth = new Date(y, m, 0).getDate()
+  const firstDow = new Date(y, m - 1, 1).getDay() // 0=Sun..6=Sat
+  const offset = (firstDow + 6) % 7 // Monday=0
 
-const maxV = Math.max(0, Number(timeSidebarMax.value || 0))
-const counts = timeSidebarCounts.value || {}
-const selected = String(timeSidebarSelectedDate.value || '').trim()
+  const maxV = Math.max(0, Number(timeSidebarMax.value || 0))
+  const counts = timeSidebarCounts.value || {}
+  const selected = String(timeSidebarSelectedDate.value || '').trim()
 
-const out = []
-for (let i = 0; i < 42; i++) {
-  const dayNum = i - offset + 1
-  const inMonth = dayNum >= 1 && dayNum <= daysInMonth
-  if (!inMonth) {
+  const out = []
+  for (let i = 0; i < 42; i++) {
+    const dayNum = i - offset + 1
+    const inMonth = dayNum >= 1 && dayNum <= daysInMonth
+    if (!inMonth) {
+      out.push({
+        key: `e:${y}-${m}:${i}`,
+        day: '',
+        dateStr: '',
+        count: 0,
+        countText: '',
+        disabled: true,
+        className: 'calendar-day-outside',
+        style: null,
+        title: ''
+      })
+      continue
+    }
+
+    const dateStr = `${y}-${_pad2(m)}-${_pad2(dayNum)}`
+    const count = Math.max(0, Number(counts[dateStr] || 0))
+    const disabled = count <= 0
+    const style = !disabled
+      ? { backgroundColor: _calendarHeatColor(count, Math.max(maxV, count)) }
+      : null
+
+    const className = [
+      disabled ? 'calendar-day-empty' : '',
+      !disabled ? 'calendar-day-has-messages' : '',
+      (selected && dateStr === selected) ? 'calendar-day-selected' : ''
+    ].filter(Boolean).join(' ')
+
     out.push({
-      key: `e:${y}-${m}:${i}`,
-      day: '',
-      dateStr: '',
-      count: 0,
-      disabled: true,
-      className: 'calendar-day-outside',
-      style: null,
-      title: ''
+      key: dateStr,
+      day: String(dayNum),
+      dateStr,
+      count,
+      countText: String(count),
+      disabled,
+      className,
+      style,
+      title: `${dateStr}：${count} 条`
     })
-    continue
   }
-
-  const dateStr = `${y}-${_pad2(m)}-${_pad2(dayNum)}`
-  const count = Math.max(0, Number(counts[dateStr] || 0))
-  const disabled = count <= 0
-
-  const style = !disabled
-    ? { backgroundColor: _calendarHeatColor(count, Math.max(maxV, count)) }
-    : null
-
-  const className = [
-    disabled ? 'calendar-day-empty' : '',
-    (selected && dateStr === selected) ? 'calendar-day-selected' : ''
-  ].filter(Boolean).join(' ')
-
-  out.push({
-    key: dateStr,
-    day: String(dayNum),
-    dateStr,
-    count,
-    disabled,
-    // NOTE: heatmap bg color is applied via inline style (reusing Wrapped heatmap palette).
-    // Dynamic class names like `calendar-day-l${level}` may be purged by Tailwind and lead to no bg color.
-    className,
-    style,
-    title: `${dateStr}：${count} 条`
-  })
-}
-return out
+  return out
 })
 const closeMessageSearch = (reason = 'manual') => {
 logSearchPhase('message-search:close', {

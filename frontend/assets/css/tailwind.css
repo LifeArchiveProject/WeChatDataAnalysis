@@ -1002,7 +1002,7 @@
   }
 
   .calendar-day {
-    @apply h-9 rounded-md flex items-center justify-center text-xs font-medium transition-colors border border-gray-200 bg-white disabled:cursor-not-allowed;
+    @apply h-10 rounded-md flex flex-col items-center justify-center gap-[1px] text-xs font-medium transition-colors border border-gray-200 bg-white disabled:cursor-not-allowed;
   }
 
   .calendar-day-outside {
@@ -1013,45 +1013,30 @@
     @apply bg-gray-100 text-gray-400 border-gray-100;
   }
 
+  .calendar-day-has-messages {
+    @apply bg-white text-gray-800 border-gray-200 hover:border-[#03C160] hover:bg-[#03C160]/5;
+  }
+
   .calendar-day-selected {
-    /* Keep background as-is (heatmap), but emphasize with a ring/outline. */
-    box-shadow: 0 0 0 2px rgba(3, 193, 96, 0.85);
+    box-shadow: 0 0 0 2px rgba(3, 193, 96, 0.45);
     border-color: rgba(3, 193, 96, 0.95) !important;
   }
 
-  .calendar-day-l1 {
-    background: rgba(3, 193, 96, 0.12);
-    border-color: rgba(3, 193, 96, 0.18);
-    color: #065f46;
-  }
-
-  .calendar-day-l2 {
-    background: rgba(3, 193, 96, 0.24);
-    border-color: rgba(3, 193, 96, 0.28);
-    color: #065f46;
-  }
-
-  .calendar-day-l3 {
-    background: rgba(3, 193, 96, 0.38);
-    border-color: rgba(3, 193, 96, 0.40);
-    color: #064e3b;
-  }
-
-  .calendar-day-l4 {
-    background: rgba(3, 193, 96, 0.55);
-    border-color: rgba(3, 193, 96, 0.55);
-    color: #053d2e;
-  }
-
-  .calendar-day-l1:hover,
-  .calendar-day-l2:hover,
-  .calendar-day-l3:hover,
-  .calendar-day-l4:hover {
-    filter: brightness(0.98);
-  }
-
   .calendar-day-number {
-    @apply select-none;
+    @apply select-none leading-none;
+  }
+
+  .calendar-day-count {
+    @apply select-none text-[10px] leading-none text-gray-500 tabular-nums;
+  }
+
+  .calendar-day-has-messages .calendar-day-count {
+    @apply text-gray-700;
+  }
+
+  .calendar-day-selected .calendar-day-number,
+  .calendar-day-selected .calendar-day-count {
+    color: #018a45 !important;
   }
 
   .time-sidebar-actions {
@@ -1954,6 +1939,25 @@
     background-color: var(--calendar-day-bg);
     border-color: var(--calendar-day-border);
     color: var(--calendar-day-text);
+  }
+
+  .calendar-day-has-messages {
+    background-color: var(--calendar-day-bg);
+    border-color: var(--calendar-day-border);
+    color: var(--calendar-day-text);
+  }
+
+  .calendar-day-count {
+    color: var(--calendar-day-empty-text);
+  }
+
+  .calendar-day-has-messages .calendar-day-count {
+    color: var(--calendar-day-text);
+    opacity: 0.72;
+  }
+
+  .calendar-day-selected .calendar-day-count {
+    opacity: 1;
   }
 
   .calendar-day-empty {
