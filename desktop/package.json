@@ -1,7 +1,7 @@
 {
   "name": "wechat-data-analysis-desktop",
   "private": true,
-  "version": "1.11.4",
+  "version": "1.11.5",
   "main": "src/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.cjs",
