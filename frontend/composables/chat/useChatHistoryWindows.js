@@ -2,12 +2,10 @@ import { ref } from 'vue'
 import {
   buildChatHistoryWindowPayload,
   createChatHistoryRecordNormalizer,
-  enhanceChatHistoryRecords,
   formatChatHistoryVideoDuration,
   getChatHistoryPreviewLines,
   isChatHistoryRecordItemIncomplete,
   normalizeChatHistoryUrl,
-  parseChatHistoryRecord,
   pickFirstMd5,
   stripWeChatInvisible
 } from '~/lib/chat/chat-history'
@@ -399,8 +397,16 @@ export const useChatHistoryWindows = ({
     const content = String(record?.content || '')
     const recordItem = String(record?.recordItem || '').trim()
     const serverId = String(record?.fromnewmsgid || '').trim()
+    const recordIndexPrefix = String(record?.recordIndexPath || record?._recordIndexPath || '').trim()
+      || (Number.isFinite(Number(record?.recordIndex)) ? String(Number(record.recordIndex)) : '')
 
-    const { info0, records0 } = buildChatHistoryWindowPayload({ title, content, recordItem }, normalizeRecordItem)
+    const { info0, records0 } = buildChatHistoryWindowPayload({
+      title,
+      content,
+      recordItem,
+      recordAttachKey: record?.recordAttachKey || record?._recordAttachKey || '',
+      recordIndexPrefix
+    }, normalizeRecordItem)
     const windowItem = openFloatingWindow({
       kind: 'chatHistory',
       title: title || '聊天记录',
@@ -426,15 +432,21 @@ export const useChatHistoryWindows = ({
         const resolved = String(response?.recordItem || '').trim()
         if (!resolved) return
         windowItem.title = String(response?.title || title || '聊天记录')
-        const parsed = parseChatHistoryRecord(resolved)
-        windowItem.info = parsed?.info || { isChatRoom: false, count: 0 }
-        const items = Array.isArray(parsed?.items) ? parsed.items : []
-        windowItem.records = items.length ? enhanceChatHistoryRecords(items.map(normalizeRecordItem)) : []
+        const { info0: resolvedInfo, records0: resolvedRecords } = buildChatHistoryWindowPayload({
+          title: response?.title || title,
+          content: response?.content || content,
+          recordItem: resolved,
+          recordAttachKey: record?.recordAttachKey || record?._recordAttachKey || '',
+          recordIndexPrefix
+        }, normalizeRecordItem)
+        windowItem.info = resolvedInfo || { isChatRoom: false, count: 0 }
+        windowItem.records = Array.isArray(resolvedRecords) ? resolvedRecords : []
         if (!windowItem.records.length) {
           const lines = String(response?.content || content || '').trim().split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
           windowItem.info = { isChatRoom: false, count: 0 }
           windowItem.records = lines.map((line, idx) => normalizeRecordItem({
             id: String(idx),
+            recordIndex: idx,
             datatype: '1',
             sourcename: '',
             sourcetime: '',

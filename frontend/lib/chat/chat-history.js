@@ -16,8 +16,34 @@ export const stripWeChatInvisible = (value) => {
   return String(value || '').replace(/[\u3164\u2800]/g, '').trim()
 }
 
-export const parseChatHistoryRecord = (recordItemXml) => {
+export const extractChatHistoryAttachKey = (...values) => {
+  for (const value of values) {
+    const text = String(value || '').trim()
+    if (!text) continue
+    const msgMatch = text.match(/(?:^|[:/_-])Msg_([0-9a-f]{32})(?:$|[:/_-])/i)
+    if (msgMatch?.[1]) return msgMatch[1].toLowerCase()
+    const directMatch = text.match(/(?:^|[^0-9a-f])([0-9a-f]{32})(?:$|[^0-9a-f])/i)
+    if (directMatch?.[1]) return directMatch[1].toLowerCase()
+  }
+  return ''
+}
+
+export const normalizeChatHistoryRecordIndexPath = (value) => {
+  const text = String(value || '').trim()
+  return /^\d+(?:_\d+)*$/.test(text) ? text : ''
+}
+
+export const joinChatHistoryRecordIndexPath = (prefix, index) => {
+  const idx = Number(index)
+  if (!Number.isFinite(idx) || idx < 0) return normalizeChatHistoryRecordIndexPath(prefix)
+  const base = normalizeChatHistoryRecordIndexPath(prefix)
+  return base ? `${base}_${Math.trunc(idx)}` : String(Math.trunc(idx))
+}
+
+export const parseChatHistoryRecord = (recordItemXml, options = {}) => {
   if (!process.client) return { info: null, items: [] }
+  const opts = options && typeof options === 'object' ? options : {}
+  const recordIndexPrefix = normalizeChatHistoryRecordIndexPath(opts.recordIndexPrefix || opts.recordIndexPath || '')
   const xml = String(recordItemXml || '').trim()
   if (!xml) return { info: null, items: [] }
 
@@ -131,6 +157,7 @@ export const parseChatHistoryRecord = (recordItemXml) => {
     const link = normalizeChatHistoryUrl(getText(node, 'link') || getText(node, 'dataurl') || getText(node, 'url'))
     const datafmt = getText(node, 'datafmt')
     const duration = getText(node, 'duration')
+    const datasize = getText(node, 'datasize')
 
     const fullmd5 = getText(node, 'fullmd5')
     const thumbfullmd5 = getText(node, 'thumbfullmd5')
@@ -142,7 +169,12 @@ export const parseChatHistoryRecord = (recordItemXml) => {
     const encrypturlstring = normalizeChatHistoryUrl(getText(node, 'encrypturlstring'))
     const externurl = normalizeChatHistoryUrl(getText(node, 'externurl'))
     const aeskey = getText(node, 'aeskey')
-    const nestedRecordItem = getAnyXml(node, 'recorditem') || getDirectChildXml(node, 'recorditem') || getText(node, 'recorditem')
+    const nestedRecordItem = getAnyXml(node, 'recordxml')
+      || getDirectChildXml(node, 'recordxml')
+      || getAnyXml(node, 'recorditem')
+      || getDirectChildXml(node, 'recorditem')
+      || getText(node, 'recordxml')
+      || getText(node, 'recorditem')
 
     let content = datatitle || datadesc
     if (!content) {
@@ -197,12 +229,15 @@ export const parseChatHistoryRecord = (recordItemXml) => {
 
     return {
       id: dataid,
+      recordIndex: idx,
+      recordIndexPath: joinChatHistoryRecordIndexPath(recordIndexPrefix, idx),
       datatype,
       sourcename,
       sourcetime,
       sourceheadurl,
       datafmt,
       duration,
+      datasize,
       fullmd5,
       thumbfullmd5,
       md5,
@@ -244,6 +279,8 @@ export const createChatHistoryRecordNormalizer = ({ apiBase, getSelectedAccount,
     output.senderDisplayName = String(output.sourcename || '').trim()
     output.senderAvatar = normalizeChatHistoryUrl(output.sourceheadurl)
     output.fullTime = String(output.sourcetime || '').trim()
+    output.recordAttachKey = extractChatHistoryAttachKey(output.recordAttachKey, output._recordAttachKey)
+    output.recordIndexPath = normalizeChatHistoryRecordIndexPath(output.recordIndexPath || output._recordIndexPath)
 
     if (output.renderType === 'link') {
       const linkUrl = String(output.url || output.externurl || '').trim()
@@ -291,19 +328,41 @@ export const createChatHistoryRecordNormalizer = ({ apiBase, getSelectedAccount,
       output.videoMd5 = pickFirstMd5(output.fullmd5, output.md5)
       output.videoThumbMd5 = pickFirstMd5(output.thumbfullmd5)
       output.videoDuration = String(output.duration || '').trim()
+      const srcServerId = String(output.fromnewmsgid || '').trim()
+      const srcLocalId = String(output.srcMsgLocalid || '').trim()
+      const srcCreateTime = String(output.srcMsgCreateTime || '').trim()
+      const dataSize = String(output.datasize || '').trim()
+      const recordIndex = Number.isFinite(Number(output.recordIndex)) ? String(Number(output.recordIndex)) : ''
+      const recordIndexPath = normalizeChatHistoryRecordIndexPath(output.recordIndexPath)
+      const recordAttachKey = String(output.recordAttachKey || '').trim()
+      const makeVideoMediaUrl = (endpoint, candidateMd5, includeDataSize = false) => {
+        const parts = [
+          `account=${account}`,
+          `md5=${encodeURIComponent(candidateMd5)}`,
+          srcServerId ? `server_id=${encodeURIComponent(srcServerId)}` : '',
+          srcLocalId ? `src_local_id=${encodeURIComponent(srcLocalId)}` : '',
+          srcCreateTime ? `src_create_time=${encodeURIComponent(srcCreateTime)}` : '',
+          includeDataSize && dataSize ? `file_size=${encodeURIComponent(dataSize)}` : '',
+          recordIndexPath ? `record_index_path=${encodeURIComponent(recordIndexPath)}` : '',
+          recordIndex ? `record_index=${encodeURIComponent(recordIndex)}` : '',
+          recordAttachKey ? `record_attach=${encodeURIComponent(recordAttachKey)}` : '',
+          `username=${username}`
+        ].filter(Boolean)
+        return `${apiBase}/chat/media/${endpoint}?${parts.join('&')}`
+      }
       const thumbCandidates = []
       if (output.videoMd5) {
-        thumbCandidates.push(`${apiBase}/chat/media/video_thumb?account=${account}&md5=${encodeURIComponent(output.videoMd5)}&username=${username}`)
+        thumbCandidates.push(makeVideoMediaUrl('video_thumb', output.videoMd5, true))
       }
       if (output.videoThumbMd5 && output.videoThumbMd5 !== output.videoMd5) {
-        thumbCandidates.push(`${apiBase}/chat/media/video_thumb?account=${account}&md5=${encodeURIComponent(output.videoThumbMd5)}&username=${username}`)
+        thumbCandidates.push(makeVideoMediaUrl('video_thumb', output.videoThumbMd5, false))
       }
       output._videoThumbCandidates = thumbCandidates
       output._videoThumbCandidateIndex = 0
       output._videoThumbError = false
       output.videoThumbUrl = thumbCandidates[0] || ''
       output.videoUrl = output.videoMd5
-        ? `${apiBase}/chat/media/video?account=${account}&md5=${encodeURIComponent(output.videoMd5)}&username=${username}`
+        ? makeVideoMediaUrl('video', output.videoMd5, true)
         : ''
       if (!output.content || /^\[.+\]$/.test(String(output.content || '').trim())) output.content = '[视频]'
     } else if (output.renderType === 'emoji') {
@@ -318,10 +377,20 @@ export const createChatHistoryRecordNormalizer = ({ apiBase, getSelectedAccount,
     } else if (output.renderType === 'image') {
       output.imageMd5 = pickFirstMd5(output.fullmd5, output.thumbfullmd5, output.md5)
       const srcServerId = String(output.fromnewmsgid || '').trim()
+      const srcCreateTime = String(output.srcMsgCreateTime || '').trim()
+      const dataSize = String(output.datasize || '').trim()
+      const recordIndex = Number.isFinite(Number(output.recordIndex)) ? String(Number(output.recordIndex)) : ''
+      const recordIndexPath = normalizeChatHistoryRecordIndexPath(output.recordIndexPath)
+      const recordAttachKey = String(output.recordAttachKey || '').trim()
       const imageParts = [
         `account=${account}`,
         output.imageMd5 ? `md5=${encodeURIComponent(output.imageMd5)}` : '',
         srcServerId ? `server_id=${encodeURIComponent(srcServerId)}` : '',
+        srcCreateTime ? `src_create_time=${encodeURIComponent(srcCreateTime)}` : '',
+        dataSize ? `file_size=${encodeURIComponent(dataSize)}` : '',
+        recordIndexPath ? `record_index_path=${encodeURIComponent(recordIndexPath)}` : '',
+        recordIndex ? `record_index=${encodeURIComponent(recordIndex)}` : '',
+        recordAttachKey ? `record_attach=${encodeURIComponent(recordAttachKey)}` : '',
         `username=${username}`
       ].filter(Boolean)
       output.imageUrl = imageParts.length ? `${apiBase}/chat/media/image?${imageParts.join('&')}` : ''
@@ -453,14 +522,33 @@ export const buildChatHistoryWindowPayload = (payload, normalizeRecordItem) => {
   const title0 = String(payload?.title || '聊天记录')
   const content0 = String(payload?.content || '')
   const recordItem0 = String(payload?.recordItem || '').trim()
-  const parsed = parseChatHistoryRecord(recordItem0)
+  const recordAttachKey = extractChatHistoryAttachKey(
+    payload?.recordAttachKey,
+    payload?._recordAttachKey,
+    payload?.id,
+    payload?.messageId,
+    payload?.clientId,
+    payload?.sessionId,
+    payload?.chatId,
+    payload?.username
+  )
+  const recordIndexPrefix = normalizeChatHistoryRecordIndexPath(
+    payload?.recordIndexPrefix || payload?.recordIndexPath || payload?._recordIndexPath || ''
+  )
+  const parsed = parseChatHistoryRecord(recordItem0, { recordIndexPrefix })
   const info0 = parsed?.info || { isChatRoom: false, count: 0 }
   const items = Array.isArray(parsed?.items) ? parsed.items : []
-  let records0 = items.length ? enhanceChatHistoryRecords(items.map(normalizeRecordItem)) : []
+  let records0 = items.length ? enhanceChatHistoryRecords(items.map((item) => normalizeRecordItem({
+    ...item,
+    recordAttachKey
+  }))) : []
   if (!records0.length) {
     const lines = content0.trim().split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
     records0 = lines.map((line, idx) => normalizeRecordItem({
       id: String(idx),
+      recordIndex: idx,
+      recordIndexPath: joinChatHistoryRecordIndexPath(recordIndexPrefix, idx),
+      recordAttachKey,
       datatype: '1',
       sourcename: '',
       sourcetime: '',
