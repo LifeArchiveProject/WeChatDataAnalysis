@@ -2831,6 +2831,7 @@ async def get_sns_media(
         key: Optional[str] = None,
         use_cache: int = 1,
         url: Optional[str] = None,
+        variant: Optional[str] = None,
 ):
     account_dir = _resolve_account_dir(account)
     wxid_dir = _resolve_account_wxid_dir(account_dir)
@@ -2839,6 +2840,23 @@ async def get_sns_media(
         use_cache_flag = bool(int(use_cache or 1))
     except Exception:
         use_cache_flag = True
+
+    variant_norm = str(variant or "").strip().lower()
+    prefer_remote_original = variant_norm in {"full", "origin", "original", "large"}
+
+    # 点击预览需要高清原图：本地 sns 缓存有时只命中缩略图，所以 full/original 请求先按
+    # WeFlow 的 CDN URL 修正 + token/key 解密链路取原图；失败后再回退本地缓存。
+    if prefer_remote_original and str(url or "").strip():
+        remote_resp = await _try_fetch_and_decrypt_sns_remote(
+            account_dir=account_dir,
+            url=str(url or ""),
+            key=str(key or ""),
+            token=str(token or ""),
+            use_cache=use_cache_flag,
+        )
+        if remote_resp is not None:
+            remote_resp.headers["X-SNS-Variant"] = "full"
+            return remote_resp
 
     if use_cache_flag:
         if wxid_dir and post_id and media_id and int(post_type or 1) == 7:

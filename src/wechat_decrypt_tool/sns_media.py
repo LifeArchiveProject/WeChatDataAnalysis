@@ -50,7 +50,7 @@ def fix_sns_cdn_url(url: str, *, token: str = "", is_video: bool = False) -> str
     """WeFlow-compatible SNS CDN URL normalization.
 
     - Force https for Tencent CDNs.
-    - For images, replace `/150` with `/0` to request the original.
+    - For images, replace `/150`, `/200`, `/480` with `/0` to request the original.
     - If token is provided and url doesn't contain it, append `token=<token>&idx=1`.
     """
     u = html.unescape(str(url or "")).strip()
@@ -69,9 +69,9 @@ def fix_sns_cdn_url(url: str, *, token: str = "", is_video: bool = False) -> str
     # http -> https
     u = re.sub(r"^http://", "https://", u, flags=re.I)
 
-    # /150 -> /0 (image only)
+    # /150|/200|/480 -> /0 (image only; matches WeFlow's original-image request behavior).
     if not is_video:
-        u = re.sub(r"/150(?=($|\\?))", "/0", u)
+        u = re.sub(r"/(?:150|200|480)(?=($|\?))", "/0", u)
 
     tok = str(token or "").strip()
     if tok and ("token=" not in u):
