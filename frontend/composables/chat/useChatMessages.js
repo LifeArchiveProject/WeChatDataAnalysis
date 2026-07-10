@@ -1263,7 +1263,37 @@ export const useChatMessages = ({
   const contactProfileLoading = ref(false)
   const contactProfileError = ref('')
   const contactProfileData = ref(null)
+  const CONTACT_PROFILE_REQUEST_TIMEOUT_MS = 4500
+  let contactProfileFetchSeq = 0
   let contactProfileHoverHideTimer = null
+
+  const withContactProfileTimeout = (promise, ms, message = '请求超时') => {
+    let timer = null
+    return new Promise((resolve, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(message)
+        error.code = 'ETIMEDOUT'
+        reject(error)
+      }, Math.max(1, Number(ms || 0)))
+
+      Promise.resolve(promise).then(
+        (value) => {
+          if (timer) clearTimeout(timer)
+          timer = null
+          resolve(value)
+        },
+        (error) => {
+          if (timer) clearTimeout(timer)
+          timer = null
+          reject(error)
+        }
+      )
+    })
+  }
+
+  const contactProfileInitialLoading = computed(() => (
+    !!contactProfileLoading.value && !contactProfileData.value
+  ))
 
   const contactProfileResolvedName = computed(() => {
     const profile = contactProfileData.value || {}
@@ -1285,11 +1315,69 @@ export const useChatMessages = ({
   const contactProfileResolvedRemark = computed(() => String(contactProfileData.value?.remark || '').trim())
   const contactProfileResolvedSignature = computed(() => String(contactProfileData.value?.signature || '').trim())
   const contactProfileResolvedSource = computed(() => String(contactProfileData.value?.source || '').trim())
+  const contactProfileResolvedGroupNickname = computed(() => String(contactProfileData.value?.groupNickname || '').trim())
+  const contactProfileResolvedHeaderSubtitle = computed(() => {
+    const username = contactProfileResolvedUsername.value
+    if (username) return `微信ID：${username}`
+    const alias = contactProfileResolvedAlias.value
+    return alias ? `微信号：${alias}` : ''
+  })
+  const contactProfileResolvedAddTime = computed(() => {
+    const text = String(contactProfileData.value?.addTimeText || '').trim()
+    if (text) return text
+    const value = contactProfileData.value?.addTime
+    if (value == null || value === '') return ''
+    const ts = Number(value)
+    if (!Number.isFinite(ts) || ts <= 0) return ''
+    const date = new Date((ts > 10000000000 ? ts : ts * 1000))
+    if (Number.isNaN(date.getTime())) return ''
+    const y = date.getFullYear()
+    const m = String(date.getMonth() + 1).padStart(2, '0')
+    const d = String(date.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  })
+  const contactProfileResolvedCommonChatroomCount = computed(() => {
+    const value = contactProfileData.value?.commonChatroomCount
+    if (value == null || value === '') return null
+    const count = Number(value)
+    return Number.isFinite(count) && count >= 0 ? count : null
+  })
+  const contactProfileResolvedCommonChatrooms = computed(() => {
+    const rows = Array.isArray(contactProfileData.value?.commonChatrooms)
+      ? contactProfileData.value.commonChatrooms
+      : []
+    const seen = new Set()
+    return rows
+      .map((row) => {
+        const item = row && typeof row === 'object' ? row : {}
+        const username = String(item.username || item.roomUsername || '').trim()
+        if (!username || seen.has(username)) return null
+        seen.add(username)
+        return {
+          username,
+          displayName: String(item.displayName || item.name || item.nickname || '').trim() || '未命名群聊',
+          avatar: String(item.avatar || item.avatarUrl || '').trim(),
+          avatarColor: String(item.avatarColor || '').trim() || '#07c160'
+        }
+      })
+      .filter(Boolean)
+  })
+  const contactProfileHasMoreInfo = computed(() => (
+    (contactProfileResolvedCommonChatroomCount.value != null && contactProfileResolvedCommonChatroomCount.value > 0)
+    || contactProfileResolvedCommonChatrooms.value.length > 0
+    || !!contactProfileResolvedSource.value
+    || !!contactProfileResolvedAddTime.value
+  ))
   const contactProfileResolvedAvatar = computed(() => {
     const avatar = String(contactProfileData.value?.avatar || '').trim()
     if (avatar) return avatar
     return String(selectedContact.value?.avatar || '').trim()
   })
+  const contactProfileResolvedAvatarColor = computed(() => (
+    String(contactProfileData.value?.avatarColor || '').trim()
+    || String(selectedContact.value?.avatarColor || '').trim()
+    || '#6b7280'
+  ))
 
   const contactProfileResolvedGender = computed(() => {
     const value = contactProfileData.value?.gender
@@ -1310,26 +1398,38 @@ export const useChatMessages = ({
   })
 
   const fetchContactProfile = async (options = {}) => {
+    const seq = ++contactProfileFetchSeq
     const username = String(options?.username || contactProfileData.value?.username || selectedContact.value?.username || '').trim()
     const displayNameFallback = String(options?.displayName || '').trim()
     const avatarFallback = String(options?.avatar || '').trim()
     const account = String(selectedAccount.value || '').trim()
     if (!username || !account) {
       contactProfileData.value = null
+      contactProfileLoading.value = false
       return
+    }
+
+    const contextPatch = {
+      groupNickname: String(options?.groupNickname || contactProfileData.value?.groupNickname || '').trim(),
+      avatarColor: String(options?.avatarColor || contactProfileData.value?.avatarColor || selectedContact.value?.avatarColor || '').trim()
     }
 
     contactProfileLoading.value = true
     contactProfileError.value = ''
     try {
-      const response = await api.getChatContactProfile({
-        account,
-        source: DEFAULT_CHAT_SOURCE,
-        username
-      })
+      const response = await withContactProfileTimeout(
+        api.getChatContactProfile({
+          account,
+          source: DEFAULT_CHAT_SOURCE,
+          username
+        }),
+        CONTACT_PROFILE_REQUEST_TIMEOUT_MS,
+        '联系人资料加载超时'
+      )
+      if (seq !== contactProfileFetchSeq) return
       const matched = response?.contact && typeof response.contact === 'object' ? response.contact : null
       if (matched) {
-        const normalized = { ...matched, username }
+        const normalized = { ...matched, ...contextPatch, username }
         if (!String(normalized.displayName || '').trim() && displayNameFallback) {
           normalized.displayName = displayNameFallback
         }
@@ -1342,6 +1442,7 @@ export const useChatMessages = ({
           username,
           displayName: displayNameFallback || selectedContact.value?.name || username,
           avatar: avatarFallback || selectedContact.value?.avatar || '',
+          avatarColor: contextPatch.avatarColor,
           nickname: '',
           alias: '',
           gender: null,
@@ -1349,14 +1450,21 @@ export const useChatMessages = ({
           remark: '',
           signature: '',
           source: '',
-          sourceScene: null
+          sourceScene: null,
+          addTime: null,
+          addTimeText: '',
+          commonChatroomCount: null,
+          commonChatrooms: [],
+          ...contextPatch
         }
       }
     } catch (error) {
+      if (seq !== contactProfileFetchSeq) return
       contactProfileData.value = {
         username,
         displayName: displayNameFallback || selectedContact.value?.name || username,
         avatar: avatarFallback || selectedContact.value?.avatar || '',
+        avatarColor: contextPatch.avatarColor,
         nickname: '',
         alias: '',
         gender: null,
@@ -1364,11 +1472,16 @@ export const useChatMessages = ({
         remark: '',
         signature: '',
         source: '',
-        sourceScene: null
+        sourceScene: null,
+        addTime: null,
+        addTimeText: '',
+        commonChatroomCount: null,
+        commonChatrooms: [],
+        ...contextPatch
       }
-      contactProfileError.value = error?.message || '加载联系人资料失败'
+      contactProfileError.value = error?.code === 'ETIMEDOUT' ? '' : (error?.message || '加载联系人资料失败')
     } finally {
-      contactProfileLoading.value = false
+      if (seq === contactProfileFetchSeq) contactProfileLoading.value = false
     }
   }
 
@@ -1380,6 +1493,8 @@ export const useChatMessages = ({
   }
 
   const closeContactProfileCard = () => {
+    contactProfileFetchSeq++
+    contactProfileLoading.value = false
     contactProfileCardOpen.value = false
     contactProfileCardMessageId.value = ''
   }
@@ -1411,6 +1526,7 @@ export const useChatMessages = ({
         username,
         displayName: senderName || username,
         avatar: senderAvatar,
+        avatarColor: String(message?.avatarColor || '').trim(),
         nickname: '',
         alias: '',
         gender: null,
@@ -1418,7 +1534,12 @@ export const useChatMessages = ({
         remark: '',
         signature: '',
         source: '',
-        sourceScene: null
+        sourceScene: null,
+        addTime: null,
+        addTimeText: '',
+        commonChatroomCount: null,
+        commonChatrooms: [],
+        groupNickname: message?.isGroup ? senderName : '',
       }
     } else {
       if (!String(contactProfileData.value?.displayName || '').trim() && senderName) {
@@ -1427,12 +1548,20 @@ export const useChatMessages = ({
       if (!String(contactProfileData.value?.avatar || '').trim() && senderAvatar) {
         contactProfileData.value.avatar = senderAvatar
       }
+      contactProfileData.value.avatarColor = String(message?.avatarColor || contactProfileData.value?.avatarColor || '').trim()
+      contactProfileData.value.groupNickname = message?.isGroup ? senderName : ''
     }
 
     clearContactProfileHoverHideTimer()
     contactProfileCardMessageId.value = messageId
     contactProfileCardOpen.value = true
-    await fetchContactProfile({ username, displayName: senderName, avatar: senderAvatar })
+    await fetchContactProfile({
+      username,
+      displayName: senderName,
+      avatar: senderAvatar,
+      avatarColor: String(message?.avatarColor || '').trim(),
+      groupNickname: message?.isGroup ? senderName : ''
+    })
   }
 
   const onMentionMouseEnter = async (message, user) => {
@@ -1449,6 +1578,7 @@ export const useChatMessages = ({
         username,
         displayName: displayName || username,
         avatar,
+        avatarColor: String(user?.avatarColor || '').trim(),
         nickname: '',
         alias: '',
         gender: null,
@@ -1456,7 +1586,12 @@ export const useChatMessages = ({
         remark: '',
         signature: '',
         source: '',
-        sourceScene: null
+        sourceScene: null,
+        addTime: null,
+        addTimeText: '',
+        commonChatroomCount: null,
+        commonChatrooms: [],
+        groupNickname: displayName,
       }
     } else {
       if (!String(contactProfileData.value?.displayName || '').trim() && displayName) {
@@ -1465,12 +1600,20 @@ export const useChatMessages = ({
       if (!String(contactProfileData.value?.avatar || '').trim() && avatar) {
         contactProfileData.value.avatar = avatar
       }
+      contactProfileData.value.avatarColor = String(user?.avatarColor || contactProfileData.value?.avatarColor || '').trim()
+      contactProfileData.value.groupNickname = displayName
     }
 
     clearContactProfileHoverHideTimer()
     contactProfileCardMessageId.value = cardId
     contactProfileCardOpen.value = true
-    await fetchContactProfile({ username, displayName, avatar })
+    await fetchContactProfile({
+      username,
+      displayName,
+      avatar,
+      avatarColor: String(user?.avatarColor || '').trim(),
+      groupNickname: displayName
+    })
   }
 
   const onMessageAvatarMouseLeave = () => {
@@ -1562,6 +1705,7 @@ export const useChatMessages = ({
     contactProfileCardOpen,
     contactProfileCardMessageId,
     contactProfileLoading,
+    contactProfileInitialLoading,
     contactProfileError,
     contactProfileData,
     contactProfileResolvedName,
@@ -1573,8 +1717,15 @@ export const useChatMessages = ({
     contactProfileResolvedRemark,
     contactProfileResolvedSignature,
     contactProfileResolvedSource,
+    contactProfileResolvedGroupNickname,
     contactProfileResolvedSourceScene,
+    contactProfileResolvedHeaderSubtitle,
+    contactProfileResolvedAddTime,
+    contactProfileResolvedCommonChatroomCount,
+    contactProfileResolvedCommonChatrooms,
+    contactProfileHasMoreInfo,
     contactProfileResolvedAvatar,
+    contactProfileResolvedAvatarColor,
     normalizeMessage,
     updateJumpToBottomState,
     scrollToBottom,

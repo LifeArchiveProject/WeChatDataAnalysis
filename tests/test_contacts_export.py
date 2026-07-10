@@ -63,6 +63,14 @@ class TestContactsExport(unittest.TestCase):
             ]
         )
 
+    def test_region_lookup_uses_generated_dictionary(self):
+        from wechat_decrypt_tool.routers.chat_contacts import _build_region
+
+        # `Ziyang` is not in the small hand-maintained fallback map; it comes
+        # from the generated province-city dictionary bundled with the backend.
+        self.assertEqual(_build_region("CN", "Sichuan", "Ziyang"), "中国大陆·四川·资阳")
+        self.assertEqual(_build_region("China", "Sichuan", "Ziyang"), "中国大陆·四川·资阳")
+
     def _seed_contact_db(self, path: Path) -> None:
         conn = sqlite3.connect(str(path))
         try:
@@ -336,7 +344,7 @@ class TestContactsExport(unittest.TestCase):
                 self.assertEqual(friend_contact.get("country"), "CN")
                 self.assertEqual(friend_contact.get("province"), "Sichuan")
                 self.assertEqual(friend_contact.get("city"), "Chengdu")
-                self.assertEqual(friend_contact.get("region"), "中国大陆·Sichuan·Chengdu")
+                self.assertEqual(friend_contact.get("region"), "中国大陆·四川·成都")
                 self.assertEqual(friend_contact.get("gender"), 1)
                 self.assertEqual(friend_contact.get("signature"), "自助者天助！！！")
                 self.assertEqual(friend_contact.get("sourceScene"), 14)
@@ -384,7 +392,7 @@ class TestContactsExport(unittest.TestCase):
                     (x for x in data.get("contacts", []) if str(x.get("username")) == "wxid_friend"),
                     {},
                 )
-                self.assertEqual(friend_export.get("region"), "中国大陆·Sichuan·Chengdu")
+                self.assertEqual(friend_export.get("region"), "中国大陆·四川·成都")
                 self.assertEqual(friend_export.get("sourceScene"), 14)
                 self.assertEqual(friend_export.get("source"), "通过群聊添加")
 
@@ -408,10 +416,10 @@ class TestContactsExport(unittest.TestCase):
                 self.assertEqual(csv_payload["count"], 1)
                 csv_path = Path(csv_payload["outputPath"])
                 text = csv_path.read_text(encoding="utf-8-sig")
-                self.assertIn("用户名,显示名称,备注,昵称,微信号,类型,地区,国家/地区码,省份,城市,来源,来源场景码", text.splitlines()[0])
+                self.assertIn("用户名,显示名称,备注,昵称,微信号,类型,公众号类型,公众号类型码,地区,国家/地区码,省份,城市,来源,来源场景码", text.splitlines()[0])
                 self.assertNotIn("头像链接", text.splitlines()[0])
                 self.assertIn("wxid_friend", text)
-                self.assertIn("中国大陆·Sichuan·Chengdu", text)
+                self.assertIn("中国大陆·四川·成都", text)
                 self.assertIn("通过群聊添加", text)
                 self.assertIn(",14", text)
                 self.assertNotIn("wxid_local_type_3", text)
@@ -615,6 +623,7 @@ class TestContactsExport(unittest.TestCase):
                 client = TestClient(app)
 
                 username = "wxid_group_member"
+                common_room = "shared_room@chatroom"
                 extra_buffer = self._build_extra_buffer(
                     country="CN",
                     province="Jiangsu",
@@ -641,6 +650,8 @@ class TestContactsExport(unittest.TestCase):
                     self.assertIsNone(path)
                     if "FROM contact" in sql and username in sql:
                         return [contact_row]
+                    if "FROM chatroom_member" in sql and username in sql:
+                        return [{"username": common_room, "roomId": 42}]
                     return []
 
                 rt_conn = SimpleNamespace(handle=1, lock=threading.Lock())
@@ -648,6 +659,8 @@ class TestContactsExport(unittest.TestCase):
                     patch.object(chat_contacts.WCDB_REALTIME, "ensure_connected", return_value=rt_conn),
                     patch.object(chat_contacts, "_wcdb_get_contact", side_effect=RuntimeError("native API missing")),
                     patch.object(chat_contacts, "_wcdb_exec_query", side_effect=fake_exec_query),
+                    patch.object(chat_contacts, "_wcdb_get_display_names", return_value={common_room: "共同群聊"}),
+                    patch.object(chat_contacts, "_wcdb_get_avatar_urls", return_value={common_room: "https://cdn.example.com/shared-room.jpg"}),
                     patch.object(chat_contacts, "_wcdb_get_sessions", side_effect=AssertionError("profile must not depend on sessions")),
                 ):
                     resp = client.get(
@@ -671,10 +684,17 @@ class TestContactsExport(unittest.TestCase):
                 self.assertEqual(contact.get("type"), "friend")
                 self.assertEqual(contact.get("gender"), 2)
                 self.assertEqual(contact.get("signature"), "签名来自 extra_buffer")
-                self.assertEqual(contact.get("region"), "中国大陆·Jiangsu·Nanjing")
+                self.assertEqual(contact.get("region"), "中国大陆·江苏·南京")
                 self.assertEqual(contact.get("sourceScene"), 14)
                 self.assertEqual(contact.get("source"), "通过群聊添加")
                 self.assertEqual(contact.get("avatarLink"), "https://cdn.example.com/member_big.jpg")
+                self.assertEqual(contact.get("commonChatroomCount"), 1)
+                common_chatrooms = contact.get("commonChatrooms") or []
+                self.assertEqual(len(common_chatrooms), 1)
+                self.assertEqual(common_chatrooms[0].get("username"), common_room)
+                self.assertEqual(common_chatrooms[0].get("displayName"), "共同群聊")
+                self.assertEqual(common_chatrooms[0].get("avatarLink"), "https://cdn.example.com/shared-room.jpg")
+                self.assertIn(common_room.replace("@", "%40"), common_chatrooms[0].get("avatar", ""))
             finally:
                 if prev is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)

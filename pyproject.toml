@@ -50,6 +50,7 @@ include = [
     "src/wechat_decrypt_tool/native/weflow_wasm/weflow_wasm_keystream.js",
     "src/wechat_decrypt_tool/native/weflow_wasm/wasm_video_decode.js",
     "src/wechat_decrypt_tool/native/weflow_wasm/wasm_video_decode.wasm",
+    "src/wechat_decrypt_tool/resources/*.json",
 ]
 
 [tool.uv]

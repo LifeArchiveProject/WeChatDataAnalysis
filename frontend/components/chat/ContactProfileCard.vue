@@ -4,9 +4,7 @@
     @mouseenter="onContactCardMouseEnter"
     @mouseleave="onMessageAvatarMouseLeave"
   >
-    <div class="contact-card-title">联系人资料</div>
-
-    <div v-if="contactProfileLoading" class="contact-card-body">
+    <div v-if="contactProfileInitialLoading" class="contact-card-body">
       <div class="contact-card-head">
         <div class="skeleton skeleton-avatar"></div>
         <div class="min-w-0 flex-1">
@@ -14,16 +12,12 @@
           <div class="skeleton skeleton-username"></div>
         </div>
       </div>
-      <div class="contact-card-fields">
+      <div class="contact-profile-section">
         <div v-for="idx in 6" :key="idx" class="contact-field">
           <div class="skeleton skeleton-label"></div>
           <div class="skeleton skeleton-value"></div>
         </div>
       </div>
-    </div>
-
-    <div v-else-if="contactProfileError" class="contact-card-body">
-      <div class="contact-error">{{ contactProfileError }}</div>
     </div>
 
     <div v-else class="contact-card-body">
@@ -33,45 +27,104 @@
             v-if="contactProfileResolvedAvatar"
             :src="contactProfileResolvedAvatar"
             alt="联系人头像"
-            class="w-full h-full object-cover"
+            class="h-full w-full object-cover"
             referrerpolicy="no-referrer"
           />
-          <div v-else class="contact-avatar-fallback">{{ contactProfileResolvedName.charAt(0) || '?' }}</div>
+          <div v-else class="contact-avatar-fallback" :style="{ backgroundColor: contactProfileResolvedAvatarColor }">{{ contactProfileResolvedName.charAt(0) || '?' }}</div>
         </div>
         <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
-          <div class="contact-name">{{ contactProfileResolvedName || '未知联系人' }}</div>
-          <div class="contact-username" :title="contactProfileResolvedUsername">{{ contactProfileResolvedUsername }}</div>
+          <div class="contact-name-row">
+            <div class="contact-name">{{ contactProfileResolvedName || '未知联系人' }}</div>
+            <span v-if="contactProfileResolvedGender" class="contact-inline-pill">{{ contactProfileResolvedGender }}</span>
+            <span v-if="contactProfileResolvedRegion" class="contact-inline-region">{{ contactProfileResolvedRegion }}</span>
+          </div>
+          <div class="contact-subtitle">{{ contactProfileResolvedHeaderSubtitle }}</div>
         </div>
       </div>
 
-      <div class="contact-card-fields">
-        <div class="contact-field">
+      <div v-if="contactProfileError" class="contact-error">{{ contactProfileError }}</div>
+
+      <div
+        v-if="contactProfileResolvedGroupNickname || contactProfileResolvedNickname || contactProfileResolvedRemark || contactProfileResolvedAlias"
+        class="contact-profile-section"
+      >
+        <div v-if="contactProfileResolvedGroupNickname" class="contact-field">
+          <div class="contact-label">群昵称</div>
+          <div class="contact-value" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedGroupNickname }}</div>
+        </div>
+        <div v-if="contactProfileResolvedNickname" class="contact-field">
           <div class="contact-label">昵称</div>
-          <div class="contact-value" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedNickname || '-' }}</div>
+          <div class="contact-value" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedNickname }}</div>
         </div>
-        <div class="contact-field">
-          <div class="contact-label">微信号</div>
-          <div class="contact-value contact-code" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedAlias || '-' }}</div>
-        </div>
-        <div class="contact-field">
-          <div class="contact-label">性别</div>
-          <div class="contact-value" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedGender || '-' }}</div>
-        </div>
-        <div class="contact-field">
-          <div class="contact-label">地区</div>
-          <div class="contact-value" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedRegion || '-' }}</div>
-        </div>
-        <div class="contact-field">
+        <div v-if="contactProfileResolvedRemark" class="contact-field">
           <div class="contact-label">备注</div>
-          <div class="contact-value" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedRemark || '-' }}</div>
+          <div class="contact-value" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedRemark }}</div>
         </div>
-        <div class="contact-field">
+        <div v-if="contactProfileResolvedAlias" class="contact-field contact-field-copy">
+          <div class="contact-label">微信号</div>
+          <div class="contact-value contact-code" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedAlias }}</div>
+          <button type="button" class="contact-copy" title="复制微信号" @click.stop="copyContactProfileText(contactProfileResolvedAlias, 'alias')">
+            <svg v-if="copiedField === 'alias'" class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            </svg>
+            <svg v-else class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 7V5a2 2 0 012-2h7a2 2 0 012 2v7a2 2 0 01-2 2h-2M5 9h7a2 2 0 012 2v7a2 2 0 01-2 2H5a2 2 0 01-2-2v-7a2 2 0 012-2z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="contactProfileResolvedSignature" class="contact-profile-section">
+        <div class="contact-field contact-field-tall">
           <div class="contact-label">签名</div>
-          <div class="contact-value whitespace-pre-wrap" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedSignature || '-' }}</div>
+          <div class="contact-value contact-signature" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedSignature }}</div>
         </div>
-        <div class="contact-field" :title="contactProfileResolvedSourceScene != null ? `来源场景码：${contactProfileResolvedSourceScene}` : ''">
+      </div>
+
+      <div
+        v-if="contactProfileHasMoreInfo"
+        class="contact-profile-section compact"
+        :class="{ 'compact--with-groups': contactProfileResolvedCommonChatrooms.length }"
+      >
+        <div v-if="contactProfileResolvedCommonChatrooms.length" class="contact-common-groups">
+          <div class="contact-common-groups-head">
+            <div class="contact-label">共同群聊</div>
+            <div class="contact-common-groups-count">
+              {{ contactProfileResolvedCommonChatroomCount ?? contactProfileResolvedCommonChatrooms.length }} 个
+            </div>
+          </div>
+          <div class="contact-common-groups-list">
+            <button
+              v-for="group in contactProfileResolvedCommonChatrooms"
+              :key="group.username"
+              type="button"
+              class="contact-common-group"
+              :title="`进入${group.displayName}的会话`"
+              @click.stop="openCommonChatroom(group)"
+            >
+              <span class="contact-common-group-avatar" :class="{ 'privacy-blur': privacyMode }">
+                <img
+                  v-if="group.avatar"
+                  :src="group.avatar"
+                  :alt="`${group.displayName}群头像`"
+                  loading="lazy"
+                  decoding="async"
+                  referrerpolicy="no-referrer"
+                />
+                <span v-else :style="{ backgroundColor: group.avatarColor }">群</span>
+              </span>
+              <span class="contact-common-group-name" :class="{ 'privacy-blur': privacyMode }">{{ group.displayName }}</span>
+              <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
+            </button>
+          </div>
+        </div>
+        <div v-if="contactProfileResolvedSource" class="contact-field" :title="contactProfileResolvedSourceScene != null ? `来源场景码：${contactProfileResolvedSourceScene}` : ''">
           <div class="contact-label">来源</div>
-          <div class="contact-value" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedSource || '-' }}</div>
+          <div class="contact-value" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedSource }}</div>
+        </div>
+        <div v-if="contactProfileResolvedAddTime" class="contact-field">
+          <div class="contact-label">添加时间</div>
+          <div class="contact-value contact-code" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedAddTime }}</div>
         </div>
       </div>
     </div>
@@ -79,7 +132,8 @@
 </template>
 
 <script>
-import { defineComponent } from 'vue'
+import { defineComponent, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 export default defineComponent({
   name: 'ContactProfileCard',
@@ -87,8 +141,45 @@ export default defineComponent({
     state: { type: Object, required: true }
   },
   setup(props) {
+    const router = useRouter()
+    const copiedField = ref('')
+    let copiedTimer = null
+
+    const copyContactProfileText = async (value, field) => {
+      const text = String(value || '').trim()
+      if (!text) return
+      try {
+        if (process.client && typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text)
+        }
+      } catch {}
+      copiedField.value = String(field || '')
+      if (copiedTimer) clearTimeout(copiedTimer)
+      copiedTimer = setTimeout(() => {
+        copiedField.value = ''
+        copiedTimer = null
+      }, 1200)
+    }
+
+    const openCommonChatroom = async (group) => {
+      const username = String(group?.username || '').trim()
+      if (!username) return
+      if (typeof props.state?.closeContactProfileCard === 'function') {
+        props.state.closeContactProfileCard()
+      }
+      await router.push(`/chat/${encodeURIComponent(username)}`)
+    }
+
+    onUnmounted(() => {
+      if (copiedTimer) clearTimeout(copiedTimer)
+      copiedTimer = null
+    })
+
     return {
-      ...props.state
+      ...props.state,
+      copiedField,
+      copyContactProfileText,
+      openCommonChatroom
     }
   }
 })
@@ -97,112 +188,259 @@ export default defineComponent({
 <style scoped>
 .chat-contact-card {
   /* 不设置 position：外层 MessageItem 传入的 absolute 不能被覆盖，否则会挤乱消息流。 */
-  overflow: hidden;
-  border-radius: 10px;
-  background: var(--app-surface-bg);
-  border: 1px solid var(--app-border);
+  --contact-profile-radius: 0.375rem; /* 对齐当前聊天头像的 rounded-md 圆角 */
+  --contact-profile-surface: #f8faf8;
+  --contact-profile-border: #d4dad5;
+  overflow: visible;
+  border-radius: var(--contact-profile-radius);
+  background: var(--contact-profile-surface);
+  border: 1px solid var(--contact-profile-border);
   color: var(--app-text-primary);
-  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.14);
-}
-
-.contact-card-title {
-  padding: 11px 14px;
-  border-bottom: 1px solid var(--app-border);
-  color: var(--app-text-primary);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.3;
-  background: var(--app-surface-bg);
+  box-shadow: none;
 }
 
 .contact-card-body {
-  padding: 12px;
-  background: var(--app-surface-soft);
+  max-height: min(680px, calc(100vh - 120px));
+  overflow-y: auto;
+  padding: 14px;
 }
 
 .contact-card-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border-radius: 8px;
-  background: var(--app-surface-bg);
-  border: 1px solid var(--app-border);
+  gap: 13px;
+  min-height: 78px;
+  padding: 0 0 14px 0;
+  border-bottom: 1px solid var(--app-border);
 }
 
 .contact-avatar {
-  width: 54px;
-  height: 54px;
+  width: 64px;
+  height: 64px;
   flex: 0 0 auto;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--contact-profile-radius);
   background: var(--app-border-soft);
 }
 
 .contact-avatar-fallback {
-  width: 100%;
-  height: 100%;
   display: flex;
+  height: 100%;
+  width: 100%;
   align-items: center;
   justify-content: center;
   color: #fff;
   background: #6b7280;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.contact-name-row {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .contact-name {
+  min-width: 0;
+  overflow: hidden;
+  flex: 0 1 auto;
   color: var(--app-text-primary);
-  font-size: 16px;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-inline-pill,
+.contact-inline-region {
+  min-width: 0;
+  flex: 0 1 auto;
+  color: var(--app-text-muted);
+  font-size: 12px;
   font-weight: 500;
   line-height: 1.35;
+}
+
+.contact-inline-pill {
+  flex: 0 0 auto;
+}
+
+.contact-inline-region {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.contact-username {
-  margin-top: 3px;
-  color: var(--app-text-muted);
-  font-size: 12px;
-  line-height: 1.35;
+.contact-subtitle {
+  margin-top: 6px;
   overflow: hidden;
+  color: var(--app-text-muted);
+  font-size: 13px;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.contact-profile-section {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.contact-profile-section.compact {
+  padding-bottom: 8px;
+}
+
+.contact-profile-section.compact--with-groups {
+  padding-top: 0;
+}
+
+.contact-common-groups {
+  padding: 2px 0 8px;
+}
+
+.compact--with-groups .contact-common-groups {
+  padding-top: 0;
+}
+
+.contact-common-groups-head {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.compact--with-groups .contact-common-groups-head {
+  min-height: 44px;
+}
+
+.contact-common-groups-count {
+  color: var(--app-text-muted);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
-.contact-card-fields {
-  margin-top: 8px;
+.contact-common-groups-list {
+  border-top: 1px solid var(--app-border);
+}
+
+.contact-common-group {
+  display: grid;
+  width: 100%;
+  min-height: 44px;
+  grid-template-columns: 32px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--app-border);
+  border-radius: 0;
+  color: var(--app-text-primary);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.contact-common-group:hover {
+  color: var(--app-accent-hover);
+  background: var(--app-surface-soft);
+}
+
+.contact-common-group:last-child {
+  border-bottom: 0;
+}
+
+.contact-common-group-avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
   overflow: hidden;
-  border-radius: 8px;
-  background: var(--app-surface-bg);
-  border: 1px solid var(--app-border);
+  border-radius: 5px;
+  color: #fff;
+  background: var(--app-border-soft);
+  font-size: 12px;
+}
+
+.contact-common-group-avatar img,
+.contact-common-group-avatar > span {
+  width: 100%;
+  height: 100%;
+}
+
+.contact-common-group-avatar img {
+  object-fit: cover;
+}
+
+.contact-common-group-avatar > span {
+  display: grid;
+  place-items: center;
+}
+
+.contact-common-group-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-common-group > i {
+  color: var(--app-text-muted);
+  font-size: 10px;
+}
+
+.contact-profile-section:last-child {
+  border-bottom: 0;
+  padding-bottom: 2px;
 }
 
 .contact-field {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
+  grid-template-columns: 72px minmax(0, 1fr);
+  min-height: 31px;
+  align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  min-height: 39px;
+  color: var(--app-text-muted);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
-.contact-field + .contact-field {
-  border-top: 1px solid var(--app-border);
+.contact-field-copy {
+  grid-template-columns: 72px minmax(0, 1fr) 24px;
+}
+
+.contact-field-tall {
+  align-items: start;
+  padding-top: 5px;
 }
 
 .contact-label {
   color: var(--app-text-muted);
   font-size: 13px;
-  line-height: 1.45;
 }
 
 .contact-value {
   min-width: 0;
+  overflow: hidden;
   color: var(--app-text-primary);
   font-size: 13px;
-  line-height: 1.45;
+  font-weight: 500;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-signature {
+  max-height: 60px;
+  overflow: hidden;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -210,14 +448,33 @@ export default defineComponent({
   font-variant-numeric: tabular-nums;
 }
 
+.contact-copy {
+  display: flex;
+  height: 24px;
+  width: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--app-text-muted);
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.contact-copy:hover {
+  background: var(--app-surface-soft);
+  color: var(--app-text-primary);
+}
+
 .contact-error {
-  padding: 12px;
+  margin-top: 10px;
+  padding: 9px 10px;
   border-radius: 8px;
   color: #dc2626;
   background: rgba(254, 242, 242, 0.9);
   border: 1px solid rgba(248, 113, 113, 0.22);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.45;
   white-space: pre-wrap;
 }
 
@@ -238,32 +495,33 @@ export default defineComponent({
 }
 
 .skeleton-avatar {
-  width: 54px;
-  height: 54px;
+  width: 64px;
+  height: 64px;
   flex: 0 0 auto;
-  border-radius: 8px;
+  border-radius: var(--contact-profile-radius);
 }
 
 .skeleton-name {
-  width: 42%;
-  height: 16px;
-  margin-bottom: 8px;
+  width: 46%;
+  height: 18px;
+  margin-bottom: 9px;
 }
 
 .skeleton-username {
-  width: 66%;
-  height: 12px;
+  width: 68%;
+  height: 13px;
 }
 
 .skeleton-label {
-  width: 36px;
+  width: 40px;
   height: 13px;
   align-self: center;
 }
 
 .skeleton-value {
-  width: 70%;
+  width: 72%;
   height: 13px;
+  justify-self: end;
   align-self: center;
 }
 
@@ -277,5 +535,10 @@ html[data-theme='dark'] .contact-error {
   color: #fca5a5;
   background: rgba(127, 29, 29, 0.18);
   border-color: rgba(248, 113, 113, 0.18);
+}
+
+html[data-theme='dark'] .chat-contact-card {
+  --contact-profile-surface: #292d2a;
+  --contact-profile-border: #414842;
 }
 </style>
