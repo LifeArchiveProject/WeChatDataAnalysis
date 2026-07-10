@@ -103,7 +103,105 @@
             </div>
           </div>
 
-          <div class="contacts-export-panel w-full self-start">
+          <div class="contacts-export-panel h-full min-h-0 w-full space-y-3 overflow-y-auto pr-1">
+            <section class="rounded-lg border border-[#e5e7eb] bg-white">
+              <div class="flex items-center justify-between gap-3 border-b border-[#e5e7eb] px-4 py-2.5">
+                <div>
+                  <div class="text-[14px] font-medium text-[#111827]">好友验证</div>
+                </div>
+                <div class="rounded-full bg-[#f0fdf4] px-2.5 py-1 text-[12px] font-semibold text-[#047857]">
+                  {{ friendVerificationTotal }}
+                </div>
+              </div>
+
+              <div class="space-y-2.5 px-4 py-3">
+                <div class="relative">
+                  <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9ca3af]" fill="none" stroke="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.333 12.667A5.333 5.333 0 1 0 7.333 2a5.333 5.333 0 0 0 0 10.667ZM14 14l-2.9-2.9" />
+                  </svg>
+                  <input
+                    v-model="friendVerificationKeyword"
+                    type="text"
+                    class="w-full rounded-md border border-[#e5e7eb] bg-white py-1.5 pl-9 pr-9 text-[13px] text-[#111827] outline-none transition placeholder:text-[#9ca3af] focus:border-[#07C160] focus:ring-2 focus:ring-[#07C160]/15"
+                    placeholder="搜索验证内容、用户名、备注"
+                  />
+                  <button
+                    v-if="friendVerificationKeyword"
+                    type="button"
+                    class="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-[#9ca3af] transition hover:bg-[#f3f4f6] hover:text-[#4b5563]"
+                    title="清空"
+                    @click="friendVerificationKeyword = ''"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div v-if="friendVerificationLoading && !friendVerifications.length" class="rounded-md border border-[#e5e7eb] bg-[#f9fafb] px-3 py-4 text-[13px] text-[#6b7280]">
+                  正在加载好友验证记录…
+                </div>
+                <div v-else-if="friendVerificationError" class="rounded-md border border-[#fecaca] bg-[#fef2f2] px-3 py-3 text-[13px] leading-5 text-[#b91c1c]">
+                  {{ friendVerificationError }}
+                </div>
+                <div v-else-if="!friendVerifications.length" class="rounded-md border border-[#e5e7eb] bg-[#f9fafb] px-3 py-4 text-[13px] text-[#6b7280]">
+                  暂无好友验证记录
+                </div>
+                <div v-else class="max-h-[340px] space-y-1.5 overflow-y-auto pr-1">
+                  <article
+                    v-for="item in friendVerifications"
+                    :key="`${item.timestamp}-${item.userName}-${item.type}-${item.scene}`"
+                    class="cursor-pointer rounded-md border border-[#eef2f7] bg-white px-3 py-2 transition hover:border-[#dbeafe] hover:bg-[#fbfdff]"
+                    title="点击跳转到会话"
+                    @click="openChatByUsername(item.userName)"
+                  >
+                    <div class="flex items-start gap-3">
+                      <div class="h-9 w-9 shrink-0 overflow-hidden rounded-md bg-[#e5e7eb]" :class="{ 'privacy-blur': privacyMode }">
+                        <img
+                          v-if="identityAvatar(friendVerificationContact(item)) && !avatarBroken[avatarBrokenKey(friendVerificationContact(item))]"
+                          :src="identityAvatar(friendVerificationContact(item))"
+                          :alt="friendVerificationDisplayName(item)"
+                          class="h-full w-full object-cover"
+                          loading="lazy"
+                          decoding="async"
+                          referrerpolicy="no-referrer"
+                          @error="markAvatarBroken(friendVerificationContact(item))"
+                        />
+                        <div v-else class="flex h-full w-full items-center justify-center bg-[#07C160] text-xs font-bold text-white">
+                          {{ identityFallback(friendVerificationDisplayName(item), friendVerificationContact(item)?.isGroup) }}
+                        </div>
+                      </div>
+                      <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
+                        <div class="flex items-start justify-between gap-3">
+                          <div class="min-w-0 flex-1">
+                            <div class="truncate text-[13px] font-medium text-[#111827]" :title="friendVerificationRawTitle(item)">
+                              {{ friendVerificationDisplayName(item) }}
+                            </div>
+                            <div class="mt-0.5 truncate text-[12px] text-[#6b7280]">
+                              {{ item.content || item.remark || '（无验证内容）' }}
+                            </div>
+                          </div>
+                          <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium" :class="item.isSender ? 'bg-[#eff6ff] text-[#1d4ed8]' : 'bg-[#f0fdf4] text-[#047857]'">
+                            {{ item.isSender ? '我发起' : '对方发起' }}<span v-if="item.timeText" class="ml-1 font-normal opacity-75">{{ item.timeText }}</span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+
+                  <button
+                    v-if="friendVerificationHasMore"
+                    type="button"
+                    class="w-full rounded-md border border-[#e5e7eb] bg-white px-3 py-2 text-[12px] font-medium text-[#4b5563] transition hover:border-[#bbf7d0] hover:bg-[#f0fdf4] hover:text-[#047857] disabled:cursor-not-allowed disabled:opacity-60"
+                    :disabled="friendVerificationLoading"
+                    @click="loadMoreFriendVerifications"
+                  >
+                    {{ friendVerificationLoading ? '加载中…' : `加载更多（${friendVerifications.length} / ${friendVerificationTotal}）` }}
+                  </button>
+                </div>
+              </div>
+            </section>
+
             <section class="rounded-lg border border-[#e5e7eb] bg-white">
               <div class="border-b border-[#e5e7eb] px-4 py-3">
                 <div class="text-[14px] font-medium text-[#111827]">导出联系人</div>
@@ -234,11 +332,74 @@ const exporting = ref(false)
 const exportMsg = ref('')
 const exportOk = ref(false)
 
+const friendVerificationKeyword = ref('')
+const friendVerifications = ref([])
+const friendVerificationTotal = ref(0)
+const friendVerificationHasMore = ref(false)
+const friendVerificationLoading = ref(false)
+const friendVerificationError = ref('')
+const FRIEND_VERIFICATION_PAGE_SIZE = 20
+
 const avatarBrokenKey = (contact) => `${selectedAccount.value || ''}::${contact?.username || ''}`
 
 const markAvatarBroken = (contact) => {
   const key = avatarBrokenKey(contact)
   if (key) avatarBroken[key] = true
+}
+
+const looksLikeRawId = (value) => {
+  const text = String(value || '').trim()
+  return !!(
+    text.startsWith('wxid_') ||
+    text.endsWith('@chatroom') ||
+    /^\d{5,}@chatroom$/i.test(text)
+  )
+}
+
+const identityDisplayName = (contact, fallback = '未知用户') => {
+  const c = contact && typeof contact === 'object' ? contact : {}
+  const rawUsername = String(c.username || '').trim()
+  const candidates = [c.displayName, c.name, c.nickname, c.remark]
+  for (const value of candidates) {
+    const text = String(value || '').trim()
+    if (!text) continue
+    if (text !== rawUsername && !looksLikeRawId(text)) return text
+  }
+  const fb = String(fallback || '').trim()
+  if (fb && !looksLikeRawId(fb)) return fb
+  return c.isGroup ? '未知群聊' : '未知用户'
+}
+
+const identityAvatar = (contact) => {
+  return String(contact?.avatar || contact?.avatarUrl || '').trim()
+}
+
+const identityFallback = (name, isGroup = false) => {
+  if (isGroup) return '群'
+  const text = String(name || '').trim()
+  return text ? text.charAt(0) : '用'
+}
+
+const friendVerificationContact = (item) => {
+  return item?.contact && typeof item.contact === 'object'
+    ? item.contact
+    : { username: String(item?.userName || '').trim(), displayName: '', avatar: '', isGroup: false }
+}
+
+const friendVerificationDisplayName = (item) => {
+  return identityDisplayName(friendVerificationContact(item), item?.remark || '未知用户')
+}
+
+const friendVerificationRawTitle = (item) => {
+  const username = String(item?.userName || '').trim()
+  const name = friendVerificationDisplayName(item)
+  return username ? `${name} · ${username}` : name
+}
+
+const openChatByUsername = (username) => {
+  const u = String(username || '').trim()
+  if (!u) return
+  void navigateTo(`/chat/${encodeURIComponent(u)}`)
 }
 
 const contactTypeIconPaths = {
@@ -659,6 +820,58 @@ const loadContacts = async (options = {}) => {
   }
 }
 
+let friendVerificationRequestId = 0
+
+const resetFriendVerifications = () => {
+  friendVerifications.value = []
+  friendVerificationTotal.value = 0
+  friendVerificationHasMore.value = false
+  friendVerificationError.value = ''
+}
+
+const loadFriendVerifications = async (options = {}) => {
+  if (!selectedAccount.value) {
+    friendVerificationRequestId += 1
+    resetFriendVerifications()
+    friendVerificationLoading.value = false
+    return
+  }
+
+  const append = !!options.append
+  const requestId = ++friendVerificationRequestId
+  friendVerificationLoading.value = true
+  friendVerificationError.value = ''
+
+  try {
+    const resp = await api.listFriendVerifications({
+      account: selectedAccount.value,
+      q: friendVerificationKeyword.value || '',
+      limit: FRIEND_VERIFICATION_PAGE_SIZE,
+      offset: append ? friendVerifications.value.length : 0,
+    })
+    if (requestId !== friendVerificationRequestId) return
+    const items = Array.isArray(resp?.items) ? resp.items : []
+    friendVerifications.value = append ? [...friendVerifications.value, ...items] : items
+    friendVerificationTotal.value = Number(resp?.total || 0)
+    friendVerificationHasMore.value = !!resp?.hasMore
+  } catch (e) {
+    if (requestId === friendVerificationRequestId) {
+      if (!append) friendVerifications.value = []
+      friendVerificationTotal.value = append ? friendVerificationTotal.value : 0
+      friendVerificationHasMore.value = false
+      friendVerificationError.value = e?.message || '加载好友验证记录失败'
+    }
+  } finally {
+    if (requestId === friendVerificationRequestId) {
+      friendVerificationLoading.value = false
+    }
+  }
+}
+
+const loadMoreFriendVerifications = () => {
+  return loadFriendVerifications({ append: true })
+}
+
 let keywordTimer = null
 watch(() => searchKeyword.value, () => {
   if (keywordTimer) clearTimeout(keywordTimer)
@@ -677,6 +890,18 @@ watch(() => [
   contactTypes.blocked,
 ], () => {
   void loadContacts()
+})
+
+let friendVerificationKeywordTimer = null
+watch(() => friendVerificationKeyword.value, () => {
+  if (friendVerificationKeywordTimer) clearTimeout(friendVerificationKeywordTimer)
+  friendVerificationKeywordTimer = setTimeout(() => {
+    void loadFriendVerifications()
+  }, 250)
+})
+
+watch(() => selectedAccount.value, () => {
+  void loadFriendVerifications()
 })
 
 const chooseExportFolder = async () => {
@@ -749,6 +974,7 @@ onMounted(async () => {
   privacyStore.init()
   await loadAccounts()
   await loadContacts()
+  await loadFriendVerifications()
 })
 </script>
 

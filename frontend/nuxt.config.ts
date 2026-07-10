@@ -42,7 +42,8 @@ export default defineNuxtConfig({
   
   // 应用配置
   css: [
-    '~/assets/css/chat.css'
+    '~/assets/css/chat.css',
+    '~/assets/css/record-pages.css'
   ],
 
   // 应用配置
