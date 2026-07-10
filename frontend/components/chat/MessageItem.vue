@@ -54,7 +54,7 @@
           <ContactProfileCard
             v-if="contactProfileCardOpen && contactProfileCardMessageId === String(message.id ?? '')"
             :state="state"
-            class="absolute z-40 w-[360px] max-w-[88vw]"
+            class="absolute z-40 w-[400px] max-w-[92vw]"
             :class="message.isSent ? 'right-0 top-[calc(100%+8px)]' : 'left-0 top-[calc(100%+8px)]'"
           />
         </div>
@@ -79,7 +79,7 @@
           <ContactProfileCard
             v-if="isMentionContactProfileCardForMessage && isMentionContactProfileCardForMessage(message)"
             :state="state"
-            class="absolute z-40 w-[360px] max-w-[88vw]"
+            class="absolute z-40 w-[400px] max-w-[92vw]"
             :class="message.isSent ? 'right-0 top-[calc(100%+8px)]' : 'left-0 top-[calc(100%+8px)]'"
           />
         </div>
@@ -111,14 +111,16 @@ export default defineComponent({
 
 <style scoped>
 .chat-contact-card {
-  background-color: var(--app-surface-bg);
-  border: 1px solid var(--app-border);
+  background-color: #f8faf8;
+  border: 1px solid #d4dad5;
   color: var(--app-text-primary);
-  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.16);
+  box-shadow: none;
 }
 
 html[data-theme='dark'] .chat-contact-card {
-  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.42);
+  background-color: #292d2a;
+  border-color: #414842;
+  box-shadow: none;
 }
 
 .chat-contact-card .bg-white {
