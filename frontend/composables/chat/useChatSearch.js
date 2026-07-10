@@ -1976,12 +1976,12 @@ if (searchContext.value?.active) {
   return
 }
 
-if (c.scrollTop > 120) {
+if (c.scrollTop > 300) {
   autoLoadReady.value = true
   return
 }
 
-if (c.scrollTop <= 60 && autoLoadReady.value && hasMoreMessages.value && !isLoadingMessages.value) {
+if (c.scrollTop <= 240 && autoLoadReady.value && hasMoreMessages.value && !isLoadingMessages.value) {
   autoLoadReady.value = false
   await loadMoreMessages()
 }

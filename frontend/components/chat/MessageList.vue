@@ -2,9 +2,8 @@
   <div ref="messageContainerRef" class="message-list flex-1 overflow-y-auto p-4 min-h-0" @scroll="onMessageScroll">
     <div v-if="selectedContact && hasMoreMessages" class="flex justify-center mb-4">
       <div
-        class="message-list-load-more text-xs px-3 py-1 rounded-md border select-none"
-        :class="isLoadingMessages ? 'opacity-60' : 'hover:bg-gray-50 cursor-pointer'"
-        @click="!isLoadingMessages && loadMoreMessages()"
+        class="message-list-load-more text-xs px-3 py-1 select-none"
+        :class="{ 'opacity-60': isLoadingMessages }"
       >
         {{ isLoadingMessages ? '加载中...' : '继续上滑加载更多' }}
       </div>

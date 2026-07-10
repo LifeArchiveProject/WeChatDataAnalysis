@@ -1513,14 +1513,14 @@
   }
 
   .message-list-load-more {
-    background-color: var(--message-load-more-bg);
-    border-color: var(--message-load-more-border);
+    background-color: transparent;
+    border-color: transparent;
     color: var(--message-load-more-text);
   }
 
   .message-list-load-more:hover {
-    background-color: var(--message-load-more-bg);
-    filter: brightness(1.06);
+    background-color: transparent;
+    filter: none;
   }
 
   .jump-to-bottom-btn {
