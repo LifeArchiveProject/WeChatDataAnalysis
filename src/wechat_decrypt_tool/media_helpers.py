@@ -3107,12 +3107,43 @@ def _decrypt_wechat_dat_v4(data: bytes, xor_key: int, aes_key: bytes) -> bytes:
 
 def _load_media_keys(account_dir: Path) -> dict[str, Any]:
     p = account_dir / "_media_keys.json"
+    data: dict[str, Any] = {}
     if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+        data = {}
+    else:
+        try:
+            loaded = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data.update(loaded)
+        except Exception:
+            data = {}
+
+    # Newer key flows store image keys in the shared account key store, while
+    # the media decoder historically looked only at `_media_keys.json`. Read
+    # both so realtime v4 `.dat` images can decode immediately after key fetch.
+    if data.get("xor") is None or not str(data.get("aes") or "").strip():
+        try:
+            from .key_store import get_account_keys_from_store
+
+            keys = get_account_keys_from_store(Path(account_dir).name)
+            if isinstance(keys, dict):
+                if data.get("xor") is None:
+                    xor_raw = str(keys.get("image_xor_key") or keys.get("xor_key") or "").strip()
+                    if xor_raw:
+                        if xor_raw.lower().startswith("0x"):
+                            data["xor"] = int(xor_raw[2:], 16)
+                        else:
+                            try:
+                                data["xor"] = int(xor_raw, 16)
+                            except Exception:
+                                data["xor"] = int(xor_raw)
+                if not str(data.get("aes") or "").strip():
+                    aes_raw = str(keys.get("image_aes_key") or keys.get("aes_key") or "").strip()
+                    if aes_raw:
+                        data["aes"] = aes_raw[:16]
+        except Exception:
+            pass
+    return data
 
 
 def _get_resource_dir(account_dir: Path) -> Path:
