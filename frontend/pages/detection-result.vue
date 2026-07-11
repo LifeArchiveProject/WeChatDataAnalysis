@@ -280,6 +280,20 @@
         </div>
       </section>
     </main>
+
+    <GuideDialog
+      v-if="guideConfig"
+      :open="guideOpen"
+      :eyebrow="guideConfig.eyebrow"
+      :title="guideConfig.title"
+      :description="guideConfig.description"
+      :details="guideConfig.details"
+      :note="guideConfig.note"
+      :primary-label="guideConfig.primaryLabel"
+      :tone="guideConfig.tone"
+      @primary="confirmGuide"
+      @close="closeGuide"
+    />
   </div>
 </template>
 
@@ -298,6 +312,75 @@ const customPath = ref('')
 const wechatInstallPath = ref('')
 const isPickingWechatInstallPath = ref(false)
 const STORAGE_KEY = 'wechat_data_root_path'
+const guideMode = ref('')
+const guideOpen = computed(() => !!guideMode.value)
+
+const GUIDE_CONFIGS = {
+  detection: {
+    eyebrow: '开始前确认',
+    title: '请先登录电脑版微信',
+    description: '登录状态会帮助系统识别当前账号，也能减少后续获取密钥时的失败。这里只做操作提醒，不会检查或限制您的微信状态。',
+    details: [
+      '启动电脑版微信并登录准备处理的账号',
+      '等待微信主界面和最近会话加载完成',
+      '检测与密钥获取期间尽量不要退出或切换账号'
+    ],
+    note: '如果暂时不方便登录，也可以继续检测并在后续手动补充路径。',
+    primaryLabel: '我知道了，继续检测',
+    tone: 'guide'
+  },
+  dataPath: {
+    eyebrow: '目录选择提示',
+    title: '请选择微信数据根目录',
+    description: '这里需要的是聊天数据所在的 xwechat_files 文件夹，不是微信程序的安装位置。',
+    details: [
+      '优先选择名称为 xwechat_files 的文件夹',
+      '不要选择 Weixin.exe、WeChat.exe 或单个数据库文件',
+      '选择完成后，系统会立即使用该目录重新检测'
+    ],
+    note: '不确定目录时可以取消选择，自动检测结果不会被删除。',
+    primaryLabel: '我知道了，选择数据目录',
+    tone: 'info'
+  },
+  installPath: {
+    eyebrow: '目录选择提示',
+    title: '请选择微信安装目录',
+    description: '这里需要的是微信客户端程序所在位置，与存放聊天记录的 xwechat_files 数据目录不同。',
+    details: [
+      '选择包含 Weixin.exe 或 WeChat.exe 的文件夹',
+      '不要选择 xwechat_files 或 db_storage 文件夹',
+      '该路径主要用于后续一键获取数据库密钥'
+    ],
+    note: '如果微信安装在默认位置，系统通常可以自动识别，此项也可以暂不选择。',
+    primaryLabel: '我知道了，选择安装目录',
+    tone: 'info'
+  }
+}
+
+const guideConfig = computed(() => GUIDE_CONFIGS[guideMode.value] || null)
+
+const openGuide = (mode) => {
+  guideMode.value = mode
+}
+
+const closeGuide = () => {
+  const mode = guideMode.value
+  guideMode.value = ''
+  if (mode === 'detection') void startDetection()
+}
+
+const confirmGuide = () => {
+  const mode = guideMode.value
+  guideMode.value = ''
+
+  if (mode === 'detection') {
+    void startDetection()
+  } else if (mode === 'dataPath') {
+    void pickDataDirectory()
+  } else if (mode === 'installPath') {
+    void performPickWechatInstallDirectory()
+  }
+}
 
 const isDesktopShell = () => {
   if (!process.client || typeof window === 'undefined') return false
@@ -305,7 +388,7 @@ const isDesktopShell = () => {
 }
 
 // 唤起目录选择器并自动检测
-const handlePickDirectory = async () => {
+const pickDataDirectory = async () => {
   let path = ''
 
   if (isDesktopShell()) {
@@ -340,13 +423,15 @@ const handlePickDirectory = async () => {
   }
 }
 
+const handlePickDirectory = () => openGuide('dataPath')
+
 const persistWechatInstallPath = () => {
   const normalized = normalizeWechatInstallPath(wechatInstallPath.value)
   wechatInstallPath.value = normalized
   writeStoredWechatInstallPath(normalized)
 }
 
-const pickWechatInstallDirectory = async () => {
+const performPickWechatInstallDirectory = async () => {
   if (isPickingWechatInstallPath.value) return
   isPickingWechatInstallPath.value = true
 
@@ -384,6 +469,8 @@ const pickWechatInstallDirectory = async () => {
     isPickingWechatInstallPath.value = false
   }
 }
+
+const pickWechatInstallDirectory = () => openGuide('installPath')
 
 // 计算属性：将当前登录账号排在第一位
 const sortedAccounts = computed(() => {
@@ -504,7 +591,7 @@ const isCurrentAccount = (accountName) => {
   return accountName === current.matched_folder || accountName === current.current_account
 }
 
-// 页面加载时自动检测
+// 页面加载时先完成登录提示，再自动检测。
 onMounted(() => {
   if (process.client) {
     try {
@@ -513,6 +600,6 @@ onMounted(() => {
     } catch {}
     wechatInstallPath.value = readStoredWechatInstallPath()
   }
-  startDetection()
+  openGuide('detection')
 })
 </script>
