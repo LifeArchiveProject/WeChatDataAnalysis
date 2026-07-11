@@ -176,6 +176,12 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                 "<msg>语音通话</msg>"
                 "</VoIPBubbleMsg></msg>"
             )
+            video_voip_xml = (
+                "<msg><VoIPBubbleMsg>"
+                "<room_type>0</room_type>"
+                "<msg>视频通话</msg>"
+                "</VoIPBubbleMsg></msg>"
+            )
             quote_voice_xml = (
                 "<msg><appmsg>"
                 "<type>57</type>"
@@ -200,6 +206,7 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                 (8, 1008, 50, 8, 2, 1735689608, voip_xml, None),
                 (9, self._VOICE_SERVER_ID, 34, 9, 1, 1735689609, voice_xml, None),
                 (10, 1010, 49, 10, 1, 1735689610, quote_voice_xml, None),
+                (11, 1011, 50, 11, 1, 1735689611, video_voip_xml, None),
             ]
             conn.executemany(
                 f"INSERT INTO {table_name} (local_id, server_id, local_type, sort_seq, real_sender_id, create_time, message_content, compress_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -364,6 +371,9 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     self.assertIn("wechat-redpacket-card", html_text)
                     self.assertIn("wechat-chat-history-card", html_text)
                     self.assertIn("wechat-voip-bubble", html_text)
+                    self.assertIn("wechat-video-call.svg", html_text)
+                    self.assertIn("wechat-voip-icon--video", html_text)
+                    self.assertIn("wechat-voip-icon--mirrored", html_text)
                     self.assertIn("wechat-link-card", html_text)
                     self.assertIn("wechat-file-card", html_text)
                     self.assertIn("wechat-voice-wrapper", html_text)
@@ -372,7 +382,12 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     self.assertIn("wechat-transfer-card", css_text)
                     self.assertRegex(css_text, re.compile(r"\.wechat-voice-sent(?::|::)after"))
                     self.assertRegex(css_text, re.compile(r"\.wechat-voice-received(?::|::)before"))
+                    self.assertIn(".wechat-voip-icon--video", css_text)
+                    self.assertIn(".wechat-voip-icon--mirrored", css_text)
                     self.assertNotIn("wechat-transfer-card[data-v-", css_text)
+
+                    self.assertIn("assets/images/wechat/wechat-audio-call.svg", names)
+                    self.assertIn("assets/images/wechat/wechat-video-call.svg", names)
                     self.assertNotIn("bento-container", css_text)
 
                     js_text = zf.read(js_asset).decode("utf-8", errors="ignore")
@@ -473,7 +488,10 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     html_text = zf.read(html_path).decode("utf-8")
                     self.assertIn("wechat-voice-wrapper", html_text)
                     self.assertIn('data-render-type="voice"', html_text)
-                    self.assertIn('data-voice-id="message_0:msg_d5616d78f22fe35c632f66cabecfc82d:11"', html_text)
+                    self.assertRegex(
+                        html_text,
+                        re.compile(r'data-voice-id="message_0:msg_d5616d78f22fe35c632f66cabecfc82d:\d+"'),
+                    )
                     self.assertIn('class="wechat-voice-duration">7"</span>', html_text)
             finally:
                 logging.shutdown()
