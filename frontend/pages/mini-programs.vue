@@ -31,6 +31,9 @@
                 <i class="fa-solid fa-xmark" aria-hidden="true"></i>
               </button>
             </label>
+            <button type="button" class="records-icon-button" title="导出小程序" aria-label="导出小程序" @click="exportDialogOpen = true">
+              <i class="fa-solid fa-file-export" aria-hidden="true"></i>
+            </button>
             <button
               type="button"
               class="records-icon-button"
@@ -111,6 +114,14 @@
         </section>
       </main>
     </div>
+    <RecordExportDialog
+      :open="exportDialogOpen"
+      dataset="mini-programs"
+      title="小程序"
+      :account="selectedAccount || ''"
+      :query="keyword"
+      @close="exportDialogOpen = false"
+    />
   </div>
 </template>
 
@@ -133,6 +144,7 @@ const total = ref(0)
 const hasMore = ref(false)
 const loading = ref(false)
 const error = ref('')
+const exportDialogOpen = ref(false)
 const PAGE_SIZE = 80
 let requestId = 0
 let keywordTimer = null

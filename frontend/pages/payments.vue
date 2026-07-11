@@ -31,6 +31,9 @@
                 <i class="fa-solid fa-xmark" aria-hidden="true"></i>
               </button>
             </label>
+            <button type="button" class="records-icon-button" title="导出转账与红包" aria-label="导出转账与红包" @click="exportDialogOpen = true">
+              <i class="fa-solid fa-file-export" aria-hidden="true"></i>
+            </button>
             <button
               type="button"
               class="records-icon-button"
@@ -53,12 +56,22 @@
                 type="button"
                 :class="{ 'is-active': kindFilter === option.value }"
                 :aria-pressed="kindFilter === option.value"
-                @click="kindFilter = option.value"
+                @click="selectKind(option.value)"
               >
                 <i :class="['fa-solid', option.icon]" aria-hidden="true"></i>
                 <span>{{ option.label }}</span>
               </button>
             </div>
+
+            <label class="payments-status-filter" :class="{ 'is-disabled': kindFilter === 'redpacket' }">
+              <i class="fa-solid fa-filter" aria-hidden="true"></i>
+              <select v-model="statusFilter" aria-label="按转账状态筛选" :disabled="kindFilter === 'redpacket'">
+                <option v-for="option in statusOptions" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+              <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+            </label>
 
             <dl class="payments-stats">
               <div class="payments-stat">
@@ -128,14 +141,21 @@
               <div class="ledger-row__content" :class="{ 'privacy-blur': privacyMode }">
                 <div class="ledger-row__head">
                   <div class="ledger-row__title" :title="recordRawTitle(item)">{{ recordTitle(item) }}</div>
+                  <span
+                    v-if="item.kind === 'transfer'"
+                    class="ledger-transfer-status"
+                    :class="`ledger-transfer-status--${transferStatusTone(item)}`"
+                  >
+                    {{ transferStatusText(item) }}
+                  </span>
                 </div>
                 <div v-if="item.kind === 'transfer'" class="ledger-route">
                   <span class="ledger-route__item">
-                    <span class="ledger-route__label">付款</span>{{ participantName(item.payerContact, item.payPayer, '未知付款方') }}
+                    <span class="ledger-route__label">付款人</span>{{ participantName(item.payerContact, item.payPayer, '未知付款方') }}
                   </span>
                   <i class="fa-solid fa-arrow-right-long" aria-hidden="true"></i>
                   <span class="ledger-route__item">
-                    <span class="ledger-route__label">收款</span>{{ participantName(item.receiverContact, item.payReceiver, '未知收款方') }}
+                    <span class="ledger-route__label">收款人</span>{{ participantName(item.receiverContact, item.payReceiver, '未知收款方') }}
                   </span>
                 </div>
                 <div v-else class="ledger-route">
@@ -177,6 +197,16 @@
         </section>
       </main>
     </div>
+    <RecordExportDialog
+      :open="exportDialogOpen"
+      dataset="payments"
+      title="转账与红包"
+      :account="selectedAccount || ''"
+      :query="keyword"
+      :type-options="paymentExportTypes"
+      :default-types="paymentExportDefaultTypes"
+      @close="exportDialogOpen = false"
+    />
   </div>
 </template>
 
@@ -198,15 +228,36 @@ const kindOptions = [
   { label: '转账', value: 'transfer', icon: 'fa-arrow-right-arrow-left' },
   { label: '红包', value: 'redpacket', icon: 'fa-envelope-open-text' },
 ]
+const statusOptions = [
+  { label: '全部状态', value: 'all' },
+  { label: '待收款', value: 'pending' },
+  { label: '已收款', value: 'received' },
+  { label: '已退还', value: 'returned' },
+  { label: '已过期', value: 'expired' },
+  { label: '未知状态', value: 'unknown' },
+]
 
 const keyword = ref('')
 const kindFilter = ref('all')
+const statusFilter = ref('all')
 const items = ref([])
 const total = ref(0)
 const hasMore = ref(false)
 const loading = ref(false)
 const error = ref('')
 const stats = ref({})
+const exportDialogOpen = ref(false)
+const paymentExportTypes = [
+  { value: 'received', label: '已收款', icon: 'fa-circle-check' },
+  { value: 'expired', label: '已过期', icon: 'fa-clock' },
+  { value: 'returned', label: '已退还', icon: 'fa-rotate-left' },
+  { value: 'redpacket', label: '红包', icon: 'fa-envelope-open-text' },
+]
+const paymentExportDefaultTypes = computed(() => {
+  if (kindFilter.value === 'redpacket') return ['redpacket']
+  if (['received', 'expired', 'returned'].includes(statusFilter.value)) return [statusFilter.value]
+  return []
+})
 const PAGE_SIZE = 80
 let requestId = 0
 let keywordTimer = null
@@ -287,6 +338,35 @@ const transferMemoText = (item) => {
   return value
 }
 
+const transferStatusText = (item) => {
+  const value = String(item?.transferStatus || item?.statusMessage?.transferStatus || '').trim()
+  if (value && value !== '转账' && value !== '发起转账') return value
+  const state = String(item?.transferState || '').trim()
+  if (state === 'returned') return '已退还'
+  if (state === 'received') return '已收款'
+  if (state === 'expired') return '已过期'
+  if (state === 'pending') return '待收款'
+  const paySubType = Number(item?.paySubType || 0)
+  if (paySubType === 4) return '已退还'
+  if (paySubType === 3) return '已收款'
+  if (paySubType === 2) return '待收款'
+  return '状态未记录'
+}
+
+const transferStatusTone = (item) => {
+  const state = String(item?.transferState || '').trim()
+  if (state) return state
+  if (Number(item?.paySubType) === 4) return 'returned'
+  if (Number(item?.paySubType) === 3) return 'received'
+  if (Number(item?.paySubType) === 2) return 'pending'
+  return 'unknown'
+}
+
+const selectKind = (value) => {
+  kindFilter.value = value
+  if (value === 'redpacket') statusFilter.value = 'all'
+}
+
 const chatUsername = (item) => String(item?.sessionName || item?.senderUserName || '').trim()
 
 const openChatByUsername = (username) => {
@@ -349,6 +429,7 @@ const loadItems = async (options = {}) => {
       account: selectedAccount.value,
       q: keyword.value || '',
       kind: kindFilter.value,
+      status: statusFilter.value,
       limit: PAGE_SIZE,
       offset: append ? items.value.length : 0,
     })
@@ -374,6 +455,13 @@ watch(keyword, () => {
 })
 
 watch(kindFilter, () => { void loadItems() })
+watch(statusFilter, (value) => {
+  if (value !== 'all' && kindFilter.value !== 'transfer') {
+    kindFilter.value = 'transfer'
+    return
+  }
+  void loadItems()
+})
 watch(() => selectedAccount.value, () => { void loadItems() })
 
 onMounted(async () => {
@@ -386,3 +474,46 @@ onBeforeUnmount(() => {
   if (keywordTimer) clearTimeout(keywordTimer)
 })
 </script>
+
+<style scoped>
+.ledger-transfer-status {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 4px;
+  color: var(--wx-text-muted);
+  background: var(--wx-muted-surface);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.ledger-transfer-status--received { color: #167548; background: #e9f8ef; }
+.ledger-transfer-status--returned { color: #8b5b35; background: #fbf1e8; }
+.ledger-transfer-status--expired { color: #6b7280; background: #f3f4f6; }
+.ledger-transfer-status--pending { color: #576b95; background: #eef1f6; }
+
+.payments-status-filter {
+  position: relative;
+  display: flex;
+  width: 210px;
+  height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding: 0 10px;
+  border: 1px solid var(--wx-line);
+  border-radius: 6px;
+  color: var(--wx-text-muted);
+  background: var(--wx-panel);
+}
+
+.payments-status-filter > i { flex: 0 0 auto; font-size: 11px; }
+.payments-status-filter > i:last-child { pointer-events: none; }
+.payments-status-filter select { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--wx-text-secondary); background: transparent; appearance: none; font-size: 12px; }
+.payments-status-filter.is-disabled { opacity: 0.5; }
+
+@media (max-width: 900px) {
+  .payments-status-filter { width: 100%; margin-left: 0; }
+}
+</style>

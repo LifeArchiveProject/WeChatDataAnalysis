@@ -31,6 +31,9 @@
                 <i class="fa-solid fa-xmark" aria-hidden="true"></i>
               </button>
             </label>
+            <button type="button" class="records-icon-button" title="导出视频号直播" aria-label="导出视频号直播" @click="exportDialogOpen = true">
+              <i class="fa-solid fa-file-export" aria-hidden="true"></i>
+            </button>
             <button
               type="button"
               class="records-icon-button"
@@ -151,6 +154,15 @@
         </section>
       </main>
     </div>
+    <RecordExportDialog
+      :open="exportDialogOpen"
+      dataset="finder"
+      title="视频号直播"
+      :account="selectedAccount || ''"
+      :query="keyword"
+      :type-options="finderExportTypes"
+      @close="exportDialogOpen = false"
+    />
   </div>
 </template>
 
@@ -174,6 +186,10 @@ const openableTotal = ref(0)
 const hasMore = ref(false)
 const loading = ref(false)
 const error = ref('')
+const exportDialogOpen = ref(false)
+const finderExportTypes = [
+  { value: 'live', label: '直播记录', icon: 'fa-tower-broadcast' },
+]
 const PAGE_SIZE = 80
 let requestId = 0
 let keywordTimer = null

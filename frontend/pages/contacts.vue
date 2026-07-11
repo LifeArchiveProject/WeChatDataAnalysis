@@ -109,8 +109,19 @@
                 <div>
                   <div class="text-[14px] font-medium text-[#111827]">好友验证</div>
                 </div>
-                <div class="rounded-full bg-[#f0fdf4] px-2.5 py-1 text-[12px] font-semibold text-[#047857]">
-                  {{ friendVerificationTotal }}
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    class="flex h-8 w-8 items-center justify-center rounded-md border border-[#e5e7eb] bg-white text-[#4b5563] transition hover:border-[#86efac] hover:bg-[#f0fdf4] hover:text-[#047857]"
+                    title="导出好友验证"
+                    aria-label="导出好友验证"
+                    @click="friendVerificationExportOpen = true"
+                  >
+                    <i class="fa-solid fa-file-export" aria-hidden="true"></i>
+                  </button>
+                  <div class="rounded-full bg-[#f0fdf4] px-2.5 py-1 text-[12px] font-semibold text-[#047857]">
+                    {{ friendVerificationTotal }}
+                  </div>
                 </div>
               </div>
 
@@ -278,6 +289,15 @@
         </div>
       </div>
     </div>
+    <RecordExportDialog
+      :open="friendVerificationExportOpen"
+      dataset="friend-verifications"
+      title="好友验证"
+      :account="selectedAccount || ''"
+      :query="friendVerificationKeyword"
+      :type-options="friendVerificationExportTypes"
+      @close="friendVerificationExportOpen = false"
+    />
   </div>
 </template>
 
@@ -335,6 +355,11 @@ const exportOk = ref(false)
 const friendVerificationKeyword = ref('')
 const friendVerifications = ref([])
 const friendVerificationTotal = ref(0)
+const friendVerificationExportOpen = ref(false)
+const friendVerificationExportTypes = [
+  { value: 'incoming', label: '对方发起', icon: 'fa-arrow-down' },
+  { value: 'outgoing', label: '我发起', icon: 'fa-arrow-up' },
+]
 const friendVerificationHasMore = ref(false)
 const friendVerificationLoading = ref(false)
 const friendVerificationError = ref('')

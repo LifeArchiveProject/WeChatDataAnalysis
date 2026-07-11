@@ -860,6 +860,27 @@ def _format_amount_text(value: Any) -> str:
     return text
 
 
+def _transfer_table_state(item: dict[str, Any], *, now_ts: int | None = None) -> tuple[str, str]:
+    pay_sub_type = _safe_int(item.get("paySubType"), 0)
+    if pay_sub_type == 4:
+        return "returned", "已退还"
+    if pay_sub_type == 3:
+        return "received", "已收款"
+    if pay_sub_type == 2:
+        current = int(now_ts if now_ts is not None else datetime.now().timestamp())
+        invalid_time = _safe_int(item.get("invalidTime"), 0)
+        if invalid_time > 0 and invalid_time <= current:
+            return "expired", "已过期"
+        return "pending", "待收款"
+    return "unknown", "状态未记录"
+
+
+def _apply_transfer_table_state(item: dict[str, Any], *, now_ts: int | None = None) -> None:
+    state, label = _transfer_table_state(item, now_ts=now_ts)
+    item["transferState"] = state
+    item["transferStatus"] = label
+
+
 def _summarize_message_row(row: sqlite3.Row) -> dict[str, Any]:
     local_type = _safe_int(row["local_type"], 0)
     base_type = _message_base_type(local_type)
@@ -1132,7 +1153,7 @@ def _lookup_messages_for_requests(
 
 def _attach_payment_message_details(account_dir: Path, items: list[dict[str, Any]], *, source: str = "decrypted") -> None:
     requests: list[dict[str, Any]] = []
-    request_targets: list[tuple[dict[str, Any], str]] = []
+    request_targets: list[tuple[dict[str, Any], str, str]] = []
     for item in items:
         session_name = _text(item.get("sessionName"))
         if not session_name:
@@ -1142,34 +1163,53 @@ def _attach_payment_message_details(account_dir: Path, items: list[dict[str, Any
             candidates = [_safe_int(item.get("messageServerId"), 0), _safe_int(item.get("secondMessageServerId"), 0)]
         else:
             candidates = [_safe_int(item.get("messageServerId"), 0)]
-        for server_id in candidates:
+        for index, server_id in enumerate(candidates):
             if server_id <= 0:
                 continue
             key = _message_lookup_key(session_name, server_id=server_id)
             requests.append({"username": session_name, "serverId": server_id, "localId": 0})
-            request_targets.append((item, key))
+            request_targets.append((item, key, "initial" if index == 0 else "status"))
 
     details = _lookup_messages_for_requests(account_dir, requests, source=source)
-    for item, key in request_targets:
-        if "message" in item:
-            continue
+    for item, key, role in request_targets:
         detail = details.get(key)
         if not detail:
             if item.get("kind") == "redpacket":
                 item["amountUnavailableReason"] = "redEnvelopeTable 未包含金额字段，且未在消息库中找到对应红包 XML。"
             continue
-        item["message"] = detail
-        item["messageSummary"] = _text(detail.get("content"), max_len=180)
+        if role == "status":
+            item["statusMessage"] = detail
+        else:
+            item["initialMessage"] = detail
+            item["message"] = detail
+            item["messageSummary"] = _text(detail.get("content"), max_len=180)
         amount = _format_amount_text(detail.get("amount"))
-        if amount:
+        if amount and not item.get("amount"):
             item["amount"] = amount
             item["amountText"] = amount
         elif item.get("kind") == "redpacket":
             item["amountUnavailableReason"] = "红包金额未保存在 redEnvelopeTable/native_url/消息 XML 中。"
-        if detail.get("transferStatus"):
+        if role == "status" and detail.get("transferStatus"):
             item["transferStatus"] = detail.get("transferStatus")
-        if detail.get("transferMemo"):
+        elif role == "initial" and detail.get("transferStatus") and not item.get("transferStatus"):
+            item["transferStatus"] = detail.get("transferStatus")
+        if role == "initial" and detail.get("transferMemo"):
             item["transferMemo"] = detail.get("transferMemo")
+
+    now_ts = int(datetime.now().timestamp())
+    for item in items:
+        if item.get("kind") != "transfer":
+            continue
+        _apply_transfer_table_state(item, now_ts=now_ts)
+        pay_sub_type = _safe_int(item.get("paySubType"), 0)
+        status_message = item.get("statusMessage") if isinstance(item.get("statusMessage"), dict) else {}
+        message_status = _text(status_message.get("transferStatus"))
+        if pay_sub_type == 4 or "退" in message_status:
+            item["transferState"] = "returned"
+            item["transferStatus"] = message_status or "已退还"
+        elif pay_sub_type == 3 or "收款" in message_status:
+            item["transferState"] = "received"
+            item["transferStatus"] = message_status or "已收款"
 
 
 def _attach_revoke_message_details(account_dir: Path, items: list[dict[str, Any]], *, source: str = "decrypted") -> None:
@@ -1536,10 +1576,13 @@ def list_payment_records(
     account: Optional[str] = None,
     q: str = "",
     kind: str = Query("all", pattern="^(all|transfer|redpacket)$"),
+    status: str = Query("all", pattern="^(all|pending|received|returned|expired|unknown)$"),
     source: str = Query("auto", pattern="^(auto|realtime|decrypted)$"),
     limit: int = Query(120, ge=1, le=_MAX_LIMIT),
     offset: int = Query(0, ge=0),
 ):
+    if not isinstance(status, str) or status not in {"all", "pending", "received", "returned", "expired", "unknown"}:
+        status = "all"
     ctx, db_path = _general_context(account)
     account_name = ctx.name
     limit = _clamp_limit(limit, 120)
@@ -1633,6 +1676,10 @@ def list_payment_records(
             _attach_contact(item, contact_map, "payReceiver", "receiverContact")
         else:
             _attach_contact(item, contact_map, "senderUserName", "senderContact")
+    now_ts = int(datetime.now().timestamp())
+    for item in items:
+        if item.get("kind") == "transfer":
+            _apply_transfer_table_state(item, now_ts=now_ts)
     items = [
         item for item in items
         if _contains_keyword(
@@ -1645,6 +1692,11 @@ def list_payment_records(
             ],
         )
     ]
+    if status != "all":
+        items = [
+            item for item in items
+            if item.get("kind") == "transfer" and item.get("transferState") == status
+        ]
     items.sort(key=lambda x: (_safe_int(x.get("sortTime"), 0), _safe_int(x.get("messageServerId"), 0)), reverse=True)
     sliced, has_more = _page(items, limit=limit, offset=offset)
     _attach_payment_message_details(ctx.account_dir, sliced, source=meta.get("dataSource", "decrypted"))
