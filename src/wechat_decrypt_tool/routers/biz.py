@@ -57,6 +57,18 @@ def _normalize_biz_source(value: Optional[str]) -> str:
     raise HTTPException(status_code=400, detail="Invalid source, use 'auto', 'decrypted' or 'realtime'.")
 
 
+def _normalize_pagination(limit: Any, offset: Any) -> tuple[int, int]:
+    try:
+        normalized_limit = int(limit or 50)
+    except Exception:
+        normalized_limit = 50
+    try:
+        normalized_offset = int(offset or 0)
+    except Exception:
+        normalized_offset = 0
+    return max(1, min(normalized_limit, 500)), max(0, normalized_offset)
+
+
 def _is_biz_realtime_available(account_dir: Path) -> bool:
     try:
         info = WCDB_REALTIME.get_status(account_dir)
@@ -501,6 +513,7 @@ def get_biz_messages(
 ):
     if username == "gh_3dfda90e39d6":
         raise HTTPException(status_code=400, detail="微信支付记录请请求 /api/biz/pay_records 接口")
+    limit, offset = _normalize_pagination(limit, offset)
 
     account_dir = _resolve_account_dir(account)
     source_requested = _normalize_biz_source(source)
@@ -534,10 +547,19 @@ def get_biz_messages(
             rt_conn = None
             target_db = _find_biz_message_db_for_table(account_dir, table_name, source=source_norm)
         if not target_db:
-            return {"status": "success", "source": source_norm, "data": [], "message": f"未找到 {username} 的消息历史"}
+            return {
+                "status": "success",
+                "account": account_dir.name,
+                "source": source_norm,
+                "data": [],
+                "scanned": 0,
+                "hasMore": False,
+                "message": f"未找到 {username} 的消息历史",
+            }
 
     # ... (后续数据库查询逻辑保持不变) ...
     messages = []
+    scanned = 0
     try:
         if source_norm == "realtime" and rt_conn is not None:
             query = (
@@ -569,6 +591,7 @@ def get_biz_messages(
             iter_rows = cursor.execute(query, (limit, offset)).fetchall()
             conn.close()
 
+        scanned = len(iter_rows)
         for local_id, c_time, content in iter_rows:
             raw_xml = extract_xml_from_db_content(content, username, local_id)
             if not raw_xml:
@@ -581,9 +604,16 @@ def get_biz_messages(
                 messages.append(struct_data)
     except Exception as e:
         logger.error(f"[biz] 数据库查询出错: {e}")
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "account": account_dir.name, "source": source_norm, "message": str(e)}
 
-    return {"status": "success", "source": source_norm, "data": messages}
+    return {
+        "status": "success",
+        "account": account_dir.name,
+        "source": source_norm,
+        "data": messages,
+        "scanned": scanned,
+        "hasMore": scanned >= limit,
+    }
 
 
 # 接口 3：返回微信支付的 json 消息 (已修复表名比对 bug)
@@ -595,6 +625,7 @@ def get_wechat_pay_records(
     source: Optional[str] = None,
 ):
     username = "gh_3dfda90e39d6"
+    limit, offset = _normalize_pagination(limit, offset)
     account_dir = _resolve_account_dir(account)
     source_requested = _normalize_biz_source(source)
     source_norm = _resolve_biz_source_for_account(source_requested, account_dir)
@@ -627,9 +658,18 @@ def get_wechat_pay_records(
             rt_conn = None
             target_db = _find_biz_message_db_for_table(account_dir, table_name, source=source_norm)
         if not target_db:
-            return {"status": "success", "source": source_norm, "data": [], "message": "未找到微信支付的消息历史"}
+            return {
+                "status": "success",
+                "account": account_dir.name,
+                "source": source_norm,
+                "data": [],
+                "scanned": 0,
+                "hasMore": False,
+                "message": "未找到微信支付的消息历史",
+            }
 
     messages = []
+    scanned = 0
     try:
         if source_norm == "realtime" and rt_conn is not None:
             query = (
@@ -661,6 +701,7 @@ def get_wechat_pay_records(
             iter_rows = cursor.execute(query, (limit, offset)).fetchall()
             conn.close()
 
+        scanned = len(iter_rows)
         for local_id, c_time, content in iter_rows:
             raw_xml = extract_xml_from_db_content(content, username, local_id)
             if not raw_xml:
@@ -679,6 +720,13 @@ def get_wechat_pay_records(
                 messages.append(parsed_data)
     except Exception as e:
         logger.error(f"[biz] 查询微信支付数据库出错: {e}")
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "account": account_dir.name, "source": source_norm, "message": str(e)}
 
-    return {"status": "success", "source": source_norm, "data": messages}
+    return {
+        "status": "success",
+        "account": account_dir.name,
+        "source": source_norm,
+        "data": messages,
+        "scanned": scanned,
+        "hasMore": scanned >= limit,
+    }

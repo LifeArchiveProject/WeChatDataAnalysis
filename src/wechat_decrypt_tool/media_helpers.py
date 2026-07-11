@@ -46,7 +46,7 @@ _MEDIA_INDEX_VIDEO_STREAM_EXTS = {
 }
 _MEDIA_INDEX_VIDEO_INDEX_EXTS = _MEDIA_INDEX_VIDEO_STREAM_EXTS | {".dat"}
 _MEDIA_INDEX_STRIP_SUFFIX_RE = re.compile(r"(?i)(?:_h|_t|_thumb)$")
-_MEDIA_INDEX_DB_VERSION = 2
+_MEDIA_INDEX_DB_VERSION = 4
 
 
 # 运行时输出目录（桌面端可通过 WECHAT_TOOL_DATA_DIR 指向可写目录）
@@ -2048,6 +2048,8 @@ class MediaPathIndex:
             targets.append((f"file:{directory.name}", directory, 2))
         for directory in self._iter_cache_scan_dirs():
             targets.append((f"cache:{directory.name}", directory, 3))
+        for directory in self._iter_favorite_scan_dirs():
+            targets.append((f"favorite:{directory.name}", directory, 3))
         return targets
 
     def _snapshot_path(self, path: Path, max_depth: int) -> list[tuple[str, int, int, int]]:
@@ -2356,6 +2358,61 @@ class MediaPathIndex:
         if self._wants("emoji") or self._wants("video_thumb"):
             for directory in self._iter_cache_scan_dirs():
                 self._scan_cache_dir(directory)
+
+        self._scan_favorite_media_dirs()
+
+    def _iter_favorite_scan_dirs(self) -> list[Path]:
+        result: list[Path] = []
+        for root in self._roots:
+            candidate = root / "business" / "favorite"
+            try:
+                if candidate.exists() and candidate.is_dir() and candidate not in result:
+                    result.append(candidate)
+            except Exception:
+                continue
+        return result
+
+    def _scan_favorite_media_dirs(self) -> None:
+        """Index encrypted favorite assets stored under opaque filenames."""
+        for favorite_root in self._iter_favorite_scan_dirs():
+            for bucket_name in ("data", "mid", "thumb"):
+                directory = favorite_root / bucket_name
+                try:
+                    if not directory.exists() or not directory.is_dir():
+                        continue
+                except Exception:
+                    continue
+
+                for path in _iter_files_under(directory):
+                    try:
+                        if not path.is_file():
+                            continue
+                        self.stats["scannedFiles"] += 1
+                        payload, _media_type = _read_and_maybe_decrypt_media(
+                            path,
+                            account_dir=self.account_dir,
+                            weixin_root=self.wxid_dir,
+                        )
+                    except Exception:
+                        continue
+                    if not payload:
+                        continue
+
+                    payload_md5 = hashlib.md5(payload).hexdigest()
+                    looks_like_video = len(payload) >= 8 and payload[4:8] == b"ftyp"
+                    image_type = _detect_image_media_type(payload[:32])
+                    if looks_like_video:
+                        if self._wants("video"):
+                            self._put_md5("video", payload_md5, path)
+                    elif image_type.startswith("image/"):
+                        if self._wants("image"):
+                            self._put_md5("image", payload_md5, path)
+                        if self._wants("emoji"):
+                            self._put_md5("emoji", payload_md5, path)
+                        if self._wants("video_thumb"):
+                            self._put_md5("video_thumb", payload_md5, path)
+                    elif bucket_name == "data" and self._wants("file"):
+                        self._put_md5("file", payload_md5, path)
 
     def _iter_attach_scan_dirs(self) -> list[tuple[str, Path]]:
         result: list[tuple[str, Path]] = []
@@ -3322,6 +3379,7 @@ def _read_and_maybe_decrypt_media(
                 mt1 = _detect_image_media_type(out[:32])
                 if mt1 != "application/octet-stream":
                     return out, mt1
+                return out, "application/octet-stream"
             elif version == 2 and xor_key is not None and aes_key16:
                 out = _decrypt_wechat_dat_v4(data, xor_key, aes_key16)
                 try:
@@ -3340,6 +3398,7 @@ def _read_and_maybe_decrypt_media(
                 mt2b = _detect_image_media_type(out[:32])
                 if mt2b != "application/octet-stream":
                     return out, mt2b
+                return out, "application/octet-stream"
         except Exception:
             pass
 

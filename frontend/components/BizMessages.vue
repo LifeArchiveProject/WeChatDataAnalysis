@@ -64,8 +64,18 @@
 
     <div class="flex-1 flex flex-col min-h-0 min-w-0" :class="isDark ? 'bg-[#121212]' : 'bg-[#F5F5F5]'">
       <div v-if="selectedBizAccount" class="flex-1 flex flex-col min-h-0 relative">
-        <div class="h-14 border-b flex items-center px-5 shrink-0 z-10" :class="isDark ? 'bg-[#121212] border-[#333]' : 'bg-[#F5F5F5] border-gray-200'">
-          <h2 class="text-base" :class="isDark ? 'text-gray-100' : 'text-gray-900'">{{ selectedBizAccount.name }}</h2>
+        <div class="h-14 border-b flex items-center justify-between gap-3 px-5 shrink-0 z-10" :class="isDark ? 'bg-[#121212] border-[#333]' : 'bg-[#F5F5F5] border-gray-200'">
+          <h2 class="min-w-0 truncate text-base" :class="isDark ? 'text-gray-100' : 'text-gray-900'">{{ selectedBizAccount.name }}</h2>
+          <button
+            type="button"
+            class="biz-export-button"
+            :class="isDark ? 'text-gray-400 hover:bg-[#2a2a2a] hover:text-[#03C160]' : 'text-gray-500 hover:bg-[#e9f8ef] hover:text-[#058f48]'"
+            :title="`导出${selectedBizAccount.name || selectedBizAccount.username}的全部记录`"
+            :aria-label="`导出${selectedBizAccount.name || selectedBizAccount.username}的全部记录`"
+            @click="exportDialogOpen = true"
+          >
+            <i class="fa-solid fa-file-export" aria-hidden="true"></i>
+          </button>
         </div>
 
         <div class="flex-1 overflow-y-auto px-4 py-6 flex flex-col-reverse" @scroll="handleScroll" ref="messageListRef">
@@ -140,6 +150,16 @@
         </div>
       </div>
     </div>
+
+    <RecordExportDialog
+      :open="exportDialogOpen"
+      dataset="biz"
+      :title="selectedBizAccount?.name || selectedBizAccount?.username || '服务号'"
+      :account="selectedDbAccount || ''"
+      :username="selectedBizAccount?.username || ''"
+      :subject-name="selectedBizAccount?.name || selectedBizAccount?.username || ''"
+      @close="exportDialogOpen = false"
+    />
   </div>
 </template>
 
@@ -158,6 +178,7 @@ const accounts = ref([])
 const loadingAccounts = ref(false)
 const searchQuery = ref('')
 const selectedBizAccount = ref(null)
+const exportDialogOpen = ref(false)
 
 const themeStore = useThemeStore()
 const chatAccountsStore = useChatAccountsStore()
@@ -192,8 +213,8 @@ const resetMessagesState = () => {
   hasMore.value = true
 }
 
-const fetchAccounts = async ({ preserveSelection = true } = {}) => {
-  loadingAccounts.value = true
+const fetchAccounts = async ({ preserveSelection = true, silent = false } = {}) => {
+  if (!silent) loadingAccounts.value = true
   const previousUsername = preserveSelection ? String(selectedBizAccount.value?.username || '').trim() : ''
   try {
     const res = await api.listBizAccounts({ account: getCurrentAccountParam(), source: DEFAULT_BIZ_SOURCE })
@@ -206,11 +227,13 @@ const fetchAccounts = async ({ preserveSelection = true } = {}) => {
       selectedBizAccount.value = null
     }
   } catch (err) {
-    accounts.value = []
-    selectedBizAccount.value = null
+    if (!silent) {
+      accounts.value = []
+      selectedBizAccount.value = null
+    }
     console.error('获取服务号失败:', err)
   } finally {
-    loadingAccounts.value = false
+    if (!silent) loadingAccounts.value = false
   }
 }
 
@@ -227,6 +250,7 @@ const filteredAccounts = computed(() => {
 // 点击选择服务号
 const selectAccount = async (account) => {
   if (selectedBizAccount.value?.username === account.username) return
+  exportDialogOpen.value = false
   selectedBizAccount.value = account
 
   // 重置消息状态
@@ -262,8 +286,10 @@ const loadMessages = async () => {
         hasMore.value = false
       }
       // 追加数据
-      messages.value.push(...res.data)
-      offset.value += limit
+      const known = new Set(messages.value.map(message => `${message.local_id}:${message.create_time}`))
+      messages.value.push(...res.data.filter(message => !known.has(`${message.local_id}:${message.create_time}`)))
+      offset.value += Number(res.scanned ?? limit)
+      if (typeof res.hasMore === 'boolean') hasMore.value = res.hasMore
     }
   } catch (err) {
     console.error('加载消息失败:', err)
@@ -272,28 +298,50 @@ const loadMessages = async () => {
   }
 }
 
-const reloadSelectedMessages = async () => {
-  if (!selectedBizAccount.value) return
-  resetMessagesState()
-  await loadMessages()
+const refreshSelectedMessagesInBackground = async () => {
+  const username = String(selectedBizAccount.value?.username || '').trim()
+  if (!username) return
+  const requestedLimit = Math.min(500, Math.max(limit, messages.value.length || 0))
+  const params = {
+    account: getCurrentAccountParam(),
+    username,
+    offset: 0,
+    limit: requestedLimit,
+    source: DEFAULT_BIZ_SOURCE,
+  }
+  const res = username === 'gh_3dfda90e39d6'
+    ? await api.listBizPayRecords(params)
+    : await api.listBizMessages(params)
+  if (String(selectedBizAccount.value?.username || '').trim() !== username) return
+
+  const next = Array.isArray(res?.data) ? res.data : []
+  const byKey = new Map()
+  for (const message of [...next, ...messages.value]) {
+    const key = `${message?.local_id || 0}:${message?.create_time || 0}`
+    if (!byKey.has(key)) byKey.set(key, message)
+  }
+  const merged = [...byKey.values()].sort((left, right) => {
+    return Number(right?.create_time || 0) - Number(left?.create_time || 0)
+      || Number(right?.local_id || 0) - Number(left?.local_id || 0)
+  })
+  const previousSignature = messages.value.map(message => `${message?.local_id || 0}:${message?.create_time || 0}`).join('|')
+  const nextSignature = merged.map(message => `${message?.local_id || 0}:${message?.create_time || 0}`).join('|')
+  if (nextSignature !== previousSignature) messages.value = merged
+  if (typeof res?.hasMore === 'boolean' && messages.value.length <= requestedLimit) {
+    hasMore.value = res.hasMore
+  }
 }
 
-const syncAllBizRealtime = async ({ forceReload = false } = {}) => {
+const syncAllBizRealtime = async () => {
   // 服务号页面现在默认直接读取 WCDB realtime（source=auto），不再依赖先同步到本地 output 库。
   // 因此收到 db_storage 变化后直接刷新服务号列表和当前服务号消息，避免 sync_all 没有插入本地库时漏刷。
   try {
-    await fetchAccounts({ preserveSelection: true })
+    await fetchAccounts({ preserveSelection: true, silent: true })
     if (selectedBizAccount.value?.username) {
-      await reloadSelectedMessages()
-    } else if (forceReload) {
-      resetMessagesState()
+      await refreshSelectedMessagesInBackground()
     }
   } catch (err) {
     console.error('实时刷新服务号失败:', err)
-    if (forceReload) {
-      await fetchAccounts({ preserveSelection: true })
-      await reloadSelectedMessages()
-    }
   }
 }
 
@@ -337,9 +385,6 @@ watch(selectedDbAccount, async (next, prev) => {
     return
   }
   await fetchAccounts({ preserveSelection: false })
-  if (realtimeEnabled.value) {
-    await syncAllBizRealtime({ forceReload: true })
-  }
 })
 
 watch(changeSeq, (next, prev) => {
@@ -348,22 +393,14 @@ watch(changeSeq, (next, prev) => {
   queueRealtimeBizRefresh()
 })
 
-watch(realtimeEnabled, async (enabled, wasEnabled) => {
-  if (enabled && !wasEnabled) {
-    await syncAllBizRealtime({ forceReload: true })
-  }
-})
-
 onMounted(async () => {
   await chatAccountsStore.ensureLoaded()
   await realtimeStore.enable({ silent: true })
   await fetchAccounts({ preserveSelection: false })
-  if (realtimeEnabled.value) {
-    await syncAllBizRealtime({ forceReload: true })
-  }
 })
 
 onUnmounted(() => {
+  exportDialogOpen.value = false
   void realtimeStore.disable({ silent: true })
 })
 </script>
@@ -379,5 +416,23 @@ onUnmounted(() => {
 .overflow-y-auto::-webkit-scrollbar-thumb {
   background-color: rgba(0,0,0,0.1);
   border-radius: 10px;
+}
+
+.biz-export-button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  transition: color 150ms ease, background-color 150ms ease, transform 150ms ease;
+}
+
+.biz-export-button:active {
+  transform: translateY(1px);
 }
 </style>

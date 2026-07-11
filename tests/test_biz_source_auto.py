@@ -127,7 +127,21 @@ class TestBizSourceAuto(unittest.TestCase):
 
         self.assertEqual(resp.get("status"), "success")
         self.assertEqual(resp.get("source"), "realtime")
+        self.assertEqual(resp.get("scanned"), 1)
+        self.assertFalse(resp.get("hasMore"))
         self.assertEqual((resp.get("data") or [])[0].get("title"), "实时服务号文章")
+
+    def test_biz_page_refreshes_in_the_background_and_exposes_scoped_export(self):
+        source = (ROOT / "frontend" / "components" / "BizMessages.vue").read_text(encoding="utf-8")
+
+        self.assertIn('dataset="biz"', source)
+        self.assertIn('class="fa-solid fa-file-export"', source)
+        self.assertIn(":username=\"selectedBizAccount?.username || ''\"", source)
+        self.assertIn("refreshSelectedMessagesInBackground", source)
+        self.assertIn("silent: true", source)
+        realtime_block = source.split("const syncAllBizRealtime", 1)[1].split("const queueRealtimeBizRefresh", 1)[0]
+        self.assertNotIn("resetMessagesState()", realtime_block)
+        self.assertNotIn("loadingAccounts.value = true", realtime_block)
 
 
 if __name__ == "__main__":

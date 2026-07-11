@@ -111,6 +111,8 @@ const props = defineProps({
   dataset: { type: String, required: true },
   title: { type: String, required: true },
   account: { type: String, default: '' },
+  username: { type: String, default: '' },
+  subjectName: { type: String, default: '' },
   query: { type: String, default: '' },
   typeOptions: { type: Array, default: () => [] },
   defaultTypes: { type: Array, default: () => [] },
@@ -123,6 +125,7 @@ const formatOptions = [
   { value: 'html', label: 'HTML' },
   { value: 'json', label: 'JSON' },
   { value: 'txt', label: 'TXT' },
+  { value: 'excel', label: 'Excel' },
 ]
 
 const format = ref('html')
@@ -209,6 +212,8 @@ const startExport = async () => {
     const result = await api.exportRecords({
       account: props.account,
       dataset: props.dataset,
+      username: props.username,
+      subject_name: props.subjectName,
       format: format.value,
       types: selectedTypes.value,
       query: props.query || '',
@@ -299,8 +304,9 @@ watch(normalizedTypeOptions, () => {
 
 .record-export-segments {
   display: grid;
-  height: 38px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  height: auto;
+  min-height: 38px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid var(--wx-line, #e5e7eb);
   border-radius: 6px;
@@ -308,6 +314,7 @@ watch(normalizedTypeOptions, () => {
 }
 
 .record-export-segments button {
+  min-height: 38px;
   border: 0;
   border-right: 1px solid var(--wx-line, #e5e7eb);
   color: var(--wx-text-secondary, #4b5563);
@@ -389,6 +396,10 @@ watch(normalizedTypeOptions, () => {
   .record-export-backdrop { align-items: end; padding: 0; }
   .record-export-dialog { width: 100%; max-height: 92vh; border-radius: 8px 8px 0 0; }
   .record-export-types { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .record-export-segments { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .record-export-segments button { border-bottom: 1px solid var(--wx-line, #e5e7eb); }
+  .record-export-segments button:nth-child(2n) { border-right: 0; }
+  .record-export-segments button:nth-last-child(-n + 2) { border-bottom: 0; }
   .record-export-dialog__body { max-height: calc(92vh - 132px); }
 }
 </style>
