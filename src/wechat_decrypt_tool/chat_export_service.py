@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import copy
 import functools
 import base64
 import hashlib
 import heapq
 import html
+import importlib.machinery
+import importlib.util
 import ipaddress
 import json
 import os
 import re
 import sqlite3
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -86,7 +90,7 @@ from .wcdb_realtime import (
 
 logger = get_logger(__name__)
 
-ExportFormat = Literal["json", "txt", "html"]
+ExportFormat = Literal["json", "txt", "html", "excel"]
 ExportScope = Literal["selected", "all", "groups", "singles"]
 ChatSource = Literal["auto", "decrypted", "realtime"]
 ExportStatus = Literal["queued", "running", "done", "error", "cancelled"]
@@ -291,10 +295,40 @@ def _load_ui_entry_css(ui_public_dir: Path) -> str:
 
 _VUE_SCOPED_ATTR_RE = re.compile(r"\[data-v-[0-9a-f]{8}\]", flags=re.IGNORECASE)
 _CHAT_HISTORY_MD5_TAG_RE = re.compile(
-    r"(?i)<(?:fullmd5|thumbfullmd5|md5|emoticonmd5|emojimd5|cdnthumbmd5)>([0-9a-f]{32})<"
+    r"(?i)<(?P<tag>fullmd5|thumbfullmd5|md5|emoticonmd5|emojimd5|cdnthumbmd5)>(?P<md5>[0-9a-f]{32})<"
 )
+_CHAT_HISTORY_DATAITEM_RE = re.compile(r"(?is)<dataitem\b(?P<attrs>[^>]*)>(?P<body>.*?)</dataitem>")
+_CHAT_HISTORY_DATA_TYPE_RE = re.compile(r"(?i)\bdatatype\s*=\s*['\"]?(?P<type>\d+)")
+_CHAT_HISTORY_DATA_TYPE_TAG_RE = re.compile(r"(?i)<datatype>\s*(?P<type>\d+)\s*<")
 _CHAT_HISTORY_URL_TAG_RE = re.compile(r"(?i)<(?:sourceheadurl|cdnurlstring|encrypturlstring|externurl)>(https?://[^<\s]+)<")
 _CHAT_HISTORY_SERVER_ID_TAG_RE = re.compile(r"(?i)<fromnewmsgid>\s*(\d+)\s*<")
+
+
+def _iter_chat_history_media_refs(record_item: str) -> list[tuple[str, str]]:
+    """Return recordItem media hashes with a type hint when the item defines one."""
+
+    raw = str(record_item or "")
+    refs: list[tuple[str, str]] = []
+    handled: set[str] = set()
+    for item_match in _CHAT_HISTORY_DATAITEM_RE.finditer(raw):
+        attrs = str(item_match.group("attrs") or "")
+        body = str(item_match.group("body") or "")
+        type_match = _CHAT_HISTORY_DATA_TYPE_RE.search(attrs) or _CHAT_HISTORY_DATA_TYPE_TAG_RE.search(body)
+        if not type_match or str(type_match.group("type") or "") != "4":
+            continue
+        for md5_match in _CHAT_HISTORY_MD5_TAG_RE.finditer(body):
+            md5 = str(md5_match.group("md5") or "").lower()
+            tag = str(md5_match.group("tag") or "").lower()
+            if not md5:
+                continue
+            refs.append((md5, "video_thumb" if "thumb" in tag else "video"))
+            handled.add(md5)
+
+    for md5_match in _CHAT_HISTORY_MD5_TAG_RE.finditer(raw):
+        md5 = str(md5_match.group("md5") or "").lower()
+        if md5 and md5 not in handled:
+            refs.append((md5, ""))
+    return refs
 
 
 def _strip_vue_scoped_attrs(css: str) -> str:
@@ -3832,6 +3866,69 @@ def _write_conversation_json(
     return exported
 
 
+def _write_conversation_excel(**kwargs: Any) -> int:
+    """Write an Excel view from the normalized JSON conversation payload.
+
+    The JSON writer provides the normalized temporary payload, while the workbook
+    is the only conversation data file added to an Excel archive.
+    """
+    zf = kwargs["zf"]
+    conv_dir = str(kwargs["conv_dir"])
+
+    def write_workbook(json_path: Path) -> None:
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+        messages = payload.get("messages") if isinstance(payload, dict) else []
+        rows: list[list[str]] = []
+        for index, message_raw in enumerate(messages if isinstance(messages, list) else [], start=1):
+            message = message_raw if isinstance(message_raw, dict) else {"value": message_raw}
+            content = str(
+                message.get("content")
+                or message.get("title")
+                or message.get("description")
+                or message.get("fileName")
+                or ""
+            ).strip()
+            if not content:
+                content = json.dumps(message, ensure_ascii=False, default=str, sort_keys=True)
+            rows.append(
+                [
+                    str(index),
+                    str(message.get("createTimeText") or message.get("createTime") or message.get("timestamp") or ""),
+                    str(message.get("senderDisplayName") or message.get("senderUsername") or ""),
+                    str(message.get("renderType") or message.get("type") or ""),
+                    content,
+                    str(message.get("localId") or ""),
+                    str(message.get("serverId") or ""),
+                ]
+            )
+        conversation = payload.get("conversation") if isinstance(payload, dict) else {}
+        filters = payload.get("filters") if isinstance(payload, dict) else {}
+        workbook = build_xlsx_workbook(
+            [
+                ("消息", ["序号", "时间", "发送者", "消息类型", "内容", "本地 ID", "服务 ID"], rows),
+                (
+                    "会话信息",
+                    ["字段", "值"],
+                    [
+                        ["账号", payload.get("account", "") if isinstance(payload, dict) else ""],
+                        ["会话", conversation.get("displayName", "") if isinstance(conversation, dict) else ""],
+                        ["用户名", conversation.get("username", "") if isinstance(conversation, dict) else ""],
+                        ["是否群聊", conversation.get("isGroup", "") if isinstance(conversation, dict) else ""],
+                        ["导出时间", payload.get("exportedAt", "") if isinstance(payload, dict) else ""],
+                        ["筛选条件", json.dumps(filters, ensure_ascii=False, default=str) if isinstance(filters, dict) else ""],
+                    ],
+                ),
+            ]
+        )
+        zf.writestr(f"{conv_dir}/messages.xlsx", workbook)
+
+    return _write_conversation_json(
+        **kwargs,
+        after_payload_written=write_workbook,
+        include_archive_payload=False,
+    )
+
+
 def _write_conversation_txt(
     *,
     zf: zipfile.ZipFile,
@@ -3862,6 +3959,7 @@ def _write_conversation_txt(
     media_index: Optional[MediaPathIndex],
     job: ExportJob,
     lock: threading.Lock,
+    prepared_messages: Optional[list[dict[str, Any]]] = None,
 ) -> int:
     arcname = f"{conv_dir}/messages.txt"
     exported = 0
@@ -3947,7 +4045,7 @@ def _write_conversation_txt(
             sender_alias_map: dict[str, int] = {}
             scanned = 0
             prev_ts = 0
-            for row in _iter_rows_for_conversation(
+            source_messages: Iterable[Any] = prepared_messages if prepared_messages is not None else _iter_rows_for_conversation(
                 account_dir=account_dir,
                 conv_username=conv_username,
                 start_time=start_time,
@@ -3955,7 +4053,8 @@ def _write_conversation_txt(
                 local_types=local_types,
                 source=source,
                 rt_conn=rt_conn,
-            ):
+            )
+            for source_message in source_messages:
                 scanned += 1
                 _raise_if_job_cancelled(
                     job,
@@ -3973,42 +4072,47 @@ def _write_conversation_txt(
                     scanned=scanned,
                     exported=exported,
                 )
-                sender_alias = ""
-                if conv_is_group and row.raw_text and (not row.raw_text.startswith("<")) and (not row.raw_text.startswith('"<')):
-                    sep = row.raw_text.find(":\n")
-                    if sep > 0:
-                        prefix = row.raw_text[:sep].strip()
-                        su = str(row.sender_username or "").strip()
-                        if prefix and su and prefix != su:
-                            strong_hint = prefix.startswith("wxid_") or prefix.endswith("@chatroom") or "@" in prefix
-                            if not strong_hint:
-                                body_probe = row.raw_text[sep + 2 :].lstrip("\n").lstrip()
-                                body_is_xml = body_probe.startswith("<") or body_probe.startswith('"<')
-                                if not body_is_xml:
-                                    sender_alias = lookup_alias(su)
+                if prepared_messages is not None:
+                    msg = copy.deepcopy(source_message)
+                else:
+                    row = source_message
+                    sender_alias = ""
+                    if conv_is_group and row.raw_text and (not row.raw_text.startswith("<")) and (not row.raw_text.startswith('"<')):
+                        sep = row.raw_text.find(":\n")
+                        if sep > 0:
+                            prefix = row.raw_text[:sep].strip()
+                            su = str(row.sender_username or "").strip()
+                            if prefix and su and prefix != su:
+                                strong_hint = prefix.startswith("wxid_") or prefix.endswith("@chatroom") or "@" in prefix
+                                if not strong_hint:
+                                    body_probe = row.raw_text[sep + 2 :].lstrip("\n").lstrip()
+                                    body_is_xml = body_probe.startswith("<") or body_probe.startswith('"<')
+                                    if not body_is_xml:
+                                        sender_alias = lookup_alias(su)
 
-                phase_started = time.perf_counter()
-                msg = _parse_message_for_export(
-                    row=row,
-                    conv_username=conv_username,
-                    is_group=conv_is_group,
-                    resource_conn=resource_conn,
-                    resource_chat_id=resource_chat_id,
-                    sender_alias=sender_alias,
-                    resolve_display_name=resolve_display_name,
-                )
-                _log_export_slow_step(
-                    "txt.parse_message",
-                    phase_started,
-                    exportId=job.export_id,
-                    conversation=conv_username,
-                    scanned=scanned,
-                    localType=row.local_type,
-                    serverId=row.server_id,
-                )
+                    phase_started = time.perf_counter()
+                    msg = _parse_message_for_export(
+                        row=row,
+                        conv_username=conv_username,
+                        is_group=conv_is_group,
+                        resource_conn=resource_conn,
+                        resource_chat_id=resource_chat_id,
+                        sender_alias=sender_alias,
+                        resolve_display_name=resolve_display_name,
+                    )
+                    _log_export_slow_step(
+                        "txt.parse_message",
+                        phase_started,
+                        exportId=job.export_id,
+                        conversation=conv_username,
+                        scanned=scanned,
+                        localType=row.local_type,
+                        serverId=row.server_id,
+                    )
                 if not _is_render_type_selected(msg.get("renderType"), want_types):
                     continue
 
+                media_conv_username = str(msg.pop("_mediaUsername", "") or "").strip() or conv_username
                 su = str(msg.get("senderUsername") or "").strip()
                 if privacy_mode:
                     _privacy_scrub_message(msg, conv_is_group=conv_is_group, sender_alias_map=sender_alias_map)
@@ -4039,7 +4143,7 @@ def _write_conversation_txt(
                     _attach_offline_media(
                         zf=zf,
                         account_dir=account_dir,
-                        conv_username=conv_username,
+                        conv_username=media_conv_username,
                         msg=msg,
                         media_written=media_written,
                         report=report,
@@ -4128,6 +4232,7 @@ def _write_conversation_html(
     media_index: Optional[MediaPathIndex],
     job: ExportJob,
     lock: threading.Lock,
+    prepared_messages: Optional[list[dict[str, Any]]] = None,
 ) -> int:
     arcname = f"{conv_dir}/messages.html"
     exported = 0
@@ -4435,7 +4540,7 @@ def _write_conversation_html(
         "serverMd5": {},
         "remote": {},
     }
-    chat_history_md5_done: set[str] = set()
+    chat_history_md5_done: set[tuple[str, str]] = set()
 
     def _remember_offline_media(message: dict[str, Any]) -> None:
         media = message.get("offlineMedia") or []
@@ -4466,12 +4571,18 @@ def _write_conversation_html(
             elif kind == "video_thumb":
                 page_media_index["videoThumbs"][md5] = url0
 
-    def _ensure_chat_history_md5(md5: str) -> str:
+    def _ensure_chat_history_md5(md5: str, media_username: str = "", preferred_kind: str = "") -> str:
         m = str(md5 or "").strip().lower()
         if (not m) or (not _is_md5(m)):
             return ""
-        if m in chat_history_md5_done:
-            for k in ("images", "emojis", "videos", "videoThumbs"):
+        preferred = str(preferred_kind or "").strip()
+        done_key = (m, preferred)
+        if done_key in chat_history_md5_done:
+            map_names = {
+                "video": ("videos",),
+                "video_thumb": ("videoThumbs", "images"),
+            }.get(preferred, ("images", "emojis", "videos", "videoThumbs"))
+            for k in map_names:
                 try:
                     hit = str((page_media_index.get(k) or {}).get(m) or "").strip()
                 except Exception:
@@ -4479,12 +4590,14 @@ def _write_conversation_html(
                 if hit:
                     return hit
             return ""
-        chat_history_md5_done.add(m)
+        chat_history_md5_done.add(done_key)
 
         arc = ""
         is_new = False
 
-        for try_kind in ("image", "emoji", "video_thumb", "video"):
+        try_kinds = [preferred] if preferred in {"video", "video_thumb"} else []
+        try_kinds.extend(kind for kind in ("image", "emoji", "video_thumb", "video") if kind not in try_kinds)
+        for try_kind in try_kinds:
             arc, is_new = _materialize_media(
                 zf=zf,
                 account_dir=account_dir,
@@ -4504,11 +4617,14 @@ def _write_conversation_html(
 
         url0 = rel_path(arc)
         try:
-            page_media_index["images"].setdefault(m, url0)
-            page_media_index["emojis"].setdefault(m, url0)
-            page_media_index["videoThumbs"].setdefault(m, url0)
-            if arc.lower().endswith(".mp4"):
+            if preferred == "video" or arc.lower().endswith(".mp4"):
                 page_media_index["videos"][m] = url0
+            elif preferred == "video_thumb":
+                page_media_index["videoThumbs"][m] = url0
+            else:
+                page_media_index["images"].setdefault(m, url0)
+                page_media_index["emojis"].setdefault(m, url0)
+                page_media_index["videoThumbs"].setdefault(m, url0)
         except Exception:
             pass
 
@@ -4527,6 +4643,7 @@ def _write_conversation_html(
         ("emoji", "表情"),
         ("video", "视频"),
         ("voice", "语音"),
+        ("location", "位置"),
         ("chatHistory", "聊天记录"),
         ("transfer", "转账"),
         ("redPacket", "红包"),
@@ -4825,7 +4942,7 @@ def _write_conversation_html(
             sender_alias_map: dict[str, int] = {}
             prev_ts = 0
             scanned = 0
-            for row in _iter_rows_for_conversation(
+            source_messages: Iterable[Any] = prepared_messages if prepared_messages is not None else _iter_rows_for_conversation(
                 account_dir=account_dir,
                 conv_username=conv_username,
                 start_time=start_time,
@@ -4833,7 +4950,8 @@ def _write_conversation_html(
                 local_types=local_types,
                 source=source,
                 rt_conn=rt_conn,
-            ):
+            )
+            for source_message in source_messages:
                 scanned += 1
                 _raise_if_job_cancelled(
                     job,
@@ -4852,28 +4970,33 @@ def _write_conversation_html(
                     exported=exported,
                 )
 
-                phase_started = time.perf_counter()
-                msg = _parse_message_for_export(
-                    row=row,
-                    conv_username=conv_username,
-                    is_group=conv_is_group,
-                    resource_conn=resource_conn,
-                    resource_chat_id=resource_chat_id,
-                    sender_alias="",
-                    resolve_display_name=resolve_display_name,
-                )
-                _log_export_slow_step(
-                    "html.parse_message",
-                    phase_started,
-                    exportId=job.export_id,
-                    conversation=conv_username,
-                    scanned=scanned,
-                    localType=row.local_type,
-                    serverId=row.server_id,
-                )
+                if prepared_messages is not None:
+                    msg = copy.deepcopy(source_message)
+                else:
+                    row = source_message
+                    phase_started = time.perf_counter()
+                    msg = _parse_message_for_export(
+                        row=row,
+                        conv_username=conv_username,
+                        is_group=conv_is_group,
+                        resource_conn=resource_conn,
+                        resource_chat_id=resource_chat_id,
+                        sender_alias="",
+                        resolve_display_name=resolve_display_name,
+                    )
+                    _log_export_slow_step(
+                        "html.parse_message",
+                        phase_started,
+                        exportId=job.export_id,
+                        conversation=conv_username,
+                        scanned=scanned,
+                        localType=row.local_type,
+                        serverId=row.server_id,
+                    )
                 if not _is_render_type_selected(msg.get("renderType"), want_types):
                     continue
 
+                media_conv_username = str(msg.pop("_mediaUsername", "") or "").strip() or conv_username
                 sender_username = str(msg.get("senderUsername") or "").strip()
                 if privacy_mode:
                     _privacy_scrub_message(msg, conv_is_group=conv_is_group, sender_alias_map=sender_alias_map)
@@ -4904,7 +5027,7 @@ def _write_conversation_html(
                     _attach_offline_media(
                         zf=zf,
                         account_dir=account_dir,
-                        conv_username=conv_username,
+                        conv_username=media_conv_username,
                         msg=msg,
                         media_written=media_written,
                         report=report,
@@ -5095,6 +5218,89 @@ def _write_conversation_html(
                     if voice:
                         tw.write(f'                    <audio src="{esc_attr(voice)}" preload="none" class="hidden"></audio>\n')
                     tw.write("                  </div>\n")
+                elif rt == "location":
+                    title = str(
+                        msg.get("locationPoiname")
+                        or msg.get("title")
+                        or msg.get("content")
+                        or "位置"
+                    ).strip() or "位置"
+                    label = str(msg.get("locationLabel") or "").strip()
+                    lat_text = str(msg.get("locationLat") or "").strip()
+                    lng_text = str(msg.get("locationLng") or "").strip()
+                    lat_value: Optional[float] = None
+                    lng_value: Optional[float] = None
+                    try:
+                        candidate = float(lat_text)
+                        if -90 <= candidate <= 90:
+                            lat_value = candidate
+                    except Exception:
+                        pass
+                    try:
+                        candidate = float(lng_text)
+                        if -180 <= candidate <= 180:
+                            lng_value = candidate
+                    except Exception:
+                        pass
+
+                    if lat_value is not None and lng_value is not None:
+                        coordinate_text = f"{lng_value:.6f}, {lat_value:.6f}"
+                        location_url = "https://uri.amap.com/marker?" + urlencode(
+                            {
+                                "position": f"{lng_value:.6f},{lat_value:.6f}",
+                                "name": title,
+                            }
+                        )
+                    else:
+                        coordinate_text = ""
+                        location_url = "https://uri.amap.com/search?" + urlencode({"keyword": title})
+
+                    wrap_side = "sent" if is_sent else "received"
+                    card_side = " wechat-location-card--sent" if is_sent else ""
+                    tw.write(
+                        f'                  <div class="wechat-location-card-wrap wechat-location-card-wrap--{wrap_side}" '
+                        'style="position:relative;display:inline-block">\n'
+                    )
+                    tw.write(
+                        f'                    <a href="{esc_attr(location_url)}" target="_blank" rel="noreferrer noopener" '
+                        f'class="wechat-location-card{card_side} msg-radius" '
+                        'style="display:block;width:208px;overflow:hidden;color:inherit;text-decoration:none;background:#fff">\n'
+                    )
+                    tw.write('                      <div class="wechat-location-card__text" style="padding:10px 12px 8px">\n')
+                    tw.write(
+                        f'                        <div class="wechat-location-card__title" '
+                        f'style="font-size:13px;font-weight:500;line-height:1.4">{esc_text(title)}</div>\n'
+                    )
+                    if label and label != title:
+                        tw.write(
+                            f'                        <div class="wechat-location-card__subtitle" '
+                            f'style="margin-top:4px;color:#8a8f99;font-size:11px;line-height:1.4">{esc_text(label)}</div>\n'
+                        )
+                    if coordinate_text:
+                        tw.write(
+                            f'                        <div class="wechat-location-card__coordinates" '
+                            f'style="margin-top:3px;color:#9ca3af;font-size:10px;line-height:1.4">{esc_text(coordinate_text)}</div>\n'
+                        )
+                    tw.write("                      </div>\n")
+                    tw.write(
+                        '                      <div class="wechat-location-card__map wechat-location-card__map--placeholder" '
+                        'style="position:relative;height:98px;overflow:hidden;background:#e4edf0">\n'
+                    )
+                    tw.write(
+                        '                        <div aria-hidden="true" style="position:absolute;inset:0;opacity:.72;'
+                        'background:linear-gradient(90deg,rgba(255,255,255,.72) 0 8%,transparent 8% 34%,rgba(255,255,255,.72) 34% 42%,transparent 42%),'
+                        'linear-gradient(0deg,rgba(255,255,255,.75) 0 10%,transparent 10% 38%,rgba(255,255,255,.75) 38% 46%,transparent 46%)"></div>\n'
+                    )
+                    tw.write(
+                        '                        <div class="wechat-location-card__pin" aria-hidden="true" '
+                        'style="position:absolute;left:50%;top:54%;width:22px;height:22px;transform:translate(-50%,-92%)">'
+                        '<svg viewBox="0 0 24 24" fill="none" style="display:block;width:100%;height:100%">'
+                        '<path d="M12 22s7-5.82 7-12a7 7 0 1 0-14 0c0 6.18 7 12 7 12Z" fill="#22c55e"/>'
+                        '<circle cx="12" cy="10" r="3.2" fill="#fff"/></svg></div>\n'
+                    )
+                    tw.write("                      </div>\n")
+                    tw.write("                    </a>\n")
+                    tw.write("                  </div>\n")
                 elif rt == "file":
                     fsrc = offline_path(msg, "file")
                     title = str(msg.get("title") or msg.get("content") or "文件").strip()
@@ -5195,10 +5401,12 @@ def _write_conversation_html(
                     voip_dir_cls = "wechat-voip-sent" if is_sent else "wechat-voip-received"
                     content_dir_cls = " flex-row-reverse" if is_sent else ""
                     voip_type = str(msg.get("voipType") or "").strip().lower()
-                    icon = "wechat-video-light.png" if voip_type == "video" else "wechat-audio-light.png"
+                    icon = "wechat-video-call.svg" if voip_type == "video" else "wechat-audio-call.svg"
+                    icon_type_cls = " wechat-voip-icon--video" if voip_type == "video" else ""
+                    icon_dir_cls = " wechat-voip-icon--mirrored" if voip_type == "video" and is_sent else ""
                     tw.write(f'                  <div class="wechat-voip-bubble msg-radius {esc_attr(voip_dir_cls)}">\n')
                     tw.write(f'                    <div class="wechat-voip-content{esc_attr(content_dir_cls)}">\n')
-                    tw.write(f'                      <img src="{esc_attr(wechat_icon(icon))}" class="wechat-voip-icon" alt="" />\n')
+                    tw.write(f'                      <img src="{esc_attr(wechat_icon(icon))}" class="wechat-voip-icon{esc_attr(icon_type_cls)}{esc_attr(icon_dir_cls)}" alt="" />\n')
                     tw.write(f'                      <span class="wechat-voip-text">{esc_text(msg.get("content") or "通话")}</span>\n')
                     tw.write("                    </div>\n")
                     tw.write("                  </div>\n")
@@ -5243,6 +5451,7 @@ def _write_conversation_html(
                         try:
                             arc, is_new = _materialize_voice(
                                 zf=zf,
+                                account_dir=account_dir,
                                 media_db_path=media_db_path,
                                 server_id=int(qsid),
                                 media_written=media_written,
@@ -5391,8 +5600,8 @@ def _write_conversation_html(
 
                     if record_item and include_media and (not privacy_mode):
                         try:
-                            for m in _CHAT_HISTORY_MD5_TAG_RE.findall(record_item):
-                                _ensure_chat_history_md5(m)
+                            for m, preferred_kind in _iter_chat_history_media_refs(record_item):
+                                _ensure_chat_history_md5(m, media_conv_username, preferred_kind)
                         except Exception:
                             pass
                         if resource_conn is not None:
@@ -5428,7 +5637,7 @@ def _write_conversation_html(
                                     md5_hit = str(md5_hit or "").strip().lower()
                                     if not _is_md5(md5_hit):
                                         continue
-                                    if _ensure_chat_history_md5(md5_hit):
+                                    if _ensure_chat_history_md5(md5_hit, media_conv_username):
                                         server_map[sid_text] = md5_hit
                             except Exception:
                                 pass
@@ -5676,6 +5885,19 @@ def _format_message_line_txt(*, msg: dict[str, Any]) -> str:
         title = str(msg.get("title") or "").strip()
         sz = str(msg.get("fileSize") or "").strip()
         extra = f" {title} size={sz}".strip()
+    elif rt == "location":
+        title = str(msg.get("locationPoiname") or msg.get("title") or "").strip()
+        label = str(msg.get("locationLabel") or "").strip()
+        lat = str(msg.get("locationLat") or "").strip()
+        lng = str(msg.get("locationLng") or "").strip()
+        details: list[str] = []
+        if title:
+            details.append(f"地点={title}")
+        if label and label != title:
+            details.append(f"地址={label}")
+        if lat and lng:
+            details.append(f"坐标={lng},{lat}")
+        extra = (" " + " ".join(details)) if details else ""
 
     media = msg.get("offlineMedia") or []
     media_desc = ""
@@ -5729,6 +5951,7 @@ def _privacy_scrub_message(
         "emoji": "[表情]",
         "video": "[视频]",
         "voice": "[语音]",
+        "location": "[位置]",
         "link": "[链接]",
         "file": "[文件]",
         "transfer": "[转账]",
@@ -5782,6 +6005,10 @@ def _privacy_scrub_message(
         "transferStatus",
         "transferId",
         "voipType",
+        "locationLat",
+        "locationLng",
+        "locationPoiname",
+        "locationLabel",
     ):
         if k in msg:
             msg[k] = ""
@@ -5922,24 +6149,25 @@ def _attach_offline_media(
 
     if rt == "emoji" and "emoji" in media_kinds:
         md5 = str(msg.get("emojiMd5") or "").strip().lower()
+        file_id = str(msg.get("emojiFileId") or "").strip()
         arc, is_new = _materialize_media(
             zf=zf,
             account_dir=account_dir,
             conv_username=conv_username,
             kind="emoji",
             md5=md5 if _is_md5(md5) else "",
-            file_id="",
+            file_id=file_id,
             media_written=media_written,
             suggested_name="",
             media_index=media_index,
         )
         if arc:
-            offline.append({"kind": "emoji", "path": arc, "md5": md5})
+            offline.append({"kind": "emoji", "path": arc, "md5": md5, "fileId": file_id})
             if is_new:
                 with lock:
                     job.progress.media_copied += 1
         else:
-            record_missing("emoji", md5)
+            record_missing("emoji", md5 or file_id)
 
     if rt == "video":
         if "video_thumb" in media_kinds:
@@ -5991,6 +6219,7 @@ def _attach_offline_media(
         if server_id > 0:
             arc, is_new = _materialize_voice(
                 zf=zf,
+                account_dir=account_dir,
                 media_db_path=media_db_path,
                 server_id=server_id,
                 media_written=media_written,
@@ -6005,24 +6234,25 @@ def _attach_offline_media(
 
     if rt == "file" and "file" in media_kinds:
         md5 = str(msg.get("fileMd5") or "").strip().lower()
+        file_id = str(msg.get("fileFileId") or "").strip()
         arc, is_new = _materialize_media(
             zf=zf,
             account_dir=account_dir,
             conv_username=conv_username,
             kind="file",
             md5=md5 if _is_md5(md5) else "",
-            file_id="",
+            file_id=file_id,
             media_written=media_written,
             suggested_name=str(msg.get("title") or "").strip(),
             media_index=media_index,
         )
         if arc:
-            offline.append({"kind": "file", "path": arc, "md5": md5, "title": str(msg.get("title") or "").strip()})
+            offline.append({"kind": "file", "path": arc, "md5": md5, "fileId": file_id, "title": str(msg.get("title") or "").strip()})
             if is_new:
                 with lock:
                     job.progress.media_copied += 1
         else:
-            record_missing("file", md5)
+            record_missing("file", md5 or file_id)
 
     if offline:
         msg["offlineMedia"] = offline
@@ -6100,6 +6330,7 @@ def _materialize_avatar(
 def _materialize_voice(
     *,
     zf: zipfile.ZipFile,
+    account_dir: Path,
     media_db_path: Path,
     server_id: int,
     media_written: dict[str, str],
@@ -6110,36 +6341,82 @@ def _materialize_voice(
     if existing:
         return existing, False
 
-    if not media_db_path.exists():
+    def coerce_blob(value: Any) -> bytes:
+        if value is None:
+            return b""
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, bytearray):
+            return bytes(value)
+        if isinstance(value, memoryview):
+            return value.tobytes()
+        text = str(value or "").strip()
+        if not text:
+            return b""
+        compact = re.sub(r"\s+", "", text)
+        if compact.lower().startswith("0x"):
+            compact = compact[2:]
+        if len(compact) >= 2 and len(compact) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]+", compact):
+            try:
+                return bytes.fromhex(compact)
+            except Exception:
+                return b""
+        return text.encode("utf-8", "replace")
+
+    data = b""
+    if media_db_path.exists():
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = sqlite3.connect(str(media_db_path))
+            row = conn.execute(
+                "SELECT voice_data FROM VoiceInfo WHERE svr_id = ? ORDER BY create_time DESC LIMIT 1",
+                (int(server_id),),
+            ).fetchone()
+            if row:
+                data = coerce_blob(row[0])
+        except Exception:
+            data = b""
+        finally:
+            if conn is not None:
+                conn.close()
+
+    if not data:
+        try:
+            realtime = WCDB_REALTIME.ensure_connected(Path(account_dir))
+            media_dir = Path(realtime.db_storage_dir) / "message"
+            sql = (
+                "SELECT voice_data FROM VoiceInfo "
+                f"WHERE svr_id = {int(server_id)} ORDER BY create_time DESC LIMIT 1"
+            )
+            for realtime_db_path in sorted(media_dir.glob("media_*.db")):
+                if not realtime_db_path.is_file():
+                    continue
+                try:
+                    with realtime.lock:
+                        rows = _wcdb_exec_query(
+                            realtime.handle,
+                            kind="message",
+                            path=str(realtime_db_path),
+                            sql=sql,
+                        )
+                except Exception:
+                    rows = []
+                if rows:
+                    data = coerce_blob(rows[0].get("voice_data"))
+                if data:
+                    break
+        except Exception:
+            data = b""
+
+    if not data:
         return "", False
 
-    conn = sqlite3.connect(str(media_db_path))
     try:
-        row = conn.execute(
-            "SELECT voice_data FROM VoiceInfo WHERE svr_id = ? ORDER BY create_time DESC LIMIT 1",
-            (int(server_id),),
-        ).fetchone()
+        payload, ext, _media_type = _convert_silk_to_browser_audio(data, preferred_format="mp3")
     except Exception:
-        row = None
-    finally:
-        conn.close()
-
-    if not row or row[0] is None:
-        return "", False
-
-    data = bytes(row[0]) if isinstance(row[0], (memoryview, bytearray)) else row[0]
-    if not isinstance(data, (bytes, bytearray)):
-        data = bytes(data)
-
-    payload, ext, _media_type = _convert_silk_to_browser_audio(data, preferred_format="mp3")
+        payload, ext = b"", "silk"
     if not payload:
-        _log_export_slow_step(
-            "materialize_voice_failed",
-            started_at,
-            serverId=server_id,
-            reason="convert_failed",
-        )
-        return "", False
+        payload, ext = data, "silk"
 
     arc = f"media/voices/voice_{int(server_id)}.{ext}"
     zf.writestr(arc, payload)
@@ -6388,8 +6665,13 @@ def _materialize_media(
 
     head_mt = _detect_image_media_type(head[:32])
     looks_like_mp4 = len(head) >= 8 and head[4:8] == b"ftyp"
+    is_wechat_dat = head[:6] in {b"\x07\x08V1\x08\x07", b"\x07\x08V2\x08\x07"}
 
     ext = src.suffix.lstrip(".").lower()
+    if kind == "file" and (not ext or ext == "dat"):
+        title_ext = Path(str(suggested_name or "")).suffix.lstrip(".").lower()
+        if title_ext:
+            ext = title_ext
     if not ext:
         if head_mt.startswith("image/"):
             ext = head_mt.split("/", 1)[-1]
@@ -6424,7 +6706,8 @@ def _materialize_media(
     arc = f"media/{folder}/{arc_name}"
     should_stream_copy = False
     if kind == "file":
-        should_stream_copy = True
+        # Favorites store V1/V2 encrypted files under extensionless opaque names.
+        should_stream_copy = not is_wechat_dat
     elif kind in {"image", "emoji", "video_thumb"}:
         should_stream_copy = (
             (ext == "jpg" and head_mt == "image/jpeg")
@@ -6435,7 +6718,7 @@ def _materialize_media(
     elif kind == "video":
         should_stream_copy = ext == "mp4" and looks_like_mp4
 
-    if should_stream_copy or (kind not in {"image", "emoji", "video", "video_thumb"}):
+    if should_stream_copy:
         try:
             zf.write(src, arcname=arc)
         except Exception:
@@ -6462,6 +6745,8 @@ def _materialize_media(
             ext2 = "webp"
         elif mt == "video/mp4":
             ext2 = "mp4"
+        elif kind == "file" and ext:
+            ext2 = ext
         else:
             ext2 = "dat" if mt == "application/octet-stream" else (ext or "dat")
 
@@ -6499,3 +6784,31 @@ def _materialize_media(
 
 
 CHAT_EXPORT_MANAGER = ChatExportManager()
+
+
+def export_prepared_chat_archive(
+    *,
+    account_dir: Optional[Path] = None,
+    account: Optional[str] = None,
+    output_dir: Path,
+    file_name: str,
+    title: str,
+    export_format: ExportFormat,
+    conversations: list[dict[str, Any]],
+    include_media: bool,
+    media_kinds: list[MediaKind],
+    message_types: list[str],
+) -> ExportJob:
+    """Export pre-parsed messages through the standard chat archive pipeline."""
+    resolved_account_dir = Path(account_dir) if account_dir is not None else _resolve_account_dir(account)
+    return CHAT_EXPORT_MANAGER.run_prepared_archive(
+        account_dir=resolved_account_dir,
+        output_dir=Path(output_dir),
+        file_name=file_name,
+        title=title,
+        export_format=export_format,
+        conversations=conversations,
+        include_media=include_media,
+        media_kinds=media_kinds,
+        message_types=message_types,
+    )

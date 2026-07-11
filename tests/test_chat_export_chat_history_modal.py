@@ -1,5 +1,8 @@
+import base64
 import os
 import hashlib
+import json
+import re
 import sqlite3
 import sys
 import unittest
@@ -216,3 +219,78 @@ class TestChatExportChatHistoryModal(unittest.TestCase):
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
                 else:
                     os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_chat_history_runtime_uses_video_map_for_video_links(self):
+        from wechat_decrypt_tool import chat_export_service
+
+        script = chat_export_service._load_wce_integrity_native().runtime_js()
+        match = re.search(r"const _0=(\[.*?\]),_1=(\[.*?\]);let", script)
+        self.assertIsNotNone(match)
+        chunks = json.loads(match.group(1))
+        key = json.loads(match.group(2))
+        encoded = base64.b64decode("".join(chunks))
+        runtime = bytes(value ^ key[index % len(key)] for index, value in enumerate(encoded)).decode("utf-8")
+
+        self.assertIn("const resolveMediaMd5", runtime)
+        self.assertIn("resolveMediaMd5(mediaIndex, 'video', videoMd5)", runtime)
+        self.assertIn("resolveMediaMd5(mediaIndex, 'videoThumb', thumbMd5)", runtime)
+
+    def test_chat_history_video_prefers_video_over_same_md5_thumbnail(self):
+        from wechat_decrypt_tool import chat_export_service
+
+        video_md5 = "b" * 32
+        thumb_md5 = "c" * 32
+        record_item = (
+            "<recordinfo><datalist><dataitem datatype=\"4\">"
+            f"<fullmd5>{video_md5}</fullmd5>"
+            f"<thumbfullmd5>{thumb_md5}</thumbfullmd5>"
+            "<datafmt>.mp4</datafmt>"
+            "</dataitem></datalist></recordinfo>"
+        )
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account_dir = root / "wxid_test"
+            for md5, suffix, content in (
+                (video_md5, "mp4", b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isom"),
+                (thumb_md5, "jpg", b"\xff\xd8\xff\xd9"),
+            ):
+                directory = account_dir / "resource" / md5[:2]
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / f"{md5}.{suffix}").write_bytes(content)
+
+            job = chat_export_service.export_prepared_chat_archive(
+                account_dir=account_dir,
+                output_dir=root / "exports",
+                file_name="chat-history-video.zip",
+                title="收藏",
+                export_format="html",
+                conversations=[
+                    {
+                        "username": "__favorites__",
+                        "displayName": "收藏",
+                        "messages": [
+                            {
+                                "id": "history-video",
+                                "renderType": "chatHistory",
+                                "recordItem": record_item,
+                                "senderUsername": "wxid_friend",
+                                "senderDisplayName": "测试好友",
+                                "createTime": 1735689600,
+                            }
+                        ],
+                    }
+                ],
+                include_media=True,
+                media_kinds=["video", "video_thumb"],
+                message_types=["chatHistory"],
+            )
+
+            self.assertEqual(job.status, "done", msg=job.error)
+            with zipfile.ZipFile(job.zip_path, "r") as zf:
+                names = set(zf.namelist())
+                self.assertIn(f"media/videos/{video_md5}.mp4", names)
+                self.assertIn(f"media/video_thumbs/{thumb_md5}.jpg", names)
+                html_path = next(name for name in names if name.endswith("/messages.html"))
+                html_text = zf.read(html_path).decode("utf-8")
+            self.assertIn(f'"{video_md5}": "../../media/videos/{video_md5}.mp4"', html_text)
