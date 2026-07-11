@@ -152,6 +152,7 @@ class TestContactTypeDetection(unittest.TestCase):
             patch.object(chat_contacts.WCDB_REALTIME, "ensure_connected", return_value=fake_conn),
             patch.object(chat_contacts, "_wcdb_get_sessions", return_value=[]),
             patch.object(chat_contacts, "_wcdb_get_contacts_compact", return_value=contact_rows),
+            patch.object(chat_contacts, "_query_realtime_contact_rows", return_value=[]),
             patch.object(chat_contacts, "_query_realtime_official_account_type_map", return_value={}),
             patch.object(
                 chat_contacts,
@@ -179,6 +180,76 @@ class TestContactTypeDetection(unittest.TestCase):
 
         by_username = {item["username"]: item["type"] for item in contacts}
         self.assertEqual(by_username, {"wxid_real_friend": "friend", "room@chatroom": "group"})
+
+    def test_realtime_contact_details_are_enriched_with_one_bulk_query(self):
+        from wechat_decrypt_tool.routers import chat_contacts
+
+        class DummyLock:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        fake_conn = SimpleNamespace(handle=1, lock=DummyLock())
+        compact_rows = [
+            {"username": "wxid_friend_a", "nick_name": "好友A", "local_type": 1},
+            {"username": "wxid_friend_b", "nick_name": "好友B", "local_type": 1},
+        ]
+        full_rows = [
+            {
+                "username": "wxid_friend_a",
+                "nick_name": "好友A",
+                "local_type": 1,
+                "source_scene": 17,
+                "country": "CN",
+                "province": "Sichuan",
+                "city": "Chengdu",
+                "big_head_url": "https://cdn.example.com/friend-a.jpg",
+            },
+            {
+                "username": "wxid_friend_b",
+                "nick_name": "好友B",
+                "local_type": 1,
+                "source_scene": 14,
+                "country": "CN",
+                "province": "Jiangsu",
+                "city": "Nanjing",
+            },
+        ]
+
+        with (
+            patch.object(chat_contacts.WCDB_REALTIME, "ensure_connected", return_value=fake_conn),
+            patch.object(chat_contacts, "_wcdb_get_sessions", return_value=[]),
+            patch.object(chat_contacts, "_wcdb_get_contacts_compact", return_value=compact_rows) as compact_query,
+            patch.object(chat_contacts, "_query_realtime_contact_rows", return_value=full_rows) as bulk_query,
+            patch.object(chat_contacts, "_query_realtime_contact_row", side_effect=full_rows) as per_contact_query,
+            patch.object(chat_contacts, "_query_realtime_official_account_type_map", return_value={}),
+            patch.object(chat_contacts, "_wcdb_get_display_names", return_value={}) as display_name_fallback,
+            patch.object(chat_contacts, "_wcdb_get_avatar_urls", return_value={}) as avatar_fallback,
+        ):
+            contacts = chat_contacts._collect_contacts_for_account_realtime(
+                account_dir=Path("account"),
+                base_url="http://test",
+                keyword=None,
+                include_friends=True,
+                include_groups=True,
+                include_officials=True,
+                include_official_subscriptions=True,
+                include_official_services=True,
+                include_former_friends=True,
+                include_blocked=True,
+            )
+
+        bulk_query.assert_called_once_with(1)
+        compact_query.assert_not_called()
+        per_contact_query.assert_not_called()
+        display_name_fallback.assert_not_called()
+        avatar_fallback.assert_called_once_with(1, ["wxid_friend_b"])
+        by_username = {item["username"]: item for item in contacts}
+        self.assertEqual(by_username["wxid_friend_a"]["sourceScene"], 17)
+        self.assertEqual(by_username["wxid_friend_a"]["source"], "通过名片分享添加")
+        self.assertEqual(by_username["wxid_friend_a"]["region"], "中国大陆·四川·成都")
 
 
 if __name__ == "__main__":

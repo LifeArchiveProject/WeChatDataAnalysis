@@ -71,6 +71,19 @@ class TestContactsExport(unittest.TestCase):
         self.assertEqual(_build_region("CN", "Sichuan", "Ziyang"), "中国大陆·四川·资阳")
         self.assertEqual(_build_region("China", "Sichuan", "Ziyang"), "中国大陆·四川·资阳")
 
+    def test_source_scene_17_is_card_share_for_profiles_and_exports(self):
+        from wechat_decrypt_tool.routers.chat_contacts import _contact_item_from_profile_row, _source_scene_label
+
+        self.assertEqual(_source_scene_label(17), "通过名片分享添加")
+        profile = _contact_item_from_profile_row(
+            account_dir=Path("wxid_account"),
+            base_url="http://example.test",
+            username="wxid_friend",
+            row={"username": "wxid_friend", "source_scene": 17},
+        )
+        self.assertEqual(profile.get("sourceScene"), 17)
+        self.assertEqual(profile.get("source"), "通过名片分享添加")
+
     def _seed_contact_db(self, path: Path) -> None:
         conn = sqlite3.connect(str(path))
         try:
@@ -109,7 +122,7 @@ class TestContactsExport(unittest.TestCase):
                 country="CN",
                 province="Sichuan",
                 city="Chengdu",
-                source_scene=14,
+                source_scene=17,
                 gender=1,
                 signature="自助者天助！！！",
             )
@@ -347,8 +360,8 @@ class TestContactsExport(unittest.TestCase):
                 self.assertEqual(friend_contact.get("region"), "中国大陆·四川·成都")
                 self.assertEqual(friend_contact.get("gender"), 1)
                 self.assertEqual(friend_contact.get("signature"), "自助者天助！！！")
-                self.assertEqual(friend_contact.get("sourceScene"), 14)
-                self.assertEqual(friend_contact.get("source"), "通过群聊添加")
+                self.assertEqual(friend_contact.get("sourceScene"), 17)
+                self.assertEqual(friend_contact.get("source"), "通过名片分享添加")
 
                 export_dir = root / "exports"
                 export_dir.mkdir(parents=True, exist_ok=True)
@@ -393,8 +406,8 @@ class TestContactsExport(unittest.TestCase):
                     {},
                 )
                 self.assertEqual(friend_export.get("region"), "中国大陆·四川·成都")
-                self.assertEqual(friend_export.get("sourceScene"), 14)
-                self.assertEqual(friend_export.get("source"), "通过群聊添加")
+                self.assertEqual(friend_export.get("sourceScene"), 17)
+                self.assertEqual(friend_export.get("source"), "通过名片分享添加")
 
                 csv_resp = client.post(
                     "/api/chat/contacts/export",
@@ -420,8 +433,8 @@ class TestContactsExport(unittest.TestCase):
                 self.assertNotIn("头像链接", text.splitlines()[0])
                 self.assertIn("wxid_friend", text)
                 self.assertIn("中国大陆·四川·成都", text)
-                self.assertIn("通过群聊添加", text)
-                self.assertIn(",14", text)
+                self.assertIn("通过名片分享添加", text)
+                self.assertIn(",17", text)
                 self.assertNotIn("wxid_local_type_3", text)
             finally:
                 if prev is None:

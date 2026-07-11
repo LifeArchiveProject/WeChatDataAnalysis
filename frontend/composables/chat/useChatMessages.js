@@ -1354,6 +1354,7 @@ export const useChatMessages = ({
   const contactProfileCardOpen = ref(false)
   const contactProfileCardMessageId = ref('')
   const contactProfileLoading = ref(false)
+  const contactProfileVerificationLoading = ref(false)
   const contactProfileError = ref('')
   const contactProfileData = ref(null)
   const CONTACT_PROFILE_REQUEST_TIMEOUT_MS = 4500
@@ -1409,6 +1410,12 @@ export const useChatMessages = ({
   const contactProfileResolvedSignature = computed(() => String(contactProfileData.value?.signature || '').trim())
   const contactProfileResolvedSource = computed(() => String(contactProfileData.value?.source || '').trim())
   const contactProfileResolvedGroupNickname = computed(() => String(contactProfileData.value?.groupNickname || '').trim())
+  const contactProfileIsFriend = computed(() => String(contactProfileData.value?.type || '').trim() === 'friend')
+  const contactProfileFriendVerifications = computed(() => (
+    Array.isArray(contactProfileData.value?.friendVerifications)
+      ? contactProfileData.value.friendVerifications
+      : []
+  ))
   const contactProfileResolvedHeaderSubtitle = computed(() => {
     const username = contactProfileResolvedUsername.value
     if (username) return `微信ID：${username}`
@@ -1490,6 +1497,47 @@ export const useChatMessages = ({
     return Number.isFinite(scene) ? scene : null
   })
 
+  const loadContactFriendVerifications = async ({ seq, account, username }) => {
+    contactProfileVerificationLoading.value = true
+    try {
+      const response = await withContactProfileTimeout(
+        api.listFriendVerifications({
+          account,
+          q: username,
+          source: 'realtime',
+          limit: 200,
+          offset: 0
+        }),
+        CONTACT_PROFILE_REQUEST_TIMEOUT_MS,
+        '好友验证记录加载超时'
+      )
+      if (seq !== contactProfileFetchSeq) return
+      const records = (Array.isArray(response?.items) ? response.items : [])
+        .filter((item) => String(item?.userName || '').trim() === username)
+        .map((item) => ({
+          userName: username,
+          isSender: !!item?.isSender,
+          content: String(item?.content || '').trim(),
+          remark: String(item?.remark || '').trim(),
+          timeText: String(item?.timeText || '').trim(),
+          timestamp: Number(item?.timestamp || 0)
+        }))
+      contactProfileData.value = {
+        ...(contactProfileData.value || {}),
+        friendVerifications: records
+      }
+    } catch {
+      if (seq === contactProfileFetchSeq) {
+        contactProfileData.value = {
+          ...(contactProfileData.value || {}),
+          friendVerifications: []
+        }
+      }
+    } finally {
+      if (seq === contactProfileFetchSeq) contactProfileVerificationLoading.value = false
+    }
+  }
+
   const fetchContactProfile = async (options = {}) => {
     const seq = ++contactProfileFetchSeq
     const username = String(options?.username || contactProfileData.value?.username || selectedContact.value?.username || '').trim()
@@ -1529,10 +1577,14 @@ export const useChatMessages = ({
         if (!String(normalized.avatar || '').trim() && avatarFallback) {
           normalized.avatar = avatarFallback
         }
-        contactProfileData.value = normalized
+        contactProfileData.value = { ...normalized, friendVerifications: [] }
       } else {
+        const fallbackType = username.endsWith('@chatroom')
+          ? 'group'
+          : (username.startsWith('gh_') ? 'official' : 'friend')
         contactProfileData.value = {
           username,
+          type: fallbackType,
           displayName: displayNameFallback || selectedContact.value?.name || username,
           avatar: avatarFallback || selectedContact.value?.avatar || '',
           avatarColor: contextPatch.avatarColor,
@@ -1548,13 +1600,18 @@ export const useChatMessages = ({
           addTimeText: '',
           commonChatroomCount: null,
           commonChatrooms: [],
+          friendVerifications: [],
           ...contextPatch
         }
+      }
+      if (contactProfileIsFriend.value) {
+        await loadContactFriendVerifications({ seq, account, username })
       }
     } catch (error) {
       if (seq !== contactProfileFetchSeq) return
       contactProfileData.value = {
         username,
+        type: username.endsWith('@chatroom') ? 'group' : (username.startsWith('gh_') ? 'official' : 'friend'),
         displayName: displayNameFallback || selectedContact.value?.name || username,
         avatar: avatarFallback || selectedContact.value?.avatar || '',
         avatarColor: contextPatch.avatarColor,
@@ -1570,6 +1627,7 @@ export const useChatMessages = ({
         addTimeText: '',
         commonChatroomCount: null,
         commonChatrooms: [],
+        friendVerifications: [],
         ...contextPatch
       }
       contactProfileError.value = error?.code === 'ETIMEDOUT' ? '' : (error?.message || '加载联系人资料失败')
@@ -1588,6 +1646,7 @@ export const useChatMessages = ({
   const closeContactProfileCard = () => {
     contactProfileFetchSeq++
     contactProfileLoading.value = false
+    contactProfileVerificationLoading.value = false
     contactProfileCardOpen.value = false
     contactProfileCardMessageId.value = ''
   }
@@ -1799,6 +1858,7 @@ export const useChatMessages = ({
     contactProfileCardMessageId,
     contactProfileLoading,
     contactProfileInitialLoading,
+    contactProfileVerificationLoading,
     contactProfileError,
     contactProfileData,
     contactProfileResolvedName,
@@ -1811,6 +1871,8 @@ export const useChatMessages = ({
     contactProfileResolvedSignature,
     contactProfileResolvedSource,
     contactProfileResolvedGroupNickname,
+    contactProfileIsFriend,
+    contactProfileFriendVerifications,
     contactProfileResolvedSourceScene,
     contactProfileResolvedHeaderSubtitle,
     contactProfileResolvedAddTime,
