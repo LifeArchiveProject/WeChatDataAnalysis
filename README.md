@@ -42,6 +42,23 @@
   </tr>
 </table>
 
+## 可导出的内容
+
+| 内容 | 支持格式 | 导出范围 / 说明 |
+| --- | --- | --- |
+| 聊天记录 | HTML / JSON / TXT / Excel（ZIP） | 当前会话、自定义会话、全部会话、群聊或单聊；支持按消息类型和时间筛选 |
+| 朋友圈 | HTML / JSON / TXT / Excel（ZIP） | 指定联系人或全部联系人 |
+| 联系人 | HTML / JSON / TXT / Excel | 支持按联系人分类和关键词筛选，可选择是否包含头像链接 |
+| 收藏 | HTML / JSON / TXT / Excel（ZIP） | 支持按收藏类型和关键词筛选 |
+| 好友验证 | HTML / JSON / TXT / Excel | 支持按发起方向和关键词筛选 |
+| 小程序 | HTML / JSON / TXT / Excel | 支持按关键词筛选 |
+| 视频号直播 | HTML / JSON / TXT / Excel | 支持按直播类型和关键词筛选 |
+| 转账与红包 | HTML / JSON / TXT / Excel | 支持按记录类型和关键词筛选 |
+| 服务号记录 | HTML / JSON / TXT / Excel | 支持按服务号和记录类型导出 |
+| 账号数据归档 | ZIP | 可选择导出数据库、资源文件或两者 |
+
+> Excel 格式生成 `.xlsx` 文件；聊天记录、朋友圈和收藏会将对应格式文件与必要资源一起打包为 ZIP。
+
 ## 快速开始
 
 ### 1. 下载并安装 EXE（Windows，推荐）

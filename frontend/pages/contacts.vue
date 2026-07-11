@@ -216,20 +216,20 @@
             <section class="rounded-lg border border-[#e5e7eb] bg-white">
               <div class="border-b border-[#e5e7eb] px-4 py-3">
                 <div class="text-[14px] font-medium text-[#111827]">导出联系人</div>
-                <div class="mt-0.5 text-[12px] text-[#6b7280]">支持 JSON / CSV，导出范围由左侧分类控制。</div>
+                <div class="mt-0.5 text-[12px] text-[#6b7280]">支持 HTML / JSON / TXT / Excel，导出范围由左侧分类控制。</div>
               </div>
 
               <div class="space-y-4 px-4 py-4">
                 <div>
                   <div class="mb-2 text-[13px] font-medium text-[#111827]">导出格式</div>
-                  <div class="grid grid-cols-2 gap-3">
+                  <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     <label
                       class="flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition"
-                      :class="exportFormat === 'json' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
+                      :class="exportFormat === 'html' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
                     >
-                      <input v-model="exportFormat" type="radio" value="json" class="sr-only" />
-                      <span class="text-[13px] font-medium">JSON</span>
-                      <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="exportFormat === 'json' ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
+                      <input v-model="exportFormat" type="radio" value="html" class="sr-only" />
+                      <span class="text-[13px] font-medium">HTML</span>
+                      <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="exportFormat === 'html' ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
                         <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                           <path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" />
                         </svg>
@@ -237,14 +237,32 @@
                     </label>
                     <label
                       class="flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition"
-                      :class="exportFormat === 'csv' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
+                      :class="exportFormat === 'json' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
                     >
-                      <input v-model="exportFormat" type="radio" value="csv" class="sr-only" />
-                      <span class="text-[13px] font-medium">CSV (Excel)</span>
-                      <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="exportFormat === 'csv' ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                          <path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" />
-                        </svg>
+                      <input v-model="exportFormat" type="radio" value="json" class="sr-only" />
+                      <span class="text-[13px] font-medium">JSON</span>
+                      <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="exportFormat === 'json' ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" /></svg>
+                      </span>
+                    </label>
+                    <label
+                      class="flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition"
+                      :class="exportFormat === 'txt' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
+                    >
+                      <input v-model="exportFormat" type="radio" value="txt" class="sr-only" />
+                      <span class="text-[13px] font-medium">TXT</span>
+                      <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="exportFormat === 'txt' ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" /></svg>
+                      </span>
+                    </label>
+                    <label
+                      class="flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition"
+                      :class="exportFormat === 'excel' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
+                    >
+                      <input v-model="exportFormat" type="radio" value="excel" class="sr-only" />
+                      <span class="text-[13px] font-medium">Excel</span>
+                      <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="exportFormat === 'excel' ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" /></svg>
                       </span>
                     </label>
                   </div>
@@ -303,6 +321,7 @@
 
 <script setup>
 import { storeToRefs } from 'pinia'
+import { createXlsxBlob } from '~/lib/xlsx-export'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
 
@@ -636,6 +655,59 @@ const escapeCsvCell = (value) => {
   return text
 }
 
+const escapeHtml = (value) => String(value == null ? '' : value)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;')
+
+const renderContactHtmlValue = (value) => {
+  const text = String(value == null ? '' : value).trim()
+  return text ? escapeHtml(text) : '<span class="empty-value">未填写</span>'
+}
+
+const contactHtmlIdentityFields = [['username', '用户名'], ['displayName', '显示名称']]
+const contactHtmlDetailFields = [
+  ['remark', '备注'],
+  ['nickname', '昵称'],
+  ['alias', '微信号'],
+  ['region', '地区'],
+  ['source', '来源'],
+]
+
+const renderContactHtmlCard = (row, includeAvatar) => {
+  const displayName = [row?.displayName, row?.remark, row?.nickname, row?.username]
+    .map((value) => String(value || '').trim())
+    .find(Boolean) || '未命名联系人'
+  const initial = Array.from(displayName)[0]?.toUpperCase() || '?'
+  const rawAvatarUrl = includeAvatar ? String(row?.avatarLink || '').trim() : ''
+  const avatarUrl = /^https?:\/\//i.test(rawAvatarUrl) ? rawAvatarUrl : ''
+  const avatarImage = avatarUrl
+    ? `<span class="contact-avatar fallback">${escapeHtml(initial)}</span><img class="contact-avatar" src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(displayName)}的头像" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true">`
+    : `<span class="contact-avatar fallback">${escapeHtml(initial)}</span>`
+  const identity = contactHtmlIdentityFields.map(([key, label]) => (
+    `<div class="contact-field"><span>${escapeHtml(label)}</span><b>${renderContactHtmlValue(row?.[key])}</b></div>`
+  )).join('')
+  const details = contactHtmlDetailFields.map(([key, label]) => (
+    `<div class="contact-field"><span>${escapeHtml(label)}</span><b>${renderContactHtmlValue(row?.[key])}</b></div>`
+  )).join('')
+
+  return `<article class="contact-card">
+  <div class="contact-head"><figure><div class="avatar-frame">${avatarImage}</div></figure><div class="identity-fields">${identity}</div></div>
+  <div class="contact-details">${details}</div>
+</article>`
+}
+
+const buildContactsHtmlDocument = ({ account, contacts, includeAvatar }) => {
+  const cards = contacts.map((row) => renderContactHtmlCard(row, includeAvatar)).join('\n')
+  const content = cards
+    ? `<section class="contact-grid">${cards}</section>`
+    : '<div class="empty-state">没有符合条件的联系人</div>'
+  const styles = `:root{--page:#ededed;--panel:#fff;--soft:#f7f7f7;--hover:#f5f7f5;--line:#e2e5e2;--line-strong:#d3d7d3;--text:#191919;--secondary:#555b56;--muted:#6d746e;--green:#07c160;--green-dark:#058f48;--green-soft:#e9f8ef}*{box-sizing:border-box;letter-spacing:0}html,body{margin:0;min-height:100%;background:var(--page);color:var(--text);font:13px/1.45 "Segoe UI","PingFang SC","Microsoft YaHei UI",sans-serif}.records-page{width:100%;min-height:100vh;padding:16px}.records-frame{width:min(100%,1400px);min-height:calc(100vh - 32px);margin:0 auto;overflow:hidden;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel)}.masthead{position:sticky;z-index:5;top:0;display:flex;min-height:76px;align-items:center;justify-content:space-between;gap:24px;padding:14px 18px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.96)}.masthead h1{margin:0;font-size:21px;font-weight:500;line-height:1.3}.masthead .count{display:block;margin-top:2px;color:var(--muted);font-size:13px}.masthead .count strong{margin:0 3px;color:var(--secondary);font-size:14px;font-weight:500}.export-meta{max-width:55%;color:var(--muted);font-size:12px;text-align:right;overflow-wrap:anywhere}.section-bar{display:flex;min-height:50px;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid var(--line);background:var(--soft)}.section-bar strong{font-size:14px;font-weight:500}.section-bar span{color:var(--muted)}.contact-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0 14px;padding:2px 14px 18px}.contact-card{min-width:0;padding:14px 8px 12px;border-bottom:1px solid var(--line);border-radius:6px}.contact-card:hover{background:var(--hover)}.contact-head{display:grid;grid-template-columns:50px minmax(0,1fr);align-items:start;gap:11px;min-width:0}figure{width:50px;margin:0;text-align:center}.avatar-frame{position:relative;width:50px;height:50px;overflow:hidden;border-radius:8px;background:var(--green-soft)}.contact-avatar{position:absolute;inset:0;display:grid;width:100%;height:100%;place-items:center;object-fit:cover}.contact-avatar.fallback{color:var(--green-dark);font-size:15px;font-weight:500}.identity-fields,.contact-details{min-width:0}.contact-details{margin-top:8px}.contact-field{display:grid;grid-template-columns:76px minmax(0,1fr);gap:7px;min-width:0;padding:3px 0}.contact-field span{color:var(--muted);font-size:12px;white-space:nowrap}.contact-field b{min-width:0;color:var(--secondary);font-size:12px;font-weight:400;line-height:1.45;overflow-wrap:anywhere}.empty-value{color:#a6aca7}.empty-state{display:grid;min-height:260px;place-items:center;color:var(--muted)}@media(max-width:1100px){.contact-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.records-page{padding:0}.records-frame{min-height:100vh;border:0;border-radius:0}.masthead{align-items:flex-start;flex-direction:column;gap:7px;padding:14px 16px}.export-meta{max-width:100%;text-align:left}.contact-grid{grid-template-columns:minmax(0,1fr);padding-inline:9px}}`
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>联系人导出</title><style>${styles}</style></head><body><div class="records-page"><main class="records-frame"><header class="masthead"><div><h1>联系人</h1><span class="count">共<strong>${contacts.length}</strong>个联系人</span></div><div class="export-meta">账号 ${escapeHtml(account)}</div></header><div class="section-bar"><strong>全部联系人</strong><span>已显示 ${contacts.length} 个</span></div>${content}</main></div></body></html>`
+}
+
 const numberFrom = (...values) => {
   for (const value of values) {
     const n = Number(value)
@@ -693,7 +765,7 @@ const buildExportContactsPayload = async () => {
       sourceScene: item?.sourceScene == null ? '' : String(item?.sourceScene),
     }
     if (includeAvatarLink.value) {
-      row.avatarLink = String(item?.avatarLink || '')
+      row.avatarLink = String(item?.avatarLink || item?.avatar || '')
     }
     return row
   })
@@ -717,15 +789,35 @@ const writeWebExportFile = async ({ fileName, content }) => {
 
 const exportContactsInWeb = async () => {
   const fmt = String(exportFormat.value || 'json').toLowerCase()
-  if (fmt !== 'json' && fmt !== 'csv') {
-    throw new Error('网页端仅支持 JSON/CSV 导出')
+  if (!['html', 'json', 'txt', 'excel', 'csv'].includes(fmt)) {
+    throw new Error('不支持的导出格式')
   }
   if (!exportFolderHandle.value) {
     throw new Error('请先选择导出目录')
   }
 
   const payload = await buildExportContactsPayload()
-  const fileName = `contacts_${safeExportPart(payload.account)}_${buildExportTimestamp()}.${fmt}`
+  const extension = fmt === 'excel' ? 'xlsx' : fmt
+  const fileName = `contacts_${safeExportPart(payload.account)}_${buildExportTimestamp()}.${extension}`
+  const columns = [
+    ['username', '用户名'],
+    ['displayName', '显示名称'],
+    ['remark', '备注'],
+    ['nickname', '昵称'],
+    ['alias', '微信号'],
+    ['type', '类型'],
+    ['officialAccountKind', '公众号类型'],
+    ['officialAccountType', '公众号类型码'],
+    ['region', '地区'],
+    ['country', '国家/地区码'],
+    ['province', '省份'],
+    ['city', '城市'],
+    ['source', '来源'],
+    ['sourceScene', '来源场景码'],
+  ]
+  if (includeAvatarLink.value) {
+    columns.push(['avatarLink', '头像链接'])
+  }
 
   if (fmt === 'json') {
     const jsonPayload = {
@@ -742,31 +834,37 @@ const exportContactsInWeb = async () => {
       contacts: payload.contacts,
     }
     await writeWebExportFile({ fileName, content: JSON.stringify(jsonPayload, null, 2) })
-  } else {
-    const columns = [
-      ['username', '用户名'],
-      ['displayName', '显示名称'],
-      ['remark', '备注'],
-      ['nickname', '昵称'],
-      ['alias', '微信号'],
-      ['type', '类型'],
-      ['officialAccountKind', '公众号类型'],
-      ['officialAccountType', '公众号类型码'],
-      ['region', '地区'],
-      ['country', '国家/地区码'],
-      ['province', '省份'],
-      ['city', '城市'],
-      ['source', '来源'],
-      ['sourceScene', '来源场景码'],
-    ]
-    if (includeAvatarLink.value) {
-      columns.push(['avatarLink', '头像链接'])
-    }
+  } else if (fmt === 'csv') {
     const lines = [columns.map(([, label]) => escapeCsvCell(label)).join(',')]
     for (const row of payload.contacts) {
       lines.push(columns.map(([key]) => escapeCsvCell(row[key])).join(','))
     }
     await writeWebExportFile({ fileName, content: `\uFEFF${lines.join('\n')}` })
+  } else if (fmt === 'txt') {
+    const lines = ['联系人导出', `账号: ${payload.account}`, `数量: ${payload.count}`, '']
+    for (const [index, row] of payload.contacts.entries()) {
+      const details = columns
+        .map(([key, label]) => `${label}: ${String(row?.[key] == null ? '' : row[key])}`)
+        .filter((value) => !value.endsWith(': '))
+      lines.push(`[${index + 1}] ${details.join(' | ')}`)
+    }
+    await writeWebExportFile({ fileName, content: `${lines.join('\n')}\n` })
+  } else if (fmt === 'html') {
+    const document = buildContactsHtmlDocument({
+      account: payload.account,
+      contacts: payload.contacts,
+      includeAvatar: !!includeAvatarLink.value,
+    })
+    await writeWebExportFile({ fileName, content: document })
+  } else {
+    await writeWebExportFile({
+      fileName,
+      content: createXlsxBlob({
+        sheetName: '联系人',
+        headers: columns.map(([, label]) => label),
+        rows: payload.contacts.map((row) => columns.map(([key]) => row?.[key] == null ? '' : row[key]))
+      })
+    })
   }
 
   return {
