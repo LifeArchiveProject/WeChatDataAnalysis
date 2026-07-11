@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import requests
 
@@ -69,6 +69,7 @@ from .media_helpers import (
     _try_find_decrypted_resource,
 )
 from .perf_trace import create_perf_trace
+from .xlsx_export import build_xlsx_workbook
 from .wcdb_realtime import (
     WCDB_REALTIME,
     WCDBRealtimeError,
@@ -649,6 +650,33 @@ _HTML_EXPORT_NATIVE_ERROR = "\u0048\u0054\u004d\u004c \u5bfc\u51fa\u7ec4\u4ef6\u
 
 
 def _load_wce_integrity_native() -> Any:
+    module_name = f"{__package__}.native.wce_integrity"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+
+    # During local development a running desktop process can keep the packaged
+    # .pyd locked. Prefer a freshly built native DLL when one is present.
+    build_path = (
+        Path(__file__).resolve().parents[2]
+        / "native"
+        / "wce_integrity"
+        / "target"
+        / "release"
+        / "wce_integrity.dll"
+    )
+    if build_path.is_file():
+        try:
+            loader = importlib.machinery.ExtensionFileLoader(module_name, str(build_path))
+            spec = importlib.util.spec_from_file_location(module_name, build_path, loader=loader)
+            if spec is not None:
+                native = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = native
+                loader.exec_module(native)
+                return native
+        except Exception:
+            sys.modules.pop(module_name, None)
+
     try:
         from .native import wce_integrity  # type: ignore
 
@@ -1166,6 +1194,51 @@ class ChatExportManager:
                 job.error = str(e)
                 job.finished_at = time.time()
 
+    def run_prepared_archive(
+        self,
+        *,
+        account_dir: Path,
+        output_dir: Path,
+        file_name: str,
+        title: str,
+        export_format: ExportFormat,
+        conversations: list[dict[str, Any]],
+        include_media: bool,
+        media_kinds: list[MediaKind],
+        message_types: list[str],
+    ) -> ExportJob:
+        if export_format not in {"html", "json", "txt", "excel"}:
+            raise ValueError(f"Unsupported export format: {export_format}")
+        prepared = [copy.deepcopy(item) for item in conversations if isinstance(item, dict)]
+        if not prepared:
+            raise ValueError("No prepared conversations to export.")
+
+        export_id = uuid.uuid4().hex[:12]
+        job = ExportJob(
+            export_id=export_id,
+            account=Path(account_dir).name,
+            options={
+                "scope": "selected",
+                "source": "realtime",
+                "format": export_format,
+                "includeHidden": False,
+                "includeOfficial": False,
+                "includeMedia": bool(include_media),
+                "mediaKinds": list(media_kinds),
+                "messageTypes": list(message_types),
+                "outputDir": str(output_dir),
+                "allowProcessKeyExtract": False,
+                "downloadRemoteMedia": True,
+                "htmlPageSize": 1000,
+                "privacyMode": False,
+                "fileName": str(file_name or "").strip(),
+                "_archiveTitle": str(title or "").strip() or "聊天记录",
+                "_preparedConversations": prepared,
+            },
+        )
+        self._run_job_safe(job, Path(account_dir))
+        return job
+
     def _should_cancel(self, job: ExportJob) -> bool:
         with self._lock:
             return bool(job.cancel_requested)
@@ -1186,10 +1259,30 @@ class ChatExportManager:
         )
         _safe_trace(trace, "job_started", thread=threading.current_thread().name)
         opts = dict(job.options or {})
+        prepared_conversations: list[dict[str, Any]] = []
+        prepared_usernames: set[str] = set()
+        for index, raw in enumerate(opts.get("_preparedConversations") or [], start=1):
+            if not isinstance(raw, dict):
+                continue
+            username = str(raw.get("username") or "").strip() or f"__prepared_{index:04d}__"
+            if username in prepared_usernames:
+                username = f"{username}_{index:04d}"
+            messages = [copy.deepcopy(msg) for msg in (raw.get("messages") or []) if isinstance(msg, dict)]
+            prepared = dict(raw)
+            prepared["username"] = username
+            prepared["messages"] = messages
+            prepared_conversations.append(prepared)
+            prepared_usernames.add(username)
+        prepared_by_username = {
+            str(item.get("username") or "").strip(): item
+            for item in prepared_conversations
+            if str(item.get("username") or "").strip()
+        }
+        has_prepared_conversations = bool(prepared_by_username)
         source_requested = _normalize_chat_source(opts.get("source"), default="auto")
         source_norm = "realtime" if source_requested in {"auto", "realtime"} else "decrypted"
         rt_conn = None
-        if source_norm == "realtime":
+        if source_norm == "realtime" and not has_prepared_conversations:
             try:
                 rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
                 _safe_trace(
@@ -1227,7 +1320,7 @@ class ChatExportManager:
 
         scope: ExportScope = str(opts.get("scope") or "selected")  # type: ignore[assignment]
         export_format_raw = str(opts.get("format") or "json").strip() or "json"
-        if export_format_raw not in {"json", "txt", "html"}:
+        if export_format_raw not in {"json", "txt", "html", "excel"}:
             raise ValueError(f"Unsupported export format: {export_format_raw}")
         export_format: ExportFormat = export_format_raw  # type: ignore[assignment]
         include_hidden = bool(opts.get("includeHidden"))
@@ -1290,15 +1383,18 @@ class ChatExportManager:
         _raise_if_job_cancelled(job, "options_resolved", trace)
 
         phase_started = time.perf_counter()
-        target_usernames = _resolve_export_targets(
-            account_dir=account_dir,
-            scope=scope,
-            usernames=list(opts.get("usernames") or []),
-            include_hidden=include_hidden,
-            include_official=include_official,
-            source=source_norm,
-            rt_conn=rt_conn,
-        )
+        if has_prepared_conversations:
+            target_usernames = list(prepared_by_username)
+        else:
+            target_usernames = _resolve_export_targets(
+                account_dir=account_dir,
+                scope=scope,
+                usernames=list(opts.get("usernames") or []),
+                include_hidden=include_hidden,
+                include_official=include_official,
+                source=source_norm,
+                rt_conn=rt_conn,
+            )
         _safe_trace(
             trace,
             "targets_resolved",
@@ -1374,6 +1470,23 @@ class ChatExportManager:
         contact_cache: dict[str, str] = {}
         contact_row_cache: dict[str, sqlite3.Row] = {}
         wcdb_display_cache: dict[str, str] = {}
+        prepared_media_usernames: list[str] = []
+        if has_prepared_conversations:
+            for prepared in prepared_conversations:
+                prepared_username = str(prepared.get("username") or "").strip()
+                prepared_name = str(prepared.get("displayName") or "").strip()
+                if prepared_username and prepared_name:
+                    contact_cache[prepared_username] = prepared_name
+                for message in prepared.get("messages") or []:
+                    if not isinstance(message, dict):
+                        continue
+                    sender_username = str(message.get("senderUsername") or "").strip()
+                    sender_name = str(message.get("senderDisplayName") or "").strip()
+                    if sender_username and sender_name:
+                        contact_cache.setdefault(sender_username, sender_name)
+                    media_username = str(message.get("_mediaUsername") or "").strip()
+                    if media_username and media_username not in prepared_media_usernames:
+                        prepared_media_usernames.append(media_username)
         if source_norm == "realtime" and target_usernames and rt_conn is not None:
             try:
                 with rt_conn.lock:
@@ -1413,7 +1526,17 @@ class ChatExportManager:
         conv_rows = _load_contact_rows(contact_db_path, target_usernames)
         for k, v in conv_rows.items():
             contact_row_cache[k] = v
-            contact_cache[k] = _pick_display_name(v, k)
+            contact_cache.setdefault(k, _pick_display_name(v, k))
+
+        def conversation_meta(username: str) -> tuple[str, bool, str, list[dict[str, Any]] | None]:
+            prepared = prepared_by_username.get(username)
+            if prepared is not None:
+                display_name = str(prepared.get("displayName") or "").strip() or username
+                avatar_username = str(prepared.get("avatarUsername") or "").strip()
+                messages = prepared.get("messages") if isinstance(prepared.get("messages"), list) else []
+                return display_name, bool(prepared.get("isGroup")), avatar_username, messages
+            row = contact_row_cache.get(username)
+            return resolve_display_name(username), bool(username.endswith("@chatroom")), username, None
         _safe_trace(
             trace,
             "contacts_preloaded",
@@ -1428,14 +1551,14 @@ class ChatExportManager:
             phase_started = time.perf_counter()
             media_index = MediaPathIndex.build(
                 account_dir=account_dir,
-                usernames=target_usernames,
+                usernames=prepared_media_usernames or target_usernames,
                 media_kinds=media_kinds,
             )
             _safe_trace(
                 trace,
                 "media_index_built",
                 durationMs=_elapsed_ms(phase_started),
-                usernames=len(target_usernames),
+                usernames=len(prepared_media_usernames or target_usernames),
                 mediaKinds=media_kinds,
                 md5Keys=int(media_index.stats.get("md5Keys") or 0),
                 fileIdKeys=int(media_index.stats.get("fileIdKeys") or 0),
@@ -1454,7 +1577,6 @@ class ChatExportManager:
             "missingMedia": [],
             "errors": [],
         }
-
         with self._lock:
             job.progress.conversations_total = len(target_usernames)
             job.progress.conversations_done = 0
@@ -1477,6 +1599,7 @@ class ChatExportManager:
                 zf = _ZipIntegrityWriter(raw_zf, native_integrity=native_integrity)
                 _safe_trace(trace, "zip_opened", durationMs=_elapsed_ms(phase_started))
                 html_index_items: list[dict[str, Any]] = []
+                excel_index_items: list[dict[str, Any]] = []
                 self_avatar_path = ""
                 session_items: list[dict[str, Any]] = []
                 remote_written: dict[str, str] = {}
@@ -1561,7 +1684,24 @@ class ChatExportManager:
                             avatar_written=avatar_written,
                         )
 
-                        if source_norm == "realtime" and rt_conn is not None:
+                        if has_prepared_conversations:
+                            for prepared in prepared_conversations:
+                                username = str(prepared.get("username") or "").strip()
+                                if not username:
+                                    continue
+                                preview_by_username[username] = str(prepared.get("previewText") or "").strip()
+                                try:
+                                    last_timestamp = int(prepared.get("lastTimestamp") or 0)
+                                except Exception:
+                                    last_timestamp = 0
+                                if last_timestamp <= 0:
+                                    for message in prepared.get("messages") or []:
+                                        try:
+                                            last_timestamp = max(last_timestamp, int((message or {}).get("createTime") or 0))
+                                        except Exception:
+                                            continue
+                                last_ts_by_username[username] = last_timestamp
+                        elif source_norm == "realtime" and rt_conn is not None:
                             try:
                                 with rt_conn.lock:
                                     raw_sessions_for_index = _wcdb_get_sessions(rt_conn.handle)
@@ -1634,16 +1774,17 @@ class ChatExportManager:
                     for idx, conv_username in enumerate(target_usernames, start=1):
                         _raise_if_job_cancelled(job, "html_session_index", trace, index=idx)
                         conv_row = contact_row_cache.get(conv_username)
-                        conv_name = resolve_display_name(conv_username) if not privacy_mode else _pick_display_name(conv_row, conv_username)
-                        conv_is_group = bool(conv_username.endswith("@chatroom"))
+                        prepared_name, prepared_is_group, conv_avatar_username, _prepared_messages = conversation_meta(conv_username)
+                        conv_name = prepared_name if not privacy_mode else _pick_display_name(conv_row, conv_username)
+                        conv_is_group = prepared_is_group
                         conv_dir = f"conversations/{_conversation_dir_name(idx, conv_name, conv_username, conv_is_group, privacy_mode)}"
 
                         conv_avatar_path = ""
-                        if not privacy_mode:
+                        if not privacy_mode and conv_avatar_username:
                             conv_avatar_path = _materialize_avatar(
                                 zf=zf,
                                 head_image_conn=head_image_conn,
-                                username=conv_username,
+                                username=conv_avatar_username,
                                 avatar_written=avatar_written,
                             )
 
@@ -1670,8 +1811,9 @@ class ChatExportManager:
 
                     conv_started = time.perf_counter()
                     conv_row = contact_row_cache.get(conv_username)
-                    conv_name = resolve_display_name(conv_username) if not privacy_mode else _pick_display_name(conv_row, conv_username)
-                    conv_is_group = bool(conv_username.endswith("@chatroom"))
+                    prepared_name, prepared_is_group, conv_avatar_username, prepared_messages = conversation_meta(conv_username)
+                    conv_name = prepared_name if not privacy_mode else _pick_display_name(conv_row, conv_username)
+                    conv_is_group = prepared_is_group
 
                     conv_dir = f"conversations/{_conversation_dir_name(idx, conv_name, conv_username, conv_is_group, privacy_mode)}"
 
@@ -1682,19 +1824,22 @@ class ChatExportManager:
                         job.progress.current_conversation_messages_exported = 0
                         job.progress.current_conversation_messages_total = 0
 
-                    try:
-                        phase_started = time.perf_counter()
-                        estimated_total = _estimate_conversation_message_count(
-                            account_dir=account_dir,
-                            conv_username=conv_username,
-                            start_time=st,
-                            end_time=et,
-                            local_types=estimate_local_types,
-                            source=source_norm,
-                            rt_conn=rt_conn,
-                        )
-                    except Exception:
-                        estimated_total = 0
+                    phase_started = time.perf_counter()
+                    if prepared_messages is not None:
+                        estimated_total = len(prepared_messages)
+                    else:
+                        try:
+                            estimated_total = _estimate_conversation_message_count(
+                                account_dir=account_dir,
+                                conv_username=conv_username,
+                                start_time=st,
+                                end_time=et,
+                                local_types=estimate_local_types,
+                                source=source_norm,
+                                rt_conn=rt_conn,
+                            )
+                        except Exception:
+                            estimated_total = 0
                     _safe_trace(
                         trace,
                         "conversation_estimated",
@@ -1712,7 +1857,7 @@ class ChatExportManager:
                     chat_id = None
                     try:
                         phase_started = time.perf_counter()
-                        if resource_conn is not None:
+                        if resource_conn is not None and prepared_messages is None:
                             chat_id = _resource_lookup_chat_id(resource_conn, conv_username)
                     except Exception:
                         chat_id = None
@@ -1727,12 +1872,12 @@ class ChatExportManager:
                     _raise_if_job_cancelled(job, "conversation_resource_lookup", trace, index=idx, conversation=conv_username)
 
                     conv_avatar_path = ""
-                    if not privacy_mode:
+                    if not privacy_mode and conv_avatar_username:
                         phase_started = time.perf_counter()
                         conv_avatar_path = _materialize_avatar(
                             zf=zf,
                             head_image_conn=head_image_conn,
-                            username=conv_username,
+                            username=conv_avatar_username,
                             avatar_written=avatar_written,
                         )
                         _safe_trace(
@@ -1776,6 +1921,39 @@ class ChatExportManager:
                             media_index=media_index,
                             job=job,
                             lock=self._lock,
+                            prepared_messages=prepared_messages,
+                        )
+                    elif export_format == "excel":
+                        exported_count = _write_conversation_excel(
+                            zf=zf,
+                            conv_dir=conv_dir,
+                            account_dir=account_dir,
+                            conv_username=conv_username,
+                            conv_name=conv_name,
+                            conv_avatar_path=conv_avatar_path,
+                            conv_is_group=conv_is_group,
+                            start_time=st,
+                            end_time=et,
+                            want_types=want_types,
+                            local_types=local_types,
+                            source=source_norm,
+                            rt_conn=rt_conn,
+                            resource_conn=resource_conn,
+                            resource_chat_id=chat_id,
+                            head_image_conn=head_image_conn,
+                            resolve_display_name=resolve_display_name,
+                            privacy_mode=privacy_mode,
+                            include_media=include_media,
+                            media_kinds=media_kinds,
+                            media_written=media_written,
+                            avatar_written=avatar_written,
+                            report=report,
+                            allow_process_key_extract=allow_process_key_extract,
+                            media_db_path=media_db_path,
+                            media_index=media_index,
+                            job=job,
+                            lock=self._lock,
+                            prepared_messages=prepared_messages,
                         )
                     elif export_format == "html":
                         exported_count = _write_conversation_html(
@@ -1812,6 +1990,7 @@ class ChatExportManager:
                             media_index=media_index,
                             job=job,
                             lock=self._lock,
+                            prepared_messages=prepared_messages,
                         )
                     else:
                         exported_count = _write_conversation_json(
@@ -1843,6 +2022,7 @@ class ChatExportManager:
                             media_index=media_index,
                             job=job,
                             lock=self._lock,
+                            prepared_messages=prepared_messages,
                         )
 
                     _safe_trace(
@@ -1872,6 +2052,8 @@ class ChatExportManager:
                     zf.writestr(f"{conv_dir}/meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
                     if export_format == "html":
                         html_index_items.append({"convDir": conv_dir, "meta": meta})
+                    elif export_format == "excel":
+                        excel_index_items.append({"convDir": conv_dir, "meta": meta})
 
                     with self._lock:
                         job.progress.current_conversation_messages_exported = int(exported_count)
@@ -1890,6 +2072,7 @@ class ChatExportManager:
 
                 if export_format == "html":
                     phase_started = time.perf_counter()
+                    archive_title = str(opts.get("_archiveTitle") or "").strip() or "聊天记录"
                     def esc_text(v: Any) -> str:
                         return html.escape(str(v or ""), quote=False)
 
@@ -1902,7 +2085,7 @@ class ChatExportManager:
                     parts.append("<head>\n")
                     parts.append('  <meta charset="utf-8" />\n')
                     parts.append('  <meta name="viewport" content="width=device-width, initial-scale=1" />\n')
-                    parts.append("  <title>聊天记录导出</title>\n")
+                    parts.append(f"  <title>{esc_text(archive_title)}导出</title>\n")
                     html_assets = dict(job.options.get("_htmlAssets") or {})
                     css_asset_path = str(html_assets.get("cssPath") or _html_export_asset_paths(job.export_id)[0])
                     js_asset_path = str(html_assets.get("jsPath") or _html_export_asset_paths(job.export_id)[1])
@@ -1924,7 +2107,7 @@ class ChatExportManager:
                     )
                     parts.append('<div class="wce-index">\n')
                     parts.append('  <div class="wce-index-container">\n')
-                    parts.append('    <h1 class="wce-index-title">聊天记录导出（HTML）</h1>\n')
+                    parts.append(f'    <h1 class="wce-index-title">{esc_text(archive_title)}导出（HTML）</h1>\n')
                     parts.append(
                         f'    <p class="wce-index-sub">账号: {esc_text("hidden" if privacy_mode else account_dir.name)} · 会话数: {len(html_index_items)} · 导出时间: {esc_text(_now_iso())}</p>\n'
                     )
@@ -1973,6 +2156,28 @@ class ChatExportManager:
                         conversations=len(html_index_items),
                     )
                     _raise_if_job_cancelled(job, "html_index_written", trace)
+                elif export_format == "excel":
+                    zf.writestr(
+                        "index.xlsx",
+                        build_xlsx_workbook(
+                            [
+                                (
+                                    "会话目录",
+                                    ["会话", "用户名", "群聊", "消息数", "文件"],
+                                    [
+                                        [
+                                            str((item.get("meta") or {}).get("displayName") or ""),
+                                            str((item.get("meta") or {}).get("username") or ""),
+                                            "是" if bool((item.get("meta") or {}).get("isGroup")) else "否",
+                                            str((item.get("meta") or {}).get("messageCount") or 0),
+                                            f"{item.get('convDir')}/messages.xlsx",
+                                        ]
+                                        for item in excel_index_items
+                                    ],
+                                )
+                            ]
+                        ),
+                    )
 
                 phase_started = time.perf_counter()
                 manifest = {
@@ -3357,6 +3562,9 @@ def _write_conversation_json(
     media_index: Optional[MediaPathIndex],
     job: ExportJob,
     lock: threading.Lock,
+    prepared_messages: Optional[list[dict[str, Any]]] = None,
+    after_payload_written: Optional[Callable[[Path], None]] = None,
+    include_archive_payload: bool = True,
 ) -> int:
     arcname = f"{conv_dir}/messages.json"
     exported = 0
@@ -3457,7 +3665,7 @@ def _write_conversation_json(
             sender_alias_map: dict[str, int] = {}
             first = True
             scanned = 0
-            for row in _iter_rows_for_conversation(
+            source_messages: Iterable[Any] = prepared_messages if prepared_messages is not None else _iter_rows_for_conversation(
                 account_dir=account_dir,
                 conv_username=conv_username,
                 start_time=start_time,
@@ -3465,7 +3673,8 @@ def _write_conversation_json(
                 local_types=local_types,
                 source=source,
                 rt_conn=rt_conn,
-            ):
+            )
+            for source_message in source_messages:
                 scanned += 1
                 _raise_if_job_cancelled(
                     job,
@@ -3484,42 +3693,47 @@ def _write_conversation_json(
                     exported=exported,
                 )
 
-                sender_alias = ""
-                if conv_is_group and row.raw_text and (not row.raw_text.startswith("<")) and (not row.raw_text.startswith('"<')):
-                    sep = row.raw_text.find(":\n")
-                    if sep > 0:
-                        prefix = row.raw_text[:sep].strip()
-                        su = str(row.sender_username or "").strip()
-                        if prefix and su and prefix != su:
-                            strong_hint = prefix.startswith("wxid_") or prefix.endswith("@chatroom") or "@" in prefix
-                            if not strong_hint:
-                                body_probe = row.raw_text[sep + 2 :].lstrip("\n").lstrip()
-                                body_is_xml = body_probe.startswith("<") or body_probe.startswith('"<')
-                                if not body_is_xml:
-                                    sender_alias = lookup_alias(su)
+                if prepared_messages is not None:
+                    msg = copy.deepcopy(source_message)
+                else:
+                    row = source_message
+                    sender_alias = ""
+                    if conv_is_group and row.raw_text and (not row.raw_text.startswith("<")) and (not row.raw_text.startswith('"<')):
+                        sep = row.raw_text.find(":\n")
+                        if sep > 0:
+                            prefix = row.raw_text[:sep].strip()
+                            su = str(row.sender_username or "").strip()
+                            if prefix and su and prefix != su:
+                                strong_hint = prefix.startswith("wxid_") or prefix.endswith("@chatroom") or "@" in prefix
+                                if not strong_hint:
+                                    body_probe = row.raw_text[sep + 2 :].lstrip("\n").lstrip()
+                                    body_is_xml = body_probe.startswith("<") or body_probe.startswith('"<')
+                                    if not body_is_xml:
+                                        sender_alias = lookup_alias(su)
 
-                phase_started = time.perf_counter()
-                msg = _parse_message_for_export(
-                    row=row,
-                    conv_username=conv_username,
-                    is_group=conv_is_group,
-                    resource_conn=resource_conn,
-                    resource_chat_id=resource_chat_id,
-                    sender_alias=sender_alias,
-                    resolve_display_name=resolve_display_name,
-                )
-                _log_export_slow_step(
-                    "json.parse_message",
-                    phase_started,
-                    exportId=job.export_id,
-                    conversation=conv_username,
-                    scanned=scanned,
-                    localType=row.local_type,
-                    serverId=row.server_id,
-                )
+                    phase_started = time.perf_counter()
+                    msg = _parse_message_for_export(
+                        row=row,
+                        conv_username=conv_username,
+                        is_group=conv_is_group,
+                        resource_conn=resource_conn,
+                        resource_chat_id=resource_chat_id,
+                        sender_alias=sender_alias,
+                        resolve_display_name=resolve_display_name,
+                    )
+                    _log_export_slow_step(
+                        "json.parse_message",
+                        phase_started,
+                        exportId=job.export_id,
+                        conversation=conv_username,
+                        scanned=scanned,
+                        localType=row.local_type,
+                        serverId=row.server_id,
+                    )
                 if not _is_render_type_selected(msg.get("renderType"), want_types):
                     continue
 
+                media_conv_username = str(msg.pop("_mediaUsername", "") or "").strip() or conv_username
                 su = str(msg.get("senderUsername") or "").strip()
                 if privacy_mode:
                     _privacy_scrub_message(msg, conv_is_group=conv_is_group, sender_alias_map=sender_alias_map)
@@ -3550,7 +3764,7 @@ def _write_conversation_json(
                     _attach_offline_media(
                         zf=zf,
                         account_dir=account_dir,
-                        conv_username=conv_username,
+                        conv_username=media_conv_username,
                         msg=msg,
                         media_written=media_written,
                         report=report,
@@ -3596,14 +3810,18 @@ def _write_conversation_json(
             )
             _safe_trace(trace, "messages_temp_written", scanned=scanned, exported=exported)
 
-        phase_started = time.perf_counter()
-        try:
-            tmp_html_text = tmp_path.read_text(encoding="utf-8")
-            tmp_path.write_text(_minify_html_for_export(tmp_html_text), encoding="utf-8", newline="\n")
-        except Exception:
-            pass
-        zf.write(str(tmp_path), arcname)
-        _safe_trace(trace, "zip_entry_written", durationMs=_elapsed_ms(phase_started), arcname=arcname)
+        if after_payload_written is not None:
+            after_payload_written(tmp_path)
+
+        if include_archive_payload:
+            phase_started = time.perf_counter()
+            try:
+                tmp_html_text = tmp_path.read_text(encoding="utf-8")
+                tmp_path.write_text(_minify_html_for_export(tmp_html_text), encoding="utf-8", newline="\n")
+            except Exception:
+                pass
+            zf.write(str(tmp_path), arcname)
+            _safe_trace(trace, "zip_entry_written", durationMs=_elapsed_ms(phase_started), arcname=arcname)
     if contact_conn is not None:
         try:
             contact_conn.close()

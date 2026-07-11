@@ -16,6 +16,57 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 class TestContactsExport(unittest.TestCase):
+    def test_html_export_renders_contact_profile_cards(self):
+        from wechat_decrypt_tool.routers.chat_contacts import _build_export_contacts, _write_html_export
+
+        built_contacts = _build_export_contacts(
+            [{"username": "missing_remote_avatar", "avatarLink": "", "avatar": "http://example.test/local-avatar"}],
+            include_avatar_link=True,
+        )
+        self.assertEqual(built_contacts[0]["avatarLink"], "http://example.test/local-avatar")
+
+        with TemporaryDirectory() as td:
+            output_path = Path(td) / "contacts.html"
+            _write_html_export(
+                output_path,
+                account="wxid_account",
+                source="decrypted",
+                contacts=[
+                    {
+                        "username": "wxid_friend",
+                        "displayName": "小明 <好友>",
+                        "remark": "项目联系人",
+                        "nickname": "明明",
+                        "alias": "wechat-ming",
+                        "type": "friend",
+                        "officialAccountKind": "",
+                        "officialAccountType": 0,
+                        "region": "中国大陆·四川·成都",
+                        "country": "CN",
+                        "province": "Sichuan",
+                        "city": "Chengdu",
+                        "source": "通过名片分享添加",
+                        "sourceScene": 17,
+                        "avatarLink": "https://example.test/avatar?id=1&size=0",
+                    }
+                ],
+                include_avatar_link=True,
+            )
+
+            document = output_path.read_text(encoding="utf-8")
+            self.assertIn('class="contact-card"', document)
+            self.assertIn('class="contact-avatar"', document)
+            self.assertIn('src="https://example.test/avatar?id=1&amp;size=0"', document)
+            self.assertNotIn("<table", document)
+            self.assertIn("小明 &lt;好友&gt;", document)
+            for label in ("用户名", "显示名称", "备注", "昵称", "微信号", "地区", "来源"):
+                self.assertIn(f">{label}<", document)
+                self.assertEqual(document.count(f">{label}<"), 1, label)
+            for label in ("头像", "类型", "公众号类型", "公众号类型码", "国家/地区码", "省份", "城市", "来源场景码"):
+                self.assertNotIn(f">{label}<", document)
+            self.assertIn("grid-template-columns:repeat(4,minmax(0,1fr))", document)
+            self.assertIn("width:50px;height:50px", document)
+
     @staticmethod
     def _encode_varint(value: int) -> bytes:
         v = int(value)

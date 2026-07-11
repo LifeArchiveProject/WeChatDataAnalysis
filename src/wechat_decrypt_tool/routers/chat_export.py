@@ -12,7 +12,7 @@ from ..path_fix import PathFixRoute
 
 router = APIRouter(route_class=PathFixRoute)
 
-ExportFormat = Literal["json", "txt", "html"]
+ExportFormat = Literal["json", "txt", "html", "excel"]
 ExportScope = Literal["selected", "all", "groups", "singles"]
 ChatSource = Literal["auto", "decrypted", "realtime"]
 MediaKind = Literal["image", "emoji", "video", "video_thumb", "voice", "file"]
@@ -38,7 +38,7 @@ class ChatExportCreateRequest(BaseModel):
     source: ChatSource = Field("auto", description="数据源：auto/realtime=直接读取原始 WCDB；decrypted=兼容旧本地解密库")
     scope: ExportScope = Field("selected", description="导出范围：selected=指定会话；all=全部；groups=仅群聊；singles=仅单聊")
     usernames: list[str] = Field(default_factory=list, description="会话 username 列表（scope=selected 时使用）")
-    format: ExportFormat = Field("json", description="导出格式：json/txt/html（zip 内每个会话一个文件；html 可离线打开 index.html 查看）")
+    format: ExportFormat = Field("json", description="导出格式：html/json/txt/excel（zip 内每个会话一个文件；Excel 为 .xlsx）")
     start_time: Optional[int] = Field(None, description="起始时间（Unix 秒，含）")
     end_time: Optional[int] = Field(None, description="结束时间（Unix 秒，含）")
     include_hidden: bool = Field(False, description="是否包含隐藏会话（scope!=selected 时）")
