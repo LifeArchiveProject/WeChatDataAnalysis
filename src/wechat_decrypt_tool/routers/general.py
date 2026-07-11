@@ -1183,6 +1183,12 @@ def _attach_payment_message_details(account_dir: Path, items: list[dict[str, Any
             item["initialMessage"] = detail
             item["message"] = detail
             item["messageSummary"] = _text(detail.get("content"), max_len=180)
+            message_create_time = _safe_int(detail.get("createTime"), 0)
+            if message_create_time > 0:
+                item["messageCreateTime"] = message_create_time
+                item["messageCreateTimeText"] = _text(detail.get("createTimeText")) or _time_text(message_create_time)
+                if item.get("kind") == "redpacket":
+                    item["sortTime"] = message_create_time
         amount = _format_amount_text(detail.get("amount"))
         if amount and not item.get("amount"):
             item["amount"] = amount
@@ -1210,6 +1216,24 @@ def _attach_payment_message_details(account_dir: Path, items: list[dict[str, Any
         elif pay_sub_type == 3 or "收款" in message_status:
             item["transferState"] = "received"
             item["transferStatus"] = message_status or "已收款"
+
+
+def _hydrate_and_sort_payment_items(
+    account_dir: Path,
+    items: list[dict[str, Any]],
+    *,
+    source: str,
+) -> None:
+    """Resolve message timestamps before ordering the mixed payment ledger."""
+    red_packets = [item for item in items if item.get("kind") == "redpacket"]
+    _attach_payment_message_details(account_dir, red_packets, source=source)
+    items.sort(
+        key=lambda item: (
+            _safe_int(item.get("sortTime"), 0),
+            _safe_int(item.get("messageServerId"), 0),
+        ),
+        reverse=True,
+    )
 
 
 def _attach_revoke_message_details(account_dir: Path, items: list[dict[str, Any]], *, source: str = "decrypted") -> None:
@@ -1697,9 +1721,18 @@ def list_payment_records(
             item for item in items
             if item.get("kind") == "transfer" and item.get("transferState") == status
         ]
-    items.sort(key=lambda x: (_safe_int(x.get("sortTime"), 0), _safe_int(x.get("messageServerId"), 0)), reverse=True)
+    _hydrate_and_sort_payment_items(
+        ctx.account_dir,
+        items,
+        source=meta.get("dataSource", "decrypted"),
+    )
     sliced, has_more = _page(items, limit=limit, offset=offset)
-    _attach_payment_message_details(ctx.account_dir, sliced, source=meta.get("dataSource", "decrypted"))
+    visible_transfers = [item for item in sliced if item.get("kind") == "transfer"]
+    _attach_payment_message_details(
+        ctx.account_dir,
+        visible_transfers,
+        source=meta.get("dataSource", "decrypted"),
+    )
     return {"status": "success", "account": account_name, "total": len(items), "hasMore": has_more, "stats": stats, "items": sliced, **meta}
 
 

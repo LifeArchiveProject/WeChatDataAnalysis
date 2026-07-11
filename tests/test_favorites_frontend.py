@@ -75,6 +75,9 @@ class TestFavoritesFrontend(unittest.TestCase):
     def test_payment_page_filters_and_exports_terminal_transfer_states(self):
         source = (ROOT / "frontend" / "pages" / "payments.vue").read_text(encoding="utf-8")
         self.assertIn('aria-label="按转账状态筛选"', source)
+        self.assertIn("item?.messageCreateTimeText", source)
+        self.assertIn("queueRealtimePaymentRefresh", source)
+        self.assertIn("loadItems({ background: true })", source)
         export_types = source.split("const paymentExportTypes = [", 1)[1].split("]", 1)[0]
         self.assertIn("{ value: 'received', label: '已收款'", export_types)
         self.assertIn("{ value: 'expired', label: '已过期'", export_types)

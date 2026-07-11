@@ -56,6 +56,47 @@ class TestGeneralPaymentStatus(unittest.TestCase):
         self.assertEqual([item["transferState"] for item in items], ["received", "returned", "expired"])
         self.assertEqual([item["transferStatus"] for item in items], ["已收款", "已退还", "已过期"])
 
+    def test_red_packets_are_sorted_by_message_time_before_paging(self):
+        items = [
+            {
+                "kind": "redpacket",
+                "sessionName": "wxid_friend",
+                "messageServerId": 999,
+                "sendId": "older",
+                "sortTime": 0,
+            },
+            {
+                "kind": "redpacket",
+                "sessionName": "wxid_friend",
+                "messageServerId": 1,
+                "sendId": "newer",
+                "sortTime": 0,
+            },
+        ]
+        details = {
+            "wxid_friend|s:999|l:0": {
+                "serverId": 999,
+                "createTime": 100,
+                "createTimeText": "1970-01-01 00:01:40",
+                "renderType": "redPacket",
+                "content": "旧红包",
+            },
+            "wxid_friend|s:1|l:0": {
+                "serverId": 1,
+                "createTime": 200,
+                "createTimeText": "1970-01-01 00:03:20",
+                "renderType": "redPacket",
+                "content": "新红包",
+            },
+        }
+
+        with patch.object(general, "_lookup_messages_for_requests", return_value=details):
+            general._hydrate_and_sort_payment_items(Path("."), items, source="realtime")
+
+        self.assertEqual([item["sendId"] for item in items], ["newer", "older"])
+        self.assertEqual(items[0]["messageCreateTime"], 200)
+        self.assertEqual(items[0]["messageCreateTimeText"], "1970-01-01 00:03:20")
+
 
 if __name__ == "__main__":
     unittest.main()

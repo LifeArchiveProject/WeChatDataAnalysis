@@ -213,6 +213,7 @@
 <script setup>
 import { storeToRefs } from 'pinia'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
+import { useChatRealtimeStore } from '~/stores/chatRealtime'
 import { usePrivacyStore } from '~/stores/privacy'
 
 useHead({ title: '转账与红包 - 微信数据分析助手' })
@@ -220,6 +221,8 @@ useHead({ title: '转账与红包 - 微信数据分析助手' })
 const api = useApi()
 const chatAccounts = useChatAccountsStore()
 const { selectedAccount } = storeToRefs(chatAccounts)
+const realtimeStore = useChatRealtimeStore()
+const { enabled: realtimeEnabled, changeSeq: realtimeChangeSeq } = storeToRefs(realtimeStore)
 const privacyStore = usePrivacyStore()
 const { privacyMode } = storeToRefs(privacyStore)
 
@@ -261,6 +264,7 @@ const paymentExportDefaultTypes = computed(() => {
 const PAGE_SIZE = 80
 let requestId = 0
 let keywordTimer = null
+let realtimeRefreshTimer = null
 const avatarBroken = reactive({})
 
 const recordKey = (item) => item.kind === 'transfer'
@@ -390,11 +394,23 @@ const numericFieldText = (value) => {
 }
 
 const recordTimeText = (item) => {
-  return String(item?.beginTransferTimeText || item?.lastUpdateTimeText || '').trim() || '时间未记录'
+  return String(
+    item?.beginTransferTimeText
+    || item?.lastUpdateTimeText
+    || item?.messageCreateTimeText
+    || item?.message?.createTimeText
+    || ''
+  ).trim() || '时间未记录'
 }
 
 const recordDateTime = (item) => {
-  const value = Number(item?.beginTransferTime || item?.lastUpdateTime || 0)
+  const value = Number(
+    item?.beginTransferTime
+    || item?.lastUpdateTime
+    || item?.messageCreateTime
+    || item?.message?.createTime
+    || 0
+  )
   if (!Number.isFinite(value) || value <= 0) return undefined
   try {
     return new Date(value * 1000).toISOString()
@@ -421,16 +437,22 @@ const loadItems = async (options = {}) => {
   }
 
   const append = !!options.append
+  const background = !!options.background
   const rid = ++requestId
-  loading.value = true
-  error.value = ''
+  if (!background) {
+    loading.value = true
+    error.value = ''
+  }
   try {
+    const requestedLimit = background
+      ? Math.min(500, Math.max(PAGE_SIZE, items.value.length))
+      : PAGE_SIZE
     const resp = await api.listPaymentRecords({
       account: selectedAccount.value,
       q: keyword.value || '',
       kind: kindFilter.value,
       status: statusFilter.value,
-      limit: PAGE_SIZE,
+      limit: requestedLimit,
       offset: append ? items.value.length : 0,
     })
     if (rid !== requestId) return
@@ -440,13 +462,26 @@ const loadItems = async (options = {}) => {
     hasMore.value = !!resp?.hasMore
     stats.value = resp?.stats || {}
   } catch (e) {
-    if (rid === requestId) {
+    if (rid === requestId && !background) {
       if (!append) resetItems()
       error.value = e?.message || '加载转账与红包数据失败'
     }
   } finally {
-    if (rid === requestId) loading.value = false
+    if (rid === requestId && !background) loading.value = false
   }
+}
+
+const queueRealtimePaymentRefresh = () => {
+  if (!realtimeEnabled.value) return
+  if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer)
+  realtimeRefreshTimer = setTimeout(() => {
+    realtimeRefreshTimer = null
+    if (loading.value) {
+      queueRealtimePaymentRefresh()
+      return
+    }
+    void loadItems({ background: true })
+  }, 450)
 }
 
 watch(keyword, () => {
@@ -463,15 +498,21 @@ watch(statusFilter, (value) => {
   void loadItems()
 })
 watch(() => selectedAccount.value, () => { void loadItems() })
+watch(realtimeChangeSeq, (next, previous) => {
+  if (next !== previous) queueRealtimePaymentRefresh()
+})
 
 onMounted(async () => {
   privacyStore.init()
   await chatAccounts.ensureLoaded()
+  await realtimeStore.enable({ silent: true })
   await loadItems()
 })
 
 onBeforeUnmount(() => {
   if (keywordTimer) clearTimeout(keywordTimer)
+  if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer)
+  void realtimeStore.disable({ silent: true })
 })
 </script>
 
