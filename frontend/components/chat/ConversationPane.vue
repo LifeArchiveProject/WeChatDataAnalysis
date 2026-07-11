@@ -8,6 +8,21 @@
           </h2>
         </div>
         <div class="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            class="header-btn-icon"
+            :disabled="isLoadingMessages || isJumpingToFirst"
+            :aria-busy="isJumpingToFirst"
+            aria-label="从第一条消息开始阅读"
+            title="从第一条消息开始阅读"
+            @click="jumpToConversationFirst"
+          >
+            <svg class="w-4 h-4" :class="{ 'animate-pulse': isJumpingToFirst }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" aria-hidden="true">
+              <path d="M5 4h14" />
+              <path d="M12 20V7" />
+              <path d="m7.5 11.5 4.5-4.5 4.5 4.5" />
+            </svg>
+          </button>
           <button class="header-btn-icon" @click="refreshSelectedMessages" :disabled="isLoadingMessages" title="刷新消息">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>

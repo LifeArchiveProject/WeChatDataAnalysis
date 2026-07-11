@@ -592,7 +592,7 @@ if (kind === 'date') {
   return label ? `已定位到 ${label}（上下文模式）` : '已定位到指定日期（上下文模式）'
 }
 if (kind === 'first') {
-  return '已定位到会话顶部（上下文模式）'
+  return '已从第一条消息开始阅读（上下文模式）'
 }
 return '已定位到搜索结果（上下文模式）'
 })
@@ -610,6 +610,7 @@ const timeSidebarTotal = ref(0)
 const timeSidebarLoading = ref(false)
 const timeSidebarError = ref('')
 const timeSidebarSelectedDate = ref('') // YYYY-MM-DD (current/selected day)
+const isJumpingToFirst = ref(false)
 // Simple in-memory cache per (account|username|YYYY-MM)
 const timeSidebarCache = ref({})
 const timeSidebarWeekdays = ['一', '二', '三', '四', '五', '六', '日']
@@ -1404,8 +1405,17 @@ try {
   searchContext.value.anchorId = String(resp?.anchorId || anchor)
   searchContext.value.anchorIndex = Number(resp?.anchorIndex ?? -1)
 
-  const ok = await scrollToMessageId(searchContext.value.anchorId)
-  if (ok) flashMessage(searchContext.value.anchorId)
+  if (kindNorm === 'first') {
+    await nextTick()
+    const container = messageContainerRef.value
+    if (container) container.scrollTop = 0
+    updateJumpToBottomState()
+    const firstMessageId = String(mapped[0]?.id || '').trim()
+    if (firstMessageId) flashMessage(firstMessageId)
+  } else {
+    const ok = await scrollToMessageId(searchContext.value.anchorId)
+    if (ok) flashMessage(searchContext.value.anchorId)
+  }
 } catch (e) {
   window.alert(e?.message || '定位失败')
 }
@@ -1444,7 +1454,9 @@ const jumpToConversationFirst = async () => {
 if (!process.client) return
 if (!selectedAccount.value) return
 if (!selectedContact.value?.username) return
+if (isJumpingToFirst.value) return
 
+isJumpingToFirst.value = true
 try {
   const resp = await api.getChatMessageAnchor({
     account: selectedAccount.value,
@@ -1463,6 +1475,8 @@ try {
   await locateByAnchorId({ targetUsername: selectedContact.value.username, anchorId, kind: 'first', label: '' })
 } catch (e) {
   window.alert(e?.message || '定位失败')
+} finally {
+  isJumpingToFirst.value = false
 }
 }
 
@@ -2074,6 +2088,7 @@ if (c.scrollTop <= 240 && autoLoadReady.value && hasMoreMessages.value && !isLoa
     timeSidebarLoading,
     timeSidebarError,
     timeSidebarSelectedDate,
+    isJumpingToFirst,
     timeSidebarWeekdays,
     timeSidebarMonthLabel,
     timeSidebarYearOptions,

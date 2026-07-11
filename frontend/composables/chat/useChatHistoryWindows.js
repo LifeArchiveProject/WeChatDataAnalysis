@@ -9,6 +9,7 @@ import {
   pickFirstMd5,
   stripWeChatInvisible
 } from '~/lib/chat/chat-history'
+import { openMessageExternalUrl } from '~/lib/chat/message-links'
 
 export const useChatHistoryWindows = ({
   api,
@@ -16,7 +17,8 @@ export const useChatHistoryWindows = ({
   selectedAccount,
   selectedContact,
   openImagePreview,
-  openVideoPreview
+  openVideoPreview,
+  buildVoiceUrl
 }) => {
   const floatingWindows = ref([])
   let floatingWindowSeq = 0
@@ -27,7 +29,8 @@ export const useChatHistoryWindows = ({
   const normalizeRecordItem = createChatHistoryRecordNormalizer({
     apiBase,
     getSelectedAccount: () => selectedAccount.value,
-    getSelectedContact: () => selectedContact.value
+    getSelectedContact: () => selectedContact.value,
+    buildVoiceUrl
   })
 
   const getFloatingWindowById = (id) => {
@@ -232,9 +235,7 @@ export const useChatHistoryWindows = ({
   }
 
   const openUrlInBrowser = (url) => {
-    const next = String(url || '').trim()
-    if (!next) return
-    try { window.open(next, '_blank', 'noopener,noreferrer') } catch {}
+    void openMessageExternalUrl(url)
   }
 
   const resolveChatHistoryLinkRecord = async (record) => {

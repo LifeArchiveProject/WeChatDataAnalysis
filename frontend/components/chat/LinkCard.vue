@@ -21,6 +21,7 @@ export default defineComponent({
   setup(props) {
     const fromAvatarImgOk = ref(false)
     const fromAvatarImgError = ref(false)
+    const previewImgError = ref(false)
 
     watch(
       () => String(props.fromAvatar || '').trim(),
@@ -28,6 +29,12 @@ export default defineComponent({
         fromAvatarImgOk.value = false
         fromAvatarImgError.value = false
       },
+      { immediate: true }
+    )
+
+    watch(
+      () => String(props.preview || '').trim(),
+      () => { previewImgError.value = false },
       { immediate: true }
     )
 
@@ -59,7 +66,9 @@ export default defineComponent({
       const isMiniProgram = String(props.linkType || '').trim() === 'mini_program'
       const isFinder = String(props.linkType || '').trim() === 'finder'
       const isCoverVariant = !isMiniProgram && String(props.variant || '').trim() === 'cover'
+      const showPreview = Boolean(String(props.preview || '').trim()) && !previewImgError.value
       const Tag = canNavigate ? 'a' : 'div'
+      const onPreviewError = () => { previewImgError.value = true }
 
       const showFromAvatarImg = Boolean(fromAvatarUrl) && !fromAvatarImgError.value
       const showFromAvatarText = (!fromAvatarUrl) || (!fromAvatarImgOk.value)
@@ -130,13 +139,14 @@ export default defineComponent({
             }
           },
           [
-            props.preview
+            showPreview
               ? h('div', { class: 'wechat-link-cover-image-wrap' }, [
                   h('img', {
                     src: props.preview,
                     alt: props.heading || '链接封面',
                     class: 'wechat-link-cover-image',
-                    referrerpolicy: 'no-referrer'
+                    referrerpolicy: 'no-referrer',
+                    onError: onPreviewError
                   }),
                   fromRow
                 ])
@@ -173,13 +183,14 @@ export default defineComponent({
             }
           },
           [
-            h('div', { class: ['wechat-link-finder-cover', !props.preview ? 'wechat-link-finder-cover--empty' : ''].filter(Boolean).join(' ') }, [
-              props.preview
+            h('div', { class: ['wechat-link-finder-cover', !showPreview ? 'wechat-link-finder-cover--empty' : ''].filter(Boolean).join(' ') }, [
+              showPreview
                 ? h('img', {
                     src: props.preview,
                     alt: props.heading || '视频号封面',
                     class: 'wechat-link-finder-cover-img',
-                    referrerpolicy: 'no-referrer'
+                    referrerpolicy: 'no-referrer',
+                    onError: onPreviewError
                   })
                 : h('div', { class: 'wechat-link-finder-cover-placeholder', 'aria-hidden': 'true' }, [
                     h('svg', { viewBox: '0 0 24 24', fill: 'currentColor' }, [
@@ -258,13 +269,14 @@ export default defineComponent({
                 h('div', { class: 'wechat-link-mini-header-name' }, fromText || '\u200B')
               ]),
               h('div', { class: 'wechat-link-mini-title' }, headingText || abstractText || href),
-              h('div', { class: ['wechat-link-mini-preview', !props.preview ? 'wechat-link-mini-preview--empty' : ''].filter(Boolean).join(' ') }, [
-                props.preview
+              h('div', { class: ['wechat-link-mini-preview', !showPreview ? 'wechat-link-mini-preview--empty' : ''].filter(Boolean).join(' ') }, [
+                showPreview
                   ? h('img', {
                       src: props.preview,
                       alt: props.heading || '小程序预览',
                       class: 'wechat-link-mini-preview-img',
-                      referrerpolicy: 'no-referrer'
+                      referrerpolicy: 'no-referrer',
+                      onError: onPreviewError
                     })
                   : null
               ].filter(Boolean))
@@ -311,16 +323,17 @@ export default defineComponent({
         [
           h('div', { class: 'wechat-link-content' }, [
             h('div', { class: 'wechat-link-title' }, headingText || href),
-            (abstractText || props.preview)
+            (abstractText || showPreview)
               ? h('div', { class: 'wechat-link-summary' }, [
                   abstractText ? h('div', { class: 'wechat-link-desc' }, abstractText) : null,
-                  props.preview
+                  showPreview
                     ? h('div', { class: 'wechat-link-thumb' }, [
                         h('img', {
                           src: props.preview,
                           alt: props.heading || '链接预览',
                           class: 'wechat-link-thumb-img',
-                          referrerpolicy: 'no-referrer'
+                          referrerpolicy: 'no-referrer',
+                          onError: onPreviewError
                         })
                       ])
                     : null

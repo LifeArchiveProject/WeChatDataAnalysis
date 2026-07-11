@@ -187,14 +187,18 @@ export const parseChatHistoryRecord = (recordItemXml, options = {}) => {
 
     const fmt = String(datafmt || '').trim().toLowerCase().replace(/^\./, '')
     const imageFormats = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif'])
+    const audioFormats = new Set(['silk', 'amr', 'aud', 'mp3', 'wav', 'm4a', 'aac', 'ogg', 'opus'])
+    const videoFormats = new Set(['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm'])
 
     let renderType = 'text'
     if (datatype === '17') {
       renderType = 'chatHistory'
     } else if (datatype === '5' || link) {
       renderType = 'link'
-    } else if (datatype === '4' || String(duration || '').trim() || fmt === 'mp4') {
+    } else if (datatype === '4' || videoFormats.has(fmt)) {
       renderType = 'video'
+    } else if (datatype === '3' || audioFormats.has(fmt)) {
+      renderType = 'voice'
     } else if (datatype === '47' || datatype === '37') {
       renderType = 'emoji'
     } else if (
@@ -270,7 +274,7 @@ export const formatChatHistoryVideoDuration = (value) => {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
-export const createChatHistoryRecordNormalizer = ({ apiBase, getSelectedAccount, getSelectedContact }) => {
+export const createChatHistoryRecordNormalizer = ({ apiBase, getSelectedAccount, getSelectedContact, buildVoiceUrl }) => {
   return (record) => {
     const account = encodeURIComponent(String(getSelectedAccount?.() || '').trim())
     const username = encodeURIComponent(String(getSelectedContact?.()?.username || '').trim())
@@ -278,6 +282,14 @@ export const createChatHistoryRecordNormalizer = ({ apiBase, getSelectedAccount,
 
     output.senderDisplayName = String(output.sourcename || '').trim()
     output.senderAvatar = normalizeChatHistoryUrl(output.sourceheadurl)
+    if (/^https?:\/\//i.test(output.senderAvatar)) {
+      try {
+        const avatarHost = new URL(output.senderAvatar).hostname.toLowerCase()
+        if (avatarHost.endsWith('.qlogo.cn') || avatarHost.endsWith('.qpic.cn')) {
+          output.senderAvatar = `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(output.senderAvatar)}`
+        }
+      } catch {}
+    }
     output.fullTime = String(output.sourcetime || '').trim()
     output.recordAttachKey = extractChatHistoryAttachKey(output.recordAttachKey, output._recordAttachKey)
     output.recordIndexPath = normalizeChatHistoryRecordIndexPath(output.recordIndexPath || output._recordIndexPath)
@@ -365,6 +377,17 @@ export const createChatHistoryRecordNormalizer = ({ apiBase, getSelectedAccount,
         ? makeVideoMediaUrl('video', output.videoMd5, true)
         : ''
       if (!output.content || /^\[.+\]$/.test(String(output.content || '').trim())) output.content = '[视频]'
+    } else if (output.renderType === 'voice') {
+      const srcServerId = String(output.fromnewmsgid || '').trim()
+      output.voiceDuration = String(output.duration || '').trim()
+      const defaultVoiceUrl = srcServerId
+        ? `${apiBase}/chat/media/voice?account=${account}&server_id=${encodeURIComponent(srcServerId)}`
+        : ''
+      output.voiceUrl = typeof buildVoiceUrl === 'function'
+        ? String(buildVoiceUrl(output, defaultVoiceUrl) || '').trim()
+        : defaultVoiceUrl
+      output.voiceRead = true
+      if (!output.content || /^\[.+\]$/.test(String(output.content || '').trim())) output.content = '[语音]'
     } else if (output.renderType === 'emoji') {
       output.emojiMd5 = pickFirstMd5(output.md5, output.fullmd5, output.thumbfullmd5)
       const remoteEmojiUrl = String(output.cdnurlstring || output.externurl || output.encrypturlstring || '').trim()
