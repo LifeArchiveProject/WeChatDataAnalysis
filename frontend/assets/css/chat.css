@@ -377,9 +377,21 @@
 
 .wechat-voip-icon {
   width: 22px;
-  height: 14px;
+  height: 18px;
   flex-shrink: 0;
   object-fit: contain;
+}
+
+.wechat-voip-icon--video {
+  transform: scale(1.5);
+}
+
+.wechat-voip-icon--mirrored {
+  transform: scaleX(-1);
+}
+
+.wechat-voip-icon--video.wechat-voip-icon--mirrored {
+  transform: scale(1.5) scaleX(-1);
 }
 
 .wechat-voip-text {

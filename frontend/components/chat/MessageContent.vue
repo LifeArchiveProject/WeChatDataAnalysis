@@ -133,8 +133,15 @@
                     class="wechat-voip-bubble msg-radius"
                     :class="message.isSent ? 'wechat-voip-sent' : 'wechat-voip-received'">
                     <div class="wechat-voip-content" :class="message.isSent ? 'flex-row-reverse' : ''">
-                      <img v-if="message.voipType === 'video'" src="/assets/images/wechat/wechat-video-light.png" class="wechat-voip-icon" alt="">
-                      <img v-else src="/assets/images/wechat/wechat-audio-light.png" class="wechat-voip-icon" alt="">
+                      <img
+                        :src="message.voipType === 'video' ? '/assets/images/wechat/wechat-video-call.svg' : '/assets/images/wechat/wechat-audio-call.svg'"
+                        class="wechat-voip-icon"
+                        :class="{
+                          'wechat-voip-icon--video': message.voipType === 'video',
+                          'wechat-voip-icon--mirrored': message.voipType === 'video' && message.isSent,
+                        }"
+                        alt=""
+                      >
                       <span class="wechat-voip-text">{{ message.content || '通话' }}</span>
                     </div>
                   </div>
