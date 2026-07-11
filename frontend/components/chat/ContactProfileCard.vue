@@ -82,6 +82,46 @@
       </div>
 
       <div
+        v-if="contactProfileIsFriend && (contactProfileVerificationLoading || contactProfileFriendVerifications.length)"
+        class="contact-profile-section contact-verification-section"
+      >
+        <div class="contact-verification-head">
+          <div class="contact-label">好友验证</div>
+          <span v-if="contactProfileVerificationLoading">加载中...</span>
+          <span v-else>{{ contactProfileFriendVerifications.length }} 条</span>
+        </div>
+        <div v-if="contactProfileFriendVerifications.length" class="contact-verification-list">
+          <article
+            v-for="(record, index) in contactProfileFriendVerifications"
+            :key="`${record.timestamp || 0}-${index}`"
+            class="contact-verification-item"
+          >
+            <div class="contact-verification-meta">
+              <span :class="record.isSender ? 'is-outgoing' : 'is-incoming'">
+                {{ record.isSender ? '我方发起' : '对方发起' }}
+              </span>
+              <time v-if="record.timeText">{{ record.timeText }}</time>
+            </div>
+            <p v-if="record.content || record.remark" :class="{ 'privacy-blur': privacyMode }">
+              <template v-for="(segment, segmentIndex) in verificationContentSegments(record.content || record.remark)" :key="segmentIndex">
+                <button
+                  v-if="segment.type === 'link'"
+                  type="button"
+                  class="contact-verification-link"
+                  :title="`在默认浏览器打开 ${segment.url}`"
+                  @click.stop="openVerificationUrl(segment.url)"
+                >
+                  {{ segment.text }}
+                </button>
+                <span v-else>{{ segment.text }}</span>
+              </template>
+            </p>
+            <p v-else class="contact-verification-empty">未保存验证消息</p>
+          </article>
+        </div>
+      </div>
+
+      <div
         v-if="contactProfileHasMoreInfo"
         class="contact-profile-section compact"
         :class="{ 'compact--with-groups': contactProfileResolvedCommonChatrooms.length }"
@@ -170,6 +210,47 @@ export default defineComponent({
       await router.push(`/chat/${encodeURIComponent(username)}`)
     }
 
+    const verificationContentSegments = (value) => {
+      const text = String(value || '')
+      if (!text) return []
+      const segments = []
+      const pattern = /(?:https?:\/\/|www\.)[^\s<>"']+/giu
+      let lastIndex = 0
+      for (const match of text.matchAll(pattern)) {
+        const index = Number(match.index || 0)
+        if (index > lastIndex) segments.push({ type: 'text', text: text.slice(lastIndex, index) })
+        let linkText = String(match[0] || '')
+        let trailing = ''
+        while (linkText && /[.,;:!?，。；：！？）)】\]]/u.test(linkText.at(-1))) {
+          trailing = linkText.at(-1) + trailing
+          linkText = linkText.slice(0, -1)
+        }
+        if (linkText) {
+          segments.push({
+            type: 'link',
+            text: linkText,
+            url: /^www\./i.test(linkText) ? `https://${linkText}` : linkText
+          })
+        }
+        if (trailing) segments.push({ type: 'text', text: trailing })
+        lastIndex = index + String(match[0] || '').length
+      }
+      if (lastIndex < text.length) segments.push({ type: 'text', text: text.slice(lastIndex) })
+      return segments.length ? segments : [{ type: 'text', text }]
+    }
+
+    const openVerificationUrl = async (value) => {
+      const url = String(value || '').trim()
+      if (!/^https?:\/\//i.test(url)) return
+      if (process.client && typeof window !== 'undefined' && window.wechatDesktop?.openExternalUrl) {
+        try {
+          await window.wechatDesktop.openExternalUrl(url)
+          return
+        } catch {}
+      }
+      try { window.open(url, '_blank', 'noopener,noreferrer') } catch {}
+    }
+
     onUnmounted(() => {
       if (copiedTimer) clearTimeout(copiedTimer)
       copiedTimer = null
@@ -179,7 +260,9 @@ export default defineComponent({
       ...props.state,
       copiedField,
       copyContactProfileText,
-      openCommonChatroom
+      openCommonChatroom,
+      verificationContentSegments,
+      openVerificationUrl
     }
   }
 })
@@ -535,6 +618,86 @@ html[data-theme='dark'] .contact-error {
   color: #fca5a5;
   background: rgba(127, 29, 29, 0.18);
   border-color: rgba(248, 113, 113, 0.18);
+}
+
+.contact-verification-section {
+  padding-top: 10px;
+}
+
+.contact-verification-head,
+.contact-verification-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.contact-verification-head {
+  min-height: 28px;
+}
+
+.contact-verification-head > span,
+.contact-verification-meta time {
+  color: var(--app-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.contact-verification-list {
+  margin-top: 4px;
+}
+
+.contact-verification-item {
+  padding: 9px 0;
+  border-top: 1px solid var(--app-border);
+}
+
+.contact-verification-meta > span {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.contact-verification-meta .is-incoming {
+  color: #167548;
+  background: #e9f8ef;
+}
+
+.contact-verification-meta .is-outgoing {
+  color: #576b95;
+  background: #eef1f6;
+}
+
+.contact-verification-item p {
+  margin: 7px 0 0;
+  color: var(--app-text-primary);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.contact-verification-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  color: #2474c8;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.contact-verification-link:hover {
+  color: #165da5;
+  text-decoration: underline;
+}
+
+.contact-verification-item .contact-verification-empty {
+  color: var(--app-text-muted);
 }
 
 html[data-theme='dark'] .chat-contact-card {
