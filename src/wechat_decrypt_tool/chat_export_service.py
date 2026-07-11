@@ -55,6 +55,7 @@ from .chat_helpers import (
     _resolve_msg_table_name_by_map,
 )
 from .chat_realtime_autosync import CHAT_REALTIME_AUTOSYNC
+from .chat_realtime_reader import count_realtime_message_rows_via_exec, read_all_realtime_message_rows
 from .logging_config import get_logger
 from .media_helpers import (
     MediaPathIndex,
@@ -71,11 +72,15 @@ from .perf_trace import create_perf_trace
 from .wcdb_realtime import (
     WCDB_REALTIME,
     WCDBRealtimeError,
+    close_message_cursor as _wcdb_close_message_cursor,
+    exec_query as _wcdb_exec_query,
+    fetch_message_batch as _wcdb_fetch_message_batch,
     get_avatar_urls as _wcdb_get_avatar_urls,
     get_display_names as _wcdb_get_display_names,
     get_message_count as _wcdb_get_message_count,
     get_messages as _wcdb_get_messages,
     get_sessions as _wcdb_get_sessions,
+    open_message_cursor as _wcdb_open_message_cursor,
 )
 
 logger = get_logger(__name__)
@@ -2557,9 +2562,13 @@ def _normalize_realtime_message_item_for_export(item: dict[str, Any], *, account
     elif (not is_group) and (not sender_username):
         sender_username = conv_username
 
-    table_name = f"msg_{hashlib.md5(str(conv_username or '').strip().encode('utf-8')).hexdigest()}"
+    table_name = str(_pick_case_insensitive_value(item, "table_name", "tableName") or "").strip()
+    if not table_name:
+        table_name = f"msg_{hashlib.md5(str(conv_username or '').strip().encode('utf-8')).hexdigest()}"
+    db_path = str(_pick_case_insensitive_value(item, "_db_path", "db_path", "dbPath") or "").strip()
+    db_stem = Path(db_path).stem if db_path else f"realtime_{account_dir.name}"
     return _Row(
-        db_stem=f"realtime_{account_dir.name}",
+        db_stem=db_stem,
         table_name=table_name,
         local_id=_to_int(_pick_case_insensitive_value(item, "local_id", "localId")),
         server_id=_to_int(_pick_case_insensitive_value(item, "server_id", "serverId", "MsgSvrID")),
@@ -2582,34 +2591,40 @@ def _iter_realtime_rows_for_conversation(
     end_time: Optional[int],
     local_types: Optional[set[int]] = None,
 ) -> Iterable[_Row]:
-    batch = 1000
-    offset = 0
-    rows: list[_Row] = []
-    local_type_filter = {int(x) for x in (local_types or set()) if int(x) != 0} if local_types else None
-    while True:
-        with rt_conn.lock:
-            raw_rows = _wcdb_get_messages(rt_conn.handle, conv_username, limit=batch, offset=offset)
-        if not raw_rows:
-            break
-        offset += len(raw_rows)
-        stop = False
-        for item in raw_rows:
-            if not isinstance(item, dict):
-                continue
-            row = _normalize_realtime_message_item_for_export(item, account_dir=account_dir, conv_username=conv_username)
-            if row.local_id <= 0:
-                continue
-            if local_type_filter and int(row.local_type) not in local_type_filter:
-                continue
-            if end_time is not None and int(row.create_time or 0) > int(end_time):
-                continue
-            if start_time is not None and int(row.create_time or 0) < int(start_time):
-                stop = True
-                continue
-            rows.append(row)
-        if len(raw_rows) < batch or stop:
-            break
-    rows.sort(key=lambda r: (int(r.create_time or 0), int(r.sort_seq or 0), int(r.local_id or 0)))
+    db_storage_dir = _resolve_account_db_storage_dir(account_dir)
+    result = read_all_realtime_message_rows(
+        rt_conn=rt_conn,
+        account_dir=account_dir,
+        username=conv_username,
+        db_storage_dir=db_storage_dir,
+        exec_query=_wcdb_exec_query,
+        open_cursor=_wcdb_open_message_cursor,
+        fetch_batch=_wcdb_fetch_message_batch,
+        close_cursor=_wcdb_close_message_cursor,
+        get_messages=_wcdb_get_messages,
+        normalize_item=lambda item: dict(item),
+        start_time=start_time,
+        end_time=end_time,
+        local_types=local_types,
+    )
+    logger.info(
+        "[chat-export] realtime messages loaded account=%s conversation=%s strategy=%s rows=%s "
+        "tables=%s databases=%s authoritative=%s diagnostics=%s",
+        account_dir.name,
+        conv_username,
+        result.strategy,
+        len(result.rows),
+        result.tables_found,
+        result.databases_probed,
+        result.authoritative,
+        list(result.diagnostics),
+    )
+    rows = [
+        _normalize_realtime_message_item_for_export(item, account_dir=account_dir, conv_username=conv_username)
+        for item in result.rows
+        if isinstance(item, dict)
+    ]
+    rows = [row for row in rows if row.local_id > 0]
     return rows
 
 
@@ -2626,6 +2641,18 @@ def _estimate_conversation_message_count(
     if source == "realtime":
         if rt_conn is None:
             rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
+        direct_count = count_realtime_message_rows_via_exec(
+            rt_conn=rt_conn,
+            account_dir=account_dir,
+            username=conv_username,
+            db_storage_dir=_resolve_account_db_storage_dir(account_dir),
+            exec_query=_wcdb_exec_query,
+            start_time=start_time,
+            end_time=end_time,
+            local_types=local_types,
+        )
+        if direct_count is not None:
+            return int(direct_count)
         if start_time is None and end_time is None and not local_types:
             with rt_conn.lock:
                 return int(_wcdb_get_message_count(rt_conn.handle, conv_username) or 0)

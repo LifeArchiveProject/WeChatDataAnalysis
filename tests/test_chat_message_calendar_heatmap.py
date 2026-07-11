@@ -409,6 +409,144 @@ class TestChatMessageCalendarHeatmap(unittest.TestCase):
             self.assertEqual(data.get("anchorIndex"), 0)
             self.assertEqual([m.get("content") for m in data.get("messages") or []], ["A", "B"])
 
+    def test_realtime_first_anchor_uses_exec_query_without_scanning_messages(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            db_storage_dir = Path(td) / "db_storage"
+            message_dir = db_storage_dir / "message"
+            message_dir.mkdir(parents=True, exist_ok=True)
+            message_db_path = message_dir / "message.db"
+            message_db_path.touch()
+
+            username = "wxid_test_user"
+            table = _msg_table_name(username)
+            first_ts = int(datetime(2020, 1, 2, 3, 4, 5).timestamp())
+            executed_sql: list[str] = []
+
+            def fake_exec_query(_handle, *, kind, path, sql):
+                self.assertEqual(kind, "message")
+                self.assertEqual(Path(path), message_db_path)
+                executed_sql.append(str(sql))
+                if "sqlite_master" in sql:
+                    return [{"name": table}]
+                if "ORDER BY create_time ASC" in sql and "LIMIT 1" in sql:
+                    return [{"local_id": 7, "create_time": first_ts, "sort_seq": 3}]
+                raise AssertionError(f"unexpected SQL: {sql}")
+
+            with (
+                patch.object(chat_router, "_resolve_account_dir", return_value=account_dir),
+                patch.object(chat_router, "_resolve_account_db_storage_dir", return_value=db_storage_dir),
+                patch.object(chat_router.WCDB_REALTIME, "ensure_connected", return_value=_FakeRealtimeConnection()),
+                patch.object(chat_router, "_wcdb_exec_query", side_effect=fake_exec_query),
+                patch.object(
+                    chat_router,
+                    "_wcdb_get_messages",
+                    side_effect=AssertionError("first anchor must not scan the conversation"),
+                ),
+            ):
+                resp = chat_router.get_chat_message_anchor(
+                    username=username,
+                    kind="first",
+                    account="acc",
+                    source="realtime",
+                )
+
+            self.assertEqual(resp.get("status"), "success")
+            self.assertEqual(resp.get("source"), "realtime")
+            self.assertEqual(resp.get("anchorId"), f"message:{table}:7")
+            self.assertEqual(resp.get("createTime"), first_ts)
+            self.assertEqual(resp.get("scannedMessages"), 1)
+            self.assertTrue(any("ORDER BY create_time ASC" in sql for sql in executed_sql))
+
+    def test_realtime_first_context_uses_bounded_exec_queries_without_scanning_messages(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            db_storage_dir = Path(td) / "db_storage"
+            message_dir = db_storage_dir / "message"
+            message_dir.mkdir(parents=True, exist_ok=True)
+            message_db_path = message_dir / "message.db"
+            username = "wxid_test_user"
+            table = _msg_table_name(username)
+            _seed_message_db_full(
+                message_db_path,
+                username=username,
+                rows=[
+                    (1000, 0, "A"),
+                    (2000, 0, "B"),
+                    (3000, 0, "C"),
+                    (4000, 0, "D"),
+                ],
+            )
+            conn = sqlite3.connect(str(message_db_path))
+            try:
+                conn.execute("CREATE TABLE Name2Id (user_name TEXT)")
+                conn.commit()
+            finally:
+                conn.close()
+            _seed_contact_db_minimal(account_dir / "contact.db")
+
+            executed_sql: list[str] = []
+
+            def fake_exec_query(_handle, *, kind, path, sql):
+                self.assertEqual(kind, "message")
+                self.assertEqual(Path(path), message_db_path)
+                executed_sql.append(str(sql))
+                live = sqlite3.connect(str(path))
+                live.row_factory = sqlite3.Row
+                try:
+                    return [dict(row) for row in live.execute(sql).fetchall()]
+                finally:
+                    live.close()
+
+            fake_rt = _FakeRealtimeConnection()
+            app = FastAPI()
+            app.include_router(chat_router.router)
+            client = TestClient(app)
+            with (
+                patch.object(chat_router, "_resolve_account_dir", return_value=account_dir),
+                patch.object(chat_router, "_resolve_account_db_storage_dir", return_value=db_storage_dir),
+                patch.object(chat_router.WCDB_REALTIME, "ensure_connected", return_value=fake_rt),
+                patch.object(chat_router, "_wcdb_exec_query", side_effect=fake_exec_query),
+                patch.object(
+                    chat_router,
+                    "_wcdb_get_messages",
+                    side_effect=AssertionError("bounded context must not scan the conversation"),
+                ),
+                patch.object(chat_router, "_wcdb_get_display_names", return_value={}),
+                patch.object(chat_router, "_wcdb_get_avatar_urls", return_value={}),
+            ):
+                anchor = chat_router.get_chat_message_anchor(
+                    username=username,
+                    kind="first",
+                    account="acc",
+                    source="realtime",
+                )
+                resp = client.get(
+                    "/api/chat/messages/around",
+                    params={
+                        "account": "acc",
+                        "username": username,
+                        "anchor_id": anchor.get("anchorId"),
+                        "before": 2,
+                        "after": 2,
+                        "source": "realtime",
+                    },
+                )
+
+            self.assertEqual(anchor.get("anchorId"), f"message:{table}:1")
+            self.assertEqual(resp.status_code, 200, resp.text)
+            data = resp.json()
+            self.assertEqual(data.get("anchorId"), f"message:{table}:1")
+            self.assertEqual(data.get("anchorIndex"), 0)
+            self.assertEqual([item.get("content") for item in data.get("messages") or []], ["A", "B", "C"])
+            self.assertLessEqual(int(data.get("scannedMessages") or 0), 3)
+            self.assertTrue(any("m.create_time > 1000" in sql and "LIMIT 2" in sql for sql in executed_sql))
+
     def test_realtime_search_uses_decrypted_index_rows(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient

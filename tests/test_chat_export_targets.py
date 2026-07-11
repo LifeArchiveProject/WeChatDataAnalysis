@@ -298,7 +298,7 @@ class TestChatExportTargets(unittest.TestCase):
                     ],
                     [],
                 ],
-            ):
+            ), patch.object(svc, "_wcdb_open_message_cursor", return_value=0):
                 rows = list(
                     svc._iter_rows_for_conversation(
                         account_dir=account_dir,
@@ -314,6 +314,129 @@ class TestChatExportTargets(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].raw_text, "hello from realtime")
             self.assertEqual(rows[0].sender_username, "wxid_friend")
+
+    def test_realtime_message_iterator_reads_live_shards_when_native_cache_is_empty(self):
+        import wechat_decrypt_tool.chat_export_service as svc
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account_dir = root / "wxid_account"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            db_storage = root / "source" / "db_storage"
+            message_dir = db_storage / "message"
+            message_dir.mkdir(parents=True, exist_ok=True)
+            old_db = message_dir / "message_0.db"
+            new_db = message_dir / "message_1.db"
+            old_db.write_bytes(b"placeholder")
+            new_db.write_bytes(b"placeholder")
+
+            username = "wxid_friend"
+            table_name = f"Msg_{hashlib.md5(username.encode('utf-8')).hexdigest()}"
+            rt_conn = _DummyRealtimeConn()
+            rt_conn.db_storage_dir = db_storage
+            rt_conn.native_wxid = account_dir.name
+
+            def fake_exec_query(_handle, *, kind, path, sql):
+                self.assertEqual(kind, "message")
+                db_path = Path(path)
+                if "sqlite_master" in sql:
+                    return [{"name": table_name}]
+                if "FROM Name2Id" in sql:
+                    return [{"rowid": 1}]
+                if "SELECT COUNT(*) AS count" in sql:
+                    return [{"count": 1}]
+                if f'FROM "{table_name}"' not in sql:
+                    return []
+                if db_path == old_db:
+                    return [
+                        {
+                            "local_id": 7,
+                            "server_id": 700,
+                            "local_type": 1,
+                            "sort_seq": 1700000000000,
+                            "real_sender_id": 2,
+                            "create_time": 1700000000,
+                            "message_content": "old shard message",
+                            "compress_content": None,
+                            "packed_info_data": None,
+                            "sender_username": username,
+                        }
+                    ]
+                if db_path == new_db:
+                    return [
+                        {
+                            "local_id": 8,
+                            "server_id": 800,
+                            "local_type": 1,
+                            "sort_seq": 1800000000000,
+                            "real_sender_id": 1,
+                            "create_time": 1800000000,
+                            "message_content": "new shard message",
+                            "compress_content": None,
+                            "packed_info_data": None,
+                            "sender_username": account_dir.name,
+                        }
+                    ]
+                return []
+
+            with (
+                patch.object(svc, "_wcdb_get_messages", return_value=[]),
+                patch.object(svc, "_wcdb_exec_query", side_effect=fake_exec_query, create=True),
+                patch.object(svc, "_resolve_account_db_storage_dir", return_value=db_storage),
+            ):
+                rows = list(
+                    svc._iter_rows_for_conversation(
+                        account_dir=account_dir,
+                        conv_username=username,
+                        start_time=None,
+                        end_time=None,
+                        source="realtime",
+                        rt_conn=rt_conn,
+                    )
+                )
+
+            self.assertEqual([row.raw_text for row in rows], ["old shard message", "new shard message"])
+            self.assertFalse(rows[0].is_sent)
+            self.assertTrue(rows[1].is_sent)
+            with (
+                patch.object(svc, "_wcdb_get_message_count", return_value=0),
+                patch.object(svc, "_wcdb_exec_query", side_effect=fake_exec_query),
+                patch.object(svc, "_resolve_account_db_storage_dir", return_value=db_storage),
+            ):
+                estimated = svc._estimate_conversation_message_count(
+                    account_dir=account_dir,
+                    conv_username=username,
+                    start_time=None,
+                    end_time=None,
+                    source="realtime",
+                    rt_conn=rt_conn,
+                )
+            self.assertEqual(estimated, 2)
+
+    def test_realtime_message_iterator_rejects_unverified_empty_result(self):
+        import wechat_decrypt_tool.chat_export_service as svc
+        from wechat_decrypt_tool.chat_realtime_reader import RealtimeMessageReadError
+
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "wxid_account"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            rt_conn = _DummyRealtimeConn()
+            with (
+                patch.object(svc, "_resolve_account_db_storage_dir", return_value=None),
+                patch.object(svc, "_wcdb_open_message_cursor", return_value=0),
+                patch.object(svc, "_wcdb_get_messages", return_value=[]),
+            ):
+                with self.assertRaises(RealtimeMessageReadError):
+                    list(
+                        svc._iter_rows_for_conversation(
+                            account_dir=account_dir,
+                            conv_username="wxid_friend",
+                            start_time=None,
+                            end_time=None,
+                            source="realtime",
+                            rt_conn=rt_conn,
+                        )
+                    )
 
 
 if __name__ == "__main__":
