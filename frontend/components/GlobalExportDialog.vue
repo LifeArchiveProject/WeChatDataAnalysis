@@ -1,194 +1,199 @@
 <template>
-  <div v-if="open" class="fixed inset-0 z-[135] flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-6">
-    <div class="absolute inset-0" @click="requestClose"></div>
+  <div v-if="open" class="app-export-backdrop">
+    <div class="app-export-backdrop__hit-area" aria-hidden="true" @click="requestClose"></div>
 
-    <div class="relative flex max-h-[90vh] w-full max-w-[680px] flex-col overflow-hidden rounded-lg border border-[#e5e7eb] bg-white">
-      <header class="flex items-start gap-3 border-b border-[#e5e7eb] px-5 py-4">
-        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#d9f3e3] bg-[#f0fdf4] text-[#07C160]">
-          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <section class="app-export-modal app-export-modal--medium" role="dialog" aria-modal="true" aria-labelledby="account-export-title">
+      <header class="app-export-header">
+        <div class="app-export-header__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 3v11" />
-            <path d="M7.5 10.5L12 15l4.5-4.5" />
+            <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
             <path d="M4 19h16" />
           </svg>
         </div>
 
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-2">
-            <h2 class="text-[16px] font-semibold text-[#111827]">导出账号归档</h2>
-            <span class="rounded-md border border-[#d1fae5] bg-[#f0fdf4] px-2 py-0.5 text-[11px] font-medium text-[#047857]">ZIP 归档</span>
+        <div class="app-export-header__copy">
+          <div class="app-export-header__title-row">
+            <h2 id="account-export-title">导出账号归档</h2>
+            <span class="app-export-badge">ZIP 归档</span>
           </div>
-          <p class="mt-1 text-[12px] leading-5 text-[#6b7280]">
-            账号归档会直接打包已解密数据库和本地资源目录，适合备份、迁移或后续重新分析；普通导出会生成 HTML / JSON / TXT 等可阅读结果，更适合查看和分享。
-          </p>
+          <p>打包已解密数据库与本地资源，用于备份、迁移或后续分析</p>
         </div>
 
         <button
           type="button"
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#111827] disabled:cursor-not-allowed disabled:opacity-50"
+          class="app-export-icon-button"
           :disabled="running"
           title="关闭"
+          aria-label="关闭导出面板"
           @click="requestClose"
         >
-          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <path d="M6 6l12 12M18 6L6 18" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M6 6l12 12M18 6 6 18" />
           </svg>
         </button>
       </header>
 
-      <main class="flex-1 overflow-y-auto px-5 py-4">
-        <div class="space-y-4">
-          <div v-if="!selectedAccount" class="rounded-md border border-[#fde68a] bg-[#fffbeb] px-3 py-2.5 text-[13px] leading-5 text-[#92400e]">
-            当前未选择账号，请先导入或切换到一个已解密账号后再导出。
-          </div>
+      <div v-if="!selectedAccount" class="app-export-alert app-export-alert--warning" role="status">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v6M12 17h.01" />
+        </svg>
+        <span>当前未选择账号，请先导入或切换到一个已解密账号后再导出。</span>
+      </div>
+      <div v-if="globalError" class="app-export-alert app-export-alert--error" role="alert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v6M12 17h.01" />
+        </svg>
+        <span>{{ globalError }}</span>
+      </div>
+      <div v-if="globalMessage" class="app-export-alert app-export-alert--success" role="status">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="m8 12 2.5 2.5L16 9" />
+        </svg>
+        <span>{{ globalMessage }}</span>
+      </div>
 
-          <div v-if="globalError" class="rounded-md border border-[#fecaca] bg-[#fef2f2] px-3 py-2.5 text-[13px] leading-5 text-[#b91c1c] whitespace-pre-wrap">
-            {{ globalError }}
-          </div>
-
-          <div v-if="globalMessage" class="rounded-md border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2.5 text-[13px] leading-5 text-[#15803d] whitespace-pre-wrap">
-            {{ globalMessage }}
-          </div>
-
-          <section class="rounded-lg border border-[#e5e7eb] bg-white">
-            <div class="border-b border-[#e5e7eb] px-4 py-3">
-              <div class="text-[14px] font-medium text-[#111827]">导出目录</div>
-              <div class="mt-0.5 text-[12px] text-[#6b7280]">选择 ZIP 文件的保存位置。</div>
-            </div>
-
-            <div class="px-4 py-4">
-              <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <div class="min-w-0 flex-1 rounded-md border border-dashed px-3 py-2.5 text-[12px] leading-5" :class="exportFolder ? 'border-[#86efac] bg-[#f0fdf4] text-[#166534]' : 'border-[#d1d5db] bg-[#f9fafb] text-[#6b7280]'">
-                  <div class="truncate" :title="exportFolder || '尚未选择导出目录'">{{ exportFolder || '尚未选择导出目录' }}</div>
-                </div>
-
-                <div class="flex shrink-0 gap-2">
-                  <button
-                    type="button"
-                    class="inline-flex items-center gap-2 whitespace-nowrap rounded-md border border-[#d1d5db] bg-white px-3 py-2.5 text-[13px] font-medium text-[#111827] transition hover:bg-[#f9fafb] disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="running"
-                    @click="chooseExportFolder"
-                  >
-                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <path d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-                      <path d="M12 11v5" />
-                      <path d="M9.5 13.5H14.5" />
-                    </svg>
-                    选择目录
-                  </button>
-                  <button
-                    v-if="exportFolder"
-                    type="button"
-                    class="inline-flex items-center whitespace-nowrap rounded-md border border-[#d1d5db] bg-white px-3 py-2.5 text-[13px] font-medium text-[#374151] transition hover:bg-[#f9fafb] disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="running"
-                    @click="clearExportFolderSelection"
-                  >
-                    清空
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="rounded-lg border border-[#e5e7eb] bg-white">
-            <div class="flex items-center justify-between gap-3 border-b border-[#e5e7eb] px-4 py-3">
+      <div class="app-export-workspace">
+        <main class="app-export-settings app-export-settings--single">
+          <section class="app-export-panel" aria-labelledby="account-export-content-title">
+            <header class="app-export-panel__header">
               <div>
-                <div class="text-[14px] font-medium text-[#111827]">导出内容</div>
-                <div class="mt-0.5 text-[12px] text-[#6b7280]">勾选要包含在归档中的内容。</div>
+                <h3 id="account-export-content-title">归档内容</h3>
+                <p>勾选要包含在 ZIP 归档中的本地数据。</p>
               </div>
-              <div class="rounded-md bg-[#f3f4f6] px-2 py-1 text-[12px] text-[#4b5563]">{{ contentSummary }}</div>
-            </div>
+              <span class="app-export-badge" :class="{ 'app-export-badge--warning': !hasSelectedContent }">{{ contentSummary }}</span>
+            </header>
 
-            <div class="grid gap-3 p-4 sm:grid-cols-2">
+            <div class="app-export-choice-grid">
               <label
-                class="flex cursor-pointer gap-3 rounded-md border p-3 transition"
-                :class="includeDatabases ? 'border-[#22c55e] bg-[#f0fdf4]' : 'border-[#e5e7eb] bg-white hover:bg-[#f9fafb]'"
+                class="app-export-choice"
+                :class="{ 'is-active': includeDatabases }"
               >
                 <input v-model="includeDatabases" type="checkbox" class="sr-only" />
-                <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border" :class="includeDatabases ? 'border-[#22c55e] bg-white text-[#16a34a]' : 'border-[#e5e7eb] bg-[#f9fafb] text-[#6b7280]'">
-                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <span class="app-export-choice__icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <ellipse cx="12" cy="5" rx="8" ry="3" />
                     <path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
                     <path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
                   </svg>
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="text-[14px] font-medium text-[#111827]">导出数据库</span>
-                    <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="includeDatabases ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
-                      <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                        <path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" />
-                      </svg>
-                    </span>
-                  </div>
-                  <p class="mt-1 text-[12px] leading-5 text-[#6b7280]">包含 .db / .sqlite 数据库，以及必要的账号元信息文件。</p>
-                </div>
+                </span>
+                <span class="app-export-choice__copy">
+                  <strong>数据库</strong>
+                  <p>包含 .db / .sqlite 数据库和必要的账号元信息。</p>
+                </span>
+                <span class="app-export-radio-check" aria-hidden="true">
+                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg>
+                </span>
               </label>
 
               <label
-                class="flex cursor-pointer gap-3 rounded-md border p-3 transition"
-                :class="includeResources ? 'border-[#22c55e] bg-[#f0fdf4]' : 'border-[#e5e7eb] bg-white hover:bg-[#f9fafb]'"
+                class="app-export-choice"
+                :class="{ 'is-active': includeResources }"
               >
                 <input v-model="includeResources" type="checkbox" class="sr-only" />
-                <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border" :class="includeResources ? 'border-[#22c55e] bg-white text-[#16a34a]' : 'border-[#e5e7eb] bg-[#f9fafb] text-[#6b7280]'">
-                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <span class="app-export-choice__icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
                     <path d="M3.3 7L12 12l8.7-5" />
                     <path d="M12 22V12" />
                   </svg>
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="text-[14px] font-medium text-[#111827]">导出资源文件</span>
-                    <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="includeResources ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
-                      <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                        <path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" />
-                      </svg>
-                    </span>
-                  </div>
-                  <p class="mt-1 text-[12px] leading-5 text-[#6b7280]">包含 resource、sns_resource 及朋友圈媒体缓存目录。</p>
-                </div>
+                </span>
+                <span class="app-export-choice__copy">
+                  <strong>资源文件</strong>
+                  <p>包含 resource、sns_resource 和朋友圈媒体缓存。</p>
+                </span>
+                <span class="app-export-radio-check" aria-hidden="true">
+                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg>
+                </span>
               </label>
             </div>
           </section>
 
-          <section v-if="task" class="rounded-lg border border-[#e5e7eb] bg-white">
-            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] px-4 py-3">
+          <section class="app-export-panel" aria-labelledby="account-export-output-title">
+            <header class="app-export-panel__header">
               <div>
-                <div class="text-[14px] font-medium text-[#111827]">{{ task.label }}</div>
-                <div v-if="task.message" class="mt-0.5 text-[12px] text-[#6b7280]">{{ task.message }}</div>
+                <h3 id="account-export-output-title">保存位置</h3>
+                <p>选择 ZIP 文件的保存目录。</p>
               </div>
-              <span class="rounded-md px-2 py-1 text-[11px] font-medium" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
-            </div>
-            <div class="space-y-3 p-4">
-              <div class="space-y-1.5">
-                <div class="flex items-center justify-between text-[12px] text-[#6b7280]">
-                  <span>{{ taskProgressLabel }}</span>
-                  <span class="font-medium text-[#374151]">{{ taskProgress }}%</span>
-                </div>
-                <div class="h-2 overflow-hidden rounded-sm bg-[#f3f4f6]">
-                  <div class="h-full rounded-sm transition-all duration-300" :class="progressBarClass" :style="{ width: `${taskProgress}%` }"></div>
-                </div>
-              </div>
+              <span class="app-export-badge" :class="{ 'app-export-badge--warning': !hasExportTarget }">{{ hasExportTarget ? '位置已设置' : '需要目录' }}</span>
+            </header>
 
-              <div v-if="task.detail" class="rounded-md bg-[#f9fafb] px-3 py-2 text-[12px] leading-5 text-[#4b5563]">{{ task.detail }}</div>
-              <div v-if="task.outputPath" class="break-all rounded-md border border-[#e5e7eb] bg-white px-3 py-2 text-[12px] leading-5 text-[#374151]">
-                {{ task.outputPath }}
+            <div class="app-export-destination" :class="{ 'has-value': hasExportTarget }">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 7.5h7l2-2h9v13H3z" />
+              </svg>
+              <div class="app-export-destination__copy">
+                <strong :title="exportFolder || '尚未选择导出目录'">{{ exportFolder || '尚未选择导出目录' }}</strong>
+                <small>{{ hasExportTarget ? '归档完成后会写入此目录' : '开始导出前需要先完成此项' }}</small>
               </div>
-              <div v-if="task.error" class="whitespace-pre-wrap rounded-md bg-[#fef2f2] px-3 py-2 text-[12px] leading-5 text-[#b91c1c]">{{ task.error }}</div>
+              <button type="button" class="app-export-secondary-button" :disabled="running" @click="chooseExportFolder">
+                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                  <path d="M12 11v5M9.5 13.5h5" />
+                </svg>
+                {{ hasExportTarget ? '更改' : '选择目录' }}
+              </button>
+              <button v-if="hasExportTarget" type="button" class="app-export-icon-button app-export-icon-button--danger" :disabled="running" title="清空目录" aria-label="清空导出目录" @click="clearExportFolderSelection">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" />
+                </svg>
+              </button>
             </div>
           </section>
-        </div>
-      </main>
 
-      <footer class="flex flex-col gap-3 border-t border-[#e5e7eb] bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <div class="text-[12px] leading-5 text-[#6b7280]">
-          <span class="font-medium text-[#374151]">当前账号：</span>{{ selectedAccount || '未选择' }}
+          <section v-if="task" class="app-export-panel" aria-labelledby="account-export-task-title">
+            <header class="app-export-panel__header">
+              <div>
+                <h3 id="account-export-task-title">{{ task.label }}</h3>
+                <p v-if="task.message">{{ task.message }}</p>
+              </div>
+              <span class="app-export-status" :data-status="task.status">{{ statusLabel(task.status) }}</span>
+            </header>
+
+            <div class="app-export-progress-block">
+              <div class="app-export-progress-heading">
+                <span>{{ taskProgressLabel }}</span>
+                <strong>{{ taskProgress }}%</strong>
+              </div>
+              <div class="app-export-progress" role="progressbar" aria-label="账号归档进度" :aria-valuenow="taskProgress" aria-valuemin="0" aria-valuemax="100">
+                <span :style="{ transform: `scaleX(${taskProgress / 100})` }"></span>
+              </div>
+              <p v-if="task.detail" class="app-export-progress-note">{{ task.detail }}</p>
+            </div>
+
+            <div v-if="task.outputPath" class="app-export-result app-export-result--success">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="m8 12 2.5 2.5L16 9" />
+              </svg>
+              <span>{{ task.outputPath }}</span>
+            </div>
+            <div v-if="task.error" class="app-export-result app-export-result--error" role="alert">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v6M12 17h.01" />
+              </svg>
+              <span>{{ task.error }}</span>
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <footer class="app-export-footer">
+        <div class="app-export-summary">
+          <span>账号 <strong>{{ selectedAccount || '未选择' }}</strong></span>
+          <span class="app-export-summary__separator"></span>
+          <span>内容 <strong>{{ contentSummary }}</strong></span>
+          <span class="app-export-summary__separator"></span>
+          <span class="app-export-summary__path" :class="{ 'is-missing': !hasExportTarget }">{{ exportFolder || '尚未选择目录' }}</span>
         </div>
-        <div class="flex justify-end">
+        <div class="app-export-footer__actions">
           <button
             type="button"
-            class="inline-flex min-w-[112px] items-center justify-center gap-2 rounded-md px-4 py-2 text-[13px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60"
-            :class="running ? 'border border-[#fecaca] bg-white text-[#b91c1c] hover:bg-[#fef2f2]' : (canStartExport ? 'bg-[#07C160] text-white hover:bg-[#06ad56]' : 'bg-[#d1d5db] text-white')"
+            :class="running ? 'app-export-danger-button' : 'app-export-primary-button'"
             :disabled="running ? cancelRequested : !canStartExport"
             @click="running ? cancelExport() : startExport()"
           >
@@ -200,7 +205,7 @@
           </button>
         </div>
       </footer>
-    </div>
+    </section>
   </div>
 </template>
 
@@ -288,6 +293,7 @@ const statusLabel = (status) => {
   if (status === 'running') return '导出中'
   if (status === 'done') return '已完成'
   if (status === 'error') return '失败'
+  if (status === 'cancelled') return '已取消'
   return '等待中'
 }
 

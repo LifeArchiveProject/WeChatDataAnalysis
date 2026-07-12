@@ -612,256 +612,257 @@
     </div>
 
     <!-- SNS export modal -->
-    <div v-if="exportModalOpen" class="fixed inset-0 z-[12000] flex items-center justify-center">
-      <div class="absolute inset-0 bg-black/40" @click="closeExportModal"></div>
-      <div class="relative w-[880px] max-w-[95vw] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
-        <div class="px-5 py-4 border-b border-gray-200 flex items-start gap-3">
-          <div class="min-w-0">
-            <div class="text-base font-medium text-gray-900">导出朋友圈（离线 ZIP）</div>
-            <div class="mt-1 text-xs text-gray-500 leading-5">
-              直接勾选要导出的联系人；支持搜索、批量勾选，以及自定义 ZIP 文件名和导出目录。
-            </div>
+    <div v-if="exportModalOpen" class="app-export-backdrop">
+      <div class="app-export-backdrop__hit-area" aria-hidden="true" @click="closeExportModal"></div>
+      <section class="app-export-modal" role="dialog" aria-modal="true" aria-labelledby="sns-export-title">
+        <header class="app-export-header">
+          <div class="app-export-header__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v11" />
+              <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+              <path d="M4 19h16" />
+            </svg>
           </div>
-          <button class="ml-auto text-gray-400 hover:text-gray-700" type="button" @click="closeExportModal">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          <div class="app-export-header__copy">
+            <h2 id="sns-export-title">导出朋友圈</h2>
+            <p>选择联系人范围、导出格式和保存位置</p>
+          </div>
+          <button type="button" class="app-export-icon-button" title="关闭" aria-label="关闭导出面板" @click="closeExportModal">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
             </svg>
           </button>
+        </header>
+
+        <div v-if="exportError" class="app-export-alert app-export-alert--error" role="alert">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v6M12 17h.01" />
+          </svg>
+          <span>{{ exportError }}</span>
         </div>
 
-        <div class="p-5 max-h-[75vh] overflow-y-auto space-y-5">
-          <div v-if="exportError" class="text-sm text-red-600 whitespace-pre-wrap">{{ exportError }}</div>
-
-          <div v-if="exportJob" class="border border-gray-200 rounded-lg bg-gray-50 p-4 space-y-3">
-            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-              <div class="min-w-0">
-                <div class="text-sm font-medium text-gray-900">&#24403;&#21069;&#23548;&#20986;&#20219;&#21153;</div>
-                <div class="mt-1 text-xs text-gray-500 break-all">ID&#65306;{{ exportJob.exportId || '-' }}</div>
-              </div>
-              <button
-                  v-if="exportJob.status === 'done' && exportJob.exportId && hasWebExportFolder"
-                  type="button"
-                  class="w-fit px-3 py-1.5 rounded-md text-xs border border-[#03C160]/20 bg-[#03C160]/10 text-[#027a44] hover:bg-[#03C160]/15 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  :disabled="exportSaveBusy"
-                  @click="saveSnsExportToSelectedFolder()"
-              >
-                {{ exportSaveBusy ? '保存中…' : exportSaveState === 'success' ? '重新保存到文件夹' : '保存到已选文件夹' }}
-              </button>
-            </div>
-
-            <div class="space-y-2">
-              <div class="flex items-center justify-between text-sm text-gray-700">
-                <div>&#21160;&#24577;&#65306;{{ exportJob.progress?.postsExported || 0 }}/{{ exportJob.progress?.postsTotal || 0 }}</div>
-                <div class="text-gray-500">{{ exportOverallPercent }}%</div>
-              </div>
-              <div class="h-2.5 rounded-full bg-white border border-gray-200 overflow-hidden">
-                <div class="h-full bg-[#03C160] transition-all duration-300" :style="{ width: exportOverallPercent + '%' }"></div>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-gray-600">
-              <div class="rounded-md border border-gray-200 bg-white px-3 py-2">
-                &#32852;&#31995;&#20154;&#65306;{{ exportJob.progress?.usersDone || 0 }}/{{ exportJob.progress?.usersTotal || 0 }}
-              </div>
-              <div class="rounded-md border border-gray-200 bg-white px-3 py-2">
-                &#26684;&#24335;&#65306;{{ exportActiveFormatLabel }}
-              </div>
-              <div class="rounded-md border border-gray-200 bg-white px-3 py-2">
-                &#24050;&#22797;&#21046;&#23186;&#20307;&#65306;{{ exportJob.progress?.mediaCopied || 0 }}
-              </div>
-              <div class="rounded-md border border-gray-200 bg-white px-3 py-2">
-                &#32570;&#22833;&#23186;&#20307;&#65306;{{ exportJob.progress?.mediaMissing || 0 }}
-              </div>
-            </div>
-
-            <div v-if="exportCurrentTargetLabel" class="space-y-2">
-              <div class="flex items-center justify-between gap-2 text-sm text-gray-700">
-                <div class="truncate">
-                  &#24403;&#21069;&#32852;&#31995;&#20154;&#65306;{{ exportCurrentTargetLabel }}
-                  &#65288;{{ exportJob.progress?.currentUserPostsDone || 0 }}/{{ exportJob.progress?.currentUserPostsTotal || 0 }}&#65289;
+        <div class="app-export-workspace">
+          <div class="app-export-layout">
+            <section class="app-export-scope" aria-labelledby="sns-export-scope-title">
+              <header class="app-export-panel__header">
+                <div>
+                  <h3 id="sns-export-scope-title">联系人范围</h3>
+                  <p>搜索并勾选需要导出朋友圈的联系人。</p>
                 </div>
-                <div class="text-gray-500">
-                  <span v-if="exportCurrentPercent != null">{{ exportCurrentPercent }}%</span>
-                  <span v-else>…</span>
-                </div>
-              </div>
-              <div class="h-2.5 rounded-full bg-white border border-gray-200 overflow-hidden">
-                <div
-                    v-if="exportCurrentPercent != null"
-                    class="h-full bg-sky-500 transition-all duration-300"
-                    :style="{ width: exportCurrentPercent + '%' }"
-                ></div>
-                <div v-else class="h-full bg-sky-500/60 animate-pulse" style="width: 30%"></div>
-              </div>
-            </div>
+                <span class="app-export-badge">{{ exportSelectedCount }} 人</span>
+              </header>
 
-            <div v-if="isExportCancelling && canCancelSnsExport" class="text-xs text-amber-700">
-              &#24050;&#21457;&#36865;&#21462;&#28040;&#35831;&#27714;&#65292;&#27491;&#22312;&#31561;&#24453;&#24403;&#21069;&#27493;&#39588;&#32467;&#26463;&#8230;
-            </div>
-            <div v-else-if="exportJob.status === 'cancelled'" class="text-xs text-amber-700">
-              &#23548;&#20986;&#24050;&#21462;&#28040;&#12290;
-            </div>
-            <div v-else-if="exportJob.status === 'error' && exportJob.error" class="text-xs text-red-600 whitespace-pre-wrap break-words">
-              {{ exportJob.error }}
-            </div>
-
-            <div v-if="exportOutputPathText" class="text-xs text-green-600 break-all">
-              &#24050;&#23548;&#20986;&#21040;&#65306;{{ exportOutputPathText }}
-            </div>
-          </div>
-
-          <div class="flex flex-wrap items-end gap-4 xl:flex-nowrap">
-            <div class="w-full min-w-[280px] sm:w-auto">
-              <div class="text-sm font-medium text-gray-900 mb-2">&#23548;&#20986;&#26684;&#24335;</div>
-              <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <label
-                    v-for="item in exportFormatOptions"
-                    :key="item.value"
-                    class="px-3 py-2 text-center text-sm rounded-md border cursor-pointer transition-colors"
-                    :class="exportFormat === item.value ? 'bg-[#03C160] text-white border-[#03C160]' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'"
-                >
-                  <input v-model="exportFormat" type="radio" :value="item.value" class="hidden" />
-                  <span>{{ item.label }}</span>
+              <div class="app-export-toolbar">
+                <label class="app-export-search">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="m16 16 4 4" />
+                  </svg>
+                  <input v-model="exportSearchQuery" type="search" placeholder="搜索名称或 username" aria-label="搜索导出联系人" :class="{ 'privacy-blur': privacyMode }" />
                 </label>
-              </div>
-            </div>
-
-            <div class="flex-1 min-w-[220px]">
-              <label class="block text-sm font-medium text-gray-900 mb-2">&#23548;&#20986;&#25991;&#20214;&#21517;&#65288;&#21487;&#36873;&#65289;</label>
-              <input
-                  v-model="exportFileName"
-                  type="text"
-                  placeholder="&#21487;&#36873;&#65292;&#19981;&#22635;&#21017;&#33258;&#21160;&#29983;&#25104; .zip &#25991;&#20214;&#21517;"
-                  class="w-full px-3 py-2 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
-              />
-            </div>
-
-            <div class="flex-[1.4] min-w-[300px]">
-              <div class="flex items-center justify-between gap-2 mb-2">
-                <div class="text-sm font-medium text-gray-900">&#23548;&#20986;&#30446;&#24405;</div>
-                <div class="text-[11px] text-gray-400">{{ exportFolderModeText }}</div>
-              </div>
-              <div class="flex items-center gap-2">
-                <div class="px-3 py-2 rounded-md border border-gray-200 bg-gray-50 text-sm text-gray-600 break-all min-h-[42px] flex items-center min-w-0 flex-1">
-                  {{ exportFolder || '未选择' }}
-                </div>
-                <button
-                    type="button"
-                    class="px-3 py-2 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                    :disabled="exportSaveBusy"
-                    @click="chooseExportFolder"
-                >
-                  &#36873;&#25321;&#25991;&#20214;&#22841;
+                <button type="button" class="app-export-secondary-button" :disabled="!exportFilteredSnsUsers.length" @click="toggleSelectAllFilteredExportUsers">
+                  {{ areAllFilteredExportUsersSelected ? '取消全选' : '全选结果' }}
                 </button>
-                <button
-                    v-if="hasSelectedExportFolder"
-                    type="button"
-                    class="px-3 py-2 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                    :disabled="exportSaveBusy"
-                    @click="clearExportFolderSelection"
-                >
-                  &#28165;&#38500;
-                </button>
+                <button type="button" class="app-export-secondary-button" :disabled="!exportSelectedCount" @click="clearExportSelectedUsers">清空</button>
               </div>
-            </div>
-          </div>
-          <div class="text-[11px] text-gray-500 whitespace-pre-wrap">{{ exportFolderHint }}</div>
 
-          <div class="space-y-3">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div class="text-sm font-medium text-gray-900">&#36873;&#25321;&#32852;&#31995;&#20154;</div>
-              <div class="flex flex-wrap items-center gap-2">
-                <div class="text-xs text-gray-500">&#24050;&#36873; {{ exportSelectedCount }} &#20154;</div>
-                <button
-                    type="button"
-                    class="px-3 py-1.5 rounded-md text-xs border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                    :disabled="!exportFilteredSnsUsers.length"
-                    @click="toggleSelectAllFilteredExportUsers"
-                >
-                  {{ areAllFilteredExportUsersSelected ? '取消全选当前结果' : '全选当前结果' }}
-                </button>
-                <button
-                    type="button"
-                    class="px-3 py-1.5 rounded-md text-xs border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                    :disabled="!exportSelectedCount"
-                    @click="clearExportSelectedUsers"
-                >
-                  &#28165;&#31354;&#24050;&#36873;
-                </button>
-              </div>
-            </div>
-
-            <div class="flex flex-col sm:flex-row gap-2">
-              <input
-                  v-model="exportSearchQuery"
-                  type="text"
-                  placeholder="&#25628;&#32034;&#32852;&#31995;&#20154;&#65288;&#21517;&#31216; / username&#65289;"
-                  class="flex-1 px-3 py-2 text-sm rounded-md border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#03C160]/30"
-                  :class="{ 'privacy-blur': privacyMode }"
-              />
-            </div>
-            <div class="border border-gray-200 rounded-md max-h-72 overflow-y-auto">
-              <div v-if="!exportFilteredSnsUsers.length" class="px-3 py-8 text-sm text-gray-500 text-center">
-                &#26410;&#25214;&#21040;&#21487;&#23548;&#20986;&#30340;&#32852;&#31995;&#20154;
-              </div>
-              <label
+              <div class="app-export-load-state">共 {{ exportFilteredSnsUsers.length }} 个结果</div>
+              <div class="app-export-contact-list" role="listbox" aria-label="可导出的朋友圈联系人" aria-multiselectable="true">
+                <div v-if="!exportFilteredSnsUsers.length" class="app-export-empty">没有匹配的联系人</div>
+                <label
                   v-for="u in exportFilteredSnsUsers"
                   :key="u.username"
-                  class="px-3 py-2 border-b border-gray-100 flex items-center gap-2 cursor-pointer transition-colors"
-                  :class="exportSelectedUsernameSet.has(u.username) ? 'bg-[#03C160]/5 hover:bg-[#03C160]/10' : 'hover:bg-gray-50'"
-              >
-                <input v-model="exportSelectedUsernames" type="checkbox" :value="u.username" class="cursor-pointer" />
-                <div class="w-9 h-9 rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
-                  <img
+                  class="app-export-contact"
+                  :class="{ 'is-active': exportSelectedUsernameSet.has(u.username) }"
+                  role="option"
+                  :aria-selected="exportSelectedUsernameSet.has(u.username)"
+                >
+                  <input v-model="exportSelectedUsernames" type="checkbox" :value="u.username" class="sr-only" />
+                  <span class="app-export-checkbox" aria-hidden="true">
+                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg>
+                  </span>
+                  <span class="app-export-contact__avatar" :class="{ 'privacy-blur': privacyMode }">
+                    <img
                       v-if="postAvatarUrl(u.username) && !hasSnsAvatarError(u.username)"
                       :src="postAvatarUrl(u.username)"
-                      :alt="u.displayName || u.username"
-                      class="w-full h-full object-cover"
+                      :alt="`${u.displayName || u.username}头像`"
                       referrerpolicy="no-referrer"
                       @error="onSnsAvatarError(u.username)"
-                  />
-                  <div
-                      v-else
-                      class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
-                      style="background-color: #4B5563"
-                  >
-                    {{ (u.displayName || u.username || '友').charAt(0) }}
+                    />
+                    <span v-else>{{ (u.displayName || u.username || '友').charAt(0) }}</span>
+                  </span>
+                  <span class="app-export-contact__copy" :class="{ 'privacy-blur': privacyMode }">
+                    <strong>{{ u.displayName || u.username }}</strong>
+                    <small>{{ u.username }} · {{ u.postCount || 0 }} 条</small>
+                  </span>
+                </label>
+              </div>
+            </section>
+
+            <main class="app-export-settings">
+              <section class="app-export-panel" aria-labelledby="sns-export-format-title">
+                <header class="app-export-panel__header">
+                  <div>
+                    <h3 id="sns-export-format-title">格式与文件</h3>
+                    <p>选择离线 ZIP 内的结果格式和文件名。</p>
+                  </div>
+                  <span class="app-export-badge">{{ exportFormatLabel }}</span>
+                </header>
+
+                <div class="min-w-[280px]">
+                  <div class="grid grid-cols-2 gap-2 sm:grid-cols-4" :class="'app-export-format-grid'">
+                    <label
+                      v-for="item in exportFormatOptions"
+                      :key="item.value"
+                      class="app-export-format-option"
+                      :class="{ 'is-active': exportFormat === item.value }"
+                    >
+                      <input v-model="exportFormat" type="radio" :value="item.value" class="sr-only" />
+                      <span class="app-export-format-option__code">{{ item.label }}</span>
+                      <span class="app-export-format-option__meta">{{ item.meta }}</span>
+                      <span class="app-export-radio-check" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg>
+                      </span>
+                    </label>
                   </div>
                 </div>
-                <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
-                  <div class="text-sm text-gray-800 truncate">{{ u.displayName || u.username }}</div>
-                  <div class="text-[11px] text-gray-400 truncate">{{ u.username }} &#183; {{ u.postCount || 0 }} &#26465;</div>
+
+                <div class="app-export-field">
+                  <div class="app-export-field__label">
+                    <label for="sns-export-file-name">ZIP 文件名</label>
+                    <span>可选，留空时自动生成</span>
+                  </div>
+                  <input id="sns-export-file-name" v-model="exportFileName" type="text" class="app-export-input" placeholder="例如：朋友圈_2026-07-12.zip" />
                 </div>
-              </label>
-            </div>
-            <div class="text-[11px] text-gray-500">
-              默认按勾选联系人导出；如需全部导出，直接点“全选当前结果”即可。
-            </div>
+              </section>
+
+              <section class="app-export-panel" aria-labelledby="sns-export-output-title">
+                <header class="app-export-panel__header">
+                  <div>
+                    <h3 id="sns-export-output-title">保存位置</h3>
+                    <p>{{ exportFolderHint }}</p>
+                  </div>
+                  <span class="app-export-badge" :class="{ 'app-export-badge--warning': !hasSelectedExportFolder }">{{ hasSelectedExportFolder ? exportFolderModeText : '需要目录' }}</span>
+                </header>
+
+                <div class="app-export-destination" :class="{ 'has-value': hasSelectedExportFolder }">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5h7l2-2h9v13H3z" /></svg>
+                  <div class="app-export-destination__copy">
+                    <strong :title="exportFolder || '尚未选择导出目录'">{{ exportFolder || '尚未选择导出目录' }}</strong>
+                    <small>{{ hasSelectedExportFolder ? '导出完成后会写入此目录' : '开始导出前需要先完成此项' }}</small>
+                  </div>
+                  <button type="button" class="app-export-secondary-button" :disabled="exportSaveBusy" @click="chooseExportFolder">
+                    {{ hasSelectedExportFolder ? '更改' : '选择目录' }}
+                  </button>
+                  <button v-if="hasSelectedExportFolder" type="button" class="app-export-icon-button app-export-icon-button--danger" :disabled="exportSaveBusy" title="清空目录" aria-label="清空导出目录" @click="clearExportFolderSelection">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" /></svg>
+                  </button>
+                </div>
+              </section>
+
+              <section v-if="exportJob" class="app-export-panel" aria-labelledby="sns-export-task-title">
+                <header class="app-export-panel__header">
+                  <div>
+                    <h3 id="sns-export-task-title">导出任务</h3>
+                    <p class="app-export-task-id">{{ exportJob.exportId || '-' }}</p>
+                  </div>
+                  <span class="app-export-status" :data-status="exportJob.status">{{ snsExportStatusLabel }}</span>
+                </header>
+
+                <div class="app-export-task-stats">
+                  <div><span>联系人</span><strong>{{ exportJob.progress?.usersDone || 0 }}/{{ exportJob.progress?.usersTotal || 0 }}</strong></div>
+                  <div><span>格式</span><strong>{{ exportActiveFormatLabel }}</strong></div>
+                  <div><span>已复制媒体</span><strong>{{ exportJob.progress?.mediaCopied || 0 }}</strong></div>
+                  <div><span>缺失媒体</span><strong>{{ exportJob.progress?.mediaMissing || 0 }}</strong></div>
+                </div>
+
+                <div class="app-export-progress-block">
+                  <div class="app-export-progress-heading">
+                    <span>总体进度 · {{ exportJob.progress?.postsExported || 0 }}/{{ exportJob.progress?.postsTotal || 0 }} 条动态</span>
+                    <strong>{{ exportOverallPercent }}%</strong>
+                  </div>
+                  <div class="app-export-progress" role="progressbar" aria-label="朋友圈导出总体进度" :aria-valuenow="exportOverallPercent" aria-valuemin="0" aria-valuemax="100">
+                    <span :style="{ transform: `scaleX(${exportOverallPercent / 100})` }"></span>
+                  </div>
+                </div>
+
+                <div v-if="exportCurrentTargetLabel" class="app-export-progress-block">
+                  <div class="app-export-progress-heading">
+                    <span>当前：{{ exportCurrentTargetLabel }}（{{ exportJob.progress?.currentUserPostsDone || 0 }}/{{ exportJob.progress?.currentUserPostsTotal || 0 }}）</span>
+                    <strong>{{ exportCurrentPercent != null ? `${exportCurrentPercent}%` : '处理中' }}</strong>
+                  </div>
+                  <div class="app-export-progress" role="progressbar" aria-label="当前联系人导出进度" :aria-valuenow="exportCurrentPercent == null ? undefined : exportCurrentPercent" aria-valuemin="0" aria-valuemax="100">
+                    <span v-if="exportCurrentPercent != null" :style="{ transform: `scaleX(${exportCurrentPercent / 100})` }"></span>
+                    <span v-else class="app-export-progress__indeterminate"></span>
+                  </div>
+                </div>
+
+                <div v-if="exportMediaPrepareTotal > 0" class="app-export-progress-block">
+                  <div class="app-export-progress-heading">
+                    <span>媒体准备 · {{ exportMediaPrepared }}/{{ exportMediaPrepareTotal }}</span>
+                    <strong>{{ exportMediaPreparePercent }}%</strong>
+                  </div>
+                  <div class="app-export-progress" role="progressbar" aria-label="朋友圈媒体准备进度" :aria-valuenow="exportMediaPreparePercent" aria-valuemin="0" aria-valuemax="100">
+                    <span :style="{ transform: `scaleX(${exportMediaPreparePercent / 100})` }"></span>
+                  </div>
+                </div>
+
+                <div v-if="isExportCancelling && canCancelSnsExport" class="app-export-result app-export-result--warning" role="status">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v6M12 17h.01" /></svg>
+                  <span>已发送取消请求，正在等待当前步骤结束…</span>
+                </div>
+                <div v-else-if="exportJob.status === 'cancelled'" class="app-export-result app-export-result--warning" role="status">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v6M12 17h.01" /></svg>
+                  <span>导出已取消。</span>
+                </div>
+                <div v-else-if="exportJob.status === 'error' && exportJob.error" class="app-export-result app-export-result--error" role="alert">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v6M12 17h.01" /></svg>
+                  <span>{{ exportJob.error }}</span>
+                </div>
+                <div v-if="exportOutputPathText" class="app-export-result app-export-result--success">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg>
+                  <span>已导出到：{{ exportOutputPathText }}</span>
+                </div>
+                <div v-if="exportSaveProgressText" class="app-export-result app-export-result--warning" role="status">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v6M12 17h.01" /></svg>
+                  <span>{{ exportSaveProgressText }}</span>
+                </div>
+                <div v-if="exportSaveError" class="app-export-result app-export-result--error" role="alert">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v6M12 17h.01" /></svg>
+                  <span>{{ exportSaveError }}</span>
+                </div>
+                <div v-else-if="exportSaveMsg" class="app-export-result app-export-result--success">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg>
+                  <span>{{ exportSaveMsg }}</span>
+                  <button v-if="exportJob.status === 'done' && exportJob.exportId && hasWebExportFolder" type="button" class="app-export-secondary-button" :disabled="exportSaveBusy" @click="saveSnsExportToSelectedFolder()">
+                    {{ exportSaveBusy ? '保存中…' : '重新保存' }}
+                  </button>
+                </div>
+                <button v-else-if="exportJob.status === 'done' && exportJob.exportId && hasWebExportFolder" type="button" class="app-export-secondary-button sns-export-save-button" :disabled="exportSaveBusy" @click="saveSnsExportToSelectedFolder()">
+                  {{ exportSaveBusy ? '保存中…' : '保存到已选文件夹' }}
+                </button>
+              </section>
+            </main>
           </div>
         </div>
 
-        <div class="px-5 py-4 border-t border-gray-200 flex items-center justify-between gap-3">
-          <div class="text-xs text-gray-500">&#24050;&#36873; {{ exportSelectedCount }} &#20154;</div>
-          <div class="flex gap-2">
-            <button
-                type="button"
-                class="px-4 py-2 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors"
-                @click="closeExportModal"
-            >
-              &#21462;&#28040;
-            </button>
-            <button
-                type="button"
-                class="px-4 py-2 rounded-md text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                :class="canCancelSnsExport ? 'border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-[#03C160] text-white hover:bg-[#02ad56]'"
-                :disabled="exportPrimaryActionDisabled"
-                @click="handleExportPrimaryAction"
-            >
+        <footer class="app-export-footer">
+          <div class="app-export-summary">
+            <span>联系人 <strong>{{ exportSelectedCount }}</strong></span>
+            <span class="app-export-summary__separator"></span>
+            <span>格式 <strong>{{ exportFormatLabel }}</strong></span>
+            <span class="app-export-summary__separator"></span>
+            <span class="app-export-summary__path" :class="{ 'is-missing': !hasSelectedExportFolder }">{{ exportFolder || '尚未选择目录' }}</span>
+          </div>
+          <div class="app-export-footer__actions">
+            <button type="button" class="app-export-secondary-button" @click="closeExportModal">取消</button>
+            <button type="button" :class="canCancelSnsExport ? 'app-export-danger-button' : 'app-export-primary-button'" :disabled="exportPrimaryActionDisabled" @click="handleExportPrimaryAction">
               {{ exportPrimaryActionLabel }}
             </button>
           </div>
-        </div>
-      </div>
+        </footer>
+      </section>
     </div>
 
     <!-- Image preview modal -->
@@ -1111,10 +1112,10 @@ const apiBase = useApiBase()
 // 朋友圈导出（离线 ZIP）
 const exportFormat = ref('html')
 const exportFormatOptions = [
-  { value: 'html', label: 'HTML' },
-  { value: 'json', label: 'JSON' },
-  { value: 'txt', label: 'TXT' },
-  { value: 'excel', label: 'Excel' }
+  { value: 'html', label: 'HTML', meta: '可阅读网页' },
+  { value: 'json', label: 'JSON', meta: '结构化数据' },
+  { value: 'txt', label: 'TXT', meta: '纯文本记录' },
+  { value: 'excel', label: 'Excel', meta: '表格工作簿' }
 ]
 const exportFolder = ref('')
 const exportFolderHandle = ref(null)
@@ -1224,9 +1225,31 @@ const exportCurrentTargetLabel = computed(() => {
   return String(progress.currentDisplayName || progress.currentUsername || '').trim()
 })
 
+const exportMediaPrepareTotal = computed(() => {
+  return asNumber(exportJob.value?.progress?.mediaPrepareTotal)
+})
+
+const exportMediaPrepared = computed(() => {
+  return asNumber(exportJob.value?.progress?.mediaPrepared)
+})
+
+const exportMediaPreparePercent = computed(() => {
+  if (exportMediaPrepareTotal.value <= 0) return 0
+  return Math.round(clamp01(exportMediaPrepared.value / exportMediaPrepareTotal.value) * 100)
+})
+
 const isSnsExportBusy = computed(() => {
   const status = String(exportJob.value?.status || '').trim()
   return status === 'queued' || status === 'running'
+})
+
+const snsExportStatusLabel = computed(() => {
+  const status = String(exportJob.value?.status || '').trim()
+  if (status === 'running') return '导出中'
+  if (status === 'done') return '已完成'
+  if (status === 'error') return '失败'
+  if (status === 'cancelled') return '已取消'
+  return '等待中'
 })
 
 const canCancelSnsExport = computed(() => {
