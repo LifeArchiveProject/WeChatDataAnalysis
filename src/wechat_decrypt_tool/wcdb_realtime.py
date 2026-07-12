@@ -1,3 +1,4 @@
+import atexit
 import ctypes
 import base64
 import binascii
@@ -38,6 +39,36 @@ def _with_vc_redist_help(message: str) -> str:
 
 class WCDBRealtimeError(RuntimeError):
     pass
+
+
+class WCDBSidecarUnavailableError(WCDBRealtimeError):
+    pass
+
+
+_WCDB_OPEN_HELP_TEXT = (
+    "请重新获取当前账号的数据库密钥，并确认密钥来源与当前 db_storage 一致；"
+    "若密钥正确，请关闭微信后重试，以排除数据库占用或文件未写完整。"
+)
+
+
+def _with_wcdb_open_help(message: str) -> str:
+    text = str(message or "").strip()
+    if _WCDB_OPEN_HELP_TEXT in text:
+        return text
+    return f"{text} {_WCDB_OPEN_HELP_TEXT}" if text else _WCDB_OPEN_HELP_TEXT
+
+
+def _should_cache_open_failure(exc: Exception) -> bool:
+    if isinstance(exc, WCDBSidecarUnavailableError):
+        return False
+    message = str(exc or "")
+    non_native_failures = (
+        "数据库密钥与当前 session.db 不匹配",
+        "session.db 文件不完整",
+        "无法读取 session.db 进行密钥校验",
+        "Invalid db key",
+    )
+    return not any(marker in message for marker in non_native_failures)
 
 
 def _clean_weflow_account_dir_name(dir_name: str) -> str:
@@ -180,6 +211,7 @@ def _resolve_wcdb_api_dll_path() -> Path:
 _lib_lock = threading.Lock()
 _lib: Optional[ctypes.CDLL] = None
 _initialized = False
+_inprocess_runtime_poisoned_reason = ""
 _loaded_wcdb_api_dll: Optional[Path] = None
 _preloaded_native_libs: list[ctypes.CDLL] = []
 _protection_checked = False
@@ -188,6 +220,7 @@ _AUTO_SIDECAR_LOCK = threading.Lock()
 _AUTO_SIDECAR_PROC: Optional[subprocess.Popen] = None
 _AUTO_SIDECAR_URL = ""
 _AUTO_SIDECAR_TOKEN = ""
+_AUTO_SIDECAR_MISSING_WARNED = False
 
 
 def _is_windows() -> bool:
@@ -406,21 +439,31 @@ def _stop_auto_sidecar() -> None:
         if proc.poll() is None:
             proc.terminate()
             try:
-                proc.wait(timeout=5.0)
+                proc.wait(timeout=2.0)
             except Exception:
                 proc.kill()
     except Exception:
         pass
 
 
+atexit.register(_stop_auto_sidecar)
+
+
 def _maybe_start_auto_sidecar() -> bool:
-    global _AUTO_SIDECAR_PROC, _AUTO_SIDECAR_URL, _AUTO_SIDECAR_TOKEN
+    global _AUTO_SIDECAR_PROC, _AUTO_SIDECAR_URL, _AUTO_SIDECAR_TOKEN, _AUTO_SIDECAR_MISSING_WARNED
 
     if _sidecar_enabled() or not _is_windows():
         return False
 
     assets = _source_sidecar_assets()
     if not assets:
+        if not _AUTO_SIDECAR_MISSING_WARNED:
+            _AUTO_SIDECAR_MISSING_WARNED = True
+            logger.warning(
+                "[wcdb] isolated sidecar unavailable; source runs require "
+                "desktop/node_modules/electron, desktop/src/wcdb-sidecar.cjs, and desktop/vendor/koffi. "
+                "Using in-process WCDB fallback. Run `cd desktop; npm ci` to enable crash isolation."
+            )
         return False
 
     wcdb_api_dll = _resolve_wcdb_api_dll_path()
@@ -430,7 +473,7 @@ def _maybe_start_auto_sidecar() -> bool:
     except Exception:
         return False
 
-    electron_exe, sidecar_script, koffi_dir = assets
+    runtime_exe, sidecar_script, koffi_dir = assets
     repo_root = _repo_root()
 
     with _AUTO_SIDECAR_LOCK:
@@ -467,7 +510,7 @@ def _maybe_start_auto_sidecar() -> bool:
         creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
         try:
             proc = subprocess.Popen(
-                [str(electron_exe), str(sidecar_script)],
+                [str(runtime_exe), str(sidecar_script)],
                 cwd=str(repo_root),
                 env=env,
                 stdin=subprocess.DEVNULL,
@@ -485,8 +528,30 @@ def _maybe_start_auto_sidecar() -> bool:
         os.environ["WECHAT_TOOL_WCDB_SIDECAR_URL"] = url
         os.environ["WECHAT_TOOL_WCDB_SIDECAR_TOKEN"] = token
 
-    logger.info("[wcdb] auto-started electron sidecar url=%s dll=%s", _AUTO_SIDECAR_URL, wcdb_api_dll)
+    logger.info(
+        "[wcdb] auto-started sidecar url=%s runtime=%s dll=%s",
+        _AUTO_SIDECAR_URL,
+        runtime_exe,
+        wcdb_api_dll,
+    )
     return True
+
+
+def _invalidate_sidecar_runtime(reason: str) -> None:
+    global _initialized
+
+    with _lib_lock:
+        _initialized = False
+
+    manager = globals().get("WCDB_REALTIME")
+    if manager is not None:
+        try:
+            manager.invalidate_runtime(reason=reason)
+        except Exception:
+            pass
+
+    if _auto_sidecar_started_here():
+        _stop_auto_sidecar()
 
 
 def _sidecar_call(action: str, payload: Optional[dict[str, Any]] = None, *, timeout: float = 30.0) -> dict[str, Any]:
@@ -536,8 +601,10 @@ def _sidecar_call(action: str, payload: Optional[dict[str, Any]] = None, *, time
             if isinstance(logs, list) and logs:
                 hint = f" logs={[str(x) for x in logs[:6]]}"
             message = f"{err} rc={rc}.{hint}"
-            if str(action or "").strip() in {"init", "open_account"}:
+            if str(action or "").strip() == "init":
                 message = _with_vc_redist_help(message)
+            elif str(action or "").strip() == "open_account":
+                message = _with_wcdb_open_help(message)
             raise WCDBRealtimeError(message)
         except WCDBRealtimeError:
             raise
@@ -550,7 +617,12 @@ def _sidecar_call(action: str, payload: Optional[dict[str, Any]] = None, *, time
             last_err = exc
             break
 
-    raise WCDBRealtimeError(_with_vc_redist_help(f"WCDB sidecar unavailable: {last_err}"))
+    message = (
+        f"WCDB sidecar unavailable: {last_err}. "
+        "WCDB 辅助进程已退出或正在重启，也可能暂时无响应；请稍后重试，若仍失败请重启应用。"
+    )
+    _invalidate_sidecar_runtime(message)
+    raise WCDBSidecarUnavailableError(message)
 
 
 def _sidecar_payload(action: str, payload: Optional[dict[str, Any]] = None, *, timeout: float = 30.0) -> str:
@@ -940,15 +1012,51 @@ def get_native_logs(*, require_initialized: bool = True) -> list[str]:
             pass
 
 
-def open_account(session_db_path: Path, key_hex: str) -> int:
-    _ensure_initialized()
-
+def _validate_session_db_key(session_db_path: Path, key_hex: str) -> str:
     p = Path(session_db_path)
     if not p.exists():
         raise WCDBRealtimeError(f"session db not found: {p}")
     key = str(key_hex or "").strip()
-    if len(key) != 64:
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", key):
         raise WCDBRealtimeError("Invalid db key (must be 64 hex chars).")
+
+    try:
+        from .wechat_decrypt import PAGE_SIZE, SQLITE_HEADER, _resolve_page1_key_material
+
+        with p.open("rb") as f:
+            page1 = f.read(PAGE_SIZE)
+    except WCDBRealtimeError:
+        raise
+    except Exception as exc:
+        raise WCDBRealtimeError(f"无法读取 session.db 进行密钥校验: {p}: {exc}") from exc
+
+    if page1.startswith(SQLITE_HEADER):
+        return "plaintext"
+    if len(page1) < PAGE_SIZE:
+        raise WCDBRealtimeError(f"session.db 文件不完整（不足 {PAGE_SIZE} 字节）: {p}")
+
+    resolved = _resolve_page1_key_material(bytes.fromhex(key), page1)
+    if resolved is None:
+        raise WCDBRealtimeError(
+            f"数据库密钥与当前 session.db 不匹配: {p}。"
+            "请重新获取当前账号的数据库密钥，勿复用其他账号或旧 db_storage 的密钥。"
+        )
+    return str(resolved[2] or "unknown")
+
+
+def open_account(session_db_path: Path, key_hex: str, *, timeout: float = 30.0) -> int:
+    p = Path(session_db_path)
+    key = str(key_hex or "").strip()
+    key_mode = _validate_session_db_key(p, key)
+    logger.info("[wcdb] session db key preflight passed mode=%s path=%s", key_mode, p)
+
+    _ensure_initialized()
+
+    if not _sidecar_enabled() and _inprocess_runtime_poisoned_reason:
+        raise WCDBRealtimeError(
+            "进程内 WCDB 曾发生不可回收的原生调用超时，请重启应用。"
+            "源码运行请先执行 `cd desktop; npm ci`，启用隔离的 WCDB sidecar 后再试。"
+        )
 
     if _sidecar_enabled():
         result = _sidecar_call(
@@ -957,11 +1065,11 @@ def open_account(session_db_path: Path, key_hex: str) -> int:
                 "path": str(p),
                 "key": key,
             },
-            timeout=30.0,
+            timeout=max(0.5, float(timeout or 30.0)),
         )
         handle = int(result.get("handle") or 0)
         if handle <= 0:
-            raise WCDBRealtimeError(_with_vc_redist_help("wcdb_open_account failed: invalid sidecar handle."))
+            raise WCDBRealtimeError(_with_wcdb_open_help("wcdb_open_account failed: invalid sidecar handle."))
         return handle
 
     lib = _load_wcdb_lib()
@@ -970,7 +1078,7 @@ def open_account(session_db_path: Path, key_hex: str) -> int:
     if rc != 0 or int(out_handle.value) <= 0:
         logs = get_native_logs()
         hint = f" logs={logs[:6]}" if logs else ""
-        raise WCDBRealtimeError(_with_vc_redist_help(f"wcdb_open_account failed: {rc}.{hint}"))
+        raise WCDBRealtimeError(_with_wcdb_open_help(f"wcdb_open_account failed: {rc}.{hint}"))
     return int(out_handle.value)
 
 
@@ -1829,6 +1937,21 @@ class WCDBRealtimeManager:
             conn = self._conns.get(str(account))
             return bool(conn and conn.handle > 0)
 
+    def invalidate_runtime(self, *, reason: str = "") -> None:
+        with self._mu:
+            connection_count = len(self._conns)
+            waiters = list(self._connecting.values())
+            self._conns.clear()
+            self._connecting.clear()
+            self._failed.clear()
+        for waiter in waiters:
+            waiter.set()
+        logger.warning(
+            "[wcdb] invalidated cached runtime handles connections=%s reason=%s",
+            connection_count,
+            str(reason or "runtime unavailable")[:500],
+        )
+
     def ensure_connected(
         self, account_dir: Path, *, key_hex: Optional[str] = None, timeout: float = 5.0
     ) -> WCDBRealtimeConnection:
@@ -1839,9 +1962,7 @@ class WCDBRealtimeManager:
             failed_at = self._failed.get(account)
             if failed_at is not None and (time.monotonic() - failed_at) < self._FAILED_TTL:
                 logger.warning("[wcdb] recent failure cache hit account=%s ttl=%ss", account, int(self._FAILED_TTL))
-                raise WCDBRealtimeError(
-                    _with_vc_redist_help("WCDB connection recently failed; retry after 60s.")
-                )
+                raise WCDBRealtimeError("WCDB connection recently failed; retry after 60s.")
 
         deadline = time.monotonic() + timeout
 
@@ -1860,10 +1981,10 @@ class WCDBRealtimeManager:
             # Another thread is connecting; wait a bit and retry.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise WCDBRealtimeError(_with_vc_redist_help("Timed out waiting for WCDB connection."))
+                raise WCDBRealtimeError("Timed out waiting for WCDB connection.")
             waiter.wait(timeout=min(remaining, 10.0))
             if time.monotonic() >= deadline:
-                raise WCDBRealtimeError(_with_vc_redist_help("Timed out waiting for WCDB connection."))
+                raise WCDBRealtimeError("Timed out waiting for WCDB connection.")
 
         key = str(key_hex or "").strip()
         if not key:
@@ -1871,9 +1992,7 @@ class WCDBRealtimeManager:
             key = str((key_item or {}).get("db_key") or "").strip()
 
         try:
-            if len(key) != 64:
-                with self._mu:
-                    self._failed[account] = time.monotonic()
+            if not re.fullmatch(r"[0-9a-fA-F]{64}", key):
                 logger.warning("[wcdb] missing/invalid db key account=%s key_len=%s", account, len(key))
                 raise WCDBRealtimeError("Missing db key for this account (call /api/keys or decrypt first).")
             db_storage_dir = _resolve_account_db_storage_dir(account_dir)
@@ -1888,19 +2007,38 @@ class WCDBRealtimeManager:
             # blocking indefinitely when the native library hangs (locked DB).
             _handle_box: list[int] = []
             _open_err: list[Exception] = []
+            remaining = max(0.1, deadline - time.monotonic())
+            request_timeout = max(0.5, remaining - 0.5)
 
             def _do_open() -> None:
                 try:
-                    _handle_box.append(open_account(session_db_path, key))
+                    _handle_box.append(open_account(session_db_path, key, timeout=request_timeout))
                 except Exception as exc:
                     _open_err.append(exc)
 
-            remaining = max(0.1, deadline - time.monotonic())
             open_thread = threading.Thread(target=_do_open, daemon=True)
             open_thread.start()
             open_thread.join(timeout=remaining)
 
             if open_thread.is_alive():
+                if _sidecar_enabled():
+                    _invalidate_sidecar_runtime(
+                        f"open_account timed out account={account} session_db={session_db_path}"
+                    )
+                    timeout_message = (
+                        f"open_account timed out after {timeout:.0f}s for {session_db_path}. "
+                        "原生调用已隔离，WCDB 运行时将重启。"
+                    )
+                else:
+                    global _inprocess_runtime_poisoned_reason
+                    _inprocess_runtime_poisoned_reason = (
+                        f"open_account timeout account={account} session_db={session_db_path}"
+                    )
+                    timeout_message = (
+                        f"open_account timed out after {timeout:.0f}s for {session_db_path}. "
+                        "当前为进程内 WCDB，原生调用无法安全终止；请重启应用。"
+                        "源码运行请先执行 `cd desktop; npm ci` 以启用隔离 sidecar。"
+                    )
                 with self._mu:
                     self._failed[account] = time.monotonic()
                 logger.warning(
@@ -1910,13 +2048,12 @@ class WCDBRealtimeManager:
                     session_db_path,
                 )
                 raise WCDBRealtimeError(
-                    _with_vc_redist_help(
-                        f"open_account timed out after {timeout:.0f}s for {session_db_path}"
-                    )
+                    _with_wcdb_open_help(timeout_message)
                 )
             if _open_err:
-                with self._mu:
-                    self._failed[account] = time.monotonic()
+                if _should_cache_open_failure(_open_err[0]):
+                    with self._mu:
+                        self._failed[account] = time.monotonic()
                 logger.warning(
                     "[wcdb] open_account failed account=%s session_db=%s error=%s",
                     account,
@@ -1926,7 +2063,7 @@ class WCDBRealtimeManager:
                 raise _open_err[0]
             if not _handle_box:
                 logger.warning("[wcdb] open_account returned no handle account=%s session_db=%s", account, session_db_path)
-                raise WCDBRealtimeError(_with_vc_redist_help("open_account returned no handle."))
+                raise WCDBRealtimeError(_with_wcdb_open_help("open_account returned no handle."))
 
             handle = _handle_box[0]
             # 对齐 WeFlow：传清理后的 wxid/account 名称给 native WCDB，

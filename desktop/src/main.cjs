@@ -41,6 +41,14 @@ let wcdbSidecarProc = null;
 let wcdbSidecarPort = null;
 let wcdbSidecarUrl = "";
 let wcdbSidecarToken = "";
+let wcdbSidecarRestartTimer = null;
+let wcdbSidecarRestartInProgress = false;
+let wcdbSidecarRestartHistory = [];
+let wcdbSidecarHealthTimer = null;
+let wcdbSidecarHealthInFlight = false;
+let wcdbSidecarHealthFailures = 0;
+let wcdbSidecarHealthGeneration = 0;
+const WCDB_SIDECAR_HEALTH_FAILURE_LIMIT = 15;
 let resolvedDataDir = null;
 let mainWindow = null;
 let tray = null;
@@ -1841,6 +1849,110 @@ function ensureWcdbSidecarEnv(env) {
   return env;
 }
 
+function stopWcdbSidecarHealthMonitor() {
+  wcdbSidecarHealthGeneration += 1;
+  if (wcdbSidecarHealthTimer) clearInterval(wcdbSidecarHealthTimer);
+  wcdbSidecarHealthTimer = null;
+  wcdbSidecarHealthInFlight = false;
+  wcdbSidecarHealthFailures = 0;
+}
+
+async function probeWcdbSidecarHealth(proc) {
+  if (!proc || proc.exitCode != null || !wcdbSidecarUrl) return false;
+  try {
+    const statusCode = await httpGet(`${wcdbSidecarUrl}/health`);
+    return statusCode >= 200 && statusCode < 500;
+  } catch {
+    return false;
+  }
+}
+
+function startWcdbSidecarHealthMonitor(proc) {
+  stopWcdbSidecarHealthMonitor();
+  if (!proc) return;
+
+  const generation = wcdbSidecarHealthGeneration;
+  const startedAt = Date.now();
+  wcdbSidecarHealthTimer = setInterval(() => {
+    if (generation !== wcdbSidecarHealthGeneration || wcdbSidecarHealthInFlight) return;
+    if (wcdbSidecarProc !== proc || proc.exitCode != null) {
+      stopWcdbSidecarHealthMonitor();
+      return;
+    }
+
+    wcdbSidecarHealthInFlight = true;
+    void probeWcdbSidecarHealth(proc)
+      .then((healthy) => {
+        if (generation !== wcdbSidecarHealthGeneration) return;
+        if (healthy) {
+          wcdbSidecarHealthFailures = 0;
+          return;
+        }
+        if (Date.now() - startedAt < 4_000) return;
+
+        wcdbSidecarHealthFailures += 1;
+        logMain(`[wcdb-sidecar] health probe failed count=${wcdbSidecarHealthFailures}`);
+        // Most sidecar calls allow up to 30 seconds. Recycle only after that
+        // request window has elapsed, so a slow valid query is not interrupted.
+        if (wcdbSidecarHealthFailures < WCDB_SIDECAR_HEALTH_FAILURE_LIMIT) return;
+
+        logMain("[wcdb-sidecar] unresponsive; terminating runtime for clean restart");
+        stopWcdbSidecarHealthMonitor();
+        try {
+          proc.kill();
+        } catch (err) {
+          logMain(`[wcdb-sidecar] watchdog kill failed: ${err?.message || err}`);
+        }
+      })
+      .finally(() => {
+        if (generation === wcdbSidecarHealthGeneration) wcdbSidecarHealthInFlight = false;
+      });
+  }, 2_000);
+  wcdbSidecarHealthTimer.unref?.();
+}
+
+function cancelWcdbRuntimeRestart() {
+  if (!wcdbSidecarRestartTimer) return;
+  clearTimeout(wcdbSidecarRestartTimer);
+  wcdbSidecarRestartTimer = null;
+}
+
+function scheduleWcdbRuntimeRestart(code, signal) {
+  if (isQuitting || !backendProc || wcdbSidecarRestartTimer || wcdbSidecarRestartInProgress) return;
+
+  const now = Date.now();
+  wcdbSidecarRestartHistory = wcdbSidecarRestartHistory.filter((timestamp) => now - timestamp < 60_000);
+  if (wcdbSidecarRestartHistory.length >= 3) {
+    logMain("[wcdb-sidecar] restart suppressed after 3 failures in 60s");
+    return;
+  }
+  wcdbSidecarRestartHistory.push(now);
+  const delayMs = Math.min(4_000, 500 * 2 ** (wcdbSidecarRestartHistory.length - 1));
+  logMain(`[wcdb-sidecar] scheduling runtime restart in ${delayMs}ms code=${code} signal=${signal}`);
+
+  wcdbSidecarRestartTimer = setTimeout(() => {
+    wcdbSidecarRestartTimer = null;
+    if (isQuitting || !backendProc || wcdbSidecarRestartInProgress) return;
+    wcdbSidecarRestartInProgress = true;
+
+    void (async () => {
+      try {
+        // A restarted sidecar has no knowledge of the backend's cached native handles.
+        // Restart both processes so the next request opens a fresh WCDB account.
+        await stopBackendAndWait({ timeoutMs: 10_000 });
+        if (isQuitting) return;
+        startBackend();
+        await waitForBackend({ timeoutMs: 30_000 });
+        logMain("[wcdb-sidecar] runtime restart completed");
+      } catch (err) {
+        logMain(`[wcdb-sidecar] runtime restart failed: ${err?.stack || String(err)}`);
+      } finally {
+        wcdbSidecarRestartInProgress = false;
+      }
+    })();
+  }, delayMs);
+}
+
 function startWcdbSidecar() {
   if (process.env.WECHAT_TOOL_WCDB_SIDECAR === "0") return null;
   if (wcdbSidecarProc && wcdbSidecarProc.exitCode == null) return wcdbSidecarProc;
@@ -1892,9 +2004,15 @@ function startWcdbSidecar() {
 
   const proc = wcdbSidecarProc;
   proc.on("exit", (code, signal) => {
-    if (wcdbSidecarProc === proc) wcdbSidecarProc = null;
+    const unexpected = wcdbSidecarProc === proc;
+    if (unexpected) {
+      wcdbSidecarProc = null;
+      stopWcdbSidecarHealthMonitor();
+    }
     logMain(`[wcdb-sidecar] exited code=${code} signal=${signal}`);
+    if (unexpected) scheduleWcdbRuntimeRestart(code, signal);
   });
+  startWcdbSidecarHealthMonitor(proc);
 
   process.env.WECHAT_TOOL_WCDB_SIDECAR_URL = wcdbSidecarUrl;
   process.env.WECHAT_TOOL_WCDB_SIDECAR_TOKEN = wcdbSidecarToken;
@@ -1902,6 +2020,8 @@ function startWcdbSidecar() {
 }
 
 function stopWcdbSidecar() {
+  cancelWcdbRuntimeRestart();
+  stopWcdbSidecarHealthMonitor();
   if (!wcdbSidecarProc) return;
   const pid = wcdbSidecarProc.pid;
   logMain(`[wcdb-sidecar] stop pid=${pid || "?"}`);
