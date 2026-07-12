@@ -788,6 +788,184 @@ def fetch_rows_via_exec(
     )
 
 
+def fetch_all_rows_via_exec_paged(
+    *,
+    rt_conn: Any,
+    account_dir: Path,
+    username: str,
+    db_storage_dir: Optional[Path],
+    exec_query: ExecQuery,
+    normalize_item: NormalizeItem,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+    local_types: Optional[set[int]] = None,
+    page_size: int = 1000,
+) -> RealtimeMessageBatch:
+    """Read a full conversation without creating an unbounded sidecar response."""
+
+    size = max(1, min(int(page_size or 1000), 1000))
+    resolved, candidate_count, probed, diagnostics = _resolve_tables(
+        rt_conn=rt_conn,
+        db_storage_dir=db_storage_dir,
+        username=username,
+        exec_query=exec_query,
+    )
+    authoritative = bool(candidate_count > 0 and probed == candidate_count)
+    if not resolved:
+        return RealtimeMessageBatch(
+            [],
+            False,
+            "exec_paged",
+            authoritative,
+            tables_found=0,
+            databases_probed=probed,
+            diagnostics=tuple(diagnostics),
+        )
+
+    all_rows: list[dict[str, Any]] = []
+    first_db_path: Optional[Path] = None
+    first_table_name = ""
+    first_my_rowid: Optional[int] = None
+    wanted_types = sorted({int(value) for value in (local_types or set()) if int(value) != 0})
+
+    def row_key(row: dict[str, Any]) -> tuple[int, int, int]:
+        return (
+            _to_int(_pick(row, "create_time", "createTime")),
+            _to_int(_pick(row, "sort_seq", "sortSeq")),
+            _to_int(_pick(row, "local_id", "localId")),
+        )
+
+    for db_path, table_name in resolved:
+        my_rowid = _lookup_my_rowid(
+            rt_conn=rt_conn,
+            account_dir=account_dir,
+            db_path=db_path,
+            exec_query=exec_query,
+        )
+        boundary: Optional[tuple[int, int, int]] = None
+        selected_statement: Optional[int] = None
+
+        while True:
+            where_parts: list[str] = []
+            if wanted_types:
+                where_parts.append("m.local_type IN (" + ", ".join(str(value) for value in wanted_types) + ")")
+            if start_time is not None:
+                where_parts.append(f"m.create_time >= {int(start_time)}")
+            if end_time is not None:
+                where_parts.append(f"m.create_time <= {int(end_time)}")
+            if boundary is not None:
+                create_time, sort_seq, local_id = boundary
+                where_parts.append(
+                    "(m.create_time > {0} OR "
+                    "(m.create_time = {0} AND m.sort_seq > {1}) OR "
+                    "(m.create_time = {0} AND m.sort_seq = {1} AND m.local_id > {2}))".format(
+                        create_time,
+                        sort_seq,
+                        local_id,
+                    )
+                )
+
+            statements = _select_window_candidates(
+                table_name,
+                where_sql=" AND ".join(where_parts) if where_parts else "1=1",
+                order_sql="m.create_time ASC, m.sort_seq ASC, m.local_id ASC",
+                limit=size,
+            )
+            indexes = list(range(len(statements)))
+            if selected_statement is not None:
+                indexes.remove(selected_statement)
+                indexes.insert(0, selected_statement)
+
+            raw_rows: Optional[list[dict[str, Any]]] = None
+            last_error: Optional[Exception] = None
+            for statement_index in indexes:
+                try:
+                    raw_rows = list(
+                        _locked_call(
+                            rt_conn,
+                            exec_query,
+                            rt_conn.handle,
+                            kind="message",
+                            path=str(db_path),
+                            sql=statements[statement_index],
+                        )
+                        or []
+                    )
+                    selected_statement = statement_index
+                    break
+                except Exception as exc:
+                    last_error = exc
+
+            if raw_rows is None:
+                raise RealtimeMessageReadError(
+                    f"Cannot query realtime table {db_path.name}/{table_name}: {last_error or 'unknown error'}"
+                )
+            if not raw_rows:
+                break
+            if len(raw_rows) > size:
+                raise RealtimeMessageReadError(
+                    f"Realtime query exceeded bounded page size for {db_path.name}/{table_name}: "
+                    f"received {len(raw_rows)}, limit {size}"
+                )
+
+            page_rows = [row for row in raw_rows if isinstance(row, dict)]
+            if not page_rows:
+                raise RealtimeMessageReadError(
+                    f"Realtime query returned malformed rows for {db_path.name}/{table_name}"
+                )
+            page_rows.sort(key=row_key)
+            next_boundary = row_key(page_rows[-1])
+            if boundary is not None and next_boundary <= boundary:
+                raise RealtimeMessageReadError(
+                    f"Realtime pagination did not advance for {db_path.name}/{table_name} at {boundary}"
+                )
+
+            if first_db_path is None:
+                first_db_path = db_path
+                first_table_name = table_name
+                first_my_rowid = my_rowid
+
+            for raw in page_rows:
+                item = normalize_item(raw)
+                if not isinstance(item, dict):
+                    continue
+                item["_db_path"] = str(db_path)
+                item["db_name"] = db_path.name
+                item["table_name"] = table_name
+                if my_rowid is not None:
+                    item["__my_rowid"] = int(my_rowid)
+                    item.setdefault("debug_my_rowid", int(my_rowid))
+                    real_sender_id = _to_int(_pick(item, "real_sender_id", "realSenderId"))
+                    if real_sender_id > 0:
+                        item.setdefault("computed_is_send", int(real_sender_id == int(my_rowid)))
+                all_rows.append(item)
+
+            boundary = next_boundary
+            if len(raw_rows) < size:
+                break
+
+    all_rows.sort(
+        key=lambda row: (
+            _to_int(_pick(row, "create_time", "createTime")),
+            _to_int(_pick(row, "sort_seq", "sortSeq")),
+            _to_int(_pick(row, "local_id", "localId")),
+            str(_pick(row, "_db_path") or ""),
+        )
+    )
+    return RealtimeMessageBatch(
+        all_rows,
+        False,
+        "exec_paged",
+        authoritative,
+        db_path=first_db_path,
+        table_name=first_table_name,
+        my_rowid=first_my_rowid,
+        tables_found=len(resolved),
+        databases_probed=probed,
+        diagnostics=tuple(diagnostics),
+    )
+
+
 def fetch_rows_via_cursor(
     *,
     rt_conn: Any,
@@ -867,36 +1045,31 @@ def read_all_realtime_message_rows(
     diagnostics: list[str] = []
     exec_empty: Optional[RealtimeMessageBatch] = None
     exec_partial = False
-    take = max(1, int(initial_take))
     try:
-        while True:
-            batch = fetch_rows_via_exec(
-                rt_conn=rt_conn,
-                account_dir=account_dir,
-                username=username,
-                take=take,
-                db_storage_dir=db_storage_dir,
-                exec_query=exec_query,
-                normalize_item=normalize_item,
-            )
-            diagnostics.extend(batch.diagnostics)
-            if batch.tables_found > 0:
-                if not batch.has_more:
-                    if batch.authoritative:
-                        result = batch
-                    else:
-                        exec_partial = True
-                        diagnostics.append("exec: one or more realtime message databases could not be probed")
-                        result = None
-                    break
-                if take >= 2_000_000_000:
-                    raise RealtimeMessageReadError("Realtime conversation exceeds the supported message count.")
-                take = min(take * 2, 2_000_000_000)
-                continue
+        batch = fetch_all_rows_via_exec_paged(
+            rt_conn=rt_conn,
+            account_dir=account_dir,
+            username=username,
+            db_storage_dir=db_storage_dir,
+            exec_query=exec_query,
+            normalize_item=normalize_item,
+            start_time=start_time,
+            end_time=end_time,
+            local_types=local_types,
+            page_size=initial_take,
+        )
+        diagnostics.extend(batch.diagnostics)
+        if batch.tables_found > 0:
+            if batch.authoritative:
+                result = batch
+            else:
+                exec_partial = True
+                diagnostics.append("exec: one or more realtime message databases could not be probed")
+                result = None
+        else:
             if batch.authoritative:
                 exec_empty = batch
             result = None
-            break
     except Exception as exc:
         diagnostics.append(f"exec: {exc}")
         result = None

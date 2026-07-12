@@ -438,6 +438,91 @@ class TestChatExportTargets(unittest.TestCase):
                         )
                     )
 
+    def test_realtime_message_iterator_pages_large_conversation(self):
+        import wechat_decrypt_tool.chat_export_service as svc
+
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "wxid_account"
+            db_storage = Path(td) / "db_storage"
+            message_dir = db_storage / "message"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            message_dir.mkdir(parents=True, exist_ok=True)
+
+            username = "wxid_large_friend"
+            table_name = f"Msg_{hashlib.md5(username.encode('utf-8')).hexdigest()}"
+            db_path = message_dir / "message_0.db"
+            conn = sqlite3.connect(str(db_path))
+            try:
+                conn.execute("CREATE TABLE Name2Id (user_name TEXT)")
+                conn.execute("INSERT INTO Name2Id(rowid, user_name) VALUES (1, ?)", (account_dir.name,))
+                conn.execute("INSERT INTO Name2Id(rowid, user_name) VALUES (2, ?)", (username,))
+                conn.execute(
+                    f'''CREATE TABLE "{table_name}" (
+                        local_id INTEGER PRIMARY KEY,
+                        server_id INTEGER,
+                        local_type INTEGER,
+                        sort_seq INTEGER,
+                        real_sender_id INTEGER,
+                        create_time INTEGER,
+                        message_content TEXT,
+                        compress_content BLOB,
+                        packed_info_data BLOB,
+                        source TEXT
+                    )'''
+                )
+                conn.executemany(
+                    f'''INSERT INTO "{table_name}" VALUES (?, ?, 1, ?, 2, ?, ?, NULL, NULL, NULL)''',
+                    (
+                        (
+                            index,
+                            index * 10,
+                            index // 10,
+                            1_700_000_000 + index // 1500,
+                            f"message {index}",
+                        )
+                        for index in range(1, 2506)
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            message_query_limits: list[int] = []
+
+            def fake_exec_query(_handle, *, kind, path, sql):
+                self.assertEqual(kind, "message")
+                if f'FROM "{table_name}"' in sql and "LIMIT " in sql:
+                    message_query_limits.append(int(sql.rsplit("LIMIT ", 1)[1].split()[0]))
+                query_conn = sqlite3.connect(path)
+                query_conn.row_factory = sqlite3.Row
+                try:
+                    return [dict(row) for row in query_conn.execute(sql).fetchall()]
+                finally:
+                    query_conn.close()
+
+            rt_conn = _DummyRealtimeConn()
+            rt_conn.db_storage_dir = db_storage
+            rt_conn.native_wxid = account_dir.name
+            with (
+                patch.object(svc, "_wcdb_exec_query", side_effect=fake_exec_query),
+                patch.object(svc, "_resolve_account_db_storage_dir", return_value=db_storage),
+            ):
+                rows = list(
+                    svc._iter_rows_for_conversation(
+                        account_dir=account_dir,
+                        conv_username=username,
+                        start_time=None,
+                        end_time=None,
+                        source="realtime",
+                        rt_conn=rt_conn,
+                    )
+                )
+
+            self.assertEqual(len(rows), 2505)
+            self.assertEqual([row.local_id for row in rows], list(range(1, 2506)))
+            self.assertGreater(len(message_query_limits), 2)
+            self.assertLessEqual(max(message_query_limits), 1000)
+
 
 if __name__ == "__main__":
     unittest.main()
