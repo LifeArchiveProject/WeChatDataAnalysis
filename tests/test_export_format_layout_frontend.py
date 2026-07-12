@@ -35,8 +35,11 @@ class TestExportFormatLayoutFrontend(unittest.TestCase):
         for label in ("类型", "公众号类型", "公众号类型码", "国家/地区码", "省份", "城市", "来源场景码"):
             self.assertNotIn(f"'{label}'", html_fields)
         self.assertNotIn("<figcaption>", source)
-        self.assertIn("grid-template-columns:repeat(4,minmax(0,1fr))", source)
-        self.assertIn("width:50px;height:50px", source)
+        self.assertNotIn("grid-template-columns:repeat(4,minmax(0,1fr))", source)
+        self.assertNotIn("width:50px;height:50px", source)
+        self.assertIn("/chat/contacts/export/style", source)
+        self.assertIn("/chat/contacts/export/seal", source)
+        self.assertIn("responseType: 'text'", source)
 
     def test_sns_format_grid_is_stable(self):
         source = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")

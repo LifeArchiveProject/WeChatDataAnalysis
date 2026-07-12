@@ -328,6 +328,7 @@ import { usePrivacyStore } from '~/stores/privacy'
 useHead({ title: '联系人 - 微信数据分析助手' })
 
 const api = useApi()
+const apiBase = useApiBase()
 
 const chatAccounts = useChatAccountsStore()
 const { selectedAccount } = storeToRefs(chatAccounts)
@@ -699,12 +700,15 @@ const renderContactHtmlCard = (row, includeAvatar) => {
 </article>`
 }
 
-const buildContactsHtmlDocument = ({ account, contacts, includeAvatar }) => {
+const buildContactsHtmlDocument = async ({ account, contacts, includeAvatar }) => {
   const cards = contacts.map((row) => renderContactHtmlCard(row, includeAvatar)).join('\n')
   const content = cards
     ? `<section class="contact-grid">${cards}</section>`
     : '<div class="empty-state">没有符合条件的联系人</div>'
-  const styles = `:root{--page:#ededed;--panel:#fff;--soft:#f7f7f7;--hover:#f5f7f5;--line:#e2e5e2;--line-strong:#d3d7d3;--text:#191919;--secondary:#555b56;--muted:#6d746e;--green:#07c160;--green-dark:#058f48;--green-soft:#e9f8ef}*{box-sizing:border-box;letter-spacing:0}html,body{margin:0;min-height:100%;background:var(--page);color:var(--text);font:13px/1.45 "Segoe UI","PingFang SC","Microsoft YaHei UI",sans-serif}.records-page{width:100%;min-height:100vh;padding:16px}.records-frame{width:min(100%,1400px);min-height:calc(100vh - 32px);margin:0 auto;overflow:hidden;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel)}.masthead{position:sticky;z-index:5;top:0;display:flex;min-height:76px;align-items:center;justify-content:space-between;gap:24px;padding:14px 18px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.96)}.masthead h1{margin:0;font-size:21px;font-weight:500;line-height:1.3}.masthead .count{display:block;margin-top:2px;color:var(--muted);font-size:13px}.masthead .count strong{margin:0 3px;color:var(--secondary);font-size:14px;font-weight:500}.export-meta{max-width:55%;color:var(--muted);font-size:12px;text-align:right;overflow-wrap:anywhere}.section-bar{display:flex;min-height:50px;align-items:center;justify-content:space-between;gap:16px;padding:0 18px;border-bottom:1px solid var(--line);background:var(--soft)}.section-bar strong{font-size:14px;font-weight:500}.section-bar span{color:var(--muted)}.contact-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0 14px;padding:2px 14px 18px}.contact-card{min-width:0;padding:14px 8px 12px;border-bottom:1px solid var(--line);border-radius:6px}.contact-card:hover{background:var(--hover)}.contact-head{display:grid;grid-template-columns:50px minmax(0,1fr);align-items:start;gap:11px;min-width:0}figure{width:50px;margin:0;text-align:center}.avatar-frame{position:relative;width:50px;height:50px;overflow:hidden;border-radius:8px;background:var(--green-soft)}.contact-avatar{position:absolute;inset:0;display:grid;width:100%;height:100%;place-items:center;object-fit:cover}.contact-avatar.fallback{color:var(--green-dark);font-size:15px;font-weight:500}.identity-fields,.contact-details{min-width:0}.contact-details{margin-top:8px}.contact-field{display:grid;grid-template-columns:76px minmax(0,1fr);gap:7px;min-width:0;padding:3px 0}.contact-field span{color:var(--muted);font-size:12px;white-space:nowrap}.contact-field b{min-width:0;color:var(--secondary);font-size:12px;font-weight:400;line-height:1.45;overflow-wrap:anywhere}.empty-value{color:#a6aca7}.empty-state{display:grid;min-height:260px;place-items:center;color:var(--muted)}@media(max-width:1100px){.contact-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.records-page{padding:0}.records-frame{min-height:100vh;border:0;border-radius:0}.masthead{align-items:flex-start;flex-direction:column;gap:7px;padding:14px 16px}.export-meta{max-width:100%;text-align:left}.contact-grid{grid-template-columns:minmax(0,1fr);padding-inline:9px}}`
+  const styles = await $fetch('/chat/contacts/export/style', {
+    baseURL: apiBase,
+    responseType: 'text',
+  })
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>联系人导出</title><style>${styles}</style></head><body><div class="records-page"><main class="records-frame"><header class="masthead"><div><h1>联系人</h1><span class="count">共<strong>${contacts.length}</strong>个联系人</span></div><div class="export-meta">账号 ${escapeHtml(account)}</div></header><div class="section-bar"><strong>全部联系人</strong><span>已显示 ${contacts.length} 个</span></div>${content}</main></div></body></html>`
 }
 
@@ -777,14 +781,49 @@ const buildExportContactsPayload = async () => {
   }
 }
 
-const writeWebExportFile = async ({ fileName, content }) => {
+const exportContentBase64 = async (content) => {
+  const bytes = typeof content === 'string'
+    ? new TextEncoder().encode(content)
+    : new Uint8Array(await content.arrayBuffer())
+  const chunks = []
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)))
+  }
+  return btoa(chunks.join(''))
+}
+
+const exportContentFromBase64 = (value) => {
+  const binary = atob(String(value || ''))
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return bytes
+}
+
+const writeWebExportFile = async ({ fileName, content, seal = true }) => {
   if (!exportFolderHandle.value || typeof exportFolderHandle.value.getFileHandle !== 'function') {
     throw new Error('未选择浏览器导出目录')
   }
+  const sealed = seal
+    ? await $fetch('/chat/contacts/export/seal', {
+        baseURL: apiBase,
+        method: 'POST',
+        body: {
+          file_name: fileName,
+          content_base64: await exportContentBase64(content),
+        },
+      })
+    : null
   const fileHandle = await exportFolderHandle.value.getFileHandle(fileName, { create: true })
   const writable = await fileHandle.createWritable()
-  await writable.write(content)
+  await writable.write(sealed?.protectedContentBase64 ? exportContentFromBase64(sealed.protectedContentBase64) : content)
   await writable.close()
+  if (sealed) {
+    if (sealed.integrityFileName) {
+      await writeWebExportFile({ fileName: sealed.integrityFileName, content: sealed.integrity, seal: false })
+    }
+    await writeWebExportFile({ fileName: sealed.manifestFileName, content: sealed.manifest, seal: false })
+    await writeWebExportFile({ fileName: sealed.signatureFileName, content: sealed.signature, seal: false })
+  }
 }
 
 const exportContactsInWeb = async () => {
@@ -850,7 +889,7 @@ const exportContactsInWeb = async () => {
     }
     await writeWebExportFile({ fileName, content: `${lines.join('\n')}\n` })
   } else if (fmt === 'html') {
-    const document = buildContactsHtmlDocument({
+    const document = await buildContactsHtmlDocument({
       account: payload.account,
       contacts: payload.contacts,
       includeAvatar: !!includeAvatarLink.value,

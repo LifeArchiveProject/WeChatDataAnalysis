@@ -29,6 +29,7 @@ class TestContactsExport(unittest.TestCase):
             output_path = Path(td) / "contacts.html"
             _write_html_export(
                 output_path,
+                export_id="contacts-html-test",
                 account="wxid_account",
                 source="decrypted",
                 contacts=[
@@ -59,6 +60,10 @@ class TestContactsExport(unittest.TestCase):
             self.assertIn('src="https://example.test/avatar?id=1&amp;size=0"', document)
             self.assertNotIn("<table", document)
             self.assertIn("小明 &lt;好友&gt;", document)
+            self.assertIn('data-wce-protected-root="1"', document)
+            self.assertIn('data-wce-integrity-bundle="1"', document)
+            self.assertIn('data-wce-runtime="1"', document)
+            self.assertIn('id="wceBrandAttribution"', document)
             for label in ("用户名", "显示名称", "备注", "昵称", "微信号", "地区", "来源"):
                 self.assertIn(f">{label}<", document)
                 self.assertEqual(document.count(f">{label}<"), 1, label)

@@ -101,6 +101,8 @@ class TestExcelExportFormat(unittest.TestCase):
             contact_path = Path(result["outputPath"])
             self.assertEqual(contact_path.suffix, ".xlsx")
             _assert_workbook(self, contact_path.read_bytes())
+            self.assertTrue(Path(result["integrityManifestPath"]).is_file())
+            self.assertTrue(Path(result["integritySignaturePath"]).is_file())
 
             record = {
                 "kind": "transfer",
@@ -122,6 +124,8 @@ class TestExcelExportFormat(unittest.TestCase):
             record_path = Path(result["outputPath"])
             self.assertEqual(record_path.suffix, ".xlsx")
             _assert_workbook(self, record_path.read_bytes())
+            self.assertTrue(Path(result["integrityManifestPath"]).is_file())
+            self.assertTrue(Path(result["integritySignaturePath"]).is_file())
 
     def test_chat_excel_archive_contains_workbooks(self):
         with TemporaryDirectory() as td:
@@ -156,6 +160,8 @@ class TestExcelExportFormat(unittest.TestCase):
             self.assertEqual(job.status, "done", msg=job.error)
             self.assertIsNotNone(job.zip_path)
             with zipfile.ZipFile(job.zip_path) as archive:
+                self.assertIn("_integrity/manifest.wce", archive.namelist())
+                self.assertIn("_integrity/signature.wce", archive.namelist())
                 self.assertIn("index.xlsx", archive.namelist())
                 message_workbook = next(name for name in archive.namelist() if name.endswith("/messages.xlsx"))
                 self.assertFalse(any(name.endswith("/messages.json") for name in archive.namelist()))
@@ -195,6 +201,8 @@ class TestExcelExportFormat(unittest.TestCase):
             ):
                 output = manager._run_job(job, account_dir)
             with zipfile.ZipFile(output) as archive:
+                self.assertIn("_integrity/manifest.wce", archive.namelist())
+                self.assertIn("_integrity/signature.wce", archive.namelist())
                 self.assertIn("index.xlsx", archive.namelist())
                 self.assertIn("sns_wxid_alice.xlsx", archive.namelist())
                 _assert_workbook(self, archive.read("index.xlsx"))

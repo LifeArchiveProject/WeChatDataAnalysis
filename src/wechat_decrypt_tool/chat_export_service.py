@@ -6,15 +6,12 @@ import base64
 import hashlib
 import heapq
 import html
-import importlib.machinery
-import importlib.util
 import ipaddress
 import json
 import os
 import re
 import sqlite3
 import socket
-import sys
 import tempfile
 import threading
 import time
@@ -73,6 +70,9 @@ from .media_helpers import (
     _try_find_decrypted_resource,
 )
 from .perf_trace import create_perf_trace
+from .export_integrity import export_css as _native_export_css
+from .export_integrity import load_wce_integrity_native
+from .export_integrity import write_zip_integrity_sidecars
 from .xlsx_export import build_xlsx_workbook
 from .wcdb_realtime import (
     WCDB_REALTIME,
@@ -264,36 +264,6 @@ def _resolve_ui_public_dir() -> Optional[Path]:
     return None
 
 
-def _load_ui_entry_css(ui_public_dir: Path) -> str:
-    """Load Nuxt `entry.*.css` content (choose largest file if multiple)."""
-
-    nuxt_dir = Path(ui_public_dir) / "_nuxt"
-    try:
-        css_files = list(nuxt_dir.glob("entry.*.css"))
-    except Exception:
-        css_files = []
-
-    if not css_files:
-        return ""
-
-    def sort_key(p: Path) -> int:
-        try:
-            return int(p.stat().st_size)
-        except Exception:
-            return 0
-
-    css_files.sort(key=sort_key, reverse=True)
-    best = css_files[0]
-    try:
-        return best.read_text(encoding="utf-8")
-    except Exception:
-        try:
-            return best.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            return ""
-
-
-_VUE_SCOPED_ATTR_RE = re.compile(r"\[data-v-[0-9a-f]{8}\]", flags=re.IGNORECASE)
 _CHAT_HISTORY_MD5_TAG_RE = re.compile(
     r"(?i)<(?P<tag>fullmd5|thumbfullmd5|md5|emoticonmd5|emojimd5|cdnthumbmd5)>(?P<md5>[0-9a-f]{32})<"
 )
@@ -331,80 +301,9 @@ def _iter_chat_history_media_refs(record_item: str) -> list[tuple[str, str]]:
     return refs
 
 
-def _strip_vue_scoped_attrs(css: str) -> str:
-    """Strip Vue SFC scoped attribute selectors like `[data-v-xxxxxxxx]`."""
-
-    if not css:
-        return ""
-    try:
-        return _VUE_SCOPED_ATTR_RE.sub("", css)
-    except Exception:
-        return css
-
-
 def _load_ui_css_bundle(*, ui_public_dir: Optional[Path], report: dict[str, Any]) -> str:
-    """Load Nuxt CSS bundle for offline HTML export.
-
-    Includes:
-      - `_nuxt/entry.*.css` (base + tailwind utilities)
-      - Chat page chunks `_nuxt/*_username_*.css` (scoped selectors stripped)
-      - native CSS patch appended last
-
-    Falls back to native fallback CSS when entry css is missing.
-
-    Note: We only bundle chat-related chunks because stripping Vue SFC scoped selectors (`[data-v-...]`) can
-    otherwise leak scoped utility overrides (e.g. `.text-sm[data-v-...]`) into global rules in the export.
-    """
-
-    if ui_public_dir is None:
-        try:
-            report["errors"].append("WARN: Nuxt UI dir not found; export HTML will use fallback styles.")
-        except Exception:
-            pass
-        return _html_export_css_fallback() + "\n\n" + _html_export_css_patch()
-
-    entry_css = _load_ui_entry_css(ui_public_dir)
-    if not entry_css:
-        try:
-            report["errors"].append("WARN: Nuxt UI CSS not found; export HTML will use fallback styles.")
-        except Exception:
-            pass
-        return _html_export_css_fallback() + "\n\n" + _html_export_css_patch()
-
-    entry_css = _strip_vue_scoped_attrs(entry_css)
-
-    nuxt_dir = Path(ui_public_dir) / "_nuxt"
-    chat_css_paths: list[Path] = []
-    try:
-        chat_css_paths = [p for p in nuxt_dir.glob("*_username_*.css") if p.is_file()]
-    except Exception:
-        chat_css_paths = []
-
-    chat_css_paths.sort(key=lambda p: p.name)
-
-    if not chat_css_paths:
-        try:
-            report["errors"].append(
-                "WARN: Nuxt chat CSS chunk not found (*_username_*.css); some message styles may be missing."
-            )
-        except Exception:
-            pass
-
-    extra_chunks: list[str] = []
-    for p in chat_css_paths:
-        try:
-            extra_chunks.append(_strip_vue_scoped_attrs(p.read_text(encoding="utf-8")))
-        except Exception:
-            try:
-                extra_chunks.append(_strip_vue_scoped_attrs(p.read_text(encoding="utf-8", errors="ignore")))
-            except Exception:
-                continue
-
-    parts = [entry_css]
-    if extra_chunks:
-        parts.append("\n\n".join(extra_chunks))
-    parts.append(_html_export_css_patch())
-    return "\n\n".join(parts)
+    del ui_public_dir, report
+    return _native_export_css("chat")
 
 
 @functools.lru_cache(maxsize=1)
@@ -684,39 +583,7 @@ _HTML_EXPORT_NATIVE_ERROR = "\u0048\u0054\u004d\u004c \u5bfc\u51fa\u7ec4\u4ef6\u
 
 
 def _load_wce_integrity_native() -> Any:
-    module_name = f"{__package__}.native.wce_integrity"
-    existing = sys.modules.get(module_name)
-    if existing is not None:
-        return existing
-
-    # During local development a running desktop process can keep the packaged
-    # .pyd locked. Prefer a freshly built native DLL when one is present.
-    build_path = (
-        Path(__file__).resolve().parents[2]
-        / "native"
-        / "wce_integrity"
-        / "target"
-        / "release"
-        / "wce_integrity.dll"
-    )
-    if build_path.is_file():
-        try:
-            loader = importlib.machinery.ExtensionFileLoader(module_name, str(build_path))
-            spec = importlib.util.spec_from_file_location(module_name, build_path, loader=loader)
-            if spec is not None:
-                native = importlib.util.module_from_spec(spec)
-                sys.modules[module_name] = native
-                loader.exec_module(native)
-                return native
-        except Exception:
-            sys.modules.pop(module_name, None)
-
-    try:
-        from .native import wce_integrity  # type: ignore
-
-        return wce_integrity
-    except Exception as e:
-        raise RuntimeError(_HTML_EXPORT_NATIVE_ERROR) from e
+    return load_wce_integrity_native()
 
 
 def _native_text(native_integrity: Any, func_name: str, *args: Any, error: str = _HTML_EXPORT_NATIVE_ERROR) -> str:
@@ -748,14 +615,6 @@ def _native_json_list(
     if any(not item for item in out):
         raise RuntimeError(error)
     return out
-
-
-def _html_export_css_fallback() -> str:
-    return _native_text(_load_wce_integrity_native(), "css_fallback")
-
-
-def _html_export_css_patch() -> str:
-    return _native_text(_load_wce_integrity_native(), "css_patch")
 
 
 def _html_export_runtime_js(native_integrity: Any) -> str:
@@ -1628,7 +1487,7 @@ class ChatExportManager:
 
             phase_started = time.perf_counter()
             _safe_trace(trace, "zip_open_start", tmpZip=str(tmp_zip))
-            native_integrity = _load_wce_integrity_native() if export_format == "html" else None
+            native_integrity = _load_wce_integrity_native()
             with zipfile.ZipFile(tmp_zip, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as raw_zf:
                 zf = _ZipIntegrityWriter(raw_zf, native_integrity=native_integrity)
                 _safe_trace(trace, "zip_opened", durationMs=_elapsed_ms(phase_started))
@@ -2266,6 +2125,8 @@ class ChatExportManager:
                     except Exception as e:
                         _safe_trace(trace, "html_integrity_bundle_failed", error=str(e))
                         raise
+                else:
+                    write_zip_integrity_sidecars(zf, job.export_id)
                 _safe_trace(
                     trace,
                     "manifest_written",
