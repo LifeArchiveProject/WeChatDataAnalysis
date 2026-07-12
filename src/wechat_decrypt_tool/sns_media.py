@@ -18,13 +18,18 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit
+import asyncio
+import atexit
 import base64
 import hashlib
 import html
+import json
 import os
+import queue
 import re
 import subprocess
+import threading
 import time
 
 import httpx
@@ -46,12 +51,42 @@ def is_allowed_sns_media_host(host: str) -> bool:
     return h.endswith(".qpic.cn") or h.endswith(".qlogo.cn") or h.endswith(".tc.qq.com") or h.endswith(".video.qq.com")
 
 
+def normalize_sns_cache_url(url: str) -> str:
+    """Build WeFlow's stable cache identity without volatile token/idx parameters."""
+    raw = html.unescape(str(url or "")).strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlsplit(raw)
+        query = urlencode(
+            [
+                (key, value)
+                for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+                if key.lower() not in {"token", "idx"}
+            ],
+            doseq=True,
+        )
+        base = f"{parsed.netloc}{parsed.path}"
+        return f"{base}?{query}" if query else base
+    except Exception:
+        base, separator, query = raw.partition("?")
+        stable_base = re.sub(r"^https?://", "", base, flags=re.I)
+        if not separator:
+            return stable_base
+        params = [
+            item
+            for item in query.split("&")
+            if item.partition("=")[0].strip().lower() not in {"token", "idx"}
+        ]
+        return f"{stable_base}?{'&'.join(params)}" if params else stable_base
+
+
 def fix_sns_cdn_url(url: str, *, token: str = "", is_video: bool = False) -> str:
     """WeFlow-compatible SNS CDN URL normalization.
 
     - Force https for Tencent CDNs.
     - For images, replace `/150`, `/200`, `/480` with `/0` to request the original.
-    - If token is provided and url doesn't contain it, append `token=<token>&idx=1`.
+    - If token is provided, replace stale token/idx parameters with the current values.
     """
     u = html.unescape(str(url or "")).strip()
     if not u:
@@ -74,17 +109,22 @@ def fix_sns_cdn_url(url: str, *, token: str = "", is_video: bool = False) -> str
         u = re.sub(r"/(?:150|200|480)(?=($|\?))", "/0", u)
 
     tok = str(token or "").strip()
-    if tok and ("token=" not in u):
+    if tok:
+        base, separator, query = u.partition("?")
+        params = []
+        if separator:
+            params = [
+                item
+                for item in query.split("&")
+                if item.partition("=")[0].strip().lower() not in {"token", "idx"}
+            ]
+        u = f"{base}?{'&'.join(params)}" if params else base
         if is_video:
             # Match WeFlow: place `token&idx=1` in front of existing query params.
-            base, sep, qs = u.partition("?")
-            if sep:
-                qs = qs.lstrip("&")
-                u = f"{base}?token={tok}&idx=1"
-                if qs:
-                    u = f"{u}&{qs}"
-            else:
-                u = f"{u}?token={tok}&idx=1"
+            base, separator, query = u.partition("?")
+            u = f"{base}?token={tok}&idx=1"
+            if separator and query:
+                u = f"{u}&{query}"
         else:
             connector = "&" if "?" in u else "?"
             u = f"{u}{connector}token={tok}&idx=1"
@@ -111,6 +151,119 @@ def _weflow_wxisaac64_script_path() -> str:
     return ""
 
 
+class _WeflowWasmProcess:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._process: Optional[subprocess.Popen[str]] = None
+        self._responses: queue.Queue[Optional[dict[str, object]]] = queue.Queue()
+        self._request_id = 0
+
+    def _start_locked(self, script: str) -> subprocess.Popen[str]:
+        process = self._process
+        if process is not None and process.poll() is None:
+            return process
+
+        responses: queue.Queue[Optional[dict[str, object]]] = queue.Queue()
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        process = subprocess.Popen(
+            ["node", script, "--stdio"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            creationflags=creationflags,
+        )
+        if process.stdin is None or process.stdout is None:
+            process.kill()
+            raise RuntimeError("Failed to open WeFlow WASM stdio pipes")
+
+        def read_responses() -> None:
+            try:
+                for line in process.stdout:
+                    try:
+                        value = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(value, dict):
+                        responses.put(value)
+            finally:
+                responses.put(None)
+
+        threading.Thread(
+            target=read_responses,
+            name="sns-wasm-response-reader",
+            daemon=True,
+        ).start()
+        self._responses = responses
+        self._process = process
+        return process
+
+    def generate(self, script: str, key: str, size: int) -> bytes:
+        with self._lock:
+            process = self._start_locked(script)
+            assert process.stdin is not None
+            self._request_id += 1
+            request_id = self._request_id
+            request = json.dumps(
+                {"id": request_id, "key": str(key), "size": int(size)},
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+            try:
+                process.stdin.write(request + "\n")
+                process.stdin.flush()
+                response = self._responses.get(timeout=30.0)
+            except Exception:
+                self._stop_locked()
+                raise
+
+            if response is None or int(response.get("id") or 0) != request_id:
+                self._stop_locked()
+                raise RuntimeError("WeFlow WASM process returned an invalid response")
+            error = str(response.get("error") or "").strip()
+            if error:
+                raise RuntimeError(error)
+            payload = str(response.get("data") or "").strip()
+            if not payload:
+                raise RuntimeError("WeFlow WASM process returned an empty keystream")
+            return base64.b64decode(payload, validate=False)
+
+    def _stop_locked(self) -> None:
+        process = self._process
+        self._process = None
+        if process is None:
+            return
+        try:
+            if process.stdin is not None:
+                process.stdin.close()
+        except Exception:
+            pass
+        try:
+            process.terminate()
+            process.wait(timeout=2.0)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+        try:
+            if process.stdout is not None:
+                process.stdout.close()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        with self._lock:
+            self._stop_locked()
+
+
+_WEFLOW_WASM_PROCESS = _WeflowWasmProcess()
+atexit.register(_WEFLOW_WASM_PROCESS.close)
+
+
 @lru_cache(maxsize=64)
 def weflow_wxisaac64_keystream(key: str, size: int) -> bytes:
     """Generate keystream via WeFlow's WASM (preferred; matches real video decryption)."""
@@ -122,18 +275,7 @@ def weflow_wxisaac64_keystream(key: str, size: int) -> bytes:
     script = _weflow_wxisaac64_script_path()
     if script:
         try:
-            # The JS helper prints ONLY base64 bytes to stdout; keep stderr for debugging.
-            proc = subprocess.run(
-                ["node", script, key_text, str(int(size))],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=30,
-                check=False,
-            )
-            if proc.returncode == 0:
-                out_b64 = (proc.stdout or b"").strip()
-                if out_b64:
-                    return base64.b64decode(out_b64, validate=False)
+            return _WEFLOW_WASM_PROCESS.generate(script, key_text, int(size))
         except Exception:
             pass
 
@@ -153,9 +295,15 @@ _SNS_REMOTE_VIDEO_CACHE_EXTS = [
 
 
 def _sns_remote_video_cache_dir_and_stem(account_dir: Path, *, url: str, key: str) -> tuple[Path, str]:
-    digest = hashlib.md5(f"video|{url}|{key}".encode("utf-8", errors="ignore")).hexdigest()
+    del key
+    digest = hashlib.md5(normalize_sns_cache_url(url).encode("utf-8", errors="ignore")).hexdigest()
     cache_dir = account_dir / "sns_remote_video_cache" / digest[:2]
     return cache_dir, digest
+
+
+def _legacy_sns_remote_video_cache_dir_and_stem(account_dir: Path, *, url: str, key: str) -> tuple[Path, str]:
+    digest = hashlib.md5(f"video|{url}|{key}".encode("utf-8", errors="ignore")).hexdigest()
+    return account_dir / "sns_remote_video_cache" / digest[:2], digest
 
 
 def _sns_remote_video_cache_existing_path(cache_dir: Path, stem: str) -> Optional[Path]:
@@ -169,7 +317,70 @@ def _sns_remote_video_cache_existing_path(cache_dir: Path, stem: str) -> Optiona
     return None
 
 
-async def _download_sns_remote_to_file(url: str, dest_path: Path, *, max_bytes: int) -> tuple[str, str]:
+def get_cached_sns_remote_video(
+    *,
+    account_dir: Path,
+    url: str,
+    key: str,
+    token: str,
+) -> Optional[Path]:
+    """Return a stable remote-video cache entry without doing network I/O."""
+    fixed_url = fix_sns_cdn_url(str(url or ""), token=str(token or ""), is_video=True)
+    if not fixed_url:
+        return None
+
+    try:
+        host = str(urlparse(fixed_url).hostname or "").strip().lower()
+    except Exception:
+        return None
+    if not is_allowed_sns_media_host(host):
+        return None
+
+    cache_dir, cache_stem = _sns_remote_video_cache_dir_and_stem(
+        account_dir,
+        url=fixed_url,
+        key=str(key or ""),
+    )
+    existing = _sns_remote_video_cache_existing_path(cache_dir, cache_stem)
+    if existing is None:
+        legacy_dir, legacy_stem = _legacy_sns_remote_video_cache_dir_and_stem(
+            account_dir,
+            url=fixed_url,
+            key=str(key or ""),
+        )
+        legacy = _sns_remote_video_cache_existing_path(legacy_dir, legacy_stem)
+        if legacy is not None:
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                migrated = cache_dir / f"{cache_stem}{legacy.suffix.lower()}"
+                os.replace(str(legacy), str(migrated))
+                existing = migrated
+            except Exception:
+                existing = legacy
+    if existing is None:
+        return None
+
+    try:
+        if existing.suffix.lower() == ".bin":
+            with existing.open("rb") as f:
+                head = f.read(8)
+            if _detect_mp4_ftyp(head):
+                target = cache_dir / f"{cache_stem}.mp4"
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                os.replace(str(existing), str(target))
+                existing = target
+    except Exception:
+        pass
+    return existing
+
+
+async def _download_sns_remote_to_file(
+    url: str,
+    dest_path: Path,
+    *,
+    max_bytes: int,
+    client: Optional[httpx.AsyncClient] = None,
+) -> tuple[str, str]:
     """Download SNS media to file (streaming) from Tencent CDN.
 
     Returns: (content_type, x_enc)
@@ -196,52 +407,33 @@ async def _download_sns_remote_to_file(url: str, dest_path: Path, *, max_bytes: 
         "Connection": "keep-alive",
     }
 
-    header_variants = [
-        {},
-        # WeFlow/Electron: MicroMessenger UA + servicewechat.com referer passes some CDN anti-hotlink checks.
-        {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090719) XWEB/8351",
-            "Referer": "https://servicewechat.com/",
-            "Origin": "https://servicewechat.com",
-        },
-        {"Referer": "https://wx.qq.com/", "Origin": "https://wx.qq.com"},
-        {"Referer": "https://mp.weixin.qq.com/", "Origin": "https://mp.weixin.qq.com"},
-    ]
+    async def download(http_client: httpx.AsyncClient) -> tuple[str, str]:
+        dest_path.unlink(missing_ok=True)
+        total = 0
+        async with http_client.stream("GET", u, headers=base_headers, timeout=15.0) as resp:
+            if resp.status_code not in {200, 206}:
+                raise httpx.HTTPStatusError(
+                    f"Unexpected SNS status {resp.status_code}",
+                    request=resp.request,
+                    response=resp,
+                )
+            content_type = str(resp.headers.get("Content-Type") or "").strip()
+            x_enc = str(resp.headers.get("x-enc") or "").strip()
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            with dest_path.open("wb") as f:
+                async for chunk in resp.aiter_bytes():
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise HTTPException(status_code=400, detail="SNS video too large.")
+                    f.write(chunk)
+        return content_type, x_enc
 
-    last_err: Exception | None = None
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        for extra in header_variants:
-            headers = dict(base_headers)
-            headers.update(extra)
-            try:
-                if dest_path.exists():
-                    try:
-                        dest_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-
-                total = 0
-                async with client.stream("GET", u, headers=headers) as resp:
-                    resp.raise_for_status()
-                    content_type = str(resp.headers.get("Content-Type") or "").strip()
-                    x_enc = str(resp.headers.get("x-enc") or "").strip()
-                    dest_path.parent.mkdir(parents=True, exist_ok=True)
-                    with dest_path.open("wb") as f:
-                        async for chunk in resp.aiter_bytes():
-                            if not chunk:
-                                continue
-                            total += len(chunk)
-                            if total > max_bytes:
-                                raise HTTPException(status_code=400, detail="SNS video too large.")
-                            f.write(chunk)
-                return content_type, x_enc
-            except HTTPException:
-                raise
-            except Exception as e:
-                last_err = e
-                continue
-
-    raise last_err or RuntimeError("sns remote download failed")
+    if client is not None:
+        return await download(client)
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as owned_client:
+        return await download(owned_client)
 
 
 def maybe_decrypt_sns_video_file(path: Path, key: str) -> bool:
@@ -302,6 +494,7 @@ async def materialize_sns_remote_video(
     key: str,
     token: str,
     use_cache: bool,
+    client: Optional[httpx.AsyncClient] = None,
 ) -> Optional[Path]:
     """Download SNS video from CDN, decrypt (if needed), and return a local mp4 path."""
     fixed_url = fix_sns_cdn_url(str(url or ""), token=str(token or ""), is_video=True)
@@ -311,27 +504,25 @@ async def materialize_sns_remote_video(
     cache_dir, cache_stem = _sns_remote_video_cache_dir_and_stem(account_dir, url=fixed_url, key=str(key or ""))
 
     if use_cache:
-        existing = _sns_remote_video_cache_existing_path(cache_dir, cache_stem)
+        existing = get_cached_sns_remote_video(
+            account_dir=account_dir,
+            url=fixed_url,
+            key=key,
+            token=token,
+        )
         if existing is not None:
-            # Best-effort migrate legacy `.bin` -> `.mp4` when it's already decrypted.
-            try:
-                if existing.suffix.lower() == ".bin":
-                    with existing.open("rb") as f:
-                        head = f.read(8)
-                    if _detect_mp4_ftyp(head):
-                        target = cache_dir / f"{cache_stem}.mp4"
-                        cache_dir.mkdir(parents=True, exist_ok=True)
-                        os.replace(str(existing), str(target))
-                        existing = target
-            except Exception:
-                pass
             return existing
 
     # Download to a temp file first.
     cache_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = cache_dir / f"{cache_stem}.mp4.{time.time_ns()}.tmp"
     try:
-        await _download_sns_remote_to_file(fixed_url, tmp_path, max_bytes=200 * 1024 * 1024)
+        await _download_sns_remote_to_file(
+            fixed_url,
+            tmp_path,
+            max_bytes=200 * 1024 * 1024,
+            client=client,
+        )
     except Exception:
         try:
             tmp_path.unlink(missing_ok=True)
@@ -340,7 +531,7 @@ async def materialize_sns_remote_video(
         return None
 
     # Decrypt in-place if the file isn't already a mp4.
-    maybe_decrypt_sns_video_file(tmp_path, str(key or ""))
+    await asyncio.to_thread(maybe_decrypt_sns_video_file, tmp_path, str(key or ""))
 
     # Validate: mp4 must have `ftyp` at offset 4.
     ok_mp4 = False
@@ -358,29 +549,22 @@ async def materialize_sns_remote_video(
             pass
         return None
 
-    if use_cache:
-        final_path = cache_dir / f"{cache_stem}.mp4"
+    final_path = cache_dir / f"{cache_stem}.mp4"
+    try:
+        os.replace(str(tmp_path), str(final_path))
+    except Exception:
+        final_path = tmp_path
+
+    for other_ext in _SNS_REMOTE_VIDEO_CACHE_EXTS:
+        if other_ext.lower() == ".mp4":
+            continue
+        other = cache_dir / f"{cache_stem}{other_ext}"
         try:
-            os.replace(str(tmp_path), str(final_path))
+            if other.exists() and other.is_file():
+                other.unlink(missing_ok=True)
         except Exception:
-            # If rename fails, keep tmp_path as fallback.
-            final_path = tmp_path
-
-        # Remove other extensions for the same cache key.
-        for other_ext in _SNS_REMOTE_VIDEO_CACHE_EXTS:
-            if other_ext.lower() == ".mp4":
-                continue
-            other = cache_dir / f"{cache_stem}{other_ext}"
-            try:
-                if other.exists() and other.is_file():
-                    other.unlink(missing_ok=True)
-            except Exception:
-                continue
-
-        return final_path
-
-    # Cache disabled: keep the decrypted tmp_path (caller should delete it).
-    return tmp_path
+            continue
+    return final_path
 
 
 def best_effort_unlink(path: str) -> None:
@@ -486,9 +670,15 @@ def _ext_to_mime(ext: str) -> str:
 
 
 def _sns_remote_cache_dir_and_stem(account_dir: Path, *, url: str, key: str) -> tuple[Path, str]:
-    digest = hashlib.md5(f"{url}|{key}".encode("utf-8", errors="ignore")).hexdigest()
+    del key
+    digest = hashlib.md5(normalize_sns_cache_url(url).encode("utf-8", errors="ignore")).hexdigest()
     cache_dir = account_dir / "sns_remote_cache" / digest[:2]
     return cache_dir, digest
+
+
+def _legacy_sns_remote_cache_dir_and_stem(account_dir: Path, *, url: str, key: str) -> tuple[Path, str]:
+    digest = hashlib.md5(f"{url}|{key}".encode("utf-8", errors="ignore")).hexdigest()
+    return account_dir / "sns_remote_cache" / digest[:2], digest
 
 
 def _sns_remote_cache_existing_path(cache_dir: Path, stem: str) -> Optional[Path]:
@@ -511,7 +701,11 @@ def _sniff_image_mime_from_file(path: Path) -> str:
         return ""
 
 
-async def _download_sns_remote_bytes(url: str) -> tuple[bytes, str, str]:
+async def _download_sns_remote_bytes(
+    url: str,
+    *,
+    client: Optional[httpx.AsyncClient] = None,
+) -> tuple[bytes, str, str]:
     """Download SNS media bytes from Tencent CDN with a few safe header variants."""
     u = str(url or "").strip()
     if not u:
@@ -523,47 +717,28 @@ async def _download_sns_remote_bytes(url: str) -> tuple[bytes, str, str]:
         "User-Agent": "MicroMessenger Client",
         "Accept": "*/*",
         "Accept-Language": "zh-CN,zh;q=0.9",
-        # Avoid brotli dependency issues; images are already compressed anyway.
-        "Accept-Encoding": "identity",
         "Connection": "keep-alive",
     }
 
-    # Some CDN endpoints return a small placeholder image for certain UA/Referer
-    # combinations but still respond 200. Try the simplest (base headers only)
-    # first to maximize the chance of getting the real media in one request.
-    header_variants = [
-        {},
-        # WeFlow/Electron: MicroMessenger UA + servicewechat.com referer passes some CDN anti-hotlink checks.
-        {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090719) XWEB/8351",
-            "Referer": "https://servicewechat.com/",
-            "Origin": "https://servicewechat.com",
-        },
-        {"Referer": "https://wx.qq.com/", "Origin": "https://wx.qq.com"},
-        {"Referer": "https://mp.weixin.qq.com/", "Origin": "https://mp.weixin.qq.com"},
-    ]
+    async def download(http_client: httpx.AsyncClient) -> tuple[bytes, str, str]:
+        resp = await http_client.get(u, headers=base_headers, timeout=15.0)
+        if resp.status_code not in {200, 206}:
+            raise httpx.HTTPStatusError(
+                f"Unexpected SNS status {resp.status_code}",
+                request=resp.request,
+                response=resp,
+            )
+        payload = bytes(resp.content or b"")
+        if len(payload) > max_bytes:
+            raise HTTPException(status_code=400, detail="SNS media too large (>25MB).")
+        content_type = str(resp.headers.get("Content-Type") or "").strip()
+        x_enc = str(resp.headers.get("x-enc") or "").strip()
+        return payload, content_type, x_enc
 
-    last_err: Exception | None = None
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-        for extra in header_variants:
-            headers = dict(base_headers)
-            headers.update(extra)
-            try:
-                resp = await client.get(u, headers=headers)
-                resp.raise_for_status()
-                payload = bytes(resp.content or b"")
-                if len(payload) > max_bytes:
-                    raise HTTPException(status_code=400, detail="SNS media too large (>25MB).")
-                content_type = str(resp.headers.get("Content-Type") or "").strip()
-                x_enc = str(resp.headers.get("x-enc") or "").strip()
-                return payload, content_type, x_enc
-            except HTTPException:
-                raise
-            except Exception as e:
-                last_err = e
-                continue
-
-    raise last_err or RuntimeError("sns remote download failed")
+    if client is not None:
+        return await download(client)
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as owned_client:
+        return await download(owned_client)
 
 
 @dataclass(frozen=True)
@@ -575,6 +750,84 @@ class SnsRemoteImageResult:
     cache_path: Optional[Path] = None
 
 
+def get_cached_sns_remote_image(
+    *,
+    account_dir: Path,
+    url: str,
+    key: str,
+    token: str,
+) -> Optional[SnsRemoteImageResult]:
+    """Return a validated remote-image cache entry without doing network I/O."""
+    u_fixed = fix_sns_cdn_url(url, token=token, is_video=False)
+    if not u_fixed:
+        return None
+
+    try:
+        host = str(urlparse(u_fixed).hostname or "").strip().lower()
+    except Exception:
+        return None
+    if not is_allowed_sns_media_host(host):
+        return None
+
+    cache_dir, cache_stem = _sns_remote_cache_dir_and_stem(account_dir, url=u_fixed, key=str(key or ""))
+    try:
+        existing = _sns_remote_cache_existing_path(cache_dir, cache_stem)
+        if existing is None:
+            legacy_dir, legacy_stem = _legacy_sns_remote_cache_dir_and_stem(
+                account_dir,
+                url=u_fixed,
+                key=str(key or ""),
+            )
+            legacy = _sns_remote_cache_existing_path(legacy_dir, legacy_stem)
+            if legacy is not None:
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    migrated = cache_dir / f"{cache_stem}{legacy.suffix.lower()}"
+                    os.replace(str(legacy), str(migrated))
+                    existing = migrated
+                except Exception:
+                    existing = legacy
+        if existing is None:
+            return None
+
+        mt = _ext_to_mime(existing.suffix)
+        if (existing.suffix or "").lower() == ".bin" or not mt:
+            mt = _sniff_image_mime_from_file(existing)
+            if not mt:
+                try:
+                    existing.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return None
+
+            ext = _mime_to_ext(mt)
+            if ext != ".bin":
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    desired = cache_dir / f"{cache_stem}{ext}"
+                    if desired.exists():
+                        existing.unlink(missing_ok=True)
+                        existing = desired
+                    else:
+                        os.replace(str(existing), str(desired))
+                        existing = desired
+                except Exception:
+                    pass
+
+        payload = existing.read_bytes()
+        if not payload:
+            return None
+        return SnsRemoteImageResult(
+            payload=payload,
+            media_type=mt,
+            source="remote-cache",
+            x_enc="",
+            cache_path=existing,
+        )
+    except Exception:
+        return None
+
+
 async def try_fetch_and_decrypt_sns_image_remote(
     *,
     account_dir: Path,
@@ -582,6 +835,7 @@ async def try_fetch_and_decrypt_sns_image_remote(
     key: str,
     token: str,
     use_cache: bool,
+    client: Optional[httpx.AsyncClient] = None,
 ) -> Optional[SnsRemoteImageResult]:
     """Try WeFlow-style: download from CDN -> WxIsaac64 full-file XOR -> return bytes.
 
@@ -602,57 +856,20 @@ async def try_fetch_and_decrypt_sns_image_remote(
 
     cache_dir, cache_stem = _sns_remote_cache_dir_and_stem(account_dir, url=u_fixed, key=str(key or ""))
 
-    cache_path: Optional[Path] = None
     if use_cache:
-        try:
-            existing = _sns_remote_cache_existing_path(cache_dir, cache_stem)
-            if existing is not None:
-                mt = _ext_to_mime(existing.suffix)
+        cached = get_cached_sns_remote_image(
+            account_dir=account_dir,
+            url=u_fixed,
+            key=key,
+            token=token,
+        )
+        if cached is not None:
+            return cached
 
-                # Upgrade legacy `.bin` cache to a proper image extension once.
-                if (existing.suffix or "").lower() == ".bin" or (not mt):
-                    mt2 = _sniff_image_mime_from_file(existing)
-                    if not mt2:
-                        try:
-                            existing.unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                        existing = None
-                    else:
-                        ext2 = _mime_to_ext(mt2)
-                        if ext2 != ".bin":
-                            try:
-                                cache_dir.mkdir(parents=True, exist_ok=True)
-                                desired = cache_dir / f"{cache_stem}{ext2}"
-                                if desired.exists():
-                                    # Another process/version already wrote the real file; drop legacy bin.
-                                    existing.unlink(missing_ok=True)
-                                    existing = desired
-                                else:
-                                    os.replace(str(existing), str(desired))
-                                    existing = desired
-                            except Exception:
-                                pass
-                        mt = mt2
-
-                if existing is not None and mt:
-                    try:
-                        payload = existing.read_bytes()
-                    except Exception:
-                        payload = b""
-                    if payload:
-                        return SnsRemoteImageResult(
-                            payload=payload,
-                            media_type=mt,
-                            source="remote-cache",
-                            x_enc="",
-                            cache_path=existing,
-                        )
-        except Exception:
-            pass
+    cache_path: Optional[Path] = None
 
     try:
-        raw, _content_type, x_enc = await _download_sns_remote_bytes(u_fixed)
+        raw, _content_type, x_enc = await _download_sns_remote_bytes(u_fixed, client=client)
     except Exception as e:
         logger.info("[sns_media] remote download failed: %s", e)
         return None
@@ -677,7 +894,7 @@ async def try_fetch_and_decrypt_sns_image_remote(
 
     if need_decrypt:
         try:
-            decoded2 = weflow_decrypt_sns_image_bytes(raw, k)
+            decoded2 = await asyncio.to_thread(weflow_decrypt_sns_image_bytes, raw, k)
             mt2 = detect_image_mime(decoded2)
             if mt2:
                 decoded = decoded2
@@ -702,28 +919,26 @@ async def try_fetch_and_decrypt_sns_image_remote(
     if not mt:
         return None
 
-    if use_cache:
-        try:
-            ext = _mime_to_ext(mt)
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_path = cache_dir / f"{cache_stem}{ext}"
+    try:
+        ext = _mime_to_ext(mt)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / f"{cache_stem}{ext}"
 
-            tmp = cache_path.with_suffix(cache_path.suffix + f".{time.time_ns()}.tmp")
-            tmp.write_bytes(decoded)
-            os.replace(str(tmp), str(cache_path))
+        tmp = cache_path.with_suffix(cache_path.suffix + f".{time.time_ns()}.tmp")
+        tmp.write_bytes(decoded)
+        os.replace(str(tmp), str(cache_path))
 
-            # Remove other extensions for the same cache key to avoid stale duplicates.
-            for other_ext in _SNS_REMOTE_CACHE_EXTS:
-                if other_ext.lower() == ext.lower():
-                    continue
-                other = cache_dir / f"{cache_stem}{other_ext}"
-                try:
-                    if other.exists() and other.is_file():
-                        other.unlink(missing_ok=True)
-                except Exception:
-                    continue
-        except Exception:
-            cache_path = None
+        for other_ext in _SNS_REMOTE_CACHE_EXTS:
+            if other_ext.lower() == ext.lower():
+                continue
+            other = cache_dir / f"{cache_stem}{other_ext}"
+            try:
+                if other.exists() and other.is_file():
+                    other.unlink(missing_ok=True)
+            except Exception:
+                continue
+    except Exception:
+        cache_path = None
 
     return SnsRemoteImageResult(
         payload=decoded,

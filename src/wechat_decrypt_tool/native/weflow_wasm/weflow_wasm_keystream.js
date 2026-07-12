@@ -2,8 +2,10 @@
 //
 // Usage:
 //   node weflow_wasm_keystream.js <key> <size>
+//   node weflow_wasm_keystream.js --stdio
 //
-// Prints a base64-encoded keystream to stdout (no extra logs).
+// CLI mode prints base64 to stdout. Stdio mode accepts one JSON request per
+// line and keeps the initialized WASM module alive across requests.
 
 const fs = require('fs')
 const path = require('path')
@@ -14,10 +16,11 @@ function usageAndExit() {
   process.exit(2)
 }
 
-const key = String(process.argv[2] || '').trim()
-const size = Number(process.argv[3] || 0)
+const stdioMode = process.argv[2] === '--stdio'
+const cliKey = String(process.argv[2] || '').trim()
+const cliSize = Number(process.argv[3] || 0)
 
-if (!key || !Number.isFinite(size) || size <= 0) usageAndExit()
+if (!stdioMode && (!cliKey || !Number.isFinite(cliSize) || cliSize <= 0)) usageAndExit()
 
 const basePath = __dirname
 const wasmPath = path.join(basePath, 'wasm_video_decode.wasm')
@@ -92,29 +95,55 @@ try {
   rejectInit(e)
 }
 
+async function generateKeystream(key, size) {
+  await initPromise
+
+  if (!mockGlobal.Module.WxIsaac64 && mockGlobal.Module.asm && mockGlobal.Module.asm.WxIsaac64) {
+    mockGlobal.Module.WxIsaac64 = mockGlobal.Module.asm.WxIsaac64
+  }
+  if (!mockGlobal.Module.WxIsaac64) throw new Error('WxIsaac64 not found in WASM module')
+
+  const alignedSize = Math.ceil(size / 8) * 8
+  capturedKeystream = null
+  const isaac = new mockGlobal.Module.WxIsaac64(key)
+  isaac.generate(alignedSize)
+  if (isaac.delete) isaac.delete()
+  if (!capturedKeystream) throw new Error('Failed to capture keystream')
+
+  const out = Buffer.from(capturedKeystream)
+  out.reverse()
+  return out.subarray(0, size)
+}
+
+async function runStdioMode() {
+  const readline = require('readline')
+  const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
+  for await (const line of input) {
+    let request = null
+    try {
+      request = JSON.parse(line.replace(/^\uFEFF/, ''))
+      const key = String(request.key || '').trim()
+      const size = Number(request.size || 0)
+      if (!key || !Number.isFinite(size) || size <= 0) throw new Error('Invalid key or size')
+      const data = await generateKeystream(key, size)
+      process.stdout.write(JSON.stringify({ id: request.id, data: data.toString('base64') }) + '\n')
+    } catch (e) {
+      process.stdout.write(JSON.stringify({
+        id: request && request.id,
+        error: String(e && e.message ? e.message : e)
+      }) + '\n')
+    }
+  }
+}
+
 ;(async () => {
   try {
-    await initPromise
-
-    if (!mockGlobal.Module.WxIsaac64 && mockGlobal.Module.asm && mockGlobal.Module.asm.WxIsaac64) {
-      mockGlobal.Module.WxIsaac64 = mockGlobal.Module.asm.WxIsaac64
+    if (stdioMode) {
+      await runStdioMode()
+      return
     }
-    if (!mockGlobal.Module.WxIsaac64) {
-      throw new Error('WxIsaac64 not found in WASM module')
-    }
-
-    const alignedSize = Math.ceil(size / 8) * 8
-
-    capturedKeystream = null
-    const isaac = new mockGlobal.Module.WxIsaac64(key)
-    isaac.generate(alignedSize)
-    if (isaac.delete) isaac.delete()
-
-    if (!capturedKeystream) throw new Error('Failed to capture keystream')
-
-    const out = Buffer.from(capturedKeystream)
-    out.reverse()
-    process.stdout.write(out.subarray(0, size).toString('base64'))
+    const out = await generateKeystream(cliKey, cliSize)
+    process.stdout.write(out.toString('base64'))
   } catch (e) {
     process.stderr.write(String(e && e.stack ? e.stack : e) + '\\n')
     process.exit(1)
