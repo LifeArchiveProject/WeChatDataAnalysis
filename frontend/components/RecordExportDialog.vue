@@ -1,104 +1,184 @@
 <template>
   <Teleport to="body">
-    <div v-if="open" class="record-export-backdrop" role="presentation" @mousedown.self="emit('close')">
+    <div v-if="open" class="app-export-backdrop" role="presentation" @keydown.esc="requestClose">
+      <div class="app-export-backdrop__hit-area" aria-hidden="true" @mousedown="requestClose"></div>
       <section
-        class="record-export-dialog"
+        class="app-export-modal app-export-modal--compact record-export-dialog"
         role="dialog"
         aria-modal="true"
-        :aria-label="`${title}导出`"
+        :aria-labelledby="recordExportTitleId"
         @mousedown.stop
       >
-        <header class="record-export-dialog__header">
-          <h2>{{ title }}导出</h2>
-          <button type="button" class="record-export-icon-button" title="关闭" aria-label="关闭" @click="emit('close')">
-            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        <header class="app-export-header">
+          <div class="app-export-header__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v11" />
+              <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+              <path d="M4 19h16" />
+            </svg>
+          </div>
+          <div class="app-export-header__copy">
+            <h2 :id="recordExportTitleId">导出{{ title }}</h2>
+            <p>选择导出格式、内容类型和保存位置</p>
+          </div>
+          <button type="button" class="app-export-icon-button" title="关闭" aria-label="关闭导出面板" :disabled="exporting" @click="requestClose">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
           </button>
         </header>
 
-        <div class="record-export-dialog__body">
-          <div class="record-export-field">
-            <label>导出格式</label>
-            <div class="record-export-segments" role="radiogroup" aria-label="导出格式">
-              <button
-                v-for="option in formatOptions"
-                :key="option.value"
-                type="button"
-                role="radio"
-                :aria-checked="format === option.value"
-                :class="{ 'is-active': format === option.value }"
-                @click="format = option.value"
-              >
-                {{ option.label }}
-              </button>
-            </div>
-          </div>
+        <div class="app-export-workspace">
+          <main class="app-export-settings app-export-settings--single">
+            <section class="app-export-panel" aria-labelledby="record-export-format-title">
+              <header class="app-export-panel__header">
+                <div>
+                  <h3 id="record-export-format-title">格式与内容</h3>
+                  <p>选择结果格式，以及需要包含的记录类型。</p>
+                </div>
+                <span class="app-export-badge">{{ formatLabel }}</span>
+              </header>
 
-          <div v-if="normalizedTypeOptions.length" class="record-export-field">
-            <div class="record-export-field__label-row">
-              <label>内容类型</label>
-              <button type="button" class="record-export-select-all" @click="toggleAllTypes">
-                {{ allTypesSelected ? '取消全选' : '全选' }}
-              </button>
-            </div>
-            <div class="record-export-types">
-              <label
-                v-for="option in normalizedTypeOptions"
-                :key="option.value"
-                :class="{ 'is-active': selectedTypes.includes(option.value) }"
-              >
-                <input v-model="selectedTypes" type="checkbox" :value="option.value" class="sr-only" />
-                <span class="record-export-check" aria-hidden="true">
-                  <i class="fa-solid fa-check"></i>
-                </span>
-                <i v-if="option.icon" :class="['fa-solid', option.icon]" aria-hidden="true"></i>
-                <span>{{ option.label }}</span>
-              </label>
-            </div>
-          </div>
-
-          <div class="record-export-field">
-            <label for="record-export-file-name">文件名</label>
-            <input
-              id="record-export-file-name"
-              v-model="fileName"
-              type="text"
-              class="record-export-input"
-              :placeholder="`${dataset}-${dateStamp}`"
-              autocomplete="off"
-            />
-          </div>
-
-          <div class="record-export-field">
-            <label>导出目录</label>
-            <div class="record-export-folder-row">
-              <div class="record-export-folder" :class="{ 'has-value': outputDir }" :title="outputDir || '尚未选择导出目录'">
-                {{ outputDir || '尚未选择导出目录' }}
+              <div class="record-export-segments app-export-format-grid" role="radiogroup" aria-label="导出格式">
+                <button
+                  v-for="option in formatOptions"
+                  :key="option.value"
+                  type="button"
+                  role="radio"
+                  class="app-export-format-option"
+                  :aria-checked="format === option.value"
+                  :class="{ 'is-active': format === option.value }"
+                  @click="format = option.value"
+                >
+                  <span class="app-export-format-option__code">{{ option.label }}</span>
+                  <span class="app-export-format-option__meta">{{ option.meta }}</span>
+                  <span class="app-export-radio-check" aria-hidden="true">
+                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="m4 10 4 4 8-8" />
+                    </svg>
+                  </span>
+                </button>
               </div>
-              <button
-                type="button"
-                class="record-export-folder-button"
-                title="选择导出目录"
-                aria-label="选择导出目录"
-                :disabled="pickingDirectory || exporting"
-                @click="chooseDirectory"
-              >
-                <i class="fa-regular fa-folder-open" aria-hidden="true"></i>
-              </button>
-            </div>
-          </div>
 
-          <div v-if="message" class="record-export-message" :class="status">
-            <i :class="status === 'success' ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-exclamation'" aria-hidden="true"></i>
-            <span>{{ message }}</span>
-          </div>
+              <template v-if="normalizedTypeOptions.length">
+                <div class="app-export-type-heading">
+                  <h4>内容类型</h4>
+                  <button type="button" class="app-export-text-button" @click="toggleAllTypes">
+                    {{ allTypesSelected ? '取消全选' : '全部选择' }}
+                  </button>
+                </div>
+                <div class="record-export-types app-export-type-grid">
+                  <label
+                    v-for="option in normalizedTypeOptions"
+                    :key="option.value"
+                    class="app-export-type-option"
+                    :class="{ 'is-active': selectedTypes.includes(option.value) }"
+                  >
+                    <input v-model="selectedTypes" type="checkbox" :value="option.value" class="sr-only" />
+                    <span class="record-export-check app-export-checkbox" aria-hidden="true">
+                      <i class="fa-solid fa-check"></i>
+                    </span>
+                    <i v-if="option.icon" :class="['fa-solid', option.icon]" aria-hidden="true"></i>
+                    <span>{{ option.label }}</span>
+                  </label>
+                </div>
+              </template>
+            </section>
+
+            <section class="app-export-panel" aria-labelledby="record-export-output-title">
+              <header class="app-export-panel__header">
+                <div>
+                  <h3 id="record-export-output-title">文件与目录</h3>
+                  <p>文件名可留空，保存目录为必选项。</p>
+                </div>
+                <span class="app-export-badge" :class="{ 'app-export-badge--warning': !outputDir }">
+                  {{ outputDir ? '位置已设置' : '需要目录' }}
+                </span>
+              </header>
+
+              <div class="app-export-field">
+                <div class="app-export-field__label">
+                  <label for="record-export-file-name">文件名</label>
+                  <span>可选，留空时自动生成</span>
+                </div>
+                <input
+                  id="record-export-file-name"
+                  v-model="fileName"
+                  type="text"
+                  class="record-export-input app-export-input"
+                  :placeholder="`${dataset}-${dateStamp}`"
+                  autocomplete="off"
+                />
+              </div>
+
+              <div class="app-export-field">
+                <div class="app-export-field__label">
+                  <h4>保存目录</h4>
+                  <span class="app-export-required">必选</span>
+                </div>
+                <div class="app-export-destination" :class="{ 'has-value': outputDir }">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 7.5h7l2-2h9v13H3z" />
+                  </svg>
+                  <div class="app-export-destination__copy">
+                    <strong :title="outputDir || '尚未选择导出目录'">{{ outputDir || '尚未选择导出目录' }}</strong>
+                    <small>{{ outputDir ? '导出完成后会写入此目录' : '开始导出前需要先完成此项' }}</small>
+                  </div>
+                  <button
+                    type="button"
+                    class="app-export-secondary-button"
+                    :disabled="pickingDirectory || exporting"
+                    @click="chooseDirectory"
+                  >
+                    <i class="fa-regular fa-folder-open" aria-hidden="true"></i>
+                    {{ outputDir ? '更改' : '选择目录' }}
+                  </button>
+                  <button
+                    v-if="outputDir"
+                    type="button"
+                    class="app-export-icon-button app-export-icon-button--danger"
+                    title="清空目录"
+                    aria-label="清空导出目录"
+                    :disabled="exporting"
+                    @click="outputDir = ''"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="message" class="app-export-result" :class="status === 'success' ? 'app-export-result--success' : 'app-export-result--error'" :role="status === 'error' ? 'alert' : 'status'">
+                <svg v-if="status === 'success'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="m8 12 2.5 2.5L16 9" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 7v6M12 17h.01" />
+                </svg>
+                <span>{{ message }}</span>
+              </div>
+            </section>
+          </main>
         </div>
 
-        <footer class="record-export-dialog__footer">
-          <button type="button" class="record-export-secondary" :disabled="exporting" @click="emit('close')">取消</button>
-          <button type="button" class="record-export-primary" :disabled="!canExport" @click="startExport">
+        <footer class="app-export-footer">
+          <div class="app-export-summary">
+            <span>格式 <strong>{{ formatLabel }}</strong></span>
+            <span v-if="normalizedTypeOptions.length" class="app-export-summary__separator"></span>
+            <span v-if="normalizedTypeOptions.length">内容 <strong>{{ selectedTypes.length }} 类</strong></span>
+            <span class="app-export-summary__separator"></span>
+            <span class="app-export-summary__path" :class="{ 'is-missing': !outputDir }">{{ outputDir || '尚未选择目录' }}</span>
+          </div>
+          <div class="app-export-footer__actions">
+            <button type="button" class="app-export-secondary-button" :disabled="exporting" @click="requestClose">取消</button>
+            <button type="button" class="app-export-primary-button" :disabled="!canExport" @click="startExport">
             <i :class="exporting ? 'fa-solid fa-arrow-rotate-right fa-spin' : 'fa-solid fa-file-export'" aria-hidden="true"></i>
-            <span>{{ exporting ? '正在导出' : '导出' }}</span>
-          </button>
+              <span>{{ exporting ? '正在导出' : '开始导出' }}</span>
+            </button>
+          </div>
         </footer>
       </section>
     </div>
@@ -122,10 +202,10 @@ const emit = defineEmits(['close', 'exported'])
 const api = useApi()
 
 const formatOptions = [
-  { value: 'html', label: 'HTML' },
-  { value: 'json', label: 'JSON' },
-  { value: 'txt', label: 'TXT' },
-  { value: 'excel', label: 'Excel' },
+  { value: 'html', label: 'HTML', meta: '可阅读网页' },
+  { value: 'json', label: 'JSON', meta: '结构化数据' },
+  { value: 'txt', label: 'TXT', meta: '纯文本记录' },
+  { value: 'excel', label: 'Excel', meta: '表格工作簿' },
 ]
 
 const format = ref('html')
@@ -136,6 +216,9 @@ const exporting = ref(false)
 const pickingDirectory = ref(false)
 const message = ref('')
 const status = ref('')
+
+const recordExportTitleId = computed(() => `record-export-title-${String(props.dataset || 'records').replace(/[^a-z0-9_-]/gi, '-')}`)
+const formatLabel = computed(() => formatOptions.find((option) => option.value === format.value)?.label || 'HTML')
 
 const dateStamp = computed(() => {
   const date = new Date()
@@ -175,6 +258,10 @@ const toggleAllTypes = () => {
   selectedTypes.value = allTypesSelected.value
     ? []
     : normalizedTypeOptions.value.map((option) => option.value)
+}
+
+const requestClose = () => {
+  if (!exporting.value) emit('close')
 }
 
 const chooseDirectory = async () => {
@@ -246,160 +333,19 @@ watch(normalizedTypeOptions, () => {
 </script>
 
 <style scoped>
-.record-export-backdrop {
-  position: fixed;
-  z-index: 12000;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  overflow-y: auto;
-  padding: 20px;
-  background: rgba(0, 0, 0, 0.38);
-}
-
 .record-export-dialog {
-  width: min(620px, 100%);
-  max-height: min(760px, calc(100vh - 40px));
-  overflow: hidden;
-  border: 1px solid var(--wx-line, #e5e7eb);
-  border-radius: 8px;
-  background: var(--wx-panel, #fff);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.2);
+  height: auto;
 }
-
-.record-export-dialog__header,
-.record-export-dialog__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--wx-line, #e5e7eb);
-}
-
-.record-export-dialog__header h2 { margin: 0; color: var(--wx-text, #111827); font-size: 17px; font-weight: 600; }
-.record-export-dialog__body { display: grid; gap: 18px; max-height: calc(100vh - 190px); overflow-y: auto; padding: 18px; }
-.record-export-dialog__footer { justify-content: flex-end; border-top: 1px solid var(--wx-line, #e5e7eb); border-bottom: 0; }
-
-.record-export-icon-button,
-.record-export-folder-button {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid var(--wx-line, #e5e7eb);
-  border-radius: 6px;
-  color: var(--wx-text-secondary, #4b5563);
-  background: var(--wx-panel, #fff);
-  cursor: pointer;
-}
-
-.record-export-icon-button:hover,
-.record-export-folder-button:hover { color: var(--wx-green-dark, #047857); background: var(--wx-green-soft, #f0fdf4); }
-.record-export-field { display: grid; gap: 8px; }
-.record-export-field > label,
-.record-export-field__label-row label { color: var(--wx-text, #111827); font-size: 13px; font-weight: 500; }
-.record-export-field__label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 .record-export-segments {
-  display: grid;
   height: auto;
-  min-height: 38px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  overflow: hidden;
-  border: 1px solid var(--wx-line, #e5e7eb);
-  border-radius: 6px;
-  background: var(--wx-muted-surface, #f3f4f6);
 }
 
-.record-export-segments button {
-  min-height: 38px;
-  border: 0;
-  border-right: 1px solid var(--wx-line, #e5e7eb);
-  color: var(--wx-text-secondary, #4b5563);
-  background: transparent;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.record-export-segments button:last-child { border-right: 0; }
-.record-export-segments button.is-active { color: #fff; background: var(--wx-green, #07c160); }
-.record-export-types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
-
-.record-export-types label {
-  display: flex;
-  min-width: 0;
-  height: 36px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 9px;
-  border: 1px solid var(--wx-line, #e5e7eb);
-  border-radius: 6px;
-  color: var(--wx-text-secondary, #4b5563);
-  background: var(--wx-panel, #fff);
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.record-export-types label.is-active { border-color: #86efac; color: var(--wx-green-dark, #047857); background: var(--wx-green-soft, #f0fdf4); }
 .record-export-types label > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.record-export-check { display: grid; width: 15px; height: 15px; flex: 0 0 auto; place-items: center; border: 1px solid #d1d5db; border-radius: 3px; color: transparent; font-size: 9px; }
-.record-export-types label.is-active .record-export-check { border-color: var(--wx-green, #07c160); color: #fff; background: var(--wx-green, #07c160); }
-.record-export-select-all { border: 0; color: var(--wx-green-dark, #047857); background: transparent; cursor: pointer; font-size: 12px; }
-
-.record-export-input,
-.record-export-folder {
-  width: 100%;
-  height: 38px;
-  min-width: 0;
-  padding: 0 11px;
-  border: 1px solid var(--wx-line, #e5e7eb);
-  border-radius: 6px;
-  outline: 0;
-  color: var(--wx-text, #111827);
-  background: var(--wx-panel, #fff);
-  font-size: 12px;
-}
-
-.record-export-input:focus { border-color: var(--wx-green, #07c160); box-shadow: 0 0 0 3px rgba(7, 193, 96, 0.12); }
-.record-export-folder-row { display: flex; gap: 8px; }
-.record-export-folder { display: flex; flex: 1; align-items: center; overflow: hidden; color: var(--wx-text-muted, #6b7280); text-overflow: ellipsis; white-space: nowrap; }
-.record-export-folder.has-value { color: var(--wx-text-secondary, #4b5563); background: var(--wx-green-soft, #f0fdf4); }
-.record-export-message { display: flex; align-items: flex-start; gap: 8px; padding: 10px 11px; border-radius: 6px; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-.record-export-message.success { color: #166534; background: #f0fdf4; }
-.record-export-message.error { color: #b91c1c; background: #fef2f2; }
-
-.record-export-primary,
-.record-export-secondary {
-  display: inline-flex;
-  height: 36px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 0 16px;
-  border: 1px solid var(--wx-line, #e5e7eb);
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.record-export-secondary { color: var(--wx-text-secondary, #4b5563); background: var(--wx-panel, #fff); }
-.record-export-primary { border-color: var(--wx-green, #07c160); color: #fff; background: var(--wx-green, #07c160); }
-.record-export-primary:disabled,
-.record-export-secondary:disabled,
-.record-export-folder-button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 @media (max-width: 560px) {
-  .record-export-backdrop { align-items: end; padding: 0; }
-  .record-export-dialog { width: 100%; max-height: 92vh; border-radius: 8px 8px 0 0; }
   .record-export-types { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .record-export-segments { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .record-export-segments button { border-bottom: 1px solid var(--wx-line, #e5e7eb); }
-  .record-export-segments button:nth-child(2n) { border-right: 0; }
-  .record-export-segments button:nth-last-child(-n + 2) { border-bottom: 0; }
-  .record-export-dialog__body { max-height: calc(92vh - 132px); }
 }
 </style>

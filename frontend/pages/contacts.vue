@@ -213,95 +213,91 @@
               </div>
             </section>
 
-            <section class="rounded-lg border border-[#e5e7eb] bg-white">
-              <div class="border-b border-[#e5e7eb] px-4 py-3">
-                <div class="text-[14px] font-medium text-[#111827]">导出联系人</div>
-                <div class="mt-0.5 text-[12px] text-[#6b7280]">支持 HTML / JSON / TXT / Excel，导出范围由左侧分类控制。</div>
+            <section class="app-export-embedded" aria-labelledby="contacts-export-title">
+              <div class="app-export-panel contacts-export-title-panel">
+                <header class="app-export-panel__header">
+                  <div>
+                    <h3 id="contacts-export-title">导出联系人</h3>
+                    <p>导出范围由左侧联系人分类控制。</p>
+                  </div>
+                  <span class="app-export-badge">{{ exportFormat.toUpperCase() }}</span>
+                </header>
               </div>
 
-              <div class="space-y-4 px-4 py-4">
+              <div class="app-export-panel contacts-export-controls">
                 <div>
-                  <div class="mb-2 text-[13px] font-medium text-[#111827]">导出格式</div>
-                  <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div class="app-export-field__label">
+                    <h4>导出格式</h4>
+                    <span>选择结果文件类型</span>
+                  </div>
+                  <div class="grid grid-cols-2 gap-2 sm:grid-cols-4" :class="'app-export-format-grid'">
                     <label
-                      class="flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition"
-                      :class="exportFormat === 'html' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
+                      class="app-export-format-option"
+                      :class="{ 'is-active': exportFormat === 'html' }"
                     >
                       <input v-model="exportFormat" type="radio" value="html" class="sr-only" />
-                      <span class="text-[13px] font-medium">HTML</span>
-                      <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="exportFormat === 'html' ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                          <path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" />
-                        </svg>
+                      <span class="app-export-format-option__code">HTML</span>
+                      <span class="app-export-format-option__meta">可阅读网页</span>
+                      <span class="app-export-radio-check" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg>
                       </span>
                     </label>
-                    <label
-                      class="flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition"
-                      :class="exportFormat === 'json' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
-                    >
+                    <label class="app-export-format-option" :class="{ 'is-active': exportFormat === 'json' }">
                       <input v-model="exportFormat" type="radio" value="json" class="sr-only" />
-                      <span class="text-[13px] font-medium">JSON</span>
-                      <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="exportFormat === 'json' ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" /></svg>
-                      </span>
+                      <span class="app-export-format-option__code">JSON</span>
+                      <span class="app-export-format-option__meta">结构化数据</span>
+                      <span class="app-export-radio-check" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg></span>
                     </label>
-                    <label
-                      class="flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition"
-                      :class="exportFormat === 'txt' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
-                    >
+                    <label class="app-export-format-option" :class="{ 'is-active': exportFormat === 'txt' }">
                       <input v-model="exportFormat" type="radio" value="txt" class="sr-only" />
-                      <span class="text-[13px] font-medium">TXT</span>
-                      <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="exportFormat === 'txt' ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" /></svg>
-                      </span>
+                      <span class="app-export-format-option__code">TXT</span>
+                      <span class="app-export-format-option__meta">纯文本记录</span>
+                      <span class="app-export-radio-check" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg></span>
                     </label>
-                    <label
-                      class="flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition"
-                      :class="exportFormat === 'excel' ? 'border-[#22c55e] bg-[#f0fdf4] text-[#047857]' : 'border-[#e5e7eb] bg-white text-[#374151] hover:bg-[#f9fafb]'"
-                    >
+                    <label class="app-export-format-option" :class="{ 'is-active': exportFormat === 'excel' }">
                       <input v-model="exportFormat" type="radio" value="excel" class="sr-only" />
-                      <span class="text-[13px] font-medium">Excel</span>
-                      <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border" :class="exportFormat === 'excel' ? 'border-[#22c55e] bg-[#22c55e] text-white' : 'border-[#d1d5db] text-transparent'">
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.704 5.29a1 1 0 010 1.42l-7.25 7.25a1 1 0 01-1.42 0L3.296 9.22a1 1 0 111.414-1.414l4.03 4.03 6.543-6.543a1 1 0 011.421 0z" clip-rule="evenodd" /></svg>
-                      </span>
+                      <span class="app-export-format-option__code">Excel</span>
+                      <span class="app-export-format-option__meta">表格工作簿</span>
+                      <span class="app-export-radio-check" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg></span>
                     </label>
                   </div>
                 </div>
 
-                <div>
-                  <div class="mb-2 text-[13px] font-medium text-[#111827]">导出目录</div>
-                  <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <div class="min-w-0 flex-1 rounded-md border border-dashed px-3 py-2.5 text-[12px] leading-5" :class="exportFolder ? 'border-[#86efac] bg-[#f0fdf4] text-[#166534]' : 'border-[#d1d5db] bg-[#f9fafb] text-[#6b7280]'">
-                      <div class="truncate" :title="exportFolder || '尚未选择导出目录'">{{ exportFolder || '尚未选择导出目录' }}</div>
+                <div class="app-export-field">
+                  <div class="app-export-field__label">
+                    <h4>保存目录</h4>
+                    <span class="app-export-required">必选</span>
+                  </div>
+                  <div class="app-export-destination" :class="{ 'has-value': exportFolder }">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5h7l2-2h9v13H3z" /></svg>
+                    <div class="app-export-destination__copy">
+                      <strong :title="exportFolder || '尚未选择导出目录'">{{ exportFolder || '尚未选择导出目录' }}</strong>
+                      <small>{{ exportFolder ? '导出完成后会写入此目录' : '开始导出前需要先完成此项' }}</small>
                     </div>
-                    <button
-                      type="button"
-                      class="inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-[#d1d5db] bg-white px-3 py-2.5 text-[13px] font-medium text-[#111827] transition hover:bg-[#f9fafb]"
-                      @click="chooseExportFolder"
-                    >
-                      选择目录
+                    <button type="button" class="app-export-secondary-button" @click="chooseExportFolder">{{ exportFolder ? '更改' : '选择目录' }}</button>
+                    <button v-if="exportFolder" type="button" class="app-export-icon-button app-export-icon-button--danger" title="清空目录" aria-label="清空导出目录" @click="clearExportFolderSelection">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" /></svg>
                     </button>
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  class="inline-flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-[13px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60"
-                  :class="canExport && !exporting ? 'bg-[#07C160] text-white hover:bg-[#06ad56]' : 'bg-[#d1d5db] text-white'"
-                  :disabled="!canExport || exporting"
-                  @click="startExport"
-                >
-                  {{ exporting ? '导出中…' : '开始导出' }}
-                </button>
-
-                <div
-                  v-if="exportMsg"
-                  class="rounded-md border px-3 py-2.5 text-[13px] leading-5 whitespace-pre-wrap"
-                  :class="exportOk ? 'border-[#bbf7d0] bg-[#f0fdf4] text-[#15803d]' : 'border-[#fecaca] bg-[#fef2f2] text-[#b91c1c]'"
-                >
-                  {{ exportMsg }}
+                <div v-if="exportMsg" class="app-export-result" :class="exportOk ? 'app-export-result--success' : 'app-export-result--error'" :role="exportOk ? 'status' : 'alert'">
+                  <svg v-if="exportOk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg>
+                  <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v6M12 17h.01" /></svg>
+                  <span>{{ exportMsg }}</span>
                 </div>
               </div>
+
+              <footer class="app-export-footer">
+                <div class="app-export-summary">
+                  <span>范围 <strong>{{ selectedContactTypeCount }} 类</strong></span>
+                  <span class="app-export-summary__separator"></span>
+                  <span class="app-export-summary__path" :class="{ 'is-missing': !exportFolder }">{{ exportFolder || '尚未选择目录' }}</span>
+                </div>
+                <div class="app-export-footer__actions">
+                  <button type="button" class="app-export-primary-button" :disabled="!canExport || exporting" @click="startExport">{{ exporting ? '导出中…' : '开始导出' }}</button>
+                </div>
+              </footer>
             </section>
           </div>
         </div>
@@ -600,6 +596,17 @@ const hasSelectedContactTypes = computed(() => {
     contactTypes.formerFriends ||
     contactTypes.blocked
   )
+})
+
+const selectedContactTypeCount = computed(() => {
+  return [
+    contactTypes.friends,
+    contactTypes.groups,
+    contactTypes.officials,
+    contactTypes.services,
+    contactTypes.formerFriends,
+    contactTypes.blocked,
+  ].filter(Boolean).length
 })
 
 const buildContactIncludeParams = () => {
@@ -1100,6 +1107,13 @@ const chooseExportFolder = async () => {
   }
 }
 
+const clearExportFolderSelection = () => {
+  exportFolder.value = ''
+  exportFolderHandle.value = null
+  exportMsg.value = ''
+  exportOk.value = false
+}
+
 const startExport = async () => {
   exportMsg.value = ''
   exportOk.value = false
@@ -1141,6 +1155,15 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.contacts-export-title-panel .app-export-panel__header {
+  margin-bottom: 0;
+}
+
+.contacts-export-controls {
+  display: grid;
+  gap: 16px;
+}
+
 .contact-type-filter-card {
   min-width: 0;
   height: 38px;
