@@ -12,8 +12,8 @@ from ..chat_helpers import _quote_ident, _resolve_account_dir
 from ..media_helpers import _resolve_account_db_storage_dir
 from ..path_fix import PathFixRoute
 from ..logging_config import get_logger
+from ..source_fallback import build_source_fallback_meta
 from ..wcdb_realtime import (
-    WCDBRealtimeError,
     WCDB_REALTIME,
     exec_query as _wcdb_exec_query,
     get_avatar_urls as _wcdb_get_avatar_urls,
@@ -98,6 +98,40 @@ def _iter_biz_message_db_paths(account_dir: Path, *, source: str) -> list[Path]:
         return sorted([p for p in account_dir.glob("biz_message*.db") if p.is_file()])
     except Exception:
         return []
+
+
+def _connect_biz_source(account_dir: Path, source_requested: str) -> tuple[str, Any, str]:
+    source_norm = _resolve_biz_source_for_account(source_requested, account_dir)
+    if source_norm != "realtime":
+        return source_norm, None, ""
+    try:
+        return "realtime", WCDB_REALTIME.ensure_connected(account_dir), ""
+    except Exception as exc:
+        if _iter_biz_message_db_paths(account_dir, source="decrypted"):
+            return "decrypted", None, str(exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _biz_source_meta(
+    account_dir: Path,
+    *,
+    requested_source: str,
+    active_source: str,
+    reason: str = "",
+) -> dict[str, Any]:
+    retry_after_seconds = 0
+    if reason:
+        try:
+            failure = WCDB_REALTIME.get_recent_failure(account_dir.name)
+            retry_after_seconds = int(failure.get("retry_after_seconds") or 0)
+        except Exception:
+            retry_after_seconds = 0
+    return build_source_fallback_meta(
+        requested_source=requested_source,
+        active_source=active_source,
+        reason=reason,
+        retry_after_seconds=retry_after_seconds,
+    )
 
 
 def _coerce_realtime_blobish_content(value: Any) -> Any:
@@ -319,22 +353,10 @@ def proxy_biz_image(url: str):
 def get_biz_account_list(account: Optional[str] = None, source: Optional[str] = None):
     account_dir = _resolve_account_dir(account)
     source_requested = _normalize_biz_source(source)
-    source_norm = _resolve_biz_source_for_account(source_requested, account_dir)
+    source_norm, rt_conn, fallback_reason = _connect_biz_source(account_dir, source_requested)
 
     biz_ids = set()
     biz_latest_time = {}
-    rt_conn = None
-    if source_norm == "realtime":
-        try:
-            rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
-        except WCDBRealtimeError as e:
-            if source_requested != "auto":
-                raise HTTPException(status_code=400, detail=str(e))
-            source_norm = "decrypted"
-        except Exception as e:
-            if source_requested != "auto":
-                raise HTTPException(status_code=400, detail=str(e))
-            source_norm = "decrypted"
 
     # 1. 遍历 biz_message_*.db
     for db_file in _iter_biz_message_db_paths(account_dir, source=source_norm):
@@ -499,7 +521,18 @@ def get_biz_account_list(account: Optional[str] = None, source: Optional[str] = 
     # 4. 按最后一条消息的时间降序排列
     result.sort(key=lambda x: x.get("last_time", 0), reverse=True)
 
-    return {"status": "success", "source": source_norm, "total": len(result), "data": result}
+    return {
+        "status": "success",
+        "source": source_norm,
+        **_biz_source_meta(
+            account_dir,
+            requested_source=source_requested,
+            active_source=source_norm,
+            reason=fallback_reason,
+        ),
+        "total": len(result),
+        "data": result,
+    }
 
 
 # 接口 2：获取普通服务号/公众号的 json 消息 (已修复表名比对 bug)
@@ -517,19 +550,7 @@ def get_biz_messages(
 
     account_dir = _resolve_account_dir(account)
     source_requested = _normalize_biz_source(source)
-    source_norm = _resolve_biz_source_for_account(source_requested, account_dir)
-    rt_conn = None
-    if source_norm == "realtime":
-        try:
-            rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
-        except WCDBRealtimeError as e:
-            if source_requested != "auto":
-                raise HTTPException(status_code=400, detail=str(e))
-            source_norm = "decrypted"
-        except Exception as e:
-            if source_requested != "auto":
-                raise HTTPException(status_code=400, detail=str(e))
-            source_norm = "decrypted"
+    source_norm, rt_conn, fallback_reason = _connect_biz_source(account_dir, source_requested)
 
     md5_id = hashlib.md5(username.encode('utf-8')).hexdigest().lower()
     table_name = f"Msg_{md5_id}"
@@ -542,15 +563,22 @@ def get_biz_messages(
     )
 
     if not target_db:
-        if source_requested == "auto" and source_norm == "realtime":
+        if source_norm == "realtime" and _iter_biz_message_db_paths(account_dir, source="decrypted"):
             source_norm = "decrypted"
             rt_conn = None
+            fallback_reason = fallback_reason or "实时服务号数据库中未找到该会话"
             target_db = _find_biz_message_db_for_table(account_dir, table_name, source=source_norm)
         if not target_db:
             return {
                 "status": "success",
                 "account": account_dir.name,
                 "source": source_norm,
+                **_biz_source_meta(
+                    account_dir,
+                    requested_source=source_requested,
+                    active_source=source_norm,
+                    reason=fallback_reason,
+                ),
                 "data": [],
                 "scanned": 0,
                 "hasMore": False,
@@ -610,6 +638,12 @@ def get_biz_messages(
         "status": "success",
         "account": account_dir.name,
         "source": source_norm,
+        **_biz_source_meta(
+            account_dir,
+            requested_source=source_requested,
+            active_source=source_norm,
+            reason=fallback_reason,
+        ),
         "data": messages,
         "scanned": scanned,
         "hasMore": scanned >= limit,
@@ -628,19 +662,7 @@ def get_wechat_pay_records(
     limit, offset = _normalize_pagination(limit, offset)
     account_dir = _resolve_account_dir(account)
     source_requested = _normalize_biz_source(source)
-    source_norm = _resolve_biz_source_for_account(source_requested, account_dir)
-    rt_conn = None
-    if source_norm == "realtime":
-        try:
-            rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
-        except WCDBRealtimeError as e:
-            if source_requested != "auto":
-                raise HTTPException(status_code=400, detail=str(e))
-            source_norm = "decrypted"
-        except Exception as e:
-            if source_requested != "auto":
-                raise HTTPException(status_code=400, detail=str(e))
-            source_norm = "decrypted"
+    source_norm, rt_conn, fallback_reason = _connect_biz_source(account_dir, source_requested)
 
     md5_id = hashlib.md5(username.encode('utf-8')).hexdigest().lower()
     table_name = f"Msg_{md5_id}"
@@ -653,15 +675,22 @@ def get_wechat_pay_records(
     )
 
     if not target_db:
-        if source_requested == "auto" and source_norm == "realtime":
+        if source_norm == "realtime" and _iter_biz_message_db_paths(account_dir, source="decrypted"):
             source_norm = "decrypted"
             rt_conn = None
+            fallback_reason = fallback_reason or "实时服务号数据库中未找到微信支付会话"
             target_db = _find_biz_message_db_for_table(account_dir, table_name, source=source_norm)
         if not target_db:
             return {
                 "status": "success",
                 "account": account_dir.name,
                 "source": source_norm,
+                **_biz_source_meta(
+                    account_dir,
+                    requested_source=source_requested,
+                    active_source=source_norm,
+                    reason=fallback_reason,
+                ),
                 "data": [],
                 "scanned": 0,
                 "hasMore": False,
@@ -726,6 +755,12 @@ def get_wechat_pay_records(
         "status": "success",
         "account": account_dir.name,
         "source": source_norm,
+        **_biz_source_meta(
+            account_dir,
+            requested_source=source_requested,
+            active_source=source_norm,
+            reason=fallback_reason,
+        ),
         "data": messages,
         "scanned": scanned,
         "hasMore": scanned >= limit,

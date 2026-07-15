@@ -661,17 +661,30 @@ def _optional_rows(conn: Any, sql: str) -> list[dict[str, Any]]:
         return []
 
 
-@router.get("/api/favorites/media/voice", summary="读取实时收藏语音")
+@router.get("/api/favorites/media/voice", summary="读取收藏语音")
 def get_favorite_voice(server_id: int = Query(..., gt=0), account: Optional[str] = None):
     ctx = resolve_chat_account_context(account)
+    local_db_names = sorted(path.name for path in ctx.account_dir.glob("media_*.db") if path.is_file())
+    source_active = "realtime"
+    realtime_error = ""
     try:
         realtime = WCDB_REALTIME.ensure_connected(ctx.account_dir)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"实时语音库不可用：{exc}") from exc
+        realtime = None
+        realtime_error = str(exc)
 
-    media_dir = Path(realtime.db_storage_dir) / "message"
-    db_names = sorted(path.name for path in media_dir.glob("media_*.db") if path.is_file())
+    if realtime is not None:
+        media_dir = Path(realtime.db_storage_dir) / "message"
+        db_names = sorted(path.name for path in media_dir.glob("media_*.db") if path.is_file())
+    else:
+        db_names = []
+
+    if not db_names and local_db_names:
+        source_active = "decrypted"
+        db_names = local_db_names
     if not db_names:
+        if realtime_error:
+            raise HTTPException(status_code=503, detail=f"实时语音库不可用：{realtime_error}")
         raise HTTPException(status_code=404, detail="实时 media 数据库不存在。")
 
     voice_data = b""
@@ -679,11 +692,12 @@ def get_favorite_voice(server_id: int = Query(..., gt=0), account: Optional[str]
         try:
             with _open_db_source(
                 ctx,
-                source="realtime",
+                source=source_active,
                 db_group="message",
                 db_name=db_name,
                 decrypted_name=db_name,
             ) as conn:
+                row_source = str(getattr(conn, "source", source_active) or source_active)
                 row = conn.execute(
                     "SELECT voice_data FROM VoiceInfo "
                     f"WHERE svr_id = {int(server_id)} ORDER BY create_time DESC LIMIT 1"
@@ -693,6 +707,7 @@ def get_favorite_voice(server_id: int = Query(..., gt=0), account: Optional[str]
         if row:
             try:
                 voice_data = _coerce_blob_bytes(row[0])
+                source_active = row_source
             except Exception:
                 voice_data = b""
         if voice_data:
@@ -707,7 +722,10 @@ def get_favorite_voice(server_id: int = Query(..., gt=0), account: Optional[str]
     return Response(
         content=payload,
         media_type=media_type,
-        headers={"Content-Disposition": f"inline; filename=favorite_voice_{int(server_id)}.{extension}"},
+        headers={
+            "Content-Disposition": f"inline; filename=favorite_voice_{int(server_id)}.{extension}",
+            "X-WeChat-Data-Source": source_active,
+        },
     )
 
 
