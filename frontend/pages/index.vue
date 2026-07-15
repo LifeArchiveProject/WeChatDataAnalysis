@@ -1,11 +1,11 @@
 <template>
-  <div class="landing-page relative h-full min-h-0 overflow-hidden px-4 py-6 text-[#000000e6] sm:px-6 sm:py-8">
+  <div class="landing-page relative h-full min-h-0 overflow-auto px-4 py-6 text-[#000000e6] sm:px-6 sm:py-8">
     <div class="pointer-events-none absolute inset-0 bg-grid-pattern opacity-5"></div>
     <div class="pointer-events-none absolute left-20 top-20 h-72 w-72 rounded-full bg-[#07C160] opacity-5 blur-3xl"></div>
     <div class="pointer-events-none absolute right-20 top-40 h-96 w-96 rounded-full bg-[#10AEEF] opacity-5 blur-3xl"></div>
     <div class="pointer-events-none absolute -bottom-8 left-40 h-80 w-80 rounded-full bg-[#91D300] opacity-5 blur-3xl"></div>
 
-    <main class="relative z-10 mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col justify-center">
+    <main class="relative z-10 mx-auto flex min-h-full w-full max-w-6xl flex-col justify-start lg:justify-center">
       <section class="space-y-5">
         <div class="flex flex-col gap-5 rounded-lg border border-[#EDEDED] bg-white/78 p-6 backdrop-blur sm:p-8 lg:flex-row lg:items-center lg:justify-between">
           <div class="flex items-start gap-4 text-left">

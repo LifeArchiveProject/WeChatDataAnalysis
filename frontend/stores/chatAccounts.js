@@ -7,6 +7,7 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
   const accountInfos = ref([])
   const switchableAccounts = ref([])
   const selectedAccount = ref(null)
+  const sourceStatusByAccount = ref({})
   const loading = ref(false)
   const error = ref('')
   const loaded = ref(false)
@@ -47,6 +48,78 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
   }
 
   const normalizeAccountName = (value) => String(value || '').trim()
+
+  const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key)
+
+  const normalizeSourceStatus = (value) => {
+    if (!value || typeof value !== 'object') return null
+
+    const hasStatusFields = [
+      'fallbackActive',
+      'activeSource',
+      'preferredSource',
+      'sourceFallback',
+      'sourceFallbackReason',
+      'sourceFallbackMessage',
+      'sourceFallbackRetryAfterSeconds',
+    ].some((key) => hasOwn(value, key))
+    if (!hasStatusFields) return null
+
+    const fallbackActive = hasOwn(value, 'fallbackActive')
+      ? !!value.fallbackActive
+      : !!value.sourceFallback
+    const retryRaw = value.retryAfterSeconds ?? value.sourceFallbackRetryAfterSeconds ?? 0
+    const retryNumber = Number(retryRaw)
+
+    return {
+      preferredSource: String(value.preferredSource || value.sourceRequested || '').trim(),
+      activeSource: String(value.activeSource || value.dataSource || value.source || (fallbackActive ? 'decrypted' : '')).trim(),
+      fallbackActive,
+      reason: String(value.reason || value.sourceFallbackReason || '').trim(),
+      message: String(value.message || value.sourceFallbackMessage || '').trim(),
+      retryAfterSeconds: Number.isFinite(retryNumber) ? Math.max(0, Math.floor(retryNumber)) : 0,
+    }
+  }
+
+  const setSourceStatus = (account, value) => {
+    const accountName = normalizeAccountName(account || selectedAccount.value)
+    const status = normalizeSourceStatus(value)
+    if (!accountName || !status) return false
+    sourceStatusByAccount.value = {
+      ...sourceStatusByAccount.value,
+      [accountName]: status,
+    }
+    return true
+  }
+
+  const applySourceResponse = (response) => {
+    if (!response || typeof response !== 'object') return
+
+    const defaultAccount = normalizeAccountName(response.account || selectedAccount.value)
+
+    if (response.dataSourceStatus) {
+      setSourceStatus(defaultAccount, response.dataSourceStatus)
+    }
+    setSourceStatus(defaultAccount, response)
+
+    const accountInfoItems = Array.isArray(response.accountInfos)
+      ? response.accountInfos
+      : (Array.isArray(response.items) ? response.items : [])
+    for (const item of accountInfoItems) {
+      if (!item?.dataSourceStatus) continue
+      setSourceStatus(item.account || item.name, item.dataSourceStatus)
+    }
+
+    const jobs = [response.job, ...(Array.isArray(response.jobs) ? response.jobs : [])]
+    for (const job of jobs) {
+      if (!job || typeof job !== 'object') continue
+      const account = normalizeAccountName(job.account || defaultAccount)
+      setSourceStatus(account, job.dataSourceStatus)
+      setSourceStatus(account, job.options)
+    }
+
+    setSourceStatus(defaultAccount, response.options)
+  }
 
   const uniqueAccounts = (values = []) => {
     const out = []
@@ -118,6 +191,11 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
     return out
   })
 
+  const selectedDataSourceStatus = computed(() => {
+    const account = normalizeAccountName(selectedAccount.value)
+    return account ? (sourceStatusByAccount.value[account] || null) : null
+  })
+
   if (process.client) {
     watch(selectedAccount, (next) => {
       writeSelectedAccount(next)
@@ -149,6 +227,14 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
         accountInfos.value = normalizeAccountInfos(resp, nextAccounts)
         switchableAccounts.value = deriveSwitchableAccounts(resp, accountInfos.value, nextAccounts)
 
+        const nextSourceStatuses = {}
+        for (const info of accountInfos.value) {
+          const account = normalizeAccountName(info?.account || info?.name)
+          const status = normalizeSourceStatus(info?.dataSourceStatus)
+          if (account && status) nextSourceStatuses[account] = status
+        }
+        sourceStatusByAccount.value = nextSourceStatuses
+
         const preferred = String(selectedAccount.value || '').trim()
         const defaultAccount = String(resp?.default_account || '').trim()
         const defaultSwitchable = String(resp?.defaultSwitchableAccount || resp?.default_switchable_account || '').trim()
@@ -163,6 +249,7 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
         accounts.value = []
         accountInfos.value = []
         switchableAccounts.value = []
+        sourceStatusByAccount.value = {}
         selectedAccount.value = null
         writeSelectedAccount(null)
         loaded.value = true
@@ -185,10 +272,13 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
     accountInfoByName,
     switchableAccounts,
     selectedAccount,
+    sourceStatusByAccount,
+    selectedDataSourceStatus,
     loading,
     error,
     loaded,
     ensureLoaded,
     setSelectedAccount,
+    applySourceResponse,
   }
 })
