@@ -1,4 +1,5 @@
 import { reportServerError } from '~/lib/server-error-logging'
+import { useChatAccountsStore } from '~/stores/chatAccounts'
 
 const chatContactsListCache = new Map()
 const CHAT_CONTACTS_LIST_CACHE_TTL_MS = 3000
@@ -6,6 +7,7 @@ const CHAT_CONTACTS_LIST_CACHE_TTL_MS = 3000
 // API请求组合式函数
 export const useApi = () => {
   const baseURL = useApiBase()
+  const chatAccounts = useChatAccountsStore()
 
   const responseDetailMessage = (response, fallback = '') => {
     const detail = response?._data?.detail
@@ -41,6 +43,7 @@ export const useApi = () => {
           }
         }
       })
+      chatAccounts.applySourceResponse(response)
       return response
     } catch (error) {
       console.error('API请求错误:', error)
