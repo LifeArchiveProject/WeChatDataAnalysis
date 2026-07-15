@@ -1543,7 +1543,7 @@ def _load_contact_top_flags(contact_db_path: Path, usernames: list[str]) -> dict
         conn.close()
 
 
-def _coerce_realtime_blobish_value(value: Any) -> Any:
+def _coerce_realtime_blobish_value(value: Any, *, allow_bare_hex: bool = True) -> Any:
     if value is None:
         return None
     if isinstance(value, memoryview):
@@ -1560,7 +1560,7 @@ def _coerce_realtime_blobish_value(value: Any) -> Any:
         b = _hex_to_bytes(s)
         if b is not None:
             return b
-        if (len(s) % 2 == 0) and (_HEX_RE.fullmatch(s) is not None):
+        if allow_bare_hex and (len(s) % 2 == 0) and (_HEX_RE.fullmatch(s) is not None):
             try:
                 return bytes.fromhex(s)
             except Exception:
@@ -1573,7 +1573,7 @@ def _coerce_realtime_blobish_value(value: Any) -> Any:
         b = _hex_to_bytes(s)
         if b is not None:
             return b
-        if (len(s) % 2 == 0) and (_HEX_RE.fullmatch(s) is not None):
+        if allow_bare_hex and (len(s) % 2 == 0) and (_HEX_RE.fullmatch(s) is not None):
             try:
                 return bytes.fromhex(s)
             except Exception:
@@ -1593,7 +1593,8 @@ def _normalize_realtime_message_item(item: dict[str, Any]) -> dict[str, Any]:
             return 0
 
     message_content = _coerce_realtime_blobish_value(
-        _pick("message_content", "messageContent", "MessageContent")
+        _pick("message_content", "messageContent", "MessageContent"),
+        allow_bare_hex=False,
     )
     if message_content is None:
         message_content = ""
