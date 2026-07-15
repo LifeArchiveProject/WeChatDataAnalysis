@@ -25,6 +25,7 @@ from ..chat_helpers import (
     _resolve_msg_table_name_by_map,
 )
 from ..sqlite_diagnostics import is_usable_sqlite_db
+from ..source_fallback import build_source_fallback_meta
 from ..wcdb_realtime import WCDB_REALTIME, exec_query as _wcdb_exec_query, get_display_names as _wcdb_get_display_names
 
 router = APIRouter()
@@ -121,8 +122,18 @@ class _RowsCursor:
 class _SQLiteSource:
     source = "decrypted"
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        requested_source: str = "decrypted",
+        fallback_reason: str = "",
+        retry_after_seconds: int = 0,
+    ) -> None:
         self.db_path = Path(db_path)
+        self.requested_source = str(requested_source or "decrypted")
+        self.fallback_reason = str(fallback_reason or "")
+        self.retry_after_seconds = max(0, int(retry_after_seconds or 0))
         self._conn = _connect(self.db_path)
 
     def __enter__(self) -> "_SQLiteSource":
@@ -192,27 +203,39 @@ def _open_db_source(
 ) -> _SQLiteSource | _WCDBDatabaseSource:
     source_norm = _source_requested(source)
     realtime_capable = _account_has_realtime_source(ctx)
+    fallback_reason = ""
+    retry_after_seconds = 0
     if source_norm in {"auto", "realtime"} and realtime_capable:
         try:
             return _open_realtime_db_source(ctx, db_group=db_group, db_name=db_name)
         except Exception as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"实时读取 {db_group}/{db_name} 失败：{exc}",
-            )
+            fallback_reason = str(exc)
+            try:
+                failure = WCDB_REALTIME.get_recent_failure(ctx.name)
+                retry_after_seconds = int(failure.get("retry_after_seconds") or 0)
+            except Exception:
+                retry_after_seconds = 0
 
-    if source_norm == "realtime":
-        raise HTTPException(
-            status_code=503,
-            detail="实时模式不可用：缺少数据库密钥或 db_storage 路径。",
-        )
+    if source_norm == "realtime" and not realtime_capable:
+        fallback_reason = "实时模式不可用：缺少数据库密钥或 db_storage 路径。"
 
     db_path = ctx.account_dir / decrypted_name
+    if db_path.exists() and is_usable_sqlite_db(db_path):
+        return _SQLiteSource(
+            db_path,
+            requested_source=source_norm,
+            fallback_reason=fallback_reason,
+            retry_after_seconds=retry_after_seconds,
+        )
+
+    if fallback_reason:
+        raise HTTPException(
+            status_code=503,
+            detail=f"实时读取 {db_group}/{db_name} 失败，且没有可用的已解密数据库：{fallback_reason}",
+        )
     if not db_path.exists():
         raise HTTPException(status_code=404, detail=f"{decrypted_name} not found for account: {ctx.name}")
-    if not is_usable_sqlite_db(db_path):
-        raise HTTPException(status_code=400, detail=f"{decrypted_name} is not a usable SQLite database.")
-    return _SQLiteSource(db_path)
+    raise HTTPException(status_code=400, detail=f"{decrypted_name} is not a usable SQLite database.")
 
 
 def _open_general_source(ctx: Any, source: str = "auto") -> _SQLiteSource | _WCDBDatabaseSource:
@@ -225,10 +248,17 @@ def _open_general_source(ctx: Any, source: str = "auto") -> _SQLiteSource | _WCD
     )
 
 
-def _source_meta(conn: Any) -> dict[str, str]:
+def _source_meta(conn: Any) -> dict[str, Any]:
+    active_source = str(getattr(conn, "source", "decrypted") or "decrypted")
     return {
-        "dataSource": str(getattr(conn, "source", "decrypted") or "decrypted"),
+        "dataSource": active_source,
         "database": str(getattr(conn, "db_path", "") or ""),
+        **build_source_fallback_meta(
+            requested_source=getattr(conn, "requested_source", active_source),
+            active_source=active_source,
+            reason=getattr(conn, "fallback_reason", ""),
+            retry_after_seconds=getattr(conn, "retry_after_seconds", 0),
+        ),
     }
 
 

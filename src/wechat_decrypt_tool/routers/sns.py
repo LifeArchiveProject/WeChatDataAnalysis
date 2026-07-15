@@ -23,6 +23,7 @@ from fastapi.responses import Response, FileResponse  # 返回视频文件
 
 from ..chat_helpers import _load_contact_rows, _pick_display_name, _resolve_account_dir
 from ..logging_config import get_logger
+from ..source_fallback import build_source_fallback_meta
 from ..media_helpers import _read_and_maybe_decrypt_media, _resolve_account_wxid_dir
 from ..path_fix import PathFixRoute
 from .. import sns_media as _sns_media
@@ -2073,6 +2074,7 @@ def list_sns_timeline(
 
     # Prefer real-time WCDB access (reads the latest encrypted db_storage/sns/sns.db).
     # Fallback to the decrypted sqlite copy in output/{account}/sns.db.
+    fallback_reason = ""
     try:
         conn = WCDB_REALTIME.ensure_connected(account_dir)
         writeback_rows: list[tuple[int, str, str, Optional[str]]] = []
@@ -2417,10 +2419,27 @@ def list_sns_timeline(
         return wcdb_resp
     except WCDBRealtimeError as e:
         logger.info("[sns] wcdb realtime unavailable: %s", e)
+        fallback_reason = str(e)
     except Exception as e:
         logger.warning("[sns] wcdb realtime failed: %s", e)
+        fallback_reason = str(e)
 
-    return _list_from_decrypted_sqlite()
+    fallback = _list_from_decrypted_sqlite()
+    retry_after_seconds = 0
+    try:
+        failure = WCDB_REALTIME.get_recent_failure(account_dir.name)
+        retry_after_seconds = int(failure.get("retry_after_seconds") or 0)
+    except Exception:
+        retry_after_seconds = 0
+    fallback.update(
+        build_source_fallback_meta(
+            requested_source="realtime",
+            active_source="decrypted",
+            reason=fallback_reason,
+            retry_after_seconds=retry_after_seconds,
+        )
+    )
+    return fallback
 
 
 @router.get("/api/sns/users", summary="列出朋友圈联系人（按发圈数统计）")

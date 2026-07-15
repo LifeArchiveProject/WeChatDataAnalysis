@@ -70,6 +70,7 @@ from .media_helpers import (
     _try_find_decrypted_resource,
 )
 from .perf_trace import create_perf_trace
+from .source_fallback import build_source_fallback_meta
 from .export_integrity import export_css as _native_export_css
 from .export_integrity import load_wce_integrity_native
 from .export_integrity import write_zip_integrity_sidecars
@@ -1021,12 +1022,30 @@ class ChatExportManager:
         file_name: Optional[str],
     ) -> ExportJob:
         account_dir = _resolve_account_dir(account)
-        source_norm = _normalize_chat_source(source, default="auto")
-        if source_norm in {"auto", "realtime"}:
+        source_requested = _normalize_chat_source(source, default="auto")
+        source_norm = source_requested
+        fallback_reason = ""
+        retry_after_seconds = 0
+        if source_requested in {"auto", "realtime"}:
             try:
                 WCDB_REALTIME.ensure_connected(account_dir)
+                source_norm = "realtime"
             except WCDBRealtimeError as e:
-                raise ValueError(f"Realtime export requires WCDB/direct mode but connection failed: {e}") from e
+                if not _has_decrypted_export_dbs(account_dir):
+                    raise ValueError(f"Realtime export requires WCDB/direct mode but connection failed: {e}") from e
+                source_norm = "decrypted"
+                fallback_reason = str(e)
+                try:
+                    failure = WCDB_REALTIME.get_recent_failure(account_dir.name)
+                    retry_after_seconds = int(failure.get("retry_after_seconds") or 0)
+                except Exception:
+                    retry_after_seconds = 0
+        fallback_meta = build_source_fallback_meta(
+            requested_source=source_requested,
+            active_source=source_norm,
+            reason=fallback_reason,
+            retry_after_seconds=retry_after_seconds,
+        )
         export_id = uuid.uuid4().hex[:12]
 
         job = ExportJob(
@@ -1036,6 +1055,7 @@ class ChatExportManager:
             options={
                 "scope": scope,
                 "source": source_norm,
+                **fallback_meta,
                 "usernames": usernames,
                 "format": export_format,
                 "startTime": int(start_time) if start_time else None,
@@ -2522,14 +2542,26 @@ def build_chat_export_targets_preview(
     include_official: bool = False,
     base_url: str = "",
 ) -> dict[str, Any]:
-    source_norm = _normalize_chat_source(source, default="auto")
-    if source_norm in {"auto", "realtime"}:
+    source_requested = _normalize_chat_source(source, default="auto")
+    source_norm = source_requested
+    fallback_reason = ""
+    retry_after_seconds = 0
+    if source_requested in {"auto", "realtime"}:
         source_norm = "realtime"
         if rt_conn is None:
             try:
                 rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
             except WCDBRealtimeError as e:
-                raise ValueError(f"Realtime export targets require WCDB/direct mode but connection failed: {e}") from e
+                if not _has_decrypted_export_dbs(account_dir):
+                    raise ValueError(f"Realtime export targets require WCDB/direct mode but connection failed: {e}") from e
+                source_norm = "decrypted"
+                fallback_reason = str(e)
+                try:
+                    failure = WCDB_REALTIME.get_recent_failure(account_dir.name)
+                    retry_after_seconds = int(failure.get("retry_after_seconds") or 0)
+                except Exception:
+                    retry_after_seconds = 0
+                rt_conn = None
 
     targets = _resolve_export_targets(
         account_dir=account_dir,
@@ -2587,6 +2619,12 @@ def build_chat_export_targets_preview(
         "status": "success",
         "account": account_dir.name,
         "source": source_norm,
+        **build_source_fallback_meta(
+            requested_source=source_requested,
+            active_source=source_norm,
+            reason=fallback_reason,
+            retry_after_seconds=retry_after_seconds,
+        ),
         "includeHidden": bool(include_hidden),
         "includeOfficial": bool(include_official),
         "targets": conversations,

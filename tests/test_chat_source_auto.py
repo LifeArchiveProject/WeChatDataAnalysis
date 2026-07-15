@@ -79,7 +79,7 @@ class TestChatSourceAuto(unittest.TestCase):
         self.assertEqual((resp.get("sessions") or [])[0].get("username"), "wxid_realtime")
         self.assertEqual((resp.get("sessions") or [])[0].get("lastMessage"), "from realtime")
 
-    def test_sessions_auto_reports_realtime_error_when_unavailable(self):
+    def test_sessions_auto_falls_back_to_decrypted_when_realtime_is_unavailable(self):
         with TemporaryDirectory() as td:
             account_dir = Path(td) / "acc"
             account_dir.mkdir(parents=True, exist_ok=True)
@@ -123,19 +123,22 @@ class TestChatSourceAuto(unittest.TestCase):
                 patch.object(chat_router, "_query_head_image_usernames", return_value=set()),
                 patch.object(chat_router, "_avatar_url_unified", return_value=""),
             ):
-                with self.assertRaises(chat_router.HTTPException) as cm:
-                    chat_router.list_chat_sessions(
-                        _DummyRequest(),
-                        account="acc",
-                        limit=50,
-                        include_hidden=True,
-                        include_official=True,
-                        preview="session",
-                        source="auto",
-                    )
+                resp = chat_router.list_chat_sessions(
+                    _DummyRequest(),
+                    account="acc",
+                    limit=50,
+                    include_hidden=True,
+                    include_official=True,
+                    preview="session",
+                    source="auto",
+                )
 
-        self.assertEqual(cm.exception.status_code, 400)
-        self.assertIn("Cannot resolve db_storage", str(cm.exception.detail))
+        self.assertEqual(resp.get("status"), "success")
+        self.assertEqual(resp.get("source"), "decrypted")
+        self.assertTrue(resp.get("sourceFallback"))
+        self.assertIn("Cannot resolve db_storage", str(resp.get("sourceFallbackReason") or ""))
+        self.assertEqual((resp.get("sessions") or [])[0].get("username"), "wxid_local")
+        self.assertEqual((resp.get("sessions") or [])[0].get("lastMessage"), "from decrypted")
 
     def test_messages_auto_reads_realtime_rows_when_available(self):
         with TemporaryDirectory() as td:

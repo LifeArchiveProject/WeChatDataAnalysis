@@ -1892,8 +1892,37 @@ class WCDBRealtimeManager:
         self._mu = threading.Lock()
         self._conns: dict[str, WCDBRealtimeConnection] = {}
         self._connecting: dict[str, threading.Event] = {}
-        # Negative cache: accounts that failed to connect recently (avoids repeated timeouts).
-        self._failed: dict[str, float] = {}  # account -> monotonic timestamp of failure
+        # Negative cache: account -> (monotonic failure timestamp, original reason).
+        self._failed: dict[str, tuple[float, str]] = {}
+
+    def _recent_failure_locked(self, account: str) -> dict[str, Any]:
+        cached = self._failed.get(str(account or ""))
+        if cached is None:
+            return {"active": False, "reason": "", "retry_after_seconds": 0}
+        if isinstance(cached, tuple):
+            failed_at = float(cached[0])
+            reason = str(cached[1] or "").strip()
+        else:
+            # Backward compatibility for a process that populated the old float-only cache.
+            failed_at = float(cached)
+            reason = "WCDB realtime connection failed."
+        remaining = self._FAILED_TTL - (time.monotonic() - failed_at)
+        if remaining <= 0:
+            self._failed.pop(str(account or ""), None)
+            return {"active": False, "reason": "", "retry_after_seconds": 0}
+        return {
+            "active": True,
+            "reason": reason,
+            "retry_after_seconds": max(1, int(remaining + 0.999)),
+        }
+
+    def get_recent_failure(self, account: str) -> dict[str, Any]:
+        with self._mu:
+            return dict(self._recent_failure_locked(str(account or "")))
+
+    def _record_failure(self, account: str, reason: Any) -> None:
+        with self._mu:
+            self._failed[str(account or "")] = (time.monotonic(), str(reason or "").strip())
 
     def get_status(self, account_dir: Path) -> dict[str, Any]:
         account = str(account_dir.name)
@@ -1920,6 +1949,7 @@ class WCDBRealtimeManager:
         except Exception:
             dll_ok = False
         connected = self.is_connected(account)
+        recent_failure = self.get_recent_failure(account)
         return {
             "account": account,
             "dll_present": bool(dll_ok),
@@ -1930,6 +1960,9 @@ class WCDBRealtimeManager:
             "session_db_path": str(session_db_path) if session_db_path else "",
             "connected": bool(connected),
             "error": err,
+            "recent_failure": bool(recent_failure.get("active")),
+            "failure_reason": str(recent_failure.get("reason") or ""),
+            "retry_after_seconds": int(recent_failure.get("retry_after_seconds") or 0),
         }
 
     def is_connected(self, account: str) -> bool:
@@ -1959,10 +1992,15 @@ class WCDBRealtimeManager:
 
         # Fast-reject if this account failed recently to avoid repeated timeouts.
         with self._mu:
-            failed_at = self._failed.get(account)
-            if failed_at is not None and (time.monotonic() - failed_at) < self._FAILED_TTL:
-                logger.warning("[wcdb] recent failure cache hit account=%s ttl=%ss", account, int(self._FAILED_TTL))
-                raise WCDBRealtimeError("WCDB connection recently failed; retry after 60s.")
+            recent_failure = self._recent_failure_locked(account)
+        if recent_failure.get("active"):
+            retry_after = int(recent_failure.get("retry_after_seconds") or self._FAILED_TTL)
+            original_reason = str(recent_failure.get("reason") or "").strip()
+            logger.warning("[wcdb] recent failure cache hit account=%s retry_after=%ss", account, retry_after)
+            message = f"WCDB connection recently failed; retry after {retry_after}s."
+            if original_reason:
+                message += f" Last error: {original_reason}"
+            raise WCDBRealtimeError(message)
 
         deadline = time.monotonic() + timeout
 
@@ -2039,8 +2077,7 @@ class WCDBRealtimeManager:
                         "当前为进程内 WCDB，原生调用无法安全终止；请重启应用。"
                         "源码运行请先执行 `cd desktop; npm ci` 以启用隔离 sidecar。"
                     )
-                with self._mu:
-                    self._failed[account] = time.monotonic()
+                self._record_failure(account, timeout_message)
                 logger.warning(
                     "[wcdb] open_account timeout account=%s timeout=%ss session_db=%s",
                     account,
@@ -2052,8 +2089,7 @@ class WCDBRealtimeManager:
                 )
             if _open_err:
                 if _should_cache_open_failure(_open_err[0]):
-                    with self._mu:
-                        self._failed[account] = time.monotonic()
+                    self._record_failure(account, _open_err[0])
                 logger.warning(
                     "[wcdb] open_account failed account=%s session_db=%s error=%s",
                     account,

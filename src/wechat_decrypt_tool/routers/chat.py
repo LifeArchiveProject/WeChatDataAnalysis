@@ -87,6 +87,7 @@ from ..session_last_message import (
     load_session_last_messages,
 )
 from ..sqlite_diagnostics import collect_sqlite_diagnostics, format_sqlite_diagnostics
+from ..source_fallback import build_source_fallback_meta
 from ..wcdb_realtime import (
     WCDBRealtimeError,
     WCDB_REALTIME,
@@ -852,6 +853,42 @@ def _resolve_chat_source_for_account(source_norm: str, account_dir: Path) -> str
     if source_norm == "auto":
         return "realtime"
     return source_norm
+
+
+def _chat_source_fallback_meta(
+    *,
+    account_dir: Path,
+    requested_source: str,
+    active_source: str,
+    reason: Any = "",
+) -> dict[str, Any]:
+    retry_after_seconds = 0
+    if str(reason or "").strip():
+        try:
+            failure = WCDB_REALTIME.get_recent_failure(account_dir.name)
+            retry_after_seconds = int(failure.get("retry_after_seconds") or 0)
+        except Exception:
+            retry_after_seconds = 0
+    return build_source_fallback_meta(
+        requested_source=requested_source,
+        active_source=active_source,
+        reason=reason,
+        retry_after_seconds=retry_after_seconds,
+    )
+
+
+def _decrypted_sessions_available(account_dir: Path) -> bool:
+    try:
+        return (Path(account_dir) / "session.db").is_file()
+    except Exception:
+        return False
+
+
+def _decrypted_messages_available(account_dir: Path) -> bool:
+    try:
+        return bool(_iter_message_db_paths(Path(account_dir)))
+    except Exception:
+        return False
 
 
 def _realtime_message_table_name(username: str) -> str:
@@ -4180,18 +4217,46 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
         and realtime_db_storage
         and realtime_session_db
     )
+    has_decrypted_dbs = bool(getattr(ctx, "has_decrypted_dbs", False))
+    realtime_preferred = bool(db_storage_path or wxid_dir or realtime_db_storage)
+    recent_failure = bool(realtime_status.get("recent_failure"))
+    fallback_reason = str(realtime_status.get("failure_reason") or "").strip()
+    if realtime_preferred and not realtime_available and not fallback_reason:
+        fallback_reason = str(realtime_status.get("error") or "").strip()
+        if not fallback_reason:
+            if not realtime_status.get("dll_present"):
+                fallback_reason = "wcdb_api.dll 不可用"
+            elif not realtime_status.get("key_present"):
+                fallback_reason = "当前账号缺少可用的数据库密钥"
+            elif not realtime_db_storage:
+                fallback_reason = "无法定位微信 db_storage 数据目录"
+            elif not realtime_session_db:
+                fallback_reason = "找不到微信实时数据库 session.db"
+    fallback_active = bool(
+        has_decrypted_dbs
+        and realtime_preferred
+        and (recent_failure or not realtime_available)
+        and fallback_reason
+    )
+    active_source = "decrypted" if fallback_active or not realtime_preferred else "realtime"
+    source_fallback = build_source_fallback_meta(
+        requested_source="realtime" if realtime_preferred else "decrypted",
+        active_source=active_source,
+        reason=fallback_reason if fallback_active else "",
+        retry_after_seconds=realtime_status.get("retry_after_seconds", 0),
+    )
 
     return {
         "account": ctx.name,
         "name": ctx.name,
         "mode": getattr(ctx, "mode", "unknown"),
-        "defaultSource": "realtime" if (db_storage_path or wxid_dir or realtime_db_storage) else "decrypted",
+        "defaultSource": active_source,
         "path": data_source_path,
         "dataSourcePath": data_source_path,
         "accountDir": str(account_dir),
         "dbStoragePath": db_storage_path or realtime_db_storage,
         "wxidDir": wxid_dir,
-        "hasDecryptedDbs": bool(getattr(ctx, "has_decrypted_dbs", False)),
+        "hasDecryptedDbs": has_decrypted_dbs,
         "database_count": len(db_files),
         "databases": db_files,
         "dbKeyPresent": bool(getattr(ctx, "db_key_present", False) or realtime_status.get("key_present")),
@@ -4211,6 +4276,17 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
             "dbStorageDir": realtime_db_storage,
             "sessionDbPath": realtime_session_db,
             "error": str(realtime_status.get("error") or ""),
+            "recentFailure": recent_failure,
+            "failureReason": str(realtime_status.get("failure_reason") or ""),
+            "retryAfterSeconds": int(realtime_status.get("retry_after_seconds") or 0),
+        },
+        "dataSourceStatus": {
+            "preferredSource": "realtime" if realtime_preferred else "decrypted",
+            "activeSource": active_source,
+            "fallbackActive": bool(source_fallback.get("sourceFallback")),
+            "reason": str(source_fallback.get("sourceFallbackReason") or ""),
+            "message": str(source_fallback.get("sourceFallbackMessage") or ""),
+            "retryAfterSeconds": int(source_fallback.get("sourceFallbackRetryAfterSeconds") or 0),
         },
     }
 
@@ -4322,6 +4398,7 @@ def list_chat_sessions(
     account_dir = _resolve_account_dir(account)
     source_requested = _normalize_chat_source(source)
     source_norm = _resolve_chat_source_for_account(source_requested, account_dir)
+    source_fallback_reason = ""
     contact_db_path = account_dir / "contact.db"
     head_image_db_path = account_dir / "head_image.db"
     base_url = str(request.base_url).rstrip("/")
@@ -4367,14 +4444,19 @@ def list_chat_sessions(
                 len(raw or []),
                 wcdb_ms,
             )
-        except WCDBRealtimeError as e:
+        except Exception as e:
             logger.warning(
                 "[%s] list_sessions realtime failed account=%s error=%s",
                 trace_id,
                 account_dir.name,
                 e,
             )
-            raise HTTPException(status_code=400, detail=str(e))
+            if not _decrypted_sessions_available(account_dir):
+                raise HTTPException(status_code=400, detail=str(e))
+            source_norm = "decrypted"
+            source_fallback_reason = str(e)
+            rt_conn = None
+            trace("realtime:fallback", error=str(e), fallbackSource="decrypted")
         else:
             norm: list[dict[str, Any]] = []
             for item in raw:
@@ -4841,6 +4923,12 @@ def list_chat_sessions(
         "status": "success",
         "account": account_dir.name,
         "source": source_norm,
+        **_chat_source_fallback_meta(
+            account_dir=account_dir,
+            requested_source=source_requested,
+            active_source=source_norm,
+            reason=source_fallback_reason,
+        ),
         "total": len(sessions),
         "sessions": sessions,
     }
@@ -5440,6 +5528,12 @@ def _connect_realtime_for_chat_source(
     try:
         return "realtime", WCDB_REALTIME.ensure_connected(account_dir), ""
     except WCDBRealtimeError as e:
+        if _decrypted_messages_available(account_dir):
+            return "decrypted", None, str(e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        if _decrypted_messages_available(account_dir):
+            return "decrypted", None, str(e)
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -5636,7 +5730,7 @@ def get_chat_message_daily_counts(
 
     account_dir = _resolve_account_dir(account)
     source_requested = _normalize_chat_source(source)
-    source_norm, rt_conn, _rt_error = _connect_realtime_for_chat_source(
+    source_norm, rt_conn, rt_error = _connect_realtime_for_chat_source(
         account_dir=account_dir,
         source_requested=source_requested,
     )
@@ -5719,6 +5813,12 @@ def get_chat_message_daily_counts(
         "account": account_dir.name,
         "username": username,
         "source": source_norm,
+        **_chat_source_fallback_meta(
+            account_dir=account_dir,
+            requested_source=source_requested,
+            active_source=source_norm,
+            reason=rt_error,
+        ),
         "year": int(y),
         "month": int(m),
         "counts": counts,
@@ -5756,7 +5856,7 @@ def get_chat_message_anchor(
 
     account_dir = _resolve_account_dir(account)
     source_requested = _normalize_chat_source(source)
-    source_norm, rt_conn, _rt_error = _connect_realtime_for_chat_source(
+    source_norm, rt_conn, rt_error = _connect_realtime_for_chat_source(
         account_dir=account_dir,
         source_requested=source_requested,
     )
@@ -5901,6 +6001,12 @@ def get_chat_message_anchor(
             "status": "empty",
             "anchorId": "",
             "source": source_norm,
+            **_chat_source_fallback_meta(
+                account_dir=account_dir,
+                requested_source=source_requested,
+                active_source=source_norm,
+                reason=rt_error,
+            ),
         }
 
     resp: dict[str, Any] = {
@@ -5908,6 +6014,12 @@ def get_chat_message_anchor(
         "account": account_dir.name,
         "username": username,
         "source": source_norm,
+        **_chat_source_fallback_meta(
+            account_dir=account_dir,
+            requested_source=source_requested,
+            active_source=source_norm,
+            reason=rt_error,
+        ),
         "kind": kind_norm,
         "anchorId": best_anchor_id,
         "createTime": int(best_create_time),
@@ -5951,6 +6063,7 @@ def list_chat_messages(
     account_dir = _resolve_account_dir(account)
     source_requested = _normalize_chat_source(source)
     source_norm = _resolve_chat_source_for_account(source_requested, account_dir)
+    source_fallback_reason = ""
     contact_db_path = account_dir / "contact.db"
     head_image_db_path = account_dir / "head_image.db"
     message_resource_db_path = account_dir / "message_resource.db"
@@ -6041,9 +6154,14 @@ def list_chat_messages(
     if source_norm == "realtime":
         try:
             rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
-        except WCDBRealtimeError as e:
+        except Exception as e:
             trace("realtime:error", error=str(e))
-            raise HTTPException(status_code=400, detail=str(e))
+            if not _decrypted_messages_available(account_dir):
+                raise HTTPException(status_code=400, detail=str(e))
+            source_norm = "decrypted"
+            source_fallback_reason = str(e)
+            db_paths = _iter_message_db_paths(account_dir)
+            trace("realtime:fallback", error=str(e), fallbackSource="decrypted")
 
     if source_norm == "realtime":
         # Realtime mode: fetch from newest (offset handled after render_type filtering).
@@ -6813,6 +6931,12 @@ def list_chat_messages(
             "account": account_dir.name,
             "username": username,
             "source": source_norm,
+            **_chat_source_fallback_meta(
+                account_dir=account_dir,
+                requested_source=source_requested,
+                active_source=source_norm,
+                reason=source_fallback_reason,
+            ),
             "total": int(offset) + (1 if has_more_global else 0),
             "hasMore": bool(has_more_global),
             "filterMode": "progressive" if progressive_filter else "",
@@ -7107,6 +7231,12 @@ def list_chat_messages(
         "account": account_dir.name,
         "username": username,
         "source": source_norm,
+        **_chat_source_fallback_meta(
+            account_dir=account_dir,
+            requested_source=source_requested,
+            active_source=source_norm,
+            reason=source_fallback_reason,
+        ),
         "total": int(offset) + len(page) + (1 if has_more_global else 0),
         "hasMore": bool(has_more_global),
         "filterMode": "progressive" if progressive_filter else "",
@@ -7913,7 +8043,7 @@ async def get_chat_messages_around(
     message_resource_db_path = account_dir / "message_resource.db"
     base_url = str(request.base_url).rstrip("/")
     source_requested = _normalize_chat_source(source)
-    source_norm, rt_conn, _rt_error = _connect_realtime_for_chat_source(
+    source_norm, rt_conn, rt_error = _connect_realtime_for_chat_source(
         account_dir=account_dir,
         source_requested=source_requested,
     )
@@ -8530,6 +8660,12 @@ async def get_chat_messages_around(
         "account": account_dir.name,
         "username": username,
         "source": source_norm,
+        **_chat_source_fallback_meta(
+            account_dir=account_dir,
+            requested_source=source_requested,
+            active_source=source_norm,
+            reason=rt_error,
+        ),
         "anchorId": anchor_id_canon,
         "anchorIndex": anchor_index,
         "messages": return_messages,

@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -34,6 +34,7 @@ from ..chat_helpers import (
     _should_keep_session,
 )
 from ..path_fix import PathFixRoute
+from ..source_fallback import build_source_fallback_meta
 from ..export_integrity import (
     export_css,
     load_wce_integrity_native,
@@ -354,6 +355,45 @@ def _resolve_contacts_source_for_account(source_norm: str, account_dir: Path) ->
     if source_norm == "auto":
         return "realtime"
     return source_norm
+
+
+def _run_contacts_read_with_fallback(
+    *,
+    account_dir: Path,
+    source: Optional[str],
+    read: Callable[[str], Any],
+) -> tuple[Any, str, dict[str, Any]]:
+    source_requested = _normalize_contacts_source(source)
+    source_active = _resolve_contacts_source_for_account(source_requested, account_dir)
+    fallback_reason = ""
+
+    try:
+        result = read(source_active)
+    except HTTPException as exc:
+        if source_active != "realtime" or not (account_dir / "contact.db").is_file():
+            raise
+        fallback_reason = _normalize_text(getattr(exc, "detail", "") or str(exc))
+        source_active = "decrypted"
+        result = read(source_active)
+
+    retry_after_seconds = 0
+    if fallback_reason:
+        try:
+            failure = WCDB_REALTIME.get_recent_failure(account_dir.name)
+            retry_after_seconds = int(failure.get("retry_after_seconds") or 0)
+        except Exception:
+            retry_after_seconds = 0
+
+    return (
+        result,
+        source_active,
+        build_source_fallback_meta(
+            requested_source=source_requested,
+            active_source=source_active,
+            reason=fallback_reason,
+            retry_after_seconds=retry_after_seconds,
+        ),
+    )
 
 
 def _pick_case_insensitive_value(item: dict[str, Any], *keys: str) -> Any:
@@ -2241,29 +2281,35 @@ def get_chat_contact_profile(
     source: Optional[str] = None,
 ):
     account_dir = _resolve_account_dir(account)
-    source_norm = _resolve_contacts_source_for_account(_normalize_contacts_source(source), account_dir)
     base_url = str(request.base_url).rstrip("/")
     normalized_username = _normalize_text(username)
     if not normalized_username:
         raise HTTPException(status_code=400, detail="username is required.")
 
-    if source_norm == "realtime":
-        contact, found = _get_contact_profile_realtime(
-            account_dir=account_dir,
-            base_url=base_url,
-            username=normalized_username,
-        )
-    else:
-        contact, found = _get_contact_profile_decrypted(
+    def read_profile(source_active: str) -> tuple[dict[str, Any], bool]:
+        if source_active == "realtime":
+            return _get_contact_profile_realtime(
+                account_dir=account_dir,
+                base_url=base_url,
+                username=normalized_username,
+            )
+        return _get_contact_profile_decrypted(
             account_dir=account_dir,
             base_url=base_url,
             username=normalized_username,
         )
 
+    (contact, found), source_norm, source_meta = _run_contacts_read_with_fallback(
+        account_dir=account_dir,
+        source=source,
+        read=read_profile,
+    )
+
     return {
         "status": "success",
         "account": account_dir.name,
         "source": source_norm,
+        **source_meta,
         "found": bool(found),
         "contact": contact,
     }
@@ -2284,21 +2330,24 @@ def list_chat_contacts(
     include_blocked: bool = False,
 ):
     account_dir = _resolve_account_dir(account)
-    source_norm = _resolve_contacts_source_for_account(_normalize_contacts_source(source), account_dir)
     base_url = str(request.base_url).rstrip("/")
 
-    all_contacts = _collect_contacts_for_account(
+    all_contacts, source_norm, source_meta = _run_contacts_read_with_fallback(
         account_dir=account_dir,
-        base_url=base_url,
-        keyword=keyword,
-        include_friends=True,
-        include_groups=True,
-        include_officials=True,
-        include_official_subscriptions=True,
-        include_official_services=True,
-        include_former_friends=True,
-        include_blocked=True,
-        source=source_norm,
+        source=source,
+        read=lambda source_active: _collect_contacts_for_account(
+            account_dir=account_dir,
+            base_url=base_url,
+            keyword=keyword,
+            include_friends=True,
+            include_groups=True,
+            include_officials=True,
+            include_official_subscriptions=True,
+            include_official_services=True,
+            include_former_friends=True,
+            include_blocked=True,
+            source=source_active,
+        ),
     )
     contacts = _filter_contacts_by_type(
         all_contacts,
@@ -2315,6 +2364,7 @@ def list_chat_contacts(
         "status": "success",
         "account": account_dir.name,
         "source": source_norm,
+        **source_meta,
         "total": len(contacts),
         "counts": _build_counts(all_contacts),
         "contacts": contacts,
@@ -2325,7 +2375,6 @@ def list_chat_contacts(
 def export_chat_contacts(request: Request, req: ContactExportRequest):
     load_wce_integrity_native()
     account_dir = _resolve_account_dir(req.account)
-    source_norm = _resolve_contacts_source_for_account(_normalize_contacts_source(req.source), account_dir)
 
     output_dir_raw = _normalize_text(req.output_dir)
     if not output_dir_raw:
@@ -2342,18 +2391,22 @@ def export_chat_contacts(request: Request, req: ContactExportRequest):
         raise HTTPException(status_code=400, detail=f"Failed to prepare output_dir: {e}")
 
     base_url = str(request.base_url).rstrip("/")
-    contacts = _collect_contacts_for_account(
+    contacts, source_norm, source_meta = _run_contacts_read_with_fallback(
         account_dir=account_dir,
-        base_url=base_url,
-        keyword=req.keyword,
-        include_friends=bool(req.contact_types.friends),
-        include_groups=bool(req.contact_types.groups),
-        include_officials=bool(req.contact_types.officials),
-        include_official_subscriptions=req.contact_types.official_subscriptions,
-        include_official_services=req.contact_types.official_services,
-        include_former_friends=bool(req.contact_types.former_friends),
-        include_blocked=bool(req.contact_types.blocked),
-        source=source_norm,
+        source=req.source,
+        read=lambda source_active: _collect_contacts_for_account(
+            account_dir=account_dir,
+            base_url=base_url,
+            keyword=req.keyword,
+            include_friends=bool(req.contact_types.friends),
+            include_groups=bool(req.contact_types.groups),
+            include_officials=bool(req.contact_types.officials),
+            include_official_subscriptions=req.contact_types.official_subscriptions,
+            include_official_services=req.contact_types.official_services,
+            include_former_friends=bool(req.contact_types.former_friends),
+            include_blocked=bool(req.contact_types.blocked),
+            source=source_active,
+        ),
     )
 
     export_contacts = _build_export_contacts(
@@ -2419,6 +2472,7 @@ def export_chat_contacts(request: Request, req: ContactExportRequest):
         "status": "success",
         "account": account_dir.name,
         "source": source_norm,
+        **source_meta,
         "format": fmt,
         "outputPath": str(output_path),
         "integrityManifestPath": str(integrity_manifest_path),
