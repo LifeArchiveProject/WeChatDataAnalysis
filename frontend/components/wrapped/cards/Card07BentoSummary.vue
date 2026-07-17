@@ -738,7 +738,7 @@
           <template v-else>正在准备数据…</template>
         </div>
 
-        <div v-if="cardStatus === 'error'" class="bento-loading-error">{{ cardErrorText }}</div>
+        <ErrorNotice v-if="cardStatus === 'error'" :message="cardErrorText" compact class="bento-loading-error" />
 
         <div class="bento-loading-actions">
           <button v-if="canRetry" type="button" class="bento-loading-btn" @click="onRetry">重试</button>

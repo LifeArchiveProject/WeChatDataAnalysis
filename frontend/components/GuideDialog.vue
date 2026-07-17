@@ -47,6 +47,8 @@
 
           <p v-if="note" class="guide-dialog-note">{{ note }}</p>
 
+          <ErrorNotice v-if="errorMessage" :message="errorMessage" compact />
+
           <footer class="guide-dialog-actions">
             <button
               v-if="secondaryLabel"
@@ -87,6 +89,7 @@ const props = defineProps({
   description: { type: String, required: true },
   details: { type: Array, default: () => [] },
   note: { type: String, default: '' },
+  errorMessage: { type: String, default: '' },
   primaryLabel: { type: String, default: '我知道了，继续' },
   secondaryLabel: { type: String, default: '' },
   tone: { type: String, default: 'guide' },

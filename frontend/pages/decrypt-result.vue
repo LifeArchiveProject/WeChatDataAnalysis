@@ -41,6 +41,12 @@
             <div class="text-sm text-[#7F7F7F]">解密失败</div>
           </div>
         </div>
+
+        <ErrorNotice
+          v-if="Number(decryptResult?.failure_count || 0) > 0"
+          :message="`${Number(decryptResult?.failure_count || 0)} 个数据库解密失败`"
+          class="mb-6 text-left"
+        />
         
         <!-- 输出目录 -->
         <div class="bg-gray-50 rounded-lg p-4 mb-6">
@@ -100,6 +106,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
+import { showErrorAlert } from '~/composables/useErrorNotice'
 
 const route = useRoute()
 const decryptResult = ref(null)
@@ -137,6 +144,7 @@ const copyPath = async () => {
     }, 2000)
   } catch (err) {
     console.error('复制失败:', err)
+    showErrorAlert(err?.message || '复制路径失败')
   }
 }
 

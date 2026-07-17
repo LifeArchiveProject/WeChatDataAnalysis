@@ -61,7 +61,7 @@
 
       <div v-if="error" class="mt-2 pointer-events-auto bg-white/90 backdrop-blur rounded-xl border border-red-200 px-3 py-2">
         <div class="wrapped-label text-xs text-red-700">生成失败</div>
-        <div class="mt-1 wrapped-body text-xs text-red-600 whitespace-pre-wrap">{{ error }}</div>
+        <ErrorNotice :message="error" compact class="mt-1 wrapped-body text-xs text-red-600" />
       </div>
     </div>
 
@@ -146,7 +146,7 @@
           class="h-full w-full"
         >
           <div v-if="c?.status === 'error'" class="text-sm text-[#7F7F7F]">
-            <div class="wrapped-body text-sm text-red-600 whitespace-pre-wrap">{{ c?.error || '未知错误' }}</div>
+            <ErrorNotice :message="c?.error || '未知错误'" compact class="wrapped-body text-sm text-red-600" />
             <button
               type="button"
               class="mt-4 inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[#07C160] text-white text-sm wrapped-label hover:bg-[#06AD56] transition"

@@ -49,7 +49,7 @@
 
             <div class="flex-1 min-h-0 overflow-auto" @scroll.passive="onContactsScroll">
               <div v-if="loading" class="p-4 text-sm text-gray-500">加载中…</div>
-              <div v-else-if="error" class="p-4 text-sm text-red-500 whitespace-pre-wrap">{{ error }}</div>
+              <ErrorNotice v-else-if="error" :message="error" class="m-4" />
               <div v-else-if="contacts.length === 0" class="p-4 text-sm text-gray-500">暂无联系人</div>
               <div v-else>
                 <div v-for="group in visibleGroupedContacts" :key="group.key">
@@ -152,9 +152,7 @@
                 <div v-if="friendVerificationLoading && !friendVerifications.length" class="rounded-md border border-[#e5e7eb] bg-[#f9fafb] px-3 py-4 text-[13px] text-[#6b7280]">
                   正在加载好友验证记录…
                 </div>
-                <div v-else-if="friendVerificationError" class="rounded-md border border-[#fecaca] bg-[#fef2f2] px-3 py-3 text-[13px] leading-5 text-[#b91c1c]">
-                  {{ friendVerificationError }}
-                </div>
+                <ErrorNotice v-else-if="friendVerificationError" :message="friendVerificationError" />
                 <div v-else-if="!friendVerifications.length" class="rounded-md border border-[#e5e7eb] bg-[#f9fafb] px-3 py-4 text-[13px] text-[#6b7280]">
                   暂无好友验证记录
                 </div>
@@ -281,10 +279,11 @@
                   </div>
                 </div>
 
-                <div v-if="exportMsg" class="app-export-result" :class="exportOk ? 'app-export-result--success' : 'app-export-result--error'" :role="exportOk ? 'status' : 'alert'">
+                <div v-if="exportMsg" class="app-export-result" :class="exportOk ? 'app-export-result--success' : 'app-export-result--error'">
                   <svg v-if="exportOk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg>
                   <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v6M12 17h.01" /></svg>
-                  <span>{{ exportMsg }}</span>
+                  <ErrorNotice v-if="!exportOk" :message="exportMsg" compact />
+                  <span v-else role="status">{{ exportMsg }}</span>
                 </div>
               </div>
 

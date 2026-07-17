@@ -178,7 +178,7 @@
                 <span>未找到微信数据</span>
               </div>
               <h2 class="mt-3 text-[22px] font-semibold tracking-[-0.03em] text-[#000000e6] sm:text-[28px]">可以手动指定目录重试</h2>
-              <p class="mt-2 text-[14px] leading-6 text-[#9C5F5F]">{{ detectionResult.error }}</p>
+              <ErrorNotice :message="detectionResult.error" compact class="mt-2 text-[14px] leading-6 text-[#9C5F5F]" />
             </div>
 
             <div class="rounded-lg border border-[#F4D6D6] bg-[#FFF7F7] p-3 text-[13px] leading-6 text-[#9C5F5F]">
@@ -301,6 +301,7 @@
 <script setup>
 import {computed, onMounted, ref} from 'vue'
 import {useApi} from '~/composables/useApi'
+import {withErrorLogGuidance} from '~/composables/useErrorNotice'
 import {normalizeWechatInstallPath, readStoredWechatInstallPath, writeStoredWechatInstallPath} from '~/lib/wechat-install-path'
 import {useAppStore} from '~/stores/app'
 
@@ -411,7 +412,7 @@ const pickDataDirectory = async () => {
       path = res.path
     } catch (e) {
       console.error('通过API唤起系统目录选择器失败:', e)
-      path = window.prompt('无法直接唤起窗口，请输入 xwechat_files 目录的绝对路径:')
+      path = window.prompt(withErrorLogGuidance('无法直接唤起窗口，请输入 xwechat_files 目录的绝对路径:'))
       if (!path) return
     }
   }
@@ -454,7 +455,7 @@ const performPickWechatInstallDirectory = async () => {
         path = res.path
       } catch (e) {
         console.error('通过API唤起微信安装目录选择器失败:', e)
-        path = window.prompt('无法直接唤起窗口，请输入微信安装目录或 Weixin.exe / WeChat.exe 的绝对路径:')
+        path = window.prompt(withErrorLogGuidance('无法直接唤起窗口，请输入微信安装目录或 Weixin.exe / WeChat.exe 的绝对路径:'))
         if (!path) return
       }
     }

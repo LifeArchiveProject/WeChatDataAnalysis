@@ -261,7 +261,7 @@
                   <span>导入失败</span>
                 </div>
                 <h2 class="mt-4 text-[24px] font-semibold tracking-[-0.03em] text-[#000000e6] sm:text-[30px]">目录暂时无法识别</h2>
-                <p class="mt-2 text-[14px] leading-6 text-[#9C5F5F]">{{ importError }}</p>
+                <ErrorNotice :message="importError" compact class="mt-2 text-[14px] leading-6 text-[#9C5F5F]" />
               </div>
 
               <div v-if="selectedImportPath" class="rounded-lg border border-[#F1E3E3] bg-[#FFF7F7] px-2.5 py-2.5">
@@ -288,6 +288,7 @@
 import { onUnmounted, ref } from 'vue'
 import { useApi } from '~/composables/useApi'
 import { useApiBase } from '~/composables/useApiBase'
+import { showErrorAlert, withErrorLogGuidance } from '~/composables/useErrorNotice'
 
 const importing = ref(false)
 const importProgress = ref(0)
@@ -351,7 +352,7 @@ const handlePickDirectory = async () => {
       path = res.path
     } catch (e) {
       console.error('唤起目录选择器失败:', e)
-      path = window.prompt('无法唤起选择器，请输入已解密目录的绝对路径:')
+      path = window.prompt(withErrorLogGuidance('无法唤起选择器，请输入已解密目录的绝对路径:'))
       if (!path) return
     }
   }
@@ -403,6 +404,7 @@ const cancelImport = async () => {
     await fetch(url.toString(), { method: 'POST' })
   } catch (e) {
     console.error('取消导入失败:', e)
+    showErrorAlert(e?.message || '取消导入失败')
   } finally {
     importJobId.value = ''
   }
