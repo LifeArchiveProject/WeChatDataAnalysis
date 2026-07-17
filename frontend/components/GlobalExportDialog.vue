@@ -41,12 +41,12 @@
         </svg>
         <span>当前未选择账号，请先导入或切换到一个已解密账号后再导出。</span>
       </div>
-      <div v-if="globalError" class="app-export-alert app-export-alert--error" role="alert">
+      <div v-if="globalError" class="app-export-alert app-export-alert--error">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="9" />
           <path d="M12 7v6M12 17h.01" />
         </svg>
-        <span>{{ globalError }}</span>
+        <ErrorNotice :message="globalError" compact />
       </div>
       <div v-if="globalMessage" class="app-export-alert app-export-alert--success" role="status">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -171,12 +171,12 @@
               </svg>
               <span>{{ task.outputPath }}</span>
             </div>
-            <div v-if="task.error" class="app-export-result app-export-result--error" role="alert">
+            <div v-if="task.error" class="app-export-result app-export-result--error">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" />
                 <path d="M12 7v6M12 17h.01" />
               </svg>
-              <span>{{ task.error }}</span>
+              <ErrorNotice :message="task.error" compact />
             </div>
           </section>
         </main>

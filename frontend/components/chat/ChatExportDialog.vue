@@ -33,12 +33,12 @@
         </button>
       </header>
 
-      <div v-if="exportError" class="chat-export-alert chat-export-alert--error" role="alert">
+      <div v-if="exportError" class="chat-export-alert chat-export-alert--error">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="9" />
           <path d="M12 7v6M12 17h.01" />
         </svg>
-        <span>{{ exportError }}</span>
+        <ErrorNotice :message="exportError" compact />
       </div>
       <div v-if="privacyMode" class="chat-export-alert chat-export-alert--warning" role="status">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -99,9 +99,9 @@
               </button>
             </div>
 
-            <div class="chat-export-load-state" aria-live="polite">
-              <span v-if="exportTargetsLoading">正在加载会话列表...</span>
-              <span v-else-if="exportTargetsError" class="chat-export-load-state--error">{{ exportTargetsError }}</span>
+            <div class="chat-export-load-state">
+              <span v-if="exportTargetsLoading" role="status">正在加载会话列表...</span>
+              <ErrorNotice v-else-if="exportTargetsError" :message="exportTargetsError" compact class="chat-export-load-state--error" />
               <span v-else>共 {{ exportFilteredContacts.length }} 个结果</span>
             </div>
 
@@ -355,7 +355,7 @@
                 <span v-if="hasWebExportFolder">浏览器目录：{{ exportFolder || '未选择' }}</span>
                 <span v-if="exportSaveState === 'saving'" class="chat-export-result__info">{{ exportSaveProgressText }}</span>
                 <span v-else-if="exportSaveMsg" class="chat-export-result__success">{{ exportSaveMsg }}</span>
-                <span v-else-if="exportSaveError" class="chat-export-result__error">{{ exportSaveError }}</span>
+                <ErrorNotice v-else-if="exportSaveError" :message="exportSaveError" compact class="chat-export-result__error" />
               </div>
               <a
                 v-if="!hasWebExportFolder"
@@ -367,14 +367,14 @@
               </a>
             </div>
 
-            <div v-if="exportJob.status === 'error'" class="chat-export-result chat-export-result--error" role="alert">
+            <div v-if="exportJob.status === 'error'" class="chat-export-result chat-export-result--error">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" />
                 <path d="M12 7v6M12 17h.01" />
               </svg>
               <div>
                 <strong>导出失败</strong>
-                <span>{{ exportJob.error || '任务未能完成' }}</span>
+                <ErrorNotice :message="exportJob.error || '任务未能完成'" compact />
               </div>
             </div>
           </section>

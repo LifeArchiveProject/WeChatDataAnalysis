@@ -42,7 +42,7 @@
         </div>
       </div>
 
-      <div v-if="contactProfileError" class="contact-error">{{ contactProfileError }}</div>
+      <ErrorNotice v-if="contactProfileError" :message="contactProfileError" compact class="contact-error" />
 
       <div
         v-if="contactProfileResolvedGroupNickname || contactProfileResolvedNickname || contactProfileResolvedRemark || contactProfileResolvedAlias"

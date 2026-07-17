@@ -65,9 +65,7 @@
               </div>
             </div>
           </div>
-          <div v-else-if="contactsError" class="session-list-status px-3 py-2 text-sm text-red-500 whitespace-pre-wrap">
-            {{ contactsError }}
-          </div>
+          <ErrorNotice v-else-if="contactsError" :message="contactsError" compact class="session-list-status px-3 py-2 text-sm text-red-500" />
           <div v-else-if="contacts.length === 0" class="session-list-status px-3 py-2 text-sm">
             暂无会话
           </div>
@@ -171,9 +169,7 @@
           <div v-if="generalSearchLoading && !generalSearchRecords.length" class="px-4 py-4 text-[13px] text-[#6b7280]">
             正在读取搜索记录…
           </div>
-          <div v-else-if="generalSearchError" class="px-4 py-3 text-[13px] leading-5 text-[#b91c1c]">
-            {{ generalSearchError }}
-          </div>
+          <ErrorNotice v-else-if="generalSearchError" :message="generalSearchError" compact class="px-4 py-3 text-[13px] leading-5 text-[#b91c1c]" />
           <div v-else-if="!filteredGeneralSearchRecords.length" class="px-4 py-4 text-[13px] text-[#6b7280]">
             暂无匹配记录
           </div>

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 
+import { showErrorAlert } from '~/composables/useErrorNotice'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 
 export const useChatRealtimeStore = defineStore('chatRealtime', () => {
@@ -140,7 +141,7 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
       await fetchStatus()
       if (!available.value) {
         if (!silent && process.client && typeof window !== 'undefined') {
-          window.alert(statusError.value || '实时模式不可用：缺少密钥或 db_storage 路径。')
+          showErrorAlert(statusError.value || '实时模式不可用：缺少密钥或 db_storage 路径。')
         }
         enabled.value = false
         stopStream()

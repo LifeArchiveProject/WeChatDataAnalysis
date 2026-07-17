@@ -12,9 +12,7 @@
     <div v-if="isLoadingMessages && messages.length === 0" class="message-list-status text-center text-sm py-6">
       加载中...
     </div>
-    <div v-else-if="messagesError" class="text-center text-sm text-red-500 py-6 whitespace-pre-wrap">
-      {{ messagesError }}
-    </div>
+    <ErrorNotice v-else-if="messagesError" :message="messagesError" compact class="text-center text-sm text-red-500 py-6" />
     <div v-else-if="messages.length === 0" class="message-list-status text-center text-sm py-6">
       暂无聊天记录
     </div>

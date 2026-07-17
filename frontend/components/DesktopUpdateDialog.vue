@@ -50,9 +50,7 @@
             </div>
           </div>
 
-          <div v-if="error" class="mt-3 text-xs text-red-600 whitespace-pre-wrap break-words">
-            {{ error }}
-          </div>
+          <ErrorNotice v-if="error" :message="error" compact class="mt-3 text-xs text-red-600" />
 
           <div v-if="isDownloading" class="mt-4">
             <div class="flex items-center justify-between gap-3 text-xs text-gray-600">

@@ -1,4 +1,5 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { showErrorAlert } from '~/composables/useErrorNotice'
 import {
   dateToUnixSeconds,
   formatMessageFullTime,
@@ -1332,7 +1333,7 @@ try {
     targetUsername,
     error: String(e?.message || e || '')
   })
-  window.alert(e?.message || '定位失败')
+  showErrorAlert(e?.message || '定位失败')
 }
 }
 
@@ -1417,7 +1418,7 @@ try {
     if (ok) flashMessage(searchContext.value.anchorId)
   }
 } catch (e) {
-  window.alert(e?.message || '定位失败')
+  showErrorAlert(e?.message || '定位失败')
 }
 }
 
@@ -1446,7 +1447,7 @@ try {
   }
   await locateByAnchorId({ targetUsername: selectedContact.value.username, anchorId, kind: 'date', label: ds })
 } catch (e) {
-  window.alert(e?.message || '定位失败')
+  showErrorAlert(e?.message || '定位失败')
 }
 }
 
@@ -1474,7 +1475,7 @@ try {
   if (ds) await _applyTimeSidebarSelectedDate(ds, { syncMonth: true })
   await locateByAnchorId({ targetUsername: selectedContact.value.username, anchorId, kind: 'first', label: '' })
 } catch (e) {
-  window.alert(e?.message || '定位失败')
+  showErrorAlert(e?.message || '定位失败')
 } finally {
   isJumpingToFirst.value = false
 }
@@ -1554,7 +1555,7 @@ try {
 
   _mergeContextMessages(ctxUsername, [...existing, ...appended])
 } catch (e) {
-  window.alert(e?.message || '加载更多消息失败')
+  showErrorAlert(e?.message || '加载更多消息失败')
 } finally {
   if (searchContext.value?.active && String(searchContext.value.username || '').trim() === ctxUsername) {
     searchContext.value.loadingAfter = false
@@ -1624,7 +1625,7 @@ try {
     c2.scrollTop = beforeScrollTop + (afterScrollHeight - beforeScrollHeight)
   }
 } catch (e) {
-  window.alert(e?.message || '加载更多消息失败')
+  showErrorAlert(e?.message || '加载更多消息失败')
 } finally {
   if (searchContext.value?.active && String(searchContext.value.username || '').trim() === ctxUsername) {
     searchContext.value.loadingBefore = false

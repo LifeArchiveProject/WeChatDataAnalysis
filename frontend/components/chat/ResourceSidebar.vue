@@ -46,9 +46,7 @@
         class="resource-sidebar-results min-h-0 flex-1 overflow-y-auto px-3 py-3 scrollbar-custom"
         @scroll.passive="onResourceSidebarScroll"
       >
-        <div v-if="resourceError" class="resource-sidebar-error mb-3 rounded-lg border px-3 py-2 text-[12px]">
-          {{ resourceError }}
-        </div>
+        <ErrorNotice v-if="resourceError" :message="resourceError" compact class="resource-sidebar-error mb-3 rounded-lg border px-3 py-2 text-[12px]" />
 
         <div
           v-if="groupedResourceItems.length"

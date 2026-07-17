@@ -17,6 +17,7 @@
         <div v-if="loadingAccounts" class="flex justify-center py-4">
           <span class="text-sm" :class="isDark ? 'text-gray-500' : 'text-gray-400'">加载中...</span>
         </div>
+        <ErrorNotice v-else-if="accountsError" :message="accountsError" class="m-3" />
         <div v-else class="pb-4">
           <div
               v-for="item in filteredAccounts"
@@ -82,6 +83,7 @@
           <div class="h-4 shrink-0" aria-hidden="true"></div>
           <div v-if="!hasMore" class="text-center text-xs py-4 w-full" :class="isDark ? 'text-gray-500' : 'text-gray-400'">没有更多消息了</div>
           <div v-if="loadingMessages" class="text-center text-xs py-4 w-full" :class="isDark ? 'text-gray-500' : 'text-gray-400'">正在加载...</div>
+          <ErrorNotice v-if="messagesError" :message="messagesError" class="mx-auto mb-4 w-full max-w-[400px]" />
 
           <div class="w-full max-w-[400px] mx-auto flex flex-col-reverse gap-6">
             <div v-for="msg in messages" :key="msg.local_id" class="w-full">
@@ -176,6 +178,7 @@ import { useChatRealtimeStore } from '~/stores/chatRealtime'
 
 const accounts = ref([])
 const loadingAccounts = ref(false)
+const accountsError = ref('')
 const searchQuery = ref('')
 const selectedBizAccount = ref(null)
 const exportDialogOpen = ref(false)
@@ -189,6 +192,7 @@ const { enabled: realtimeEnabled, changeSeq } = storeToRefs(realtimeStore)
 
 const messages = ref([])
 const loadingMessages = ref(false)
+const messagesError = ref('')
 const offset = ref(0)
 const limit = 20
 const DEFAULT_BIZ_SOURCE = 'auto'
@@ -209,12 +213,16 @@ const getCurrentAccountParam = () => {
 
 const resetMessagesState = () => {
   messages.value = []
+  messagesError.value = ''
   offset.value = 0
   hasMore.value = true
 }
 
 const fetchAccounts = async ({ preserveSelection = true, silent = false } = {}) => {
-  if (!silent) loadingAccounts.value = true
+  if (!silent) {
+    loadingAccounts.value = true
+    accountsError.value = ''
+  }
   const previousUsername = preserveSelection ? String(selectedBizAccount.value?.username || '').trim() : ''
   try {
     const res = await api.listBizAccounts({ account: getCurrentAccountParam(), source: DEFAULT_BIZ_SOURCE })
@@ -230,6 +238,7 @@ const fetchAccounts = async ({ preserveSelection = true, silent = false } = {}) 
     if (!silent) {
       accounts.value = []
       selectedBizAccount.value = null
+      accountsError.value = err?.message || '获取服务号失败'
     }
     console.error('获取服务号失败:', err)
   } finally {
@@ -264,6 +273,7 @@ const loadMessages = async () => {
   if (loadingMessages.value || !hasMore.value || !selectedBizAccount.value) return
 
   loadingMessages.value = true
+  messagesError.value = ''
   try {
     const username = selectedBizAccount.value.username
     const params = {
@@ -292,6 +302,7 @@ const loadMessages = async () => {
       if (typeof res.hasMore === 'boolean') hasMore.value = res.hasMore
     }
   } catch (err) {
+    messagesError.value = err?.message || '加载消息失败'
     console.error('加载消息失败:', err)
   } finally {
     loadingMessages.value = false
