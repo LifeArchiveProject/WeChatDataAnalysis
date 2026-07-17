@@ -1,7 +1,9 @@
 import os
+import base64
 import json
 import hashlib
 import logging
+import re
 import sqlite3
 import sys
 import unittest
@@ -16,6 +18,16 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 class TestChatExportHtmlPaging(unittest.TestCase):
+    @staticmethod
+    def _decode_runtime_js(script: str) -> str:
+        match = re.search(r"const _0=(\[.*?\]),_1=(\[.*?\]);let", script)
+        if match is None:
+            raise AssertionError("unable to decode native HTML export runtime")
+        chunks = json.loads(match.group(1))
+        key = json.loads(match.group(2))
+        packed = base64.b64decode("".join(chunks))
+        return bytes(value ^ key[index % len(key)] for index, value in enumerate(packed)).decode("utf-8")
+
     def _reload_export_modules(self):
         import wechat_decrypt_tool.app_paths as app_paths
         import wechat_decrypt_tool.chat_helpers as chat_helpers
@@ -222,3 +234,13 @@ class TestChatExportHtmlPaging(unittest.TestCase):
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
                 else:
                     os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_paged_runtime_verifies_fragments_only_when_loaded(self):
+        from wechat_decrypt_tool.export_integrity import load_wce_integrity_native
+
+        runtime = self._decode_runtime_js(str(load_wce_integrity_native().runtime_js()))
+
+        self.assertNotIn("precheckPromise = precheckAllPages()", runtime)
+        self.assertNotIn("const precheckAllPages = async", runtime)
+        self.assertIn("s.src = pageSrc(n)", runtime)
+        self.assertIn("window.__WCE_PAGE_SEEN__", runtime)
