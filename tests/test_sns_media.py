@@ -19,7 +19,7 @@ from wechat_decrypt_tool import sns_export_service, sns_media  # noqa: E402  pyl
 
 
 class TestSnsMedia(unittest.TestCase):
-    def test_html_export_refreshes_wcdb_before_first_timeline_read(self):
+    def test_html_export_reads_decrypted_snapshot_without_wcdb_reconnect(self):
         with TemporaryDirectory() as td:
             root = Path(td)
             account_dir = root / "wxid_test"
@@ -37,15 +37,11 @@ class TestSnsMedia(unittest.TestCase):
                     "fileName": "sns_wcdb_refresh.zip",
                 },
             )
-            events: list[str] = []
+            timeline_sources: list[str] = []
 
-            def timeline(**_kwargs):
-                events.append("timeline")
+            def timeline(**kwargs):
+                timeline_sources.append(str(kwargs.get("source") or ""))
                 return {"timeline": [], "hasMore": False}
-
-            def disconnect(account: str):
-                self.assertEqual(account, account_dir.name)
-                events.append("disconnect")
 
             with mock.patch.object(
                 sns_export_service,
@@ -53,11 +49,12 @@ class TestSnsMedia(unittest.TestCase):
                 return_value=[{"username": "wxid_alice", "displayName": "Alice", "postCount": 0}],
             ):
                 with mock.patch.object(sns_export_service, "list_sns_timeline", side_effect=timeline):
-                    with mock.patch.object(sns_export_service.WCDB_REALTIME, "disconnect", side_effect=disconnect):
-                        output = manager._run_job(job, account_dir)
+                    output = manager._run_job(job, account_dir)
 
             self.assertTrue(output.exists())
-            self.assertEqual(events, ["disconnect", "timeline"])
+            self.assertEqual(timeline_sources, ["decrypted"])
+            service_source = (ROOT / "src" / "wechat_decrypt_tool" / "sns_export_service.py").read_text(encoding="utf-8")
+            self.assertNotIn("WCDB_REALTIME.disconnect", service_source)
 
     def test_prefetch_refreshes_thumbnail_cached_for_original_task(self):
         def png_header(width: int, height: int) -> bytes:

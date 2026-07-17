@@ -58,8 +58,6 @@ from .sns_media import (  # pylint: disable=protected-access
     normalize_sns_cache_url as _normalize_sns_cache_url,
     try_fetch_and_decrypt_sns_image_remote as _try_fetch_and_decrypt_sns_image_remote,
 )
-from .wcdb_realtime import WCDB_REALTIME
-
 logger = get_logger(__name__)
 
 ExportStatus = Literal["queued", "running", "done", "error", "cancelled"]
@@ -1049,14 +1047,6 @@ class SnsExportManager:
 
         wxid_dir = _resolve_account_wxid_dir(account_dir)
 
-        if export_format == "html":
-            try:
-                WCDB_REALTIME.disconnect(account_dir.name)
-                logger.info("sns html export refreshed wcdb session: account=%s", account_dir.name)
-            except Exception as exc:
-                # Timeline loading still reconnects automatically and falls back to sns.db.
-                logger.warning("sns html export could not refresh wcdb session: account=%s error=%s", account_dir.name, exc)
-
         avatar_conn: Optional[sqlite3.Connection] = None
         head_image_db_path = account_dir / "head_image.db"
         if head_image_db_path.exists():
@@ -1209,7 +1199,11 @@ class SnsExportManager:
                     except asyncio.QueueEmpty:
                         return
                     try:
-                        response = await get_chat_avatar(username=username, account=account_dir.name)
+                        response = await get_chat_avatar(
+                            username=username,
+                            account=account_dir.name,
+                            source="decrypted",
+                        )
                         payload, media_type = _response_bytes(response)
                         if payload:
                             avatar_payloads[username] = (payload, media_type)
@@ -1252,7 +1246,11 @@ class SnsExportManager:
                 try:
                     from .routers.chat_media import get_chat_avatar  # pylint: disable=import-outside-toplevel
 
-                    resp = run_async(get_chat_avatar(username=uname0, account=account_dir.name))
+                    resp = run_async(get_chat_avatar(
+                        username=uname0,
+                        account=account_dir.name,
+                        source="decrypted",
+                    ))
                     payload2, mt2 = _response_bytes(resp)
                     if payload2:
                         payload = payload2
@@ -2170,6 +2168,7 @@ class SnsExportManager:
                             offset=off,
                             usernames=uname,
                             keyword=None,
+                            source="decrypted",
                         )
                         if off == 0 and cover_data is None and isinstance(resp, dict) and isinstance(resp.get("cover"), dict):
                             cover_data = resp.get("cover")

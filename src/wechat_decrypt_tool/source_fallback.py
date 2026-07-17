@@ -3,13 +3,19 @@ from __future__ import annotations
 from typing import Any
 
 
-def _source_name(value: Any, default: str) -> str:
+def normalize_data_source(value: Any, default: str = "auto") -> str:
     text = str(value or "").strip().lower()
+    if not text or text == "default":
+        return str(default or "auto").strip().lower() or "auto"
     if text in {"local", "sqlite"}:
         return "decrypted"
     if text in {"real-time", "wcdb"}:
         return "realtime"
-    return text or default
+    return text
+
+
+def _source_name(value: Any, default: str) -> str:
+    return normalize_data_source(value, default)
 
 
 def humanize_wcdb_failure(reason: Any) -> str:

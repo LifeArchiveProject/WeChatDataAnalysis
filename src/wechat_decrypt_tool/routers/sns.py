@@ -23,7 +23,7 @@ from fastapi.responses import Response, FileResponse  # 返回视频文件
 
 from ..chat_helpers import _load_contact_rows, _pick_display_name, _resolve_account_dir
 from ..logging_config import get_logger
-from ..source_fallback import build_source_fallback_meta
+from ..source_fallback import build_source_fallback_meta, normalize_data_source
 from ..media_helpers import _read_and_maybe_decrypt_media, _resolve_account_wxid_dir
 from ..path_fix import PathFixRoute
 from .. import sns_media as _sns_media
@@ -32,6 +32,7 @@ from ..wcdb_realtime import (
     WCDB_REALTIME,
     decrypt_sns_image as _wcdb_decrypt_sns_image,
     exec_query as _wcdb_exec_query,
+    get_display_names as _wcdb_get_display_names,
     get_sns_timeline as _wcdb_get_sns_timeline,
 )
 
@@ -1333,7 +1334,13 @@ def _resolve_sns_cached_video_path(
 
     return None
 
-def _get_sns_covers(account_dir: Path, target_wxid: str, limit: int = 20) -> list[dict[str, Any]]:
+def _get_sns_covers(
+    account_dir: Path,
+    target_wxid: str,
+    limit: int = 20,
+    *,
+    prefer_realtime: bool = True,
+) -> list[dict[str, Any]]:
     """无论多古老，强行揪出用户的朋友圈封面历史 (type=7)。
 
     返回倒序（最新在前）的列表，包含 createTime 便于前端叠加显示。
@@ -1364,7 +1371,7 @@ def _get_sns_covers(account_dir: Path, target_wxid: str, limit: int = 20) -> lis
 
     # 1) Prefer real-time WCDB if available (reads db_storage/sns/sns.db).
     try:
-        if WCDB_REALTIME.is_connected(account_dir.name):
+        if prefer_realtime and WCDB_REALTIME.is_connected(account_dir.name):
             conn = WCDB_REALTIME.ensure_connected(account_dir)
             with conn.lock:
                 sns_db_path = conn.db_storage_dir / "sns" / "sns.db"
@@ -1435,30 +1442,33 @@ def _get_sns_cover(account_dir: Path, target_wxid: str) -> Optional[dict[str, An
 
 
 @router.get("/api/sns/self_info", summary="获取个人信息（wxid和nickname）")
-def api_sns_self_info(account: Optional[str] = None):
+def api_sns_self_info(account: Optional[str] = None, source: str = "auto"):
 
     account_dir = _resolve_account_dir(account)
     wxid = account_dir.name
+    requested_source = normalize_data_source(source, "auto")
+    if requested_source not in {"auto", "realtime", "decrypted"}:
+        raise HTTPException(status_code=400, detail="Invalid source. Use auto, realtime, or decrypted.")
 
     logger.info(f"[self_info] 开始获取账号信息, 预设 wxid: {wxid}")
 
     nickname = wxid
-    source = "wxid_dir"
+    result_source = "wxid_dir"
 
-    try:
-        status = WCDB_REALTIME.get_status(account_dir)
-        if status.get("dll_present") and status.get("key_present"):
-            rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
-            with rt_conn.lock:
-
-                names_map = _wcdb_get_display_names(rt_conn.handle, [wxid])
-                if names_map and names_map.get(wxid):
-                    nickname = names_map[wxid]
-                    source = "wcdb_realtime"
-                    logger.info(f"[self_info] 从 WCDB 实时连接获取成功: {nickname}")
-                    return {"wxid": wxid, "nickname": nickname, "source": source}
-    except Exception as e:
-        logger.debug(f"[self_info] WCDB 路径跳过或失败: {e}")
+    if requested_source != "decrypted":
+        try:
+            status = WCDB_REALTIME.get_status(account_dir)
+            if status.get("dll_present") and status.get("key_present"):
+                rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
+                with rt_conn.lock:
+                    names_map = _wcdb_get_display_names(rt_conn.handle, [wxid])
+                    if names_map and names_map.get(wxid):
+                        nickname = names_map[wxid]
+                        result_source = "wcdb_realtime"
+                        logger.info(f"[self_info] 从 WCDB 实时连接获取成功: {nickname}")
+                        return {"wxid": wxid, "nickname": nickname, "source": result_source}
+        except Exception as e:
+            logger.debug(f"[self_info] WCDB 路径跳过或失败: {e}")
 
     contact_db_path = account_dir / "contact.db"
     if contact_db_path.exists():
@@ -1486,15 +1496,15 @@ def api_sns_self_info(account: Optional[str] = None):
 
                     if raw_remark:
                         nickname = raw_remark
-                        source = "contact_db_remark"
+                        result_source = "contact_db_remark"
                     elif raw_nick:
                         nickname = raw_nick
-                        source = "contact_db_nickname"
+                        result_source = "contact_db_nickname"
                     elif raw_alias:
                         nickname = raw_alias
-                        source = "contact_db_alias"
+                        result_source = "contact_db_alias"
 
-                    logger.info(f"[self_info] 从数据库提取成功: {nickname} (src: {source})")
+                    logger.info(f"[self_info] 从数据库提取成功: {nickname} (src: {result_source})")
             else:
                 logger.warning("[self_info] contact 表中找不到任何昵称相关字段")
 
@@ -1510,7 +1520,7 @@ def api_sns_self_info(account: Optional[str] = None):
     return {
         "wxid": wxid,
         "nickname": nickname,
-        "source": source
+        "source": result_source
     }
 
 
@@ -1702,6 +1712,7 @@ def list_sns_timeline(
     offset: int = 0,
     usernames: Optional[str] = None,
     keyword: Optional[str] = None,
+    source: str = "auto",
 ):
     if limit <= 0:
         raise HTTPException(status_code=400, detail="Invalid limit.")
@@ -1713,6 +1724,10 @@ def list_sns_timeline(
     account_dir = _resolve_account_dir(account)
     contact_db_path = account_dir / "contact.db"
 
+    requested_source = normalize_data_source(source, "auto")
+    if requested_source not in {"auto", "realtime", "decrypted"}:
+        raise HTTPException(status_code=400, detail="Invalid source. Use auto, realtime, or decrypted.")
+
     users = _parse_csv_list(usernames)
     kw = str(keyword or "").strip()
 
@@ -1720,7 +1735,12 @@ def list_sns_timeline(
     covers_data: list[dict[str, Any]] = []
     if offset == 0:
         target_wxid = users[0] if users else account_dir.name
-        covers_data = _get_sns_covers(account_dir, target_wxid, limit=20)
+        covers_data = _get_sns_covers(
+            account_dir,
+            target_wxid,
+            limit=20,
+            prefer_realtime=requested_source != "decrypted",
+        )
         cover_data = covers_data[0] if covers_data else None
 
     def _list_from_decrypted_sqlite() -> dict[str, Any]:
@@ -1864,6 +1884,17 @@ def list_sns_timeline(
             "cover": cover_data,
             "covers": covers_data,
         }
+
+    if requested_source == "decrypted":
+        decrypted = _list_from_decrypted_sqlite()
+        decrypted["source"] = "decrypted"
+        decrypted.update(
+            build_source_fallback_meta(
+                requested_source="decrypted",
+                active_source="decrypted",
+            )
+        )
+        return decrypted
 
     auto_cache_key = _sns_timeline_auto_cache_key(account_dir, users, kw) if users else None
     # If we previously detected that WCDB only returns a visible subset for this contact (less than
@@ -2433,7 +2464,7 @@ def list_sns_timeline(
         retry_after_seconds = 0
     fallback.update(
         build_source_fallback_meta(
-            requested_source="realtime",
+            requested_source=requested_source,
             active_source="decrypted",
             reason=fallback_reason,
             retry_after_seconds=retry_after_seconds,
