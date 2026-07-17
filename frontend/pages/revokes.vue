@@ -33,7 +33,7 @@
 
           <div class="min-h-0 flex-1 overflow-auto p-4">
             <div v-if="loading && !items.length" class="rounded-md border border-[#e5e7eb] bg-[#f9fafb] px-4 py-6 text-[13px] text-[#6b7280]">正在加载撤回记录…</div>
-            <div v-else-if="error" class="rounded-md border border-[#fecaca] bg-[#fef2f2] px-4 py-4 text-[13px] text-[#b91c1c]">{{ error }}</div>
+            <ErrorNotice v-else-if="error" :message="error" />
             <div v-else-if="!items.length" class="rounded-md border border-[#e5e7eb] bg-[#f9fafb] px-4 py-6 text-[13px] text-[#6b7280]">暂无撤回/可撤回缓存</div>
             <div v-else class="space-y-2">
               <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-relaxed text-amber-900">

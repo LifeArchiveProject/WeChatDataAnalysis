@@ -41,7 +41,7 @@
           </button>
         </div>
         <div v-if="!selectedAccount" class="mt-1.5 text-xs text-gray-400">未选择账号</div>
-        <div v-if="sessionsError" class="mt-2 text-xs text-red-500 whitespace-pre-wrap">{{ sessionsError }}</div>
+        <ErrorNotice v-if="sessionsError" :message="sessionsError" compact class="mt-2 text-xs text-red-500" />
       </div>
 
       <!-- 会话列表区域 -->
@@ -139,7 +139,7 @@
       <!-- 内容区 -->
       <div class="flex-1 overflow-y-auto" style="background-color: var(--app-shell-bg)">
         <!-- 错误提示 -->
-        <div v-if="itemsError" class="mx-5 mt-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-4 py-3 whitespace-pre-wrap">{{ itemsError }}</div>
+        <ErrorNotice v-if="itemsError" :message="itemsError" class="mx-5 mt-4" />
 
         <!-- 加载态 -->
         <div v-if="itemsLoading" class="px-5 py-6 space-y-5">
@@ -224,7 +224,8 @@
         <div v-if="dialogVisible" class="edits-dialog-overlay" @click.self="onDialogCancel">
           <div class="edits-dialog-card">
             <div class="edits-dialog-title">{{ dialogTitle }}</div>
-            <div class="edits-dialog-msg">{{ dialogMessage }}</div>
+            <ErrorNotice v-if="dialogIsError" :message="dialogMessage" compact class="edits-dialog-msg" />
+            <div v-else class="edits-dialog-msg">{{ dialogMessage }}</div>
             <div class="edits-dialog-actions">
               <button v-if="dialogShowCancel" class="edits-dialog-btn edits-dialog-cancel" @click="onDialogCancel">取消</button>
               <button class="edits-dialog-btn edits-dialog-confirm" @click="onDialogConfirm">确定</button>
@@ -413,6 +414,7 @@ const dialogVisible = ref(false)
 const dialogTitle = ref('')
 const dialogMessage = ref('')
 const dialogShowCancel = ref(true)
+const dialogIsError = ref(false)
 let dialogResolve = null
 
 const showConfirm = (title, message) => {
@@ -420,6 +422,7 @@ const showConfirm = (title, message) => {
     dialogTitle.value = title
     dialogMessage.value = message
     dialogShowCancel.value = true
+    dialogIsError.value = false
     dialogResolve = resolve
     dialogVisible.value = true
   })
@@ -430,6 +433,7 @@ const showAlert = (title, message) => {
     dialogTitle.value = title
     dialogMessage.value = message || ''
     dialogShowCancel.value = false
+    dialogIsError.value = true
     dialogResolve = resolve
     dialogVisible.value = true
   })

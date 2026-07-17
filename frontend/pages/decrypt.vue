@@ -626,7 +626,8 @@
 
       <!-- 警告渲染 -->
       <transition name="fade">
-        <div v-if="warning" class="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-6 flex items-start">
+        <ErrorNotice v-if="warning && warningIsError" :message="warning" class="mt-6" />
+        <div v-else-if="warning" class="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-6 flex items-start">
           <svg class="h-5 w-5 mr-2 flex-shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
           </svg>
@@ -639,15 +640,7 @@
     
       <!-- 错误提示 -->
       <transition name="fade">
-        <div v-if="error" class="bg-red-50 border border-red-200 rounded-lg p-4 mt-6 animate-shake flex items-start">
-          <svg class="h-5 w-5 mr-2 flex-shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-          </svg>
-          <div>
-            <p class="font-semibold text-red-700">操作失败</p>
-            <p class="text-sm mt-1 text-red-600">{{ error }}</p>
-          </div>
-        </div>
+        <ErrorNotice v-if="error" :message="error" class="mt-6 animate-shake" />
       </transition>
     </div>
 
@@ -658,6 +651,7 @@
       :description="guideDialog.description"
       :details="guideDialog.details"
       :note="guideDialog.note"
+      :error-message="guideDialog.errorMessage"
       :primary-label="guideDialog.primaryLabel"
       :secondary-label="guideDialog.secondaryLabel"
       :tone="guideDialog.tone"
@@ -699,6 +693,7 @@ const { decryptDatabase, saveMediaKeys, getSavedKeys, getKeys, getImageKey, getW
 const loading = ref(false)
 const error = ref('')
 const warning = ref('') // 警告，用于密钥提示
+const warningIsError = computed(() => /失败|错误|异常|中断/.test(String(warning.value || '')))
 const currentStep = ref(0)
 const mediaAccount = ref('')
 const activeKeyAccount = ref('')
@@ -710,6 +705,7 @@ const guideDialog = reactive({
   description: '',
   details: [],
   note: '',
+  errorMessage: '',
   primaryLabel: '我知道了，继续',
   secondaryLabel: '',
   tone: 'guide'
@@ -725,6 +721,7 @@ const requestGuideDialog = (options) => new Promise((resolve) => {
     description: '',
     details: [],
     note: '',
+    errorMessage: '',
     primaryLabel: '我知道了，继续',
     secondaryLabel: '',
     tone: 'guide',
@@ -1043,7 +1040,8 @@ const handleGetDbKey = async () => {
       const useHook = await requestGuideDialog({
         eyebrow: '获取方式切换',
         title: '内存扫描失败，是否改用 Hook？',
-        description: `V4 内存扫描未能获取密钥：${detail}`,
+        description: '可以继续改用 Hook 获取密钥。',
+        errorMessage: `V4 内存扫描未能获取密钥：${detail}`,
         details: [
           'Hook 可能会关闭并重新启动微信',
           '请关闭微信自动登录，并在弹出的微信窗口中手动登录',

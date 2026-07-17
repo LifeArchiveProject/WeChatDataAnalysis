@@ -81,9 +81,12 @@
             条消息。
             <span v-if="indexBuild.currentConversation" class="text-[#00000055]">（当前：{{ indexBuild.currentConversation }}）</span>
           </p>
-          <p v-else-if="indexBuild && indexBuild.status === 'error'" class="mt-2 text-red-600">
-            索引构建失败：{{ indexBuild.error || '未知错误' }}
-          </p>
+          <ErrorNotice
+            v-else-if="indexBuild && indexBuild.status === 'error'"
+            :message="`索引构建失败：${indexBuild.error || '未知错误'}`"
+            compact
+            class="mt-2 text-red-600"
+          />
           <p v-if="!usedIndex" class="mt-2">
             你可以先在「聊天记录搜索」中构建索引（或调用后端接口
             <code class="px-1 py-0.5 bg-[#00000008] rounded">/api/chat/search-index/build</code>），

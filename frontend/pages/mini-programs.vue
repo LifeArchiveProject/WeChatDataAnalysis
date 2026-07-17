@@ -60,11 +60,11 @@
               <div class="records-state__text">请稍候</div>
             </div>
           </div>
-          <div v-else-if="error" class="records-state records-state--error" role="alert">
+          <div v-else-if="error" class="records-state records-state--error">
             <div class="records-state__inner">
               <span class="records-state__icon" aria-hidden="true"><i class="fa-solid fa-triangle-exclamation"></i></span>
               <div class="records-state__title">加载失败</div>
-              <div class="records-state__text">{{ error }}</div>
+              <ErrorNotice :message="error" compact />
             </div>
           </div>
           <div v-else-if="!items.length" class="records-state">
