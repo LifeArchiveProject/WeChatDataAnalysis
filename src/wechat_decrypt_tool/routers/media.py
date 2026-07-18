@@ -167,14 +167,19 @@ async def save_media_keys_api(request: MediaKeysSaveRequest):
         xor_int = int(xor_hex, 16)
     except Exception:
         raise HTTPException(status_code=400, detail="XOR密钥格式无效，请使用十六进制格式如 0xA5")
+    if not 0 <= xor_int <= 0xFF:
+        raise HTTPException(status_code=400, detail="XOR密钥必须在 0x00-0xFF 范围")
 
     # 验证AES密钥（可选）
     aes_str = str(request.aes_key or "").strip()
     if aes_str and len(aes_str) < 16:
         raise HTTPException(status_code=400, detail="AES密钥长度不足，需要至少16个字符")
+    try:
+        aes_key16 = aes_str[:16].encode("ascii") if aes_str else None
+    except UnicodeEncodeError:
+        raise HTTPException(status_code=400, detail="AES密钥前16个字符必须为 ASCII")
 
     # 保存密钥
-    aes_key16 = aes_str[:16].encode("ascii", errors="ignore") if aes_str else None
     _save_media_keys(account_dir, xor_int, aes_key16)
     try:
         upsert_account_keys_in_store(
