@@ -3163,6 +3163,46 @@ def _decrypt_wechat_dat_v4(data: bytes, xor_key: int, aes_key: bytes) -> bytes:
 
 
 def _load_media_keys(account_dir: Path) -> dict[str, Any]:
+    # A V2-template-verified account record is authoritative. It must replace a
+    # stale legacy `_media_keys.json` pair as one unit rather than field by field.
+    try:
+        from .key_store import get_account_keys_from_store, normalize_key_store_path
+
+        verified_keys = get_account_keys_from_store(Path(account_dir).name)
+        verified_xor_raw = str(verified_keys.get("image_xor_key") or "").strip()
+        verified_aes = str(verified_keys.get("image_aes_key") or "").strip()[:16]
+        stored_source = normalize_key_store_path(verified_keys.get("image_key_source_wxid_dir"))
+        resolved_source_path = _resolve_account_wxid_dir(account_dir)
+        resolved_source = normalize_key_store_path(
+            str(resolved_source_path) if resolved_source_path is not None else ""
+        )
+        source_matches = bool(stored_source and resolved_source and stored_source == resolved_source)
+        if (
+            verified_keys.get("image_key_verified") is True
+            and source_matches
+            and verified_xor_raw
+            and len(verified_aes) == 16
+        ):
+            if verified_xor_raw.lower().startswith("0x"):
+                verified_xor = int(verified_xor_raw[2:], 16)
+            else:
+                try:
+                    verified_xor = int(verified_xor_raw, 16)
+                except ValueError:
+                    verified_xor = int(verified_xor_raw)
+            if 0 <= verified_xor <= 0xFF:
+                return {
+                    "xor": verified_xor,
+                    "aes": verified_aes,
+                    "verified": True,
+                    "source": str(verified_keys.get("image_key_source") or "verified_store"),
+                    "source_wxid_dir": str(verified_keys.get("image_key_source_wxid_dir") or ""),
+                    "derived_wxid": str(verified_keys.get("image_key_derived_wxid") or ""),
+                    "code": verified_keys.get("image_key_code"),
+                }
+    except Exception:
+        pass
+
     p = account_dir / "_media_keys.json"
     data: dict[str, Any] = {}
     if not p.exists():
@@ -3184,6 +3224,8 @@ def _load_media_keys(account_dir: Path) -> dict[str, Any]:
 
             keys = get_account_keys_from_store(Path(account_dir).name)
             if isinstance(keys, dict):
+                if keys.get("image_key_verified") is True:
+                    keys = {}
                 if data.get("xor") is None:
                     xor_raw = str(keys.get("image_xor_key") or keys.get("xor_key") or "").strip()
                     if xor_raw:
@@ -3200,6 +3242,8 @@ def _load_media_keys(account_dir: Path) -> dict[str, Any]:
                         data["aes"] = aes_raw[:16]
         except Exception:
             pass
+    data.setdefault("verified", False)
+    data.setdefault("source", "legacy_media_cache")
     return data
 
 
