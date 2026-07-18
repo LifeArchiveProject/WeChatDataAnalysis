@@ -238,9 +238,24 @@ class TestChatExportHtmlPaging(unittest.TestCase):
     def test_paged_runtime_verifies_fragments_only_when_loaded(self):
         from wechat_decrypt_tool.export_integrity import load_wce_integrity_native
 
-        runtime = self._decode_runtime_js(str(load_wce_integrity_native().runtime_js()))
+        native = load_wce_integrity_native()
+        runtime = self._decode_runtime_js(str(native.runtime_js()))
+        fragment = str(
+            native.page_fragment_js(
+                "export-test",
+                "conversations/demo/pages/page-0001.js",
+                1,
+                '<div data-render-type="text">hello</div>',
+            )
+        )
 
         self.assertNotIn("precheckPromise = precheckAllPages()", runtime)
         self.assertNotIn("const precheckAllPages = async", runtime)
         self.assertIn("s.src = pageSrc(n)", runtime)
         self.assertIn("window.__WCE_PAGE_SEEN__", runtime)
+        self.assertNotIn("__WCE_PAGE_SEEN__", fragment)
+        self.assertNotIn("__WCE_PAGE_PRECHECK__", fragment)
+        self.assertIn("__WCE_PAGE_LOADED__", fragment)
+        self.assertIn("s.onload =", runtime)
+        self.assertIn("pendingPageLoads.has(n)", runtime)
+        self.assertIn("clearTimeout(pending.timer)", runtime)
