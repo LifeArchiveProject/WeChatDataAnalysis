@@ -1,6 +1,7 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+.DS_Store
 build/
 dist/
 wheels/
@@ -20,7 +21,8 @@ wheels/
 .ace-tool/
 pnpm-lock.yaml
 /tools/tmp_isaac64_compare.js
-/native/wce_integrity/
+/native/wce_integrity/target/
+/native/wce_integrity/target-*/
 /.claude/settings.local.json
 .env
 .env.*
@@ -34,6 +36,7 @@ pnpm-lock.yaml
 /wx_key/
 /refs/
 /WeFlow/
+/WeFlow-*/
 /win95/
 /py_wx_key/
 
@@ -44,9 +47,7 @@ pnpm-lock.yaml
 /desktop/build/
 /desktop/resources/ui/*
 !/desktop/resources/ui/.gitkeep
-/desktop/resources/backend/*.exe
-/desktop/resources/backend/native/*
-/desktop/resources/backend/pyproject.toml
+/desktop/resources/backend/*
 !/desktop/resources/backend/.gitkeep
 /desktop/resources/icon.ico
 

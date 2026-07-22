@@ -1,0 +1,211 @@
+
+/* Offline HTML viewer patch */
+:root {
+  /* Keep aligned with frontend defaults (see `frontend/app.vue`). */
+  --dpr: 1;
+  --message-radius: 4px;
+  --sidebar-rail-step: 48px;
+  --sidebar-rail-btn: 32px;
+  --sidebar-rail-icon: 24px;
+}
+html, body { height: 100%; }
+body { background: #EDEDED; }
+
+/* Layout helpers (used by exported HTML). */
+.wce-root { height: 100vh; display: flex; overflow: hidden; background: #EDEDED; }
+.wce-rail { width: 60px; min-width: 60px; max-width: 60px; background: #e8e7e7; border-right: 1px solid #e5e7eb; display: flex; flex-direction: column; }
+.wce-session-panel { width: calc(var(--session-list-width, 295px) / var(--dpr)); min-width: calc(var(--session-list-width, 295px) / var(--dpr)); max-width: calc(var(--session-list-width, 295px) / var(--dpr)); background: #F7F7F7; border-right: 1px solid #e5e7eb; display: flex; flex-direction: column; min-height: 0; }
+.wce-chat-area { flex: 1; display: flex; flex-direction: column; min-height: 0; background: #EDEDED; }
+.wce-chat-main { flex: 1; display: flex; min-height: 0; }
+.wce-chat-col { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }
+.wce-chat-header { height: calc(56px / var(--dpr)); padding: 0 calc(20px / var(--dpr)); display: flex; align-items: center; border-bottom: 1px solid #e5e7eb; background: #EDEDED; }
+.wce-chat-title { font-size: 1rem; font-weight: 500; color: #111827; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wce-filter-select { font-size: 0.75rem; padding: calc(6px / var(--dpr)) calc(8px / var(--dpr)); border: 0; border-radius: calc(8px / var(--dpr)); background: transparent; color: #374151; }
+.wce-message-container { flex: 1; overflow: auto; padding: 16px; min-height: 0; }
+.wce-pager { display: flex; align-items: center; justify-content: center; gap: calc(12px / var(--dpr)); padding: calc(6px / var(--dpr)) 0 calc(12px / var(--dpr)); }
+.wce-pager-btn { font-size: 0.75rem; padding: calc(6px / var(--dpr)) calc(10px / var(--dpr)); border-radius: calc(8px / var(--dpr)); border: 1px solid #e5e7eb; background: #fff; color: #374151; cursor: pointer; }
+.wce-pager-btn:hover { background: #f9fafb; }
+.wce-pager-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.wce-pager-status { font-size: 0.75rem; color: #6b7280; }
+.wce-chat-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+.wce-tool-group { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.wce-tool-input { height: 30px; border: 1px solid #d1d5db; border-radius: 7px; background: rgba(255,255,255,0.9); color: #111827; font-size: 12px; padding: 0 8px; outline: none; }
+.wce-tool-input:focus { border-color: #07c160; box-shadow: 0 0 0 2px rgba(7,193,96,0.14); }
+.wce-tool-search { width: 180px; max-width: 24vw; }
+.wce-tool-date { width: 128px; }
+.wce-tool-btn { height: 30px; border: 1px solid #d1d5db; border-radius: 7px; background: rgba(255,255,255,0.9); color: #374151; font-size: 12px; padding: 0 8px; cursor: pointer; white-space: nowrap; }
+.wce-tool-btn:hover { background: #f9fafb; color: #111827; }
+.wce-tool-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.wce-tool-status { font-size: 11px; color: #6b7280; max-width: 110px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.wce-search-hit .msg-bubble,
+.wce-search-hit .wechat-special-card,
+.wce-search-hit .wechat-voice-bubble { outline: 2px solid rgba(250, 173, 20, 0.55); outline-offset: 2px; }
+.wce-search-current .msg-bubble,
+.wce-search-current .wechat-special-card,
+.wce-search-current .wechat-voice-bubble { outline: 3px solid rgba(7, 193, 96, 0.85); outline-offset: 3px; }
+.wce-date-located { animation: wce-date-pulse 1.2s ease-out 1; }
+@keyframes wce-date-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(7,193,96,0.38); }
+  100% { box-shadow: 0 0 0 18px rgba(7,193,96,0); }
+}
+
+/* Attribution gate: static HTML cannot be truly tamper-proof, but this couples rendering to the signed badge. */
+html:not([data-wce-brand-ok="1"]) .wce-root,
+html:not([data-wce-brand-ok="1"]) .wce-index,
+html:not([data-wce-integrity-ok="1"]) .wce-root,
+html:not([data-wce-integrity-ok="1"]) .wce-index { visibility: hidden; }
+.wce-brand-attribution { position: fixed; right: 14px; bottom: 10px; z-index: 2000; display: flex; align-items: center; gap: 8px; max-width: min(760px, calc(100vw - 28px)); padding: 7px 12px; border: 1px solid rgba(17,24,39,0.10); border-radius: 999px; background: rgba(255,255,255,0.84); box-shadow: 0 8px 24px rgba(15,23,42,0.10); backdrop-filter: blur(8px); color: #4b5563; font-size: 11px; line-height: 1.35; white-space: nowrap; overflow: hidden; }
+.wce-brand-attribution span { white-space: nowrap; }
+.wce-brand-attribution a { color: #047857; text-decoration: none; font-weight: 600; }
+.wce-brand-attribution a:hover { text-decoration: underline; }
+.wce-brand-dot { width: 5px; height: 5px; border-radius: 999px; background: #07c160; flex: 0 0 auto; }
+.wce-brand-blocker { position: fixed; inset: 0; z-index: 99999; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(237,237,237,0.96); color: #111827; }
+.wce-brand-blocker-card { max-width: 520px; border: 1px solid #e5e7eb; border-radius: 16px; background: #fff; box-shadow: 0 18px 52px rgba(15,23,42,0.18); padding: 22px; }
+.wce-brand-blocker-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+.wce-brand-blocker-body { font-size: 13px; color: #4b5563; line-height: 1.7; }
+
+/* Single session item (middle column). */
+.wce-session-item { display: flex; align-items: center; gap: 12px; padding: 0 12px; height: 80px; border-bottom: 1px solid #f3f4f6; background: #DEDEDE; text-decoration: none; color: inherit; }
+.wce-session-avatar { width: 45px; height: 45px; border-radius: 6px; overflow: hidden; background: #d1d5db; flex-shrink: 0; }
+.wce-session-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wce-session-meta { min-width: 0; flex: 1; }
+.wce-session-name { font-size: 0.875rem; font-weight: 600; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wce-session-sub { font-size: 0.75rem; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: calc(2px / var(--dpr)); }
+
+/* Message rows (right column). */
+.wce-msg-row { display: flex; align-items: flex-start; margin-bottom: 24px; }
+.wce-msg-row-sent { justify-content: flex-end; }
+.wce-msg-row-received { justify-content: flex-start; }
+.wce-msg { display: flex; align-items: flex-start; max-width: 640px; }
+.wce-msg-sent { flex-direction: row-reverse; }
+.wce-avatar { width: calc(42px / var(--dpr)); height: calc(42px / var(--dpr)); border-radius: 6px; overflow: hidden; background: #d1d5db; flex-shrink: 0; }
+.wce-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wce-avatar-sent { margin-left: 12px; }
+.wce-avatar-received { margin-right: 12px; }
+.wce-sender-name { font-size: 0.75rem; color: #6b7280; margin-bottom: calc(4px / var(--dpr)); max-width: calc(320px / var(--dpr)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Bubble basics (tailwind classes may override when Nuxt CSS is present). */
+.wce-bubble { padding: calc(8px / var(--dpr)) calc(12px / var(--dpr)); border-radius: var(--message-radius); font-size: 0.875rem; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-width: calc(320px / var(--dpr)); position: relative; }
+.wce-bubble-sent { background: #95EC69; color: #000; }
+.wce-bubble-received { background: #fff; color: #1f2937; }
+
+/* WeChat-like bubble tail (fallback). */
+.bubble-tail-l, .bubble-tail-r { position: relative; }
+.bubble-tail-l::after {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 12px;
+  width: 12px;
+  height: 12px;
+  background: #FFFFFF;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+.bubble-tail-r::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  top: 12px;
+  width: 12px;
+  height: 12px;
+  background: #95EC69;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+
+/* System messages. */
+.wce-system { display: flex; justify-content: center; margin: 16px 0; }
+.wce-system > div { font-size: 0.75rem; color: #9e9e9e; padding: calc(4px / var(--dpr)) 0; }
+
+/* Media blocks. */
+.wce-media-img { max-width: 240px; max-height: 240px; border-radius: var(--message-radius); display: block; object-fit: cover; }
+.wce-emoji-img { width: 96px; height: 96px; object-fit: contain; display: block; }
+.wce-video-wrap { position: relative; display: inline-block; border-radius: var(--message-radius); overflow: hidden; background: rgba(0,0,0,0.05); }
+.wce-video-thumb { display: block; width: 220px; max-width: 260px; height: auto; max-height: 260px; object-fit: cover; }
+.wce-video-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.wce-video-play > div { width: 48px; height: 48px; border-radius: 9999px; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; }
+
+.wce-file { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background: #fff; max-width: 320px; }
+.wce-file-name { font-size: 0.8125rem; color: #111827; word-break: break-all; }
+.wce-file-meta { font-size: 0.75rem; color: #6b7280; margin-top: calc(4px / var(--dpr)); }
+.wce-file-actions { margin-top: 8px; }
+.wce-file-actions a { font-size: 0.75rem; color: #07c160; text-decoration: none; }
+.wce-file-actions a:hover { text-decoration: underline; }
+
+.wce-audio { width: 260px; max-width: 92vw; }
+.wce-audio-actions { margin-top: 6px; }
+.wce-audio-actions a { font-size: 0.75rem; color: #07c160; text-decoration: none; }
+.wce-audio-actions a:hover { text-decoration: underline; }
+
+/* Voice message fallback styles (keep close to `frontend/pages/chat/[[username]].vue`). */
+.wechat-voice-wrapper { display: flex; width: 100%; position: relative; }
+.wechat-voice-bubble {
+  border-radius: var(--message-radius);
+  position: relative;
+  transition: opacity 0.15s ease;
+  min-width: 80px;
+  max-width: 200px;
+  cursor: pointer;
+}
+.wechat-voice-bubble:hover { opacity: 0.85; }
+.wechat-voice-bubble:active { opacity: 0.7; }
+.wechat-voice-sent { background: #95EC69; }
+.wechat-voice-sent::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -4px;
+  transform: translateY(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: #95EC69;
+  border-radius: 2px;
+}
+.wechat-voice-received { background: #fff; }
+.wechat-voice-received::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -4px;
+  transform: translateY(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border-radius: 2px;
+}
+.wechat-voice-content { display: flex; align-items: center; padding: 8px 12px; gap: 8px; }
+.wechat-voice-icon { width: 18px; height: 18px; flex-shrink: 0; color: #1a1a1a; }
+.wechat-quote-voice-icon { width: 14px; height: 14px; color: inherit; }
+.voice-icon-sent { transform: scaleX(-1); }
+.wechat-voice-icon.voice-playing .voice-wave-2 { animation: voice-wave-2 1s infinite; }
+.wechat-voice-icon.voice-playing .voice-wave-3 { animation: voice-wave-3 1s infinite; }
+@keyframes voice-wave-2 {
+  0%, 33% { opacity: 0; }
+  34%, 100% { opacity: 1; }
+}
+@keyframes voice-wave-3 {
+  0%, 66% { opacity: 0; }
+  67%, 100% { opacity: 1; }
+}
+.wechat-voice-duration { font-size: 14px; color: #1a1a1a; }
+.wechat-voice-unread {
+  position: absolute;
+  top: 50%;
+  right: -20px;
+  transform: translateY(-50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e75e58;
+}
+
+/* Index page helpers. */
+.wce-index { min-height: 100vh; background: #EDEDED; }
+.wce-index-container { max-width: 880px; margin: 0 auto; padding: 24px; }
+.wce-index-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
+.wce-index-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid #f3f4f6; text-decoration: none; color: inherit; }
+.wce-index-item:last-child { border-bottom: 0; }
+.wce-index-item:hover { background: #f9fafb; }
+.wce-index-title { font-size: 1.125rem; font-weight: 700; color: #111827; margin: 0 0 calc(6px / var(--dpr)) 0; }
+.wce-index-sub { font-size: 0.75rem; color: #6b7280; margin: 0 0 calc(16px / var(--dpr)) 0; }

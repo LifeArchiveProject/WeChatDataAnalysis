@@ -1,0 +1,11 @@
+
+/* Fallback styles for chat export HTML (Nuxt build CSS not found). */
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Helvetica Neue", Helvetica, Arial, sans-serif;
+  background: #EDEDED;
+  color: #111827;
+}
+a { color: inherit; }

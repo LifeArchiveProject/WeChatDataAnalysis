@@ -63,6 +63,7 @@ if (typeof window !== "undefined") {
 contextBridge.exposeInMainWorld("wechatDesktop", {
   // Marker used by the frontend to distinguish the Electron desktop shell from the pure web build.
   __brand: "WeChatDataAnalysisDesktop",
+  platform: process.platform,
   windowControlsMode: "overlay",
   minimize: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximize: () => ipcRenderer.invoke("window:toggleMaximize"),
@@ -84,6 +85,7 @@ contextBridge.exposeInMainWorld("wechatDesktop", {
   setMcpLanAccess: (enabled) => ipcRenderer.invoke("backend:setMcpLanAccess", !!enabled),
 
   chooseDirectory: (options = {}) => ipcRenderer.invoke("dialog:chooseDirectory", options),
+  chooseArchive: (options = {}) => ipcRenderer.invoke("dialog:chooseArchive", options),
 
   // Data/output folder helpers
   getOutputDirInfo: () => ipcRenderer.invoke("app:getOutputDirInfo"),

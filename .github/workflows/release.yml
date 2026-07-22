@@ -1,4 +1,4 @@
-name: Release (Windows)
+name: Release (Windows and macOS ARM64)
 
 on:
   push:
@@ -9,91 +9,26 @@ permissions:
   contents: write
 
 jobs:
-  build-windows-installer:
+  build-windows:
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Derive version from tag
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          $version = $tag -replace '^v', ''
+          $version = "${{ github.ref_name }}" -replace '^v', ''
           if ([string]::IsNullOrWhiteSpace($version)) {
-            throw "Invalid tag: '$tag' (expected like v1.0.0)"
+            throw "Invalid tag: '${{ github.ref_name }}' (expected like v1.0.0)"
           }
-          "TAG_NAME=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Generate release notes from commits
-        shell: pwsh
-        run: |
-          git fetch --force --tags
-
-          $tag = $env:TAG_NAME
-          if ([string]::IsNullOrWhiteSpace($tag)) {
-            throw "TAG_NAME is empty"
-          }
-
-          $repo = "${{ github.repository }}"
-
-          $prev = ""
-          try {
-            $commit = (git rev-list -n 1 $tag).Trim()
-            if (-not [string]::IsNullOrWhiteSpace($commit)) {
-              $prev = (git describe --tags --abbrev=0 "$commit^" 2>$null).Trim()
-            }
-          } catch {}
-
-          if ([string]::IsNullOrWhiteSpace($prev)) {
-            # Fallback: best-effort previous version tag by semver-ish sorting.
-            $prev = (git tag --list "v*" --sort=-v:refname | Where-Object { $_ -ne $tag } | Select-Object -First 1)
-          }
-
-          $range = ""
-          if (-not [string]::IsNullOrWhiteSpace($prev)) {
-            $range = "$prev..$tag"
-          }
-
-          $lines = @()
-          if (-not [string]::IsNullOrWhiteSpace($range)) {
-            $lines = @(git log --no-merges --pretty=format:"- %s (%h)" --reverse $range)
-          } else {
-            # First release tag / missing history: include a small recent window.
-            $lines = @(git log --no-merges --pretty=format:"- %s (%h)" --reverse -n 50)
-          }
-
-          if (-not $lines -or $lines.Count -eq 0) {
-            $lines = @("- 修复了一些已知问题，提升了稳定性。")
-          }
-
-          $max = 60
-          if ($lines.Count -gt $max) {
-            $total = $lines.Count
-            $lines = @($lines | Select-Object -First $max)
-            $lines += "- ...（共 $total 条提交，更多请查看完整变更链接）"
-          }
-
-          $body = @()
-          $body += "## 更新内容 ($tag)"
-          $body += ""
-          $body += $lines
-
-          if (-not [string]::IsNullOrWhiteSpace($prev)) {
-            $body += ""
-            $body += "完整变更: https://github.com/$repo/compare/$prev...$tag"
-          }
-
-          ($body -join "`n") | Out-File -FilePath release-notes.md -Encoding utf8
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
+          cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
             desktop/package-lock.json
@@ -101,41 +36,179 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version-file: ".python-version"
+          python-version-file: .python-version
 
       - name: Install uv
         shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install uv
+        run: python -m pip install uv
 
-      - name: Install frontend deps
+      - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
 
-      - name: Install desktop deps
+      - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
 
-      - name: Set desktop app version (electron-builder)
+      - name: Run Python tests on Windows
+        env:
+          PYTHONPATH: src
+        run: uv run pytest -q
+
+      - name: Set desktop app version
         working-directory: desktop
-        shell: pwsh
-        run: |
-          npm version $env:VERSION --no-git-tag-version --allow-same-version
+        run: npm version $env:VERSION --no-git-tag-version --allow-same-version
 
       - name: Build Windows installer
         working-directory: desktop
-        run: npm run dist
+        run: npm run dist:win
 
-      - name: Create GitHub Release and upload installer
+      - name: Run desktop tests
+        working-directory: desktop
+        run: node --test tests/*.test.cjs
+
+      - name: Upload Windows release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          if-no-files-found: error
+          path: |
+            desktop/dist/*Setup*.exe
+            desktop/dist/*Setup*.exe.blockmap
+            desktop/dist/latest.yml
+
+  build-macos-arm64:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify Apple Silicon runner
+        shell: bash
+        run: |
+          test "$(uname -m)" = "arm64"
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/wce_integrity/target
+          key: macos-arm64-rust-${{ hashFiles('native/wce_integrity/Cargo.lock') }}
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Restore macOS native helper permissions
+        run: chmod +x src/wechat_decrypt_tool/native/macos/universal/image_scan_helper
+
+      - name: Set desktop app version
+        working-directory: desktop
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Build macOS DMG and ZIP
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run dist:mac
+
+      - name: Run Python tests on macOS
+        env:
+          PYTHONPATH: src
+        run: uv run pytest -q
+
+      - name: Run desktop tests
+        working-directory: desktop
+        run: node --test tests/*.test.cjs
+
+      - name: Smoke-test packaged macOS runtime
+        working-directory: desktop
+        run: npm run smoke:mac
+
+      - name: Upload macOS release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-arm64
+          if-no-files-found: error
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*.blockmap
+            desktop/dist/latest-mac.yml
+
+  publish-release:
+    needs:
+      - build-windows
+      - build-macos-arm64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release files
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate release notes from commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          previous="$(git tag --list 'v*' --sort=-v:refname | grep -Fvx "$tag" | head -n 1 || true)"
+          if [[ -n "$previous" ]]; then
+            range="$previous..$tag"
+          else
+            range="$tag"
+          fi
+          {
+            echo "## 更新内容 ($tag)"
+            echo
+            git log --no-merges --pretty=format:'- %s (%h)' --reverse -n 60 "$range"
+            if [[ -n "$previous" ]]; then
+              echo
+              echo
+              echo "完整变更: https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${tag}"
+            fi
+          } > release-notes.md
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.TAG_NAME }}
-          name: ${{ env.TAG_NAME }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           body_path: release-notes.md
-          files: |
-            desktop/dist/*Setup*.exe
-            desktop/dist/*Setup*.exe.blockmap
-            desktop/dist/latest.yml
+          fail_on_unmatched_files: true
+          files: release-assets/*

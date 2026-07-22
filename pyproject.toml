@@ -20,7 +20,7 @@ dependencies = [
     "pilk>=0.2.4",
     "pypinyin>=0.53.0",
     "jieba>=0.42.1",
-    "wx_key>=2.0.1",
+    "wx_key>=2.0.1; sys_platform == 'win32'",
     "pefile>=2024.8.26; sys_platform == 'win32'",
     "pymem>=1.14.0; sys_platform == 'win32'",
     "yara-python>=4.5.2; sys_platform == 'win32'",
@@ -31,6 +31,11 @@ dependencies = [
 [project.optional-dependencies]
 build = [
     "pyinstaller>=6.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
 ]
 
 [project.scripts]
@@ -47,6 +52,7 @@ include = [
     "src/wechat_decrypt_tool/native/wcdb_api.dll",
     "src/wechat_decrypt_tool/native/WCDB.dll",
     "src/wechat_decrypt_tool/native/wce_integrity*.pyd",
+    "src/wechat_decrypt_tool/native/macos/**/*",
     "src/wechat_decrypt_tool/native/weflow_wasm/weflow_wasm_keystream.js",
     "src/wechat_decrypt_tool/native/weflow_wasm/wasm_video_decode.js",
     "src/wechat_decrypt_tool/native/weflow_wasm/wasm_video_decode.wasm",
@@ -55,3 +61,6 @@ include = [
 
 [tool.uv]
 find-links = ["./tools/key_wheels/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
