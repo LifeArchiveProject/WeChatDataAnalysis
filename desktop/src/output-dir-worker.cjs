@@ -5,6 +5,8 @@ function serializeError(err) {
   return {
     message: err?.message || String(err),
     stack: err?.stack ? String(err.stack) : "",
+    code: err?.code ? String(err.code) : "",
+    path: err?.path ? String(err.path) : "",
   };
 }
 
@@ -60,7 +62,7 @@ async function main() {
         currentFile: "",
       },
     });
-    rollbackOutputDirectoryChange(payload);
+    await rollbackOutputDirectoryChange(payload);
     parentPort?.postMessage({ type: "result", result: { success: true } });
     return;
   }
