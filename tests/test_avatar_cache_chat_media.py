@@ -1,4 +1,5 @@
 import os
+import logging
 import sqlite3
 import sys
 import unittest
@@ -9,6 +10,20 @@ from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+
+
+def _close_logging_handlers() -> None:
+    for logger_name in ("", "uvicorn", "uvicorn.access", "uvicorn.error", "fastapi"):
+        logger = logging.getLogger(logger_name)
+        for handler in logger.handlers[:]:
+            try:
+                handler.close()
+            except Exception:
+                pass
+            try:
+                logger.removeHandler(handler)
+            except Exception:
+                pass
 
 
 class TestAvatarCacheChatMedia(unittest.TestCase):
@@ -137,6 +152,12 @@ class TestAvatarCacheChatMedia(unittest.TestCase):
                 self.assertEqual(resp.status_code, 200)
                 self.assertTrue(resp.headers.get("content-type", "").startswith("image/"))
 
+                head_resp = client.head("/api/chat/avatar", params={"account": account, "username": username})
+                self.assertEqual(head_resp.status_code, 200)
+                self.assertTrue(head_resp.headers.get("content-type", "").startswith("image/"))
+                self.assertEqual(head_resp.content, b"")
+                self.assertEqual(head_resp.headers.get("content-length"), str(len(resp.content)))
+
                 cache_db = root / "output" / "avatar_cache" / account / "avatar_cache.db"
                 self.assertTrue(cache_db.exists())
 
@@ -158,6 +179,7 @@ class TestAvatarCacheChatMedia(unittest.TestCase):
                 self.assertEqual(resp2.status_code, 200)
                 self.assertEqual(resp2.content, resp.content)
             finally:
+                _close_logging_handlers()
                 if prev_data is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
                 else:
