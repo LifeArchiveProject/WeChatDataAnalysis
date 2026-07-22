@@ -7,10 +7,18 @@ from ctypes import wintypes
 from multiprocessing import freeze_support
 import sys
 
-import pymem
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Hash import SHA512
-import yara
+
+try:
+    import pymem
+except ImportError:
+    pymem = None
+
+try:
+    import yara
+except ImportError:
+    yara = None
 
 # 定义必要的常量
 PROCESS_ALL_ACCESS = 0x1F0FFF
@@ -50,21 +58,33 @@ def verify_worker(task):
     """Pool worker wrapper for imap_unordered."""
     return check_chunk(*task)
 
-# Load Windows DLLs
-kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+if os.name == 'nt':
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 
-OpenProcess = kernel32.OpenProcess
-OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-OpenProcess.restype = wintypes.HANDLE
+    OpenProcess = kernel32.OpenProcess
+    OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    OpenProcess.restype = wintypes.HANDLE
 
-ReadProcessMemory = kernel32.ReadProcessMemory
-ReadProcessMemory.argtypes = [wintypes.HANDLE, wintypes.LPCVOID, wintypes.LPVOID, ctypes.c_size_t,
-                              ctypes.POINTER(ctypes.c_size_t)]
-ReadProcessMemory.restype = wintypes.BOOL
+    ReadProcessMemory = kernel32.ReadProcessMemory
+    ReadProcessMemory.argtypes = [wintypes.HANDLE, wintypes.LPCVOID, ctypes.LPVOID, ctypes.c_size_t,
+                                  ctypes.POINTER(ctypes.c_size_t)]
+    ReadProcessMemory.restype = wintypes.BOOL
 
-CloseHandle = kernel32.CloseHandle
-CloseHandle.argtypes = [wintypes.HANDLE]
-CloseHandle.restype = wintypes.BOOL
+    CloseHandle = kernel32.CloseHandle
+    CloseHandle.argtypes = [wintypes.HANDLE]
+    CloseHandle.restype = wintypes.BOOL
+else:
+    kernel32 = None
+    OpenProcess = None
+    ReadProcessMemory = None
+    CloseHandle = None
+
+
+def _require_windows_runtime():
+    if os.name != 'nt':
+        raise RuntimeError('V4 数据库密钥提取仅支持 Windows。')
+    if pymem is None or yara is None:
+        raise RuntimeError('V4 数据库密钥提取缺少 Windows 运行时依赖。')
 
 
 # 定义 MEMORY_BASIC_INFORMATION 结构
@@ -215,6 +235,7 @@ def is_potential_key(key: bytes) -> bool:
 
 def get_key_inner(pid, process_infos):
     """扫描可能为key的内存，返回密钥候选列表"""
+    _require_windows_runtime()
     process_handle = open_process(pid)
     rules_v4_key = r'''
         rule GetKeyAddrStub
@@ -323,6 +344,12 @@ def recover_key(pid, db_file_path=None, internal_db_key=None):
     """
     主函数：从 WeChat 进程恢复密钥
     """
+    try:
+        _require_windows_runtime()
+    except RuntimeError as exc:
+        print(f"[-] {exc}")
+        return None
+
     process_handle = open_process(pid)
     if not process_handle:
         print(f"[-] Failed to open process {pid}")
@@ -361,6 +388,12 @@ def recover_key(pid, db_file_path=None, internal_db_key=None):
 
 if __name__ == '__main__':
     freeze_support()
+
+    try:
+        _require_windows_runtime()
+    except RuntimeError as exc:
+        print(f"[-] {exc}")
+        sys.exit(1)
     
     try:
         pm = pymem.Pymem("Weixin.exe")

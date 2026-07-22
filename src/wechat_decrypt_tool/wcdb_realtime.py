@@ -224,7 +224,7 @@ def _resolve_wcdb_api_dll_path() -> Path:
     _WCDB_API_DLL_SELECTED = _DEFAULT_WCDB_API_DLL
     return _WCDB_API_DLL_SELECTED
 
-_lib_lock = threading.Lock()
+_lib_lock = threading.RLock()
 _lib: Optional[ctypes.CDLL] = None
 _initialized = False
 _inprocess_runtime_poisoned_reason = ""
