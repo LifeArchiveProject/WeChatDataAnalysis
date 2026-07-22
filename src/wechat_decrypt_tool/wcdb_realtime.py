@@ -8,6 +8,7 @@ import re
 import socket
 import subprocess
 import sys
+import platform
 import threading
 import time
 import urllib.error
@@ -32,6 +33,8 @@ _VC_REDIST_HELP_TEXT = (
 
 def _with_vc_redist_help(message: str) -> str:
     text = str(message or "").strip()
+    if not sys.platform.startswith("win"):
+        return text
     if _VC_REDIST_HELP_URL in text:
         return text
     return f"{text} {_VC_REDIST_HELP_TEXT}" if text else _VC_REDIST_HELP_TEXT
@@ -112,7 +115,16 @@ def _derive_weflow_wcdb_wxid(account: str, db_storage_dir: Optional[Path] = None
 
 
 _NATIVE_DIR = Path(__file__).resolve().parent / "native"
-_DEFAULT_WCDB_API_DLL = _NATIVE_DIR / "wcdb_api.dll"
+
+
+def _wcdb_native_relative_path() -> Path:
+    if sys.platform == "darwin":
+        arch = "arm64" if platform.machine().lower() in {"arm64", "aarch64"} else "x64"
+        return Path("macos") / arch / "libwcdb_api.dylib"
+    return Path("wcdb_api.dll")
+
+
+_DEFAULT_WCDB_API_DLL = _NATIVE_DIR / _wcdb_native_relative_path()
 _WCDB_API_DLL_SELECTED: Optional[Path] = None
 
 
@@ -127,12 +139,15 @@ def _iter_runtime_wcdb_api_dll_paths() -> tuple[Path, ...]:
             base = Path(anchor).resolve()
         except Exception:
             base = Path(anchor)
-        candidate = base / "native" / "wcdb_api.dll"
-        key = str(candidate).replace("/", "\\").rstrip("\\").lower()
-        if key in seen:
-            return
-        seen.add(key)
-        candidates.append(candidate)
+        for candidate in (
+            base / "native" / _wcdb_native_relative_path(),
+            base / "wechat_decrypt_tool" / "native" / _wcdb_native_relative_path(),
+        ):
+            key = os.path.normcase(str(candidate.resolve(strict=False)))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
 
     add_anchor(os.environ.get("WECHAT_TOOL_DATA_DIR", "").strip())
     add_anchor(Path.cwd())
@@ -165,9 +180,10 @@ def _is_project_wcdb_api_dll_path(path: Path) -> bool:
                 return True
 
     parts = tuple(str(part).lower() for part in resolved.parts)
+    relative_parts = tuple(str(part).lower() for part in _wcdb_native_relative_path().parts)
     allowed_suffixes = (
-        ("backend", "native", "wcdb_api.dll"),
-        ("wechat_decrypt_tool", "native", "wcdb_api.dll"),
+        ("backend", "native", *relative_parts),
+        ("wechat_decrypt_tool", "native", *relative_parts),
     )
     return any(parts[-len(suffix) :] == suffix for suffix in allowed_suffixes)
 
@@ -227,6 +243,14 @@ def _is_windows() -> bool:
     return sys.platform.startswith("win")
 
 
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def _is_supported_native_platform() -> bool:
+    return _is_windows() or _is_macos()
+
+
 def _iter_wcdb_resource_paths(wcdb_api_dll: Path) -> tuple[Path, ...]:
     candidates: list[Path] = []
     seen: set[str] = set()
@@ -272,12 +296,17 @@ def _iter_wcdb_resource_paths(wcdb_api_dll: Path) -> tuple[Path, ...]:
 
 def _preload_wcdb_dependencies(wcdb_api_dll: Path) -> None:
     dll_dir = wcdb_api_dll.parent
-    for name in ("WCDB.dll", "SDL2.dll", "VoipEngine.dll"):
-        dep_path = dll_dir / name
+    if _is_macos():
+        dependency_paths = (dll_dir.parent / "universal" / "libWCDB.dylib",)
+    else:
+        dependency_paths = tuple(dll_dir / name for name in ("WCDB.dll", "SDL2.dll", "VoipEngine.dll"))
+
+    for dep_path in dependency_paths:
         if not dep_path.exists():
             continue
         try:
-            _preloaded_native_libs.append(ctypes.CDLL(str(dep_path)))
+            mode = getattr(ctypes, "RTLD_GLOBAL", 0) if _is_macos() else 0
+            _preloaded_native_libs.append(ctypes.CDLL(str(dep_path), mode=mode))
             logger.info("[wcdb] preloaded dependency: %s", dep_path)
         except Exception as exc:
             logger.warning("[wcdb] preload dependency failed: %s err=%s", dep_path, exc)
@@ -340,9 +369,22 @@ def _source_sidecar_assets() -> tuple[Path, Path, Path] | None:
         return None
 
     repo_root = _repo_root()
-    electron_exe = repo_root / "desktop" / "node_modules" / "electron" / "dist" / "electron.exe"
+    if _is_macos():
+        electron_exe = (
+            repo_root
+            / "desktop"
+            / "node_modules"
+            / "electron"
+            / "dist"
+            / "Electron.app"
+            / "Contents"
+            / "MacOS"
+            / "Electron"
+        )
+    else:
+        electron_exe = repo_root / "desktop" / "node_modules" / "electron" / "dist" / "electron.exe"
     sidecar_script = repo_root / "desktop" / "src" / "wcdb-sidecar.cjs"
-    koffi_dir = repo_root / "desktop" / "vendor" / "koffi"
+    koffi_dir = repo_root / "desktop" / "node_modules" / "koffi"
 
     try:
         if electron_exe.is_file() and sidecar_script.is_file() and koffi_dir.exists():
@@ -452,7 +494,7 @@ atexit.register(_stop_auto_sidecar)
 def _maybe_start_auto_sidecar() -> bool:
     global _AUTO_SIDECAR_PROC, _AUTO_SIDECAR_URL, _AUTO_SIDECAR_TOKEN, _AUTO_SIDECAR_MISSING_WARNED
 
-    if _sidecar_enabled() or not _is_windows():
+    if _sidecar_enabled() or not _is_supported_native_platform():
         return False
 
     assets = _source_sidecar_assets()
@@ -461,7 +503,7 @@ def _maybe_start_auto_sidecar() -> bool:
             _AUTO_SIDECAR_MISSING_WARNED = True
             logger.warning(
                 "[wcdb] isolated sidecar unavailable; source runs require "
-                "desktop/node_modules/electron, desktop/src/wcdb-sidecar.cjs, and desktop/vendor/koffi. "
+                "desktop/node_modules/electron, desktop/src/wcdb-sidecar.cjs, and desktop/node_modules/koffi. "
                 "Using in-process WCDB fallback. Run `cd desktop; npm ci` to enable crash isolation."
             )
         return False
@@ -636,22 +678,23 @@ def _load_wcdb_lib() -> ctypes.CDLL:
         if _lib is not None:
             return _lib
 
-        if not _is_windows():
-            raise WCDBRealtimeError("WCDB realtime mode is only supported on Windows.")
+        if not _is_supported_native_platform():
+            raise WCDBRealtimeError("WCDB realtime mode is only supported on Windows and macOS.")
 
         wcdb_api_dll = _resolve_wcdb_api_dll_path()
         if not wcdb_api_dll.exists():
-            raise WCDBRealtimeError(f"Missing wcdb_api.dll at: {wcdb_api_dll}")
+            raise WCDBRealtimeError(f"Missing WCDB native library at: {wcdb_api_dll}")
 
         # Ensure dependent DLLs (e.g. WCDB.dll) can be found.
-        try:
-            os.add_dll_directory(str(wcdb_api_dll.parent))
-        except Exception:
-            pass
+        if _is_windows():
+            try:
+                os.add_dll_directory(str(wcdb_api_dll.parent))
+            except Exception:
+                pass
 
         _preload_wcdb_dependencies(wcdb_api_dll)
         lib = ctypes.CDLL(str(wcdb_api_dll))
-        logger.info("[wcdb] using wcdb_api.dll: %s", wcdb_api_dll)
+        logger.info("[wcdb] using native library: %s", wcdb_api_dll)
 
         # Signatures
         lib.wcdb_init.argtypes = []
@@ -871,7 +914,7 @@ def _ensure_initialized() -> None:
                 return
         try:
             result = _sidecar_call("init", timeout=30.0)
-            dll_path = str(result.get("dllPath") or "").strip()
+            dll_path = str(result.get("libraryPath") or result.get("dllPath") or "").strip()
             if dll_path:
                 try:
                     _loaded_wcdb_api_dll = Path(dll_path)
@@ -890,9 +933,15 @@ def _ensure_initialized() -> None:
             with _lib_lock:
                 _initialized = True
             return
-        except Exception:
+        except Exception as exc:
             if not _auto_sidecar_started_here():
                 raise
+            if _is_macos():
+                _stop_auto_sidecar()
+                raise WCDBRealtimeError(
+                    "macOS WCDB 隔离辅助进程启动失败。为避免原生库阻塞主服务，已拒绝回退到进程内模式："
+                    f"{exc}"
+                ) from exc
             logger.warning("[wcdb] auto sidecar init failed, fallback to in-process wcdb")
             _stop_auto_sidecar()
 

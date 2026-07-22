@@ -39,6 +39,29 @@ class TestWechatDetectionAutoDetect(unittest.TestCase):
             self.assertEqual(result["accounts"][0]["data_dir"], str(account_dir))
             self.assertEqual(result["total_databases"], 1)
 
+    def test_macos_detects_accounts_nested_under_xwechat_files(self):
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            version_root = Path(td) / "2.0b4.0.9"
+            account_dir = version_root / "xwechat_files" / "wxid_demo_abcd"
+            db_storage = account_dir / "db_storage"
+            db_storage.mkdir(parents=True)
+            (db_storage / "contact.db").write_bytes(b"demo")
+
+            with (
+                patch.object(wd.sys, "platform", "darwin"),
+                patch.object(wd, "_build_auto_detect_scan_paths", return_value=[str(version_root)]),
+                patch.object(wd, "get_process_list", return_value=[]),
+            ):
+                detected_dirs = wd.auto_detect_wechat_data_dirs()
+                accounts = wd.detect_wechat_accounts_from_data_root(str(version_root))
+
+            self.assertEqual(detected_dirs, [str(version_root)])
+            self.assertEqual([item["account_name"] for item in accounts], ["wxid_demo_abcd"])
+            self.assertEqual(accounts[0]["data_dir"], str(account_dir))
+            self.assertEqual(accounts[0]["database_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

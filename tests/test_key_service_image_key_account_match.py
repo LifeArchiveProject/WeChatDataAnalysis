@@ -15,6 +15,16 @@ import wechat_decrypt_tool.key_service as key_service
 
 
 class TestKeyServiceImageKeyAccountMatch(unittest.TestCase):
+    def setUp(self) -> None:
+        self._windows_patch = mock.patch.object(key_service, "is_windows", return_value=True)
+        self._macos_patch = mock.patch.object(key_service, "is_macos", return_value=False)
+        self._windows_patch.start()
+        self._macos_patch.start()
+
+    def tearDown(self) -> None:
+        self._macos_patch.stop()
+        self._windows_patch.stop()
+
     def test_normalize_internal_db_key_accepts_spaced_hex(self) -> None:
         key = key_service._normalize_internal_db_key("11 22 33 44 " * 8)
         self.assertEqual(len(key), 32)

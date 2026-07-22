@@ -36,6 +36,16 @@ class _FakeWxKey:
 
 
 class TestKeyServiceManualWechatInstallPath(unittest.TestCase):
+    def setUp(self) -> None:
+        self._windows_patch = mock.patch.object(key_service, "is_windows", return_value=True)
+        self._macos_patch = mock.patch.object(key_service, "is_macos", return_value=False)
+        self._windows_patch.start()
+        self._macos_patch.start()
+
+    def tearDown(self) -> None:
+        self._macos_patch.stop()
+        self._windows_patch.stop()
+
     def test_get_db_key_workflow_can_use_manual_install_directory(self) -> None:
         fake_wx_key = _FakeWxKey("a" * 64)
 

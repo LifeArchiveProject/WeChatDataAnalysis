@@ -1,10 +1,13 @@
 # import sys
 # import requests
 
+from .platform_support import MAC_DB_KEY_GUIDANCE, is_macos, is_windows
+
 try:
     import wx_key
 except ImportError:
-    print('[!] 环境中未安装wx_key依赖，可能无法自动获取数据库密钥')
+    if is_windows():
+        print('[!] 环境中未安装wx_key依赖，可能无法自动获取数据库密钥')
     wx_key = None
     # sys.exit(1)
 
@@ -672,6 +675,11 @@ def get_db_key_workflow(
         internal_db_key: Optional[str] = None,
         key_mode: str = "auto",
 ):
+    if is_macos():
+        raise RuntimeError(MAC_DB_KEY_GUIDANCE)
+    if not is_windows():
+        raise RuntimeError("当前平台不支持自动获取数据库密钥，请使用同类工具获取后手动填写。")
+
     mode = str(key_mode or "auto").strip().lower()
     if mode in {"v4", "key_v4", "memory", "memory_scan"}:
         return _get_db_key_with_v4(
@@ -806,13 +814,89 @@ def _normalize_complete_image_key_payload(payload: Dict[str, Any]) -> Optional[t
     return xor_key, aes_key
 
 
-def _get_image_key_kvcomm_dir() -> Path:
+def _get_image_key_kvcomm_dirs(account_dir: Optional[Path] = None) -> tuple[Path, ...]:
     override = str(os.environ.get("WECHAT_IMAGE_KVCOMM_DIR") or "").strip()
     if override:
-        return Path(override).expanduser()
-    appdata = str(os.environ.get("APPDATA") or "").strip()
-    appdata_root = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
-    return appdata_root / "Tencent" / "xwechat" / "net" / "kvcomm"
+        return (Path(override).expanduser(),)
+
+    if is_macos():
+        container_data = Path.home() / "Library" / "Containers" / "com.tencent.xinWeChat" / "Data"
+        candidates = [
+            container_data / "Documents" / "app_data" / "net" / "kvcomm",
+            container_data
+            / "Library"
+            / "Application Support"
+            / "com.tencent.xinWeChat"
+            / "xwechat"
+            / "net"
+            / "kvcomm",
+            container_data
+            / "Library"
+            / "Application Support"
+            / "com.tencent.xinWeChat"
+            / "net"
+            / "kvcomm",
+            container_data / "Documents" / "xwechat" / "net" / "kvcomm",
+        ]
+
+        if account_dir is not None:
+            account_path = Path(account_dir).expanduser()
+            for parent in (account_path, *account_path.parents):
+                if parent.name.casefold() == "xwechat_files":
+                    candidates.append(parent.parent / "app_data" / "net" / "kvcomm")
+                    break
+
+            cursor = account_path
+            for _ in range(6):
+                candidates.append(cursor / "net" / "kvcomm")
+                if cursor.parent == cursor:
+                    break
+                cursor = cursor.parent
+    else:
+        appdata = str(os.environ.get("APPDATA") or "").strip()
+        appdata_root = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+        candidates = [appdata_root / "Tencent" / "xwechat" / "net" / "kvcomm"]
+
+    deduplicated: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = normalize_key_store_path(str(candidate))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduplicated.append(candidate)
+
+    existing = tuple(candidate for candidate in deduplicated if candidate.is_dir())
+    if existing:
+        return existing
+    return tuple(deduplicated[:1])
+
+
+def _get_image_key_kvcomm_dir(account_dir: Optional[Path] = None) -> Path:
+    return _get_image_key_kvcomm_dirs(account_dir)[0]
+
+
+def _resolve_local_image_key_from_kvcomm_candidates(
+        *,
+        account_dir: Path,
+        target_wxid: str,
+        account: Optional[str],
+        local_native_wxids: list[str],
+        template_scan: Optional[TemplateScanResult],
+) -> Optional[ImageKeyResolution]:
+    for kvcomm_dir in _get_image_key_kvcomm_dirs(account_dir):
+        logger.info("[image_key] 尝试本地 kvcomm 目录: %s", kvcomm_dir)
+        resolution = resolve_local_image_key(
+            kvcomm_dir=kvcomm_dir,
+            account_dir=account_dir,
+            target_wxid=target_wxid,
+            account=account,
+            local_native_wxids=local_native_wxids,
+            template_scan=template_scan,
+        )
+        if resolution is not None:
+            return resolution
+    return None
 
 
 def _image_key_aliases(canonical_account: str, *values: Any) -> list[str]:
@@ -1055,8 +1139,7 @@ async def get_image_key_integrated_workflow(
 
         try:
             resolution: Optional[ImageKeyResolution] = await asyncio.to_thread(
-                resolve_local_image_key,
-                kvcomm_dir=_get_image_key_kvcomm_dir(),
+                _resolve_local_image_key_from_kvcomm_candidates,
                 account_dir=resolved_wxid_dir,
                 target_wxid=canonical_account,
                 account=account,
@@ -1087,8 +1170,7 @@ async def get_image_key_integrated_workflow(
                 local_native_wxids.extend(additional_native_wxids)
                 try:
                     resolution = await asyncio.to_thread(
-                        resolve_local_image_key,
-                        kvcomm_dir=_get_image_key_kvcomm_dir(),
+                        _resolve_local_image_key_from_kvcomm_candidates,
                         account_dir=resolved_wxid_dir,
                         target_wxid=canonical_account,
                         account=account,

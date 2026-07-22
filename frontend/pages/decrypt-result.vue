@@ -107,6 +107,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { showErrorAlert } from '~/composables/useErrorNotice'
+import { joinNativePath } from '~/lib/native-path'
 
 const route = useRoute()
 const decryptResult = ref(null)
@@ -129,7 +130,7 @@ const copyPath = async () => {
       if (accounts.length === 1) {
         // 如果只有一个账户，直接显示该账户的输出目录
         const accountName = accounts[0]
-        pathToCopy = `${pathToCopy}\\${accountName}`
+        pathToCopy = joinNativePath(pathToCopy, accountName)
       }
     }
     

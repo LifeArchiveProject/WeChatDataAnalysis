@@ -3,6 +3,7 @@ import { showErrorAlert } from '~/composables/useErrorNotice'
 
 export const useImgHelperStore = defineStore('imgHelper', () => {
   const enabled = ref(false)
+  const supported = ref(true)
   const checking = ref(false)
   const toggling = ref(false)
   const error = ref('')
@@ -14,6 +15,7 @@ export const useImgHelperStore = defineStore('imgHelper', () => {
     error.value = ''
     try {
       const resp = await api.getImgHelperStatus()
+      supported.value = resp?.supported !== false
       enabled.value = !!resp?.enabled
     } catch (e) {
       error.value = e?.message || '获取插件状态失败'
@@ -23,7 +25,7 @@ export const useImgHelperStore = defineStore('imgHelper', () => {
   }
 
   const toggle = async () => {
-    if (toggling.value) return
+    if (toggling.value || !supported.value) return
     
     const targetState = !enabled.value
     
@@ -43,6 +45,7 @@ export const useImgHelperStore = defineStore('imgHelper', () => {
     const api = useApi()
     try {
       const resp = await api.toggleImgHelper(targetState)
+      supported.value = resp?.supported !== false
       enabled.value = !!resp?.enabled
       return true
     } catch (e) {
@@ -63,6 +66,7 @@ export const useImgHelperStore = defineStore('imgHelper', () => {
 
   return {
     enabled,
+    supported,
     checking,
     toggling,
     error,

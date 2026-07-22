@@ -13,6 +13,7 @@ from ..key_service import (
 )
 from ..media_helpers import _load_media_keys, _resolve_account_dir
 from ..path_fix import PathFixRoute
+from ..platform_support import MAC_DB_KEY_GUIDANCE, current_platform, is_macos
 
 router = APIRouter(route_class=PathFixRoute)
 logger = get_logger(__name__)
@@ -316,6 +317,23 @@ async def get_wechat_db_key(
     1. 优先自动扫描 DLL 辅助 key，再使用 key_v4 从运行中的微信进程扫描并校验数据库密钥
     2. key_v4 不可用或失败时回退到 wx_key Hook 流程
     """
+    if is_macos():
+        return {
+            "status": -3,
+            "errmsg": MAC_DB_KEY_GUIDANCE,
+            "data": {
+                "platform": "macos",
+                "database_key_extraction": False,
+                "manual_input_supported": True,
+                "suggested_tools": [
+                    {
+                        "name": "WeFlow",
+                        "url": "https://github.com/hicccc77/WeFlow",
+                    }
+                ],
+            },
+        }
+
     try:
         logger.info(
             "[keys] get_wechat_db_key start: wechat_install_path=%s db_storage_path=%s key_mode=%s",
@@ -350,7 +368,7 @@ async def get_wechat_db_key(
         return {
             "status": -1,
             "errmsg": str(e).strip() or "获取超时，请确保微信没有开启自动登录并且在弹窗中完成了登录",
-            "data": {}
+            "data": {"platform": current_platform()}
         }
     except Exception as e:
         mode = str(key_mode or "auto").strip().lower()

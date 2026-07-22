@@ -13,7 +13,7 @@
             {{ loading ? '正在检测微信数据' : detectionResult?.error ? '需要手动指定目录' : '找到可操作的微信账号' }}
           </h1>
           <p class="mt-2 max-w-3xl text-[14px] leading-6 text-[#6B7280]">
-            {{ loading ? '正在检查微信安装信息、账号目录和数据库文件。' : detectionResult?.error ? '自动检测没有找到可用数据，可以在下方手动选择 xwechat_files 目录后重试。' : '选择要处理的账号进入解密提取。如果结果不完整，可以手动指定数据根目录后重新检测。' }}
+            {{ loading ? '正在检查微信客户端、账号目录和数据库文件。' : detectionResult?.error ? '自动检测没有找到可用数据，可以在下方手动选择微信数据目录后重试。' : '选择要处理的账号进入解密提取。如果结果不完整，可以手动指定数据根目录后重新检测。' }}
           </p>
         </div>
 
@@ -63,7 +63,7 @@
                     <span class="h-1.5 w-1.5 rounded-full bg-[#07C160]"></span>
                     <span>检查环境</span>
                   </div>
-                  <p class="mt-1 text-[12px] leading-5 text-[#7F7F7F]">读取微信安装与数据目录</p>
+                  <p class="mt-1 text-[12px] leading-5 text-[#7F7F7F]">读取微信客户端与数据目录</p>
                 </div>
 
                 <div class="rounded-md border border-[#E1EFE5] bg-[#F7FCF8]/86 px-2.5 py-2.5">
@@ -138,11 +138,11 @@
                 <circle class="opacity-20" cx="24" cy="24" r="18" stroke="currentColor" stroke-width="6"></circle>
                 <circle cx="24" cy="24" r="18" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-dasharray="28 72" pathLength="100" transform="rotate(-90 24 24)"></circle>
               </svg>
-              {{ loading ? '检测中...' : '选择 xwechat_files 目录' }}
+              {{ loading ? '检测中...' : '选择微信数据目录' }}
             </button>
           </div>
 
-          <div class="rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-4 backdrop-blur sm:p-5">
+          <div v-if="!isMacos" class="rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-4 backdrop-blur sm:p-5">
             <label for="wechatInstallPath" class="block text-[15px] font-medium text-[#000000e6]">
               微信安装目录
             </label>
@@ -182,7 +182,7 @@
             </div>
 
             <div class="rounded-lg border border-[#F4D6D6] bg-[#FFF7F7] p-3 text-[13px] leading-6 text-[#9C5F5F]">
-              请尝试选择微信数据根目录，通常名为 <span class="font-mono">xwechat_files</span>。
+              请尝试选择微信账号数据目录或它的上级目录。
             </div>
 
             <button
@@ -305,13 +305,15 @@ import {withErrorLogGuidance} from '~/composables/useErrorNotice'
 import {normalizeWechatInstallPath, readStoredWechatInstallPath, writeStoredWechatInstallPath} from '~/lib/wechat-install-path'
 import {useAppStore} from '~/stores/app'
 
-const { detectWechat, pickSystemDirectory } = useApi()
+const { detectWechat, pickSystemDirectory, getPlatformCapabilities } = useApi()
 const appStore = useAppStore()
 const loading = ref(false)
 const detectionResult = ref(null)
 const customPath = ref('')
 const wechatInstallPath = ref('')
 const isPickingWechatInstallPath = ref(false)
+const platformCapabilities = ref({ platform: '' })
+const isMacos = computed(() => platformCapabilities.value?.platform === 'macos')
 const STORAGE_KEY = 'wechat_data_root_path'
 const guideMode = ref('')
 const guideOpen = computed(() => !!guideMode.value)
@@ -333,10 +335,10 @@ const GUIDE_CONFIGS = {
   dataPath: {
     eyebrow: '目录选择提示',
     title: '请选择微信数据根目录',
-    description: '这里需要的是聊天数据所在的 xwechat_files 文件夹，不是微信程序的安装位置。',
+    description: '这里需要的是聊天数据所在的账号目录或其上级目录，不是微信客户端应用本身。',
     details: [
-      '优先选择名称为 xwechat_files 的文件夹',
-      '不要选择 Weixin.exe、WeChat.exe 或单个数据库文件',
+      '优先选择包含账号目录和 db_storage 的文件夹',
+      '不要选择微信应用程序或单个数据库文件',
       '选择完成后，系统会立即使用该目录重新检测'
     ],
     note: '不确定目录时可以取消选择，自动检测结果不会被删除。',
@@ -395,7 +397,7 @@ const pickDataDirectory = async () => {
   if (isDesktopShell()) {
     try {
       const res = await window.wechatDesktop.chooseDirectory({
-        title: '请选择微信数据根目录 (通常名为 xwechat_files)'
+        title: '请选择微信账号数据目录或其上级目录'
       })
       if (!res || res.canceled || !res.filePaths?.length) return
       path = res.filePaths[0]
@@ -406,13 +408,13 @@ const pickDataDirectory = async () => {
   } else {
     try {
       const res = await pickSystemDirectory({
-        title: '请选择微信数据根目录 (通常名为 xwechat_files)'
+        title: '请选择微信账号数据目录或其上级目录'
       })
       if (!res || !res.path) return // 用户取消
       path = res.path
     } catch (e) {
       console.error('通过API唤起系统目录选择器失败:', e)
-      path = window.prompt(withErrorLogGuidance('无法直接唤起窗口，请输入 xwechat_files 目录的绝对路径:'))
+      path = window.prompt(withErrorLogGuidance('无法直接唤起窗口，请输入微信数据目录的绝对路径:'))
       if (!path) return
     }
   }
@@ -593,13 +595,20 @@ const isCurrentAccount = (accountName) => {
 }
 
 // 页面加载时先完成登录提示，再自动检测。
-onMounted(() => {
+onMounted(async () => {
   if (process.client) {
     try {
       const saved = String(localStorage.getItem(STORAGE_KEY) || '').trim()
       if (saved) customPath.value = saved
     } catch {}
     wechatInstallPath.value = readStoredWechatInstallPath()
+    try {
+      platformCapabilities.value = await getPlatformCapabilities()
+    } catch {
+      platformCapabilities.value = {
+        platform: /Macintosh|Mac OS X/i.test(String(navigator.userAgent || '')) ? 'macos' : 'windows'
+      }
+    }
   }
   openGuide('detection')
 })

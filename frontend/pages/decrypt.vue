@@ -58,7 +58,7 @@
                   <svg v-else class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
-                  {{ isGettingDbKey ? '获取中...' : '一键获取数据库密钥' }}
+                  {{ isGettingDbKey ? '获取中...' : (isMacos ? '查看 Mac 获取方式' : '一键获取数据库密钥') }}
                 </button>
               </div>
               <p v-if="formErrors.key" class="mt-1 text-sm text-red-600 flex items-center">
@@ -71,9 +71,11 @@
                 <svg class="w-4 h-4 mr-1 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
-                点击按钮将优先使用 V4 内存扫描获取【数据库解密密钥】；失败时会询问您是否改用 Hook。您也可以手动输入已知的64位密钥。
+                {{ isMacos
+                  ? 'macOS 版不提取数据库密钥。请使用支持 Mac 的同类本地工具获取后，在上方手动填写 64 位密钥；填写后实时消息等功能仍可使用。'
+                  : '点击按钮将优先使用 V4 内存扫描获取【数据库解密密钥】；失败时会询问您是否改用 Hook。您也可以手动输入已知的64位密钥。' }}
               </p>
-              <p class="mt-2 text-xs text-[#7F7F7F] flex items-start">
+              <p v-if="!isMacos" class="mt-2 text-xs text-[#7F7F7F] flex items-start">
                 <svg class="w-4 h-4 mr-1 mt-0.5 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
@@ -108,7 +110,7 @@
                 id="dbPath"
                 v-model="formData.db_storage_path"
                 type="text"
-                placeholder="例如: D:\wechatMSG\xwechat_files\wxid_xxx\db_storage"
+                :placeholder="isMacos ? '例如: /Users/你的用户名/.../wxid_xxx/db_storage' : '例如: D:\\wechatMSG\\xwechat_files\\wxid_xxx\\db_storage'"
                 class="w-full px-4 py-3 bg-white border border-[#EDEDED] rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
                 :class="{ 'border-red-500': formErrors.db_storage_path }"
                 required
@@ -762,7 +764,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '~/composables/useApi'
 import { normalizeWechatInstallPath, readStoredWechatInstallPath } from '~/lib/wechat-install-path'
 
-const { decryptDatabase, saveMediaKeys, getSavedKeys, getKeys, getImageKey, getImageKeyMemory, getWxStatus } = useApi()
+const { decryptDatabase, saveMediaKeys, getSavedKeys, getKeys, getImageKey, getImageKeyMemory, getWxStatus, getPlatformCapabilities } = useApi()
 
 const loading = ref(false)
 const error = ref('')
@@ -774,6 +776,8 @@ const activeKeyAccount = ref('')
 const isGettingDbKey = ref(false)
 let dbKeyRequestRevision = 0
 let dbKeyRequestController = null
+const platformCapabilities = ref({ platform: '' })
+const isMacos = computed(() => platformCapabilities.value?.platform === 'macos')
 const guideDialog = reactive({
   open: false,
   eyebrow: '操作提示',
@@ -1299,6 +1303,29 @@ const cancelDbKeyAcquisition = () => {
 
 const handleGetDbKey = async () => {
   if (isGettingDbKey.value) return
+
+  if (isMacos.value) {
+    const openTool = await requestGuideDialog({
+      eyebrow: 'macOS 数据库密钥',
+      title: '请使用支持 Mac 的同类工具获取密钥',
+      description: platformCapabilities.value?.database_key_guidance || 'macOS 版不提供数据库密钥提取，请获取后回到这里手动填写。',
+      details: [
+        '仅处理您本人账号的数据，并妥善保存密钥',
+        '获取 64 位数据库密钥后粘贴到当前输入框',
+        '本应用仍会负责解密、实时消息、图片密钥和后续分析'
+      ],
+      note: '本应用不会调用或依赖外部工具；链接仅用于帮助您获取密钥。',
+      primaryLabel: '打开 WeFlow 项目页',
+      secondaryLabel: '返回手动填写',
+      tone: 'guide'
+    })
+    if (openTool && process.client && typeof window !== 'undefined') {
+      const url = 'https://github.com/hicccc77/WeFlow'
+      if (window.wechatDesktop?.openExternalUrl) await window.wechatDesktop.openExternalUrl(url)
+      else window.open(url, '_blank', 'noopener,noreferrer')
+    }
+    return
+  }
 
   const shouldContinue = await requestGuideDialog({
     eyebrow: '密钥获取提示',
@@ -2281,6 +2308,13 @@ const skipToChat = async () => {
 // 页面加载时检查是否有选中的账户
 onMounted(async () => {
   if (process.client && typeof window !== 'undefined') {
+    try {
+      platformCapabilities.value = await getPlatformCapabilities()
+    } catch {
+      platformCapabilities.value = {
+        platform: /Macintosh|Mac OS X/i.test(String(navigator.userAgent || '')) ? 'macos' : 'windows'
+      }
+    }
     formData.wechat_install_path = readStoredWechatInstallPath()
     const selectedAccount = sessionStorage.getItem('selectedAccount')
     logDecryptDebug('mounted:selected-account-raw', { raw: selectedAccount || '' })
@@ -2289,7 +2323,8 @@ onMounted(async () => {
         const account = JSON.parse(selectedAccount)
         // 填充数据路径
         if (account.data_dir) {
-          formData.db_storage_path = account.data_dir + '\\db_storage'
+          const separator = isMacos.value ? '/' : '\\'
+          formData.db_storage_path = String(account.data_dir).replace(/[\\/]+$/, '') + separator + 'db_storage'
         }
         if (account.account_name) {
           mediaAccount.value = account.account_name

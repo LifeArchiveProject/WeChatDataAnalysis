@@ -92,8 +92,8 @@ class TestSavedDbKeySourceValidation(unittest.TestCase):
                 self.assertEqual(result["status"], "success")
                 self.assertEqual(result["keys"]["db_key"], "B" * 64)
                 self.assertEqual(result["keys"]["db_key_store_account"], "wxid_demo_abcd")
-                self.assertEqual(result["keys"]["db_key_source_wxid_dir"], str(db_storage.parent))
-                self.assertEqual(result["keys"]["db_key_source_db_storage_path"], str(db_storage))
+                self.assertEqual(result["keys"]["db_key_source_wxid_dir"], str(db_storage.parent.resolve()))
+                self.assertEqual(result["keys"]["db_key_source_db_storage_path"], str(db_storage.resolve()))
                 self.assertEqual(result["keys"]["db_key_blocked_reason"], "")
             finally:
                 _close_logging_handlers()

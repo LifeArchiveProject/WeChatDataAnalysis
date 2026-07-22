@@ -2,6 +2,11 @@
   <div
     class="sidebar-rail border-r flex flex-col"
   >
+    <div
+      v-if="isMacosDesktop"
+      class="macos-sidebar-titlebar-spacer"
+      aria-hidden="true"
+    />
     <div class="flex-1 flex flex-col justify-start pt-0 gap-0">
       <!-- Avatar -->
       <div class="w-full h-[60px] flex items-center justify-center">
@@ -235,6 +240,7 @@
 
       <!-- ImgHelper (Auto download large images) -->
       <div
+        v-if="imgHelperSupported"
         class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center group"
         :class="imgHelperBusy ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'"
         :title="imgHelperTitle"
@@ -513,7 +519,7 @@ const themeStore = useThemeStore()
 themeStore.init()
 
 const imgHelperStore = useImgHelperStore()
-const { enabled: imgHelperEnabled, checking: imgHelperChecking, toggling: imgHelperToggling, error: imgHelperError } = storeToRefs(imgHelperStore)
+const { enabled: imgHelperEnabled, supported: imgHelperSupported, checking: imgHelperChecking, toggling: imgHelperToggling, error: imgHelperError } = storeToRefs(imgHelperStore)
 
 const { open: settingsDialogOpen, openDialog: openSettingsDialog } = useSettingsDialog()
 const { getChatAccountInfo, deleteChatAccount } = useApi()
@@ -529,6 +535,7 @@ const accountDeleteError = ref('')
 const accountInfoApiUnsupported = ref(false)
 const deleteAccountApiUnsupported = ref(false)
 const accountAvatarBroken = ref({})
+const isMacosDesktop = ref(false)
 
 const normalizeAccountName = (value) => String(value || '').trim()
 
@@ -693,6 +700,7 @@ watch(selectedAccount, () => {
 })
 
 onMounted(async () => {
+  isMacosDesktop.value = window?.wechatDesktop?.platform === 'darwin'
   await chatAccounts.ensureLoaded()
   if (process.client && typeof window !== 'undefined') {
     window.addEventListener('keydown', onWindowKeydown)
@@ -838,6 +846,13 @@ const toggleImgHelper = async () => {
   scrollbar-width: none;
 }
 
+.macos-sidebar-titlebar-spacer {
+  width: 100%;
+  height: var(--desktop-titlebar-height, 32px);
+  min-height: var(--desktop-titlebar-height, 32px);
+  -webkit-app-region: drag;
+}
+
 .sidebar-rail::-webkit-scrollbar {
   display: none;
 }
@@ -860,4 +875,3 @@ const toggleImgHelper = async () => {
 }
 
 </style>
-

@@ -21,14 +21,17 @@ class TestWcdbRealtimeDllPathSelection(unittest.TestCase):
     def tearDown(self) -> None:
         wcdb_realtime._WCDB_API_DLL_SELECTED = None
 
-    def test_resolve_prefers_project_dll_over_weflow(self) -> None:
-        weflow_candidates = sorted((ROOT / "WeFlow").glob("**/wcdb_api.dll"))
-        self.assertTrue(weflow_candidates)
-        weflow_dll = weflow_candidates[0]
+    def test_resolve_rejects_external_native_library_override(self) -> None:
         self.assertTrue(wcdb_realtime._DEFAULT_WCDB_API_DLL.exists())
-
-        with patch.dict(os.environ, {"WECHAT_TOOL_WCDB_API_DLL_PATH": str(weflow_dll)}, clear=False):
-            resolved = wcdb_realtime._resolve_wcdb_api_dll_path()
+        with TemporaryDirectory() as td:
+            external_library = Path(td) / wcdb_realtime._wcdb_native_relative_path().name
+            external_library.write_bytes(b"external fixture")
+            with patch.dict(
+                os.environ,
+                {"WECHAT_TOOL_WCDB_API_DLL_PATH": str(external_library)},
+                clear=False,
+            ):
+                resolved = wcdb_realtime._resolve_wcdb_api_dll_path()
 
         self.assertEqual(
             resolved.resolve(),
@@ -36,13 +39,23 @@ class TestWcdbRealtimeDllPathSelection(unittest.TestCase):
         )
 
     def test_resolve_accepts_project_packaged_override(self) -> None:
-        packaged_dll = ROOT / "desktop" / "resources" / "backend" / "native" / "wcdb_api.dll"
-        self.assertTrue(packaged_dll.exists())
+        with TemporaryDirectory() as td:
+            packaged_dll = (
+                Path(td)
+                / "backend"
+                / "native"
+                / wcdb_realtime._wcdb_native_relative_path()
+            )
+            packaged_dll.parent.mkdir(parents=True)
+            packaged_dll.write_bytes(b"packaged fixture")
+            with patch.dict(
+                os.environ,
+                {"WECHAT_TOOL_WCDB_API_DLL_PATH": str(packaged_dll)},
+                clear=False,
+            ):
+                resolved = wcdb_realtime._resolve_wcdb_api_dll_path()
 
-        with patch.dict(os.environ, {"WECHAT_TOOL_WCDB_API_DLL_PATH": str(packaged_dll)}, clear=False):
-            resolved = wcdb_realtime._resolve_wcdb_api_dll_path()
-
-        self.assertEqual(resolved.resolve(), packaged_dll.resolve())
+            self.assertEqual(resolved.resolve(), packaged_dll.resolve())
 
     def test_sidecar_transport_failure_does_not_claim_vc_runtime_is_missing(self) -> None:
         manager = wcdb_realtime.WCDBRealtimeManager()
@@ -144,6 +157,40 @@ class TestWcdbRealtimeDllPathSelection(unittest.TestCase):
             mode = wcdb_realtime._validate_session_db_key(session_db, key.hex())
 
         self.assertEqual(mode, "raw_enc_key")
+
+    def test_realtime_connection_reads_the_manually_saved_account_key(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account_dir = root / "wxid_demo"
+            db_storage = root / "source" / "db_storage"
+            session_db = db_storage / "session" / "session.db"
+            account_dir.mkdir(parents=True)
+            session_db.parent.mkdir(parents=True)
+            session_db.write_bytes(b"fixture")
+            manual_key = "67" * 32
+
+            manager = wcdb_realtime.WCDBRealtimeManager()
+            with (
+                patch.object(
+                    wcdb_realtime,
+                    "get_account_keys_from_store",
+                    return_value={"db_key": manual_key},
+                ) as key_store,
+                patch.object(
+                    wcdb_realtime,
+                    "_resolve_account_db_storage_dir",
+                    return_value=db_storage,
+                ),
+                patch.object(wcdb_realtime, "_resolve_session_db_path", return_value=session_db),
+                patch.object(wcdb_realtime, "open_account", return_value=77) as open_account,
+                patch.object(wcdb_realtime, "set_my_wxid", return_value=True),
+            ):
+                connection = manager.ensure_connected(account_dir, timeout=3.0)
+
+        key_store.assert_called_once_with("wxid_demo")
+        self.assertEqual(open_account.call_args.args, (session_db, manual_key))
+        self.assertEqual(connection.handle, 77)
+        self.assertEqual(connection.db_storage_dir, db_storage)
 
     def test_inprocess_open_timeout_poison_runtime_without_vc_hint(self) -> None:
         release_open = threading.Event()

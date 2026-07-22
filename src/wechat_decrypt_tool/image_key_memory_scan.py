@@ -1,15 +1,19 @@
-"""Verified WeChat image-key recovery from Windows process memory.
+"""Verified WeChat image-key recovery from Windows and macOS process memory.
 
-The module deliberately keeps Win32 loading lazy so it can be imported by
-tests, packaging tools, and non-Windows hosts.  A memory candidate is never
-returned until its first 16 ASCII bytes decrypt a real V2 image block.
+Platform-native loading is deliberately lazy so the module can be imported by
+tests and packaging tools on every host. A memory candidate is never returned
+until its first 16 ASCII bytes decrypt a real V2 image block.
 """
 
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import re
+import shlex
+import stat
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -23,9 +27,11 @@ from .image_key_resolver import (
     scan_v2_templates,
     trusted_xor_for_verified_aes_key,
 )
+from .platform_support import mac_image_scan_helper_path, mac_image_scan_library_path
 
 
 WECHAT_EXECUTABLE_NAMES = frozenset(("weixin.exe", "wechat.exe"))
+MACOS_WECHAT_EXECUTABLE_NAMES = frozenset(("wechat",))
 
 PROCESS_VM_READ = 0x0010
 PROCESS_QUERY_INFORMATION = 0x0400
@@ -205,7 +211,7 @@ def find_wechat_pids(
     *,
     process_iter: Callable[..., Iterable[object]] | None = None,
 ) -> tuple[int, ...]:
-    """Return every running Weixin.exe and WeChat.exe PID."""
+    """Return every running desktop WeChat main-process PID."""
     if process_iter is None:
         try:
             import psutil
@@ -226,7 +232,8 @@ def find_wechat_pids(
                 name = info.get("name")
                 if name is None and hasattr(process, "name"):
                     name = process.name()
-                if str(name or "").casefold() not in WECHAT_EXECUTABLE_NAMES:
+                executable_names = WECHAT_EXECUTABLE_NAMES | MACOS_WECHAT_EXECUTABLE_NAMES
+                if str(name or "").casefold() not in executable_names:
                     continue
 
                 pid = info.get("pid", getattr(process, "pid", None))
@@ -380,6 +387,9 @@ def scan_process_for_image_key(
     if _deadline_reached(deadline, clock_fn):
         return None
 
+    if sys.platform == "darwin" and memory_api is None:
+        return _scan_macos_process_for_image_key(pid, template_scan, progress, deadline=deadline, clock=clock_fn)
+
     api = memory_api or _create_win32_api()
     if api is None:
         return None
@@ -461,6 +471,141 @@ def scan_process_for_image_key(
             api.close_handle(handle)
         except Exception:
             pass
+
+
+def _ensure_executable(path: Path) -> None:
+    try:
+        mode = path.stat().st_mode
+        if mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+            return
+        path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        pass
+
+
+def _parse_macos_helper_result(stdout: str) -> str | None:
+    for line in reversed(str(stdout or "").splitlines()):
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("success") is not True:
+            continue
+        key = str(payload.get("aesKey") or "").strip()
+        try:
+            key_bytes = key.encode("ascii")
+        except UnicodeEncodeError:
+            continue
+        if len(key_bytes) >= 16:
+            return key_bytes[:16].decode("ascii")
+    return None
+
+
+def _run_macos_image_scan_helper(
+    helper_path: Path,
+    pid: int,
+    ciphertext: bytes,
+    *,
+    elevated: bool,
+    timeout: float,
+) -> tuple[str | None, bool]:
+    ciphertext_hex = bytes(ciphertext).hex()
+    command = [str(helper_path), str(int(pid)), ciphertext_hex]
+    if elevated:
+        shell_command = " ".join(shlex.quote(part) for part in command)
+        command = [
+            "/usr/bin/osascript",
+            "-e",
+            f"do shell script {json.dumps(shell_command)} with administrator privileges",
+        ]
+
+    try:
+        completed = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=max(1.0, float(timeout)),
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None, False
+
+    stdout = str(completed.stdout or "")
+    stderr = str(completed.stderr or "")
+    combined = f"{stdout}\n{stderr}".casefold()
+    permission_error = any(
+        marker in combined
+        for marker in (
+            "attach_failed",
+            "task_for_pid failed",
+            "operation not permitted",
+            "permission denied",
+        )
+    )
+    return _parse_macos_helper_result(stdout), permission_error
+
+
+def _scan_macos_process_for_image_key(
+    pid: int,
+    template_scan: TemplateScanResult,
+    progress: ProgressCallback | None = None,
+    *,
+    deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> ProcessMemoryKeyMatch | None:
+    template = current_v2_template(template_scan)
+    if template is None or _deadline_reached(deadline, clock):
+        return None
+
+    helper_path = mac_image_scan_helper_path()
+    if not helper_path.is_file():
+        _notify(progress, f"macOS image scan helper not found: {helper_path}")
+        return None
+    library_path = mac_image_scan_library_path()
+    if not library_path.is_file():
+        _notify(progress, f"macOS image scan library not found: {library_path}")
+        return None
+    if helper_path.parent.resolve() != library_path.parent.resolve():
+        _notify(progress, "macOS image scan helper and library must be installed in the same directory")
+        return None
+    _ensure_executable(helper_path)
+
+    remaining = (deadline - clock()) if deadline is not None else 30.0
+    if remaining <= 0:
+        return None
+    _notify(progress, f"PID {pid}: scanning macOS WeChat memory")
+    aes_key, permission_error = _run_macos_image_scan_helper(
+        helper_path,
+        pid,
+        template.ciphertext,
+        elevated=False,
+        timeout=min(30.0, remaining),
+    )
+
+    if aes_key is None and permission_error and not _deadline_reached(deadline, clock):
+        _notify(progress, "macOS memory access requires administrator authorization")
+        remaining = (deadline - clock()) if deadline is not None else 60.0
+        if remaining > 0:
+            aes_key, _ = _run_macos_image_scan_helper(
+                helper_path,
+                pid,
+                template.ciphertext,
+                elevated=True,
+                timeout=min(60.0, remaining),
+            )
+
+    if aes_key is None or trusted_xor_for_verified_aes_key(aes_key, template_scan) is None:
+        return None
+    return ProcessMemoryKeyMatch(
+        aes_key=aes_key,
+        template_path=template.path,
+        encoding="ascii",
+    )
 
 
 def _normalise_scanner_match(
@@ -565,7 +710,8 @@ def scan_image_key_from_memory(
         if pids:
             _notify(progress, f"Scanning WeChat PIDs: {', '.join(map(str, pids))}")
         else:
-            _notify(progress, "Waiting for Weixin.exe or WeChat.exe")
+            process_label = "WeChat" if sys.platform == "darwin" else "Weixin.exe or WeChat.exe"
+            _notify(progress, f"Waiting for {process_label}")
 
         for pid in pids:
             if clock_fn() >= deadline:

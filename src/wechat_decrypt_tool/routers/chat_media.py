@@ -8,6 +8,7 @@ import mimetypes
 import os
 import sqlite3
 import subprocess
+import sys
 import time
 import re
 from pathlib import Path
@@ -3617,19 +3618,28 @@ async def open_chat_media_folder(
 
     logger.info(f"open_folder: kind={kind_key} md5={md5} file_id={file_id} server_id={server_id} -> {target}")
 
-    if os.name != "nt":
-        raise HTTPException(status_code=400, detail="open_folder is only supported on Windows.")
-
     try:
         tp = Path(target)
-        if tp.exists() and tp.is_dir():
-            subprocess.Popen(["explorer.exe", str(tp)])
-        elif tp.exists():
-            subprocess.Popen(["explorer.exe", "/select,", str(tp)])
+        if os.name == "nt":
+            if tp.exists() and tp.is_dir():
+                subprocess.Popen(["explorer.exe", str(tp)])
+            elif tp.exists():
+                subprocess.Popen(["explorer.exe", "/select,", str(tp)])
+            else:
+                subprocess.Popen(["explorer.exe", str(tp.parent)])
+        elif sys.platform == "darwin":
+            if tp.exists() and tp.is_dir():
+                subprocess.Popen(["open", str(tp)])
+            elif tp.exists():
+                subprocess.Popen(["open", "-R", str(tp)])
+            else:
+                subprocess.Popen(["open", str(tp.parent)])
         else:
-            subprocess.Popen(["explorer.exe", str(tp.parent)])
+            raise HTTPException(status_code=400, detail="在文件管理器中显示媒体仅支持 Windows 和 macOS。")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to open explorer: {e}")
+        raise HTTPException(status_code=500, detail=f"无法在文件管理器中显示媒体: {e}")
 
     file_found = False
     try:

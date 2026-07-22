@@ -100,6 +100,10 @@ export const useApi = () => {
     return await request('/health')
   }
 
+  const getPlatformCapabilities = async () => {
+    return await request('/system/platform')
+  }
+
   const listChatAccounts = async () => {
     return await request('/chat/accounts')
   }
@@ -824,6 +828,7 @@ export const useApi = () => {
     importDecryptedPreview,
     importDecrypted,
     healthCheck,
+    getPlatformCapabilities,
     listChatAccounts,
     getChatAccountInfo,
     deleteChatAccount,
