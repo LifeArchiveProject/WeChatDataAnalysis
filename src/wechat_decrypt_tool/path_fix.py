@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request
 from fastapi.routing import APIRoute
 
 from .logging_config import get_logger
+from .request_logging import redact_sensitive_log_data
 
 logger = get_logger(__name__)
 
@@ -31,7 +32,7 @@ class PathFixRequest(Request):
 
     def _validate_paths_in_json(self, json_data: dict) -> Optional[str]:
         """验证JSON中的路径，返回错误信息（如果有）"""
-        logger.info(f"开始验证路径，JSON数据: {json_data}")
+        logger.info("开始验证路径，JSON数据: %s", redact_sensitive_log_data(json_data))
         # 仅在提供 db_storage_path 时进行校验（例如 /api/decrypt）。
         # 其它 API 的 JSON payload 不一定包含路径字段，不应强制要求。
         if 'db_storage_path' in json_data:
@@ -163,7 +164,11 @@ class PathFixRequest(Request):
 
             # 记录修复信息（仅在有修改时）
             if fixed_body_str != body_str:
-                logger.info(f"自动修复JSON路径格式: {body_str[:100]}... -> {fixed_body_str[:100]}...")
+                logger.info(
+                    "自动修复JSON路径格式: 原始字符数=%s, 修复后字符数=%s",
+                    len(body_str),
+                    len(fixed_body_str),
+                )
 
             # 修复后重新验证路径
             try:

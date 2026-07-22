@@ -34,23 +34,14 @@ logger = get_logger(__name__)
 router = APIRouter(route_class=PathFixRoute)
 
 
-def _summarize_aes_key(value: Optional[str]) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if len(raw) <= 8:
-        return raw
-    return f"{raw[:4]}...{raw[-4:]}(len={len(raw)})"
-
-
-def _summarize_media_keys(*, xor_key: Optional[str] = None, aes_key: Optional[str] = None) -> dict:
+def _media_key_log_metadata(*, xor_key: Optional[str] = None, aes_key: Optional[str] = None) -> dict:
     xor_str = str(xor_key or "").strip()
     aes_str = str(aes_key or "").strip()
     return {
-        "xor_key": xor_str,
-        "aes_key": _summarize_aes_key(aes_str),
         "has_xor": bool(xor_str),
         "has_aes": bool(aes_str),
+        "xor_length": len(xor_str),
+        "aes_length": len(aes_str),
     }
 
 
@@ -158,7 +149,7 @@ async def save_media_keys_api(request: MediaKeysSaveRequest):
         "[media] save_media_keys start: request_account=%s resolved_account=%s keys=%s",
         str(request.account or "").strip(),
         account_dir.name,
-        _summarize_media_keys(xor_key=request.xor_key, aes_key=request.aes_key),
+        _media_key_log_metadata(xor_key=request.xor_key, aes_key=request.aes_key),
     )
 
     # 解析XOR密钥
@@ -192,7 +183,7 @@ async def save_media_keys_api(request: MediaKeysSaveRequest):
     logger.info(
         "[media] save_media_keys done: account=%s keys=%s",
         account_dir.name,
-        _summarize_media_keys(xor_key=f"0x{xor_int:02X}", aes_key=aes_str[:16] if aes_str else ""),
+        _media_key_log_metadata(xor_key=f"0x{xor_int:02X}", aes_key=aes_str[:16] if aes_str else ""),
     )
 
     return {
@@ -221,7 +212,7 @@ async def decrypt_all_media(request: MediaDecryptRequest):
         "[media] decrypt_all start: request_account=%s resolved_account=%s provided_keys=%s",
         str(request.account or "").strip(),
         account_dir.name,
-        _summarize_media_keys(xor_key=request.xor_key, aes_key=request.aes_key),
+        _media_key_log_metadata(xor_key=request.xor_key, aes_key=request.aes_key),
     )
 
     if not wxid_dir:
@@ -252,7 +243,7 @@ async def decrypt_all_media(request: MediaDecryptRequest):
         logger.info(
             "[media] decrypt_all cache lookup: account=%s cached_keys=%s",
             account_dir.name,
-            _summarize_media_keys(
+            _media_key_log_metadata(
                 xor_key=f"0x{int(cached.get('xor')):02X}" if cached.get("xor") is not None else "",
                 aes_key=str(cached.get("aes") or "").strip(),
             ),
@@ -266,7 +257,7 @@ async def decrypt_all_media(request: MediaDecryptRequest):
     logger.info(
         "[media] decrypt_all effective_keys: account=%s keys=%s",
         account_dir.name,
-        _summarize_media_keys(
+        _media_key_log_metadata(
             xor_key=f"0x{int(xor_key_int):02X}" if xor_key_int is not None else "",
             aes_key=(aes_key16 or b"").decode("ascii", errors="ignore") if aes_key16 else "",
         ),
@@ -417,7 +408,7 @@ async def decrypt_all_media_stream(
                 "[media] decrypt_all_stream start: request_account=%s resolved_account=%s provided_keys=%s requested_concurrency=%s effective_concurrency=%s",
                 str(account or "").strip(),
                 account_dir.name,
-                _summarize_media_keys(xor_key=xor_key, aes_key=aes_key),
+                _media_key_log_metadata(xor_key=xor_key, aes_key=aes_key),
                 concurrency,
                 worker_count,
             )
@@ -447,7 +438,7 @@ async def decrypt_all_media_stream(
                 logger.info(
                     "[media] decrypt_all_stream cache lookup: account=%s cached_keys=%s",
                     account_dir.name,
-                    _summarize_media_keys(
+                    _media_key_log_metadata(
                         xor_key=f"0x{int(cached.get('xor')):02X}" if cached.get("xor") is not None else "",
                         aes_key=str(cached.get("aes") or "").strip(),
                     ),
@@ -461,7 +452,7 @@ async def decrypt_all_media_stream(
             logger.info(
                 "[media] decrypt_all_stream effective_keys: account=%s keys=%s",
                 account_dir.name,
-                _summarize_media_keys(
+                _media_key_log_metadata(
                     xor_key=f"0x{int(xor_key_int):02X}" if xor_key_int is not None else "",
                     aes_key=(aes_key16 or b"").decode("ascii", errors="ignore") if aes_key16 else "",
                 ),

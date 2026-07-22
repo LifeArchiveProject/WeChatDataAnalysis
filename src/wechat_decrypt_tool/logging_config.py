@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .request_logging import SensitiveQueryLogFilter
+
 
 class ColoredFormatter(logging.Formatter):
     """彩色日志格式化器"""
@@ -55,6 +57,13 @@ def _can_use_logging_stream(stream) -> bool:
         return False
 
     return True
+
+
+def install_sensitive_query_log_filter() -> None:
+    access_logger = logging.getLogger("uvicorn.access")
+    if any(getattr(item, "_wda_sensitive_query_filter", False) for item in access_logger.filters):
+        return
+    access_logger.addFilter(SensitiveQueryLogFilter())
 
 
 class WeChatLogger:
@@ -191,6 +200,7 @@ class WeChatLogger:
                     pass
         uvicorn_access_logger.addHandler(file_handler)
         uvicorn_access_logger.setLevel(level)
+        install_sensitive_query_log_filter()
 
         # 只为uvicorn.error日志器添加文件处理器
         uvicorn_error_logger = logging.getLogger("uvicorn.error")

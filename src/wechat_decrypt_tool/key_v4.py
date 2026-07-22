@@ -311,7 +311,7 @@ def verify_keys(keys, buf, internal_db_key=None):
                 last_percent = percent
 
             if r:
-                print(f"[+] Key found: {bytes.hex(r)}")
+                print(f"[+] Key found (length={len(r)} bytes; value redacted)")
                 pool.terminate()
                 return bytes.hex(r)
 
@@ -393,6 +393,6 @@ if __name__ == '__main__':
         key = xor_raw_key(bytes.fromhex(key), internal_db_key).hex()
     
     if key:
-        print(f"[+] Successfully recovered key: {key}")
+        print(f"[+] Successfully recovered key (length={len(key) // 2} bytes; value redacted)")
     else:
         print("[-] Failed to recover key")
