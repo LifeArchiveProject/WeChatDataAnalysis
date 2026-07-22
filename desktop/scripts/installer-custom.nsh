@@ -1,8 +1,17 @@
 ; This file is included for both installer and uninstaller builds.
 ; Guard installer-only pages/functions to avoid "function not referenced" warnings
 ; when electron-builder compiles the standalone uninstaller.
-!define /ifndef WDA_DEFAULT_SETTINGS_PATH "$APPDATA\${APP_FILENAME}\desktop-settings.json"
-!define /ifndef WDA_DEFAULT_OUTPUT_DIR "$APPDATA\${APP_FILENAME}\output"
+; Electron derives `userData` from package.json `name` in this app. Keep the
+; installer's canonical settings/output paths aligned with that runtime path.
+!ifdef APP_PACKAGE_NAME
+!define /ifndef WDA_RUNTIME_APPDATA_NAME "${APP_PACKAGE_NAME}"
+!else
+!define /ifndef WDA_RUNTIME_APPDATA_NAME "${APP_FILENAME}"
+!endif
+!define /ifndef WDA_DEFAULT_SETTINGS_PATH "$APPDATA\${WDA_RUNTIME_APPDATA_NAME}\desktop-settings.json"
+!define /ifndef WDA_DEFAULT_OUTPUT_DIR "$APPDATA\${WDA_RUNTIME_APPDATA_NAME}\output"
+!define /ifndef WDA_FILENAME_SETTINGS_PATH "$APPDATA\${APP_FILENAME}\desktop-settings.json"
+!define /ifndef WDA_FILENAME_OUTPUT_DIR "$APPDATA\${APP_FILENAME}\output"
 !ifdef APP_PRODUCT_FILENAME
 !define /ifndef WDA_PRODUCT_SETTINGS_PATH "$APPDATA\${APP_PRODUCT_FILENAME}\desktop-settings.json"
 !define /ifndef WDA_PRODUCT_OUTPUT_DIR "$APPDATA\${APP_PRODUCT_FILENAME}\output"
@@ -20,6 +29,7 @@
 !ifndef BUILD_UNINSTALLER
 !include nsDialogs.nsh
 !include LogicLib.nsh
+!include FileFunc.nsh
 
 ; Directory page is a "parent folder" picker. When users browse to a new folder,
 ; NSIS will set $INSTDIR to exactly what they pick (without app sub-folder),
@@ -33,12 +43,73 @@ Var WDA_OutputDirPage
 Var WDA_OutputDirInput
 Var WDA_OutputDirBrowseButton
 Var WDA_SelectedOutputDir
+Var WDA_PreviousShellAppData
+
+!ifndef INSTALL_MODE_PER_ALL_USERS
+!macro WDA_CleanupGhostPerUserInstall
+  ; Issue #77 can leave HKCU metadata and dead links without either installed
+  ; binary. Only repair that exact state; never remove a real or partial app,
+  ; a record for another location, or an installation on an offline volume.
+  ReadRegStr $R8 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
+  ReadRegStr $R9 HKCU "${UNINSTALL_REGISTRY_KEY}" UninstallString
+  ReadRegStr $R7 HKCU "${UNINSTALL_REGISTRY_KEY}" QuietUninstallString
+  ${GetRoot} "$R8" $R6
+  ${If} $R8 != ""
+  ${AndIf} $R6 != ""
+  ${AndIf} ${FileExists} "$R6\."
+  ${AndIf} $R9 == '"$R8\${UNINSTALL_FILENAME}" /currentuser'
+  ${AndIf} $R7 == '"$R8\${UNINSTALL_FILENAME}" /currentuser /S'
+  ${AndIfNot} ${FileExists} "$R8\${APP_EXECUTABLE_FILENAME}"
+  ${AndIfNot} ${FileExists} "$R8\${UNINSTALL_FILENAME}"
+    Call WDA_UseCurrentUserAppData
+    Call WDA_PrepareInstallDirScript
+    !ifdef MENU_FILENAME
+      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\wda-install-dir.ps1" -Mode RemoveGhostShortcuts -InstallDir "$R8" -ExpectedExecutablePath "$R8\${APP_EXECUTABLE_FILENAME}" -ShortcutPath1 "$DESKTOP\${SHORTCUT_NAME}.lnk" -ShortcutPath2 "$SMPROGRAMS\${MENU_FILENAME}\${SHORTCUT_NAME}.lnk"'
+    !else
+      nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\wda-install-dir.ps1" -Mode RemoveGhostShortcuts -InstallDir "$R8" -ExpectedExecutablePath "$R8\${APP_EXECUTABLE_FILENAME}" -ShortcutPath1 "$DESKTOP\${SHORTCUT_NAME}.lnk" -ShortcutPath2 "$SMPROGRAMS\${SHORTCUT_NAME}.lnk"'
+    !endif
+    Pop $R5
+    Pop $R4
+    Call WDA_RestoreInstallShellContext
+
+    ; Keep the record if shortcut inspection failed. A later run can retry and
+    ; this avoids turning a partially inspected state into a broader cleanup.
+    ${If} $R5 == "0"
+      DeleteRegKey HKCU "${UNINSTALL_REGISTRY_KEY}"
+      DeleteRegKey HKCU "${INSTALL_REGISTRY_KEY}"
+      StrCpy $hasPerUserInstallation "0"
+      ${If} $hasPerMachineInstallation == "1"
+        !insertmacro setInstallModePerAllUsers
+      ${Else}
+        !insertmacro setInstallModePerUser
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+!macroend
+!endif
 
 !macro customInit
-  ; Safety: older versions created an `output` junction inside the install directory that points to the
-  ; per-user AppData `output` folder. Some uninstall/update flows may traverse that junction and delete
-  ; real user data. Remove it as early as possible during install/update.
+  !ifndef INSTALL_MODE_PER_ALL_USERS
+    !insertmacro WDA_CleanupGhostPerUserInstall
+  !endif
+  ; Custom pages do not run for /S. Validate /D before the install section so a
+  ; current-user install cannot leave registry entries or shortcuts for an
+  ; unwritable directory. The non-admin /allusers outer process must reach the
+  ; install section first because electron-builder performs its UAC handoff there.
+  IfSilent 0 WDA_CustomInitDone
+  ${If} $installMode == "all"
+  ${AndIfNot} ${UAC_IsAdmin}
+    Goto WDA_CustomInitDone
+  ${EndIf}
+  Call WDA_EnsureAppSubDir
+  Call WDA_ValidateInstallDir
+  Pop $0
+  ${If} $0 != "0"
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
   Call WDA_RemoveLegacyOutputLink
+WDA_CustomInitDone:
 !macroend
 
 !macro customInstall
@@ -49,10 +120,56 @@ Var WDA_SelectedOutputDir
 !macroend
 
 Function WDA_RemoveLegacyOutputLink
-  ; $INSTDIR is usually the full install directory. Be defensive and also try the nested path
+  Call WDA_UseCurrentUserAppData
+  Call WDA_PrepareOutputDirScript
+  ; $INSTDIR is usually the full install directory. Be defensive and also inspect the nested path
   ; in case the installer is running before electron-builder appends "\${APP_FILENAME}".
-  RMDir "$INSTDIR\output"
-  RMDir "$INSTDIR\${APP_FILENAME}\output"
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\wda-output-dir.ps1" -Mode RemoveLegacyLinks -DefaultSettingsPath "${WDA_DEFAULT_SETTINGS_PATH}" -DefaultOutputPath "${WDA_DEFAULT_OUTPUT_DIR}" -LegacySettingsPath1 "${WDA_PRODUCT_SETTINGS_PATH}" -LegacySettingsPath2 "${WDA_FILENAME_SETTINGS_PATH}" -CandidateLinkPath1 "$INSTDIR\output" -CandidateLinkPath2 "$INSTDIR\${APP_FILENAME}\output"'
+  Pop $0
+  Pop $1
+  Call WDA_RestoreInstallShellContext
+  ${If} $0 != "0"
+    MessageBox MB_ICONSTOP|MB_OK "无法安全检查旧版 output 链接，安装已停止。$\r$\n$1"
+    Abort
+  ${EndIf}
+FunctionEnd
+
+Function WDA_PrepareOutputDirScript
+  InitPluginsDir
+  File /oname=$PLUGINSDIR\wda-output-dir.ps1 "${__FILEDIR__}\installer-output-dir.ps1"
+FunctionEnd
+
+Function WDA_PrepareInstallDirScript
+  InitPluginsDir
+  File /oname=$PLUGINSDIR\wda-install-dir.ps1 "${__FILEDIR__}\installer-install-dir.ps1"
+FunctionEnd
+
+Function WDA_ValidateInstallDir
+  Call WDA_PrepareInstallDirScript
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\wda-install-dir.ps1" -Mode Validate -InstallDir "$INSTDIR"'
+  Pop $0
+  Pop $1
+  ${If} $0 == "0"
+    Push "0"
+  ${Else}
+    Push "1"
+  ${EndIf}
+FunctionEnd
+
+Function WDA_UseCurrentUserAppData
+  ; In all-users mode electron-builder switches $APPDATA to ProgramData, while
+  ; Electron userData remains under the interactive user's Roaming profile.
+  ; This include is parsed before electron-builder declares $installMode, so
+  ; preserve the effective AppData path instead of referencing that variable.
+  StrCpy $WDA_PreviousShellAppData "$APPDATA"
+  SetShellVarContext current
+FunctionEnd
+
+Function WDA_RestoreInstallShellContext
+  StrCmp $WDA_PreviousShellAppData "$APPDATA" WDA_RestoreInstallShellContextDone
+  SetShellVarContext all
+WDA_RestoreInstallShellContextDone:
+  StrCpy $WDA_PreviousShellAppData ""
 FunctionEnd
 
 !macro customPageAfterChangeDir
@@ -65,20 +182,30 @@ FunctionEnd
 !macroend
 
 Function WDA_InitOutputDirSelection
+  Call WDA_UseCurrentUserAppData
+  Call WDA_PrepareOutputDirScript
   StrCpy $WDA_SelectedOutputDir "${WDA_DEFAULT_OUTPUT_DIR}"
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { param([string] $$defaultSettingsPath, [string] $$defaultOutputPath, [string] $$legacySettingsPath1, [string] $$legacySettingsPath2) $$candidates = @($$defaultSettingsPath, $$legacySettingsPath1, $$legacySettingsPath2) | Where-Object { -not [string]::IsNullOrWhiteSpace($$_) } | Select-Object -Unique; $$settingsPath = $$defaultSettingsPath; foreach ($$candidate in $$candidates) { if (Test-Path -LiteralPath $$candidate) { $$settingsPath = $$candidate; break } }; $$result = $$defaultOutputPath; if (Test-Path -LiteralPath $$settingsPath) { try { $$json = Get-Content -LiteralPath $$settingsPath -Raw | ConvertFrom-Json; $$value = [string] $$json.pendingOutputDir; if ([string]::IsNullOrWhiteSpace($$value)) { $$value = [string] $$json.outputDir }; if ($$value -eq '''') { $$result = $$defaultOutputPath } elseif (-not [string]::IsNullOrWhiteSpace($$value)) { $$result = $$value } } catch {} }; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::Write($$result) }" "${WDA_DEFAULT_SETTINGS_PATH}" "${WDA_DEFAULT_OUTPUT_DIR}" "${WDA_PRODUCT_SETTINGS_PATH}" "${WDA_PACKAGE_SETTINGS_PATH}"'
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\wda-output-dir.ps1" -Mode Read -DefaultSettingsPath "${WDA_DEFAULT_SETTINGS_PATH}" -DefaultOutputPath "${WDA_DEFAULT_OUTPUT_DIR}" -LegacySettingsPath1 "${WDA_PRODUCT_SETTINGS_PATH}" -LegacySettingsPath2 "${WDA_FILENAME_SETTINGS_PATH}"'
   Pop $0
   Pop $1
   ${If} $0 == "0"
   ${AndIf} $1 != ""
     StrCpy $WDA_SelectedOutputDir "$1"
   ${EndIf}
+  Call WDA_RestoreInstallShellContext
 FunctionEnd
 
 Function WDA_WritePendingOutputDirSetting
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { param([string] $$defaultSettingsPath, [string] $$defaultOutputPath, [string] $$selectedOutputPath, [string] $$legacySettingsPath1, [string] $$legacySettingsPath2) $$candidates = @($$defaultSettingsPath, $$legacySettingsPath1, $$legacySettingsPath2) | Where-Object { -not [string]::IsNullOrWhiteSpace($$_) } | Select-Object -Unique; $$sourceSettingsPath = $$defaultSettingsPath; foreach ($$candidate in $$candidates) { if (Test-Path -LiteralPath $$candidate) { $$sourceSettingsPath = $$candidate; break } }; if ([string]::IsNullOrWhiteSpace($$selectedOutputPath)) { $$selectedOutputPath = $$defaultOutputPath }; $$pending = if ([string]::Equals($$selectedOutputPath, $$defaultOutputPath, [System.StringComparison]::OrdinalIgnoreCase)) { '''' } else { $$selectedOutputPath }; $$obj = @{}; if (Test-Path -LiteralPath $$sourceSettingsPath) { try { $$existing = Get-Content -LiteralPath $$sourceSettingsPath -Raw | ConvertFrom-Json; if ($$null -ne $$existing) { $$existing.PSObject.Properties | ForEach-Object { $$obj[$$_.Name] = $$_.Value } } } catch {} }; $$obj[''pendingOutputDir''] = $$pending; $$dir = Split-Path -Parent $$defaultSettingsPath; New-Item -ItemType Directory -Force -Path $$dir | Out-Null; $$json = [PSCustomObject] $$obj | ConvertTo-Json -Depth 10; Set-Content -LiteralPath $$defaultSettingsPath -Value $$json -Encoding UTF8 }" "${WDA_DEFAULT_SETTINGS_PATH}" "${WDA_DEFAULT_OUTPUT_DIR}" "$WDA_SelectedOutputDir" "${WDA_PRODUCT_SETTINGS_PATH}" "${WDA_PACKAGE_SETTINGS_PATH}"'
+  Call WDA_UseCurrentUserAppData
+  Call WDA_PrepareOutputDirScript
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\wda-output-dir.ps1" -Mode Write -DefaultSettingsPath "${WDA_DEFAULT_SETTINGS_PATH}" -DefaultOutputPath "${WDA_DEFAULT_OUTPUT_DIR}" -SelectedOutputPath "$WDA_SelectedOutputDir" -LegacySettingsPath1 "${WDA_PRODUCT_SETTINGS_PATH}" -LegacySettingsPath2 "${WDA_FILENAME_SETTINGS_PATH}"'
   Pop $0
   Pop $1
+  Call WDA_RestoreInstallShellContext
+  ${If} $0 != "0"
+    MessageBox MB_ICONSTOP|MB_OK "无法保存 output 目录设置。$\r$\n$1"
+    Abort
+  ${EndIf}
 FunctionEnd
 
 Function WDA_EnsureAppSubDir
@@ -134,6 +261,16 @@ Function WDA_InstallDirPageCreate
 FunctionEnd
 
 Function WDA_InstallDirPageLeave
+  Call WDA_ValidateInstallDir
+  Pop $0
+  ${If} $0 != "0"
+    MessageBox MB_ICONSTOP|MB_OK "无法写入安装目录：$\r$\n$INSTDIR$\r$\n$\r$\n请选择有写入权限的目录；如需安装到受保护目录，请返回安装范围页选择“所有用户”并接受 UAC 授权。"
+    Abort
+  ${EndIf}
+
+  ; Safety: older versions created an `output` junction inside the install
+  ; directory. Only unlink it after the final directory passes preflight.
+  Call WDA_RemoveLegacyOutputLink
 FunctionEnd
 
 Function WDA_OutputDirBrowse
@@ -194,6 +331,11 @@ FunctionEnd
 Var WDA_UninstallOptionsPage
 Var WDA_UninstallDeleteDataCheckbox
 Var /GLOBAL WDA_DeleteUserData
+
+Function un.WDA_PrepareOutputDirScript
+  InitPluginsDir
+  File /oname=$PLUGINSDIR\wda-output-dir.ps1 "${__FILEDIR__}\installer-output-dir.ps1"
+FunctionEnd
 
 !macro customUnInit
   ; Default: keep user data (also applies to silent uninstall / update uninstall).
@@ -258,7 +400,8 @@ FunctionEnd
       !endif
 
       IfFileExists "$INSTDIR\output-location.path" 0 WDA_SkipCustomOutputDelete
-        nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& { param([string] $$pathFile, [string] $$defaultPath1, [string] $$defaultPath2, [string] $$defaultPath3) if (Test-Path -LiteralPath $$pathFile) { $$target = (Get-Content -LiteralPath $$pathFile -Raw).Trim(); $$defaults = @($$defaultPath1, $$defaultPath2, $$defaultPath3) | Where-Object { -not [string]::IsNullOrWhiteSpace($$_) }; $$isDefault = $$false; foreach ($$defaultPath in $$defaults) { if ([string]::Equals($$target, $$defaultPath, [System.StringComparison]::OrdinalIgnoreCase)) { $$isDefault = $$true; break } }; if (-not $$isDefault -and -not [string]::IsNullOrWhiteSpace($$target) -and (Test-Path -LiteralPath $$target)) { Remove-Item -LiteralPath $$target -Recurse -Force -ErrorAction SilentlyContinue } } }" "$INSTDIR\output-location.path" "${WDA_DEFAULT_OUTPUT_DIR}" "${WDA_PRODUCT_OUTPUT_DIR}" "${WDA_PACKAGE_OUTPUT_DIR}"'
+        Call un.WDA_PrepareOutputDirScript
+        nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\wda-output-dir.ps1" -Mode DeleteCustom -DefaultOutputPath "${WDA_DEFAULT_OUTPUT_DIR}" -PathFile "$INSTDIR\output-location.path" -LegacyOutputPath1 "${WDA_PRODUCT_OUTPUT_DIR}" -LegacyOutputPath2 "${WDA_FILENAME_OUTPUT_DIR}"'
         Pop $0
         Pop $1
       WDA_SkipCustomOutputDelete:
