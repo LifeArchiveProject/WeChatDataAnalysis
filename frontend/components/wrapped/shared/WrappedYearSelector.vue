@@ -6,6 +6,7 @@
           class="appearance-none bg-transparent pr-5 pl-0 py-0.5 rounded-md wrapped-label text-xs text-[#00000066] text-right focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 hover:bg-[#000000]/5 transition disabled:opacity-70 disabled:cursor-default"
           :disabled="years.length <= 1"
           :value="String(modelValue)"
+          aria-label="选择年份"
           @change="onSelectChange"
         >
           <option v-for="y in years" :key="y" :value="String(y)">{{ y }}年</option>
@@ -43,18 +44,17 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 
 const currentIndex = computed(() => props.years.indexOf(props.modelValue))
-const canGoPrev = computed(() => currentIndex.value > 0)
-const canGoNext = computed(() => currentIndex.value < props.years.length - 1)
 
-const prevYear = () => {
-  if (canGoPrev.value) {
-    emit('update:modelValue', props.years[currentIndex.value - 1])
+// years 为降序数组（新年份在前）：更早年份 = 下标更大
+const olderYear = () => {
+  if (currentIndex.value >= 0 && currentIndex.value < props.years.length - 1) {
+    emit('update:modelValue', props.years[currentIndex.value + 1])
   }
 }
 
-const nextYear = () => {
-  if (canGoNext.value) {
-    emit('update:modelValue', props.years[currentIndex.value + 1])
+const newerYear = () => {
+  if (currentIndex.value > 0) {
+    emit('update:modelValue', props.years[currentIndex.value - 1])
   }
 }
 
@@ -65,9 +65,10 @@ const onSelectChange = (e) => {
   }
 }
 
-// 全局左右键切换年份（所有主题）
+// Shift+左右键切换年份（不带 Shift 的左右键留给 deck 翻页）
 const handleKeydown = (e) => {
   if (props.years.length <= 1) return
+  if (!e.shiftKey) return
 
   // 检查是否在可编辑元素中
   const el = e.target
@@ -77,10 +78,10 @@ const handleKeydown = (e) => {
 
   if (e.key === 'ArrowLeft') {
     e.preventDefault()
-    prevYear()
+    olderYear()
   } else if (e.key === 'ArrowRight') {
     e.preventDefault()
-    nextYear()
+    newerYear()
   }
 }
 

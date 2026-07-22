@@ -968,6 +968,399 @@ def compute_weekday_hour_heatmap(*, account_dir: Path, year: int, sender_usernam
     )
 
 
+def _empty_night_companion() -> dict[str, Any]:
+    return {
+        "nightMessagesTotal": 0,
+        "myNightMessages": 0,
+        "partner": None,
+        "latestMoment": None,
+    }
+
+
+def _night_moment_payload(*, ts: int, direction: str, content: str) -> dict[str, Any]:
+    dt = datetime.fromtimestamp(int(ts))
+    text = re.sub(r"\s+", " ", str(content or "")).strip()
+    if len(text) > 60:
+        text = text[:57] + "..."
+    return {
+        "timestamp": int(ts),
+        "date": dt.strftime("%Y-%m-%d"),
+        "time": dt.strftime("%H:%M"),
+        "direction": "sent" if direction == "sent" else "received",
+        "content": text,
+    }
+
+
+def _night_partner_payload(
+    *,
+    account_dir: Path,
+    username: str,
+    night_messages: int,
+    total: int,
+) -> dict[str, Any]:
+    contact_rows = _load_contact_rows(account_dir / "contact.db", [username])
+    display = _pick_display_name(contact_rows.get(username), username)
+    avatar = _build_avatar_url(str(account_dir.name or ""), username) if username else ""
+    share = round(night_messages * 100.0 / total, 1) if total > 0 else 0.0
+    return {
+        "username": username,
+        "displayName": display,
+        "maskedName": _mask_name(display),
+        "avatarUrl": avatar,
+        "nightMessages": int(night_messages),
+        "sharePct": float(share),
+    }
+
+
+def _compute_night_companion_from_index(
+    *,
+    account_dir: Path,
+    year: int,
+    my_username: str,
+) -> Optional[dict[str, Any]]:
+    """Index path for the night companion stats. Returns None so caller can fall back."""
+
+    start_ts, end_ts = _year_range_epoch_seconds(year)
+    me = str(my_username or "").strip()
+
+    index_path = get_chat_search_index_db_path(account_dir)
+    if not index_path.exists():
+        return None
+
+    conn = sqlite3.connect(str(index_path))
+    try:
+        has_fts = (
+            conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_fts' LIMIT 1").fetchone()
+            is not None
+        )
+        if not has_fts:
+            return None
+
+        # Convert millisecond timestamps defensively (some datasets store ms).
+        ts_expr = (
+            "CASE "
+            "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+            "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+            "ELSE CAST(create_time AS INTEGER) "
+            "END"
+        )
+
+        where = (
+            f"{ts_expr} >= ? AND {ts_expr} < ? "
+            "AND db_stem NOT LIKE 'biz_message%' "
+            "AND username NOT LIKE '%@chatroom' "
+            "AND CAST(local_type AS INTEGER) != 10000"
+        )
+        # 深夜窗口：本地时间 0:00-5:59（小时判定必须先做 ms->s 换算，故放在外层）。
+        night_where = "CAST(strftime('%H', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) < 6"
+
+        sql_counts = (
+            "SELECT username, COUNT(1) AS cnt, "
+            "SUM(CASE WHEN sender_username = ? THEN 1 ELSE 0 END) AS mine "
+            "FROM ("
+            f"  SELECT {ts_expr} AS ts, username, sender_username "
+            "  FROM message_fts "
+            f"  WHERE {where}"
+            ") sub "
+            f"WHERE {night_where} "
+            "GROUP BY username"
+        )
+
+        try:
+            rows = conn.execute(sql_counts, (me, start_ts, end_ts)).fetchall()
+        except Exception:
+            return None
+
+        total = 0
+        mine = 0
+        best_user = ""
+        best_cnt = 0
+        for r in rows:
+            if not r:
+                continue
+            u = str(r[0] or "").strip()
+            try:
+                cnt = int(r[1] or 0)
+                sent = int(r[2] or 0)
+            except Exception:
+                continue
+            if not u or cnt <= 0:
+                continue
+            total += cnt
+            mine += sent
+            # Deterministic: pick lexicographically smallest username on ties.
+            if cnt > best_cnt or (cnt == best_cnt and (not best_user or u < best_user)):
+                best_cnt = cnt
+                best_user = u
+
+        if total <= 0 or not best_user:
+            return _empty_night_companion()
+
+        sql_moment = (
+            "SELECT ts, sender_username, text, "
+            "CAST(strftime('%H', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS h, "
+            "CAST(strftime('%M', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS m, "
+            "CAST(strftime('%S', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS s "
+            "FROM ("
+            f"  SELECT {ts_expr} AS ts, sender_username, text "
+            "  FROM message_fts "
+            f"  WHERE {where} AND username = ?"
+            ") sub "
+            f"WHERE {night_where} "
+            # 复用现有深夜计分：0-4 点 +24h，使 4:59 排在 0:00 与 5:xx 之后。
+            "ORDER BY (h*3600 + m*60 + s + CASE WHEN h < 5 THEN 86400 ELSE 0 END) DESC, ts DESC "
+            "LIMIT 1"
+        )
+
+        moment: Optional[dict[str, Any]] = None
+        try:
+            row = conn.execute(sql_moment, (start_ts, end_ts, best_user)).fetchone()
+        except Exception:
+            row = None
+        if row:
+            try:
+                ts = int(row[0] or 0)
+            except Exception:
+                ts = 0
+            sender = str(row[1] or "").strip()
+            content = _decode_sqlite_text(row[2]) if row[2] is not None else ""
+            if ts > 0:
+                moment = _night_moment_payload(
+                    ts=ts,
+                    direction="sent" if (me and sender == me) else "received",
+                    content=content,
+                )
+
+        return {
+            "nightMessagesTotal": int(total),
+            "myNightMessages": int(mine),
+            "partner": _night_partner_payload(
+                account_dir=account_dir,
+                username=best_user,
+                night_messages=best_cnt,
+                total=total,
+            ),
+            "latestMoment": moment,
+        }
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _compute_night_companion_fallback(
+    *,
+    account_dir: Path,
+    year: int,
+    my_username: str,
+) -> dict[str, Any]:
+    """Fallback implementation when no search index is present."""
+
+    start_ts, end_ts = _year_range_epoch_seconds(year)
+    me = str(my_username or "").strip()
+
+    session_usernames = _list_session_usernames(account_dir / "session.db")
+    md5_to_username: dict[str, str] = {}
+    table_to_username: dict[str, str] = {}
+    for u in session_usernames:
+        md5_hex = hashlib.md5(u.encode("utf-8")).hexdigest().lower()
+        md5_to_username[md5_hex] = u
+        table_to_username[f"msg_{md5_hex}"] = u
+        table_to_username[f"chat_{md5_hex}"] = u
+
+    def resolve_username_from_table(table_name: str) -> Optional[str]:
+        ln = str(table_name or "").lower()
+        u = table_to_username.get(ln)
+        if u:
+            return u
+        m = _MD5_HEX_RE.search(ln)
+        if m:
+            return md5_to_username.get(m.group(0).lower())
+        return None
+
+    db_paths = _iter_message_db_paths(account_dir)
+    db_paths = [p for p in db_paths if not p.name.lower().startswith("biz_message")]
+
+    ts_expr = (
+        "CASE WHEN create_time > 1000000000000 THEN CAST(create_time/1000 AS INTEGER) ELSE create_time END"
+    )
+    night_where = "CAST(strftime('%H', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) < 6"
+
+    total = 0
+    mine = 0
+    per_user_counts: dict[str, int] = {}
+    # username -> [(shard 路径, 表名, 本人在该分片的 Name2Id rowid)]，供 partner 确定后回查最晚一刻。
+    per_user_tables: dict[str, list[tuple[Path, str, Optional[int]]]] = {}
+
+    for db_path in db_paths:
+        if not db_path.exists():
+            continue
+
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            conn.text_factory = bytes
+
+            try:
+                r2 = conn.execute("SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1", (me,)).fetchone()
+                my_rowid = int(r2[0]) if r2 and r2[0] is not None else None
+            except Exception:
+                my_rowid = None
+
+            tables = _list_message_tables(conn)
+            if not tables:
+                continue
+
+            for table_name in tables:
+                username = resolve_username_from_table(table_name)
+                if not username or username.endswith("@chatroom"):
+                    continue
+
+                qt = _quote_ident(table_name)
+                sql = (
+                    "SELECT COUNT(1) AS cnt, "
+                    "SUM(CASE WHEN real_sender_id = ? THEN 1 ELSE 0 END) AS mine "
+                    "FROM ("
+                    f"  SELECT {ts_expr} AS ts, real_sender_id"
+                    f"  FROM {qt}"
+                    f"  WHERE {ts_expr} >= ? AND {ts_expr} < ? AND local_type != 10000"
+                    ") sub "
+                    f"WHERE {night_where}"
+                )
+                params = (int(my_rowid) if my_rowid is not None else -1, start_ts, end_ts)
+                try:
+                    r = conn.execute(sql, params).fetchone()
+                except Exception:
+                    continue
+                try:
+                    cnt = int(r["cnt"] or 0)
+                    sent = int(r["mine"] or 0)
+                except Exception:
+                    continue
+                if cnt <= 0:
+                    continue
+
+                total += cnt
+                mine += sent
+                per_user_counts[username] = per_user_counts.get(username, 0) + cnt
+                per_user_tables.setdefault(username, []).append((db_path, table_name, my_rowid))
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
+    if total <= 0 or not per_user_counts:
+        return _empty_night_companion()
+
+    # Deterministic: pick lexicographically smallest username on ties.
+    best_user = sorted(per_user_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+    best_cnt = per_user_counts[best_user]
+
+    best_ref: Optional[_SentMomentRef] = None
+    best_direction = "received"
+    for db_path, table_name, my_rowid in per_user_tables.get(best_user, []):
+        conn2: sqlite3.Connection | None = None
+        try:
+            conn2 = sqlite3.connect(str(db_path))
+            conn2.row_factory = sqlite3.Row
+            conn2.text_factory = bytes
+
+            qt = _quote_ident(table_name)
+            sql = (
+                "SELECT local_id, ts, real_sender_id, "
+                "CAST(strftime('%H', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS h, "
+                "CAST(strftime('%M', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS m, "
+                "CAST(strftime('%S', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS s "
+                "FROM ("
+                f"  SELECT local_id, {ts_expr} AS ts, real_sender_id"
+                f"  FROM {qt}"
+                f"  WHERE {ts_expr} >= ? AND {ts_expr} < ? AND local_type != 10000"
+                ") sub "
+                f"WHERE {night_where} "
+                "ORDER BY (h*3600 + m*60 + s + CASE WHEN h < 5 THEN 86400 ELSE 0 END) DESC, ts DESC "
+                "LIMIT 1"
+            )
+            try:
+                r = conn2.execute(sql, (start_ts, end_ts)).fetchone()
+            except Exception:
+                r = None
+            if not r:
+                continue
+            try:
+                local_id = int(r["local_id"] or 0)
+                ts = int(r["ts"] or 0)
+                h = int(r["h"] or 0)
+                m = int(r["m"] or 0)
+                s = int(r["s"] or 0)
+                sender_id = int(r["real_sender_id"] or 0)
+            except Exception:
+                continue
+            if local_id <= 0 or ts <= 0:
+                continue
+
+            score = (h * 3600 + m * 60 + s) + (86400 if h < 5 else 0)
+            if best_ref is None or score > best_ref.score or (score == best_ref.score and ts > best_ref.ts):
+                best_ref = _SentMomentRef(
+                    ts=int(ts),
+                    score=int(score),
+                    username=str(best_user),
+                    db_stem=str(db_path.stem),
+                    table_name=str(table_name),
+                    local_id=int(local_id),
+                )
+                best_direction = "sent" if (my_rowid is not None and sender_id == int(my_rowid)) else "received"
+        finally:
+            try:
+                if conn2 is not None:
+                    conn2.close()
+            except Exception:
+                pass
+
+    moment: Optional[dict[str, Any]] = None
+    if best_ref is not None:
+        payload = _fetch_message_moment_payload(account_dir=account_dir, ref=best_ref, contact_rows={})
+        content = str((payload or {}).get("content") or "")
+        moment = _night_moment_payload(ts=best_ref.ts, direction=best_direction, content=content)
+
+    return {
+        "nightMessagesTotal": int(total),
+        "myNightMessages": int(mine),
+        "partner": _night_partner_payload(
+            account_dir=account_dir,
+            username=best_user,
+            night_messages=best_cnt,
+            total=total,
+        ),
+        "latestMoment": moment,
+    }
+
+
+def _compute_night_companion(*, account_dir: Path, year: int, my_username: str) -> dict[str, Any]:
+    """深夜守夜人：凌晨 0:00-5:59 的单聊双向消息统计（排除群聊 / biz 分片 / 系统消息）。"""
+
+    result = _compute_night_companion_from_index(
+        account_dir=account_dir,
+        year=year,
+        my_username=my_username,
+    )
+    if result is not None:
+        return result
+    try:
+        return _compute_night_companion_fallback(
+            account_dir=account_dir,
+            year=year,
+            my_username=my_username,
+        )
+    except Exception:
+        return _empty_night_companion()
+
+
 def build_card_01_cyber_schedule(
     *,
     account_dir: Path,
@@ -1080,6 +1473,18 @@ def build_card_01_cyber_schedule(
             time.time() - t0,
         )
 
+    # 深夜守夜人（双向消息统计，不依赖上面的“仅本人发出”结果）。
+    t0 = time.time()
+    night_companion = _compute_night_companion(account_dir=account_dir, year=year, my_username=sender)
+    logger.info(
+        "Wrapped card#1 night companion computed: account=%s year=%s total=%s partner=%s elapsed=%.2fs",
+        str(account_dir.name or "").strip(),
+        year,
+        int(night_companion.get("nightMessagesTotal") or 0),
+        "ok" if night_companion.get("partner") else "none",
+        time.time() - t0,
+    )
+
     return {
         "id": 1,
         "title": "你是「早八人」还是「夜猫子」？",
@@ -1097,5 +1502,6 @@ def build_card_01_cyber_schedule(
             "latestSent": latest_sent,
             "yearFirstSent": year_first_sent,
             "yearLastSent": year_last_sent,
+            "nightCompanion": night_companion,
         },
     }

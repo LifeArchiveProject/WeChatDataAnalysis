@@ -269,7 +269,9 @@ const resolvePreviewMeta = (kind, idx) => {
 const props = defineProps({
   year: { type: Number, required: true },
   variant: { type: String, default: 'panel' }, // 'panel' | 'slide'
-  cardManifests: { type: Array, default: () => [] }
+  cardManifests: { type: Array, default: () => [] },
+  // deck 契约：当前 slide 是否处于激活态（封面为 slide 0）
+  isActive: { type: Boolean, default: true }
 })
 
 const previewQuestions = computed(() => {
@@ -314,16 +316,6 @@ const previewStageClass = computed(() => (
 const previewViewportClass = computed(() => (
   'h-[390px] w-[580px]'
 ))
-
-const previewCardDistance = computed(() => {
-  const total = previewQuestions.value.length
-  return total >= 9 ? 9 : total >= 7 ? 11 : total >= 5 ? 13 : 18
-})
-
-const previewVerticalDistance = computed(() => {
-  const total = previewQuestions.value.length
-  return total >= 9 ? 10 : total >= 7 ? 11 : total >= 5 ? 14 : 18
-})
 
 const yearText = computed(() => `${props.year}年`)
 

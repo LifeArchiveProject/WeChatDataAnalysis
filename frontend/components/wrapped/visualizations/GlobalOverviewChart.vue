@@ -5,6 +5,7 @@
       :daily-counts="annualDailyCounts"
       :days="daysInYear"
       :highlights="annualHighlights"
+      :is-active="isActive"
     />
   </div>
 </template>
@@ -13,7 +14,9 @@
 import AnnualCalendarHeatmap from '~/components/wrapped/visualizations/AnnualCalendarHeatmap.vue'
 
 const props = defineProps({
-  data: { type: Object, default: () => ({}) }
+  data: { type: Object, default: () => ({}) },
+  // 透传给热力图：控制入场动画与循环动画暂停
+  isActive: { type: Boolean, default: true }
 })
 
 const year = computed(() => {

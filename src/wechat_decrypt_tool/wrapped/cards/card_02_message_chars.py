@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import random
+import re
 import sqlite3
 import time
 from collections import Counter
@@ -11,7 +13,18 @@ from typing import Any, Optional
 
 from pypinyin import lazy_pinyin, Style
 
-from ...chat_helpers import _decode_message_content, _decode_sqlite_text, _iter_message_db_paths, _quote_ident
+from ...chat_helpers import (
+    _build_avatar_url,
+    _decode_message_content,
+    _decode_sqlite_text,
+    _extract_xml_attr,
+    _extract_xml_tag_text,
+    _iter_message_db_paths,
+    _load_contact_rows,
+    _pick_display_name,
+    _quote_ident,
+    _should_keep_session,
+)
 from ...chat_search_index import get_chat_search_index_db_path
 from ...logging_config import get_logger
 
@@ -769,6 +782,369 @@ def compute_text_message_char_counts(*, account_dir: Path, year: int) -> tuple[i
     return int(sent_total), int(recv_total)
 
 
+# ---------------------------------------------------------------------------
+# 语音与通话统计（local_type=34 语音消息 / local_type=50 VoIP 通话）
+# ---------------------------------------------------------------------------
+
+_MD5_HEX_RE = re.compile(r"(?i)[0-9a-f]{32}")
+_VOIP_BUBBLE_RE = re.compile(r"(<VoIPBubbleMsg[^>]*>.*?</VoIPBubbleMsg>)", flags=re.IGNORECASE | re.DOTALL)
+# 兼容 时:分:秒 与 分:秒 两种格式，如 "通话时长 00:19" / "通话时长 1:02:03"。
+_VOIP_DURATION_RE = re.compile(r"通话时长\s*(\d+):(\d+)(?::(\d+))?")
+_VOIP_MISSED_MARKERS = ("已取消", "对方已拒绝", "未接听")
+
+
+def _mask_name(name: str) -> str:
+    s = str(name or "").strip()
+    if not s:
+        return ""
+    if len(s) == 1:
+        return "*"
+    if len(s) == 2:
+        return s[0] + "*"
+    return s[0] + ("*" * (len(s) - 2)) + s[-1]
+
+
+def _list_session_usernames(session_db_path: Path) -> list[str]:
+    if not session_db_path.exists():
+        return []
+    conn = sqlite3.connect(str(session_db_path))
+    try:
+        try:
+            rows = conn.execute("SELECT username FROM SessionTable").fetchall()
+        except sqlite3.OperationalError:
+            rows = conn.execute("SELECT username FROM Session").fetchall()
+    except Exception:
+        rows = []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    out: list[str] = []
+    for r in rows:
+        if not r or not r[0]:
+            continue
+        u = str(r[0]).strip()
+        if u:
+            out.append(u)
+    return out
+
+
+def _voicelength_to_seconds(raw: Any) -> int:
+    """
+    语音时长换算，语义与 chat_export_service.get_voice_duration_in_seconds 一致：
+    voicelength 正常口径为毫秒，四舍五入到秒。
+
+    防御：微信语音上限 60 秒，毫秒口径下有效值 >= 1000；个别历史数据直接存秒
+    （很小的值），此时按秒口径返回，避免被 /1000 抹成 0。
+    """
+    try:
+        v = int(str(raw or "0").strip() or "0")
+    except Exception:
+        v = 0
+    if v <= 0:
+        return 0
+    if v <= 60:
+        # 秒口径防御：60 以内视为已经是秒。
+        return int(v)
+    return int(round(v / 1000.0))
+
+
+def _parse_voip_duration_seconds(msg_text: str) -> Optional[int]:
+    m = _VOIP_DURATION_RE.search(str(msg_text or ""))
+    if not m:
+        return None
+    try:
+        a = int(m.group(1))
+        b = int(m.group(2))
+        c = m.group(3)
+    except Exception:
+        return None
+    if c is not None:
+        return a * 3600 + b * 60 + int(c)
+    return a * 60 + b
+
+
+def compute_voice_call_stats(*, account_dir: Path, year: int) -> dict[str, Any]:
+    """
+    扫描 message_*.db 分片（排除 biz_message*），统计单聊里的语音消息与音视频通话。
+
+    说明：message_fts 索引不含原始 XML（voicelength / VoIPBubbleMsg），必须走分片；
+    local_type IN (34, 50) 的消息量小，全年扫描成本可控。
+    """
+    start_ts, end_ts = _year_range_epoch_seconds(year)
+    my_username = str(account_dir.name or "").strip()
+
+    # 会话 username 从表名反解（msg_<md5(username)> / chat_<md5(username)>）。
+    session_usernames = _list_session_usernames(account_dir / "session.db")
+    md5_to_username: dict[str, str] = {}
+    table_to_username: dict[str, str] = {}
+    for u in session_usernames:
+        md5_hex = hashlib.md5(u.encode("utf-8")).hexdigest().lower()
+        md5_to_username[md5_hex] = u
+        table_to_username[f"msg_{md5_hex}"] = u
+        table_to_username[f"chat_{md5_hex}"] = u
+
+    def resolve_username_from_table(table_name: str) -> str:
+        ln = str(table_name or "").lower()
+        x = table_to_username.get(ln)
+        if x:
+            return x
+        m = _MD5_HEX_RE.search(ln)
+        if m:
+            return str(md5_to_username.get(m.group(0).lower()) or "")
+        return ""
+
+    voice_sent_count = 0
+    voice_sent_seconds = 0
+    voice_recv_count = 0
+    voice_recv_seconds = 0
+    voice_sent_seconds_by_user: Counter[str] = Counter()
+    voice_sent_count_by_user: Counter[str] = Counter()
+    voice_recv_seconds_by_user: Counter[str] = Counter()
+    voice_recv_count_by_user: Counter[str] = Counter()
+    # (seconds, direction, username, ts)
+    longest_voice: Optional[tuple[int, str, str, int]] = None
+
+    call_total_count = 0
+    call_video_count = 0
+    call_voice_count = 0
+    call_connected_count = 0
+    call_total_seconds = 0
+    call_missed_count = 0
+    call_seconds_by_user: Counter[str] = Counter()
+    call_count_by_user: Counter[str] = Counter()
+
+    ts_expr = (
+        "CASE "
+        "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+        "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+        "ELSE CAST(create_time AS INTEGER) "
+        "END"
+    )
+
+    db_paths = _iter_message_db_paths(account_dir)
+    for db_path in db_paths:
+        try:
+            if db_path.name.lower().startswith("biz_message"):
+                continue
+        except Exception:
+            pass
+        if not db_path.exists():
+            continue
+
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            conn.text_factory = bytes
+
+            my_rowid: Optional[int]
+            try:
+                r2 = conn.execute("SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1", (my_username,)).fetchone()
+                my_rowid = int(r2[0]) if r2 and r2[0] is not None else None
+            except Exception:
+                my_rowid = None
+
+            if my_rowid is None:
+                continue
+
+            tables = _list_message_tables(conn)
+            if not tables:
+                continue
+
+            for table in tables:
+                username = resolve_username_from_table(table)
+                # 只统计单聊：无法反解会话或群聊（@chatroom）一律跳过。
+                if not username or username.endswith("@chatroom"):
+                    continue
+
+                qt = _quote_ident(table)
+                sql = (
+                    "SELECT local_type, real_sender_id, create_time, message_content, compress_content "
+                    f"FROM {qt} "
+                    "WHERE CAST(local_type AS INTEGER) IN (34, 50) "
+                    f"  AND {ts_expr} >= ? AND {ts_expr} < ?"
+                )
+                try:
+                    cur = conn.execute(sql, (start_ts, end_ts))
+                except Exception:
+                    continue
+
+                for r in cur:
+                    try:
+                        local_type = int(r["local_type"] or 0)
+                    except Exception:
+                        continue
+
+                    try:
+                        rsid = int(r["real_sender_id"] or 0)
+                    except Exception:
+                        rsid = 0
+                    is_sent = rsid == my_rowid
+
+                    ts = 0
+                    try:
+                        ts = int(r["create_time"] or 0)
+                    except Exception:
+                        ts = 0
+                    if ts > 1_000_000_000_000:
+                        ts = int(ts / 1000)
+
+                    raw_text = ""
+                    try:
+                        raw_text = _decode_message_content(r["compress_content"], r["message_content"]).strip()
+                    except Exception:
+                        raw_text = ""
+
+                    if local_type == 34:
+                        duration_raw = _extract_xml_attr(raw_text, "voicelength") or _extract_xml_tag_text(
+                            raw_text, "voicelength"
+                        )
+                        seconds = _voicelength_to_seconds(duration_raw)
+                        if is_sent:
+                            voice_sent_count += 1
+                            voice_sent_seconds += seconds
+                            voice_sent_count_by_user[username] += 1
+                            voice_sent_seconds_by_user[username] += seconds
+                        else:
+                            voice_recv_count += 1
+                            voice_recv_seconds += seconds
+                            voice_recv_count_by_user[username] += 1
+                            voice_recv_seconds_by_user[username] += seconds
+                        if seconds > 0 and (longest_voice is None or seconds > longest_voice[0]):
+                            longest_voice = (
+                                int(seconds),
+                                "sent" if is_sent else "received",
+                                username,
+                                int(ts),
+                            )
+                        continue
+
+                    # local_type == 50: VoIP 通话（VoIPBubbleMsg 块）。
+                    block = raw_text
+                    m_voip = _VOIP_BUBBLE_RE.search(raw_text)
+                    if m_voip:
+                        block = m_voip.group(1) or raw_text
+                    room_type = str(_extract_xml_tag_text(block, "room_type") or "").strip()
+                    voip_msg = str(_extract_xml_tag_text(block, "msg") or "").strip()
+
+                    call_total_count += 1
+                    call_count_by_user[username] += 1
+                    if room_type == "0":
+                        call_video_count += 1
+                    elif room_type == "1":
+                        call_voice_count += 1
+
+                    if any(marker in voip_msg for marker in _VOIP_MISSED_MARKERS):
+                        call_missed_count += 1
+                        continue
+
+                    duration = _parse_voip_duration_seconds(voip_msg)
+                    if duration is not None:
+                        call_connected_count += 1
+                        call_total_seconds += int(duration)
+                        call_seconds_by_user[username] += int(duration)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def pick_top_partner(seconds_by_user: Counter[str], count_by_user: Counter[str]) -> Optional[tuple[str, int, int]]:
+        candidates = [
+            (u, int(seconds_by_user.get(u, 0)), int(count_by_user.get(u, 0)))
+            for u in set(seconds_by_user) | set(count_by_user)
+            if u and (not u.endswith("@chatroom")) and _should_keep_session(u, include_official=False)
+        ]
+        candidates = [c for c in candidates if c[1] > 0 or c[2] > 0]
+        if not candidates:
+            return None
+        return sorted(candidates, key=lambda c: (-c[1], -c[2], c[0]))[0]
+
+    top_voice_sent = pick_top_partner(voice_sent_seconds_by_user, voice_sent_count_by_user)
+    top_voice_recv = pick_top_partner(voice_recv_seconds_by_user, voice_recv_count_by_user)
+    top_call = pick_top_partner(call_seconds_by_user, call_count_by_user)
+
+    contact_usernames: list[str] = []
+    for item in (top_voice_sent, top_voice_recv, top_call):
+        if item is not None and item[0]:
+            contact_usernames.append(item[0])
+    if longest_voice is not None and longest_voice[2]:
+        contact_usernames.append(longest_voice[2])
+    contact_rows = _load_contact_rows(account_dir / "contact.db", contact_usernames)
+
+    def build_partner_obj(item: Optional[tuple[str, int, int]]) -> Optional[dict[str, Any]]:
+        if item is None:
+            return None
+        username, seconds, count = item
+        row = contact_rows.get(username)
+        display = _pick_display_name(row, username)
+        return {
+            "username": username,
+            "displayName": display,
+            "maskedName": _mask_name(display),
+            "avatarUrl": _build_avatar_url(str(account_dir.name or ""), username),
+            "seconds": int(seconds),
+            "count": int(count),
+        }
+
+    longest_obj: Optional[dict[str, Any]] = None
+    if longest_voice is not None:
+        seconds, direction, username, ts = longest_voice
+        row = contact_rows.get(username)
+        display = _pick_display_name(row, username)
+        date_str = ""
+        if ts > 0:
+            try:
+                date_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            except Exception:
+                date_str = ""
+        longest_obj = {
+            "seconds": int(seconds),
+            "direction": str(direction),
+            "username": username,
+            "displayName": display,
+            "maskedName": _mask_name(display),
+            "avatarUrl": _build_avatar_url(str(account_dir.name or ""), username),
+            "date": date_str,
+        }
+
+    voice = {
+        "sentCount": int(voice_sent_count),
+        "sentSeconds": int(voice_sent_seconds),
+        "receivedCount": int(voice_recv_count),
+        "receivedSeconds": int(voice_recv_seconds),
+        "longest": longest_obj,
+        "topSentPartner": build_partner_obj(top_voice_sent),
+        "topReceivedPartner": build_partner_obj(top_voice_recv),
+    }
+    calls = {
+        "totalCount": int(call_total_count),
+        "videoCount": int(call_video_count),
+        "voiceCount": int(call_voice_count),
+        "connectedCount": int(call_connected_count),
+        "totalSeconds": int(call_total_seconds),
+        "missedOrCanceledCount": int(call_missed_count),
+        "topPartner": build_partner_obj(top_call),
+    }
+
+    logger.info(
+        "Wrapped card#2 voice/call stats: account=%s year=%s voice_sent=%d voice_recv=%d calls=%d connected=%d missed=%d",
+        my_username,
+        year,
+        int(voice_sent_count),
+        int(voice_recv_count),
+        int(call_total_count),
+        int(call_connected_count),
+        int(call_missed_count),
+    )
+
+    return {"voice": voice, "calls": calls}
+
+
 def build_card_02_message_chars(*, account_dir: Path, year: int) -> dict[str, Any]:
     sent_chars, recv_chars = compute_text_message_char_counts(account_dir=account_dir, year=year)
 
@@ -777,6 +1153,9 @@ def build_card_02_message_chars(*, account_dir: Path, year: int) -> dict[str, An
 
     # 计算键盘敲击统计
     keyboard_stats = compute_keyboard_stats(account_dir=account_dir, year=year, sample_rate=1.0)
+
+    # 计算语音与通话统计
+    voice_call_stats = compute_voice_call_stats(account_dir=account_dir, year=year)
 
     if sent_chars > 0 and recv_chars > 0:
         narrative = f"你今年在微信里打了 {sent_chars:,} 个字，也收到了 {recv_chars:,} 个字。"
@@ -802,5 +1181,7 @@ def build_card_02_message_chars(*, account_dir: Path, year: int) -> dict[str, An
             "sentBook": sent_book,
             "receivedA4": recv_a4,
             "keyboard": keyboard_stats,
+            "voice": voice_call_stats["voice"],
+            "calls": voice_call_stats["calls"],
         },
     }

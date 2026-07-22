@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full">
+  <div ref="rootEl" class="w-full">
     <!-- 聊天气泡区域 -->
     <div class="rounded-2xl border border-[#00000010] bg-[#F5F5F5] p-3 sm:p-4">
       <div class="flex flex-col gap-3">
@@ -22,7 +22,16 @@
               <template v-else>今年还没有收到文字消息。</template>
             </div>
             <div v-if="receivedA4 && receivedA4.a4 && receivedA4.a4.sheets > 0" class="mt-1 text-[10px] text-[#00000055] wrapped-label">
-              约 {{ formatInt(receivedA4.a4.sheets) }} 张 A4 · 堆叠高度约 {{ receivedA4.a4.heightText }}
+              约 {{ formatInt(receivedA4.a4.sheets) }} 张 A4
+            </div>
+            <!-- A4 纸堆叠高度：高度柱 + count-up 标签 -->
+            <div v-if="a4HeightCm > 0" class="a4-compare">
+              <div class="a4-col">
+                <div ref="a4BarEl" class="a4-col-fill" :style="{ height: `${a4BarPx}px` }"></div>
+              </div>
+              <div class="wrapped-label text-[10px] text-[#00000066]">
+                叠起来 ≈ <span class="wrapped-number text-[#07C160]">{{ a4HeightDisplay }}</span> {{ a4HeightUnit }}
+              </div>
             </div>
           </div>
         </div>
@@ -61,25 +70,44 @@
             <span class="dot dot-green"></span>
           </div>
           <div class="keyboard-hint">键帽磨损程度反映你的打字频率</div>
-          <div class="keyboard-stats">{{ formatInt(totalKeyHits) }} 次敲击</div>
+          <div class="keyboard-stats">{{ totalHitsDisplay }} 次敲击</div>
         </div>
 
         <!-- 键盘主体 -->
-        <div class="keyboard-body">
-          <div v-for="(row, ri) in keyboardRows" :key="ri" class="kb-row">
+        <div ref="keyboardBodyEl" class="keyboard-body">
+          <div v-for="(row, ri) in keyboardRows" :key="ri" :ref="(el) => setRowEl(el, ri)" class="kb-row">
             <div
-              v-for="key in row"
-              :key="key.code + key.label"
+              v-for="(key, ci) in row"
+              :key="`${ri}-${ci}`"
               class="kb-key"
               :class="[`kb-w-${key.w || 1}`, { 'kb-space': key.isSpace, 'kb-func': key.isFunc }, getKeyClasses(key.code)]"
               :style="getKeyStyle(key.code)"
+              @mouseenter="showKeyTip($event, key)"
+              @mouseleave="hideKeyTip"
+              @pointerdown="showKeyTip($event, key)"
+              @pointerup="hideKeyTipTouch"
+              @pointercancel="hideKeyTipTouch"
             >
-              <div class="kb-key-top" :style="getKeyTopStyle(key.code)">
-                <span v-if="key.sub" class="kb-sub" :style="getLabelStyle(key.code)">{{ key.sub }}</span>
-                <span v-if="key.label" class="kb-label" :class="{ 'kb-label-sm': key.isFunc }" :style="getLabelStyle(key.code)">{{ key.label }}</span>
+              <div class="kb-key-top">
+                <span v-if="key.sub" class="kb-sub">{{ key.sub }}</span>
+                <span v-if="key.label" class="kb-label" :class="{ 'kb-label-sm': key.isFunc }">{{ key.label }}</span>
                 <div v-if="key.isSpace" class="kb-space-bar"></div>
               </div>
             </div>
+          </div>
+
+          <!-- 单键 tooltip -->
+          <div v-if="keyTooltip" class="kb-tooltip" :style="{ left: `${keyTooltip.x}px`, top: `${keyTooltip.y}px` }">
+            {{ keyTooltip.text }}
+          </div>
+        </div>
+
+        <!-- Top3 磨损键徽章 -->
+        <div v-if="topWornKeys.length" class="kb-top-badges">
+          <div v-for="(k, i) in topWornKeys" :key="k.code" class="kb-top-badge">
+            <span class="kb-top-rank wrapped-number">{{ i + 1 }}</span>
+            <span class="kb-top-name wrapped-number">{{ k.name }}</span>
+            <span class="kb-top-hits wrapped-label">{{ formatInt(k.hits) }} 次</span>
           </div>
         </div>
 
@@ -87,16 +115,129 @@
         <div class="keyboard-brand">微信机械键盘</div>
       </div>
     </div>
+
+    <!-- 「说给你听」语音与通话（旧缓存无 voice/calls 字段时整区隐藏） -->
+    <div v-if="showVoiceCalls" class="voice-outer">
+      <div class="voice-header">
+        <span class="voice-title wrapped-label">说给你听</span>
+        <span class="voice-sub wrapped-label">语音与通话</span>
+      </div>
+
+      <div class="voice-grid" :class="{ 'voice-grid-2': hasVoice && hasCalls }">
+        <!-- 语音消息 -->
+        <div v-if="hasVoice" class="voice-block">
+          <template v-if="voiceSentSeconds > 0">
+            <div class="voice-big">
+              <span class="wrapped-number voice-big-num">{{ voiceNumDisplay }}</span>
+              <span class="voice-big-unit wrapped-label">{{ voiceMainUnit }}语音</span>
+            </div>
+            <div class="voice-analogy wrapped-body">{{ voiceAnalogyText }}</div>
+          </template>
+          <div v-else class="voice-analogy wrapped-body">
+            今年你更多在听<template v-if="topReceivedPartnerName">，最常听 <span class="wrapped-privacy-name text-[#07C160]">{{ topReceivedPartnerName }}</span> 说话</template>。
+          </div>
+
+          <div class="voice-wave" :class="{ 'wave-paused': wavePaused }" aria-hidden="true">
+            <span v-for="i in 24" :key="i" :style="waveBarStyle(i)"></span>
+          </div>
+
+          <div class="voice-meta wrapped-label">
+            发出 {{ formatInt(voiceSentCount) }} 条<template v-if="voiceReceivedCount > 0"> · 收到 {{ formatInt(voiceReceivedCount) }} 条 / {{ formatDurationShort(voiceReceivedSeconds) }}</template>
+          </div>
+          <div v-if="topSentPartnerName" class="voice-meta wrapped-label">
+            最常说给 <span class="wrapped-privacy-name text-[#07C160]">{{ topSentPartnerName }}</span> 听
+          </div>
+
+          <!-- 年度最长语音：微信绿气泡复刻 -->
+          <div v-if="longestVoice" class="voice-longest">
+            <div class="voice-longest-head wrapped-label">
+              年度最长语音 · {{ longestIsSent ? '发给' : '来自' }}
+              <span class="wrapped-privacy-name">{{ longestVoiceName || '神秘好友' }}</span>
+              <template v-if="longestVoice.date"> · {{ longestVoice.date }}</template>
+            </div>
+            <div class="flex items-center gap-2" :class="{ 'flex-row-reverse': longestIsSent }">
+              <div class="avatar-box overflow-hidden wrapped-privacy-avatar" :class="longestIsSent ? 'bg-[#95EC69]' : 'bg-white'">
+                <img
+                  v-if="longestAvatarUrl && longestAvatarOk"
+                  :src="longestAvatarUrl"
+                  class="w-full h-full object-cover"
+                  alt="avatar"
+                  @error="longestAvatarOk = false"
+                />
+                <span v-else class="wrapped-number text-sm text-[#07C160] select-none">{{ longestAvatarFallback }}</span>
+              </div>
+              <div
+                class="voice-bubble"
+                :class="longestIsSent ? 'voice-bubble-sent' : 'voice-bubble-recv'"
+                :style="{ width: longestBubbleWidth }"
+              >
+                <svg viewBox="0 0 12 12" class="voice-play" :class="{ 'voice-play-sent': longestIsSent }" aria-hidden="true">
+                  <path d="M3 2l7 4-7 4z" fill="currentColor" />
+                </svg>
+                <span class="voice-dur wrapped-number">{{ longestSecondsText }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 通话 -->
+        <div v-if="hasCalls" class="voice-block">
+          <div class="voice-meta wrapped-label">通话总时长</div>
+          <div class="flip-clock">
+            <span
+              v-for="(ch, i) in callsDurationDigits"
+              :key="i"
+              :class="ch === ':' ? 'flip-sep' : 'flip-digit'"
+            >{{ ch }}</span>
+          </div>
+          <div class="voice-meta wrapped-label">
+            全年 {{ formatInt(callsTotalCount) }} 通 · 接通 {{ formatInt(callsConnectedCount) }} 通
+            <span v-if="callsMissedCount > 0" class="call-missed-badge wrapped-number">未接通 {{ formatInt(callsMissedCount) }}</span>
+          </div>
+
+          <!-- 视频 / 语音次数对比 -->
+          <div class="call-bars">
+            <div class="call-bar-row">
+              <span class="call-bar-name wrapped-label">视频</span>
+              <div class="call-bar-track">
+                <div class="call-bar-fill call-bar-video" :style="{ width: `${callBarPct(callsVideoCount)}%` }"></div>
+              </div>
+              <span class="call-bar-count wrapped-number">{{ formatInt(callsVideoCount) }}</span>
+            </div>
+            <div class="call-bar-row">
+              <span class="call-bar-name wrapped-label">语音</span>
+              <div class="call-bar-track">
+                <div class="call-bar-fill call-bar-voice" :style="{ width: `${callBarPct(callsVoiceCount)}%` }"></div>
+              </div>
+              <span class="call-bar-count wrapped-number">{{ formatInt(callsVoiceCount) }}</span>
+            </div>
+          </div>
+
+          <div v-if="callsTopPartnerName" class="voice-meta wrapped-label">
+            最常连线 <span class="wrapped-privacy-name text-[#07C160]">{{ callsTopPartnerName }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { gsap } from 'gsap'
+import { useReducedMotion } from '~/composables/useReducedMotion'
+import { useCountUp } from '~/composables/useCountUp'
+
 const props = defineProps({
-  data: { type: Object, default: () => ({}) }
+  data: { type: Object, default: () => ({}) },
+  // deck 翻到本卡时置 true，首次为 true 触发入场编排；false 时暂停循环动画。
+  isActive: { type: Boolean, default: true }
 })
 
 const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
 const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
+
+const reducedMotion = useReducedMotion()
 
 const sentChars = computed(() => Number(props.data?.sentChars || 0))
 const receivedChars = computed(() => Number(props.data?.receivedChars || 0))
@@ -104,6 +245,148 @@ const receivedChars = computed(() => Number(props.data?.receivedChars || 0))
 const sentBookText = computed(() => props.data?.sentBook?.text || '')
 const receivedA4 = computed(() => props.data?.receivedA4 || null)
 const receivedA4Text = computed(() => receivedA4.value?.text || '')
+
+// ========== A4 纸高度对比 ==========
+
+const a4HeightCm = computed(() => Number(receivedA4.value?.a4?.heightCm ?? receivedA4.value?.heightCm ?? 0))
+const a4UseMeters = computed(() => a4HeightCm.value >= 100)
+const a4HeightValue = computed(() => (a4UseMeters.value ? a4HeightCm.value / 100 : a4HeightCm.value))
+const a4HeightUnit = computed(() => (a4UseMeters.value ? '米' : '厘米'))
+// 对数刻度：几厘米到几米都能看出柱高差异
+const a4BarPx = computed(() => {
+  const cm = a4HeightCm.value
+  if (cm <= 0) return 0
+  return Math.round(6 + Math.min(1, Math.log1p(cm) / Math.log1p(500)) * 42)
+})
+const { display: a4HeightDisplay, play: playA4Height, finish: finishA4Height } = useCountUp(
+  () => a4HeightValue.value,
+  { duration: 1.0, decimals: 1 }
+)
+
+// ========== 「说给你听」：voice / calls（字段缺失时整区隐藏） ==========
+
+const voice = computed(() => (props.data?.voice && typeof props.data.voice === 'object' ? props.data.voice : null))
+const calls = computed(() => (props.data?.calls && typeof props.data.calls === 'object' ? props.data.calls : null))
+
+const voiceSentCount = computed(() => Number(voice.value?.sentCount || 0))
+const voiceSentSeconds = computed(() => Number(voice.value?.sentSeconds || 0))
+const voiceReceivedCount = computed(() => Number(voice.value?.receivedCount || 0))
+const voiceReceivedSeconds = computed(() => Number(voice.value?.receivedSeconds || 0))
+
+const hasVoice = computed(() =>
+  voiceSentCount.value + voiceSentSeconds.value + voiceReceivedCount.value + voiceReceivedSeconds.value > 0
+)
+const hasCalls = computed(() => {
+  const c = calls.value
+  if (!c) return false
+  return Number(c.totalCount || 0) > 0 || Number(c.totalSeconds || 0) > 0
+})
+const showVoiceCalls = computed(() => hasVoice.value || hasCalls.value)
+
+// 大数字：满 1 分钟按分钟展示，否则按秒
+const voiceMainIsMinutes = computed(() => voiceSentSeconds.value >= 60)
+const voiceMainNumber = computed(() =>
+  voiceMainIsMinutes.value ? Math.round(voiceSentSeconds.value / 60) : Math.round(voiceSentSeconds.value)
+)
+const voiceMainUnit = computed(() => (voiceMainIsMinutes.value ? '分钟' : '秒'))
+const { display: voiceNumDisplay, play: playVoiceNum, finish: finishVoiceNum } = useCountUp(
+  () => voiceMainNumber.value,
+  { duration: 1.2, delay: 0.1 }
+)
+
+const voiceAnalogyText = computed(() => {
+  const m = voiceSentSeconds.value / 60
+  if (m >= 110) {
+    const n = Math.max(1, Math.round(m / 120))
+    return n <= 1 ? '≈ 认认真真讲完一场电影' : `≈ ${n} 场电影的时长`
+  }
+  if (m >= 40) return `≈ ${Math.max(1, Math.round(m / 45))} 张专辑的时长`
+  if (m >= 4) return `≈ ${Math.max(1, Math.round(m / 4))} 首歌的时长`
+  return '每一秒都是心里话'
+})
+
+const formatDurationShort = (sec) => {
+  const s = Math.max(0, Math.round(Number(sec) || 0))
+  if (s < 60) return `${s} 秒`
+  return `${Math.round(s / 60)} 分钟`
+}
+
+const partnerName = (p) => String(p?.displayName || p?.maskedName || '').trim()
+const topSentPartnerName = computed(() => partnerName(voice.value?.topSentPartner))
+const topReceivedPartnerName = computed(() => partnerName(voice.value?.topReceivedPartner))
+
+// 最长语音
+const longestVoice = computed(() => {
+  const l = voice.value?.longest
+  if (!l || typeof l !== 'object') return null
+  return Number(l.seconds || 0) > 0 ? l : null
+})
+const longestIsSent = computed(() => String(longestVoice.value?.direction || '') === 'sent')
+const longestVoiceName = computed(() => partnerName(longestVoice.value))
+const longestSecondsText = computed(() => `${Math.round(Number(longestVoice.value?.seconds || 0))}''`)
+// 气泡宽度随时长增长（微信同款观感），60 秒封顶
+const longestBubbleWidth = computed(() => {
+  const s = Number(longestVoice.value?.seconds || 0)
+  return `${Math.round(35 + Math.min(1, s / 60) * 55)}%`
+})
+
+const apiBase = useApiBase()
+const resolveMediaUrl = (value) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const host = new URL(raw).hostname.toLowerCase()
+      if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
+        return `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
+      }
+    } catch {}
+    return raw
+  }
+  if (/^\/api\//i.test(raw)) return `${apiBase}${raw.slice(4)}`
+  return raw.startsWith('/') ? raw : `/${raw}`
+}
+const longestAvatarUrl = computed(() => resolveMediaUrl(longestVoice.value?.avatarUrl))
+const longestAvatarOk = ref(true)
+watch(longestAvatarUrl, () => { longestAvatarOk.value = true })
+const longestAvatarFallback = computed(() => {
+  const s = longestVoiceName.value
+  return s ? s[0] : '?'
+})
+
+// 通话
+const callsTotalCount = computed(() => Number(calls.value?.totalCount || 0))
+const callsConnectedCount = computed(() => Number(calls.value?.connectedCount || 0))
+const callsVideoCount = computed(() => Number(calls.value?.videoCount || 0))
+const callsVoiceCount = computed(() => Number(calls.value?.voiceCount || 0))
+const callsMissedCount = computed(() => Number(calls.value?.missedOrCanceledCount || 0))
+const callsTopPartnerName = computed(() => partnerName(calls.value?.topPartner))
+
+// 翻牌数字：有小时则 H:MM:SS，否则 MM:SS
+const callsDurationDigits = computed(() => {
+  const total = Math.max(0, Math.round(Number(calls.value?.totalSeconds || 0)))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (n) => String(n).padStart(2, '0')
+  const str = h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`
+  return str.split('')
+})
+
+const callBarPct = (n) => {
+  const mx = Math.max(callsVideoCount.value, callsVoiceCount.value, 1)
+  return Math.max(4, Math.round((Number(n) || 0) / mx * 100))
+}
+
+// 声波条：固定伪随机高度序列，避免每次渲染跳变
+const WAVE_HEIGHTS = [0.35, 0.65, 0.5, 0.9, 0.45, 0.75, 0.6, 1, 0.5, 0.8, 0.4, 0.7, 0.55, 0.85, 0.45, 0.95, 0.6, 0.75, 0.4, 0.65, 0.5, 0.85, 0.45, 0.6]
+const waveBarStyle = (i) => ({
+  '--wave-h': WAVE_HEIGHTS[(i - 1) % WAVE_HEIGHTS.length],
+  animationDelay: `${((i - 1) % 8) * -0.11}s`
+})
+const wavePaused = computed(() => !props.isActive || reducedMotion.value)
+
+// ========== 键盘数据 ==========
 
 // 从后端获取键盘统计数据
 const keyboardData = computed(() => props.data?.keyboard || null)
@@ -118,6 +401,11 @@ const totalKeyHits = computed(() => {
   const letterHits = Math.round(sentChars.value * 2.8)
   return letterHits + Math.round(letterHits * 0.15)
 })
+
+const { display: totalHitsDisplay, play: playTotalHits, finish: finishTotalHits } = useCountUp(
+  () => totalKeyHits.value,
+  { duration: 1.4 }
+)
 
 // 获取各键的敲击次数（优先使用后端精确数据）
 const keyHitsMap = computed(() => {
@@ -145,18 +433,28 @@ const keyHitsMap = computed(() => {
   return result
 })
 
+const maxKeyHits = computed(() => {
+  const values = Object.values(keyHitsMap.value).map((v) => Number(v) || 0)
+  return Math.max(...values, 1)
+})
+
 // 计算磨损程度（0-1），基于实际敲击次数
 const getWear = (code) => {
   const k = code.toLowerCase()
   const hits = Number(keyHitsMap.value[k] || 0)
   if (!Number.isFinite(hits) || hits <= 0) return 0
 
-  const values = Object.values(keyHitsMap.value).map((v) => Number(v) || 0)
-  const maxHits = Math.max(...values, 1)
   // 小数量级键（如数字/标点）容易"看起来没变化"，用对数缩放增强可视化差异。
-  const ratio = Math.log1p(hits) / Math.log1p(maxHits)
+  const ratio = Math.log1p(hits) / Math.log1p(maxKeyHits.value)
   return Math.min(1, Math.pow(ratio, 1.6))
 }
+
+// 磨损显影进度（0-1）：入场时由 gsap 从 0 推到 1，键帽从全新态过渡到目标磨损。
+const wearReveal = ref(0)
+// Level 8-10 的 clip-path 缺角/报废类在显影结束后统一切换，避免中途跳变。
+const clipRevealed = ref(false)
+
+const effectiveWear = (code) => getWear(code) * wearReveal.value
 
 // ========== 10级磨损系统 ==========
 
@@ -190,7 +488,8 @@ const getBrokenCorner = (code) => {
 
 // 获取键的CSS类名
 const getKeyClasses = (code) => {
-  const level = getWearLevel(getWear(code))
+  let level = getWearLevel(effectiveWear(code))
+  if (!clipRevealed.value && level >= 8) level = 7
   const classes = [`kb-level-${level}`]
   if (level === 8) classes.push(`kb-broken-${getBrokenCorner(code)}`)
   if (level === 9) classes.push(`kb-shattered-${getBrokenCorner(code)}`)
@@ -241,9 +540,10 @@ const keyboardRows = [
   ],
 ]
 
-// 键帽样式 - 基于10级系统
+// 键帽磨损样式：统一输出 CSS 变量（--wear-opacity 等），由样式表消费；
+// 显影动画只需推进 wearReveal，即可让所有键从全新态平滑过渡到目标等级。
 const getKeyStyle = (code) => {
-  const w = getWear(code)
+  const w = effectiveWear(code)
   const level = getWearLevel(w)
   const progress = getWearProgress(w)
 
@@ -261,11 +561,16 @@ const getKeyStyle = (code) => {
     { l: 60, s: 34 },  // 9: 严重破损
     { l: 45, s: 10 },  // 10: 完全报废（轴体底座）
   ]
-
-  const current = levelParams[level]
-  const next = levelParams[Math.min(level + 1, 10)]
+  // 高光/凹陷深度、标签透明度/模糊度随等级变化
+  const highlightLevels = [0.55, 0.48, 0.40, 0.32, 0.24, 0.18, 0.12, 0.08, 0.05, 0.02, 0]
+  const depthLevels = [0.12, 0.14, 0.16, 0.18, 0.20, 0.24, 0.28, 0.32, 0.36, 0.40, 0.45]
+  const opacityLevels = [1, 0.95, 0.88, 0.75, 0.55, 0.35, 0.18, 0.08, 0.03, 0.01, 0]
+  const blurLevels = [0, 0.2, 0.4, 0.7, 1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.5]
 
   // 等级内平滑插值
+  const lerpLevel = (arr) => arr[level] + (arr[Math.min(level + 1, 10)] - arr[level]) * progress
+  const current = levelParams[level]
+  const next = levelParams[Math.min(level + 1, 10)]
   const baseL = current.l + (next.l - current.l) * progress
   const sat = current.s + (next.s - current.s) * progress
 
@@ -273,52 +578,191 @@ const getKeyStyle = (code) => {
     '--key-bg': `hsl(40, ${sat}%, ${baseL}%)`,
     '--key-bg-dark': `hsl(40, ${sat}%, ${baseL - 6}%)`,
     '--key-border': `hsl(40, ${Math.max(0, sat - 2)}%, ${baseL - 18}%)`,
-    '--wear-level': level,
-    '--wear-progress': progress,
+    '--key-highlight': lerpLevel(highlightLevels).toFixed(3),
+    '--key-depth': lerpLevel(depthLevels).toFixed(3),
+    '--wear-opacity': lerpLevel(opacityLevels).toFixed(3),
+    '--wear-blur': `${lerpLevel(blurLevels).toFixed(2)}px`,
   }
 }
 
-const getKeyTopStyle = (code) => {
-  const w = getWear(code)
-  const level = getWearLevel(w)
-  const progress = getWearProgress(w)
+// ========== 单键 tooltip 与 Top3 徽章 ==========
 
-  // 高光和深度随等级变化
-  const highlightLevels = [0.55, 0.48, 0.40, 0.32, 0.24, 0.18, 0.12, 0.08, 0.05, 0.02, 0]
-  const depthLevels = [0.12, 0.14, 0.16, 0.18, 0.20, 0.24, 0.28, 0.32, 0.36, 0.40, 0.45]
+const KEY_NAME_MAP = { space: '空格', enter: 'Enter', backspace: '退格', shift: 'Shift', tab: 'Tab', caps: 'Caps', ctrl: 'Ctrl', alt: 'Alt' }
 
-  const highlight = highlightLevels[level] + (highlightLevels[Math.min(level + 1, 10)] - highlightLevels[level]) * progress
-  const depth = depthLevels[level] + (depthLevels[Math.min(level + 1, 10)] - depthLevels[level]) * progress
+// code → 全键盘敲击排名（仅统计有敲击的键）
+const keyRankMap = computed(() => {
+  const m = {}
+  Object.entries(keyHitsMap.value)
+    .map(([k, v]) => [k, Number(v) || 0])
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([k], i) => { m[k] = i + 1 })
+  return m
+})
 
-  return {
-    background: `linear-gradient(180deg, var(--key-bg) 0%, var(--key-bg-dark) 100%)`,
-    boxShadow: `inset 0 1px 0 rgba(255,255,255,${highlight}), inset 0 -1px 2px rgba(0,0,0,${depth})`,
+const topWornKeys = computed(() =>
+  Object.entries(keyHitsMap.value)
+    .map(([code, hits]) => ({ code, hits: Number(hits) || 0 }))
+    .filter((x) => x.hits > 0)
+    .sort((a, b) => b.hits - a.hits)
+    .slice(0, 3)
+    .map((x) => ({ ...x, name: KEY_NAME_MAP[x.code] || x.code.toUpperCase() }))
+)
+
+const keyTooltip = ref(null) // { text, x, y }
+const keyboardBodyEl = ref(null)
+
+const showKeyTip = (evt, key) => {
+  const body = keyboardBodyEl.value
+  const target = evt?.currentTarget
+  if (!body || !target) return
+  const code = key.code.toLowerCase()
+  const hits = Number(keyHitsMap.value[code] || 0)
+  const rank = keyRankMap.value[code]
+  const title = key.isSpace ? '空格键' : `${key.label || key.code} 键`
+  const bodyRect = body.getBoundingClientRect()
+  const keyRect = target.getBoundingClientRect()
+  keyTooltip.value = {
+    text: hits > 0 && rank
+      ? `${title} · 敲击 ${formatInt(hits)} 次 · 全键盘第 ${rank}`
+      : `${title} · 今年还没敲过`,
+    // 边缘键做水平钳制，避免 tooltip 超出键盘
+    x: Math.min(Math.max(keyRect.left - bodyRect.left + keyRect.width / 2, 64), bodyRect.width - 64),
+    y: keyRect.top - bodyRect.top,
   }
 }
+const hideKeyTip = () => { keyTooltip.value = null }
+const hideKeyTipTouch = (evt) => { if (evt?.pointerType !== 'mouse') hideKeyTip() }
 
-const getLabelStyle = (code) => {
-  const w = getWear(code)
-  const level = getWearLevel(w)
-  const progress = getWearProgress(w)
+// ========== 入场编排 ==========
 
-  // 标签透明度和模糊度随等级变化
-  const opacityLevels = [1, 0.95, 0.88, 0.75, 0.55, 0.35, 0.18, 0.08, 0.03, 0.01, 0]
-  const blurLevels = [0, 0.2, 0.4, 0.7, 1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.5]
+const rootEl = ref(null)
+const a4BarEl = ref(null)
+const rowEls = []
+const setRowEl = (el, ri) => { rowEls[ri] = el || null }
 
-  const opacity = opacityLevels[level] + (opacityLevels[Math.min(level + 1, 10)] - opacityLevels[level]) * progress
-  const blur = blurLevels[level] + (blurLevels[Math.min(level + 1, 10)] - blurLevels[level]) * progress
+let hasEntered = false
+let entranceTl = null
 
-  return {
-    opacity: opacity,
-    filter: `blur(${blur}px)`,
-  }
+const finishAll = () => {
+  wearReveal.value = 1
+  clipRevealed.value = true
+  finishTotalHits()
+  finishVoiceNum()
+  finishA4Height()
 }
+
+const buildTimeline = () => {
+  const root = rootEl.value
+  if (!root) {
+    finishAll()
+    return
+  }
+  const tl = gsap.timeline()
+
+  // a. 键盘按行波浪「压下弹起」
+  rowEls.forEach((rowEl, ri) => {
+    if (!rowEl || !rowEl.children?.length) return
+    tl.to(rowEl.children, {
+      y: 2,
+      duration: 0.09,
+      ease: 'power1.in',
+      yoyo: true,
+      repeat: 1,
+      stagger: 0.018,
+    }, 0.05 + ri * 0.11)
+  })
+
+  // b. 磨损显影：全新态 → 目标等级；结束后再切 Level 8-10 的 clip-path 类
+  tl.to(wearReveal, { value: 1, duration: 1.2, ease: 'power1.inOut' }, 0.35)
+  tl.add(() => { clipRevealed.value = true }, 1.58)
+
+  // c. 总敲击数 count-up
+  tl.add(() => { playTotalHits() }, 0.4)
+
+  // Top3 磨损键徽章依次弹入
+  const badges = root.querySelectorAll('.kb-top-badge')
+  if (badges.length) {
+    tl.from(badges, { opacity: 0, scale: 0.6, y: 6, duration: 0.4, ease: 'back.out(2)', stagger: 0.12 }, 1.65)
+  }
+
+  // A4 高度柱 + count-up 标签
+  if (a4BarEl.value) {
+    tl.fromTo(a4BarEl.value, { scaleY: 0 }, { scaleY: 1, duration: 0.9, ease: 'power2.out' }, 0.55)
+    tl.add(() => { playA4Height() }, 0.55)
+  }
+
+  // 「说给你听」区
+  if (showVoiceCalls.value) {
+    tl.add(() => { playVoiceNum() }, 0.5)
+    const longest = root.querySelector('.voice-longest')
+    if (longest) tl.from(longest, { opacity: 0, y: 10, duration: 0.5, ease: 'power2.out' }, 0.8)
+    const flips = root.querySelectorAll('.flip-digit, .flip-sep')
+    if (flips.length) {
+      tl.from(flips, { rotationX: -90, opacity: 0, duration: 0.5, ease: 'back.out(1.6)', stagger: 0.06, transformOrigin: '50% 50% -12px' }, 0.9)
+    }
+    const fills = root.querySelectorAll('.call-bar-fill')
+    if (fills.length) {
+      tl.fromTo(fills, { scaleX: 0 }, { scaleX: 1, duration: 0.7, ease: 'power2.out', stagger: 0.15, transformOrigin: 'left center' }, 1.2)
+    }
+    const missed = root.querySelector('.call-missed-badge')
+    if (missed) tl.from(missed, { opacity: 0, scale: 0.6, duration: 0.35, ease: 'back.out(2)' }, 1.9)
+  }
+
+  entranceTl = tl
+  if (!props.isActive) tl.pause()
+}
+
+const playEntrance = () => {
+  if (hasEntered || !import.meta.client) return
+  hasEntered = true
+  if (reducedMotion.value) {
+    finishAll()
+    return
+  }
+  // 等 DOM 就绪后再采集动画目标
+  nextTick(buildTimeline)
+}
+
+watch(() => props.isActive, (active) => {
+  if (active) {
+    if (!hasEntered) playEntrance()
+    else if (entranceTl && entranceTl.progress() < 1) entranceTl.play()
+  } else if (entranceTl) {
+    entranceTl.pause()
+  }
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  if (entranceTl) { entranceTl.kill(); entranceTl = null }
+})
 </script>
 
-<style>
+<style scoped>
 /* 头像 */
 .avatar-box {
   @apply w-8 h-8 rounded-lg border border-[#00000010] flex items-center justify-center flex-shrink-0;
+}
+
+/* A4 纸堆叠高度对比 */
+.a4-compare {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+.a4-col {
+  width: 14px;
+  display: flex;
+  align-items: flex-end;
+}
+.a4-col-fill {
+  width: 100%;
+  border-radius: 2px 2px 0 0;
+  /* 横纹模拟一叠 A4 纸的侧面 */
+  background: repeating-linear-gradient(180deg, #ffffff 0px, #ffffff 2px, #e5e2da 2px, #e5e2da 3px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  transform-origin: bottom;
 }
 
 /* 键盘外框 */
@@ -363,6 +807,7 @@ const getLabelStyle = (code) => {
 
 .keyboard-body {
   @apply rounded-lg p-2;
+  position: relative;
   background: #f4f4f5;
   box-shadow: inset 0 1px 3px rgba(0,0,0,0.12);
 }
@@ -407,6 +852,7 @@ const getLabelStyle = (code) => {
   border-radius: 4px;
 }
 
+/* 磨损样式由键帽上的 CSS 变量驱动（--key-highlight/--key-depth/--wear-opacity/--wear-blur） */
 .kb-key-top {
   position: absolute;
   inset: 0;
@@ -418,6 +864,10 @@ const getLabelStyle = (code) => {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  background: linear-gradient(180deg, var(--key-bg) 0%, var(--key-bg-dark) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, var(--key-highlight, 0.55)),
+    inset 0 -1px 2px rgba(0, 0, 0, var(--key-depth, 0.12));
 }
 
 .kb-sub {
@@ -425,6 +875,8 @@ const getLabelStyle = (code) => {
   line-height: 1;
   color: #666;
   margin-bottom: 1px;
+  opacity: var(--wear-opacity, 1);
+  filter: blur(var(--wear-blur, 0px));
 }
 @media (min-width: 640px) {
   .kb-sub {
@@ -439,6 +891,8 @@ const getLabelStyle = (code) => {
   line-height: 1;
   text-shadow: 0 1px 0 rgba(255,255,255,0.6);
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  opacity: var(--wear-opacity, 1);
+  filter: blur(var(--wear-blur, 0px));
 }
 @media (min-width: 640px) {
   .kb-label {
@@ -463,6 +917,54 @@ const getLabelStyle = (code) => {
   border-radius: 2px;
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.18);
 }
+
+/* 单键 tooltip */
+.kb-tooltip {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 6px));
+  background: rgba(20, 20, 22, 0.92);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 30;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+}
+
+/* Top3 磨损键徽章 */
+.kb-top-badges {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.kb-top-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.06);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  font-size: 10px;
+}
+.kb-top-rank {
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: #07C160;
+  color: #fff;
+  font-size: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.kb-top-name { color: #262626; font-weight: 600; }
+.kb-top-hits { color: rgba(0,0,0,0.45); }
 
 /* ========== 10级磨损视觉效果 ========== */
 
@@ -747,14 +1249,244 @@ const getLabelStyle = (code) => {
   z-index: 1;
 }
 
-/* 高磨损等级性能优化 */
-.kb-level-8 .kb-key-top,
-.kb-level-9 .kb-key-top {
-  will-change: clip-path;
-}
-
 .keyboard-brand {
   @apply mt-2 text-center text-[8px] text-[#00000025] tracking-[0.15em] uppercase;
 }
 
+/* ========== 「说给你听」语音与通话 ========== */
+
+.voice-outer {
+  @apply mt-3 rounded-2xl border border-[#00000010] bg-[#F5F5F5] p-3 sm:p-4;
+}
+
+.voice-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.voice-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(0,0,0,0.7);
+}
+.voice-sub {
+  font-size: 10px;
+  color: rgba(0,0,0,0.35);
+}
+
+.voice-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-top: 8px;
+}
+@media (min-width: 640px) {
+  .voice-grid-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.voice-block {
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.05);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.voice-big {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.voice-big-num {
+  font-size: 28px;
+  line-height: 1.1;
+  color: #07C160;
+}
+.voice-big-unit {
+  font-size: 11px;
+  color: rgba(0,0,0,0.45);
+}
+.voice-analogy {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(0,0,0,0.5);
+}
+
+/* 声波条 */
+.voice-wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+  margin-top: 6px;
+}
+.voice-wave span {
+  width: 3px;
+  border-radius: 2px;
+  background: #07C160;
+  opacity: 0.75;
+  height: calc(22px * var(--wave-h, 0.5));
+  transform-origin: center;
+  animation: voiceWave 1.1s ease-in-out infinite;
+}
+.wave-paused span {
+  animation-play-state: paused;
+}
+@keyframes voiceWave {
+  0%, 100% { transform: scaleY(0.45); }
+  50% { transform: scaleY(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-wave span { animation: none; }
+}
+
+.voice-meta {
+  margin-top: 6px;
+  font-size: 10px;
+  color: rgba(0,0,0,0.45);
+}
+
+/* 年度最长语音气泡 */
+.voice-longest {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(0,0,0,0.08);
+}
+.voice-longest-head {
+  font-size: 10px;
+  color: rgba(0,0,0,0.45);
+  margin-bottom: 6px;
+}
+.voice-bubble {
+  position: relative;
+  height: 34px;
+  min-width: 72px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+}
+.voice-bubble-recv {
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+.voice-bubble-sent {
+  background: #95EC69;
+  justify-content: flex-end;
+}
+.voice-play {
+  width: 12px;
+  height: 12px;
+  color: #07C160;
+}
+.voice-play-sent {
+  color: rgba(0,0,0,0.7);
+  transform: scaleX(-1);
+}
+/* 「60''」时长角标 */
+.voice-dur {
+  position: absolute;
+  top: -7px;
+  right: -6px;
+  font-size: 9px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 999px;
+  background: #fff;
+  color: #07C160;
+  border: 1px solid rgba(7,193,96,0.25);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+/* 通话总时长翻牌数字 */
+.flip-clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 4px;
+  perspective: 300px;
+}
+.flip-digit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 30px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #3a3a3c 0%, #2c2c2e 48%, #1f1f21 52%, #2c2c2e 100%);
+  color: #fff;
+  font-family: ui-monospace, monospace;
+  font-size: 16px;
+  font-weight: 600;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.08);
+  position: relative;
+  backface-visibility: hidden;
+}
+.flip-digit::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 50%;
+  height: 1px;
+  background: rgba(0,0,0,0.4);
+}
+.flip-sep {
+  color: rgba(0,0,0,0.35);
+  font-family: ui-monospace, monospace;
+  font-weight: 700;
+}
+
+/* 视频/语音次数对比双条 */
+.call-bars {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.call-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.call-bar-name {
+  width: 26px;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: rgba(0,0,0,0.5);
+}
+.call-bar-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.05);
+  overflow: hidden;
+}
+.call-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transform-origin: left center;
+}
+.call-bar-video { background: #10AEFF; }
+.call-bar-voice { background: #07C160; }
+.call-bar-count {
+  width: 34px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 10px;
+  color: rgba(0,0,0,0.6);
+}
+
+/* 未接通角标 */
+.call-missed-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  line-height: 1;
+  color: #FA5151;
+  background: rgba(250,81,81,0.1);
+}
 </style>

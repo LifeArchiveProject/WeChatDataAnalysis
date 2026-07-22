@@ -4,6 +4,9 @@
     class="wrapped-deck-root relative h-screen w-full overflow-hidden transition-colors duration-500"
     :class="{ 'wrapped-privacy': privacyMode }"
     :style="{ backgroundColor: currentBg }"
+    role="region"
+    aria-roledescription="carousel"
+    aria-label="微信年度总结"
   >
     <!-- PPT 风格：单张卡片占据全页面，鼠标滚轮切换 -->
     <WrappedDeckBackground />
@@ -113,8 +116,51 @@
       </div>
     </div>
 
+    <!-- 翻页播报（供屏幕阅读器） -->
+    <div class="sr-only" aria-live="polite">{{ slideAnnouncement }}</div>
+
+    <!-- 右侧进度圆点导航 -->
+    <WrappedProgressDots
+      v-show="!deckChromeHidden && dotItems.length > 1"
+      :items="dotItems"
+      :active-index="activeIndex"
+      @select="onDotSelect"
+    />
+
+    <!-- 右下角：保存当前页为图片 -->
+    <button
+      v-show="!deckChromeHidden && report"
+      type="button"
+      class="absolute bottom-6 right-6 z-20 pointer-events-auto inline-flex items-center justify-center w-10 h-10 rounded-full bg-white/90 backdrop-blur border border-[#07C160]/20 text-[#07C160] shadow-sm hover:bg-[#07C160]/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 disabled:opacity-60 disabled:cursor-not-allowed transition"
+      :disabled="exporting"
+      aria-label="保存当前页为图片"
+      title="保存当前页为图片"
+      @click="exportActiveSlide"
+    >
+      <svg v-if="exporting" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z" />
+      </svg>
+      <svg
+        v-else
+        class="w-4 h-4"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <path d="M7 10l5 5 5-5" />
+        <path d="M12 15V3" />
+      </svg>
+    </button>
+
     <div
-      class="relative h-full w-full will-change-transform transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
+      ref="trackEl"
+      class="relative h-full w-full will-change-transform transition-transform ease-[cubic-bezier(0.22,1,0.36,1)]"
       :class="deckTrackClass"
       :style="trackStyle"
     >
@@ -124,6 +170,7 @@
           <WrappedHero
             :year="year"
             :card-manifests="report?.cards || []"
+            :is-active="activeIndex === 0"
             variant="slide"
             class="h-full w-full"
           />
@@ -175,48 +222,56 @@
         <Card00GlobalOverview
           v-else-if="c && (c.kind === 'global/overview' || c.id === 0)"
           :card="c"
+          :is-active="activeIndex === idx + 1"
           variant="slide"
           class="h-full w-full"
         />
         <Card01CyberSchedule
           v-else-if="c && (c.kind === 'time/weekday_hour_heatmap' || c.id === 1)"
           :card="c"
+          :is-active="activeIndex === idx + 1"
           variant="slide"
           class="h-full w-full"
         />
         <Card02MessageChars
           v-else-if="c && (c.kind === 'text/message_chars' || c.id === 2)"
           :card="c"
+          :is-active="activeIndex === idx + 1"
           variant="slide"
           class="h-full w-full"
         />
         <Card06KeywordsWordCloud
           v-else-if="c && (c.kind === 'text/keywords_wordcloud' || c.id === 6)"
           :card="c"
+          :is-active="activeIndex === idx + 1"
           variant="slide"
           class="h-full w-full"
         />
         <Card03ReplySpeed
           v-else-if="c && (c.kind === 'chat/reply_speed' || c.id === 3)"
           :card="c"
+          :is-active="activeIndex === idx + 1"
           variant="slide"
           class="h-full w-full"
         />
         <Card04MonthlyBestFriendsWall
           v-else-if="c && (c.kind === 'chat/monthly_best_friends_wall' || c.id === 4)"
           :card="c"
+          :is-active="activeIndex === idx + 1"
           variant="slide"
           class="h-full w-full"
         />
         <Card04EmojiUniverse
           v-else-if="c && (c.kind === 'emoji/annual_universe' || c.id === 5)"
           :card="c"
+          :is-active="activeIndex === idx + 1"
           variant="slide"
           class="h-full w-full"
         />
         <Card07BentoSummary
           v-else-if="c && (c.kind === 'global/bento_summary' || c.id === 7)"
           :card="c"
+          :is-active="activeIndex === idx + 1"
           variant="slide"
           class="h-full w-full"
         />
@@ -242,6 +297,7 @@
 import { useApi } from '~/composables/useApi'
 import { storeToRefs } from 'pinia'
 import { usePrivacyStore } from '~/stores/privacy'
+import { useReducedMotion } from '~/composables/useReducedMotion'
 
 useHead({
   title: '年度总结 · WeChat Wrapped',
@@ -284,10 +340,25 @@ const yearOptions = computed(() => {
 })
 
 const deckEl = ref(null)
+const trackEl = ref(null)
 const viewportHeight = ref(0)
 const activeIndex = ref(0)
 const navLocked = ref(false)
 const wheelAcc = ref(0)
+let lastWheelAt = 0
+
+const reducedMotion = useReducedMotion()
+
+// 触屏/笔跟手拖拽状态（鼠标仍走滚轮翻页）
+const dragging = ref(false)
+const dragOffset = ref(0)
+let dragPointerId = null
+let dragStartY = 0
+let dragLastY = 0
+let dragLastT = 0
+let dragVelocity = 0 // px/ms，向下为正
+
+const exporting = ref(false)
 
 // 允许子卡片隐藏 deck 顶部 UI（如关键词卡片 storm 阶段）
 const deckChromeHidden = ref(false)
@@ -305,7 +376,11 @@ const slides = computed(() => {
 
 // 年度总结沿用旧版浅绿色底色，避免继承聊天页灰底或引导页绿底。
 const currentBg = '#F3FFF8'
-const deckTrackClass = computed(() => 'z-10')
+// reduced-motion 时把 700ms 翻页过渡降为 150ms
+const deckTrackClass = computed(() => [
+  'z-10',
+  reducedMotion.value ? 'duration-150' : 'duration-700'
+])
 
 const applyViewportBg = () => {
   if (!import.meta.client) return
@@ -318,8 +393,11 @@ const slideStyle = computed(() => (
 ))
 
 const trackStyle = computed(() => {
-  const dy = viewportHeight.value > 0 ? -activeIndex.value * viewportHeight.value : 0
-  return { transform: `translate3d(0, ${dy}px, 0)` }
+  const base = viewportHeight.value > 0 ? -activeIndex.value * viewportHeight.value : 0
+  const style = { transform: `translate3d(0, ${base + dragOffset.value}px, 0)` }
+  // 拖拽期间关闭过渡以保证跟手；松手后恢复类上的过渡完成收尾/回弹
+  if (dragging.value) style.transition = 'none'
+  return style
 })
 
 const clampIndex = (i) => {
@@ -337,6 +415,49 @@ const goBack = async () => {
 
 const next = () => goTo(activeIndex.value + 1)
 const prev = () => goTo(activeIndex.value - 1)
+
+// 进度圆点数据：封面 + 各卡片（标题用于 tooltip，loading 用于细环 spinner）
+const dotItems = computed(() => {
+  const cards = Array.isArray(report.value?.cards) ? report.value.cards : []
+  return [
+    { title: '封面', loading: false },
+    ...cards.map((c, i) => ({
+      title: String(c?.title || `第 ${i + 2} 页`),
+      loading: c?.status === 'loading'
+    }))
+  ]
+})
+
+const onDotSelect = (i) => {
+  goTo(i)
+  lockNav()
+}
+
+// 翻页后播报给屏幕阅读器的文案
+const slideAnnouncement = computed(() => {
+  const item = dotItems.value[activeIndex.value]
+  return `第 ${activeIndex.value + 1} 页 · ${item?.title || ''}`
+})
+
+// 导出当前 slide 为 PNG（html-to-image 按需加载）
+const exportActiveSlide = async () => {
+  if (exporting.value) return
+  const el = trackEl.value?.children?.[activeIndex.value]
+  if (!el) return
+  exporting.value = true
+  try {
+    const { toPng } = await import('html-to-image')
+    const dataUrl = await toPng(el, { pixelRatio: 2, backgroundColor: currentBg })
+    const a = document.createElement('a')
+    a.href = dataUrl
+    a.download = `wechat-wrapped-${year.value}-${activeIndex.value + 1}.png`
+    a.click()
+  } catch (e) {
+    window.alert(`保存图片失败：${e?.message || e}`)
+  } finally {
+    exporting.value = false
+  }
+}
 
 const lockNav = () => {
   navLocked.value = true
@@ -384,6 +505,11 @@ const onWheel = (e) => {
   e.preventDefault()
   if (navLocked.value) return
 
+  // 慢滚间隔过久时清零累积量，避免跨时间误触发翻页
+  const now = e.timeStamp || Date.now()
+  if (now - lastWheelAt > 160) wheelAcc.value = 0
+  lastWheelAt = now
+
   wheelAcc.value += e.deltaY
   const threshold = 80
   if (Math.abs(wheelAcc.value) < threshold) return
@@ -399,13 +525,14 @@ const onKeydown = (e) => {
   if (!slides.value || slides.value.length <= 1) return
   if (isEditable(e.target)) return
 
-  if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
+  // Shift+左右键留给年份选择器（WrappedYearSelector）
+  if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ' || (e.key === 'ArrowRight' && !e.shiftKey)) {
     e.preventDefault()
     next()
     lockNav()
     return
   }
-  if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+  if (e.key === 'ArrowUp' || e.key === 'PageUp' || (e.key === 'ArrowLeft' && !e.shiftKey)) {
     e.preventDefault()
     prev()
     lockNav()
@@ -424,19 +551,81 @@ const onKeydown = (e) => {
   }
 }
 
-let touchStartY = 0
-const onTouchStart = (e) => {
+// —— 触屏/笔全程跟手拖拽翻页 ——
+const onPointerDown = (e) => {
+  // 鼠标仍走滚轮翻页，只接管触屏/笔
+  if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return
   if (!slides.value || slides.value.length <= 1) return
-  touchStartY = e.touches?.[0]?.clientY ?? 0
+  if (dragPointerId !== null) return
+  if (isEditable(e.target)) return
+
+  // 复用 onWheel 的内部可滚动区检测：还能滚的区域交还给原生滚动
+  const scrollX = e.target instanceof Element ? e.target.closest('[data-wrapped-scroll-x]') : null
+  if (scrollX && scrollX.scrollWidth > scrollX.clientWidth + 1) return
+  const scrollY = findScrollableYAncestor(e.target)
+  if (scrollY && (scrollY.scrollTop > 0 || scrollY.scrollTop + scrollY.clientHeight < scrollY.scrollHeight - 1)) return
+
+  dragPointerId = e.pointerId
+  dragStartY = e.clientY
+  dragLastY = e.clientY
+  dragLastT = e.timeStamp
+  dragVelocity = 0
+  dragOffset.value = 0
+  dragging.value = true
+  try {
+    deckEl.value?.setPointerCapture?.(e.pointerId)
+  } catch {
+    // 部分环境（如旧 WebView）不支持指针捕获，降级为普通监听
+  }
 }
-const onTouchEnd = (e) => {
-  if (!slides.value || slides.value.length <= 1) return
-  const endY = e.changedTouches?.[0]?.clientY ?? 0
-  const dy = endY - touchStartY
-  if (Math.abs(dy) < 50) return
-  if (dy < 0) next()
-  else prev()
+
+const onPointerMove = (e) => {
+  if (!dragging.value || e.pointerId !== dragPointerId) return
+  const dy = e.clientY - dragStartY
+  const dt = e.timeStamp - dragLastT
+  if (dt > 0) dragVelocity = (e.clientY - dragLastY) / dt
+  dragLastY = e.clientY
+  dragLastT = e.timeStamp
+
+  // 首/末页越界拖拽加 0.35 阻尼
+  const overFirst = activeIndex.value <= 0 && dy > 0
+  const overLast = activeIndex.value >= slides.value.length - 1 && dy < 0
+  dragOffset.value = (overFirst || overLast) ? dy * 0.35 : dy
+}
+
+// commit=false（pointercancel）时仅回弹不翻页
+const finishDrag = (commit) => {
+  if (!dragging.value) return
+  const dy = dragOffset.value
+  dragging.value = false
+  dragPointerId = null
+  dragOffset.value = 0
+
+  if (!commit) return
+  const threshold = Math.max(1, viewportHeight.value) * 0.25
+  const byDistance = Math.abs(dy) > threshold
+  const byVelocity = Math.abs(dragVelocity) > 0.5
+  if (!byDistance && !byVelocity) return
+
+  // 距离达标看位移方向，否则看松手瞬间速度方向（上滑=下一页）
+  const dir = byDistance ? (dy < 0 ? 1 : -1) : (dragVelocity < 0 ? 1 : -1)
+  goTo(activeIndex.value + dir)
   lockNav()
+}
+
+const onPointerUp = (e) => {
+  if (e.pointerId !== dragPointerId) return
+  finishDrag(true)
+}
+
+const onPointerCancel = (e) => {
+  if (e.pointerId !== dragPointerId) return
+  finishDrag(false)
+}
+
+// 拖拽期间阻止浏览器接管触摸手势，否则会触发 pointercancel 丢失跟手
+const onDeckTouchMove = (e) => {
+  if (dragging.value) e.preventDefault()
 }
 
 const updateViewport = () => {
@@ -524,6 +713,15 @@ const retryCard = async (cardId) => {
 
 provide('wrappedRetryCard', retryCard)
 
+// slide 索引 → 卡片数据加载（slide 0 为封面，无需加载）
+const loadCardAtSlide = (slideIdx) => {
+  const cardIdx = Number(slideIdx) - 1
+  if (!Number.isFinite(cardIdx) || cardIdx < 0) return
+  const id = Number(report.value?.cards?.[cardIdx]?.id)
+  if (!Number.isFinite(id)) return
+  void ensureCardLoaded(id)
+}
+
 const reload = async (forceRefresh = false, preserveIndex = false) => {
   const token = ++reportToken
   const keepIndex = preserveIndex ? activeIndex.value : 0
@@ -571,12 +769,10 @@ const reload = async (forceRefresh = false, preserveIndex = false) => {
 
     if (preserveIndex) {
       activeIndex.value = clampIndex(keepIndex)
-      const cardIdx = Number(activeIndex.value) - 1
-      if (cardIdx >= 0) {
-        const id = Number(report.value?.cards?.[cardIdx]?.id)
-        if (Number.isFinite(id)) void ensureCardLoaded(id)
-      }
+      loadCardAtSlide(activeIndex.value)
     }
+    // 报告就绪后立即预取第一张卡，封面翻下来时无需等待
+    loadCardAtSlide(1)
   } catch (e) {
     if (token !== reportToken) return
     report.value = null
@@ -587,14 +783,11 @@ const reload = async (forceRefresh = false, preserveIndex = false) => {
   }
 }
 
-// Lazy-load the active slide's card data.
+// Lazy-load the active slide's card data. 同时 fire-and-forget 预取相邻卡，减少翻页等待。
 watch(activeIndex, (i) => {
-  const cardIdx = Number(i) - 1
-  if (!Number.isFinite(cardIdx) || cardIdx < 0) return
-  const c = report.value?.cards?.[cardIdx]
-  const id = Number(c?.id)
-  if (!Number.isFinite(id)) return
-  void ensureCardLoaded(id)
+  loadCardAtSlide(i)
+  loadCardAtSlide(i + 1)
+  loadCardAtSlide(i - 1)
 })
 
 onMounted(async () => {
@@ -611,8 +804,12 @@ onMounted(async () => {
   // passive:false 才能 preventDefault，避免外层容器产生滚动/回弹
   deckEl.value?.addEventListener('wheel', onWheel, { passive: false })
   window.addEventListener('keydown', onKeydown)
-  deckEl.value?.addEventListener('touchstart', onTouchStart, { passive: true })
-  deckEl.value?.addEventListener('touchend', onTouchEnd, { passive: true })
+  deckEl.value?.addEventListener('pointerdown', onPointerDown)
+  deckEl.value?.addEventListener('pointermove', onPointerMove)
+  deckEl.value?.addEventListener('pointerup', onPointerUp)
+  deckEl.value?.addEventListener('pointercancel', onPointerCancel)
+  // passive:false：拖拽期间 preventDefault 阻止浏览器把触摸手势判定为滚动
+  deckEl.value?.addEventListener('touchmove', onDeckTouchMove, { passive: false })
 
   await loadAccounts()
   // Auto-generate once if we already have chat accounts (direct WCDB or legacy), to match "one click" expectations.
@@ -631,8 +828,11 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', updateViewport)
   deckEl.value?.removeEventListener('wheel', onWheel)
   window.removeEventListener('keydown', onKeydown)
-  deckEl.value?.removeEventListener('touchstart', onTouchStart)
-  deckEl.value?.removeEventListener('touchend', onTouchEnd)
+  deckEl.value?.removeEventListener('pointerdown', onPointerDown)
+  deckEl.value?.removeEventListener('pointermove', onPointerMove)
+  deckEl.value?.removeEventListener('pointerup', onPointerUp)
+  deckEl.value?.removeEventListener('pointercancel', onPointerCancel)
+  deckEl.value?.removeEventListener('touchmove', onDeckTouchMove)
   if (navUnlockTimer) clearTimeout(navUnlockTimer)
 })
 

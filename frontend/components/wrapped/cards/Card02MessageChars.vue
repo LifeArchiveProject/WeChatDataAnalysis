@@ -21,7 +21,7 @@
       </div>
     </template>
 
-    <MessageCharsChart :data="card.data || {}" />
+    <MessageCharsChart :data="card.data || {}" :is-active="isActive" />
   </WrappedCardShell>
 </template>
 
@@ -30,7 +30,9 @@ import MessageCharsChart from '~/components/wrapped/visualizations/MessageCharsC
 
 const props = defineProps({
   card: { type: Object, required: true },
-  variant: { type: String, default: 'panel' } // 'panel' | 'slide'
+  variant: { type: String, default: 'panel' }, // 'panel' | 'slide'
+  // deck 翻到本页时置 true，首次为 true 触发入场动画；false 时暂停循环动画。
+  isActive: { type: Boolean, default: true }
 })
 
 const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
@@ -39,4 +41,3 @@ const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
 const sentChars = computed(() => Number(props.card?.data?.sentChars || 0))
 const receivedChars = computed(() => Number(props.card?.data?.receivedChars || 0))
 </script>
-
