@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import unittest
 from datetime import datetime
@@ -38,11 +39,15 @@ class TestWrappedCyberScheduleNightCompanion(unittest.TestCase):
         finally:
             conn.close()
 
-    def _seed_index_db(self, path: Path, rows: list[dict]) -> None:
+    def _seed_index_db(self, path: Path, rows: list[dict], *, with_payload: bool = True) -> None:
+        # 模拟真实索引：text 列存逐字符分词文本，原文保留在 payload_json（旧索引无该列）。
+        from wechat_decrypt_tool.chat_helpers import _to_char_token_text
+
         conn = sqlite3.connect(str(path))
         try:
+            payload_col = ",\n                    payload_json TEXT" if with_payload else ""
             conn.execute(
-                """
+                f"""
                 CREATE TABLE IF NOT EXISTS message_fts (
                     text TEXT,
                     username TEXT,
@@ -52,30 +57,32 @@ class TestWrappedCyberScheduleNightCompanion(unittest.TestCase):
                     local_id INTEGER,
                     local_type INTEGER,
                     db_stem TEXT,
-                    table_name TEXT
+                    table_name TEXT{payload_col}
                 )
                 """
             )
             for r in rows:
-                conn.execute(
-                    """
-                    INSERT INTO message_fts(
-                        text, username, sender_username, create_time, sort_seq,
-                        local_id, local_type, db_stem, table_name
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(r.get("text", "hi")),
-                        r["username"],
-                        r["sender_username"],
-                        int(r["create_time"]),
-                        int(r.get("sort_seq", r["local_id"])),
-                        int(r["local_id"]),
-                        int(r.get("local_type", 1)),
-                        str(r.get("db_stem", "message_0")),
-                        str(r.get("table_name", "msg_abc")),
-                    ),
+                original = str(r.get("text", "hi"))
+                values = [
+                    _to_char_token_text(original),
+                    r["username"],
+                    r["sender_username"],
+                    int(r["create_time"]),
+                    int(r.get("sort_seq", r["local_id"])),
+                    int(r["local_id"]),
+                    int(r.get("local_type", 1)),
+                    str(r.get("db_stem", "message_0")),
+                    str(r.get("table_name", "msg_abc")),
+                ]
+                cols = (
+                    "text, username, sender_username, create_time, sort_seq, "
+                    "local_id, local_type, db_stem, table_name"
                 )
+                if with_payload:
+                    cols += ", payload_json"
+                    values.append(json.dumps({"content": original}, ensure_ascii=False))
+                placeholders = ", ".join("?" for _ in values)
+                conn.execute(f"INSERT INTO message_fts({cols}) VALUES({placeholders})", values)
             conn.commit()
         finally:
             conn.close()
@@ -197,6 +204,63 @@ class TestWrappedCyberScheduleNightCompanion(unittest.TestCase):
             self.assertEqual(moment["content"], "夜" * 57 + "...")
             self.assertEqual(len(moment["content"]), 60)
             self.assertEqual(moment["direction"], "received")
+
+    def test_latest_moment_readable_on_legacy_index_without_payload(self):
+        # 旧索引没有 payload_json 列：分词文本应去空格还原（小写/空格损失可接受），不得逐字带空格展示。
+        from wechat_decrypt_tool.wrapped.cards.card_01_cyber_schedule import _compute_night_companion
+
+        with TemporaryDirectory() as td:
+            account = "wxid_me"
+            account_dir = Path(td) / account
+            account_dir.mkdir(parents=True, exist_ok=True)
+
+            friend = "wxid_legacy_friend"
+            self._seed_contact_db(account_dir / "contact.db", [friend])
+
+            rows = [self._row(friend, friend, self._ts(2025, 6, 1, 2, 0), 1, text="晚安 Good Night")]
+            self._seed_index_db(account_dir / "chat_search_index.db", rows, with_payload=False)
+
+            data = _compute_night_companion(account_dir=account_dir, year=2025, my_username=account)
+            moment = data["latestMoment"]
+            self.assertIsNotNone(moment)
+            self.assertEqual(moment["content"], "晚安goodnight")
+
+    def test_excludes_official_and_service_sessions(self):
+        # 公众号/企业微信/服务号会话不得成为守夜人，也不得进入 sharePct 分母。
+        from wechat_decrypt_tool.wrapped.cards.card_01_cyber_schedule import _compute_night_companion
+
+        with TemporaryDirectory() as td:
+            account = "wxid_me"
+            account_dir = Path(td) / account
+            account_dir.mkdir(parents=True, exist_ok=True)
+
+            friend = "wxid_real_friend"
+            self._seed_contact_db(account_dir / "contact.db", [friend])
+
+            rows: list[dict] = []
+            lid = 1
+            for hh, mm in [(1, 0), (2, 0)]:
+                rows.append(self._row(friend, friend, self._ts(2025, 9, 9, hh, mm), lid))
+                lid += 1
+            # 企业微信联系人 5 条、服务推送 3 条、公众号 2 条，全部应被排除。
+            for hh in range(5):
+                rows.append(self._row("1688850001@openim", "1688850001@openim", self._ts(2025, 9, 10, 1, hh), lid))
+                lid += 1
+            for hh in range(3):
+                rows.append(self._row("notifymessage", "notifymessage", self._ts(2025, 9, 11, 2, hh), lid))
+                lid += 1
+            for hh in range(2):
+                rows.append(self._row("gh_news123", "gh_news123", self._ts(2025, 9, 12, 3, hh), lid))
+                lid += 1
+
+            self._seed_index_db(account_dir / "chat_search_index.db", rows)
+
+            data = _compute_night_companion(account_dir=account_dir, year=2025, my_username=account)
+            self.assertEqual(data["nightMessagesTotal"], 2)
+            partner = data["partner"]
+            self.assertIsNotNone(partner)
+            self.assertEqual(partner["username"], friend)
+            self.assertAlmostEqual(partner["sharePct"], 100.0)
 
     def test_no_night_messages_returns_zero_shape(self):
         from wechat_decrypt_tool.wrapped.cards.card_01_cyber_schedule import _compute_night_companion
