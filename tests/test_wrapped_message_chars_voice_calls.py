@@ -83,6 +83,7 @@ class TestWrappedMessageCharsVoiceCalls(unittest.TestCase):
         *,
         account: str,
         rows_by_username: dict[str, list[dict[str, object]]],
+        include_account_in_name2id: bool = True,
     ) -> None:
         """
         为每个会话 username 建一张 msg_<md5(username)> 表。
@@ -94,7 +95,8 @@ class TestWrappedMessageCharsVoiceCalls(unittest.TestCase):
         conn = sqlite3.connect(str(path))
         try:
             conn.execute("CREATE TABLE Name2Id (rowid INTEGER PRIMARY KEY, user_name TEXT)")
-            conn.execute("INSERT INTO Name2Id(rowid, user_name) VALUES (?, ?)", (1, account))
+            if include_account_in_name2id:
+                conn.execute("INSERT INTO Name2Id(rowid, user_name) VALUES (?, ?)", (1, account))
             for idx, (username, rows) in enumerate(rows_by_username.items()):
                 friend_rowid = idx + 2
                 conn.execute("INSERT INTO Name2Id(rowid, user_name) VALUES (?, ?)", (friend_rowid, username))
@@ -306,26 +308,88 @@ class TestWrappedMessageCharsVoiceCalls(unittest.TestCase):
                     "create_time": self._ts(2025, 4, 5, 20, 0, 0),
                     "message_content": _voip_xml(room_type="1", msg="未接听"),
                 },
+                {
+                    # 自己拒接：文案「已拒绝」（不含「对方」前缀）也须计入未接通。
+                    "local_id": 6,
+                    "local_type": 50,
+                    "direction": "received",
+                    "create_time": self._ts(2025, 4, 6, 20, 0, 0),
+                    "message_content": _voip_xml(room_type="0", msg="已拒绝"),
+                },
+                {
+                    # 拨出无人接听：「对方无应答」。
+                    "local_id": 7,
+                    "local_type": 50,
+                    "direction": "sent",
+                    "create_time": self._ts(2025, 4, 7, 20, 0, 0),
+                    "message_content": _voip_xml(room_type="1", msg="对方无应答"),
+                },
             ]
             self._seed_message_db(account_dir / "message_0.db", account=account, rows_by_username={friend: rows})
 
             data = compute_voice_call_stats(account_dir=account_dir, year=2025)
             calls = data["calls"]
 
-            self.assertEqual(calls["totalCount"], 5)
-            self.assertEqual(calls["videoCount"], 2)
-            self.assertEqual(calls["voiceCount"], 3)
+            self.assertEqual(calls["totalCount"], 7)
+            self.assertEqual(calls["videoCount"], 3)
+            self.assertEqual(calls["voiceCount"], 4)
             self.assertEqual(calls["connectedCount"], 2)
             self.assertEqual(calls["totalSeconds"], 3723 + 19)
-            self.assertEqual(calls["missedOrCanceledCount"], 3)
+            self.assertEqual(calls["missedOrCanceledCount"], 5)
+            # 恒等式：任何文案变体都不得让通话在两侧计数中同时丢失。
+            self.assertEqual(calls["totalCount"], calls["connectedCount"] + calls["missedOrCanceledCount"])
 
             top = calls["topPartner"]
             self.assertIsNotNone(top)
             self.assertEqual(top["username"], friend)
             self.assertEqual(top["seconds"], 3742)
-            self.assertEqual(top["count"], 5)
+            self.assertEqual(top["count"], 7)
             self.assertEqual(top["displayName"], "好友1")
             self.assertEqual(top["maskedName"], "好*1")
+
+    def test_shard_without_my_name2id_still_counts_received(self):
+        # 本人不在某分片的 Name2Id（该分片里从未发过消息）时，收到的语音/通话不得丢失。
+        from wechat_decrypt_tool.wrapped.cards.card_02_message_chars import compute_voice_call_stats
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_me"
+            friend = "wxid_recv_only"
+            account_dir = self._make_account_dir(root, account=account, usernames=[friend])
+
+            rows = [
+                {
+                    "local_id": 1,
+                    "local_type": 34,
+                    "direction": "received",
+                    "create_time": self._ts(2025, 8, 1, 10, 0, 0),
+                    "message_content": _voice_xml("15000"),
+                },
+                {
+                    "local_id": 2,
+                    "local_type": 50,
+                    "direction": "received",
+                    "create_time": self._ts(2025, 8, 2, 10, 0, 0),
+                    "message_content": _voip_xml(room_type="1", msg="通话时长 02:00"),
+                },
+            ]
+            self._seed_message_db(
+                account_dir / "message_0.db",
+                account=account,
+                rows_by_username={friend: rows},
+                include_account_in_name2id=False,
+            )
+
+            data = compute_voice_call_stats(account_dir=account_dir, year=2025)
+            voice = data["voice"]
+            calls = data["calls"]
+
+            self.assertEqual(voice["receivedCount"], 1)
+            self.assertEqual(voice["receivedSeconds"], 15)
+            self.assertEqual(voice["sentCount"], 0)
+            self.assertEqual(calls["totalCount"], 1)
+            self.assertEqual(calls["connectedCount"], 1)
+            self.assertEqual(calls["totalSeconds"], 120)
 
     def test_chatroom_messages_are_excluded(self):
         from wechat_decrypt_tool.wrapped.cards.card_02_message_chars import compute_voice_call_stats

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sqlite3
 import time
@@ -18,6 +19,7 @@ from ...chat_helpers import (
     _pick_display_name,
     _quote_ident,
     _row_to_search_hit,
+    _should_keep_session,
 )
 from ...logging_config import get_logger
 
@@ -977,6 +979,26 @@ def _empty_night_companion() -> dict[str, Any]:
     }
 
 
+def _readable_night_index_text(token_text: Any, payload_json: Any) -> str:
+    """message_fts.text 存的是逐字符分词文本（小写、单空格连接）。
+
+    优先取 payload_json 里保留的原文（新版索引），缺失时去空格拼接还原。
+    与 card_00 的 _readable_index_text 同口径，保持卡片文件自包含。
+    """
+
+    content = ""
+    try:
+        obj = json.loads(_decode_sqlite_text(payload_json))
+        if isinstance(obj, dict):
+            content = str(obj.get("content") or "").strip()
+    except Exception:
+        content = ""
+
+    if content:
+        return content
+    return "".join(ch for ch in _decode_sqlite_text(token_text) if not ch.isspace())
+
+
 def _night_moment_payload(*, ts: int, direction: str, content: str) -> dict[str, Any]:
     dt = datetime.fromtimestamp(int(ts))
     text = re.sub(r"\s+", " ", str(content or "")).strip()
@@ -1086,6 +1108,9 @@ def _compute_night_companion_from_index(
                 continue
             if not u or cnt <= 0:
                 continue
+            # 排除公众号/服务号/企业微信等非真人会话，计数与 partner 口径保持一致。
+            if not _should_keep_session(u, include_official=False):
+                continue
             total += cnt
             mine += sent
             # Deterministic: pick lexicographically smallest username on ties.
@@ -1096,34 +1121,39 @@ def _compute_night_companion_from_index(
         if total <= 0 or not best_user:
             return _empty_night_companion()
 
-        sql_moment = (
-            "SELECT ts, sender_username, text, "
-            "CAST(strftime('%H', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS h, "
-            "CAST(strftime('%M', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS m, "
-            "CAST(strftime('%S', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS s "
-            "FROM ("
-            f"  SELECT {ts_expr} AS ts, sender_username, text "
-            "  FROM message_fts "
-            f"  WHERE {where} AND username = ?"
-            ") sub "
-            f"WHERE {night_where} "
-            # 复用现有深夜计分：0-4 点 +24h，使 4:59 排在 0:00 与 5:xx 之后。
-            "ORDER BY (h*3600 + m*60 + s + CASE WHEN h < 5 THEN 86400 ELSE 0 END) DESC, ts DESC "
-            "LIMIT 1"
-        )
-
+        # payload_json 仅新版索引存在；缺列时退化为只取分词 text 再还原。
         moment: Optional[dict[str, Any]] = None
-        try:
-            row = conn.execute(sql_moment, (start_ts, end_ts, best_user)).fetchone()
-        except Exception:
-            row = None
+        row = None
+        row_has_payload = False
+        for cols in ('"text", payload_json', '"text"'):
+            sql_moment = (
+                f"SELECT ts, sender_username, {cols}, "
+                "CAST(strftime('%H', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS h, "
+                "CAST(strftime('%M', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS m, "
+                "CAST(strftime('%S', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) AS s "
+                "FROM ("
+                f"  SELECT {ts_expr} AS ts, sender_username, {cols} "
+                "  FROM message_fts "
+                f"  WHERE {where} AND username = ?"
+                ") sub "
+                f"WHERE {night_where} "
+                # 复用现有深夜计分：0-4 点 +24h，使 4:59 排在 0:00 与 5:xx 之后。
+                "ORDER BY (h*3600 + m*60 + s + CASE WHEN h < 5 THEN 86400 ELSE 0 END) DESC, ts DESC "
+                "LIMIT 1"
+            )
+            try:
+                row = conn.execute(sql_moment, (start_ts, end_ts, best_user)).fetchone()
+                row_has_payload = "payload_json" in cols
+                break
+            except Exception:
+                row = None
         if row:
             try:
                 ts = int(row[0] or 0)
             except Exception:
                 ts = 0
             sender = str(row[1] or "").strip()
-            content = _decode_sqlite_text(row[2]) if row[2] is not None else ""
+            content = _readable_night_index_text(row[2], row[3] if row_has_payload else None)
             if ts > 0:
                 moment = _night_moment_payload(
                     ts=ts,
@@ -1218,6 +1248,9 @@ def _compute_night_companion_fallback(
             for table_name in tables:
                 username = resolve_username_from_table(table_name)
                 if not username or username.endswith("@chatroom"):
+                    continue
+                # 排除公众号/服务号/企业微信等非真人会话，与索引路径口径一致。
+                if not _should_keep_session(username, include_official=False):
                     continue
 
                 qt = _quote_ident(table_name)

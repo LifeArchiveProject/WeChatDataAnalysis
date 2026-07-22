@@ -790,7 +790,8 @@ _MD5_HEX_RE = re.compile(r"(?i)[0-9a-f]{32}")
 _VOIP_BUBBLE_RE = re.compile(r"(<VoIPBubbleMsg[^>]*>.*?</VoIPBubbleMsg>)", flags=re.IGNORECASE | re.DOTALL)
 # 兼容 时:分:秒 与 分:秒 两种格式，如 "通话时长 00:19" / "通话时长 1:02:03"。
 _VOIP_DURATION_RE = re.compile(r"通话时长\s*(\d+):(\d+)(?::(\d+))?")
-_VOIP_MISSED_MARKERS = ("已取消", "对方已拒绝", "未接听")
+# 用不含前缀的子串以同时覆盖「已拒绝/对方已拒绝」「对方无应答」「忙线未接听」等变体。
+_VOIP_MISSED_MARKERS = ("已取消", "已拒绝", "未接听", "无应答")
 
 
 def _mask_name(name: str) -> str:
@@ -947,8 +948,10 @@ def compute_voice_call_stats(*, account_dir: Path, year: int) -> dict[str, Any]:
             except Exception:
                 my_rowid = None
 
+            # 本人不在该分片 Name2Id（从未在此分片发过消息）时不跳库：
+            # 用 -1 兜底参与比较，方向恒判为 received，保证接收侧语音/通话统计不丢。
             if my_rowid is None:
-                continue
+                my_rowid = -1
 
             tables = _list_message_tables(conn)
             if not tables:
@@ -1046,6 +1049,10 @@ def compute_voice_call_stats(*, account_dir: Path, year: int) -> dict[str, Any]:
                         call_connected_count += 1
                         call_total_seconds += int(duration)
                         call_seconds_by_user[username] += int(duration)
+                    else:
+                        # 文案既无 marker 也无「通话时长」：视为未接通，
+                        # 保证 totalCount == connectedCount + missedOrCanceledCount 恒等。
+                        call_missed_count += 1
         finally:
             if conn is not None:
                 try:

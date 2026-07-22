@@ -108,15 +108,15 @@
         <p v-if="yearFirstSent && totalMessages > 0" class="mt-2">
           今年的第一条消息（<span class="wrapped-number text-[#07C160] font-semibold">{{ yearFirstDateLabel }} {{ yearFirstSent.time }}</span>）发给了
           <img
-            v-if="yearFirstSent.avatarUrl"
-            :src="yearFirstSent.avatarUrl"
+            v-if="yearFirstAvatarUrl"
+            :src="yearFirstAvatarUrl"
             :alt="yearFirstSent.displayName"
             class="inline-block w-5 h-5 rounded align-middle mx-0.5 wrapped-privacy-avatar"
           /><span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ yearFirstSent.displayName }}</span>：「<span class="wrapped-privacy-message">{{ yearFirstSent.content || '...' }}</span>」<template v-if="yearLastSent">；
           最后一条消息（<span class="wrapped-number text-[#07C160] font-semibold">{{ yearLastDateLabel }} {{ yearLastSent.time }}</span>）发给了
           <img
-            v-if="yearLastSent.avatarUrl"
-            :src="yearLastSent.avatarUrl"
+            v-if="yearLastAvatarUrl"
+            :src="yearLastAvatarUrl"
             :alt="yearLastSent.displayName"
             class="inline-block w-5 h-5 rounded align-middle mx-0.5 wrapped-privacy-avatar"
           /><span class="wrapped-number text-[#07C160] font-semibold wrapped-privacy-name">{{ yearLastSent.displayName }}</span>：「<span class="wrapped-privacy-message">{{ yearLastSent.content || '...' }}</span>」</template>。
@@ -137,7 +137,7 @@
           :date="earliestSent.date"
           :display-name="earliestSent.displayName"
           :masked-name="earliestSent.maskedName"
-          :avatar-url="earliestSent.avatarUrl"
+          :avatar-url="resolveMediaUrl(earliestSent.avatarUrl)"
           :content="earliestSent.content"
           label="最早的一条"
           :delay="0"
@@ -149,7 +149,7 @@
           :date="latestSent.date"
           :display-name="latestSent.displayName"
           :masked-name="latestSent.maskedName"
-          :avatar-url="latestSent.avatarUrl"
+          :avatar-url="resolveMediaUrl(latestSent.avatarUrl)"
           :content="latestSent.content"
           label="最晚的一条"
           :delay="600"
@@ -201,8 +201,8 @@
           <!-- partner 头像置于“月亮”位置 -->
           <div class="wr-night-moon wrapped-privacy-avatar">
             <img
-              v-if="nightPartner.avatarUrl && nightAvatarOk"
-              :src="nightPartner.avatarUrl"
+              v-if="nightPartnerAvatarUrl && nightAvatarOk"
+              :src="nightPartnerAvatarUrl"
               :alt="nightPartner.displayName"
               @error="nightAvatarOk = false"
             />
@@ -435,6 +435,28 @@ const nightTotal = computed(() => Number(nightCompanion.value?.nightMessagesTota
 const nightMine = computed(() => Number(nightCompanion.value?.myNightMessages || 0))
 const nightShare = computed(() => Number(nightPartner.value?.sharePct || 0))
 const nightMomentDateLabel = computed(() => _formatDateLabel(nightMoment.value?.date))
+
+const apiBase = useApiBase()
+const resolveMediaUrl = (value) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) {
+    // qpic/qlogo 常有防盗链；与聊天页一致走后端代理。
+    try {
+      const host = new URL(raw).hostname.toLowerCase()
+      if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn')) {
+        return `${apiBase}/chat/media/proxy_image?url=${encodeURIComponent(raw)}`
+      }
+    } catch {}
+    return raw
+  }
+  if (/^\/api\//i.test(raw)) return `${apiBase}${raw.slice(4)}`
+  return raw.startsWith('/') ? raw : `/${raw}`
+}
+
+const nightPartnerAvatarUrl = computed(() => resolveMediaUrl(nightPartner.value?.avatarUrl))
+const yearFirstAvatarUrl = computed(() => resolveMediaUrl(yearFirstSent.value?.avatarUrl))
+const yearLastAvatarUrl = computed(() => resolveMediaUrl(yearLastSent.value?.avatarUrl))
 
 const nightAvatarOk = ref(true)
 const nightAvatarFallback = computed(() => {

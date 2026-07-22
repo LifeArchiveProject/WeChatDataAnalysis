@@ -327,6 +327,8 @@ const report = ref(null)
 // If user clicks "强制刷新", pass refresh=true for subsequent per-card requests in this session.
 const refreshCards = ref(false)
 let reportToken = 0
+// reload 中后端 snap 年份回写 year 时置位，抑制 watch(year) 的二次 reload。
+let suppressYearWatch = false
 
 const availableYears = ref([])
 const yearOptions = computed(() => {
@@ -558,6 +560,10 @@ const onPointerDown = (e) => {
   if (!slides.value || slides.value.length <= 1) return
   if (dragPointerId !== null) return
   if (isEditable(e.target)) return
+  // 卡内自带 pointer 拖拽（如好友墙拍立得）已 preventDefault，deck 不抢手势；
+  // data-deck-nodrag 供卡内拖拽区显式声明豁免。
+  if (e.defaultPrevented) return
+  if (e.target instanceof Element && e.target.closest('[data-deck-nodrag]')) return
 
   // 复用 onWheel 的内部可滚动区检测：还能滚的区域交还给原生滚动
   const scrollX = e.target instanceof Element ? e.target.closest('[data-wrapped-scroll-x]') : null
@@ -594,7 +600,7 @@ const onPointerMove = (e) => {
 }
 
 // commit=false（pointercancel）时仅回弹不翻页
-const finishDrag = (commit) => {
+const finishDrag = (commit, upTimeStamp = 0) => {
   if (!dragging.value) return
   const dy = dragOffset.value
   dragging.value = false
@@ -602,9 +608,12 @@ const finishDrag = (commit) => {
   dragOffset.value = 0
 
   if (!commit) return
+  // 手指停顿后释放：速度值已过期，视为 0，避免误翻页
+  if (upTimeStamp && upTimeStamp - dragLastT > 100) dragVelocity = 0
   const threshold = Math.max(1, viewportHeight.value) * 0.25
   const byDistance = Math.abs(dy) > threshold
-  const byVelocity = Math.abs(dragVelocity) > 0.5
+  // 速度判定加最小位移门槛，抖动轻点不触发翻页
+  const byVelocity = Math.abs(dragVelocity) > 0.5 && Math.abs(dy) > 15
   if (!byDistance && !byVelocity) return
 
   // 距离达标看位移方向，否则看松手瞬间速度方向（上滑=下一页）
@@ -615,7 +624,7 @@ const finishDrag = (commit) => {
 
 const onPointerUp = (e) => {
   if (e.pointerId !== dragPointerId) return
-  finishDrag(true)
+  finishDrag(true, e.timeStamp)
 }
 
 const onPointerCancel = (e) => {
@@ -757,6 +766,8 @@ const reload = async (forceRefresh = false, preserveIndex = false) => {
     // Backend may snap the year to the latest available year (only years with data are selectable).
     const respYear = Number(resp?.year)
     if (Number.isFinite(respYear)) {
+      // 回写 snap 年份时抑制 watch(year)，避免二次 reload（双请求 + 卡片闪烁）
+      if (respYear !== year.value) suppressYearWatch = true
       year.value = respYear
       try {
         await router.replace({ query: { ...route.query, year: String(respYear) } })
@@ -785,6 +796,8 @@ const reload = async (forceRefresh = false, preserveIndex = false) => {
 
 // Lazy-load the active slide's card data. 同时 fire-and-forget 预取相邻卡，减少翻页等待。
 watch(activeIndex, (i) => {
+  // reload 进行中 manifest 尚未就绪，跳过（reload 末尾已有首卡预取）
+  if (loading.value) return
   loadCardAtSlide(i)
   loadCardAtSlide(i + 1)
   loadCardAtSlide(i - 1)
@@ -846,6 +859,10 @@ watch(
 
 // 监听年份变化（由 WrappedYearSelector v-model 触发）
 watch(year, async (newYear, oldYear) => {
+  if (suppressYearWatch) {
+    suppressYearWatch = false
+    return
+  }
   if (newYear === oldYear) return
   // 仅允许切换到后端报告有数据的年份
   if (Array.isArray(availableYears.value) && availableYears.value.length > 0 && !availableYears.value.includes(newYear)) {
