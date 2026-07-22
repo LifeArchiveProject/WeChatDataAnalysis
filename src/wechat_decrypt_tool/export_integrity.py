@@ -9,6 +9,7 @@ import json
 import re
 import sys
 import zipfile
+import platform
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -26,8 +27,36 @@ def load_wce_integrity_native() -> Any:
     candidates = [
         repo_root / "native" / "wce_integrity" / "target" / "release" / "wce_integrity.dll",
         repo_root / "native" / "wce_integrity" / "target-next" / "release" / "wce_integrity.dll",
+        repo_root / "native" / "wce_integrity" / "target" / "release" / "libwce_integrity.dylib",
+        repo_root / "native" / "wce_integrity" / "target" / "release" / "libwce_integrity.so",
         Path(__file__).resolve().parent / "native" / "wce_integrity.pyd",
+        Path(__file__).resolve().parent / "native" / "libwce_integrity.dylib",
+        Path(__file__).resolve().parent / "native" / "libwce_integrity.so",
     ]
+    architecture = (platform.machine() or "").lower()
+    if architecture in {"arm64", "aarch64"}:
+        candidates.append(
+            Path(__file__).resolve().parent / "native" / "macos" / "arm64" / "libwce_integrity.dylib"
+        )
+    if getattr(sys, "frozen", False):
+        executable_native = Path(sys.executable).resolve().parent / "native"
+        candidates.extend(
+            (
+                executable_native / "wce_integrity.pyd",
+                executable_native / "libwce_integrity.dylib",
+                executable_native / "libwce_integrity.so",
+            )
+        )
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        bundled_native = Path(bundle_root) / "wechat_decrypt_tool" / "native"
+        candidates.extend(
+            (
+                bundled_native / "wce_integrity.pyd",
+                bundled_native / "libwce_integrity.dylib",
+                bundled_native / "libwce_integrity.so",
+            )
+        )
     candidates = [path for path in candidates if path.is_file()]
     candidates.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
     for build_path in candidates:
