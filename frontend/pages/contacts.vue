@@ -586,6 +586,24 @@ const isWebDirectoryPickerSupported = () => {
   return !!(process.client && typeof window.showDirectoryPicker === 'function')
 }
 
+const ensureWebExportWritePermission = async () => {
+  const handle = exportFolderHandle.value
+  if (!handle || typeof handle.getFileHandle !== 'function') {
+    throw new Error('请先选择浏览器导出目录')
+  }
+  if (typeof handle.requestPermission !== 'function') return
+
+  let permission = 'prompt'
+  try {
+    permission = await handle.requestPermission({ mode: 'readwrite' })
+  } catch {
+    throw new Error('无法获得导出目录写入权限，请点击“更改”重新选择目录，并在弹窗中允许写入')
+  }
+  if (permission !== 'granted') {
+    throw new Error('未获得导出目录写入权限，请点击“更改”重新选择目录，并在弹窗中允许写入')
+  }
+}
+
 const hasSelectedContactTypes = computed(() => {
   return !!(
     contactTypes.friends ||
@@ -1091,7 +1109,7 @@ const chooseExportFolder = async () => {
     }
 
     if (isWebDirectoryPickerSupported()) {
-      const handle = await window.showDirectoryPicker()
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite' })
       if (handle) {
         exportFolderHandle.value = handle
         exportFolder.value = `浏览器目录：${String(handle.name || '已选择')}`
@@ -1124,7 +1142,11 @@ const startExport = async () => {
 
   exporting.value = true
   try {
-    const resp = isDesktopExportRuntime()
+    const desktopRuntime = isDesktopExportRuntime()
+    if (!desktopRuntime) {
+      await ensureWebExportWritePermission()
+    }
+    const resp = desktopRuntime
       ? await api.exportChatContacts({
           account: selectedAccount.value,
           source: 'auto',
