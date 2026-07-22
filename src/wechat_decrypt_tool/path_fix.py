@@ -46,8 +46,13 @@ class PathFixRequest(Request):
             is_absolute = self._is_absolute_path(path)
             logger.info(f"是否为绝对路径: {is_absolute}")
             if not is_absolute:
+                path_example = (
+                    "/Users/name/Library/Containers/com.tencent.xinWeChat/Data/.../wxid_xxx/db_storage"
+                    if os.name != "nt"
+                    else r"D:\wechatMSG\xwechat_files\wxid_xxx\db_storage"
+                )
                 error_msg = f"请提供绝对路径，当前输入的是相对路径: {path}。\n" \
-                           f"Windows绝对路径示例: D:\\wechatMSG\\xwechat_files\\wxid_xxx\\db_storage"
+                           f"绝对路径示例: {path_example}"
                 return error_msg
 
             # 检查路径是否存在

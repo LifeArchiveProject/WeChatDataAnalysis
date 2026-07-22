@@ -43,6 +43,14 @@ class ColoredFormatter(logging.Formatter):
         return formatted
 
 
+class RecreatingFileHandler(logging.FileHandler):
+    """Recreate a removed log directory before reopening a delayed handler."""
+
+    def _open(self):
+        Path(self.baseFilename).parent.mkdir(parents=True, exist_ok=True)
+        return super()._open()
+
+
 def _can_use_logging_stream(stream) -> bool:
     try:
         if stream is None or getattr(stream, "closed", False):
@@ -160,7 +168,7 @@ class WeChatLogger:
         )
 
         # 文件处理器
-        file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
+        file_handler = RecreatingFileHandler(self.log_file, encoding='utf-8')
         file_handler.setFormatter(file_formatter)
         file_handler.setLevel(level)
 

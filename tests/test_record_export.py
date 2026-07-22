@@ -576,7 +576,7 @@ class TestRecordExport(unittest.TestCase):
 
             index = MediaPathIndex.build(account_dir=account_dir, media_kinds=["file"])
 
-            self.assertEqual(index.resolve(kind="file", md5=media_md5), source)
+            self.assertEqual(index.resolve(kind="file", md5=media_md5), source.resolve())
 
     def test_favorite_media_index_resolves_opaque_image_as_emoji(self):
         from wechat_decrypt_tool.media_helpers import MediaPathIndex
@@ -598,7 +598,7 @@ class TestRecordExport(unittest.TestCase):
 
             index = MediaPathIndex.build(account_dir=account_dir, media_kinds=["emoji"])
 
-            self.assertEqual(index.resolve(kind="emoji", md5=media_md5), source)
+            self.assertEqual(index.resolve(kind="emoji", md5=media_md5), source.resolve())
 
     def test_materialize_encrypted_favorite_file_writes_decrypted_payload(self):
         from wechat_decrypt_tool import chat_export_service

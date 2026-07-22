@@ -6,9 +6,15 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..img_helper import IMG_HELPER
+from ..platform_support import is_windows, runtime_capabilities
 from .wechat_detection import check_wechat_status
 
 router = APIRouter()
+
+
+@router.get("/api/system/platform", summary="获取当前平台与功能能力")
+async def get_platform_capabilities():
+    return runtime_capabilities()
 
 
 def _open_folder_dialog(title: str, initial_dir: str) -> str:
@@ -42,7 +48,7 @@ async def pick_directory(title: str = "请选择目录", initial_dir: str = ""):
 
 @router.get("/api/system/img_helper/status", summary="获取大图下载辅助插件状态")
 async def get_img_helper_status():
-    return {"enabled": IMG_HELPER.is_enabled}
+    return {"supported": is_windows(), "enabled": IMG_HELPER.is_enabled if is_windows() else False}
 
 
 class ImgHelperToggleRequest(BaseModel):
@@ -53,7 +59,10 @@ class ImgHelperToggleRequest(BaseModel):
 async def toggle_img_helper(req: ImgHelperToggleRequest):
     if not req.enabled:
         IMG_HELPER.disable()
-        return {"status": "success", "enabled": False}
+        return {"status": "success", "supported": is_windows(), "enabled": False}
+
+    if not is_windows():
+        raise HTTPException(status_code=400, detail="自动下载大图 Hook 仅支持 Windows。")
 
     # Attempt to enable
     status_res = await check_wechat_status()
@@ -66,4 +75,4 @@ async def toggle_img_helper(req: ImgHelperToggleRequest):
     if not ok:
         raise HTTPException(status_code=500, detail=f"开启失败: {err}")
 
-    return {"status": "success", "enabled": True}
+    return {"status": "success", "supported": True, "enabled": True}

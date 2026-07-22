@@ -298,8 +298,8 @@ class TestDecryptStreamSSE(unittest.TestCase):
                     "wxid_foo",
                     db_key="00" * 32,
                     aliases=["wxid_foo_bar"],
-                    db_key_source_wxid_dir=str(db_storage.parent),
-                    db_key_source_db_storage_path=str(db_storage),
+                    db_key_source_wxid_dir=str(db_storage.parent.resolve()),
+                    db_key_source_db_storage_path=str(db_storage.resolve()),
                 )
 
                 out = root / "output" / "databases" / "wxid_foo" / "MSG0.db"
@@ -391,4 +391,3 @@ class TestDecryptStreamSSE(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

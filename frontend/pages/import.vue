@@ -108,6 +108,14 @@
                 <span class="mt-4 text-[15px] font-medium text-[#000000e6]">打开目录选择器</span>
                 <span class="mt-2 text-[12px] leading-5 text-[#7F7F7F]">建议选到 wxid_xxxxx 账号层级</span>
               </button>
+              <button
+                v-if="isDesktopShell()"
+                type="button"
+                class="inline-flex w-full items-center justify-center rounded-lg border border-[#CFEEDB] bg-[#F7FDF9] px-4 py-3 text-sm font-medium text-[#07C160] transition hover:bg-[#EFFAF3] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20"
+                @click="handlePickArchive"
+              >
+                选择账号归档 ZIP
+              </button>
             </div>
           </div>
 
@@ -331,6 +339,38 @@ const resetImport = () => {
 
 const { importDecryptedPreview, pickSystemDirectory } = useApi()
 const apiBase = useApiBase()
+const previewImportPath = async (path) => {
+  if (!path) return
+  const isArchive = String(path).toLowerCase().endsWith('.zip')
+  if (!isArchive && !path.includes('wxid_')) {
+    const isOk = window.confirm(`你选择的目录为：
+${path}
+
+该目录似乎不是 "wxid_xxxxx" 账号目录。如果这是 wxdump 的单账号 output 根目录，可以继续。确定要继续吗？`)
+    if (!isOk) return
+  }
+
+  selectedImportPath.value = path
+  importError.value = ''
+  importPreview.value = null
+  try {
+    importPreview.value = await importDecryptedPreview({ import_path: path })
+  } catch (e) {
+    importError.value = e.message || '备份格式不正确，请选择账号归档 ZIP 或有效的已解密账号目录'
+  }
+}
+
+const handlePickArchive = async () => {
+  try {
+    const res = await window.wechatDesktop?.chooseArchive?.({ title: '请选择账号归档 ZIP' })
+    if (!res || res.canceled || !res.filePaths?.length) return
+    await previewImportPath(res.filePaths[0])
+  } catch (e) {
+    console.error('选择账号归档失败:', e)
+    importError.value = e?.message || '选择账号归档失败'
+  }
+}
+
 const handlePickDirectory = async () => {
   let path = ''
 
@@ -357,23 +397,7 @@ const handlePickDirectory = async () => {
     }
   }
 
-  if (path && !path.includes('wxid_')) {
-    const isOk = window.confirm(`你选择的目录为：
-${path}
-
-该目录似乎不是 "wxid_xxxxx" 账号目录。如果这是 wxdump 的单账号 output 根目录，可以继续。确定要继续吗？`)
-    if (!isOk) return
-  }
-
-  selectedImportPath.value = path
-  importError.value = ''
-  importPreview.value = null
-
-  try {
-    importPreview.value = await importDecryptedPreview({ import_path: path })
-  } catch (e) {
-    importError.value = e.message || '目录格式不正确，请确保包含 databases/database 目录；wxdump 格式可不含 account.json'
-  }
+  await previewImportPath(path)
 }
 
 const retryPickDirectory = async () => {

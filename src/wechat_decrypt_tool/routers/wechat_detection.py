@@ -1,4 +1,5 @@
 from typing import Optional
+import sys
 import psutil
 from fastapi import APIRouter
 
@@ -96,7 +97,7 @@ async def check_wechat_status():
     2. 校验命令行必须包含 exe 名称（排除崩溃后的残留/无效进程）
     3. 在有效进程中选择命令行最短的一个作为主进程
     """
-    process_name_targets = ["Weixin.exe", "WeChat.exe"]
+    process_name_targets = ["WeChat"] if sys.platform == "darwin" else ["Weixin.exe", "WeChat.exe"]
 
     wx_status = {
         "is_running": False,
@@ -111,12 +112,15 @@ async def check_wechat_status():
         for proc in psutil.process_iter(['pid', 'name', 'exe', 'memory_info', 'cmdline']):
             try:
                 p_name = proc.info.get('name')
-                if p_name and p_name in process_name_targets:
+                if p_name and str(p_name).casefold() in {name.casefold() for name in process_name_targets}:
                     # 获取命令行并合并为字符串
                     cmdline_list = proc.info.get('cmdline') or []
                     cmdline_str = " ".join(cmdline_list).lower()
 
-                    if any(target.lower() in cmdline_str for target in process_name_targets):
+                    if (
+                        sys.platform == "darwin"
+                        or any(target.lower() in cmdline_str for target in process_name_targets)
+                    ):
                         candidates.append({
                             "pid": proc.info['pid'],
                             "exe_path": proc.info['exe'],

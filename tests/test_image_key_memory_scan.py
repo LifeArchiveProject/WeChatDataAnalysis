@@ -80,6 +80,36 @@ def test_win32_api_is_not_loaded_on_non_windows(monkeypatch) -> None:
     assert memory_scan._create_win32_api() is None
 
 
+def test_macos_scanner_uses_bundled_helper_and_retries_with_elevation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    helper = tmp_path / "image_scan_helper"
+    library = tmp_path / "libwx_key.dylib"
+    helper.write_bytes(b"helper")
+    library.write_bytes(b"library")
+    scan = _template_scan(tmp_path)
+    calls: list[tuple[Path, int, bool]] = []
+
+    def run_helper(helper_path, pid, ciphertext, *, elevated, timeout):
+        calls.append((helper_path, pid, elevated))
+        return (AES_KEY, False) if elevated else (None, True)
+
+    monkeypatch.setattr(memory_scan.sys, "platform", "darwin")
+    monkeypatch.setattr(memory_scan, "mac_image_scan_helper_path", lambda: helper)
+    monkeypatch.setattr(memory_scan, "mac_image_scan_library_path", lambda: library)
+    monkeypatch.setattr(memory_scan, "_run_macos_image_scan_helper", run_helper)
+
+    result = scan_process_for_image_key(321, scan)
+
+    assert result == ProcessMemoryKeyMatch(
+        aes_key=AES_KEY,
+        template_path=scan.templates[0].path,
+        encoding="ascii",
+    )
+    assert calls == [(helper, 321, False), (helper, 321, True)]
+
+
 def test_candidate_extraction_requires_exact_32_character_runs() -> None:
     ascii_data = b"!" + FULL_CANDIDATE.encode("ascii") + b"?"
     utf16_data = b"!\x00" + FULL_CANDIDATE.encode("utf-16le") + b"?\x00"
