@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full">
+  <div class="w-full" :class="{ 'wr-anim-paused': !isActive }">
     <div v-if="weeks > 0" class="overflow-x-auto" data-wrapped-scroll-x>
       <div class="w-max mx-auto" :style="{ '--cell': `${cellPx}px` }">
         <!-- Month labels -->
@@ -38,15 +38,12 @@
             v-for="(c, idx) in cells"
             :key="idx"
             class="heatmap-cell rounded-[2px] transition-transform duration-150 hover:scale-125 hover:z-10"
-            :style="{
-              backgroundColor: colorFor(c),
-              transformOrigin: originFor(c),
-              gridColumn: String((c.col ?? 0) + 2),
-              gridRow: String((c.row ?? 0) + 1)
-            }"
-            @mouseenter="showTooltip(c, $event)"
+            :class="cellClass(c)"
+            :style="cellStyle(c)"
+            @mouseenter="onCellMouseEnter(c, $event)"
             @mousemove="scheduleTooltipLayout"
             @mouseleave="hideTooltip"
+            @pointerdown="onCellPointerDown(c, $event)"
           ></div>
         </div>
 
@@ -63,58 +60,63 @@
             </div>
             <span class="wrapped-body">高</span>
           </div>
-          <div v-if="maxValue > 0" class="wrapped-number">最大 {{ maxValue }}</div>
+          <div v-if="maxValue > 0" class="wrapped-number">最大 {{ formatInt(maxValue) }}</div>
         </div>
       </div>
     </div>
 
     <Teleport to="body">
-      <div
-        v-if="tooltipOpen && tooltipCell && tooltipCell.ymd"
-        ref="tooltipEl"
-        class="fixed z-[60] pointer-events-none"
-        :style="{ left: `${tooltipX}px`, top: `${tooltipY}px` }"
-        role="tooltip"
-      >
-        <div class="wr-heatmap-tooltip">
-          <div class="flex justify-center mb-2">
-            <span class="wr-heatmap-tooltip__time wrapped-number">{{ tooltipCell.ymd }}</span>
-          </div>
+      <Transition name="wr-tip">
+        <div
+          v-if="tooltipOpen && tooltipCell && tooltipCell.ymd"
+          ref="tooltipEl"
+          class="fixed z-[60] pointer-events-none"
+          :style="{ left: `${tooltipX}px`, top: `${tooltipY}px` }"
+          role="tooltip"
+        >
+          <div class="wr-heatmap-tooltip">
+            <div class="flex justify-center mb-2">
+              <span class="wr-heatmap-tooltip__time wrapped-number">{{ tooltipCell.ymd }}</span>
+            </div>
 
-          <div class="flex flex-col gap-2">
-            <div class="flex justify-end">
-              <div class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed bg-[#95EC69] text-black bubble-tail-r">
-                <div class="wrapped-body">{{ tooltipPrimaryText }}</div>
+            <div class="flex flex-col gap-2">
+              <div class="flex justify-end">
+                <div class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed bg-[#95EC69] text-black bubble-tail-r">
+                  <div class="wrapped-body">{{ tooltipPrimaryText }}</div>
+                </div>
+              </div>
+
+              <div v-for="(line, i) in tooltipHighlightLines" :key="i" class="flex justify-start">
+                <div class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed bg-white text-gray-800 bubble-tail-l">
+                  <div class="wrapped-body">{{ line }}</div>
+                </div>
               </div>
             </div>
 
-            <div v-for="(line, i) in tooltipHighlightLines" :key="i" class="flex justify-start">
-              <div class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed bg-white text-gray-800 bubble-tail-l">
-                <div class="wrapped-body">{{ line }}</div>
-              </div>
-            </div>
+            <div
+              class="wr-heatmap-tooltip__arrow"
+              :class="tooltipPlacement === 'bottom' ? 'wr-heatmap-tooltip__arrow--top' : 'wr-heatmap-tooltip__arrow--bottom'"
+              aria-hidden="true"
+            ></div>
           </div>
-
-          <div
-            class="wr-heatmap-tooltip__arrow"
-            :class="tooltipPlacement === 'bottom' ? 'wr-heatmap-tooltip__arrow--top' : 'wr-heatmap-tooltip__arrow--bottom'"
-            aria-hidden="true"
-          ></div>
         </div>
-      </div>
+      </Transition>
     </Teleport>
   </div>
 </template>
 
 <script setup>
 import { heatColor } from '~/lib/wrapped/heatmap'
+import { useReducedMotion } from '~/composables/useReducedMotion'
 
 const props = defineProps({
   year: { type: Number, default: new Date().getFullYear() },
   // 0-indexed day-of-year array; length should be 365/366
   dailyCounts: { type: Array, default: () => [] },
   days: { type: Number, default: 0 },
-  highlights: { type: Array, default: () => [] }
+  highlights: { type: Array, default: () => [] },
+  // 卡片是否处于当前页：首次为 true 时播放入场动画，false 时暂停循环动画
+  isActive: { type: Boolean, default: true }
 })
 
 // Cell size of each day square (px). Tuned to fit Card00 slide width without truncation.
@@ -129,6 +131,9 @@ const MARKER_ORDER = [
   'sticker_messages_max',
   'emoji_chars_max'
 ]
+
+const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
+const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
 
 const isLeapYear = (y) => {
   const n = Number(y)
@@ -265,6 +270,58 @@ const colorFor = (cell) => {
   return heatColor(cell.count, maxValue.value)
 }
 
+// ---------------- 入场动画（isActive 首次为 true 时只播一次） ----------------
+
+const reducedMotion = useReducedMotion()
+const entered = ref(false)
+const entranceDone = ref(false)
+let entranceTimer = 0
+
+// 入场扫过 600ms + 单格动画 350ms，结束后再触发峰值日脉冲光环。
+const ENTRANCE_SWEEP_MS = 600
+const ENTRANCE_CELL_MS = 350
+
+watch(() => props.isActive, (active) => {
+  if (!active || entered.value) return
+  if (typeof window === 'undefined') return
+  entered.value = true
+  if (reducedMotion.value) {
+    entranceDone.value = true
+    return
+  }
+  entranceTimer = window.setTimeout(() => {
+    entranceTimer = 0
+    entranceDone.value = true
+  }, ENTRANCE_SWEEP_MS + ENTRANCE_CELL_MS)
+}, { immediate: true })
+
+const entranceAnimating = computed(() => entered.value && !entranceDone.value && !reducedMotion.value)
+
+const hasMarker = (cell) => !!(cell && cell.valid && Array.isArray(cell.highlights) && cell.highlights.length > 0)
+
+const cellClass = (cell) => ({
+  'wr-cell-pre': !entered.value && !reducedMotion.value,
+  'wr-cell-enter': entranceAnimating.value,
+  'wr-cell-highlight': hasMarker(cell),
+  'wr-cell-pulse': hasMarker(cell) && entranceDone.value && !reducedMotion.value
+})
+
+const cellStyle = (cell) => {
+  const style = {
+    backgroundColor: colorFor(cell),
+    transformOrigin: originFor(cell),
+    gridColumn: String((cell.col ?? 0) + 2),
+    gridRow: String((cell.row ?? 0) + 1)
+  }
+  if (entranceAnimating.value) {
+    // 按周列从左到右波浪级联，全部列的 delay 落在 600ms 内。
+    style.animationDelay = `${Math.round(((cell.col ?? 0) * ENTRANCE_SWEEP_MS) / Math.max(1, weeks.value))}ms`
+  }
+  return style
+}
+
+// ---------------- Tooltip ----------------
+
 const tooltipOpen = ref(false)
 const tooltipCell = ref(null)
 const tooltipX = ref(0)
@@ -354,16 +411,49 @@ const hideTooltip = () => {
   tooltipAnchorEl.value = null
 }
 
+// 触屏没有 hover：点格子显示 tooltip，点空白关闭（见 document 级监听）。
+let lastTouchTs = 0
+
+const onCellMouseEnter = (cell, e) => {
+  // 触屏 tap 会补发 mouseenter，避免与 pointerdown 分支互相打架。
+  if (Date.now() - lastTouchTs < 700) return
+  showTooltip(cell, e)
+}
+
+const onCellPointerDown = (cell, e) => {
+  if (!e || e.pointerType === 'mouse') return
+  lastTouchTs = Date.now()
+  if (tooltipOpen.value && tooltipCell.value === cell) {
+    hideTooltip()
+    return
+  }
+  showTooltip(cell, e)
+}
+
+const onDocPointerDown = (e) => {
+  if (!tooltipOpen.value) return
+  if (!e || e.pointerType === 'mouse') return
+  const t = e.target
+  if (t && typeof t.closest === 'function' && t.closest('.heatmap-cell')) return
+  hideTooltip()
+}
+
 onMounted(() => {
   if (!import.meta.client) return
   window.addEventListener('resize', scheduleTooltipLayout)
+  document.addEventListener('pointerdown', onDocPointerDown, true)
 })
 
 onBeforeUnmount(() => {
   if (!import.meta.client) return
   window.removeEventListener('resize', scheduleTooltipLayout)
+  document.removeEventListener('pointerdown', onDocPointerDown, true)
   if (tooltipRaf) cancelAnimationFrame(tooltipRaf)
   tooltipRaf = 0
+  if (entranceTimer) {
+    clearTimeout(entranceTimer)
+    entranceTimer = 0
+  }
 })
 
 const legendColor = (i) => {
@@ -413,5 +503,73 @@ const originFor = (cell) => {
   border-right: 8px solid transparent;
   border-bottom: 8px solid rgba(245, 245, 245, 0.95);
   filter: drop-shadow(0 -1px 0 rgba(0, 0, 0, 0.06));
+}
+
+/* Tooltip 淡入 + 4px 上移 */
+.wr-tip-enter-active,
+.wr-tip-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.wr-tip-enter-from,
+.wr-tip-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+/* 入场前隐藏，避免动画开始前闪现 */
+.wr-cell-pre {
+  opacity: 0;
+}
+
+.wr-cell-enter {
+  animation: wr-cell-in 0.35s ease-out both;
+}
+
+@keyframes wr-cell-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 峰值日常驻标记：白边 + 金色描边圆环 */
+.wr-cell-highlight {
+  position: relative;
+  z-index: 5;
+  box-shadow: 0 0 0 1px #ffffff, 0 0 0 2.5px #f59e0b;
+}
+
+/* 入场结束后播 2 次脉冲光环 */
+.wr-cell-pulse {
+  animation: wr-peak-pulse 1.1s ease-out 0.15s 2;
+}
+
+@keyframes wr-peak-pulse {
+  0% {
+    box-shadow: 0 0 0 1px #ffffff, 0 0 0 2.5px #f59e0b, 0 0 0 0 rgba(245, 158, 11, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 1px #ffffff, 0 0 0 2.5px #f59e0b, 0 0 0 10px rgba(245, 158, 11, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 1px #ffffff, 0 0 0 2.5px #f59e0b, 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+}
+
+/* 卡片离屏时暂停本组件动画 */
+.wr-anim-paused .heatmap-cell {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heatmap-cell {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 </style>

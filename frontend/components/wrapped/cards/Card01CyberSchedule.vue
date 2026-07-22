@@ -163,19 +163,87 @@
           :hour-labels="card.data?.hourLabels"
           :matrix="card.data?.matrix"
           :total-messages="card.data?.totalMessages || 0"
+          :is-active="isActive"
         />
+      </div>
+
+      <!-- 深夜守夜人：夜空面板（无深夜单聊对象时整区隐藏） -->
+      <div
+        v-if="nightPartner"
+        class="wr-night w-full"
+        :class="{
+          'wr-night--entered': nightEntered,
+          'wr-night--paused': !isActive,
+          'wr-night--reduced': reducedMotion
+        }"
+      >
+        <span
+          v-for="(st, i) in nightStars"
+          :key="i"
+          class="wr-night-star"
+          :style="st"
+          aria-hidden="true"
+        ></span>
+
+        <div class="relative z-10 flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <div class="wrapped-label text-[10px] text-[#9FB0DA]">NIGHT WATCH</div>
+            <h3 class="wrapped-title text-lg text-white mt-1">深夜守夜人</h3>
+            <p class="wrapped-body text-xs text-[#B9C4E4] mt-2 leading-relaxed">
+              今年凌晨 0:00 - 5:59，你留下了
+              <span class="wrapped-number text-[#FFE9A3] font-semibold">{{ formatInt(nightTotal) }}</span>
+              条深夜单聊消息，其中
+              <span class="wrapped-number text-[#FFE9A3] font-semibold">{{ formatInt(nightMine) }}</span>
+              条由你发出。
+            </p>
+          </div>
+
+          <!-- partner 头像置于“月亮”位置 -->
+          <div class="wr-night-moon wrapped-privacy-avatar">
+            <img
+              v-if="nightPartner.avatarUrl && nightAvatarOk"
+              :src="nightPartner.avatarUrl"
+              :alt="nightPartner.displayName"
+              @error="nightAvatarOk = false"
+            />
+            <span v-else class="wr-night-moon__fallback wrapped-number">{{ nightAvatarFallback }}</span>
+          </div>
+        </div>
+
+        <p class="relative z-10 mt-4 wrapped-body text-sm text-[#E6EAF7]">
+          陪你守夜最多的是「<span class="wrapped-number text-[#FFE9A3] font-semibold wrapped-privacy-name">{{ nightPartner.displayName }}</span>」，
+          夜空被 TA 点亮了
+          <span class="wrapped-number text-[#FFE9A3] font-semibold text-lg">{{ nightShareDisplay }}</span>%。
+        </p>
+
+        <!-- 最晚一刻：时钟时刻 + 气泡淡入 -->
+        <div v-if="nightMoment" class="wr-night-moment relative z-10 mt-4 flex items-center gap-4">
+          <div class="flex-shrink-0">
+            <div class="wrapped-number text-2xl font-semibold text-white">{{ nightMoment.time }}</div>
+            <div class="wrapped-label text-[10px] text-[#9FB0DA] mt-0.5">{{ nightMomentDateLabel }} · 最晚的一刻</div>
+          </div>
+          <div class="wr-night-bubble" :class="{ 'wr-night-bubble--sent': nightMoment.direction === 'sent' }">
+            <div class="wrapped-label text-[10px] text-[#00000066] mb-1">
+              {{ nightMoment.direction === 'sent' ? '你说' : 'TA 说' }}
+            </div>
+            <div class="wrapped-body text-sm wrapped-privacy-message">{{ nightMoment.content || '...' }}</div>
+          </div>
+        </div>
       </div>
     </div>
   </WrappedCardShell>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import ChatReplayAnimation from '~/components/wrapped/visualizations/ChatReplayAnimation.vue'
+import { useReducedMotion } from '~/composables/useReducedMotion'
+import { useCountUp } from '~/composables/useCountUp'
 
 const props = defineProps({
   card: { type: Object, required: true },
-  variant: { type: String, default: 'panel' } // 'panel' | 'slide'
+  variant: { type: String, default: 'panel' }, // 'panel' | 'slide'
+  isActive: { type: Boolean, default: true } // deck 当前展示页时为 true
 })
 
 const _DEFAULT_WEEKDAYS_ZH = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
@@ -343,4 +411,181 @@ const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
 const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
 
 const pad2 = (h) => String(Number(h ?? 0)).padStart(2, '0')
+
+// ---------- 深夜守夜人 ----------
+
+const reducedMotion = useReducedMotion()
+
+const nightCompanion = computed(() => {
+  const o = props.card?.data?.nightCompanion
+  return o && typeof o === 'object' ? o : null
+})
+
+const nightPartner = computed(() => {
+  const p = nightCompanion.value?.partner
+  return p && typeof p === 'object' && typeof p.displayName === 'string' ? p : null
+})
+
+const nightMoment = computed(() => {
+  const m = nightCompanion.value?.latestMoment
+  return m && typeof m === 'object' && typeof m.time === 'string' ? m : null
+})
+
+const nightTotal = computed(() => Number(nightCompanion.value?.nightMessagesTotal || 0))
+const nightMine = computed(() => Number(nightCompanion.value?.myNightMessages || 0))
+const nightShare = computed(() => Number(nightPartner.value?.sharePct || 0))
+const nightMomentDateLabel = computed(() => _formatDateLabel(nightMoment.value?.date))
+
+const nightAvatarOk = ref(true)
+const nightAvatarFallback = computed(() => {
+  const s = String(nightPartner.value?.displayName || nightPartner.value?.maskedName || '').trim()
+  return s ? s[0] : '?'
+})
+
+// 星点数量按深夜消息量分档；位置用 LCG 生成，保证同一数据下渲染稳定不跳动。
+const nightStars = computed(() => {
+  const total = nightTotal.value
+  let count = 10
+  if (total >= 1000) count = 42
+  else if (total >= 300) count = 30
+  else if (total >= 100) count = 22
+  else if (total >= 20) count = 14
+
+  let seed = ((total + 7) * 2654435761) % 2147483647
+  if (seed <= 0) seed = 12345
+  const rand = () => {
+    seed = (seed * 48271) % 2147483647
+    return seed / 2147483647
+  }
+
+  const stars = []
+  for (let i = 0; i < count; i += 1) {
+    const size = 1.5 + rand() * 2
+    stars.push({
+      left: `${(rand() * 96 + 2).toFixed(2)}%`,
+      top: `${(rand() * 72 + 3).toFixed(2)}%`,
+      width: `${size.toFixed(1)}px`,
+      height: `${size.toFixed(1)}px`,
+      animationDelay: `${(rand() * 2.4).toFixed(2)}s`,
+      animationDuration: `${(2 + rand() * 2).toFixed(2)}s`
+    })
+  }
+  return stars
+})
+
+const { display: nightShareDisplay, play: playNightShare } = useCountUp(
+  () => nightShare.value,
+  { duration: 1.6, delay: 0.4, decimals: 1 }
+)
+
+// isActive 首次为 true 时触发入场（只播一次）。
+const nightEntered = ref(false)
+watch(
+  () => props.isActive,
+  (active) => {
+    if (!active || nightEntered.value) return
+    nightEntered.value = true
+    playNightShare()
+  },
+  { immediate: true }
+)
 </script>
+
+<style scoped>
+.wr-night {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  padding: 20px;
+  background: linear-gradient(165deg, #0A1030 0%, #16224A 55%, #23345F 100%);
+}
+
+.wr-night-star {
+  position: absolute;
+  border-radius: 9999px;
+  background: #ffffff;
+  opacity: 0.25;
+  animation: wr-night-twinkle 2.8s ease-in-out infinite;
+}
+
+@keyframes wr-night-twinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.2);
+  }
+}
+
+/* 离屏时暂停循环动画；reduced-motion 直接关闭 */
+.wr-night--paused .wr-night-star {
+  animation-play-state: paused;
+}
+
+.wr-night--reduced .wr-night-star {
+  animation: none;
+  opacity: 0.55;
+}
+
+.wr-night-moon {
+  position: relative;
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: #ffe9a3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    0 0 22px 6px rgba(255, 233, 163, 0.4),
+    0 0 60px 14px rgba(255, 233, 163, 0.15);
+}
+
+.wr-night-moon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wr-night-moon__fallback {
+  font-size: 18px;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+/* 最晚一刻整块淡入：入场（wr-night--entered）后延迟出现 */
+.wr-night-moment {
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 600ms ease 900ms,
+    transform 600ms ease 900ms;
+}
+
+.wr-night--entered .wr-night-moment {
+  opacity: 1;
+  transform: none;
+}
+
+.wr-night--reduced .wr-night-moment {
+  transition: none;
+}
+
+.wr-night-bubble {
+  position: relative;
+  min-width: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #1a1a1a;
+  padding: 8px 12px;
+  word-break: break-word;
+}
+
+.wr-night-bubble--sent {
+  background: #95ec69;
+}
+</style>

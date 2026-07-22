@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sqlite3
 import time
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -402,6 +403,181 @@ def _weekday_name_zh(weekday_index: int) -> str:
     if 0 <= weekday_index < len(labels):
         return labels[weekday_index]
     return ""
+
+
+def _readable_index_text(token_text: Any, payload_json: Any, *, max_len: int = 60) -> str:
+    """Recover readable message text from a search-index row.
+
+    `message_fts.text` stores char-tokenized text (lowercased, whitespace removed,
+    chars joined by single spaces). Prefer the original content preserved in
+    `payload_json` (newer indexes); fall back to de-tokenizing.
+    """
+
+    content = ""
+    try:
+        obj = json.loads(_decode_sqlite_text(payload_json))
+        if isinstance(obj, dict):
+            content = str(obj.get("content") or "").strip()
+    except Exception:
+        content = ""
+
+    if content:
+        s = re.sub(r"\s+", " ", content).strip()
+    else:
+        s = "".join(ch for ch in _decode_sqlite_text(token_text) if not ch.isspace())
+
+    if not s:
+        return ""
+    if len(s) > max_len:
+        s = s[:max_len]
+    return s
+
+
+def _compute_peak_day_details(
+    *,
+    account_dir: Path,
+    year: int,
+    doy: int,
+    sender_username: str | None,
+) -> dict[str, Any]:
+    """Best-effort details for the peak day (top conversation + my first/last text).
+
+    Only implemented on top of the unified search index; when the index is
+    missing, all fields stay None and the frontend hides them.
+    """
+
+    out: dict[str, Any] = {
+        "topContact": None,
+        "firstTime": None,
+        "firstText": None,
+        "lastTime": None,
+        "lastText": None,
+    }
+
+    try:
+        day_dt = datetime(int(year), 1, 1) + timedelta(days=int(doy))
+        next_dt = day_dt + timedelta(days=1)
+        day_start = int(datetime(day_dt.year, day_dt.month, day_dt.day).timestamp())
+        day_end = int(datetime(next_dt.year, next_dt.month, next_dt.day).timestamp())
+    except Exception:
+        return out
+
+    index_path = get_chat_search_index_db_path(account_dir)
+    if not index_path.exists():
+        return out
+
+    sender = str(sender_username or "").strip()
+
+    conn = sqlite3.connect(str(index_path))
+    try:
+        has_fts = (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_fts' LIMIT 1"
+            ).fetchone()
+            is not None
+        )
+        if not has_fts:
+            return out
+
+        # Convert millisecond timestamps defensively (some datasets store ms).
+        ts_expr = (
+            "CASE "
+            "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+            "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+            "ELSE CAST(create_time AS INTEGER) "
+            "END"
+        )
+        where = f"{ts_expr} >= ? AND {ts_expr} < ? AND db_stem NOT LIKE 'biz_message%'"
+        params: tuple[Any, ...] = (day_start, day_end)
+
+        # 当日消息最多的会话（含群，双向计数）。
+        try:
+            rows_u = conn.execute(
+                f"SELECT username, COUNT(1) AS cnt FROM message_fts WHERE {where} "
+                "GROUP BY username ORDER BY cnt DESC, username ASC LIMIT 50",
+                params,
+            ).fetchall()
+        except Exception:
+            rows_u = []
+
+        top_username = ""
+        top_count = 0
+        for rr in rows_u:
+            if not rr or not rr[0]:
+                continue
+            u = str(rr[0] or "").strip()
+            try:
+                cnt = int(rr[1] or 0)
+            except Exception:
+                cnt = 0
+            if not u or cnt <= 0:
+                continue
+            if not _should_keep_session(u, include_official=False):
+                continue
+            top_username, top_count = u, cnt
+            break
+
+        if top_username:
+            contact_rows = _load_contact_rows(account_dir / "contact.db", [top_username])
+            row = contact_rows.get(top_username)
+            display = _pick_display_name(row, top_username)
+            out["topContact"] = {
+                "username": top_username,
+                "displayName": display,
+                "maskedName": _mask_name(display),
+                "avatarUrl": _build_avatar_url(str(account_dir.name or ""), top_username),
+                "messages": int(top_count),
+                "isGroup": top_username.endswith("@chatroom"),
+            }
+
+        # 当日本人发出的首/末条文本消息。
+        if sender:
+            where_text = (
+                where
+                + " AND sender_username = ? AND render_type = 'text' "
+                + "AND \"text\" IS NOT NULL AND TRIM(CAST(\"text\" AS TEXT)) != ''"
+            )
+            params_text = (day_start, day_end, sender)
+
+            def fetch_edge(order: str) -> Optional[tuple[int, str]]:
+                # payload_json 仅新版索引存在；缺列时退化为只取 token text。
+                for cols in ('"text", payload_json', '"text"'):
+                    sql = (
+                        f"SELECT {ts_expr} AS ts, {cols} FROM message_fts "
+                        f"WHERE {where_text} "
+                        f"ORDER BY ts {order}, CAST(sort_seq AS INTEGER) {order} LIMIT 1"
+                    )
+                    try:
+                        r = conn.execute(sql, params_text).fetchone()
+                    except Exception:
+                        continue
+                    if not r:
+                        return None
+                    try:
+                        ts = int(r[0] or 0)
+                    except Exception:
+                        ts = 0
+                    if ts <= 0:
+                        return None
+                    text = _readable_index_text(r[1], r[2] if len(r) > 2 else None)
+                    return ts, text
+                return None
+
+            first_edge = fetch_edge("ASC")
+            last_edge = fetch_edge("DESC")
+            if first_edge:
+                out["firstTime"] = datetime.fromtimestamp(first_edge[0]).strftime("%H:%M")
+                out["firstText"] = first_edge[1] or None
+            if last_edge:
+                out["lastTime"] = datetime.fromtimestamp(last_edge[0]).strftime("%H:%M")
+                out["lastText"] = last_edge[1] or None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return out
 
 
 def _kind_label_zh(kind: str) -> str:
@@ -989,14 +1165,48 @@ def build_card_00_global_overview(
         }
 
     daily_counts = compute_annual_daily_counts(account_dir=account_dir, year=year, sender_username=sender)
+
+    # 年度峰值日：全年逐日计数的 argmax（并列时取更早的一天；全 0 时无峰值日）。
+    peak_day: Optional[dict[str, Any]] = None
+    peak_highlights: list[dict[str, Any]] = []
+    if daily_counts:
+        peak_doy = max(range(len(daily_counts)), key=lambda i: (daily_counts[i], -i))
+        peak_count = int(daily_counts[peak_doy])
+        if peak_count > 0:
+            peak_dt = datetime(int(year), 1, 1) + timedelta(days=int(peak_doy))
+            peak_multiple: Optional[float] = None
+            if messages_per_day > 0:
+                peak_multiple = round(float(peak_count) / float(messages_per_day), 1)
+            details = _compute_peak_day_details(
+                account_dir=account_dir,
+                year=year,
+                doy=peak_doy,
+                sender_username=sender,
+            )
+            peak_day = {
+                "date": peak_dt.strftime("%Y-%m-%d"),
+                "weekdayName": _weekday_name_zh(peak_dt.weekday()),
+                "count": peak_count,
+                "multiple": peak_multiple,
+                **details,
+            }
+            # Shape must match AnnualCalendarHeatmap.vue highlight parsing: {key, doy, label, valueLabel}.
+            peak_highlights = [
+                {
+                    "key": "sent_messages_max",
+                    "doy": int(peak_doy),
+                    "label": "全年发消息最多",
+                    "valueLabel": f"{peak_count:,} 条",
+                }
+            ]
+
     annual_heatmap = {
         "year": int(year),
         "startDate": f"{int(year)}-01-01",
         "endDate": f"{int(year)}-12-31",
         "days": int(len(daily_counts)),
         "dailyCounts": daily_counts,
-        # Product decision: keep the calendar heatmap lightweight (no extra "best day" markers).
-        "highlights": [],
+        "highlights": peak_highlights,
     }
 
     lines: list[str] = []
@@ -1055,6 +1265,7 @@ def build_card_00_global_overview(
             "topContact": top_contact_obj,
             "topGroup": top_group_obj,
             "topKind": top_kind,
+            "peakDay": peak_day,
             "annualHeatmap": annual_heatmap,
             "topPhrase": {"phrase": stats.top_phrase[0], "count": int(stats.top_phrase[1])} if stats.top_phrase else None,
             "topEmoji": {"emoji": stats.top_emoji[0], "count": int(stats.top_emoji[1])} if stats.top_emoji else None,

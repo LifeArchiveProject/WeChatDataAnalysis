@@ -280,6 +280,20 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
     # Keep more than 10 so the bar-race "TOP10" can actually evolve (members can enter/leave over time).
     top_total_n = 100
 
+    # ---- 「谁先开口」：相邻消息间隔 ≥1 小时切分为一次“对话”，首条消息发送方即发起者 ----
+    conv_gap_seconds = 3600
+    initiative_conversations = 0
+    initiated_by_me = 0
+    initiated_by_others = 0
+    init_by_me_counts: dict[str, int] = {}
+    init_to_me_counts: dict[str, int] = {}
+
+    # ---- 「势均力敌」：双方消息量均 ≥50 且 min/max 比值最接近 1 的好友 ----
+    mutual_min_each = 50
+    mutual_best_agg: _ConvAgg | None = None
+    # (ratio, total, username)：比值优先，其次总量更大者，最后用户名字典序保证确定性。
+    mutual_best_key: tuple[float, int, str] | None = None
+
     def consider_conv(agg: _ConvAgg) -> None:
         nonlocal best_score, best_agg
         if not agg.username:
@@ -303,6 +317,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
             heapq.heappushpop(top_heap, key)
 
     def consider_total(agg: _ConvAgg) -> None:
+        nonlocal mutual_best_agg, mutual_best_key
         if not agg.username:
             return
         if agg.total <= 0:
@@ -313,6 +328,23 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
 
         if agg.outgoing > 0:
             sent_to_contacts.add(agg.username)
+
+        sent = int(agg.outgoing)
+        received = int(agg.incoming)
+        if sent >= mutual_min_each and received >= mutual_min_each:
+            ratio = float(min(sent, received)) / float(max(sent, received))
+            if (
+                mutual_best_key is None
+                or ratio > mutual_best_key[0]
+                or (ratio == mutual_best_key[0] and sent + received > mutual_best_key[1])
+                or (
+                    ratio == mutual_best_key[0]
+                    and sent + received == mutual_best_key[1]
+                    and str(agg.username) < mutual_best_key[2]
+                )
+            ):
+                mutual_best_key = (float(ratio), int(sent + received), str(agg.username))
+                mutual_best_agg = agg
 
         total = int(agg.total)
         all_totals[agg.username] = int(total)
@@ -380,6 +412,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
                 min_gap = 0
                 max_gap = 0
                 prev_other_ts: int | None = None
+                prev_any_ts: int | None = None
 
                 def flush() -> None:
                     nonlocal cur_username, incoming, outgoing, replies, sum_gap, sum_gap_capped, min_gap, max_gap
@@ -417,12 +450,25 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
                         sum_gap = sum_gap_capped = 0
                         min_gap = max_gap = 0
                         prev_other_ts = None
+                        prev_any_ts = None
 
                     # Drop system/official-ish sessions (best-effort).
                     if not _should_keep_session(username, include_official=False):
                         continue
 
                     is_me = sender == my_username
+
+                    # 「谁先开口」：会话首条消息、或与上一条消息间隔 ≥ conv_gap_seconds，均视为新对话开始。
+                    if prev_any_ts is None or ts - prev_any_ts >= conv_gap_seconds:
+                        initiative_conversations += 1
+                        if is_me:
+                            initiated_by_me += 1
+                            init_by_me_counts[username] = init_by_me_counts.get(username, 0) + 1
+                        else:
+                            initiated_by_others += 1
+                            init_to_me_counts[username] = init_to_me_counts.get(username, 0) + 1
+                    prev_any_ts = ts
+
                     if is_me:
                         outgoing += 1
                         if prev_other_ts is not None and ts >= prev_other_ts:
@@ -518,6 +564,10 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
         key=lambda x: (-x[0], x[1].username),
     )
 
+    # 「谁先开口」双榜：按次数降序（并列时用户名字典序），各取前 3。
+    top_init_by_me = sorted(init_by_me_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))[:3]
+    top_init_to_me = sorted(init_to_me_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))[:3]
+
     # Resolve contact display names/avatars for a small set (bestBuddy + extremes + top list).
     need_usernames: list[str] = []
     if best_agg is not None:
@@ -530,6 +580,12 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
         need_usernames.append(agg.username)
     for _, agg in top_totals:
         need_usernames.append(agg.username)
+    for u, _ in top_init_by_me:
+        need_usernames.append(u)
+    for u, _ in top_init_to_me:
+        need_usernames.append(u)
+    if mutual_best_agg is not None:
+        need_usernames.append(mutual_best_agg.username)
 
     uniq_usernames = []
     seen = set()
@@ -624,6 +680,47 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
         }
         for total, agg in top_totals
     ]
+
+    def initiative_person(u: str, count: int) -> dict[str, Any]:
+        row = contact_rows.get(u)
+        display = _pick_display_name(row, u)
+        return {
+            "username": u,
+            "displayName": display,
+            "maskedName": _mask_name(display),
+            "avatarUrl": _build_avatar_url(str(account_dir.name or ""), u) if u else "",
+            "count": int(count),
+        }
+
+    mutual_friend_obj: dict[str, Any] | None = None
+    if mutual_best_agg is not None:
+        sent = int(mutual_best_agg.outgoing)
+        received = int(mutual_best_agg.incoming)
+        row = contact_rows.get(mutual_best_agg.username)
+        display = _pick_display_name(row, mutual_best_agg.username)
+        mutual_friend_obj = {
+            "username": mutual_best_agg.username,
+            "displayName": display,
+            "maskedName": _mask_name(display),
+            "avatarUrl": _build_avatar_url(str(account_dir.name or ""), mutual_best_agg.username),
+            "sentCount": sent,
+            "receivedCount": received,
+            "ratio": round(float(min(sent, received)) / float(max(sent, received)), 2),
+        }
+
+    initiative_obj: dict[str, Any] = {
+        "conversationCount": int(initiative_conversations),
+        "initiatedByMe": int(initiated_by_me),
+        "initiatedByOthers": int(initiated_by_others),
+        "initiationRatePct": (
+            round(float(initiated_by_me) * 100.0 / float(initiative_conversations), 1)
+            if initiative_conversations > 0
+            else None
+        ),
+        "topInitiatedByMe": [initiative_person(u, c) for u, c in top_init_by_me],
+        "topInitiatedToMe": [initiative_person(u, c) for u, c in top_init_to_me],
+        "mutualFriend": mutual_friend_obj,
+    }
 
     # Prepare "bar race" data: all 1v1 sessions (exclude official/system), cumulative per day.
     race = None
@@ -821,6 +918,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
         "topBuddies": top_list,
         "topTotals": top_totals_list,
         "allContacts": all_contacts_list,
+        "initiative": initiative_obj,
         "race": race,
         "settings": {
             "gapCapSeconds": int(gap_cap_seconds),
