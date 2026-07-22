@@ -10,7 +10,7 @@ const TOKEN = String(process.env.WECHAT_TOOL_WCDB_SIDECAR_TOKEN || "").trim();
 
 let koffi = null;
 let nativeLib = null;
-let nativeDllPath = "";
+let nativeLibraryPath = "";
 let initialized = false;
 let protectionResults = [];
 const preloadedLibs = [];
@@ -110,6 +110,7 @@ function getDllDir() {
 function getDllPath() {
   const fromEnv = String(process.env.WECHAT_TOOL_WCDB_API_DLL_PATH || "").trim();
   if (fromEnv) return path.resolve(fromEnv);
+  if (process.platform === "darwin") return path.join(getDllDir(), "libwcdb_api.dylib");
   return path.join(getDllDir(), "wcdb_api.dll");
 }
 
@@ -138,17 +139,19 @@ function loadNative() {
 
   const ffi = loadKoffi();
   const dllDir = getDllDir();
-  nativeDllPath = getDllPath();
-  if (!fs.existsSync(nativeDllPath)) {
-    throw new ApiError(`wcdb_api.dll not found: ${nativeDllPath}`);
+  nativeLibraryPath = getDllPath();
+  if (!fs.existsSync(nativeLibraryPath)) {
+    throw new ApiError(`WCDB native library not found: ${nativeLibraryPath}`);
   }
 
   try {
     process.chdir(dllDir);
   } catch {}
 
-  for (const dep of ["WCDB.dll", "SDL2.dll", "VoipEngine.dll"]) {
-    const depPath = path.join(dllDir, dep);
+  const dependencyPaths = process.platform === "darwin"
+    ? [path.join(dllDir, "..", "universal", "libWCDB.dylib")]
+    : ["WCDB.dll", "SDL2.dll", "VoipEngine.dll"].map((name) => path.join(dllDir, name));
+  for (const depPath of dependencyPaths) {
     if (!fs.existsSync(depPath)) continue;
     try {
       preloadedLibs.push(ffi.load(depPath));
@@ -158,7 +161,7 @@ function loadNative() {
     }
   }
 
-  nativeLib = ffi.load(nativeDllPath);
+  nativeLib = ffi.load(nativeLibraryPath);
   funcs.InitProtection = tryFunc("int32 InitProtection(const char* resourcePath)");
   funcs.wcdb_init = tryFunc("int32 wcdb_init()");
   funcs.wcdb_shutdown = tryFunc("int32 wcdb_shutdown()");
@@ -224,10 +227,10 @@ function loadNative() {
   funcs.wcdb_free_string = tryFunc("void wcdb_free_string(void* ptr)");
 
   if (!funcs.wcdb_init || !funcs.wcdb_open_account || !funcs.wcdb_get_logs || !funcs.wcdb_free_string) {
-    throw new ApiError("wcdb_api.dll is missing required exports");
+    throw new ApiError("WCDB native library is missing required exports");
   }
 
-  log(`loaded ${nativeDllPath}`);
+  log(`loaded ${nativeLibraryPath}`);
   return nativeLib;
 }
 
@@ -236,6 +239,19 @@ function requireFunc(name) {
   const fn = funcs[name];
   if (!fn) throw new ApiError(`${name} not exported`, -404);
   return fn;
+}
+
+function selectMessageCursorFunction(action, availableFuncs) {
+  const preferredName = action === "open_message_cursor_lite"
+    ? "wcdb_open_message_cursor_lite"
+    : "wcdb_open_message_cursor";
+  if (availableFuncs[preferredName]) {
+    return { fnName: preferredName, fn: availableFuncs[preferredName] };
+  }
+  if (preferredName === "wcdb_open_message_cursor_lite" && availableFuncs.wcdb_open_message_cursor) {
+    return { fnName: "wcdb_open_message_cursor", fn: availableFuncs.wcdb_open_message_cursor };
+  }
+  throw new ApiError(`${preferredName} not exported`, -404);
 }
 
 function ptrToString(ptr) {
@@ -298,7 +314,7 @@ function callOutError(name, args) {
 function ensureInitialized() {
   loadNative();
   if (initialized) {
-    return { initialized: true, dllPath: nativeDllPath, protection: protectionResults };
+    return { initialized: true, libraryPath: nativeLibraryPath, protection: protectionResults };
   }
 
   protectionResults = [];
@@ -320,7 +336,7 @@ function ensureInitialized() {
     throw new ApiError("wcdb_init failed", rc, { protection: protectionResults });
   }
   initialized = true;
-  return { initialized: true, dllPath: nativeDllPath, protection: protectionResults };
+  return { initialized: true, libraryPath: nativeLibraryPath, protection: protectionResults };
 }
 
 function normalizeHandle(value) {
@@ -382,10 +398,11 @@ function handleAction(action, payload) {
 
     case "open_message_cursor":
     case "open_message_cursor_lite": {
-      const fnName = action === "open_message_cursor_lite" ? "wcdb_open_message_cursor_lite" : "wcdb_open_message_cursor";
+      loadNative();
+      const { fnName, fn } = selectMessageCursorFunction(action, funcs);
       const out = [0];
       const rc = Number(
-        requireFunc(fnName)(
+        fn(
           normalizeHandle(data.handle),
           String(data.session_id || "").trim(),
           Number.parseInt(String(data.batch_size || 0), 10) || 1,
@@ -559,7 +576,7 @@ function handleAction(action, payload) {
 async function handleRequest(req, res) {
   try {
     if (req.method === "GET" && req.url === "/health") {
-      jsonResponse(res, 200, { ok: true, initialized, dllPath: nativeDllPath || getDllPath() });
+      jsonResponse(res, 200, { ok: true, initialized, libraryPath: nativeLibraryPath || getDllPath() });
       return;
     }
 
@@ -591,31 +608,36 @@ async function handleRequest(req, res) {
   }
 }
 
-if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) {
-  log(`invalid sidecar port: ${process.env.WECHAT_TOOL_WCDB_SIDECAR_PORT || ""}`);
-  process.exit(2);
+function startServer() {
+  if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) {
+    log(`invalid sidecar port: ${process.env.WECHAT_TOOL_WCDB_SIDECAR_PORT || ""}`);
+    process.exit(2);
+  }
+
+  const server = http.createServer((req, res) => {
+    void handleRequest(req, res);
+  });
+
+  server.listen(PORT, HOST, () => {
+    log(`listening http://${HOST}:${PORT} dll=${getDllPath()} koffi=${process.env.WECHAT_TOOL_KOFFI_DIR || "node_modules"}`);
+  });
+
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.on(signal, () => {
+      try {
+        server.close(() => process.exit(0));
+      } catch {
+        process.exit(0);
+      }
+    });
+  }
+
+  return server;
 }
 
-const server = http.createServer((req, res) => {
-  void handleRequest(req, res);
-});
+if (require.main === module) startServer();
 
-server.listen(PORT, HOST, () => {
-  log(`listening http://${HOST}:${PORT} dll=${getDllPath()} koffi=${process.env.WECHAT_TOOL_KOFFI_DIR || "node_modules"}`);
-});
-
-process.on("SIGTERM", () => {
-  try {
-    server.close(() => process.exit(0));
-  } catch {
-    process.exit(0);
-  }
-});
-
-process.on("SIGINT", () => {
-  try {
-    server.close(() => process.exit(0));
-  } catch {
-    process.exit(0);
-  }
-});
+module.exports = {
+  selectMessageCursorFunction,
+  startServer,
+};

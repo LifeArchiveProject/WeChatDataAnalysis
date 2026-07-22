@@ -5,14 +5,19 @@
   "main": "src/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.cjs",
-    "dev:static": "pushd ..\\\\frontend && npm run generate && popd && cross-env ELECTRON_START_URL=http://127.0.0.1:10392 electron .",
-    "build:ui": "pushd ..\\\\frontend && npm run generate && popd && node scripts\\\\copy-ui.cjs",
+    "dev:static": "npm --prefix ../frontend run generate && cross-env ELECTRON_START_URL=http://127.0.0.1:10392 electron .",
+    "build:ui": "npm --prefix ../frontend run generate && node scripts/copy-ui.cjs",
     "build:backend": "uv sync --extra build && node scripts/build-backend.cjs",
     "build:icon": "node scripts/build-icon.cjs",
-    "dist": "npm run build:ui && npm run build:backend && npm run build:icon && electron-builder --win --x64 --publish never"
+    "smoke:mac": "node scripts/smoke-macos-package.cjs",
+    "dist": "npm run dist:win",
+    "dist:win": "npm run build:ui && npm run build:backend && npm run build:icon && electron-builder --win --x64 --publish never",
+    "dist:mac": "npm run build:ui && npm run build:backend && npm run build:icon && electron-builder --mac dmg zip --arm64 --publish never"
   },
   "dependencies": {
-    "electron-updater": "^6.7.3"
+    "electron-updater": "^6.7.3",
+    "ffmpeg-static": "^5.3.0",
+    "koffi": "^2.15.2"
   },
   "build": {
     "appId": "com.lifearchive.wechatdataanalysis",
@@ -45,9 +50,13 @@
           "graceful-fs/**/*",
           "jsonfile/**/*",
           "universalify/**/*",
-          "semver/**/*"
+          "semver/**/*",
+          "koffi/**/*"
         ]
       }
+    ],
+    "asarUnpack": [
+      "node_modules/koffi/**/*"
     ],
     "extraResources": [
       {
@@ -63,8 +72,19 @@
         "to": "wcdb-sidecar.cjs"
       },
       {
-        "from": "vendor/koffi",
-        "to": "koffi"
+        "from": "src/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "node_modules/ffmpeg-static",
+        "to": "ffmpeg",
+        "filter": [
+          "ffmpeg",
+          "ffmpeg.exe",
+          "ffmpeg.LICENSE",
+          "ffmpeg.README",
+          "LICENSE"
+        ]
       }
     ],
     "win": {
@@ -72,6 +92,19 @@
       "target": [
         "nsis"
       ]
+    },
+    "mac": {
+      "icon": "src/icon.png",
+      "category": "public.app-category.utilities",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist"
     },
     "publish": {
       "provider": "github",

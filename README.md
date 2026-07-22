@@ -112,6 +112,29 @@
 
 > Excel 格式生成 `.xlsx` 文件；聊天记录、朋友圈和收藏会将对应格式文件与必要资源一起打包为 ZIP。
 
+## Windows / macOS 兼容性
+
+| 功能 | Windows | macOS |
+| --- | --- | --- |
+| 数据库密钥自动获取 | 支持 | 不提供；请用支持 Mac 的同类本地工具获取后手动填写 64 位密钥 |
+| 数据库解密与离线分析 | 支持 | 支持 |
+| 图片密钥内存扫描 | 支持 | 支持；首次使用可能需要授予辅助功能或管理员权限 |
+| WCDB 实时消息、联系人和朋友圈 | 支持 | Apple Silicon 支持；Intel Mac 暂不支持实时 WCDB |
+| 聊天、朋友圈、联系人、收藏等导出 | 支持 | 支持 |
+| 账号全量归档 ZIP 导入与导出 | 支持 | 支持，并可与 Windows 双向迁移 |
+| 微信进程大图 Hook | 支持 | 不提供，这是 Windows 专属能力 |
+
+macOS 版本不会从微信进程提取数据库密钥。应用检测到 Mac 后只会显示获取方式提示；取得您本人账号的密钥并手动填写后，Apple Silicon Mac 上的数据库解密、实时消息、联系人、朋友圈、媒体、导出和迁移流程与 Windows 保持一致。
+
+### 从 Windows 迁移到 Mac
+
+1. 在 Windows 端打开全局导出，选择“账号数据归档”，同时包含数据库和资源文件。
+2. 将生成的 `wechat_archive_*.zip` 传到 Mac，不要手动解压或修改归档内容。
+3. 在 Mac 端进入“导入数据”，选择“账号归档 ZIP”，预览账号后确认导入。
+4. 导入器会校验每个文件的 SHA-256；若本地已有同名账号，会在完整导入成功后保留旧目录备份。
+
+已经由本项目解密并归档的数据，迁移后可直接离线查看；只有连接 Mac 上微信原始 WCDB 做实时读取时才需要手动填写数据库密钥。
+
 ## 加入群聊
 
 也欢迎加入下方 QQ 群一起讨论。
@@ -124,13 +147,15 @@
 
 ## 快速开始
 
-### 1. 下载并安装 EXE（Windows，推荐）
+### 1. 下载桌面安装包（推荐）
 
 1. 打开 Release 页面（最新版）：https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest
-2. 下载 `WeChatDataAnalysis.Setup.<version>.exe` 并运行安装
+2. Windows 下载 `Setup.exe`；Apple Silicon Mac 下载 `.dmg` 或 `mac.zip`
 3. 安装完成后启动 `WeChatDataAnalysis`
 
 > 如果 Windows 弹出“未知发布者/更多信息”等提示，请确认下载来源为本仓库 Release 后再选择“仍要运行”。
+>
+> macOS 首次打开若提示来源限制，请在“系统设置 → 隐私与安全性”中确认来自本仓库的应用。图片密钥扫描还可能需要授予终端或应用辅助功能权限。
 
 ### 2. 从源码运行（开发者/高级用户）
 
@@ -195,6 +220,20 @@ npm run dist
 
 输出位置：`desktop/dist/WeChatDataAnalysis Setup <version>.exe`
 
+## 打包 macOS 桌面端（Apple Silicon）
+
+需要 Xcode Command Line Tools、Rust、Python 3.11、Node.js 20+ 和 `uv`。
+
+```bash
+cd desktop
+npm install
+npm run dist:mac
+```
+
+该命令会生成静态前端、编译 macOS `wce_integrity` 模块、使用 PyInstaller 打包 ARM64 后端，并生成 DMG 与 ZIP。输出位于 `desktop/dist/`。
+
+内置 Mac 原生资源的来源、哈希、修改内容和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。运行和打包均不依赖仓库外或根目录下的 WeFlow 副本。
+
 ## 安全说明
 
 **重要提醒**:
@@ -227,4 +266,3 @@ npm run dist
 ---
 
 **免责声明**: 本工具仅供学习研究使用，使用者需自行承担使用风险。开发者不对因使用本工具造成的任何损失负责。
-

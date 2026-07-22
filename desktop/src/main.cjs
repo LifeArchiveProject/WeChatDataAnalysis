@@ -3,6 +3,7 @@ const {
   BrowserWindow,
   Menu,
   Tray,
+  nativeImage,
   ipcMain,
   globalShortcut,
   dialog,
@@ -65,6 +66,8 @@ let wcdbSidecarHealthGeneration = 0;
 const WCDB_SIDECAR_HEALTH_FAILURE_LIMIT = 15;
 let resolvedDataDir = null;
 let mainWindow = null;
+let mainWindowLaunchPromise = null;
+let initialStartupPromise = null;
 let tray = null;
 let isQuitting = false;
 let desktopSettings = null;
@@ -89,6 +92,7 @@ function getTitleBarOverlayOptions(theme) {
 }
 
 function setWindowTitleBarTheme(win, theme) {
+  if (process.platform === "darwin") return false;
   if (!win || typeof win.setTitleBarOverlay !== "function") return false;
   try {
     win.setTitleBarOverlay(getTitleBarOverlayOptions(theme));
@@ -109,8 +113,8 @@ if (!gotSingleInstanceLock) {
 } else {
   app.on("second-instance", () => {
     try {
-      if (app.isReady()) showMainWindow();
-      else app.whenReady().then(() => showMainWindow());
+      if (app.isReady()) requestMainWindow("second-instance");
+      else app.whenReady().then(() => requestMainWindow("second-instance"));
     } catch {}
   });
 }
@@ -641,7 +645,10 @@ function ensureOutputLink() {
   // NOTE: We intentionally avoid creating a junction/symlink inside the install directory.
   // Some uninstall/update flows may traverse reparse points and delete the target directory,
   // causing data loss (the install dir is removed on every update/reinstall).
-  if (!app.isPackaged) return;
+  // These helper files are Windows installer affordances. Writing beside the
+  // executable on macOS would mutate Contents/MacOS and invalidate the app's
+  // code signature after the first launch.
+  if (!app.isPackaged || process.platform !== "win32") return;
 
   const exeDir = getExeDir();
   const target = resolveOutputDir();
@@ -1634,6 +1641,18 @@ function checkForUpdatesOnStartup() {
 }
 
 function getTrayIconPath() {
+  if (process.platform === "darwin") {
+    const packaged = path.join(process.resourcesPath, "icon.png");
+    try {
+      if (app.isPackaged && fs.existsSync(packaged)) return packaged;
+    } catch {}
+
+    const devMac = path.resolve(__dirname, "..", "src", "icon.png");
+    try {
+      if (fs.existsSync(devMac)) return devMac;
+    } catch {}
+  }
+
   // Prefer an icon shipped in `src/` so it works both in dev and packaged (asar) builds.
   const shipped = path.join(__dirname, "icon.ico");
   try {
@@ -1650,7 +1669,7 @@ function getTrayIconPath() {
 }
 
 function showMainWindow() {
-  if (!mainWindow) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
   try {
     mainWindow.setSkipTaskbar(false);
   } catch {}
@@ -1663,6 +1682,22 @@ function showMainWindow() {
   try {
     mainWindow.focus();
   } catch {}
+  return true;
+}
+
+function requestMainWindow(reason = "request") {
+  if (showMainWindow()) return;
+
+  const startup = initialStartupPromise || Promise.resolve();
+  void startup
+    .then(() => ensureMainWindowReady())
+    .catch((err) => {
+      const message = err?.message || String(err);
+      logMain(`[main] failed to open window reason=${reason}: ${err?.stack || message}`);
+      try {
+        dialog.showErrorBox("WeChatDataAnalysis", `无法打开主窗口：${message}`);
+      } catch {}
+    });
 }
 
 function createTray() {
@@ -1676,7 +1711,12 @@ function createTray() {
   }
 
   try {
-    tray = new Tray(iconPath);
+    let trayIcon = iconPath;
+    if (process.platform === "darwin") {
+      trayIcon = nativeImage.createFromPath(iconPath).resize({ width: 18, height: 18 });
+      trayIcon.setTemplateImage(true);
+    }
+    tray = new Tray(trayIcon);
   } catch (err) {
     tray = null;
     logMain(`[main] failed to create tray: ${err?.message || err}`);
@@ -1692,7 +1732,7 @@ function createTray() {
       Menu.buildFromTemplate([
         {
           label: "显示",
-          click: () => showMainWindow(),
+          click: () => requestMainWindow("tray-menu"),
         },
         {
           label: "检查更新...",
@@ -1791,8 +1831,8 @@ function createTray() {
   } catch {}
 
   try {
-    tray.on("click", () => showMainWindow());
-    tray.on("double-click", () => showMainWindow());
+    tray.on("click", () => requestMainWindow("tray-click"));
+    tray.on("double-click", () => requestMainWindow("tray-double-click"));
   } catch {}
 
   return tray;
@@ -1875,15 +1915,36 @@ function repoRoot() {
 }
 
 function getPackagedBackendPath() {
-  // Placeholder: in step 3 we will bundle a real backend exe into resources.
-  return path.join(process.resourcesPath, "backend", "wechat-backend.exe");
+  const executableName = process.platform === "win32" ? "wechat-backend.exe" : "wechat-backend";
+  return path.join(process.resourcesPath, "backend", executableName);
+}
+
+function getFfmpegPath() {
+  if (app.isPackaged) {
+    const executableName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+    return path.join(process.resourcesPath, "ffmpeg", executableName);
+  }
+
+  try {
+    return String(require("ffmpeg-static") || "").trim();
+  } catch {
+    return "";
+  }
 }
 
 function getPackagedWcdbDllPath() {
+  if (process.platform === "darwin") {
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    return path.join(process.resourcesPath, "backend", "native", "macos", arch, "libwcdb_api.dylib");
+  }
   return path.join(process.resourcesPath, "backend", "native", "wcdb_api.dll");
 }
 
 function getDevWcdbDllPath() {
+  if (process.platform === "darwin") {
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    return path.join(repoRoot(), "src", "wechat_decrypt_tool", "native", "macos", arch, "libwcdb_api.dylib");
+  }
   return path.join(repoRoot(), "src", "wechat_decrypt_tool", "native", "wcdb_api.dll");
 }
 
@@ -1902,7 +1963,9 @@ function getWcdbSidecarScriptPath() {
 }
 
 function getKoffiDir() {
-  return app.isPackaged ? path.join(process.resourcesPath, "koffi") : path.join(repoRoot(), "desktop", "vendor", "koffi");
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "app.asar.unpacked", "node_modules", "koffi")
+    : path.join(repoRoot(), "desktop", "node_modules", "koffi");
 }
 
 function getWcdbSidecarStdioLogPath(dataDir) {
@@ -2116,13 +2179,13 @@ function scheduleWcdbRuntimeRestart(code, signal) {
 function startWcdbSidecar() {
   if (process.env.WECHAT_TOOL_WCDB_SIDECAR === "0") return null;
   if (wcdbSidecarProc && wcdbSidecarProc.exitCode == null) return wcdbSidecarProc;
-  if (process.platform !== "win32") return null;
+  if (!["win32", "darwin"].includes(process.platform)) return null;
 
   const dllPath = getWcdbDllPath();
   const sidecarScript = getWcdbSidecarScriptPath();
   const koffiDir = getKoffiDir();
   if (!fs.existsSync(dllPath)) {
-    logMain(`[wcdb-sidecar] skip: missing wcdb_api.dll ${dllPath}`);
+    logMain(`[wcdb-sidecar] skip: missing native library ${dllPath}`);
     return null;
   }
   if (!fs.existsSync(sidecarScript)) {
@@ -2192,7 +2255,8 @@ function stopWcdbSidecar() {
 }
 
 function startBackend() {
-  if (backendProc) return backendProc;
+  if (backendProc && backendProc.exitCode == null) return backendProc;
+  backendProc = null;
   startWcdbSidecar();
 
   const resolvedDataPath = resolveDataDir() || getUserDataDir() || repoRoot();
@@ -2216,6 +2280,12 @@ function startBackend() {
     env.WECHAT_TOOL_UI_DIR = path.join(process.resourcesPath, "ui");
   }
 
+  const ffmpegPath = getFfmpegPath();
+  if (ffmpegPath && fs.existsSync(ffmpegPath)) {
+    env.WECHAT_TOOL_FFMPEG = ffmpegPath;
+    logMain(`[main] using bundled ffmpeg: ${ffmpegPath}`);
+  }
+
   if (app.isPackaged) {
     try {
       fs.mkdirSync(env.WECHAT_TOOL_DATA_DIR, { recursive: true });
@@ -2224,16 +2294,14 @@ function startBackend() {
 
     const backendExe = getPackagedBackendPath();
     if (!fs.existsSync(backendExe)) {
-      throw new Error(
-        `Packaged backend not found: ${backendExe}. Build it into desktop/resources/backend/wechat-backend.exe`
-      );
+      throw new Error(`Packaged backend not found: ${backendExe}. Run the platform backend build before packaging.`);
     }
     const packagedWcdbDll = getPackagedWcdbDllPath();
     if (fs.existsSync(packagedWcdbDll)) {
       env.WECHAT_TOOL_WCDB_API_DLL_PATH = packagedWcdbDll;
-      logMain(`[main] using packaged wcdb_api.dll: ${packagedWcdbDll}`);
+      logMain(`[main] using packaged WCDB native library: ${packagedWcdbDll}`);
     } else {
-      logMain(`[main] packaged wcdb_api.dll not found: ${packagedWcdbDll}`);
+      logMain(`[main] packaged WCDB native library not found: ${packagedWcdbDll}`);
     }
 
     const backendCwd = path.dirname(backendExe);
@@ -2593,8 +2661,9 @@ function createMainWindow() {
     height: 800,
     minWidth: 980,
     minHeight: 700,
-    titleBarStyle: "hidden",
-    titleBarOverlay: getTitleBarOverlayOptions("light"),
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 12, y: 9 } }
+      : { titleBarStyle: "hidden", titleBarOverlay: getTitleBarOverlayOptions("light") }),
     backgroundColor: "#EDEDED",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -2627,7 +2696,7 @@ function createMainWindow() {
   });
 
   win.on("closed", () => {
-    stopBackend();
+    if (mainWindow === win) mainWindow = null;
   });
 
   setupRendererConsoleLogging(win);
@@ -3072,26 +3141,26 @@ function registerWindowIpc() {
       };
     }
   });
+
+  ipcMain.handle("dialog:chooseArchive", async (_event, options) => {
+    try {
+      return await dialog.showOpenDialog({
+        title: String(options?.title || "请选择账号归档 ZIP"),
+        defaultPath: String(options?.defaultPath || "") || undefined,
+        properties: ["openFile"],
+        filters: [
+          { name: "微信账号归档", extensions: ["zip"] },
+          { name: "所有文件", extensions: ["*"] },
+        ],
+      });
+    } catch (err) {
+      logMain(`[main] dialog:chooseArchive failed: ${err?.message || err}`);
+      throw err;
+    }
+  });
 }
 
-async function main() {
-  await app.whenReady();
-  await refreshRendererCacheForPackagedUi();
-  Menu.setApplicationMenu(null);
-  registerWindowIpc();
-  registerDebugShortcuts();
-
-  // Resolve/create the data dir early so we can log reliably and place helper files
-  // next to the installed exe for easier access.
-  resolveDataDir();
-  loadDesktopSettings();
-  await applyPendingOutputDirOnStartup();
-  ensureOutputLink();
-  await ensureBackendPortAvailableOnStartup();
-  await prepareWcdbSidecarPort();
-
-  logMain(`[main] app.isPackaged=${app.isPackaged} argv=${JSON.stringify(process.argv)}`);
-
+async function ensureBackendReadyWithFallback() {
   startBackend();
   const startupTimeoutMs = getBackendStartupTimeoutMs();
   try {
@@ -3144,31 +3213,74 @@ async function main() {
       throw err;
     }
   }
+}
 
-  const win = createMainWindow();
-  mainWindow = win;
-  ensureTrayForCloseBehavior();
+async function ensureMainWindowReady() {
+  if (showMainWindow()) return mainWindow;
+  if (mainWindowLaunchPromise) return mainWindowLaunchPromise;
 
-  const startUrl = getDesktopUiUrl();
+  mainWindowLaunchPromise = (async () => {
+    await ensureBackendReadyWithFallback();
 
-  logMain(`[main] debugEnabled=${debugEnabled()} startUrl=${startUrl}`);
-  await loadWithRetry(win, startUrl);
+    if (showMainWindow()) return mainWindow;
 
-  // Auto-check updates after the UI has loaded (packaged builds only).
-  checkForUpdatesOnStartup();
+    const win = createMainWindow();
+    mainWindow = win;
+    ensureTrayForCloseBehavior();
 
-  // If debug mode is enabled, auto-open DevTools so the user doesn't need menu/shortcuts.
-  if (debugEnabled()) {
-    try {
-      win.webContents.openDevTools({ mode: "detach" });
-    } catch {}
+    const startUrl = getDesktopUiUrl();
+    logMain(`[main] debugEnabled=${debugEnabled()} startUrl=${startUrl}`);
+    await loadWithRetry(win, startUrl);
+
+    if (debugEnabled()) {
+      try {
+        win.webContents.openDevTools({ mode: "detach" });
+      } catch {}
+    }
+
+    return win;
+  })();
+
+  try {
+    return await mainWindowLaunchPromise;
+  } finally {
+    mainWindowLaunchPromise = null;
   }
 }
 
+async function main() {
+  await app.whenReady();
+  await refreshRendererCacheForPackagedUi();
+  Menu.setApplicationMenu(null);
+  registerWindowIpc();
+  registerDebugShortcuts();
+
+  // Resolve/create the data dir early so we can log reliably and place helper files
+  // next to the installed exe for easier access.
+  resolveDataDir();
+  loadDesktopSettings();
+  await applyPendingOutputDirOnStartup();
+  ensureOutputLink();
+  await ensureBackendPortAvailableOnStartup();
+  await prepareWcdbSidecarPort();
+
+  logMain(`[main] app.isPackaged=${app.isPackaged} argv=${JSON.stringify(process.argv)}`);
+
+  await ensureMainWindowReady();
+
+  // Auto-check updates once after the first UI load (packaged builds only).
+  checkForUpdatesOnStartup();
+}
+
 app.on("window-all-closed", () => {
-  stopBackend();
-  stopWcdbSidecar();
-  if (process.platform !== "darwin") app.quit();
+  // Standard macOS lifecycle: keep the app runtime alive so clicking the Dock
+  // icon can recreate a window. All child processes are stopped in before-quit.
+  if (process.platform === "darwin" && getCloseBehavior() !== "exit") return;
+  app.quit();
+});
+
+app.on("activate", () => {
+  requestMainWindow("activate");
 });
 
 app.on("will-quit", () => {
@@ -3185,7 +3297,8 @@ app.on("before-quit", () => {
 });
 
 if (gotSingleInstanceLock) {
-  main().catch((err) => {
+  initialStartupPromise = main();
+  initialStartupPromise.catch((err) => {
     // eslint-disable-next-line no-console
     console.error(err);
     logMain(`[main] fatal: ${err?.stack || String(err)}`);
@@ -3202,7 +3315,7 @@ if (gotSingleInstanceLock) {
           "文件：desktop-main.log / backend-stdio.log",
         ];
         if (outputDir) {
-          detailLines.push("", `当前 output 目录：${outputDir}`, "其中 output\\logs\\... 也在这里");
+          detailLines.push("", `当前 output 目录：${outputDir}`, `其中 output${path.sep}logs${path.sep}... 也在这里`);
         }
         dialog.showErrorBox(
           "WeChatDataAnalysis 启动失败",
