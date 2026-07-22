@@ -28,6 +28,9 @@ logger = get_logger(__name__)
 router = APIRouter(route_class=PathFixRoute)
 
 
+_DEFERRED_DECRYPT_CLEANUPS: set[asyncio.Task[None]] = set()
+
+
 def _normalize_decrypt_guard_accounts(accounts: Any) -> list[str]:
     if not accounts:
         return []
@@ -80,6 +83,76 @@ def _release_decrypt_account_guards(guards: list[tuple[str, Any]], *, reason: st
                 account,
                 reason,
             )
+
+
+async def _release_decrypt_guards_after_worker(
+    worker_task: asyncio.Task,
+    guards: list[tuple[str, Any]],
+) -> None:
+    try:
+        try:
+            await asyncio.shield(worker_task)
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            # The disconnected client no longer needs the worker result. The
+            # guard still must remain held until the underlying worker stops.
+            pass
+
+        if guards:
+            await asyncio.to_thread(
+                _release_decrypt_account_guards,
+                guards,
+                reason="decrypt:sse-disconnected",
+            )
+    except asyncio.CancelledError:
+        raise
+    except BaseException:
+        logger.exception("[decrypt] deferred SSE guard cleanup failed")
+
+
+async def _release_decrypt_guards_after_acquire(
+    acquire_task: asyncio.Task[list[tuple[str, Any]]],
+) -> None:
+    try:
+        try:
+            guards = await asyncio.shield(acquire_task)
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            logger.exception("[decrypt] deferred SSE guard acquisition failed")
+            return
+
+        if guards:
+            await asyncio.to_thread(
+                _release_decrypt_account_guards,
+                guards,
+                reason="decrypt:sse-disconnected",
+            )
+    except asyncio.CancelledError:
+        raise
+    except BaseException:
+        logger.exception("[decrypt] deferred SSE acquired guard cleanup failed")
+
+
+def _track_deferred_decrypt_cleanup(cleanup_task: asyncio.Task[None]) -> None:
+    _DEFERRED_DECRYPT_CLEANUPS.add(cleanup_task)
+    cleanup_task.add_done_callback(_DEFERRED_DECRYPT_CLEANUPS.discard)
+
+
+def _defer_decrypt_guard_cleanup(
+    worker_task: asyncio.Task,
+    guards: list[tuple[str, Any]],
+) -> None:
+    cleanup_task = asyncio.create_task(_release_decrypt_guards_after_worker(worker_task, guards))
+    _track_deferred_decrypt_cleanup(cleanup_task)
+
+
+def _defer_decrypt_guard_acquire_cleanup(
+    acquire_task: asyncio.Task[list[tuple[str, Any]]],
+) -> None:
+    cleanup_task = asyncio.create_task(_release_decrypt_guards_after_acquire(acquire_task))
+    _track_deferred_decrypt_cleanup(cleanup_task)
 
 
 def _acquire_decrypt_account_guards(accounts: Any, *, reason: str) -> list[tuple[str, Any]]:
@@ -283,6 +356,8 @@ async def decrypt_databases_stream(
         total_databases = sum(len(dbs) for dbs in account_databases.values())
 
         decrypt_guards: list[tuple[str, Any]] = []
+        guard_acquire_task: asyncio.Task[list[tuple[str, Any]]] | None = None
+        active_worker_task: asyncio.Task | None = None
         try:
             guard_accounts = _normalize_decrypt_guard_accounts(account_databases.keys())
             if guard_accounts:
@@ -294,11 +369,15 @@ async def decrypt_databases_stream(
                     }
                 )
                 await asyncio.sleep(0)
-                decrypt_guards = await asyncio.to_thread(
-                    _acquire_decrypt_account_guards,
-                    guard_accounts,
-                    reason="decrypt:sse",
+                guard_acquire_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        _acquire_decrypt_account_guards,
+                        guard_accounts,
+                        reason="decrypt:sse",
+                    )
                 )
+                decrypt_guards = await asyncio.shield(guard_acquire_task)
+                guard_acquire_task = None
 
             yield _sse({"type": "start", "total": total_databases, "message": f"开始解密 {total_databases} 个数据库"})
             await asyncio.sleep(0)
@@ -373,12 +452,15 @@ async def decrypt_databases_stream(
 
                     output_path = account_output_dir / db_name
                     task = asyncio.create_task(asyncio.to_thread(decryptor.decrypt_database, db_path, str(output_path)))
+                    active_worker_task = task
 
                     # Wait with heartbeat (can't yield while awaiting the thread directly).
                     last_heartbeat = time.time()
+                    disconnected = False
                     while not task.done():
                         if await request.is_disconnected():
-                            return
+                            disconnected = True
+                            break
                         now = time.time()
                         if now - last_heartbeat > 15:
                             last_heartbeat = now
@@ -386,9 +468,16 @@ async def decrypt_databases_stream(
                             yield ": ping\n\n"
                         await asyncio.sleep(0.6)
                     try:
-                        ok = bool(task.result())
+                        ok = bool(await asyncio.shield(task))
+                    except asyncio.CancelledError:
+                        raise
                     except Exception:
                         ok = False
+                    finally:
+                        if task.done():
+                            active_worker_task = None
+                    if disconnected:
+                        return
                     db_diagnostic = dict(getattr(decryptor, "last_result", {}) or {})
                     if not db_diagnostic:
                         db_diagnostic = {
@@ -486,18 +575,28 @@ async def decrypt_databases_stream(
                                 include_official=True,
                             )
                         )
+                        active_worker_task = task
                         last_heartbeat = time.time()
+                        disconnected = False
                         while not task.done():
                             if await request.is_disconnected():
-                                return
+                                disconnected = True
+                                break
                             now = time.time()
                             if now - last_heartbeat > 15:
                                 last_heartbeat = now
                                 yield ": ping\n\n"
                             await asyncio.sleep(0.6)
-                        account_results[account]["session_last_message"] = task.result()
+                        account_results[account]["session_last_message"] = await asyncio.shield(task)
+                        if disconnected:
+                            return
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
                         account_results[account]["session_last_message"] = {"status": "error", "message": str(e)}
+                    finally:
+                        if active_worker_task is not None and active_worker_task.done():
+                            active_worker_task = None
 
             status = "completed" if success_count > 0 else "failed"
             result = {
@@ -526,6 +625,34 @@ async def decrypt_databases_stream(
 
             yield _sse({"type": "complete", **result})
         finally:
+            acquire_to_clean = guard_acquire_task
+            if acquire_to_clean is not None:
+                if acquire_to_clean.done():
+                    try:
+                        decrypt_guards = acquire_to_clean.result()
+                    except BaseException:
+                        pass
+                else:
+                    _defer_decrypt_guard_acquire_cleanup(acquire_to_clean)
+                guard_acquire_task = None
+
+            worker_to_wait = active_worker_task
+            if worker_to_wait is not None and not worker_to_wait.done():
+                current_task = asyncio.current_task()
+                if current_task is not None and current_task.cancelling():
+                    _defer_decrypt_guard_cleanup(worker_to_wait, decrypt_guards)
+                    decrypt_guards = []
+                else:
+                    try:
+                        await asyncio.shield(worker_to_wait)
+                    except asyncio.CancelledError:
+                        # A second cancellation while closing the response must
+                        # not cancel the thread-backed worker or release its guard.
+                        _defer_decrypt_guard_cleanup(worker_to_wait, decrypt_guards)
+                        decrypt_guards = []
+                        raise
+                    except BaseException:
+                        pass
             if decrypt_guards:
                 await asyncio.to_thread(_release_decrypt_account_guards, decrypt_guards, reason="decrypt:sse")
 
