@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WeChatDataAnalysis — 你的微信数据，由你留存</title>
+  <meta name="description" content="微信 4.x 数据库解密与分析工具：高仿微信界面、实时消息、朋友圈、全文搜索、聊天记录导出与年度总结，100% 本地离线运行。" />
+  <meta property="og:title" content="WeChatDataAnalysis — 你的微信数据，由你留存" />
+  <meta property="og:description" content="解密 · 浏览 · 搜索 · 导出 · 年度总结，全部在你自己的电脑上完成。" />
+  <meta property="og:type" content="website" />
+  <link rel="icon" href="assets/img/logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@900&family=Noto+Sans+SC:wght@500;700;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="assets/css/main.css" />
+</head>
+<body class="is-loading">
+
+  <!-- ═══════════ PRELOADER ═══════════ -->
+  <div id="loader" aria-hidden="true">
+    <canvas id="loader-hex"></canvas>
+    <div class="loader__center">
+      <p class="loader__toplabel mono">WECHATDATAANALYSIS — DECRYPT SEQUENCE</p>
+      <p class="loader__keylabel mono"><span class="tick"></span>AES-256 KEY · 64 HEX<span class="tick"></span></p>
+      <p class="loader__key mono" id="loader-key" aria-hidden="true"></p>
+      <div class="loader__line"><i id="loader-fill"></i></div>
+      <div class="loader__meta mono">
+        <span id="loader-status">locating db_storage …</span>
+        <span class="loader__pnum"><span id="loader-num">000</span>%</span>
+      </div>
+    </div>
+    <div class="loader__corner mono tl">WECHAT&nbsp;DATA&nbsp;ANALYSIS</div>
+    <div class="loader__corner mono tr">AES-256 · SQLCIPHER</div>
+    <div class="loader__corner mono bl">LIFEARCHIVEPROJECT</div>
+    <div class="loader__corner mono br">LOCAL&nbsp;/&nbsp;OFFLINE</div>
+    <div class="loader__panel top"></div>
+    <div class="loader__panel bottom"></div>
+  </div>
+
+  <!-- ═══════════ GLOBAL CHROME ═══════════ -->
+  <canvas id="gl"></canvas>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="cursor" aria-hidden="true">
+    <i class="cursor__c tl"></i><i class="cursor__c tr"></i><i class="cursor__c bl"></i><i class="cursor__c br"></i>
+    <span class="cursor__label mono"></span>
+  </div>
+  <div class="cursor-dot" aria-hidden="true"></div>
+  <span class="cursor-addr mono" id="cursor-addr" aria-hidden="true"></span>
+
+  <header class="nav" id="nav">
+    <a class="nav__brand" href="#hero" data-cursor="hover">
+      <img src="assets/img/logo.png" alt="" class="nav__logo" />
+      <span class="nav__word mono">WeChatDataAnalysis</span>
+    </a>
+    <div class="nav__links">
+      <a class="nav__gh mono" data-cursor="hover" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span id="gh-stars">GitHub</span>
+      </a>
+      <a class="nav__dl mono" data-cursor="hover" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest" target="_blank" rel="noopener">下载 ↓</a>
+    </div>
+  </header>
+
+  <aside class="rail" aria-hidden="true">
+    <div class="rail__idx mono"><span id="rail-cur">01</span><em>/ 07</em></div>
+    <div class="rail__line"><i id="rail-fill"></i></div>
+  </aside>
+
+  <main id="page">
+
+    <!-- ═══════════ ACT 01 · HERO ═══════════ -->
+    <section class="act hero" id="hero" data-act="01">
+      <p class="hero__vert mono" aria-hidden="true">WECHAT 4.X DATABASE — DECRYPT · BROWSE · SEARCH · EXPORT · WRAPPED</p>
+      <p class="hero__coord mono" aria-hidden="true">
+        <span id="hc-1">DB — AES-256 · SQLCIPHER COMPAT</span>
+        <span id="hc-2">KEY — 64 HEX · MEMORY SCAN</span>
+        <span id="hc-3">RUNTIME — 100% LOCAL · 0 UPLOAD</span>
+      </p>
+      <h1 class="hero__title">
+        <i class="hero__decrypt" aria-hidden="true"></i>
+        <span class="ht-line ht-line--1"><span class="ht-mask">你的聊天记录</span></span>
+        <span class="ht-line ht-line--2"><span class="ht-mask">本就属于<em>你</em></span></span>
+      </h1>
+      <p class="hero__sub mono" id="hero-scramble">解密 · 浏览 · 搜索 · 导出 · 年度总结 —— 全部离线完成</p>
+      <div class="hero__cta">
+        <a class="hero__orb" data-magnetic data-cursor="hover" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest" target="_blank" rel="noopener">
+          <svg class="hero__orb-ring" viewBox="0 0 200 200"><circle cx="100" cy="100" r="97" fill="none" stroke="currentColor" stroke-width="1" /></svg>
+          <span>下载<i class="mono">WIN / MAC</i></span>
+        </a>
+        <a class="hero__gh mono" data-cursor="hover" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis" target="_blank" rel="noopener">GitHub · 阅读源码 <i>↗</i></a>
+      </div>
+      <div class="hero__ticker" aria-hidden="true">
+        <div class="hero__ticker-row mono" id="hero-ticker">
+          <span>100% 本地运行</span><i>◆</i><span>开源可审计</span><i>◆</i><span>Windows &amp; Apple Silicon</span><i>◆</i><span>WCDB 实时读取</span><i>◆</i><span>SHA-256 迁移校验</span><i>◆</i><span>10 类内容 × 4 格式导出</span><i>◆</i>
+          <span>100% 本地运行</span><i>◆</i><span>开源可审计</span><i>◆</i><span>Windows &amp; Apple Silicon</span><i>◆</i><span>WCDB 实时读取</span><i>◆</i><span>SHA-256 迁移校验</span><i>◆</i><span>10 类内容 × 4 格式导出</span><i>◆</i>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ ACT 02 · MANIFESTO ═══════════ -->
+    <section class="act manifesto" id="manifesto" data-act="02">
+      <div class="manifesto__pin">
+        <div class="mf__field" id="mfield" aria-hidden="true"></div>
+        <canvas class="mf__wall" id="mwall" aria-hidden="true"></canvas>
+        <p class="m-line m-line--up" data-mline>多年的对话、照片、<br/>红包与告别，</p>
+        <p class="m-line" data-mline>都锁在一个<span class="hl">你打不开</span>的<br/>加密数据库里。</p>
+        <p class="m-line m-line--last" data-mline>直到<em>现在</em>。</p>
+      </div>
+    </section>
+
+    <!-- ═══════════ ACT 03 · DECRYPT ═══════════ -->
+    <section class="act decrypt" id="decrypt" data-act="03">
+      <div class="decrypt__pin">
+        <canvas class="decrypt__hex" id="hexwall"></canvas>
+
+        <div class="decrypt__hud mono">
+          <div class="dhud__left">
+            <span id="dstep-num">STEP 01 / 03</span>
+            <span id="dstep-file">key_pattern @ WeChat.exe</span>
+          </div>
+          <div class="dhud__right"><span id="dpct">0.0%</span></div>
+        </div>
+
+        <h3 class="dtitle" id="dtitle">获取密钥</h3>
+        <p class="dsub" id="dsub">内存扫描自动定位 64 位数据库密钥</p>
+        <p class="dkey mono" id="dkey" aria-hidden="true"></p>
+
+        <div class="decrypt__chat" id="dchat">
+          <p class="dchat__tag mono" aria-hidden="true">message_0.db — 已解密 · READONLY</p>
+          <div class="dchat__body">
+            <p class="wc-time" data-bub>昨天 21:47</p>
+            <div class="wc-row" data-bub>
+              <span class="wc-avatar" style="--av:#5d6a75">友</span>
+              <div class="wc-bubble wc-bubble--l">到了跟我说一声</div>
+            </div>
+            <div class="wc-row wc-row--r" data-bub>
+              <span class="wc-avatar" style="--av:#07b75b">我</span>
+              <div class="wc-bubble wc-bubble--r">刚落地，还是老地方见</div>
+            </div>
+            <div class="wc-row" data-bub>
+              <span class="wc-avatar" style="--av:#5d6a75">友</span>
+              <div class="wc-bubble wc-bubble--l wc-voice">
+                <svg class="wc-voice-ic" viewBox="0 0 32 32" fill="currentColor"><path d="M10.3 11.7l-1.8 1.8c.7.7 1.1 1.6 1.1 2.5s-.4 1.9-1.1 2.5l1.8 1.8c1.1-1.1 1.8-2.6 1.8-4.3s-.7-3.2-1.8-4.3z"/><path class="voice-wave-2" d="M15.2 6.7l-1.8 1.8c1.9 1.9 3 4.5 3 7.3s-1.2 5.4-3 7.3l1.8 1.8c2.3-2.3 3.8-5.5 3.8-9.1s-1.5-6.8-3.8-9.1z"/><path class="voice-wave-3" d="M20.1 1.8l-1.8 1.8c3.1 3.2 5 7.5 5 12.3s-1.9 9.1-5 12.3l1.8 1.8c3.6-3.6 5.9-8.5 5.9-14s-2.2-10.4-5.9-14z"/></svg>
+                <span>4″</span><i class="wc-unread"></i>
+              </div>
+            </div>
+            <div class="wc-row wc-row--r" data-bub>
+              <span class="wc-avatar" style="--av:#07b75b">我</span>
+              <div class="wc-img"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M3 17l5-5 4 4 3.5-3.5L21 18"/></svg></div>
+            </div>
+            <div class="wc-row" data-bub>
+              <span class="wc-avatar" style="--av:#5d6a75">友</span>
+              <div class="wc-redpacket">
+                <div class="wc-rp-main"><span class="wc-rp-ic">🧧</span><div><b>恭喜发财，大吉大利</b><i>领取红包</i></div></div>
+                <div class="wc-rp-foot">微信红包</div>
+              </div>
+            </div>
+            <div class="wc-row wc-row--r" data-bub>
+              <span class="wc-avatar" style="--av:#07b75b">我</span>
+              <div class="wc-bubble wc-bubble--r">好，就这么定了</div>
+            </div>
+          </div>
+        </div>
+
+        <ul class="ddbs mono" id="ddbs">
+          <li data-db><i></i>message_0.db</li>
+          <li data-db><i></i>contact.db</li>
+          <li data-db><i></i>session.db</li>
+          <li data-db><i></i>sns.db</li>
+          <li data-db><i></i>favorite.db</li>
+          <li data-db><i></i>media_0.db</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ═══════════ ACT 04 · FEATURES ═══════════ -->
+    <section class="act features" id="features" data-act="04">
+      <div class="features__pin">
+        <div class="deck" id="deck">
+          <div class="deck__text">
+            <p class="deck__kicker mono"><span class="tick"></span>FEATURES · 功能全景</p>
+            <span class="deck__num" id="deck-num">01</span>
+            <h3 class="deck__name" id="deck-name">聊天记录 1:1 复刻</h3>
+            <p class="deck__desc" id="deck-desc">文本、图片、视频、语音、表情、引用、合并转发……逐一还原，样式尽可能与微信保持一致。</p>
+            <p class="deck__meta mono" id="deck-meta">全消息类型 · 时间轴跳转 · 高仿界面</p>
+            <div class="deck__dots" id="deck-dots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+
+          <div class="deck__stack" id="deck-stack">
+            <div class="deck__card" data-card><img src="assets/img/message.png" alt="聊天记录页面" decoding="async" /></div>
+            <div class="deck__card" data-card><img src="assets/img/RealTimeMessages.gif" alt="实时消息同步" decoding="async" /></div>
+            <div class="deck__card" data-card><img src="assets/img/edit.gif" alt="修改消息" decoding="async" /></div>
+            <div class="deck__card" data-card><img src="assets/img/sns.png" alt="朋友圈" decoding="async" /></div>
+            <div class="deck__card" data-card><img src="assets/img/search.png" alt="聊天记录搜索" decoding="async" /></div>
+            <div class="deck__card" data-card><img src="assets/img/export.png" alt="导出" decoding="async" /></div>
+            <div class="deck__card deck__card--code" data-card><pre class="mono"><code><span class="c-dim">$</span> mcp connect <span class="c-green">127.0.0.1:10392/mcp</span>
+<span class="c-dim">›</span> Authorization: Bearer ****************
+<span class="c-dim">›</span> tools: <span class="c-green">search_messages</span> · <span class="c-green">get_contacts</span> · …
+<span class="c-ok">✓ 你的聊天档案，现在可以被 AI 提问</span></code></pre></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ ACT 05 · WRAPPED ═══════════ -->
+    <section class="act wrapped" id="wrapped" data-act="05">
+      <div class="wrapped__pin">
+        <header class="wrapped__intro">
+          <p class="sec-tag mono"><span class="tick"></span>ANNUAL WRAPPED — 年度总结</p>
+          <h2 class="wrapped__title"><span>而这一年，</span><br/><span>值得被数据<em>温柔复述</em></span></h2>
+        </header>
+
+        <!-- 年度总结 = 展示 6 张年度卡片截图（下一个 AI 在此基础上重做呈现方式；截图 1919×868 横版，必须平铺可读、勿裁勿倾斜） -->
+        <div class="viewer" id="viewer">
+          <div class="cinema__hud mono">
+            <span class="hudl"><span class="tick"></span>WRAPPED FILM · 2025</span>
+            <span>FRAME <b id="v-idx">01</b><i>/ 06</i></span>
+          </div>
+          <figure class="viewer__frame">
+            <div class="viewer__slides" id="v-slides">
+              <img src="assets/img/AnnualSummary1.png" alt="年度总结卡片：字数统计" decoding="async" />
+              <img src="assets/img/AnnualSummary2.png" alt="年度总结卡片：赛博作息" decoding="async" />
+              <img src="assets/img/AnnualSummary3.png" alt="年度总结卡片：回复速度" decoding="async" />
+              <img src="assets/img/AnnualSummary6.png" alt="年度总结卡片：月度挚友墙" decoding="async" />
+              <img src="assets/img/AnnualSummary7.png" alt="年度总结卡片：表情宇宙" decoding="async" />
+              <img src="assets/img/AnnualSummary8.png" alt="年度总结卡片：Bento 总览" decoding="async" />
+            </div>
+          </figure>
+          <div class="cinema__foot">
+            <div class="viewer__ticks" id="v-ticks"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+        </div>
+
+        <div class="wrapped__stats">
+          <div class="wstat"><b class="mono" data-count="137842">0</b><span>条消息，被完整找回</span></div>
+          <div class="wstat"><b class="mono" data-count-time="04:17">00:00</b><span>最晚的一次夜聊</span></div>
+          <div class="wstat"><b class="mono" data-count="26" data-suffix=" 秒">0</b><span>回复 TA 的中位速度</span></div>
+          <div class="wstat"><b class="mono" data-count="8431">0</b><span>个表情包一起走过</span></div>
+        </div>
+
+        <p class="wrapped__note mono">8 张动态卡片 — 年度总览 · 赛博作息 · 字数统计 · 回复速度 · 表情宇宙 · 月度挚友墙 · 关键词云 · Bento 总结</p>
+      </div>
+    </section>
+
+    <!-- ═══════════ ACT 06 · THE MACHINE（隐私 × 引擎室 合并）═══════════ -->
+    <section class="act machine" id="machine" data-act="06">
+      <div class="mac__pin">
+        <div class="mac__top">
+          <p class="sec-tag mono"><span class="tick"></span>THE MACHINE — 本机 · 引擎 × 隐私</p>
+          <h2 class="mac__title">解密、浏览、导出<br/>全程<em>不出这台电脑</em>。</h2>
+        </div>
+
+        <div class="mac__stage">
+          <!-- 演算台：三个动作真的在本机跑一遍 -->
+          <div class="mac__run" id="mac-run">
+            <b class="mac__act" id="mac-act">解密</b>
+            <ul class="mac__trace mono" id="mac-trace" aria-hidden="true"></ul>
+          </div>
+
+          <!-- 定格：出网恒为 0 -->
+          <div class="mac__hero" id="mac-hero">
+            <div class="mac__seal">
+              <b class="mac__zero mono" id="mac-zero">0</b>
+              <i class="mac__escapee" aria-hidden="true"></i>
+            </div>
+            <div class="mac__sealtxt">
+              <span class="mono">字节出网 · BYTES UPLOADED</span>
+              <em class="mono" id="mac-pass">✓ AUDIT PASSED · 0 EGRESS</em>
+            </div>
+          </div>
+        </div>
+
+        <!-- 两个读数：本机飞涨，出网死死为 0 -->
+        <div class="mac__meters" id="mac-meters">
+          <div class="mac__meter">
+            <span class="mono">本机处理 · PROCESSED ON THIS MACHINE</span>
+            <b class="mono" id="mac-local">0 B</b>
+          </div>
+          <div class="mac__meter mac__meter--out">
+            <span class="mono">出网 · UPLOADED</span>
+            <b class="mono" id="mac-out">0 B</b>
+          </div>
+        </div>
+
+        <ul class="mac__guards">
+          <li data-guard><b>本地运行</b><span>密钥与数据全程不出本机，不存在“云端”</span></li>
+          <li data-guard><b>开源可审计</b><span>逐行开放，`source.visibility = open`</span></li>
+          <li data-guard><b>SHA-256 校验</b><span>Win ↔ Mac 归档迁移逐文件比对</span></li>
+          <li data-guard><b>微信可卸载</b><span>解密副本永久可读，记忆不会走</span></li>
+        </ul>
+
+        <div class="mac__foot">
+          <p class="mac__stack mono"><span>ENGINE</span>Python · FastAPI · SQLite · WCDB · Rust · Nuxt 4 · Vue 3 · Electron · uv</p>
+          <p class="mac__legal mono">仅限解密你本人的微信数据 · 请遵守当地法律法规</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ ACT 07 · CTA / FOOTER ═══════════ -->
+    <section class="act cta" id="cta" data-act="07">
+
+      <div class="cta__slug mono">
+        <span class="cta__slug-t"><i class="tick"></i>ACT 07 · 终章</span>
+        <i class="cta__leader" aria-hidden="true"></i>
+        <span class="cta__slug-t" id="cta-seal">FILE CLOSED · SEALED 2026</span>
+      </div>
+
+      <h2 class="cta__title">把记忆，握回<em>自己手里</em></h2>
+
+      <a class="gate" id="cta-gate" data-cursor="hover" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest" target="_blank" rel="noopener">
+        <i class="gate__fill" aria-hidden="true"></i>
+        <i class="gate__scan" aria-hidden="true"></i>
+        <i class="gate__glow" aria-hidden="true"></i>
+        <span class="gate__row gate__row--base">
+          <b class="gate__label">开始留档</b>
+          <i class="gate__track" aria-hidden="true"><i class="gate__pip"></i></i>
+          <span class="gate__meta mono" id="gate-meta">LATEST RELEASE · WINDOWS &amp; macOS · OPEN SOURCE</span>
+          <i class="gate__arrow">↓</i>
+        </span>
+        <span class="gate__row gate__row--ink" aria-hidden="true">
+          <b class="gate__label">开始留档</b>
+          <i class="gate__track"><i class="gate__pip"></i></i>
+          <span class="gate__meta mono">LATEST RELEASE · WINDOWS &amp; macOS · OPEN SOURCE</span>
+          <i class="gate__arrow">↓</i>
+        </span>
+      </a>
+
+      <nav class="cta__index">
+        <a class="ix" data-cursor="hover" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest" target="_blank" rel="noopener">
+          <span class="ix__top"><span class="ix__n mono">01</span><i class="ix__rule"></i><i class="ix__arw">↗</i></span>
+          <b class="ix__name">Releases</b>
+          <span class="ix__desc">下载最新版本安装包</span>
+        </a>
+        <a class="ix" data-cursor="hover" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis" target="_blank" rel="noopener">
+          <span class="ix__top"><span class="ix__n mono">02</span><i class="ix__rule"></i><i class="ix__arw">↗</i></span>
+          <b class="ix__name">GitHub</b>
+          <span class="ix__desc">逐行阅读全部源码</span>
+        </a>
+        <a class="ix" data-cursor="hover" href="https://qm.qq.com/q/VQEQ7PcGkk" target="_blank" rel="noopener">
+          <span class="ix__top"><span class="ix__n mono">03</span><i class="ix__rule"></i><i class="ix__arw">↗</i></span>
+          <b class="ix__name">QQ 交流群</b>
+          <span class="ix__desc">聊聊使用与反馈</span>
+        </a>
+        <a class="ix" data-cursor="hover" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis#致谢" target="_blank" rel="noopener">
+          <span class="ix__top"><span class="ix__n mono">04</span><i class="ix__rule"></i><i class="ix__arw">↗</i></span>
+          <b class="ix__name">致谢名单</b>
+          <span class="ix__desc">感谢每一位贡献者</span>
+        </a>
+      </nav>
+
+      <footer class="cta__colophon">
+        <i class="cta__colophon-rule" aria-hidden="true"></i>
+        <div class="cta__colophon-row mono">
+          <span class="cc-a"><i></i>© 2026 LifeArchiveProject</span>
+          <span>仅限个人合法使用 · 数据请谨慎保管</span>
+          <span>Made with GSAP · Three.js · Lenis</span>
+        </div>
+      </footer>
+    </section>
+
+  </main>
+
+  <!-- vendor (UMD) -->
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/ScrollTrigger.min.js"></script>
+  <script src="vendor/ScrollToPlugin.min.js"></script>
+  <script src="vendor/SplitText.min.js"></script>
+  <script src="vendor/ScrambleTextPlugin.min.js"></script>
+  <script src="vendor/CustomEase.min.js"></script>
+  <script src="vendor/DrawSVGPlugin.min.js"></script>
+  <script src="vendor/lenis.min.js"></script>
+
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+  <script type="module" src="assets/js/main.js"></script>
+</body>
+</html>
