@@ -4,7 +4,7 @@
     <div class="flex-1 flex flex-col min-h-0">
       <!-- Desktop titlebar lives above the page content (right column) -->
       <DesktopTitleBar v-if="showDesktopTitleBar" />
-      <DataSourceFallbackBanner :status="selectedDataSourceStatus" />
+      <DataSourceFallbackBanner v-if="route.path !== '/agreement'" :status="selectedDataSourceStatus" />
       <div :class="contentClass">
         <NuxtPage />
       </div>
@@ -35,7 +35,7 @@
       @close="dismissNoAccountGuide"
     />
 
-    <ClientOnly v-if="isDesktopUpdater">
+    <ClientOnly v-if="isDesktopUpdater && route.path !== '/agreement'">
       <DesktopUpdateDialog
         :open="desktopUpdate.open.value"
         :info="desktopUpdate.info.value"
@@ -50,10 +50,23 @@
         @ignore="desktopUpdate.ignore"
       />
     </ClientOnly>
+
+    <div
+      v-if="!firstUseRouteResolved"
+      class="first-use-route-guard"
+      role="status"
+      aria-live="polite"
+      aria-label="正在准备首次使用说明"
+    >
+      <img src="/logo.png" alt="" aria-hidden="true" />
+      <span>正在准备使用须知…</span>
+    </div>
   </div>
 </template>
 
 <script setup>
+import { nextTick } from 'vue'
+import { isFirstUseAgreementAccepted } from '~/lib/first-use-agreement'
 import { useThemeStore } from '~/stores/theme'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
@@ -66,9 +79,13 @@ const {
   closeDialog: closeSettingsDialog,
 } = useSettingsDialog()
 const themeStore = useThemeStore()
+const privacyStore = usePrivacyStore()
 const chatAccounts = useChatAccountsStore()
 const { selectedAccount, selectedDataSourceStatus } = storeToRefs(chatAccounts)
 const noAccountGuideOpen = ref(false)
+const firstUseRouteResolved = ref(false)
+let firstUseGuardReady = false
+let firstUseNavigationPending = false
 
 const accountDataRoutePrefixes = [
   '/chat',
@@ -94,6 +111,10 @@ const checkNoAccountGuide = async () => {
 
   const path = String(route.path || '')
   const token = ++accountGuideCheckToken
+  if (!isFirstUseAgreementAccepted()) {
+    noAccountGuideOpen.value = false
+    return
+  }
   if (!isAccountDataRoute(path)) {
     noAccountGuideOpen.value = false
     return
@@ -128,13 +149,59 @@ if (process.client) {
 // So we detect desktop onMounted and update reactively.
 const isDesktop = ref(false)
 const isDesktopUpdater = ref(false)
+let desktopUpdaterInitialized = false
+let postAgreementRuntimeInitialized = false
+
+const initializeDesktopUpdater = async () => {
+  if (
+    desktopUpdaterInitialized
+    || !isDesktopUpdater.value
+    || route.path === '/agreement'
+    || !isFirstUseAgreementAccepted()
+  ) return
+  desktopUpdaterInitialized = true
+  await desktopUpdate.initListeners()
+}
+
+const initializePostAgreementRuntime = () => {
+  if (
+    postAgreementRuntimeInitialized
+    || route.path === '/agreement'
+    || !isFirstUseAgreementAccepted()
+  ) return
+  postAgreementRuntimeInitialized = true
+  void chatAccounts.ensureLoaded()
+  privacyStore.init()
+  themeStore.init()
+}
 
 const updateDprVar = () => {
   const dpr = window.devicePixelRatio || 1
   document.documentElement.style.setProperty('--dpr', String(dpr))
 }
 
-onMounted(() => {
+const enforceFirstUseRoute = async () => {
+  if (!process.client || !firstUseGuardReady) return
+  if (route.path === '/agreement' || isFirstUseAgreementAccepted()) {
+    firstUseRouteResolved.value = true
+    return
+  }
+
+  firstUseRouteResolved.value = false
+  if (firstUseNavigationPending) return
+  firstUseNavigationPending = true
+  try {
+    await navigateTo({
+      path: '/agreement',
+      query: { redirect: route.fullPath || '/' }
+    }, { replace: true })
+  } finally {
+    firstUseNavigationPending = false
+    firstUseRouteResolved.value = route.path === '/agreement' || isFirstUseAgreementAccepted()
+  }
+}
+
+onMounted(async () => {
   const isElectron = /electron/i.test(String(navigator.userAgent || ''))
   const api = window?.wechatDesktop
   isDesktop.value = isElectron && !!api
@@ -147,19 +214,22 @@ onMounted(() => {
   updateDprVar()
   window.addEventListener('resize', updateDprVar)
 
-  if (isDesktopUpdater.value) {
-    void desktopUpdate.initListeners()
-  }
+  void initializeDesktopUpdater()
+  initializePostAgreementRuntime()
 
-  // Init global UI state.
-  const privacy = usePrivacyStore()
-  void chatAccounts.ensureLoaded()
-  privacy.init()
-  themeStore.init()
+  await nextTick()
+  firstUseGuardReady = true
+  await enforceFirstUseRoute()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateDprVar)
+})
+
+watch(() => route.path, () => {
+  void enforceFirstUseRoute()
+  void initializeDesktopUpdater()
+  initializePostAgreementRuntime()
 })
 
 const setupShellBackgroundRoutes = new Set([
@@ -167,7 +237,8 @@ const setupShellBackgroundRoutes = new Set([
   '/import',
   '/decrypt',
   '/detection-result',
-  '/decrypt-result'
+  '/decrypt-result',
+  '/agreement'
 ])
 
 const useSetupShellBackground = computed(() => {
@@ -204,6 +275,8 @@ const showSidebar = computed(() => {
   const path = String(route.path || '')
   if (path === '/' || path === '/import') return false
   if (path === '/decrypt' || path === '/detection-result' || path === '/decrypt-result') return false
+  if (path === '/landing' || path === '/site') return false
+  if (path === '/agreement') return false
   return !(path === '/wrapped' || path.startsWith('/wrapped/'))
 })
 </script>
@@ -254,5 +327,24 @@ html[data-theme='dark'] .theme-app-shell,
 html[data-theme='dark'] .theme-app-shell-setup,
 html[data-theme='dark'] .theme-app-shell-wrapped {
   background: var(--app-shell-bg);
+}
+
+.first-use-route-guard {
+  position: fixed;
+  inset: 0;
+  z-index: 30000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--app-surface-bg, #ffffff);
+  color: var(--app-text-secondary, #5f5f5f);
+  font-size: 14px;
+}
+
+.first-use-route-guard img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
 }
 </style>
