@@ -254,11 +254,8 @@ def _mask_name(name: str) -> str:
     s = str(name or "").strip()
     if not s:
         return ""
-    if len(s) == 1:
-        return "*"
-    if len(s) == 2:
-        return s[0] + "*"
-    return s[0] + ("*" * (len(s) - 2)) + s[-1]
+    # 全星号：不保留任何原字符，长度封顶 6，数字类信息不经过本函数
+    return "*" * max(1, min(len(s), 6))
 
 
 def _weekday_name_zh(weekday_index: int) -> str:
@@ -1074,6 +1071,36 @@ def compute_emoji_universe_stats(*, account_dir: Path, year: int) -> dict[str, A
         item["gapDays"] = int(revived_gap_days_by_key.get(key) or 0)
         revived_sticker_samples.append(item)
 
+    # 「从全年表情里筛出年度卡」这段动画需要真实的一大把表情图，
+    # 光靠上面十来个样本会明显重复。这里只带 md5/图片地址/次数，
+    # 不做联系人解析，所以即使取到近百条也很便宜。
+    sticker_pool_samples: list[dict[str, Any]] = []
+    for key, cnt in sorted(sticker_key_counts.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))[:90]:
+        md5 = str(sticker_key_md5.get(key) or "")
+        expr_id = int(sticker_key_expr_id.get(key) or 0)
+        expr_asset = str(expression_id_to_asset.get(expr_id) or "") if expr_id > 0 else ""
+        remote_url = str(sticker_url_map.get(key) or "")
+        local_url = (
+            _build_local_emoji_url(
+                account_name=str(account_dir.name or ""),
+                md5=md5,
+                username="",
+                emoji_remote_url=remote_url,
+            )
+            if md5
+            else (f"/wxemoji/{expr_asset}" if expr_asset else "")
+        )
+        if not local_url:
+            continue
+        sticker_pool_samples.append(
+            {
+                "md5": str(md5 or key),
+                "count": int(cnt),
+                "emojiUrl": local_url,
+                "emojiAssetPath": f"/wxemoji/{expr_asset}" if expr_asset else "",
+            }
+        )
+
     top_wechat_emojis_raw = sorted(wechat_emoji_counts.items(), key=lambda kv: (-int(kv[1]), int(kv[0])))[:8]
     top_wechat_emojis: list[dict[str, Any]] = []
     for expr_id, cnt in top_wechat_emojis_raw:
@@ -1197,6 +1224,7 @@ def compute_emoji_universe_stats(*, account_dir: Path, year: int) -> dict[str, A
         "stickerHourCounts": [int(hour_counts.get(h, 0)) for h in range(24)],
         "stickerWeekdayCounts": [int(weekday_counts.get(w, 0)) for w in range(7)],
         "topStickers": top_stickers,
+        "stickerPoolSamples": sticker_pool_samples,
         "topWechatEmojis": top_wechat_emojis,
         "topTextEmojis": top_text_emojis,
         "topUnicodeEmojis": top_unicode_emojis,

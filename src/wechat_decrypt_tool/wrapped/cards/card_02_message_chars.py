@@ -635,6 +635,93 @@ def _pick_a4_analogy(chars: int) -> Optional[dict[str, Any]]:
     }
 
 
+# 输入法小剧场的素材：当年用户真实发出的纯中文短句（2-8 字）。
+_TYPED_PHRASE_RE = re.compile(r"^[一-鿿]{2,8}$")
+_TYPED_PHRASE_PY_RE = re.compile(r"^[a-z]+$")
+
+
+def sample_typed_phrases(*, account_dir: Path, year: int, k: int = 14) -> list[dict[str, str]]:
+    """Sample short Chinese-only sentences the user actually sent this year, with pinyin.
+
+    Index-only (the fallback shard scan is not worth a third full pass); returns [] when
+    the search index is unavailable and the frontend simply skips the IME vignette.
+    """
+    start_ts, end_ts = _year_range_epoch_seconds(year)
+    my_username = str(account_dir.name or "").strip()
+    if not my_username:
+        return []
+
+    index_path = get_chat_search_index_db_path(account_dir)
+    if not index_path.exists():
+        return []
+
+    pool: list[str] = []
+    conn = sqlite3.connect(str(index_path))
+    try:
+        has_fts = (
+            conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_fts' LIMIT 1").fetchone()
+            is not None
+        )
+        if not has_fts:
+            return []
+        ts_expr = (
+            "CASE "
+            "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+            "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+            "ELSE CAST(create_time AS INTEGER) "
+            "END"
+        )
+        sql = (
+            "SELECT \"text\" FROM message_fts "
+            f"WHERE {ts_expr} >= ? AND {ts_expr} < ? "
+            "AND db_stem NOT LIKE 'biz_message%' "
+            "AND render_type = 'text' "
+            "AND \"text\" IS NOT NULL "
+            "AND sender_username = ? "
+            # 索引把文本按字用空格分词存储（'在 吗'），长度过滤要先去掉空格
+            "AND LENGTH(REPLACE(CAST(\"text\" AS TEXT), ' ', '')) BETWEEN 2 AND 8 "
+            "LIMIT 4000"
+        )
+        seen: set[str] = set()
+        for row in conn.execute(sql, (start_ts, end_ts, my_username)):
+            txt = str(row[0] or "").replace(" ", "").replace("　", "").strip()
+            if not txt or txt in seen:
+                continue
+            if not _TYPED_PHRASE_RE.fullmatch(txt):
+                continue
+            seen.add(txt)
+            pool.append(txt)
+    except Exception:
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    if not pool:
+        return []
+
+    # 种子取年份+池大小：同一年重复构建结果稳定，数据变了才换一批。
+    rng = random.Random(year * 1000003 + len(pool))
+    picked = rng.sample(pool, min(int(k), len(pool)))
+
+    out: list[dict[str, str]] = []
+    for text in picked:
+        try:
+            syllables = [str(s or "").strip().lower() for s in lazy_pinyin(text, style=Style.NORMAL)]
+        except Exception:
+            continue
+        if not syllables or any(not _TYPED_PHRASE_PY_RE.fullmatch(s) for s in syllables):
+            continue
+        pinyin = " ".join(syllables)
+        # 候选条一行放得下的长度（拼音过长的句子打起来也太拖沓）
+        if len(pinyin) > 26:
+            continue
+        out.append({"text": text, "pinyin": pinyin})
+    return out
+
+
 def compute_text_message_char_counts(*, account_dir: Path, year: int) -> tuple[int, int]:
     """Return (sent_chars, received_chars) for render_type='text' messages in the year."""
 
@@ -798,11 +885,8 @@ def _mask_name(name: str) -> str:
     s = str(name or "").strip()
     if not s:
         return ""
-    if len(s) == 1:
-        return "*"
-    if len(s) == 2:
-        return s[0] + "*"
-    return s[0] + ("*" * (len(s) - 2)) + s[-1]
+    # 全星号：不保留任何原字符，长度封顶 6，数字类信息不经过本函数
+    return "*" * max(1, min(len(s), 6))
 
 
 def _list_session_usernames(session_db_path: Path) -> list[str]:
@@ -1161,6 +1245,9 @@ def build_card_02_message_chars(*, account_dir: Path, year: int) -> dict[str, An
     # 计算键盘敲击统计
     keyboard_stats = compute_keyboard_stats(account_dir=account_dir, year=year, sample_rate=1.0)
 
+    # 输入法小剧场素材：当年真实发出的短句
+    typed_phrases = sample_typed_phrases(account_dir=account_dir, year=year)
+
     # 计算语音与通话统计
     voice_call_stats = compute_voice_call_stats(account_dir=account_dir, year=year)
 
@@ -1188,6 +1275,7 @@ def build_card_02_message_chars(*, account_dir: Path, year: int) -> dict[str, An
             "sentBook": sent_book,
             "receivedA4": recv_a4,
             "keyboard": keyboard_stats,
+            "typedPhrases": typed_phrases,
             "voice": voice_call_stats["voice"],
             "calls": voice_call_stats["calls"],
         },

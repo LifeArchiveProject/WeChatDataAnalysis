@@ -34,11 +34,8 @@ def _mask_name(name: str) -> str:
     s = str(name or "").strip()
     if not s:
         return ""
-    if len(s) == 1:
-        return "*"
-    if len(s) == 2:
-        return s[0] + "*"
-    return s[0] + ("*" * (len(s) - 2)) + s[-1]
+    # 全星号：不保留任何原字符，长度封顶 6，数字类信息不经过本函数
+    return "*" * max(1, min(len(s), 6))
 
 
 @dataclass

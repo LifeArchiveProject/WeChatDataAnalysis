@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..chat_helpers import _decode_sqlite_text, _iter_message_db_paths, _quote_ident, _resolve_account_dir
-from ..chat_search_index import get_chat_search_index_db_path
+from ..chat_search_index import get_chat_search_index_db_path, get_chat_search_index_status
 from ..logging_config import get_logger
 from .storage import wrapped_cache_dir, wrapped_cache_path
 from .cards.card_00_global_overview import build_card_00_global_overview
@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 # an older partial cache.
 _IMPLEMENTED_UPTO_ID = 7
 # Bump this when we change card payloads/ordering while keeping the same implemented_upto.
-_CACHE_VERSION = 27
+_CACHE_VERSION = 36
 
 
 # "Manifest" is used by the frontend to render the deck quickly, then lazily fetch each card.
@@ -362,7 +362,8 @@ def build_wrapped_annual_response(
     card_message_chars = build_card_02_message_chars(account_dir=account_dir, year=y)
     cards.append(card_message_chars)
     # Page 5: annual keywords (bubble storm -> word cloud).
-    cards.append(build_card_05_keywords_wordcloud(account_dir=account_dir, year=y))
+    card_keywords = build_card_05_keywords_wordcloud(account_dir=account_dir, year=y)
+    cards.append(card_keywords)
     # Page 6: reply speed / best chat buddy.
     card_reply_speed = build_card_03_reply_speed(account_dir=account_dir, year=y)
     cards.append(card_reply_speed)
@@ -382,6 +383,7 @@ def build_wrapped_annual_response(
             reply_speed=card_reply_speed,
             monthly=card_monthly,
             emoji=card_emoji,
+            keywords=card_keywords,
         )
     )
 
@@ -526,6 +528,37 @@ def _get_or_compute_heatmap_sent(*, account_dir: Path, scope: str, year: int, re
         return heatmap
 
 
+def _reply_card_cache_stale_without_index(
+    *, cache_path: Path, cached_obj: dict[str, Any], account_dir: Path
+) -> bool:
+    """卡片#3 的缓存是否因「搜索索引后来才建好」而过期。
+
+    场景：用户先打开年度总结（索引缺失 → 卡片落了一份空结果缓存并触发建索引），
+    索引建成后再访问仍会命中旧缓存，永远显示“已索引 0 条”。
+    判定条件（全部满足才视为过期）：
+    1. 缓存标记 usedIndex=False（当时没用上索引）；
+    2. 索引现在已就绪；
+    3. 索引文件比缓存新（mtime 对比——避免重算后仍为空时每次访问都重算）。
+    """
+
+    try:
+        settings = (cached_obj.get("data") or {}).get("settings") or {}
+        if settings.get("usedIndex") is not False:
+            return False
+
+        status = get_chat_search_index_status(account_dir, source="auto")
+        index = (status or {}).get("index") or {}
+        if not bool(index.get("ready")):
+            return False
+
+        index_path = get_chat_search_index_db_path(account_dir)
+        if not index_path.exists():
+            return False
+        return index_path.stat().st_mtime > cache_path.stat().st_mtime
+    except Exception:
+        return False
+
+
 def build_wrapped_annual_card(
     *,
     account: Optional[str],
@@ -561,7 +594,23 @@ def build_wrapped_annual_card(
             try:
                 cached_obj = json.loads(cache_path.read_text(encoding="utf-8"))
                 if isinstance(cached_obj, dict) and int(cached_obj.get("id") or -1) == cid:
-                    return cached_obj
+                    if cid == 3 and _reply_card_cache_stale_without_index(
+                        cache_path=cache_path, cached_obj=cached_obj, account_dir=account_dir
+                    ):
+                        # 索引建好了：不吃旧的空结果，连带作废便当卡缓存（其回复区块取自本卡）。
+                        logger.info(
+                            "Wrapped card#3 cache is stale (built without search index, index now ready); recomputing. account=%s year=%s",
+                            account_dir.name,
+                            y,
+                        )
+                        try:
+                            _wrapped_card_cache_path(
+                                account_dir=account_dir, scope=scope, year=y, card_id=7
+                            ).unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                    else:
+                        return cached_obj
             except Exception:
                 pass
 
@@ -591,6 +640,9 @@ def build_wrapped_annual_card(
             reply_speed = build_wrapped_annual_card(account=account_dir.name, year=y, card_id=3, refresh=refresh)
             monthly = build_wrapped_annual_card(account=account_dir.name, year=y, card_id=4, refresh=refresh)
             emoji = build_wrapped_annual_card(account=account_dir.name, year=y, card_id=5, refresh=refresh)
+            # card 6（关键词）不可缓存，这里会实打实重扫一遍；card 7 自身可缓存，
+            # 所以每个 (account, year) 只付一次这个代价。
+            keywords = build_wrapped_annual_card(account=account_dir.name, year=y, card_id=6, refresh=refresh)
             card = build_card_07_bento_summary_from_sources(
                 year=y,
                 overview=overview,
@@ -599,6 +651,7 @@ def build_wrapped_annual_card(
                 reply_speed=reply_speed,
                 monthly=monthly,
                 emoji=emoji,
+                keywords=keywords,
             )
         else:
             # Should be unreachable due to _WRAPPED_CARD_ID_SET check.
