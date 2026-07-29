@@ -92,23 +92,24 @@
         </div>
       </div>
 
-      <section v-else class="grid gap-4 lg:grid-cols-[0.82fr_1.18fr]">
-        <aside class="space-y-3">
+      <section v-else class="grid gap-4 lg:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">
+        <aside class="min-w-0 space-y-3">
           <div
             v-if="detectionResult && !detectionResult.error"
-            class="grid grid-cols-1 gap-2.5 sm:grid-cols-3 lg:grid-cols-3"
+            data-testid="detection-summary"
+            class="grid grid-cols-1 gap-2.5 sm:grid-cols-3 lg:grid-cols-2"
           >
-            <div class="rounded-lg border border-[#CFEEDB] bg-[#EFFAF3]/82 p-3 backdrop-blur">
-              <p class="text-[12px] font-medium text-[#5F6F66]">微信版本</p>
-              <p class="mt-1.5 truncate text-[22px] font-semibold tracking-[-0.03em] text-[#000000e6]">{{ detectionResult.data?.wechat_version || '未知' }}</p>
+            <div class="min-w-0 rounded-lg border border-[#CFEEDB] bg-[#EFFAF3]/82 p-3 backdrop-blur lg:col-span-2">
+              <p class="whitespace-nowrap text-[12px] font-medium text-[#5F6F66]">微信版本</p>
+              <p data-testid="wechat-version-value" class="mt-1.5 break-all text-[22px] font-semibold text-[#000000e6]">{{ detectionResult.data?.wechat_version || '未知' }}</p>
             </div>
-            <div class="rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-3 backdrop-blur">
-              <p class="text-[12px] font-medium text-[#5F6F66]">检测账号</p>
-              <p class="mt-1.5 text-[22px] font-semibold tracking-[-0.03em] text-[#000000e6]">{{ detectionResult.data?.total_accounts || 0 }} 个</p>
+            <div class="min-w-0 rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-3 backdrop-blur">
+              <p class="whitespace-nowrap text-[12px] font-medium text-[#5F6F66]">检测账号</p>
+              <p class="mt-1.5 text-[22px] font-semibold tabular-nums text-[#000000e6]">{{ detectionResult.data?.total_accounts || 0 }} 个</p>
             </div>
-            <div class="rounded-lg border border-[#CFEEDB] bg-[#F1FAF4]/82 p-3 backdrop-blur">
-              <p class="text-[12px] font-medium text-[#5F6F66]">数据库文件</p>
-              <p class="mt-1.5 text-[22px] font-semibold tracking-[-0.03em] text-[#000000e6]">{{ detectionResult.data?.total_databases || 0 }} 个</p>
+            <div class="min-w-0 rounded-lg border border-[#CFEEDB] bg-[#F1FAF4]/82 p-3 backdrop-blur">
+              <p class="whitespace-nowrap text-[12px] font-medium text-[#5F6F66]">数据库文件</p>
+              <p class="mt-1.5 text-[22px] font-semibold tabular-nums text-[#000000e6]">{{ detectionResult.data?.total_databases || 0 }} 个</p>
             </div>
           </div>
 
@@ -168,7 +169,7 @@
           </div>
         </aside>
 
-        <div class="rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-4 backdrop-blur sm:p-5">
+        <div class="min-w-0 rounded-lg border border-[#DDEBE0] bg-[#F4FAF6]/82 p-4 backdrop-blur sm:p-5">
           <div v-if="detectionResult?.error" class="flex min-h-[340px] flex-col justify-between gap-4">
             <div>
               <div class="flex items-center gap-2 text-[13px] font-medium text-[#D64A4A]">
