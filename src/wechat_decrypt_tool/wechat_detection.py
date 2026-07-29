@@ -337,6 +337,10 @@ def get_process_list():
     return process_list
 
 
+def _wechat_process_targets() -> set[str]:
+    return {"wechat"} if sys.platform == "darwin" else {"weixin.exe", "wechat.exe"}
+
+
 def _is_wechat_dir_candidate_name(name: str) -> bool:
     normalized = str(name or "").strip().lower()
     if not normalized:
@@ -502,8 +506,9 @@ def auto_detect_wechat_data_dirs():
     # 策略2：进程内存分析（简化版）
     try:
         process_list = get_process_list()
+        process_targets = _wechat_process_targets()
         for pid, process_name in process_list:
-            if process_name.lower() in ['weixin.exe', 'wechat.exe']:
+            if process_name.lower() in process_targets:
                 # 尝试获取进程的工作目录
                 try:
                     import psutil
@@ -952,7 +957,7 @@ def detect_wechat_installation(data_root_path: str | None = None) -> Dict[str, A
     result["detection_methods"].append("进程检测")
     process_list = get_process_list()
 
-    process_targets = {"wechat"} if sys.platform == "darwin" else {"weixin.exe", "wechat.exe"}
+    process_targets = _wechat_process_targets()
     for pid, process_name in process_list:
         if process_name.lower() in process_targets:
             try:
