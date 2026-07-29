@@ -79,6 +79,7 @@ jobs:
 
   build-macos-arm64:
     runs-on: macos-15
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -86,8 +87,25 @@ jobs:
       - name: Verify Apple Silicon runner
         shell: bash
         run: |
+          set -euo pipefail
           test "$(uname -m)" = "arm64"
-          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          version="${GITHUB_REF_NAME#v}"
+          test -n "$version" || { echo "Invalid tag: '$GITHUB_REF_NAME' (expected like v1.0.0)" >&2; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Require Developer ID and Apple notarization secrets
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.MACOS_APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MACOS_APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.MACOS_APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            test -n "${!name:-}" || { echo "Missing required macOS release secret: $name" >&2; exit 1; }
+          done
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -129,15 +147,23 @@ jobs:
       - name: Restore macOS native helper permissions
         run: chmod +x src/wechat_decrypt_tool/native/macos/universal/image_scan_helper
 
+      - name: Verify self-contained macOS native resources
+        working-directory: desktop
+        run: npm run verify:mac:native
+
       - name: Set desktop app version
         working-directory: desktop
         run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
-      - name: Build macOS DMG and ZIP
+      - name: Build, sign, and notarize macOS DMG and ZIP
         working-directory: desktop
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npm run dist:mac
+          CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.MACOS_APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MACOS_APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.MACOS_APPLE_TEAM_ID }}
+        run: npm run dist:mac:arm64:release
 
       - name: Run Python tests on macOS
         env:
@@ -151,6 +177,12 @@ jobs:
       - name: Smoke-test packaged macOS runtime
         working-directory: desktop
         run: npm run smoke:mac
+
+      - name: Verify Developer ID distribution in ZIP and DMG
+        working-directory: desktop
+        env:
+          APPLE_TEAM_ID: ${{ secrets.MACOS_APPLE_TEAM_ID }}
+        run: npm run verify:mac:distribution
 
       - name: Upload macOS release files
         uses: actions/upload-artifact@v4

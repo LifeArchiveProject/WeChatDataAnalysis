@@ -9,10 +9,15 @@
     "build:ui": "npm --prefix ../frontend run generate && node scripts/copy-ui.cjs",
     "build:backend": "uv sync --extra build && node scripts/build-backend.cjs",
     "build:icon": "node scripts/build-icon.cjs",
+    "build:mac:image-helper": "node scripts/build-macos-image-helper.cjs",
+    "verify:mac:native": "node scripts/verify-macos-native.cjs --arch arm64 --require-host-arch",
+    "verify:mac:distribution": "node scripts/verify-macos-distribution.cjs",
     "smoke:mac": "node scripts/smoke-macos-package.cjs",
     "dist": "npm run dist:win",
     "dist:win": "npm run build:ui && npm run build:backend && npm run build:icon && electron-builder --win --x64 --publish never",
-    "dist:mac": "npm run build:ui && npm run build:backend && npm run build:icon && electron-builder --mac dmg zip --arm64 --publish never"
+    "dist:mac": "npm run dist:mac:arm64",
+    "dist:mac:arm64": "npm run verify:mac:native && npm run build:ui && npm run build:backend && npm run build:icon && electron-builder --mac dmg zip --arm64 --publish never",
+    "dist:mac:arm64:release": "npm run verify:mac:native && npm run build:ui && npm run build:backend && npm run build:icon && cross-env MACOS_DISTRIBUTION_BUILD=1 electron-builder --mac dmg zip --arm64 --publish never --config.forceCodeSigning=true"
   },
   "dependencies": {
     "electron-updater": "^6.7.3",
@@ -28,6 +33,8 @@
     "directories": {
       "output": "dist"
     },
+    "afterPack": "scripts/after-pack.cjs",
+    "afterSign": "scripts/after-sign.cjs",
     "files": [
       "src/**/*",
       "package.json",
@@ -97,6 +104,7 @@
       "icon": "src/icon.png",
       "category": "public.app-category.utilities",
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+      "minimumSystemVersion": "15.0",
       "target": [
         "dmg",
         "zip"
@@ -104,7 +112,8 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "entitlements.mac.plist",
-      "entitlementsInherit": "entitlements.mac.plist"
+      "entitlementsInherit": "entitlements.mac.plist",
+      "sign": "scripts/sign-macos.cjs"
     },
     "publish": {
       "provider": "github",
@@ -122,6 +131,7 @@
     }
   },
   "devDependencies": {
+    "@electron/osx-sign": "1.3.3",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron": "^40.0.0",

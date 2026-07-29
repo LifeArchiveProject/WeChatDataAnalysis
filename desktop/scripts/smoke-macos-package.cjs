@@ -8,25 +8,14 @@ const http = require("node:http");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const { verifyAppBundle, withMacosArtifacts } = require("./macos-package-verifier.cjs");
 
 const desktopRoot = path.resolve(__dirname, "..");
-const distRoot = path.join(desktopRoot, "dist");
+const SUPPORTED_ARCHITECTURE = "arm64";
+const PACKAGE_MINIMUM_MACOS_VERSION = "15.0";
 
 function fail(message) {
   throw new Error(message);
-}
-
-function findPackagedApp() {
-  const explicit = String(process.argv[2] || "").trim();
-  if (explicit) return path.resolve(explicit);
-
-  for (const entry of fs.readdirSync(distRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !entry.name.startsWith("mac")) continue;
-    const root = path.join(distRoot, entry.name);
-    const appName = fs.readdirSync(root).find((name) => name.endsWith(".app"));
-    if (appName) return path.join(root, appName);
-  }
-  fail(`No packaged .app found under ${distRoot}`);
 }
 
 function run(command, args, options = {}) {
@@ -45,7 +34,39 @@ function run(command, args, options = {}) {
 
 function requirePath(filePath, { executable = false } = {}) {
   assert.ok(fs.existsSync(filePath), `Missing packaged resource: ${filePath}`);
+  const stat = fs.lstatSync(filePath);
+  assert.ok(stat.isFile(), `Packaged resource is not a regular file: ${filePath}`);
+  assert.equal(stat.isSymbolicLink(), false, `Packaged resource must not link outside the app: ${filePath}`);
   if (executable) fs.accessSync(filePath, fs.constants.X_OK);
+}
+
+function versionTuple(value) {
+  return String(value)
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0);
+}
+
+function compareVersions(left, right) {
+  const a = versionTuple(left);
+  const b = versionTuple(right);
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    const delta = (a[index] || 0) - (b[index] || 0);
+    if (delta !== 0) return delta;
+  }
+  return 0;
+}
+
+function assertMinimumOSCompatible(filePath, packageMinimumOS) {
+  const output = run("otool", ["-l", filePath], { capture: true });
+  const versions = [...output.matchAll(/^\s*minos\s+([0-9.]+)\s*$/gm)].map((match) => match[1]);
+  assert.ok(versions.length > 0, `Missing LC_BUILD_VERSION minos: ${filePath}`);
+  for (const version of versions) {
+    assert.ok(
+      compareVersions(version, packageMinimumOS) <= 0,
+      `${filePath} requires macOS ${version}, above package minimum ${packageMinimumOS}`
+    );
+  }
 }
 
 function assertArchitecture(filePath, architecture, { universal = false } = {}) {
@@ -249,13 +270,87 @@ async function stopProcess(child) {
   });
 }
 
-async function main() {
-  if (process.platform !== "darwin") fail("macOS package smoke test must run on macOS");
-  if (process.arch !== "arm64") fail(`Apple Silicon runner required, got ${process.arch}`);
+async function waitForProcessOutput(child, pattern, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const output = child.output();
+    if (pattern.test(output)) return;
+    if (child.exitCode != null || child.signalCode != null) {
+      fail(`Synthetic image-key target exited before it was ready:\n${output}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  fail(`Synthetic image-key target did not become ready:\n${child.output()}`);
+}
 
-  const appPath = findPackagedApp();
+async function probePackagedImageScanner(imageHelper, tempRoot) {
+  const sourcePath = path.join(tempRoot, "image-key-target.c");
+  const targetPath = path.join(tempRoot, "image-key-target");
+  fs.writeFileSync(sourcePath, `
+#include <signal.h>
+#include <stdio.h>
+#include <unistd.h>
+
+__attribute__((used)) volatile char image_key_candidate[33] =
+    "0123456789abcdef0123456789abcdef";
+
+int main(void) {
+    if (image_key_candidate[0] == '\\0') return 1;
+    puts("ready");
+    fflush(stdout);
+    for (;;) pause();
+}
+`, "utf8");
+  run("xcrun", [
+    "clang",
+    "-arch",
+    SUPPORTED_ARCHITECTURE,
+    `-mmacosx-version-min=${PACKAGE_MINIMUM_MACOS_VERSION}`,
+    "-O0",
+    sourcePath,
+    "-o",
+    targetPath,
+  ], { capture: true });
+
+  let targetProc = null;
+  try {
+    targetProc = startProcess(targetPath, [], { cwd: tempRoot, env: process.env });
+    await waitForProcessOutput(targetProc, /(?:^|\n)ready\n/);
+    assert.ok(Number(targetProc.pid) > 0, "synthetic image-key target has no PID");
+
+    const expectedKey = "0123456789abcdef";
+    const jpegBlock = Buffer.from("ffd8ffe000104a464946000101000001", "hex");
+    const cipher = crypto.createCipheriv("aes-128-ecb", Buffer.from(expectedKey, "ascii"), null);
+    cipher.setAutoPadding(false);
+    const ciphertext = Buffer.concat([cipher.update(jpegBlock), cipher.final()]);
+    const helperProbe = spawnSync(imageHelper, [String(targetProc.pid), ciphertext.toString("hex")], {
+      encoding: "utf8",
+      stdio: "pipe",
+      timeout: 15_000,
+    });
+    assert.ifError(helperProbe.error);
+    const helperOutput = `${helperProbe.stdout || ""}\n${helperProbe.stderr || ""}`;
+    assert.equal(helperProbe.status, 0, helperOutput);
+    assert.doesNotMatch(helperOutput, /dlopen failed|symbol not found/i);
+
+    const responseLine = String(helperProbe.stdout || "")
+      .split(/\r?\n/)
+      .reverse()
+      .find((line) => line.trim().startsWith("{"));
+    assert.ok(responseLine, `image helper returned no JSON response:\n${helperOutput}`);
+    const helperPayload = JSON.parse(responseLine);
+    assert.equal(helperPayload.success, true, helperOutput);
+    assert.match(String(helperPayload.aesKey || ""), /^[0-9a-f]{32}$/i);
+    assert.equal(Buffer.from(helperPayload.aesKey, "hex").toString("ascii"), expectedKey);
+  } finally {
+    await stopProcess(targetProc);
+  }
+}
+
+async function runPackagedRuntimeSmoke(appPath) {
   const contents = path.join(appPath, "Contents");
   const resources = path.join(contents, "Resources");
+  const infoPlist = path.join(contents, "Info.plist");
   const electronExecutable = path.join(contents, "MacOS", path.basename(appPath, ".app"));
   const backend = path.join(resources, "backend", "wechat-backend");
   const nativeRoot = path.join(resources, "backend", "native");
@@ -277,6 +372,17 @@ async function main() {
   requirePath(path.join(resources, "ffmpeg", "LICENSE"));
   requirePath(path.join(resources, "ffmpeg", "ffmpeg.LICENSE"));
 
+  const packageMinimumOS = run(
+    "plutil",
+    ["-extract", "LSMinimumSystemVersion", "raw", "-o", "-", infoPlist],
+    { capture: true }
+  ).trim();
+  assert.equal(
+    packageMinimumOS,
+    PACKAGE_MINIMUM_MACOS_VERSION,
+    "Info.plist must match the minimum version supported by bundled native resources"
+  );
+
   assertArchitecture(electronExecutable, "arm64");
   assertArchitecture(backend, "arm64");
   assertArchitecture(wcdbApi, "arm64");
@@ -287,13 +393,25 @@ async function main() {
   assertArchitecture(imageHelper, "arm64", { universal: true });
   assertArchitecture(ffmpeg, "arm64");
 
+  for (const filePath of [electronExecutable, backend, wcdbApi, wcdb, imageLibrary, imageHelper, integrity, ffmpeg]) {
+    assertMinimumOSCompatible(filePath, packageMinimumOS);
+  }
+
+  const wcdbApiId = run("otool", ["-D", wcdbApi], { capture: true });
+  assert.match(wcdbApiId, /@loader_path\/libwcdb_api\.dylib/);
+  const wcdbApiDependencies = run("otool", ["-L", wcdbApi], { capture: true });
+  assert.match(wcdbApiDependencies, /@loader_path\/\.\.\/universal\/libWCDB\.dylib/);
+  assert.doesNotMatch(wcdbApiDependencies, /(?:^|\/)WeFlow(?:-|\/)/m);
+
   const ffmpegVersion = run(ffmpeg, ["-version"], { capture: true });
   assert.match(ffmpegVersion, /^ffmpeg version/m);
 
-  const imageHelperProbe = spawnSync(imageHelper, [String(process.pid), "0".repeat(32)], {
+  const imageHelperProbe = spawnSync(imageHelper, ["2147483647", "0".repeat(32)], {
     encoding: "utf8",
     stdio: "pipe",
+    timeout: 5_000,
   });
+  assert.ifError(imageHelperProbe.error);
   const imageHelperOutput = `${imageHelperProbe.stdout || ""}\n${imageHelperProbe.stderr || ""}`;
   assert.doesNotMatch(imageHelperOutput, /dlopen failed|symbol not found/i);
   assert.match(String(imageHelperProbe.stdout || ""), /"success":(?:true|false)/);
@@ -301,11 +419,15 @@ async function main() {
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
   const entitlements = run("codesign", ["-d", "--entitlements", "-", electronExecutable], { capture: true });
   assert.match(entitlements, /com\.apple\.security\.cs\.allow-jit/);
+  const helperEntitlements = run("codesign", ["-d", "--entitlements", "-", imageHelper], { capture: true });
+  assert.match(helperEntitlements, /com\.apple\.security\.cs\.debugger/);
 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wda-macos-smoke-"));
   let backendProc = null;
   let sidecarProc = null;
   try {
+    await probePackagedImageScanner(imageHelper, tempRoot);
+
     const backendPort = await getFreePort();
     const sidecarPort = await getFreePort();
     const sidecarToken = "package-smoke-token";
@@ -415,6 +537,25 @@ async function main() {
   // Runtime processes must never modify the signed application bundle.
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
   process.stdout.write(`macOS package smoke test passed: ${appPath}\n`);
+}
+
+async function main() {
+  if (process.platform !== "darwin") fail("macOS package smoke test must run on macOS");
+  if (process.arch !== SUPPORTED_ARCHITECTURE) {
+    fail(`Apple Silicon runner required, got ${process.arch}`);
+  }
+
+  const explicitAppPath = String(process.argv[2] || "").trim();
+  if (explicitAppPath) {
+    const appPath = path.resolve(explicitAppPath);
+    verifyAppBundle(appPath, { distribution: false, source: "explicit app bundle" });
+    await runPackagedRuntimeSmoke(appPath);
+    return;
+  }
+
+  await withMacosArtifacts({ distribution: false }, async ({ zipAppPath }) => {
+    await runPackagedRuntimeSmoke(zipAppPath);
+  });
 }
 
 main().catch((err) => {
