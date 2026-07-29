@@ -6,6 +6,7 @@
       :days="daysInYear"
       :highlights="annualHighlights"
       :is-active="isActive"
+      :focus-doys="focusDoys"
     />
   </div>
 </template>
@@ -16,7 +17,9 @@ import AnnualCalendarHeatmap from '~/components/wrapped/visualizations/AnnualCal
 const props = defineProps({
   data: { type: Object, default: () => ({}) },
   // 透传给热力图：控制入场动画与循环动画暂停
-  isActive: { type: Boolean, default: true }
+  isActive: { type: Boolean, default: true },
+  // 透传给热力图：目录行悬停联动的聚焦区间 { start, end }
+  focusDoys: { type: Object, default: null }
 })
 
 const year = computed(() => {

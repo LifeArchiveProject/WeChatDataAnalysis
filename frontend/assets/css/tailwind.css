@@ -326,44 +326,23 @@
     filter: none;
   }
 
-  /* Wrapped 隐私模式：仅模糊“用户名文本”，头像不模糊（避免把头像也 blur 掉） */
-  .wrapped-privacy .wrapped-privacy-name {
-    filter: blur(9px);
-    transition: filter 0.2s ease;
-  }
-
-  .wrapped-privacy .wrapped-privacy-name:hover {
-    filter: none;
-  }
-
-  /* Wrapped 隐私模式：模糊“消息内容文本”（仅在被标记为 message 的节点上生效） */
-  .wrapped-privacy .wrapped-privacy-message {
-    filter: blur(9px);
-    transition: filter 0.2s ease;
-  }
-
-  .wrapped-privacy .wrapped-privacy-message:hover {
-    filter: none;
-  }
-
-  /* Wrapped 隐私模式：模糊“词云关键词” */
+  /* Wrapped 隐私模式（2026-07 定稿）：
+     一律模糊、一律不可悬停显形。文字模糊用 em 单位——强度随字号缩放，
+     词典大字号词头也糊得住（旧版固定 9px 在大字下仍可辨认）。 */
+  .wrapped-privacy .wrapped-privacy-name,
+  .wrapped-privacy .wrapped-privacy-message,
   .wrapped-privacy .wrapped-privacy-keyword {
-    filter: blur(9px);
-    transition: filter 0.2s ease;
+    filter: blur(0.42em);
   }
 
-  .wrapped-privacy .wrapped-privacy-keyword:hover {
-    filter: none;
-  }
-
-  /* Wrapped 隐私模式：模糊头像（含 fallback 字符） */
+  /* 头像：强模糊 */
   .wrapped-privacy .wrapped-privacy-avatar {
-    filter: blur(9px);
-    transition: filter 0.2s ease;
+    filter: blur(16px);
   }
 
-  .wrapped-privacy .wrapped-privacy-avatar:hover {
-    filter: none;
+  /* 表情包/贴纸图片：强模糊 */
+  .wrapped-privacy .wrapped-privacy-sticker {
+    filter: blur(16px) saturate(0.85);
   }
   /* 按钮样式 */
   .btn {

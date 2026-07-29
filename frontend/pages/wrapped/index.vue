@@ -16,7 +16,8 @@
       <div class="flex items-center gap-3">
         <button
           type="button"
-          class="pointer-events-auto inline-flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-[#07C160] hover:bg-[#07C160]/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 transition"
+          class="pointer-events-auto inline-flex items-center justify-center w-9 h-9 rounded-full bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 transition"
+          :class="deckDark ? 'text-[#4ADE80] hover:bg-white/10' : 'text-[#07C160] hover:bg-[#07C160]/10'"
           aria-label="返回上一级"
           title="返回上一级"
           @click="goBack"
@@ -37,7 +38,8 @@
 
         <button
           type="button"
-          class="pointer-events-auto inline-flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-[#07C160] hover:bg-[#07C160]/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 disabled:opacity-60 disabled:cursor-not-allowed transition"
+          class="pointer-events-auto inline-flex items-center justify-center w-9 h-9 rounded-full bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 disabled:opacity-60 disabled:cursor-not-allowed transition"
+          :class="deckDark ? 'text-[#4ADE80] hover:bg-white/10' : 'text-[#07C160] hover:bg-[#07C160]/10'"
           :disabled="loading || accountsLoading || accounts.length === 0"
           aria-label="强制刷新（忽略缓存）"
           title="强制刷新（忽略缓存）"
@@ -75,14 +77,15 @@
         <div class="relative flex items-center justify-end gap-3">
           <button
             type="button"
-            class="pointer-events-auto inline-flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-[#07C160] hover:bg-[#07C160]/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 transition"
+            class="pointer-events-auto inline-flex items-center justify-center w-9 h-9 rounded-full bg-transparent focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 transition"
+            :class="deckDark ? 'hover:bg-white/10' : 'hover:bg-[#07C160]/10'"
             :aria-label="privacyMode ? '关闭隐私模式' : '开启隐私模式'"
             :title="privacyMode ? '关闭隐私模式' : '开启隐私模式'"
             @click="privacyStore.toggle"
           >
             <svg
               class="w-4 h-4"
-              :class="privacyMode ? 'text-[#07C160]' : 'text-[#00000080]'"
+              :class="privacyMode ? (deckDark ? 'text-[#4ADE80]' : 'text-[#07C160]') : (deckDark ? 'text-[#FFFFFF8C]' : 'text-[#00000080]')"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -109,8 +112,9 @@
             v-if="yearOptions.length > 1"
             v-model="year"
             :years="yearOptions"
+            :dark="deckDark"
           />
-          <div v-else class="wrapped-label text-xs text-[#00000066]">{{ year }}年</div>
+          <div v-else class="wrapped-label text-xs" :class="deckDark ? 'text-[#FFFFFF66]' : 'text-[#00000066]'">{{ year }}年</div>
         </div>
         <div class="relative mt-1 h-[1px] w-16 ml-auto bg-gradient-to-l from-[#07C160]/40 to-transparent"></div>
       </div>
@@ -119,47 +123,7 @@
     <!-- 翻页播报（供屏幕阅读器） -->
     <div class="sr-only" aria-live="polite">{{ slideAnnouncement }}</div>
 
-    <!-- 右侧进度圆点导航 -->
-    <WrappedProgressDots
-      v-show="!deckChromeHidden && dotItems.length > 1"
-      :items="dotItems"
-      :active-index="activeIndex"
-      @select="onDotSelect"
-    />
-
-    <!-- 右下角：保存当前页为图片 -->
-    <button
-      v-show="!deckChromeHidden && report"
-      type="button"
-      class="absolute bottom-6 right-6 z-20 pointer-events-auto inline-flex items-center justify-center w-10 h-10 rounded-full bg-white/90 backdrop-blur border border-[#07C160]/20 text-[#07C160] shadow-sm hover:bg-[#07C160]/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 disabled:opacity-60 disabled:cursor-not-allowed transition"
-      :disabled="exporting"
-      aria-label="保存当前页为图片"
-      title="保存当前页为图片"
-      @click="exportActiveSlide"
-    >
-      <svg v-if="exporting" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z" />
-      </svg>
-      <svg
-        v-else
-        class="w-4 h-4"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-        <path d="M7 10l5 5 5-5" />
-        <path d="M12 15V3" />
-      </svg>
-    </button>
-
     <div
-      ref="trackEl"
       class="relative h-full w-full will-change-transform transition-transform ease-[cubic-bezier(0.22,1,0.36,1)]"
       :class="deckTrackClass"
       :style="trackStyle"
@@ -342,12 +306,14 @@ const yearOptions = computed(() => {
 })
 
 const deckEl = ref(null)
-const trackEl = ref(null)
 const viewportHeight = ref(0)
 const activeIndex = ref(0)
 const navLocked = ref(false)
 const wheelAcc = ref(0)
 let lastWheelAt = 0
+// 本次滚动手势是否已翻过页：触控板惯性尾巴（事件间隔持续 <160ms）会被整段忽略，
+// 避免一次滑动在 650ms 解锁后又凑满阈值、多翻一页。
+let wheelGestureConsumed = false
 
 const reducedMotion = useReducedMotion()
 
@@ -360,11 +326,13 @@ let dragLastY = 0
 let dragLastT = 0
 let dragVelocity = 0 // px/ms，向下为正
 
-const exporting = ref(false)
-
 // 允许子卡片隐藏 deck 顶部 UI（如关键词卡片 storm 阶段）
 const deckChromeHidden = ref(false)
 provide('deckChromeHidden', deckChromeHidden)
+
+// 影院模式的卡片（如年度海报长廊）在场时，顶栏与 deck 底色一起转暗
+const deckDark = ref(false)
+provide('deckDark', deckDark)
 
 let navUnlockTimer = null
 let deckResizeObserver = null
@@ -376,8 +344,8 @@ const slides = computed(() => {
   return out
 })
 
-// 年度总结沿用旧版浅绿色底色，避免继承聊天页灰底或引导页绿底。
-const currentBg = '#F3FFF8'
+// 年度总结沿用旧版浅绿色底色，避免继承聊天页灰底或引导页绿底；影院卡在场时整体转暗。
+const currentBg = computed(() => (deckDark.value ? '#0A100D' : '#F3FFF8'))
 // reduced-motion 时把 700ms 翻页过渡降为 150ms
 const deckTrackClass = computed(() => [
   'z-10',
@@ -386,9 +354,11 @@ const deckTrackClass = computed(() => [
 
 const applyViewportBg = () => {
   if (!import.meta.client) return
-  document.documentElement.style.backgroundColor = currentBg
-  document.body.style.backgroundColor = currentBg
+  document.documentElement.style.backgroundColor = currentBg.value
+  document.body.style.backgroundColor = currentBg.value
 }
+
+watch(currentBg, applyViewportBg)
 
 const slideStyle = computed(() => (
   viewportHeight.value > 0 ? { height: `${viewportHeight.value}px` } : { height: '100%' }
@@ -418,48 +388,12 @@ const goBack = async () => {
 const next = () => goTo(activeIndex.value + 1)
 const prev = () => goTo(activeIndex.value - 1)
 
-// 进度圆点数据：封面 + 各卡片（标题用于 tooltip，loading 用于细环 spinner）
-const dotItems = computed(() => {
-  const cards = Array.isArray(report.value?.cards) ? report.value.cards : []
-  return [
-    { title: '封面', loading: false },
-    ...cards.map((c, i) => ({
-      title: String(c?.title || `第 ${i + 2} 页`),
-      loading: c?.status === 'loading'
-    }))
-  ]
-})
-
-const onDotSelect = (i) => {
-  goTo(i)
-  lockNav()
-}
-
 // 翻页后播报给屏幕阅读器的文案
 const slideAnnouncement = computed(() => {
-  const item = dotItems.value[activeIndex.value]
-  return `第 ${activeIndex.value + 1} 页 · ${item?.title || ''}`
+  const cards = Array.isArray(report.value?.cards) ? report.value.cards : []
+  const title = activeIndex.value === 0 ? '封面' : String(cards[activeIndex.value - 1]?.title || '')
+  return `第 ${activeIndex.value + 1} 页 · ${title}`
 })
-
-// 导出当前 slide 为 PNG（html-to-image 按需加载）
-const exportActiveSlide = async () => {
-  if (exporting.value) return
-  const el = trackEl.value?.children?.[activeIndex.value]
-  if (!el) return
-  exporting.value = true
-  try {
-    const { toPng } = await import('html-to-image')
-    const dataUrl = await toPng(el, { pixelRatio: 2, backgroundColor: currentBg })
-    const a = document.createElement('a')
-    a.href = dataUrl
-    a.download = `wechat-wrapped-${year.value}-${activeIndex.value + 1}.png`
-    a.click()
-  } catch (e) {
-    window.alert(`保存图片失败：${e?.message || e}`)
-  } finally {
-    exporting.value = false
-  }
-}
 
 const lockNav = () => {
   navLocked.value = true
@@ -505,12 +439,21 @@ const onWheel = (e) => {
 
   // 进入 deck 逻辑：阻止默认滚动，转为“翻页”
   e.preventDefault()
-  if (navLocked.value) return
 
-  // 慢滚间隔过久时清零累积量，避免跨时间误触发翻页
+  // lastWheelAt 必须对每个事件更新（含锁定/忽略期间），间隔检测才能识别“同一次滑动的连续事件流”
   const now = e.timeStamp || Date.now()
-  if (now - lastWheelAt > 160) wheelAcc.value = 0
+  const gap = now - lastWheelAt
   lastWheelAt = now
+
+  // 间隔够大 = 新手势：清零累积量，解除“本手势已翻页”标记
+  if (gap > 160) {
+    wheelAcc.value = 0
+    wheelGestureConsumed = false
+  }
+
+  // 同一手势已经翻过页（惯性尾巴还在发事件）：整段忽略，等真实停顿
+  if (wheelGestureConsumed) return
+  if (navLocked.value) return
 
   wheelAcc.value += e.deltaY
   const threshold = 80
@@ -520,6 +463,7 @@ const onWheel = (e) => {
   else prev()
 
   wheelAcc.value = 0
+  wheelGestureConsumed = true
   lockNav()
 }
 

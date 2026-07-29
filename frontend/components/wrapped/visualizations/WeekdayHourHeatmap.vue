@@ -36,7 +36,7 @@
                 v-for="(v, hi) in row"
                 :key="`${wi}-${hi}`"
                 class="heatmap-cell aspect-square min-h-[10px] rounded-[2px] transition-transform duration-150 hover:scale-125 hover:z-10 relative"
-                :class="cellStateClass"
+                :class="[cellStateClass, { 'wr-hm-dim': isHourDimmed(hi) }]"
                 :style="{
                   backgroundColor: colorFor(v),
                   transformOrigin: originFor(wi, hi),
@@ -61,21 +61,6 @@
         <span class="wrapped-body">高</span>
       </div>
       <div v-if="maxValue > 0" class="wrapped-number">最大 {{ maxValue }}</div>
-    </div>
-
-    <!-- 三枚派生小徽章：热力图扫完后依次淡入 -->
-    <div v-if="badges.length" class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2">
-      <div
-        v-for="(b, i) in badges"
-        :key="b.key"
-        class="wr-hm-badge rounded-xl border border-[#EDEDED] bg-[#FAFAFA] px-3 py-2.5"
-        :class="badgeStateClass"
-        :style="{ animationDelay: badgeDelay(i) }"
-      >
-        <div class="wrapped-label text-[10px] text-[#00000066]">{{ b.label }}</div>
-        <div class="wrapped-number text-base text-[#07C160] font-semibold mt-0.5">{{ b.value }}</div>
-        <div class="wrapped-body text-[11px] text-[#7F7F7F] mt-0.5">{{ b.sub }}</div>
-      </div>
     </div>
 
     <!-- 自绘轻量 tooltip（替代原生 title，支持触屏点按） -->
@@ -112,8 +97,19 @@ const props = defineProps({
   hourLabels: { type: Array, default: () => Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')) },
   matrix: { type: Array, default: () => [] },
   totalMessages: { type: Number, default: 0 },
-  isActive: { type: Boolean, default: true }
+  isActive: { type: Boolean, default: true },
+  // 外部聚焦小时区间 { start, end }（含端点）：区间外的列变淡，用于与「一天的轮廓」联动
+  focusHours: { type: Object, default: null }
 })
+
+const isHourDimmed = (hi) => {
+  const f = props.focusHours
+  if (!f) return false
+  const s = Number(f.start)
+  const e = Number(f.end)
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return false
+  return hi < Math.min(s, e) || hi > Math.max(s, e)
+}
 
 const matrixSafe = computed(() => {
   // Expect 7x24, but keep defensive to avoid UI crashes.
@@ -161,15 +157,42 @@ const sweepEndMs = 23 * SWEEP_STEP_MS + SWEEP_CELL_MS
 const reducedMotion = useReducedMotion()
 const entered = ref(false)
 
-const { display: totalDisplay, play: playTotal } = useCountUp(() => Number(props.totalMessages || 0), { duration: 1.4 })
+const { display: totalDisplay, restart: restartTotal, finish: finishTotal } = useCountUp(() => Number(props.totalMessages || 0), { duration: 1.4 })
 
-// isActive 首次为 true 时触发入场（只播一次）；reduced-motion 由 useCountUp 内部与 CSS 类共同兜底。
+// 每次翻到本页都重播入场：进入后 450ms（翻页落定）开播，离开后 750ms（翻页结束）复位。
+const START_DELAY_MS = 450
+const RESET_DELAY_MS = 750
+let startTimer = 0
+let resetTimer = 0
+
 watch(
   () => props.isActive,
   (active) => {
-    if (!active || entered.value) return
-    entered.value = true
-    playTotal()
+    if (typeof window === 'undefined') {
+      entered.value = true
+      finishTotal()
+      return
+    }
+    if (startTimer) { window.clearTimeout(startTimer); startTimer = 0 }
+    if (resetTimer) { window.clearTimeout(resetTimer); resetTimer = 0 }
+    if (!active) {
+      resetTimer = window.setTimeout(() => {
+        resetTimer = 0
+        entered.value = false
+      }, RESET_DELAY_MS)
+      return
+    }
+    if (reducedMotion.value) {
+      entered.value = true
+      finishTotal()
+      return
+    }
+    if (entered.value) return
+    startTimer = window.setTimeout(() => {
+      startTimer = 0
+      entered.value = true
+      restartTotal()
+    }, START_DELAY_MS)
   },
   { immediate: true }
 )
@@ -184,65 +207,6 @@ const cellDelay = (hour) => {
   if (reducedMotion.value || !entered.value) return '0ms'
   return `${hour * SWEEP_STEP_MS}ms`
 }
-
-const badgeStateClass = computed(() => {
-  if (reducedMotion.value) return ''
-  if (!entered.value) return 'wr-hm-badge--pending'
-  return 'wr-hm-badge--in'
-})
-
-const badgeDelay = (i) => {
-  if (reducedMotion.value || !entered.value) return '0ms'
-  return `${sweepEndMs + i * 160}ms`
-}
-
-// ---------- 派生小徽章 ----------
-
-const badges = computed(() => {
-  const m = matrixSafe.value
-  let total = 0
-  const hourTotals = new Array(24).fill(0)
-  let weekdaySum = 0
-  let weekendSum = 0
-  for (let w = 0; w < 7; w++) {
-    for (let h = 0; h < 24; h++) {
-      const v = m[w][h]
-      total += v
-      hourTotals[h] += v
-      if (w >= 5) weekendSum += v
-      else weekdaySum += v
-    }
-  }
-  if (total <= 0) return []
-
-  // 深夜指数：0-5 点消息占比
-  let night = 0
-  for (let h = 0; h < 6; h++) night += hourTotals[h]
-  const nightPct = (night * 100) / total
-
-  // 最安静的一小时（并列取更早的）
-  let quietH = 0
-  let quietV = Infinity
-  for (let h = 0; h < 24; h++) {
-    if (hourTotals[h] < quietV) {
-      quietV = hourTotals[h]
-      quietH = h
-    }
-  }
-
-  // 工作日 vs 周末：按日均比较（工作日 5 天 / 周末 2 天）
-  const weekdayAvg = weekdaySum / 5
-  const weekendAvg = weekendSum / 2
-  let ratioLabel = '—'
-  if (weekendAvg > 0) ratioLabel = `${(weekdayAvg / weekendAvg).toFixed(1)} : 1`
-  else if (weekdayAvg > 0) ratioLabel = '全在工作日'
-
-  return [
-    { key: 'night', label: '深夜指数', value: `${nightPct.toFixed(1)}%`, sub: '0-5 点消息占比' },
-    { key: 'quiet', label: '最安静的一小时', value: formatHourRange(quietH), sub: `仅 ${quietV} 条` },
-    { key: 'ratio', label: '工作日 vs 周末', value: ratioLabel, sub: '日均消息量之比' }
-  ]
-})
 
 // ---------- 自绘 tooltip ----------
 
@@ -356,12 +320,23 @@ onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocPointerDown)
   if (tipRaf) cancelAnimationFrame(tipRaf)
   tipRaf = 0
+  if (startTimer) { window.clearTimeout(startTimer); startTimer = 0 }
+  if (resetTimer) { window.clearTimeout(resetTimer); resetTimer = 0 }
 })
 </script>
 
 <style scoped>
 /* 入场前隐藏，扫到该列时点亮；fill-mode 用 backwards：
    动画结束后回到自然样式，避免 forwards 的 transform 压住 hover 缩放。 */
+/* 外部联动聚焦：区间外的小时列变淡 */
+.heatmap-cell {
+  transition-property: transform, opacity;
+}
+
+.wr-hm-dim {
+  opacity: 0.14;
+}
+
 .wr-hm-cell--pending {
   opacity: 0;
 }
@@ -381,24 +356,11 @@ onBeforeUnmount(() => {
   }
 }
 
-.wr-hm-badge--pending {
-  opacity: 0;
-}
 
-.wr-hm-badge--in {
-  animation: wr-hm-badge-in 420ms ease-out backwards;
-}
 
-@keyframes wr-hm-badge-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
+
+
+
 
 .wr-hm-tip {
   position: relative;

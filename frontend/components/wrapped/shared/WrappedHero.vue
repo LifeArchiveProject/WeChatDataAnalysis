@@ -310,7 +310,7 @@ const modernPreviewItems = computed(() => {
 })
 
 const previewStageClass = computed(() => (
-  'w-[620px] h-[420px] translate-x-32 -translate-y-10'
+  'w-[620px] h-[420px] translate-x-32 -translate-y-24'
 ))
 
 const previewViewportClass = computed(() => (

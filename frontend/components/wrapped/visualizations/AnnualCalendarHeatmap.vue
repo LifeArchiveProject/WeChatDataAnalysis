@@ -1,8 +1,8 @@
 <template>
-  <div class="w-full" :class="{ 'wr-anim-paused': !isActive }">
+  <div ref="rootEl" class="w-full" :class="{ 'wr-anim-paused': !isActive }">
     <div v-if="weeks > 0" class="overflow-x-auto" data-wrapped-scroll-x>
       <div class="w-max mx-auto" :style="{ '--cell': `${cellPx}px` }">
-        <!-- Month labels -->
+        <!-- Month labels：悬停聚焦当月，点击钉住 -->
         <div
           class="grid gap-[2px] text-[11px] text-[#00000066] mb-2"
           :style="{ gridTemplateColumns: `36px repeat(${weeks}, var(--cell))` }"
@@ -12,14 +12,19 @@
             v-for="(m, idx) in monthLabels"
             :key="idx"
             class="wrapped-number whitespace-nowrap"
+            :class="m.text ? ['hm-month', { 'hm-month--active': activeMonth === m.month }] : ''"
+            @mouseenter="m.text && (monthFocus = m.month)"
+            @mouseleave="m.text && (monthFocus = -1)"
+            @click="m.text && toggleMonthPin(m.month)"
           >
-            {{ m }}
+            {{ m.text }}
           </span>
         </div>
 
-        <!-- Grid -->
+        <!-- Grid：支持鼠标按住拖选一段日期看统计（data-deck-nodrag 防止触屏拖动翻页） -->
         <div
-          class="grid gap-[2px] items-stretch"
+          class="grid gap-[2px] items-stretch select-none"
+          data-deck-nodrag
           :style="{
             gridTemplateColumns: `36px repeat(${weeks}, var(--cell))`,
             gridTemplateRows: `repeat(7, var(--cell))`
@@ -47,20 +52,26 @@
           ></div>
         </div>
 
-        <div class="mt-4 flex items-center justify-between text-xs text-[#00000066] w-full">
+        <div class="mt-4 flex items-center justify-between gap-4 text-xs text-[#00000066] w-full">
           <div class="flex items-center gap-2">
             <span class="wrapped-body">低</span>
             <div class="flex items-center gap-[2px]">
               <span
                 v-for="i in 6"
                 :key="i"
-                class="heatmap-legend-cell w-4 h-2 rounded-[2px]"
+                class="heatmap-legend-cell w-4 h-2 rounded-[2px] hm-legend"
+                :class="{ 'hm-legend--active': legendFocus === i }"
                 :style="{ backgroundColor: legendColor(i) }"
+                @mouseenter="legendFocus = i"
+                @mouseleave="legendFocus = 0"
               />
             </div>
             <span class="wrapped-body">高</span>
+            <span class="wrapped-body text-[#00000040] hidden sm:inline hm-hint">在格子上拖动可圈选统计</span>
           </div>
-          <div v-if="maxValue > 0" class="wrapped-number">最大 {{ formatInt(maxValue) }}</div>
+          <div v-if="legendInfoText" class="wrapped-number hm-info" :class="{ 'hm-info--rich': !!selSummary || activeMonth >= 0 || legendFocus > 0 }">
+            {{ legendInfoText }}
+          </div>
         </div>
       </div>
     </div>
@@ -116,7 +127,9 @@ const props = defineProps({
   days: { type: Number, default: 0 },
   highlights: { type: Array, default: () => [] },
   // 卡片是否处于当前页：首次为 true 时播放入场动画，false 时暂停循环动画
-  isActive: { type: Boolean, default: true }
+  isActive: { type: Boolean, default: true },
+  // 外部聚焦区间（{ start, end }，doy 0 起）：目录行悬停联动时其余格子变淡
+  focusDoys: { type: Object, default: null }
 })
 
 // Cell size of each day square (px). Tuned to fit Card00 slide width without truncation.
@@ -212,12 +225,12 @@ const weekdayTicks = computed(() => ['周一', '', '周三', '', '周五', '', '
 
 const monthLabels = computed(() => {
   const cols = weeks.value
-  const out = Array.from({ length: cols }, () => '')
+  const out = Array.from({ length: cols }, () => ({ text: '', month: -1 }))
   for (let m = 0; m < 12; m += 1) {
     const monthStart = Date.UTC(Number(props.year), m, 1)
     const doy = Math.round((monthStart - jan1UtcMs.value) / 86400000)
     const col = Math.floor((doy + startWeekday.value) / 7)
-    if (col >= 0 && col < out.length && !out[col]) out[col] = `${m + 1}月`
+    if (col >= 0 && col < out.length && !out[col].text) out[col] = { text: `${m + 1}月`, month: m }
   }
   return out
 })
@@ -258,6 +271,7 @@ const cells = computed(() => {
       col,
       doy,
       ymd,
+      mon: d.getUTCMonth(),
       count: Number(counts.value[doy] || 0),
       highlights: normalizedHighlights
     })
@@ -270,20 +284,34 @@ const colorFor = (cell) => {
   return heatColor(cell.count, maxValue.value)
 }
 
-// ---------------- 入场动画（isActive 首次为 true 时只播一次） ----------------
+// ---------------- 入场动画（每次翻到本页都重播一遍） ----------------
 
 const reducedMotion = useReducedMotion()
 const entered = ref(false)
 const entranceDone = ref(false)
 let entranceTimer = 0
 
-// 入场扫过 600ms + 单格动画 350ms，结束后再触发峰值日脉冲光环。
+// 入场扫过 600ms + 单格动画 350ms。
 const ENTRANCE_SWEEP_MS = 600
 const ENTRANCE_CELL_MS = 350
 
+// 离开后延迟复位（翻页动画结束后再复位，翻走过程中格子不消失），回来时重播。
+const RESET_DELAY_MS = 750
+let resetTimer = 0
+
 watch(() => props.isActive, (active) => {
-  if (!active || entered.value) return
   if (typeof window === 'undefined') return
+  if (entranceTimer) { window.clearTimeout(entranceTimer); entranceTimer = 0 }
+  if (resetTimer) { window.clearTimeout(resetTimer); resetTimer = 0 }
+  if (!active) {
+    resetTimer = window.setTimeout(() => {
+      resetTimer = 0
+      entered.value = false
+      entranceDone.value = false
+    }, RESET_DELAY_MS)
+    return
+  }
+  if (entered.value) return
   entered.value = true
   if (reducedMotion.value) {
     entranceDone.value = true
@@ -299,11 +327,106 @@ const entranceAnimating = computed(() => entered.value && !entranceDone.value &&
 
 const hasMarker = (cell) => !!(cell && cell.valid && Array.isArray(cell.highlights) && cell.highlights.length > 0)
 
+// ---------------- 探索交互：月份聚焦 / 图例分档 / 拖选范围 / 外部联动 ----------------
+
+const monthFocus = ref(-1) // 悬停中的月份（0-11）
+const monthPinned = ref(-1) // 点击钉住的月份
+const legendFocus = ref(0) // 悬停中的图例档位（1-6，0 = 无）
+const selecting = ref(false)
+const selStart = ref(-1)
+const selEnd = ref(-1)
+
+const activeMonth = computed(() => (monthFocus.value >= 0 ? monthFocus.value : monthPinned.value))
+
+const toggleMonthPin = (m) => {
+  if (m < 0) return
+  monthPinned.value = monthPinned.value === m ? -1 : m
+}
+
+const monthTotals = computed(() => {
+  const out = Array.from({ length: 12 }, () => 0)
+  for (const c of cells.value) {
+    if (c.valid && c.mon >= 0) out[c.mon] += c.count
+  }
+  return out
+})
+
+// 与 heatColor 的 sqrt 色阶一致的分档（0 = 无消息，1-6 与图例一一对应）
+const bucketFor = (cell) => {
+  const n = Number(cell?.count || 0)
+  const m = maxValue.value
+  if (n <= 0 || m <= 0) return 0
+  return Math.min(6, Math.max(1, Math.ceil(Math.sqrt(n / m) * 6)))
+}
+
+const selRange = computed(() => {
+  if (selStart.value < 0 || selEnd.value < 0) return null
+  return { s: Math.min(selStart.value, selEnd.value), e: Math.max(selStart.value, selEnd.value) }
+})
+
+const externalFocus = computed(() => {
+  const f = props.focusDoys
+  if (!f) return null
+  const s = Number(f.start)
+  const e = Number(f.end)
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return null
+  return { s: Math.min(s, e), e: Math.max(s, e) }
+})
+
+// 变淡优先级：拖选 > 外部联动 > 月份 > 图例分档
+const isDimmed = (cell) => {
+  if (!cell || !cell.valid) return false
+  const sel = selRange.value
+  if (sel) return cell.doy < sel.s || cell.doy > sel.e
+  const ext = externalFocus.value
+  if (ext) return cell.doy < ext.s || cell.doy > ext.e
+  if (activeMonth.value >= 0) return cell.mon !== activeMonth.value
+  if (legendFocus.value > 0) return bucketFor(cell) !== legendFocus.value
+  return false
+}
+
+const isSelected = (cell) => {
+  const sel = selRange.value
+  return !!(sel && cell && cell.valid && cell.doy >= sel.s && cell.doy <= sel.e)
+}
+
+const doyLabel = (doy) => {
+  const d = new Date(jan1UtcMs.value + doy * 86400000)
+  return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日`
+}
+
+// 拖选统计摘要（也用于右下角信息位）
+const selSummary = computed(() => {
+  const sel = selRange.value
+  if (!sel) return ''
+  const daysN = sel.e - sel.s + 1
+  let total = 0
+  for (let i = sel.s; i <= sel.e; i += 1) total += Number(counts.value[i] || 0)
+  const avg = daysN > 0 ? total / daysN : 0
+  const avgText = avg >= 100 ? String(Math.round(avg)) : avg.toFixed(1)
+  return `${doyLabel(sel.s)} – ${doyLabel(sel.e)} · ${daysN} 天 · ${formatInt(total)} 条 · 日均 ${avgText}`
+})
+
+// 右下角信息位：拖选摘要 > 月份小计 > 图例档位天数 > 全年最大值
+const legendInfoText = computed(() => {
+  if (selSummary.value) return selSummary.value
+  if (activeMonth.value >= 0) return `${activeMonth.value + 1}月 · ${formatInt(monthTotals.value[activeMonth.value] || 0)} 条`
+  if (legendFocus.value > 0) {
+    let n = 0
+    for (const c of cells.value) {
+      if (c.valid && bucketFor(c) === legendFocus.value) n += 1
+    }
+    return `该热度档 · ${n} 天`
+  }
+  return maxValue.value > 0 ? `最大 ${formatInt(maxValue.value)}` : ''
+})
+
 const cellClass = (cell) => ({
   'wr-cell-pre': !entered.value && !reducedMotion.value,
   'wr-cell-enter': entranceAnimating.value,
   'wr-cell-highlight': hasMarker(cell),
-  'wr-cell-pulse': hasMarker(cell) && entranceDone.value && !reducedMotion.value
+  'hm-dim': entranceDone.value || reducedMotion.value ? isDimmed(cell) : false,
+  'hm-sel': isSelected(cell)
 })
 
 const cellStyle = (cell) => {
@@ -414,14 +537,37 @@ const hideTooltip = () => {
 // 触屏没有 hover：点格子显示 tooltip，点空白关闭（见 document 级监听）。
 let lastTouchTs = 0
 
+const rootEl = ref(null)
+
+const clearSelection = () => {
+  selecting.value = false
+  selStart.value = -1
+  selEnd.value = -1
+}
+
 const onCellMouseEnter = (cell, e) => {
+  // 拖选进行中：扩展选区，不弹 tooltip
+  if (selecting.value) {
+    if (cell && cell.valid) selEnd.value = cell.doy
+    return
+  }
   // 触屏 tap 会补发 mouseenter，避免与 pointerdown 分支互相打架。
   if (Date.now() - lastTouchTs < 700) return
   showTooltip(cell, e)
 }
 
 const onCellPointerDown = (cell, e) => {
-  if (!e || e.pointerType === 'mouse') return
+  if (!e) return
+  // 鼠标左键按下：开始拖选（松手时若没拖动则视为普通点击并清空）
+  if (e.pointerType === 'mouse') {
+    if (e.button !== 0 || !cell || !cell.valid) return
+    selecting.value = true
+    selStart.value = cell.doy
+    selEnd.value = cell.doy
+    hideTooltip()
+    e.preventDefault()
+    return
+  }
   lastTouchTs = Date.now()
   if (tooltipOpen.value && tooltipCell.value === cell) {
     hideTooltip()
@@ -430,10 +576,23 @@ const onCellPointerDown = (cell, e) => {
   showTooltip(cell, e)
 }
 
+const onWindowPointerUp = () => {
+  if (!selecting.value) return
+  selecting.value = false
+  // 没有真正拖动 = 普通点击，不保留单日选区
+  if (selStart.value === selEnd.value) clearSelection()
+}
+
 const onDocPointerDown = (e) => {
-  if (!tooltipOpen.value) return
-  if (!e || e.pointerType === 'mouse') return
+  if (!e) return
   const t = e.target
+  const inRoot = t && typeof t.closest === 'function' && rootEl.value && rootEl.value.contains(t)
+  // 鼠标点击热力图外：清除拖选选区
+  if (e.pointerType === 'mouse') {
+    if (selRange.value && !inRoot) clearSelection()
+    return
+  }
+  if (!tooltipOpen.value) return
   if (t && typeof t.closest === 'function' && t.closest('.heatmap-cell')) return
   hideTooltip()
 }
@@ -441,18 +600,24 @@ const onDocPointerDown = (e) => {
 onMounted(() => {
   if (!import.meta.client) return
   window.addEventListener('resize', scheduleTooltipLayout)
+  window.addEventListener('pointerup', onWindowPointerUp)
   document.addEventListener('pointerdown', onDocPointerDown, true)
 })
 
 onBeforeUnmount(() => {
   if (!import.meta.client) return
   window.removeEventListener('resize', scheduleTooltipLayout)
+  window.removeEventListener('pointerup', onWindowPointerUp)
   document.removeEventListener('pointerdown', onDocPointerDown, true)
   if (tooltipRaf) cancelAnimationFrame(tooltipRaf)
   tooltipRaf = 0
   if (entranceTimer) {
     clearTimeout(entranceTimer)
     entranceTimer = 0
+  }
+  if (resetTimer) {
+    clearTimeout(resetTimer)
+    resetTimer = 0
   }
 })
 
@@ -537,28 +702,78 @@ const originFor = (cell) => {
   }
 }
 
-/* 峰值日常驻标记：白边 + 金色描边圆环 */
+/* ---------------- 探索交互样式 ---------------- */
+
+/* 变淡（月份聚焦 / 图例分档 / 拖选 / 外部联动之外的格子） */
+.heatmap-cell {
+  transition-property: transform, opacity;
+}
+
+.hm-dim {
+  opacity: 0.16;
+}
+
+/* 拖选选中：内描边细环 */
+.hm-sel {
+  box-shadow: inset 0 0 0 1.5px rgba(7, 193, 96, 0.85);
+}
+
+/* 峰值日格子被选中/变淡时仍保持可辨识 */
+.wr-cell-highlight.hm-dim {
+  opacity: 0.45;
+}
+
+.hm-month {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 2px;
+  margin: 0 -2px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.hm-month:hover {
+  color: #07c160;
+}
+
+.hm-month--active {
+  color: #07c160;
+  font-weight: 600;
+  background: rgba(7, 193, 96, 0.08);
+}
+
+.hm-legend {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.hm-legend--active {
+  transform: scale(1.35);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.hm-hint {
+  margin-left: 10px;
+}
+
+.hm-info {
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.hm-info--rich {
+  color: #07c160;
+  font-weight: 600;
+}
+
+/* 峰值日标记：静态弥散金色光晕（多层模糊阴影，无动画、无描边框） */
 .wr-cell-highlight {
   position: relative;
   z-index: 5;
-  box-shadow: 0 0 0 1px #ffffff, 0 0 0 2.5px #f59e0b;
-}
-
-/* 入场结束后播 2 次脉冲光环 */
-.wr-cell-pulse {
-  animation: wr-peak-pulse 1.1s ease-out 0.15s 2;
-}
-
-@keyframes wr-peak-pulse {
-  0% {
-    box-shadow: 0 0 0 1px #ffffff, 0 0 0 2.5px #f59e0b, 0 0 0 0 rgba(245, 158, 11, 0.55);
-  }
-  70% {
-    box-shadow: 0 0 0 1px #ffffff, 0 0 0 2.5px #f59e0b, 0 0 0 10px rgba(245, 158, 11, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 1px #ffffff, 0 0 0 2.5px #f59e0b, 0 0 0 0 rgba(245, 158, 11, 0);
-  }
+  background-color: #f59e0b !important;
+  box-shadow:
+    0 0 4px 1px rgba(245, 158, 11, 0.65),
+    0 0 12px 4px rgba(245, 158, 11, 0.45),
+    0 0 26px 10px rgba(245, 158, 11, 0.22);
 }
 
 /* 卡片离屏时暂停本组件动画 */
@@ -567,7 +782,8 @@ const originFor = (cell) => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .heatmap-cell {
+  .heatmap-cell,
+  .heatmap-cell::after {
     animation: none !important;
     transition: none !important;
   }
