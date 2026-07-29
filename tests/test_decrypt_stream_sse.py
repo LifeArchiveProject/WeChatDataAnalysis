@@ -31,6 +31,67 @@ def _close_logging_handlers() -> None:
 
 
 class TestDecryptStreamSSE(unittest.TestCase):
+    def test_db_key_persistence_invalidates_main_and_source_alias_connections(self):
+        import wechat_decrypt_tool.routers.decrypt as decrypt_router
+        import wechat_decrypt_tool.wcdb_realtime as wcdb_realtime
+
+        manager = wcdb_realtime.WCDBRealtimeManager()
+        for account, handle in (("wxid_output", 11), ("wxid_source_1a2b", 12)):
+            manager._conns[account] = wcdb_realtime.WCDBRealtimeConnection(
+                account=account,
+                native_wxid=account,
+                handle=handle,
+                db_storage_dir=Path("/tmp/old-db-storage"),
+                session_db_path=Path("/tmp/old-db-storage/session.db"),
+                connected_at=0.0,
+                lock=threading.Lock(),
+            )
+
+        account_results = {
+            "wxid_output": {
+                "success": 1,
+                "source_wxid_dir": "/tmp/wxid_source_1a2b",
+                "source_db_storage_path": "/tmp/wxid_source_1a2b/db_storage",
+            }
+        }
+
+        with (
+            mock.patch.object(decrypt_router, "upsert_account_keys_in_store", return_value={"db_key": "00" * 32}),
+            mock.patch.object(wcdb_realtime, "WCDB_REALTIME", manager),
+            mock.patch.object(wcdb_realtime, "close_account") as close_account,
+        ):
+            persisted, failed_accounts = decrypt_router._persist_db_keys(account_results, "00" * 32)
+
+        self.assertIs(persisted, True)
+        self.assertEqual(failed_accounts, [])
+        self.assertFalse(manager.is_connected("wxid_output"))
+        self.assertFalse(manager.is_connected("wxid_source_1a2b"))
+        self.assertEqual(close_account.call_args_list, [mock.call(11), mock.call(12)])
+
+    def test_db_key_persistence_failure_is_reported(self):
+        import wechat_decrypt_tool.routers.decrypt as decrypt_router
+
+        account_results = {
+            "wxid_persist_error": {
+                "success": 1,
+                "source_wxid_dir": "/tmp/wxid_persist_error",
+                "source_db_storage_path": "/tmp/wxid_persist_error/db_storage",
+            }
+        }
+
+        with mock.patch.object(
+            decrypt_router,
+            "upsert_account_keys_in_store",
+            side_effect=OSError("read-only data directory"),
+        ):
+            persisted, failed_accounts = decrypt_router._persist_db_keys(
+                account_results,
+                "00" * 32,
+            )
+
+        self.assertIs(persisted, False)
+        self.assertEqual(failed_accounts, ["wxid_persist_error"])
+
     def test_cancelled_while_waiting_for_guard_releases_guard_after_acquire(self):
         with TemporaryDirectory() as td:
             root = Path(td)
@@ -300,7 +361,10 @@ class TestDecryptStreamSSE(unittest.TestCase):
                     aliases=["wxid_foo_bar"],
                     db_key_source_wxid_dir=str(db_storage.parent.resolve()),
                     db_key_source_db_storage_path=str(db_storage.resolve()),
+                    raise_on_write_error=True,
                 )
+                self.assertIs(events[-1].get("db_key_persisted"), True)
+                self.assertEqual(events[-1].get("db_key_persistence_errors"), [])
 
                 out = root / "output" / "databases" / "wxid_foo" / "MSG0.db"
                 self.assertTrue(out.exists())
