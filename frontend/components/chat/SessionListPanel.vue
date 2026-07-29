@@ -1,6 +1,7 @@
 <template>
     <div
       class="session-list-panel border-r flex flex-col min-h-0 shrink-0 relative"
+      data-testid="session-list-panel"
       :style="{ '--session-list-width': sessionListWidth + 'px' }"
     >
       <!-- 拖动调整会话列表宽度 -->
@@ -57,8 +58,8 @@
         <!-- 联系人列表 -->
         <div class="session-list-scroll flex-1 overflow-y-auto min-h-0">
           <div v-if="isLoadingContacts" class="px-3 py-4 h-full overflow-hidden">
-            <div v-for="i in 15" :key="i" class="flex items-center space-x-3 h-[calc(80px/var(--dpr))]">
-              <div class="w-[calc(45px/var(--dpr))] h-[calc(45px/var(--dpr))] rounded-md bg-gray-200 skeleton-pulse"></div>
+            <div v-for="i in 15" :key="i" class="flex h-[68px] items-center gap-3">
+              <div class="h-11 w-11 shrink-0 rounded-md bg-gray-200 skeleton-pulse"></div>
               <div class="flex-1 space-y-2">
                 <div class="h-3.5 bg-gray-200 rounded skeleton-pulse" :style="{ width: (60 + (i % 4) * 15) + 'px' }"></div>
                 <div class="h-3 bg-gray-200 rounded skeleton-pulse" :style="{ width: (80 + (i % 3) * 20) + 'px' }"></div>
@@ -71,16 +72,16 @@
           </div>
           <div v-else class="pb-4">
             <div v-for="contact in filteredContacts" :key="contact.id"
-              class="session-list-item px-3 cursor-pointer transition-colors duration-150 h-[calc(80px/var(--dpr))] flex items-center"
+              class="session-list-item flex h-[68px] cursor-pointer items-center px-3 transition-colors duration-150"
               :class="{
                 'session-list-item--top': contact.isTop,
                 'session-list-item--selected': selectedContact?.id === contact.id
               }"
               @click="selectContact(contact)">
-              <div class="flex items-center space-x-3 w-full">
+              <div class="flex w-full min-w-0 items-center gap-3">
                 <!-- 联系人头像 -->
                 <div class="relative flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
-                  <div class="w-[calc(45px/var(--dpr))] h-[calc(45px/var(--dpr))] rounded-md overflow-hidden bg-gray-300">
+                  <div class="session-list-avatar h-11 w-11 overflow-hidden rounded-md bg-gray-300">
                     <div v-if="contact.avatar" class="w-full h-full">
                       <img :src="contact.avatar" :alt="contact.name" class="w-full h-full object-cover" loading="lazy" referrerpolicy="no-referrer" @error="onAvatarError($event, contact)">
                     </div>
@@ -91,19 +92,20 @@
                   </div>
                   <span
                     v-if="contact.unreadCount > 0"
-                    class="absolute z-10 -top-[calc(4px/var(--dpr))] -right-[calc(4px/var(--dpr))] w-[calc(10px/var(--dpr))] h-[calc(10px/var(--dpr))] bg-[#ed4d4d] rounded-full"
+                    class="absolute -right-1 -top-1 z-10 h-2.5 w-2.5 rounded-full bg-[#ed4d4d]"
                   ></span>
                 </div>
                 
                 <!-- 联系人信息 -->
                 <div class="flex-1 min-w-0">
-                  <div class="flex items-center justify-between">
-                    <h3 class="session-list-item-name text-sm truncate" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</h3>
-                    <div class="flex items-center flex-shrink-0 ml-2">
-                      <span class="session-list-item-time text-xs">{{ contact.lastMessageTime }}</span>
-                    </div>
+                  <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+                    <h3 class="session-list-item-name min-w-0 truncate text-[15px] leading-5" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</h3>
+                    <span
+                      class="session-list-item-time max-w-[92px] truncate whitespace-nowrap text-[11px]"
+                      :title="contact.lastMessageTime"
+                    >{{ formatSessionListTime(contact.lastMessageTime) }}</span>
                   </div>
-                  <p class="session-list-item-preview text-xs truncate mt-0.5 leading-tight" :class="{ 'privacy-blur': privacyMode }">
+                  <p class="session-list-item-preview mt-0.5 truncate text-[13px] leading-5" :class="{ 'privacy-blur': privacyMode }">
                     <span
                       v-for="(seg, idx) in parseTextWithEmoji(
                         (contact.unreadCount > 0 ? `[${contact.unreadCount > 99 ? '99+' : contact.unreadCount}条] ` : '') +
@@ -220,6 +222,7 @@
 <script>
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useApi } from '~/composables/useApi'
+import { formatSessionListTime } from '~/lib/chat/formatters'
 
 export default defineComponent({
   name: 'SessionListPanel',
@@ -568,6 +571,7 @@ export default defineComponent({
       generalSearchAvatarAlt,
       generalSearchAvatarColor,
       onGeneralSearchAvatarError,
+      formatSessionListTime,
       loadGeneralSearchRecords,
       openGeneralSearchPanel,
       scheduleCloseGeneralSearchPanel,

@@ -28,7 +28,7 @@
           @mouseenter="onMessageAvatarMouseEnter(message)"
           @mouseleave="onMessageAvatarMouseLeave"
         >
-          <div class="w-[calc(42px/var(--dpr))] h-[calc(42px/var(--dpr))] rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="[message.isSent ? 'ml-3' : 'mr-3', { 'privacy-blur': privacyMode }]">
+          <div class="message-avatar h-[42px] w-[42px] flex-shrink-0 overflow-hidden rounded-md bg-gray-300" :class="[message.isSent ? 'ml-3' : 'mr-3', { 'privacy-blur': privacyMode }]">
             <div v-if="message.avatar" class="w-full h-full">
               <img
                 v-chat-lazy-src="message.avatar"

@@ -92,6 +92,20 @@ export const formatSmartTime = (ts) => {
   }
 }
 
+export const formatSessionListTime = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  if (/^\d{1,2}:\d{2}$/.test(text)) return text
+
+  const relative = text.match(/^(昨天|星期[一二三四五六日天])(?:\s+\d{1,2}:\d{2})$/)
+  if (relative) return relative[1]
+
+  const calendarDate = text.match(/^((?:\d{4}年)?\d{1,2}月\d{1,2}日)(?:\s+\d{1,2}:\d{2})$/)
+  if (calendarDate) return calendarDate[1]
+
+  return text
+}
+
 export const formatTimeDivider = (ts) => formatSmartTime(ts)
 
 export const formatMessageTime = (ts) => {
