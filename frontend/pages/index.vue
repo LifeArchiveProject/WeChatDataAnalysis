@@ -138,12 +138,14 @@
 import { onMounted, ref } from 'vue'
 import { useApi } from '~/composables/useApi'
 import { DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, readLocalBoolSetting } from '~/lib/desktop-settings'
+import { isFirstUseAgreementAccepted } from '~/lib/first-use-agreement'
 
 const { listChatAccounts } = useApi()
 const exportDialogOpen = ref(false)
 
 onMounted(async () => {
   if (!process.client || typeof window === 'undefined') return
+  if (!isFirstUseAgreementAccepted()) return
 
   const enabled = readLocalBoolSetting(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, false)
   if (!enabled) return
