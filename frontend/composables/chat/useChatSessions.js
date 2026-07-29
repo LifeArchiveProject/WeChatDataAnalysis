@@ -2,10 +2,12 @@ import { computed, onMounted, ref } from 'vue'
 import { normalizeSessionPreview } from '~/lib/chat/formatters'
 import { createPerfTrace } from '~/lib/chat/perf-logger'
 
-const SESSION_LIST_WIDTH_KEY = 'ui.chat.session_list_width_physical'
+const SESSION_LIST_WIDTH_KEY = 'ui.chat.session_list_width_css_v2'
+const SESSION_LIST_WIDTH_KEY_CSS_V1 = 'ui.chat.session_list_width_css'
+const SESSION_LIST_WIDTH_KEY_PHYSICAL = 'ui.chat.session_list_width_physical'
 const SESSION_LIST_WIDTH_KEY_LEGACY = 'ui.chat.session_list_width'
-const SESSION_LIST_WIDTH_DEFAULT = 295
-const SESSION_LIST_WIDTH_MIN = 220
+const SESSION_LIST_WIDTH_DEFAULT = 300
+const SESSION_LIST_WIDTH_MIN = 260
 const SESSION_LIST_WIDTH_MAX = 520
 const DEFAULT_CHAT_SOURCE = 'auto'
 
@@ -23,7 +25,6 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
 
   let sessionListResizeStartX = 0
   let sessionListResizeStartWidth = SESSION_LIST_WIDTH_DEFAULT
-  let sessionListResizeStartDpr = 1
   let sessionListResizePrevCursor = ''
   let sessionListResizePrevUserSelect = ''
 
@@ -46,16 +47,35 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
         return
       }
 
+      const persistMigratedWidth = (nextWidth) => {
+        const normalized = clampSessionListWidth(nextWidth)
+        sessionListWidth.value = normalized
+        localStorage.setItem(SESSION_LIST_WIDTH_KEY, String(normalized))
+        localStorage.removeItem(SESSION_LIST_WIDTH_KEY_CSS_V1)
+        localStorage.removeItem(SESSION_LIST_WIDTH_KEY_PHYSICAL)
+        localStorage.removeItem(SESSION_LIST_WIDTH_KEY_LEGACY)
+      }
+
+      const cssV1Raw = localStorage.getItem(SESSION_LIST_WIDTH_KEY_CSS_V1)
+      const cssV1Value = parseInt(String(cssV1Raw || ''), 10)
+      if (!Number.isNaN(cssV1Value)) {
+        persistMigratedWidth(cssV1Value === 320 ? SESSION_LIST_WIDTH_DEFAULT : cssV1Value)
+        return
+      }
+
+      const physicalRaw = localStorage.getItem(SESSION_LIST_WIDTH_KEY_PHYSICAL)
+      const physicalValue = parseInt(String(physicalRaw || ''), 10)
+      if (!Number.isNaN(physicalValue)) {
+        const dpr = window.devicePixelRatio || 1
+        const previousCssWidth = physicalValue / dpr
+        persistMigratedWidth(dpr > 1 ? Math.max(SESSION_LIST_WIDTH_DEFAULT, previousCssWidth) : previousCssWidth)
+        return
+      }
+
       const legacy = localStorage.getItem(SESSION_LIST_WIDTH_KEY_LEGACY)
       const legacyValue = parseInt(String(legacy || ''), 10)
       if (!Number.isNaN(legacyValue)) {
-        const dpr = window.devicePixelRatio || 1
-        const converted = clampSessionListWidth(legacyValue * dpr)
-        sessionListWidth.value = converted
-        try {
-          localStorage.setItem(SESSION_LIST_WIDTH_KEY, String(converted))
-          localStorage.removeItem(SESSION_LIST_WIDTH_KEY_LEGACY)
-        } catch {}
+        persistMigratedWidth(legacyValue)
       }
     } catch {}
   }
@@ -90,7 +110,7 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
     if (!sessionListResizing.value) return
     const clientX = Number(event?.clientX || 0)
     sessionListWidth.value = clampSessionListWidth(
-      sessionListResizeStartWidth + (clientX - sessionListResizeStartX) * (sessionListResizeStartDpr || 1)
+      sessionListResizeStartWidth + (clientX - sessionListResizeStartX)
     )
   }
 
@@ -118,7 +138,6 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
     sessionListResizing.value = true
     sessionListResizeStartX = Number(event?.clientX || 0)
     sessionListResizeStartWidth = Number(sessionListWidth.value || SESSION_LIST_WIDTH_DEFAULT)
-    sessionListResizeStartDpr = window.devicePixelRatio || 1
     setSessionListResizingActive(true)
 
     try {

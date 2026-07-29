@@ -46,9 +46,9 @@
   background: var(--scrollbar-thumb-hover);
 }
 
-/* 会话列表宽度：按物理像素(px)配置，按 dpr 换算为 CSS px */
+/* Browser layout units are already device-independent CSS pixels. */
 .session-list-panel {
-  width: calc(var(--session-list-width, 295px) / var(--dpr));
+  width: var(--session-list-width, 300px);
 }
 
 /* 会话列表拖动条（中间栏右侧） */
