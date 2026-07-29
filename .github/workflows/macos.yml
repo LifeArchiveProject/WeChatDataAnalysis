@@ -1,0 +1,120 @@
+name: macOS ARM64 CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-arm64-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-package-arm64:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify Apple Silicon runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/wce_integrity/target
+          key: macos-arm64-rust-${{ hashFiles('native/wce_integrity/Cargo.lock') }}
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Restore native helper permissions
+        run: chmod +x src/wechat_decrypt_tool/native/macos/universal/image_scan_helper
+
+      - name: Verify self-contained native resources
+        working-directory: desktop
+        run: npm run verify:mac:native
+
+      - name: Run Python tests
+        env:
+          PYTHONPATH: src
+        run: uv run pytest -q
+
+      - name: Run desktop tests
+        working-directory: desktop
+        run: node --test tests/*.test.cjs
+
+      - name: Build unsigned ARM64 DMG and ZIP
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run dist:mac:arm64
+
+      - name: Smoke-test packaged runtime and realtime WCDB
+        working-directory: desktop
+        run: npm run smoke:mac
+
+      - name: Upload main-branch macOS artifact
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WeChatDataAnalysis-macos-arm64-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 3
+          path: |
+            desktop/dist/*-mac-arm64.dmg
+            desktop/dist/*-mac-arm64.dmg.blockmap
+            desktop/dist/*-mac-arm64.zip
+            desktop/dist/*-mac-arm64.zip.blockmap
+            desktop/dist/latest-mac.yml
+
+      - name: Upload runtime logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-failure-logs-${{ github.sha }}
+          if-no-files-found: ignore
+          retention-days: 3
+          path: |
+            desktop/dist/builder-debug.yml
+            desktop/dist/builder-effective-config.yaml
+            desktop/**/*.log
