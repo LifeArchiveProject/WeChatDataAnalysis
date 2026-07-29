@@ -253,19 +253,25 @@ test("release workflow builds, smoke-tests, and uploads macOS artifacts", () => 
   assert.match(macJob, /desktop\/dist\/\*\.zip/);
 });
 
-test("regular pull requests and main pushes build and smoke-test the ARM64 macOS package", () => {
-  const workflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "macos.yml"), "utf8");
+test("macOS and Windows packages are built only by the tag-triggered release workflow", () => {
+  const workflowsDir = path.join(repoRoot, ".github", "workflows");
+  const workflow = fs.readFileSync(path.join(workflowsDir, "release.yml"), "utf8");
 
-  assert.match(workflow, /pull_request:\s*\n\s+branches:\s*\n\s+- main/);
-  assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/);
-  assert.match(workflow, /runs-on:\s*macos-15/);
-  assert.match(workflow, /test "\$\(uname -m\)" = "arm64"/);
-  assert.match(workflow, /run:\s*npm run verify:mac:native/);
-  assert.match(workflow, /run:\s*npm run dist:mac:arm64/);
-  assert.match(workflow, /run:\s*npm run smoke:mac/);
-  assert.match(workflow, /desktop\/dist\/\*-mac-arm64\.dmg/);
-  assert.match(workflow, /desktop\/dist\/\*-mac-arm64\.zip/);
-  assert.match(workflow, /desktop\/dist\/\*-mac-arm64\.zip\.blockmap/);
+  // Desktop packaging is expensive (macos-15 runners bill at 10x); keep it off
+  // pull requests and main pushes so both platforms build on the same trigger.
+  assert.match(workflow, /^on:\n  push:\n    tags:\n      - "v\*"\n/m);
+  assert.match(workflow, /\n  build-windows:\n/);
+  assert.match(workflow, /\n  build-macos-arm64:\n/);
+
+  for (const entry of fs.readdirSync(workflowsDir)) {
+    const source = fs.readFileSync(path.join(workflowsDir, entry), "utf8");
+    if (!/npm run (dist|smoke):/.test(source)) continue;
+    assert.equal(
+      entry,
+      "release.yml",
+      `${entry} packages the desktop app outside the tag-triggered release workflow`
+    );
+  }
 });
 
 test("macOS native window controls reserve the sidebar title-bar area", () => {

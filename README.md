@@ -234,7 +234,7 @@ npm run dist:mac
 
 若更新了图片密钥扫描 helper 源码或 entitlements，执行 `npm run build:mac:image-helper` 并一并提交更新后的 `desktop/scripts/macos-image-helper-manifest.json`。`npm run verify:mac:native` 会核对清单中的源码与 tracked binary SHA-256，并检查所有原生资源的架构、最低系统版本、签名和自包含依赖路径。
 
-本地 `npm run dist:mac` 生成 ad-hoc 签名包，供开发和 CI smoke 使用；`npm run smoke:mac` 会分别解开 ZIP、挂载 DMG，并核验其中应用的资源和签名。正式 tag Release 必须在 GitHub Actions 配置 `MACOS_CSC_LINK`、`MACOS_CSC_KEY_PASSWORD`、`MACOS_APPLE_ID`、`MACOS_APPLE_APP_SPECIFIC_PASSWORD`、`MACOS_APPLE_TEAM_ID` 五个 secrets。发布任务会强制 Developer ID 签名、公证与票据装订，任一 secret 缺失或 ZIP/DMG 内应用未通过 Apple distribution 检查都会停止发布。
+本地 `npm run dist:mac` 生成 ad-hoc 签名包，供开发自测使用；`npm run smoke:mac` 会分别解开 ZIP、挂载 DMG，并核验其中应用的资源和签名。macOS 与 Windows 一样只在推送 `v*` tag 时由 Release 工作流构建，日常 PR 与 main 推送不会触发桌面端打包。正式 tag Release 必须在 GitHub Actions 配置 `MACOS_CSC_LINK`、`MACOS_CSC_KEY_PASSWORD`、`MACOS_APPLE_ID`、`MACOS_APPLE_APP_SPECIFIC_PASSWORD`、`MACOS_APPLE_TEAM_ID` 五个 secrets。发布任务会强制 Developer ID 签名、公证与票据装订，任一 secret 缺失或 ZIP/DMG 内应用未通过 Apple distribution 检查都会停止发布。
 
 内置 Mac 原生资源的来源、哈希、修改内容和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。运行和打包均不依赖仓库外或根目录下的 WeFlow 副本。
 
