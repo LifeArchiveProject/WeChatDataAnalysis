@@ -115,6 +115,7 @@ def upsert_account_keys_in_store(
     image_key_source_wxid_dir: Optional[str] = None,
     image_key_derived_wxid: Optional[str] = None,
     image_key_code: Optional[int] = None,
+    raise_on_write_error: bool = False,
 ) -> dict[str, Any]:
     account = str(account or "").strip()
     if not account:
@@ -170,8 +171,8 @@ def upsert_account_keys_in_store(
         try:
             _atomic_write_json(_KEY_STORE_PATH, store)
         except Exception:
-            # 不影响主流程：写入失败时静默忽略
-            pass
+            if raise_on_write_error:
+                raise
 
         return primary_item
 

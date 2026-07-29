@@ -80,11 +80,53 @@ def test_memory_scan_button_has_explicit_progress_and_result_states():
     source = read_decrypt_page()
 
     assert '@click="scanImageKeyMemory"' in source
-    assert ':disabled="isImageKeyAcquisitionPending"' in source
+    assert ':disabled="isImageKeyAcquisitionPending || !imageKeyMemoryScanSupported"' in source
     assert "扫描微信内存" in source
     assert "正在扫描微信进程内存" in source
     assert "内存扫描完成，图片密钥已通过本地图片校验" in source
     assert "内存扫描未找到可验证的图片密钥" in source
+
+
+def test_memory_scan_uses_runtime_capability_and_explains_missing_resources():
+    source = read_decrypt_page()
+
+    assert "const platformCapabilitiesLoaded = ref(false)" in source
+    assert "if (!platformCapabilitiesLoaded.value) return false" in source
+    assert "if (isMacos.value) return platformCapabilities.value?.image_key_memory_scan === true" in source
+    assert "platformCapabilities.value?.platform === 'windows'" in source
+    assert "return platformCapabilities.value?.image_key_memory_scan !== false" in source
+    assert "platformCapabilities.value?.image_key_memory_scan_note" in source
+    assert 'data-testid="image-key-memory-scan-unavailable"' in source
+    assert "if (!imageKeyMemoryScanSupported.value)" in source
+    assert "imageMemoryScanMessage.value = imageKeyMemoryScanNote.value" in source
+    assert "platformCapabilitiesLoaded.value = true" in source
+    assert "image_key_memory_scan: !macos" in source
+
+
+def test_database_key_action_waits_for_platform_detection():
+    source = read_decrypt_page()
+
+    assert ':disabled="isGettingDbKey || !platformCapabilitiesLoaded"' in source
+    assert ':aria-busy="isGettingDbKey || !platformCapabilitiesLoaded"' in source
+    assert 'v-if="isGettingDbKey || !platformCapabilitiesLoaded"' in source
+    assert "!platformCapabilitiesLoaded ? '正在检测系统'" in source
+
+
+def test_db_key_persistence_failure_warns_without_blocking_image_key_step():
+    source = read_decrypt_page()
+
+    warning = "数据库已解密，但密钥未能保存；修复数据目录权限并重新解密后才能使用实时消息。"
+    assert warning in source
+    assert "if (result?.db_key_persisted !== false) return" in source
+    assert source.count("showDbKeyPersistenceWarning(") == 2
+
+    fallback_step = source.index("currentStep.value = 1", source.index("decrypt:completed-fallback"))
+    fallback_warning = source.index("showDbKeyPersistenceWarning(result)", fallback_step)
+    assert fallback_step < fallback_warning
+
+    sse_step = source.index("currentStep.value = 1", source.index("if (data.status === 'completed')"))
+    sse_warning = source.index("showDbKeyPersistenceWarning(data)", sse_step)
+    assert sse_step < sse_warning
 
 
 def test_memory_scan_only_applies_a_complete_verified_pair():

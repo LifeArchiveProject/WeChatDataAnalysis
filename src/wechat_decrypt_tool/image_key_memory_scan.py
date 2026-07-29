@@ -483,6 +483,29 @@ def _ensure_executable(path: Path) -> None:
         pass
 
 
+def _normalise_macos_helper_aes_key(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    key_bytes: bytes
+    if len(value) == 32 and re.fullmatch(r"[0-9A-Fa-f]{32}", value):
+        key_bytes = bytes.fromhex(value)
+    elif len(value) == 16:
+        try:
+            key_bytes = value.encode("ascii")
+        except UnicodeEncodeError:
+            return None
+    else:
+        return None
+
+    if len(key_bytes) != 16 or any(
+        not (48 <= byte <= 57 or 65 <= byte <= 90 or 97 <= byte <= 122)
+        for byte in key_bytes
+    ):
+        return None
+    return key_bytes.decode("ascii")
+
+
 def _parse_macos_helper_result(stdout: str) -> str | None:
     for line in reversed(str(stdout or "").splitlines()):
         text = line.strip()
@@ -494,13 +517,9 @@ def _parse_macos_helper_result(stdout: str) -> str | None:
             continue
         if not isinstance(payload, dict) or payload.get("success") is not True:
             continue
-        key = str(payload.get("aesKey") or "").strip()
-        try:
-            key_bytes = key.encode("ascii")
-        except UnicodeEncodeError:
-            continue
-        if len(key_bytes) >= 16:
-            return key_bytes[:16].decode("ascii")
+        key = _normalise_macos_helper_aes_key(payload.get("aesKey"))
+        if key is not None:
+            return key
     return None
 
 

@@ -191,12 +191,12 @@ def _acquire_decrypt_account_guards(accounts: Any, *, reason: str) -> list[tuple
     return guards
 
 
-def _save_db_key_for_account(account: str, key: str, account_result: dict[str, Any] | None) -> None:
+def _save_db_key_for_account(account: str, key: str, account_result: dict[str, Any] | None) -> bool:
     payload = dict(account_result or {})
     success_count = int(payload.get("success") or 0)
     if success_count <= 0:
         logger.info("[decrypt] skip saving db key for failed account=%s success=%s", account, success_count)
-        return
+        return False
 
     source_wxid_dir = str(payload.get("source_wxid_dir") or "").strip()
     source_db_storage_path = str(payload.get("source_db_storage_path") or "").strip()
@@ -213,14 +213,50 @@ def _save_db_key_for_account(account: str, key: str, account_result: dict[str, A
         aliases=aliases,
         db_key_source_wxid_dir=source_wxid_dir or None,
         db_key_source_db_storage_path=source_db_storage_path or None,
+        raise_on_write_error=True,
     )
+
+    # Import lazily: wcdb_realtime depends on the key store and media helpers,
+    # while this router is imported during API startup.  Once the new key and
+    # source paths are durable, cached handles for either account spelling must
+    # not keep reading the previous db_storage directory.
+    from ..wcdb_realtime import WCDB_REALTIME
+
+    invalidated_accounts: list[str] = []
+    for candidate in (str(account), *aliases):
+        candidate = str(candidate or "").strip()
+        if not candidate or candidate in invalidated_accounts:
+            continue
+        WCDB_REALTIME.disconnect(candidate)
+        invalidated_accounts.append(candidate)
+
     logger.info(
-        "[decrypt] saved db key account=%s aliases=%s source_wxid_dir=%s source_db_storage_path=%s",
+        "[decrypt] saved db key and invalidated realtime connection account=%s aliases=%s source_wxid_dir=%s source_db_storage_path=%s",
         str(account),
         aliases,
         source_wxid_dir,
         source_db_storage_path,
     )
+    return True
+
+
+def _persist_db_keys(
+    account_results: dict[str, Any] | None,
+    key: str,
+) -> tuple[bool, list[str]]:
+    attempted = False
+    failed_accounts: list[str] = []
+
+    for account_name, account_result in (account_results or {}).items():
+        account = str(account_name)
+        try:
+            attempted = _save_db_key_for_account(account, key, account_result) or attempted
+        except Exception:
+            attempted = True
+            failed_accounts.append(account)
+            logger.exception("[decrypt] failed to persist db key account=%s", account)
+
+    return attempted and not failed_accounts, failed_accounts
 
 
 class DecryptRequest(BaseModel):
@@ -273,12 +309,11 @@ async def decrypt_databases(request: DecryptRequest):
                 int(results.get("total_databases") or 0),
             )
 
-        # 成功解密后，按账号保存数据库密钥（用于前端自动回填）
-        try:
-            for account_name, account_result in (results.get("account_results") or {}).items():
-                _save_db_key_for_account(str(account_name), request.key, account_result)
-        except Exception:
-            pass
+        # 成功解密后，按账号保存数据库密钥（用于前端自动回填及实时消息）。
+        db_key_persisted, db_key_persistence_errors = _persist_db_keys(
+            results.get("account_results"),
+            request.key,
+        )
 
         return {
             "status": "completed" if results["status"] == "success" else "failed",
@@ -291,6 +326,8 @@ async def decrypt_databases(request: DecryptRequest):
             "failed_files": results["failed_files"],
             "account_results": results.get("account_results", {}),
             "diagnostic_warning_count": int(results.get("diagnostic_warning_count") or 0),
+            "db_key_persisted": db_key_persisted,
+            "db_key_persistence_errors": db_key_persistence_errors,
         }
 
     except HTTPException:
@@ -616,12 +653,10 @@ async def decrypt_databases_stream(
                 "diagnostic_warning_count": int(diagnostic_warning_count),
             }
 
-            # Save db key for frontend autofill.
-            try:
-                for account, account_result in (account_results or {}).items():
-                    _save_db_key_for_account(str(account), k, account_result)
-            except Exception:
-                pass
+            # Save db key for frontend autofill and realtime WCDB access.
+            db_key_persisted, db_key_persistence_errors = _persist_db_keys(account_results, k)
+            result["db_key_persisted"] = db_key_persisted
+            result["db_key_persistence_errors"] = db_key_persistence_errors
 
             yield _sse({"type": "complete", **result})
         finally:

@@ -80,6 +80,34 @@ def test_win32_api_is_not_loaded_on_non_windows(monkeypatch) -> None:
     assert memory_scan._create_win32_api() is None
 
 
+def test_macos_helper_result_decodes_hex_encoded_ascii_aes_key() -> None:
+    stdout = '{"success":true,"aesKey":"30313233343536373839616263646566"}'
+
+    assert memory_scan._parse_macos_helper_result(stdout) == AES_KEY
+
+
+def test_macos_helper_result_preserves_direct_ascii_aes_key() -> None:
+    stdout = f'{{"success":true,"aesKey":"{AES_KEY}"}}'
+
+    assert memory_scan._parse_macos_helper_result(stdout) == AES_KEY
+
+
+def test_macos_helper_result_rejects_invalid_aes_keys() -> None:
+    invalid_values = (
+        "0123456789abcde",
+        "0123456789abcdef0",
+        "3031323334353637383961626364656600",
+        "3031323334353637383961626364656g",
+        "303132333435363738396162636465ff",
+        "30313233343536373839616263646500",
+        "0123456789abcde\n",
+        1234567890123456,
+    )
+
+    for value in invalid_values:
+        assert memory_scan._normalise_macos_helper_aes_key(value) is None
+
+
 def test_macos_scanner_uses_bundled_helper_and_retries_with_elevation(
     tmp_path: Path,
     monkeypatch,

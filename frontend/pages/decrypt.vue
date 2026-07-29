@@ -48,17 +48,18 @@
                 <button
                     type="button"
                     @click="handleGetDbKey"
-                    :disabled="isGettingDbKey"
+                    :disabled="isGettingDbKey || !platformCapabilitiesLoaded"
+                    :aria-busy="isGettingDbKey || !platformCapabilitiesLoaded"
                     class="flex-none inline-flex items-center px-4 py-3 bg-[#07C160] text-white rounded-lg text-sm font-medium hover:bg-[#06AD56] transition-all duration-200 disabled:opacity-50 disabled:cursor-wait whitespace-nowrap"
                 >
-                  <svg v-if="isGettingDbKey" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                  <svg v-if="isGettingDbKey || !platformCapabilitiesLoaded" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                   </svg>
                   <svg v-else class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
-                  {{ isGettingDbKey ? '获取中...' : (isMacos ? '查看 Mac 获取方式' : '一键获取数据库密钥') }}
+                  {{ !platformCapabilitiesLoaded ? '正在检测系统' : (isGettingDbKey ? '获取中...' : (isMacos ? '查看 Mac 获取方式' : '一键获取数据库密钥')) }}
                 </button>
               </div>
               <p v-if="formErrors.key" class="mt-1 text-sm text-red-600 flex items-center">
@@ -222,9 +223,9 @@
                 <button
                   type="button"
                   @click="scanImageKeyMemory"
-                  :disabled="isImageKeyAcquisitionPending"
+                  :disabled="isImageKeyAcquisitionPending || !imageKeyMemoryScanSupported"
                   :aria-busy="isScanningImageKeyMemory"
-                  title="扫描微信内存获取图片密钥"
+                  :title="imageKeyMemoryScanSupported ? '扫描微信内存获取图片密钥' : imageKeyMemoryScanNote"
                   class="inline-flex h-9 shrink-0 items-center justify-center self-start rounded-lg border border-[#10AEEF] px-3 text-sm font-medium text-[#087FAE] transition-colors hover:bg-[#EAF8FE] disabled:cursor-not-allowed disabled:opacity-60 sm:self-auto"
                 >
                   <svg v-if="isScanningImageKeyMemory" class="mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
@@ -235,9 +236,17 @@
                     <rect x="5" y="5" width="14" height="14" rx="2" stroke-width="2"></rect>
                     <path stroke-linecap="round" stroke-width="2" d="M9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"></path>
                   </svg>
-                  {{ isScanningImageKeyMemory ? '正在扫描...' : '扫描微信内存' }}
+                  {{ imageKeyMemoryScanChecking ? '正在检测扫描资源' : (!imageKeyMemoryScanSupported ? '扫描资源不可用' : (isScanningImageKeyMemory ? '正在扫描...' : '扫描微信内存')) }}
                 </button>
               </div>
+              <p
+                v-if="!imageKeyMemoryScanSupported"
+                data-testid="image-key-memory-scan-unavailable"
+                role="alert"
+                class="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+              >
+                {{ imageKeyMemoryScanNote }}
+              </p>
               <div class="min-h-6" aria-live="polite">
                 <p
                   v-if="imageMemoryScanMessage"
@@ -777,7 +786,23 @@ const isGettingDbKey = ref(false)
 let dbKeyRequestRevision = 0
 let dbKeyRequestController = null
 const platformCapabilities = ref({ platform: '' })
+const platformCapabilitiesLoaded = ref(false)
 const isMacos = computed(() => platformCapabilities.value?.platform === 'macos')
+const imageKeyMemoryScanChecking = computed(() => !platformCapabilitiesLoaded.value)
+const imageKeyMemoryScanSupported = computed(() => {
+  if (!platformCapabilitiesLoaded.value) return false
+  if (isMacos.value) return platformCapabilities.value?.image_key_memory_scan === true
+  if (platformCapabilities.value?.platform === 'windows') {
+    return platformCapabilities.value?.image_key_memory_scan !== false
+  }
+  return platformCapabilities.value?.image_key_memory_scan === true
+})
+const imageKeyMemoryScanNote = computed(() => String(
+  (!platformCapabilitiesLoaded.value && '正在检测当前平台的图片密钥扫描资源...')
+  || platformCapabilities.value?.image_key_memory_scan_note
+  || '图片密钥扫描原生资源缺失或安装不完整，请重新安装完整发行包。'
+))
+const DB_KEY_PERSISTENCE_WARNING = '数据库已解密，但密钥未能保存；修复数据目录权限并重新解密后才能使用实时消息。'
 const guideDialog = reactive({
   open: false,
   eyebrow: '操作提示',
@@ -998,6 +1023,11 @@ const wxidDirFromDbStoragePath = (value) => {
 
 const scanImageKeyMemory = async () => {
   if (isImageKeyAcquisitionPending.value) return
+  if (!imageKeyMemoryScanSupported.value) {
+    imageMemoryScanState.value = 'error'
+    imageMemoryScanMessage.value = imageKeyMemoryScanNote.value
+    return
+  }
 
   const account = currentImageKeyAccount()
   const dbStoragePath = String(formData.db_storage_path || '').trim()
@@ -1301,6 +1331,16 @@ const cancelDbKeyAcquisition = () => {
   isGettingDbKey.value = false
 }
 
+const showDbKeyPersistenceWarning = (result) => {
+  if (result?.db_key_persisted !== false) return
+  warning.value = DB_KEY_PERSISTENCE_WARNING
+  logDecryptDebug('decrypt:db-key-persistence-warning', {
+    error_count: Array.isArray(result?.db_key_persistence_errors)
+      ? result.db_key_persistence_errors.length
+      : 0
+  })
+}
+
 const handleGetDbKey = async () => {
   if (isGettingDbKey.value) return
 
@@ -1411,6 +1451,7 @@ const handleGetDbKey = async () => {
         description: 'V4 内存扫描需要数据库存储路径来校验候选密钥。当前路径为空，可以返回填写，也可以直接切换到 Hook。',
         details: [
           'Hook 可能会关闭并重新启动微信',
+          'Hook 可能触发微信客户端账号安全提醒，相关提醒也可能延迟出现',
           '请关闭微信自动登录，并在弹出的微信窗口中手动登录',
           '登录时请选择当前准备解密的同一个账号'
         ],
@@ -1441,6 +1482,7 @@ const handleGetDbKey = async () => {
         errorMessage: `V4 内存扫描未能获取密钥：${detail}`,
         details: [
           'Hook 可能会关闭并重新启动微信',
+          'Hook 可能触发微信客户端账号安全提醒，相关提醒也可能延迟出现',
           '请关闭微信自动登录，并在弹出的微信窗口中手动登录',
           '登录时请选择当前准备解密的同一个账号'
         ],
@@ -1768,6 +1810,7 @@ const handleDecrypt = async () => {
 
         currentStep.value = 1
         await ensureKeysForAccount(mediaAccount.value)
+        showDbKeyPersistenceWarning(result)
 
       } else if (result.status === 'failed') {
         if (result.failure_count > 0 && result.success_count === 0) {
@@ -1859,6 +1902,7 @@ const handleDecrypt = async () => {
           if (data.status === 'completed') {
             currentStep.value = 1
             await ensureKeysForAccount(mediaAccount.value)
+            showDbKeyPersistenceWarning(data)
           } else if (data.status === 'failed') {
             error.value = data.message || '所有文件解密失败'
           } else {
@@ -2311,9 +2355,16 @@ onMounted(async () => {
     try {
       platformCapabilities.value = await getPlatformCapabilities()
     } catch {
+      const macos = /Macintosh|Mac OS X/i.test(String(navigator.userAgent || ''))
       platformCapabilities.value = {
-        platform: /Macintosh|Mac OS X/i.test(String(navigator.userAgent || '')) ? 'macos' : 'windows'
+        platform: macos ? 'macos' : 'windows',
+        image_key_memory_scan: !macos,
+        image_key_memory_scan_note: macos
+          ? '未能确认 macOS 图片密钥扫描资源，请检查本地服务后重试。'
+          : ''
       }
+    } finally {
+      platformCapabilitiesLoaded.value = true
     }
     formData.wechat_install_path = readStoredWechatInstallPath()
     const selectedAccount = sessionStorage.getItem('selectedAccount')
