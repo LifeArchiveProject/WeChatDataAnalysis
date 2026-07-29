@@ -808,7 +808,8 @@ def build_card_05_keywords_wordcloud(*, account_dir: Path, year: int) -> dict[st
         phrase_counts=phrase_counts,
         seed=seed,
         example_texts=example_pool,
-        examples_per_word=3,
+        # 例句候选池：前端每次点击从中随机抽 3 条展示，池子越大重复感越低。
+        examples_per_word=10,
     )
 
     logger.info(
