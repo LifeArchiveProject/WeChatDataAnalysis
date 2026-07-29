@@ -32,6 +32,65 @@ class TestWcdbFallbackFrontend(unittest.TestCase):
         self.assertIn("overflow-auto", home)
         self.assertIn("justify-start lg:justify-center", home)
 
+    def test_realtime_status_surfaces_native_probe_errors(self):
+        store = (ROOT / "frontend" / "stores" / "chatRealtime.js").read_text(encoding="utf-8")
+
+        self.assertIn("info?.probe_error", store)
+        self.assertIn("info?.failure_reason", store)
+        self.assertIn("info?.error", store)
+        self.assertIn("publishRealtimeDataSourceStatus(result)", store)
+        self.assertIn("fallbackActive: !isAvailable", store)
+        self.assertIn("reason: isAvailable ? '' : reason", store)
+
+    def test_realtime_status_ignores_out_of_order_account_responses(self):
+        store = (ROOT / "frontend" / "stores" / "chatRealtime.js").read_text(encoding="utf-8")
+
+        self.assertIn("let statusRequestGeneration = 0", store)
+        self.assertIn("const requestGeneration = ++statusRequestGeneration", store)
+        self.assertIn("generation === statusRequestGeneration && account === getAccount()", store)
+        self.assertGreaterEqual(store.count("stale: !statusRequestIsCurrent(requestGeneration, account)"), 2)
+        self.assertGreaterEqual(store.count("if (result.stale) return result"), 2)
+
+        enable_start = store.index("const enable = async")
+        enable_end = store.index("const disable = async", enable_start)
+        enable_source = store[enable_start:enable_end]
+        self.assertIn("const statusResult = await fetchStatus()", enable_source)
+        self.assertIn("if (!statusResult || statusResult.stale) return false", enable_source)
+        self.assertIn("if (!statusResult.available)", enable_source)
+        self.assertNotIn("if (!available.value)", enable_source)
+
+    def test_realtime_stream_reconnects_with_bounded_backoff(self):
+        store = (ROOT / "frontend" / "stores" / "chatRealtime.js").read_text(encoding="utf-8")
+
+        self.assertIn("REALTIME_STREAM_RECONNECT_BASE_MS", store)
+        self.assertIn("REALTIME_STREAM_RECONNECT_MAX_MS", store)
+        self.assertIn("scheduleStreamReconnect(generation, account)", store)
+        self.assertIn("streamReconnectAttempt = 0", store)
+        self.assertIn("clearStreamReconnectTimer()", store)
+
+    def test_realtime_stream_resets_backoff_only_after_stable_window(self):
+        store = (ROOT / "frontend" / "stores" / "chatRealtime.js").read_text(encoding="utf-8")
+
+        self.assertIn("const REALTIME_STREAM_STABLE_MS = 10_000", store)
+        self.assertIn("let streamStabilityTimer = null", store)
+        self.assertIn("clearStreamStabilityTimer()", store)
+        onopen_start = store.index("source.onopen = () => {")
+        onmessage_start = store.index("source.onmessage =", onopen_start)
+        onopen_source = store[onopen_start:onmessage_start]
+        self.assertIn("streamStabilityTimer = setTimeout(() => {", onopen_source)
+        self.assertIn("streamReconnectAttempt = 0", onopen_source)
+        self.assertIn("}, REALTIME_STREAM_STABLE_MS)", onopen_source)
+
+    def test_realtime_stream_rejects_stale_errors_and_closes_previous_source(self):
+        store = (ROOT / "frontend" / "stores" / "chatRealtime.js").read_text(encoding="utf-8")
+
+        self.assertIn("closeEventSource()\n    const apiBase", store)
+        onerror_start = store.index("source.onerror = () => {")
+        start_stream = store.index("const startStream =", onerror_start)
+        onerror_source = store[onerror_start:start_stream]
+        self.assertIn("if (!streamIsCurrent(generation, account) || eventSource !== source)", onerror_source)
+        self.assertIn("closeEventSource()", onerror_source)
+
 
 if __name__ == "__main__":
     unittest.main()
