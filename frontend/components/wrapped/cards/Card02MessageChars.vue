@@ -1,43 +1,29 @@
 <template>
-  <WrappedCardShell :card-id="card.id" :title="card.title" :narrative="''" :variant="variant">
+  <!-- slide 模式隐藏外壳标题：两句题词拆进可视化本体（hero 首行 / 书本引题 / 键盘脚注），高度全部让给内容 -->
+  <WrappedCardShell
+    :card-id="card.id"
+    :title="card.title"
+    :narrative="''"
+    :variant="variant"
+    :hide-chrome="variant === 'slide'"
+  >
     <template #narrative>
       <div class="mt-2 wrapped-body text-sm text-[#7F7F7F] leading-relaxed">
-        <p>
-          <template v-if="sentChars > 0">
-            这一年，你在微信里敲下了
-            <span class="wrapped-number text-[#07C160] font-semibold">{{ formatInt(sentChars) }}</span>
-            个字。
-          </template>
-          <template v-else>
-            这一年，你还没有发出文字消息。
-          </template>
-
-          <template v-if="receivedChars > 0">
-            你也收到了
-            <span class="wrapped-number text-[#07C160] font-semibold">{{ formatInt(receivedChars) }}</span>
-            个字。
-          </template>
-        </p>
+        <p>答案都在这块键盘上——它替你记着每一次敲击。</p>
       </div>
     </template>
 
-    <MessageCharsChart :data="card.data || {}" :is-active="isActive" />
+    <MessageCharsChart :data="card.data || {}" :title="card.title" :is-active="isActive" />
   </WrappedCardShell>
 </template>
 
 <script setup>
 import MessageCharsChart from '~/components/wrapped/visualizations/MessageCharsChart.vue'
 
-const props = defineProps({
+defineProps({
   card: { type: Object, required: true },
   variant: { type: String, default: 'panel' }, // 'panel' | 'slide'
   // deck 翻到本页时置 true，首次为 true 触发入场动画；false 时暂停循环动画。
   isActive: { type: Boolean, default: true }
 })
-
-const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
-const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
-
-const sentChars = computed(() => Number(props.card?.data?.sentChars || 0))
-const receivedChars = computed(() => Number(props.card?.data?.receivedChars || 0))
 </script>

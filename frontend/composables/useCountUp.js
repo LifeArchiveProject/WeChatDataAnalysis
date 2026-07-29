@@ -55,8 +55,15 @@ export function useCountUp(source, options = {}) {
     current.value = targetValue()
   }
 
+  // 从 0 重新滚动一遍（每次翻到该页重播入场时使用）。
+  const restart = () => {
+    if (tween) { tween.kill(); tween = null }
+    current.value = 0
+    play()
+  }
+
   onBeforeUnmount(() => { if (tween) tween.kill() })
 
   const display = computed(() => format(decimals > 0 ? current.value : Math.round(current.value)))
-  return { display, value: current, play, finish }
+  return { display, value: current, play, finish, restart }
 }

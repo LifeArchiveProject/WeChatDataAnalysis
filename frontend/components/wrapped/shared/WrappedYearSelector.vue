@@ -1,9 +1,10 @@
 <template>
-  <div class="year-selector">
+  <div class="year-selector" :class="{ 'year-selector--dark': dark }">
     <div class="year-modern">
       <div class="relative inline-flex items-center">
         <select
-          class="appearance-none bg-transparent pr-5 pl-0 py-0.5 rounded-md wrapped-label text-xs text-[#00000066] text-right focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 hover:bg-[#000000]/5 transition disabled:opacity-70 disabled:cursor-default"
+          class="appearance-none bg-transparent pr-5 pl-0 py-0.5 rounded-md wrapped-label text-xs text-right focus:outline-none focus-visible:ring-2 focus-visible:ring-[#07C160]/30 transition disabled:opacity-70 disabled:cursor-default"
+          :class="dark ? 'text-[#FFFFFF80] hover:bg-white/10' : 'text-[#00000066] hover:bg-[#000000]/5'"
           :disabled="years.length <= 1"
           :value="String(modelValue)"
           aria-label="选择年份"
@@ -13,7 +14,8 @@
         </select>
         <svg
           v-if="years.length > 1"
-          class="pointer-events-none absolute right-1 w-3 h-3 text-[#00000066]"
+          class="pointer-events-none absolute right-1 w-3 h-3"
+          :class="dark ? 'text-[#FFFFFF80]' : 'text-[#00000066]'"
           viewBox="0 0 20 20"
           fill="currentColor"
           aria-hidden="true"
@@ -38,6 +40,11 @@ const props = defineProps({
   years: {
     type: Array,
     required: true
+  },
+  // 影院模式的卡片会把整屏压暗，这里跟着换成浅色描边
+  dark: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -99,5 +106,10 @@ onBeforeUnmount(() => {
 .year-modern {
   display: flex;
   align-items: center;
+}
+
+/* 深色场里下拉展开的选项列表也得能看清 */
+.year-selector--dark option {
+  color: #111;
 }
 </style>
