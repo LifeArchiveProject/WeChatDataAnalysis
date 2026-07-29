@@ -10,6 +10,28 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 class TestWechatDetectionAutoDetect(unittest.TestCase):
+    def test_macos_process_probe_accepts_wechat_process_name(self):
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            process_cwd = Path(td) / "runtime"
+            data_root = process_cwd / "xwechat_files"
+            db_storage = data_root / "wxid_process_demo" / "db_storage"
+            db_storage.mkdir(parents=True)
+
+            process = unittest.mock.Mock()
+            process.cwd.return_value = str(process_cwd)
+            with (
+                patch.object(wd.sys, "platform", "darwin"),
+                patch.object(wd, "_build_auto_detect_scan_paths", return_value=[]),
+                patch.object(wd, "get_process_list", return_value=[(42, "WeChat")]),
+                patch.object(wd.psutil, "Process", return_value=process),
+            ):
+                detected_dirs = wd.auto_detect_wechat_data_dirs()
+
+            self.assertEqual(detected_dirs, [str(data_root)])
+            process.cwd.assert_called_once_with()
+
     def test_detect_wechat_installation_finds_nested_custom_data_root(self):
         from wechat_decrypt_tool import wechat_detection as wd
 
