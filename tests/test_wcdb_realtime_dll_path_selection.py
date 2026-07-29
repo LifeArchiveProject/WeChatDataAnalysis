@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+import time
 import unittest
 import urllib.error
 from pathlib import Path
@@ -194,6 +195,7 @@ class TestWcdbRealtimeDllPathSelection(unittest.TestCase):
 
     def test_inprocess_open_timeout_poison_runtime_without_vc_hint(self) -> None:
         release_open = threading.Event()
+        late_handle_closed = threading.Event()
         original_poison = wcdb_realtime._inprocess_runtime_poisoned_reason
 
         def hanging_open(*_args, **_kwargs) -> int:
@@ -215,9 +217,12 @@ class TestWcdbRealtimeDllPathSelection(unittest.TestCase):
                     patch.object(wcdb_realtime, "_resolve_account_db_storage_dir", return_value=db_storage),
                     patch.object(wcdb_realtime, "open_account", side_effect=hanging_open),
                     patch.object(wcdb_realtime, "_sidecar_enabled", return_value=False),
+                    patch.object(wcdb_realtime, "close_account", side_effect=lambda _handle: late_handle_closed.set()),
                 ):
                     with self.assertRaises(wcdb_realtime.WCDBRealtimeError) as raised:
                         manager.ensure_connected(account_dir, key_hex="34" * 32, timeout=0.05)
+                    release_open.set()
+                    self.assertTrue(late_handle_closed.wait(timeout=1.0))
 
             message = str(raised.exception)
             self.assertIn("当前为进程内 WCDB", message)
@@ -228,6 +233,109 @@ class TestWcdbRealtimeDllPathSelection(unittest.TestCase):
         finally:
             release_open.set()
             wcdb_realtime._inprocess_runtime_poisoned_reason = original_poison
+
+    def test_post_open_setup_timeout_closes_late_handle_without_caching_it(self) -> None:
+        setup_started = threading.Event()
+        release_setup = threading.Event()
+        late_handle_closed = threading.Event()
+        original_poison = wcdb_realtime._inprocess_runtime_poisoned_reason
+
+        def hanging_set_my_wxid(*_args, **_kwargs) -> bool:
+            setup_started.set()
+            release_setup.wait(timeout=2.0)
+            return True
+
+        try:
+            with TemporaryDirectory() as td:
+                root = Path(td)
+                account_dir = root / "wxid_setup_timeout"
+                db_storage = root / "source" / "db_storage"
+                session_db = db_storage / "session" / "session.db"
+                account_dir.mkdir(parents=True)
+                session_db.parent.mkdir(parents=True)
+                session_db.write_bytes(b"placeholder")
+
+                manager = wcdb_realtime.WCDBRealtimeManager()
+                with (
+                    patch.object(wcdb_realtime, "_resolve_account_db_storage_dir", return_value=db_storage),
+                    patch.object(wcdb_realtime, "_resolve_session_db_path", return_value=session_db),
+                    patch.object(wcdb_realtime, "open_account", return_value=91),
+                    patch.object(wcdb_realtime, "set_my_wxid", side_effect=hanging_set_my_wxid),
+                    patch.object(wcdb_realtime, "_sidecar_enabled", return_value=False),
+                    patch.object(wcdb_realtime, "close_account", side_effect=lambda _handle: late_handle_closed.set()) as close_account,
+                ):
+                    started_at = time.monotonic()
+                    with self.assertRaises(wcdb_realtime.WCDBRealtimeError) as raised:
+                        manager.ensure_connected(account_dir, key_hex="56" * 32, timeout=0.05)
+                    elapsed = time.monotonic() - started_at
+
+                    self.assertTrue(setup_started.is_set())
+                    self.assertLess(elapsed, 0.5)
+                    self.assertIn("connection setup timed out", str(raised.exception))
+                    self.assertFalse(manager.is_connected("wxid_setup_timeout"))
+
+                    release_setup.set()
+                    self.assertTrue(late_handle_closed.wait(timeout=1.0))
+                    close_account.assert_called_once_with(91)
+                    self.assertFalse(manager.is_connected("wxid_setup_timeout"))
+        finally:
+            release_setup.set()
+            wcdb_realtime._inprocess_runtime_poisoned_reason = original_poison
+
+    def test_disconnect_prevents_inflight_old_source_handle_from_being_cached(self) -> None:
+        setup_started = threading.Event()
+        release_setup = threading.Event()
+        late_handle_closed = threading.Event()
+        result: dict[str, object] = {}
+
+        def blocking_set_my_wxid(*_args, **_kwargs) -> bool:
+            setup_started.set()
+            release_setup.wait(timeout=2.0)
+            return True
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account_dir = root / "wxid_source_change"
+            old_db_storage = root / "old-source" / "db_storage"
+            old_session_db = old_db_storage / "session" / "session.db"
+            account_dir.mkdir(parents=True)
+            old_session_db.parent.mkdir(parents=True)
+            old_session_db.write_bytes(b"placeholder")
+
+            manager = wcdb_realtime.WCDBRealtimeManager()
+
+            def connect_old_source() -> None:
+                try:
+                    result["connection"] = manager.ensure_connected(
+                        account_dir,
+                        key_hex="78" * 32,
+                        timeout=1.0,
+                    )
+                except Exception as exc:
+                    result["error"] = exc
+
+            with (
+                patch.object(wcdb_realtime, "_resolve_account_db_storage_dir", return_value=old_db_storage),
+                patch.object(wcdb_realtime, "_resolve_session_db_path", return_value=old_session_db),
+                patch.object(wcdb_realtime, "open_account", return_value=101),
+                patch.object(wcdb_realtime, "set_my_wxid", side_effect=blocking_set_my_wxid),
+                patch.object(wcdb_realtime, "close_account", side_effect=lambda _handle: late_handle_closed.set()) as close_account,
+            ):
+                connect_thread = threading.Thread(target=connect_old_source)
+                connect_thread.start()
+                self.assertTrue(setup_started.wait(timeout=1.0))
+
+                manager.disconnect("wxid_source_change")
+                release_setup.set()
+                connect_thread.join(timeout=1.0)
+
+                self.assertFalse(connect_thread.is_alive())
+                self.assertIsInstance(result.get("error"), wcdb_realtime.WCDBRealtimeError)
+                self.assertIn("invalidated while opening", str(result.get("error")))
+                self.assertNotIn("connection", result)
+                self.assertTrue(late_handle_closed.wait(timeout=1.0))
+                close_account.assert_called_once_with(101)
+                self.assertFalse(manager.is_connected("wxid_source_change"))
 
 
 if __name__ == "__main__":

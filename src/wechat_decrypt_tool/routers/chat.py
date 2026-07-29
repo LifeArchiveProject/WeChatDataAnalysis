@@ -113,6 +113,46 @@ router = APIRouter(route_class=PathFixRoute)
 _REALTIME_SYNC_MU = threading.Lock()
 _REALTIME_SYNC_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 _REALTIME_SYNC_ALL_LOCKS: dict[str, threading.Lock] = {}
+_REALTIME_STATUS_PROBE_WAIT_SECONDS = 5.25
+_REALTIME_STATUS_PROBE_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _track_realtime_status_probe(task: asyncio.Task[Any]) -> None:
+    """Keep a timed-out to_thread task alive and consume its eventual result."""
+
+    _REALTIME_STATUS_PROBE_TASKS.add(task)
+
+    def _done(done_task: asyncio.Task[Any]) -> None:
+        _REALTIME_STATUS_PROBE_TASKS.discard(done_task)
+        try:
+            done_task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.info("[realtime] background status probe finished with error: %s", exc)
+
+    task.add_done_callback(_done)
+
+
+async def _await_realtime_status_worker(
+    func,
+    /,
+    *args,
+    wait_timeout: float,
+    **kwargs,
+):
+    if wait_timeout <= 0:
+        raise asyncio.TimeoutError
+
+    task = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=wait_timeout)
+    except asyncio.TimeoutError:
+        _track_realtime_status_probe(task)
+        raise
+    except asyncio.CancelledError:
+        _track_realtime_status_probe(task)
+        raise
 
 
 def _is_hex_md5(value: Any) -> bool:
@@ -975,14 +1015,86 @@ def _scan_db_storage_mtime_ns(db_storage_dir: Path) -> int:
 
 @router.get("/api/chat/realtime/status", summary="实时模式状态")
 async def get_chat_realtime_status(account: Optional[str] = None):
-    """检查当前账号是否具备实时模式条件（dll/密钥/db_storage）以及是否已连接。"""
+    """检查实时模式前置条件，并实际打开 WCDB 账号连接。"""
     account_dir = _resolve_account_dir(account)
-    info = WCDB_REALTIME.get_status(account_dir)
-    available = bool(info.get("dll_present") and info.get("key_present") and info.get("db_storage_dir"))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _REALTIME_STATUS_PROBE_WAIT_SECONDS
+
+    def remaining_seconds() -> float:
+        return max(0.0, deadline - loop.time())
+
+    probe_attempted = False
+    probe_error = ""
+    try:
+        info = await _await_realtime_status_worker(
+            WCDB_REALTIME.get_status,
+            account_dir,
+            wait_timeout=remaining_seconds(),
+        )
+    except asyncio.TimeoutError:
+        info = {"account": account_dir.name}
+        probe_error = (
+            "WCDB realtime status inspection timed out after "
+            f"{_REALTIME_STATUS_PROBE_WAIT_SECONDS:g}s."
+        )
+
+    prerequisites_ready = bool(
+        not probe_error
+        and info.get("dll_present")
+        and info.get("key_present")
+        and info.get("db_storage_dir")
+        and info.get("session_db_path")
+    )
+
+    if prerequisites_ready:
+        probe_attempted = True
+        connection_timeout = min(5.0, remaining_seconds())
+        try:
+            await _await_realtime_status_worker(
+                WCDB_REALTIME.ensure_connected,
+                account_dir,
+                wait_timeout=remaining_seconds(),
+                timeout=connection_timeout,
+            )
+        except asyncio.TimeoutError:
+            probe_error = (
+                "WCDB realtime connection probe timed out after "
+                f"{_REALTIME_STATUS_PROBE_WAIT_SECONDS:g}s."
+            )
+        except Exception as exc:
+            probe_error = str(exc or "WCDB realtime connection failed.").strip()
+        refresh_timeout = remaining_seconds()
+        if refresh_timeout > 0:
+            try:
+                info = await _await_realtime_status_worker(
+                    WCDB_REALTIME.get_status,
+                    account_dir,
+                    wait_timeout=refresh_timeout,
+                )
+            except asyncio.TimeoutError:
+                if not probe_error:
+                    probe_error = (
+                        "WCDB realtime status refresh timed out after "
+                        f"{_REALTIME_STATUS_PROBE_WAIT_SECONDS:g}s."
+                    )
+        elif not probe_error:
+            probe_error = (
+                "WCDB realtime status refresh timed out after "
+                f"{_REALTIME_STATUS_PROBE_WAIT_SECONDS:g}s."
+            )
+
+    info = dict(info or {})
+    probe_succeeded = bool(probe_attempted and not probe_error and info.get("connected"))
+    info["probe_attempted"] = probe_attempted
+    info["probe_succeeded"] = probe_succeeded
+    info["probe_error"] = probe_error
+    if probe_error and not str(info.get("error") or "").strip():
+        info["error"] = probe_error
+
     return {
         "status": "success",
         "account": account_dir.name,
-        "available": available,
+        "available": probe_succeeded,
         "realtime": info,
     }
 

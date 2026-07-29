@@ -1941,6 +1941,7 @@ class WCDBRealtimeManager:
         self._mu = threading.Lock()
         self._conns: dict[str, WCDBRealtimeConnection] = {}
         self._connecting: dict[str, threading.Event] = {}
+        self._connection_epochs: dict[str, int] = {}
         # Negative cache: account -> (monotonic failure timestamp, original reason).
         self._failed: dict[str, tuple[float, str]] = {}
 
@@ -2023,6 +2024,9 @@ class WCDBRealtimeManager:
         with self._mu:
             connection_count = len(self._conns)
             waiters = list(self._connecting.values())
+            invalidated_accounts = set(self._conns) | set(self._connecting)
+            for account in invalidated_accounts:
+                self._connection_epochs[account] = int(self._connection_epochs.get(account) or 0) + 1
             self._conns.clear()
             self._connecting.clear()
             self._failed.clear()
@@ -2038,6 +2042,10 @@ class WCDBRealtimeManager:
         self, account_dir: Path, *, key_hex: Optional[str] = None, timeout: float = 5.0
     ) -> WCDBRealtimeConnection:
         account = str(account_dir.name)
+        try:
+            timeout_seconds = max(0.1, float(timeout))
+        except (TypeError, ValueError):
+            timeout_seconds = 5.0
 
         # Fast-reject if this account failed recently to avoid repeated timeouts.
         with self._mu:
@@ -2051,8 +2059,10 @@ class WCDBRealtimeManager:
                 message += f" Last error: {original_reason}"
             raise WCDBRealtimeError(message)
 
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + timeout_seconds
 
+        connecting_event: Optional[threading.Event] = None
+        connection_epoch = 0
         while True:
             with self._mu:
                 existing = self._conns.get(account)
@@ -2063,6 +2073,8 @@ class WCDBRealtimeManager:
                 if waiter is None:
                     waiter = threading.Event()
                     self._connecting[account] = waiter
+                    connecting_event = waiter
+                    connection_epoch = int(self._connection_epochs.get(account) or 0)
                     break
 
             # Another thread is connecting; wait a bit and retry.
@@ -2090,73 +2102,151 @@ class WCDBRealtimeManager:
             session_db_path = _resolve_session_db_path(db_storage_dir)
             native_wxid = _derive_weflow_wcdb_wxid(account, db_storage_dir)
 
-            # Run open_account in a daemon thread with a timeout to avoid
-            # blocking indefinitely when the native library hangs (locked DB).
-            _handle_box: list[int] = []
-            _open_err: list[Exception] = []
-            remaining = max(0.1, deadline - time.monotonic())
+            # Both native open and post-open setup run in the same deadline-bound
+            # worker.  A timed-out worker retains responsibility for closing any
+            # handle that arrives later and can never publish it into _conns.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timeout_message = (
+                    f"WCDB connection setup timed out after {timeout_seconds:g}s "
+                    f"before opening {session_db_path}."
+                )
+                self._record_failure(account, timeout_message)
+                raise WCDBRealtimeError(_with_wcdb_open_help(timeout_message))
+
             request_timeout = max(0.5, remaining - 0.5)
+            setup_lock = threading.Lock()
+            setup_state: dict[str, Any] = {
+                "timed_out": False,
+                "runtime_isolated": False,
+                "handle": 0,
+                "error": None,
+            }
 
-            def _do_open() -> None:
+            def _close_late_handle(handle_value: int) -> None:
+                handle_value = int(handle_value or 0)
+                if handle_value <= 0:
+                    return
+                with setup_lock:
+                    runtime_isolated = bool(setup_state.get("runtime_isolated"))
+                if runtime_isolated:
+                    return
                 try:
-                    _handle_box.append(open_account(session_db_path, key, timeout=request_timeout))
-                except Exception as exc:
-                    _open_err.append(exc)
+                    close_account(handle_value)
+                    logger.info(
+                        "[wcdb] closed late account handle account=%s handle=%s",
+                        account,
+                        handle_value,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[wcdb] failed to close late account handle account=%s handle=%s",
+                        account,
+                        handle_value,
+                    )
 
-            open_thread = threading.Thread(target=_do_open, daemon=True)
+            def _do_open_and_configure() -> None:
+                handle_value = 0
+                try:
+                    handle_value = int(open_account(session_db_path, key, timeout=request_timeout))
+                except Exception as exc:
+                    with setup_lock:
+                        if not setup_state.get("timed_out"):
+                            setup_state["error"] = exc
+                    return
+
+                with setup_lock:
+                    timed_out = bool(setup_state.get("timed_out"))
+                if timed_out:
+                    _close_late_handle(handle_value)
+                    return
+
+                # Keep the WeFlow-compatible context setup best-effort, but keep
+                # it inside the same wall-clock budget as opening the account.
+                try:
+                    set_my_wxid(handle_value, native_wxid)
+                except Exception:
+                    pass
+
+                with setup_lock:
+                    timed_out = bool(setup_state.get("timed_out"))
+                    if not timed_out:
+                        setup_state["handle"] = handle_value
+                        handle_value = 0
+
+                if timed_out:
+                    _close_late_handle(handle_value)
+
+            open_thread = threading.Thread(
+                target=_do_open_and_configure,
+                name=f"wcdb-connect-{account}",
+                daemon=True,
+            )
             open_thread.start()
             open_thread.join(timeout=remaining)
 
-            if open_thread.is_alive():
-                if _sidecar_enabled():
+            if open_thread.is_alive() or time.monotonic() >= deadline:
+                sidecar_enabled = _sidecar_enabled()
+                runtime_isolated = bool(sidecar_enabled and _auto_sidecar_started_here())
+                with setup_lock:
+                    setup_state["timed_out"] = True
+                    setup_state["runtime_isolated"] = runtime_isolated
+                    late_handle = int(setup_state.get("handle") or 0)
+                    setup_state["handle"] = 0
+
+                if late_handle > 0 and not runtime_isolated:
+                    threading.Thread(
+                        target=_close_late_handle,
+                        args=(late_handle,),
+                        name=f"wcdb-close-late-{account}",
+                        daemon=True,
+                    ).start()
+
+                if sidecar_enabled:
                     _invalidate_sidecar_runtime(
-                        f"open_account timed out account={account} session_db={session_db_path}"
+                        f"connection setup timed out account={account} session_db={session_db_path}"
                     )
                     timeout_message = (
-                        f"open_account timed out after {timeout:.0f}s for {session_db_path}. "
+                        f"WCDB connection setup timed out after {timeout_seconds:g}s for {session_db_path}. "
                         "原生调用已隔离，WCDB 运行时将重启。"
                     )
                 else:
                     global _inprocess_runtime_poisoned_reason
                     _inprocess_runtime_poisoned_reason = (
-                        f"open_account timeout account={account} session_db={session_db_path}"
+                        f"connection setup timeout account={account} session_db={session_db_path}"
                     )
                     timeout_message = (
-                        f"open_account timed out after {timeout:.0f}s for {session_db_path}. "
+                        f"WCDB connection setup timed out after {timeout_seconds:g}s for {session_db_path}. "
                         "当前为进程内 WCDB，原生调用无法安全终止；请重启应用。"
                         "源码运行请先执行 `cd desktop; npm ci` 以启用隔离 sidecar。"
                     )
                 self._record_failure(account, timeout_message)
                 logger.warning(
-                    "[wcdb] open_account timeout account=%s timeout=%ss session_db=%s",
+                    "[wcdb] connection setup timeout account=%s timeout=%ss session_db=%s",
                     account,
-                    int(timeout),
+                    timeout_seconds,
                     session_db_path,
                 )
-                raise WCDBRealtimeError(
-                    _with_wcdb_open_help(timeout_message)
-                )
-            if _open_err:
-                if _should_cache_open_failure(_open_err[0]):
-                    self._record_failure(account, _open_err[0])
+                raise WCDBRealtimeError(_with_wcdb_open_help(timeout_message))
+
+            with setup_lock:
+                open_error = setup_state.get("error")
+                handle = int(setup_state.get("handle") or 0)
+                setup_state["handle"] = 0
+
+            if isinstance(open_error, Exception):
+                if _should_cache_open_failure(open_error):
+                    self._record_failure(account, open_error)
                 logger.warning(
                     "[wcdb] open_account failed account=%s session_db=%s error=%s",
                     account,
                     session_db_path,
-                    _open_err[0],
+                    open_error,
                 )
-                raise _open_err[0]
-            if not _handle_box:
+                raise open_error
+            if handle <= 0:
                 logger.warning("[wcdb] open_account returned no handle account=%s session_db=%s", account, session_db_path)
                 raise WCDBRealtimeError(_with_wcdb_open_help("open_account returned no handle."))
-
-            handle = _handle_box[0]
-            # 对齐 WeFlow：传清理后的 wxid/account 名称给 native WCDB，
-            # 不传带 4 位随机后缀的导出目录名。
-            try:
-                set_my_wxid(handle, native_wxid)
-            except Exception:
-                pass
 
             conn = WCDBRealtimeConnection(
                 account=account,
@@ -2169,8 +2259,21 @@ class WCDBRealtimeManager:
             )
 
             with self._mu:
-                self._conns[account] = conn
-                self._failed.pop(account, None)
+                connection_invalidated = int(self._connection_epochs.get(account) or 0) != connection_epoch
+                if not connection_invalidated:
+                    self._conns[account] = conn
+                    self._failed.pop(account, None)
+
+            if connection_invalidated:
+                threading.Thread(
+                    target=_close_late_handle,
+                    args=(handle,),
+                    name=f"wcdb-close-invalidated-{account}",
+                    daemon=True,
+                ).start()
+                raise WCDBRealtimeError(
+                    "WCDB connection was invalidated while opening; retry with the latest key and db_storage source."
+                )
             logger.info(
                 "[wcdb] connected account=%s native_wxid=%s handle=%s session_db=%s",
                 account,
@@ -2181,7 +2284,9 @@ class WCDBRealtimeManager:
             return conn
         finally:
             with self._mu:
-                ev = self._connecting.pop(account, None)
+                ev = None
+                if connecting_event is not None and self._connecting.get(account) is connecting_event:
+                    ev = self._connecting.pop(account, None)
                 if ev is not None:
                     ev.set()
 
@@ -2190,6 +2295,7 @@ class WCDBRealtimeManager:
         if not a:
             return
         with self._mu:
+            self._connection_epochs[a] = int(self._connection_epochs.get(a) or 0) + 1
             conn = self._conns.pop(a, None)
             self._failed.pop(a, None)  # clear negative cache on explicit disconnect
         if conn is None:
