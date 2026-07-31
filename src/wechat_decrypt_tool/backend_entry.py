@@ -4,7 +4,9 @@ This avoids dynamic import strings like "pkg.module:app" which some bundlers
 cannot detect reliably.
 """
 
+import json
 import multiprocessing
+import sys
 
 # PyInstaller/frozen Windows builds re-launch this executable for
 # multiprocessing workers.  The memory/DLL key scanners use process pools; if
@@ -25,7 +27,27 @@ from wechat_decrypt_tool.runtime_settings import (
 )
 
 
+def _run_opencc_smoke() -> None:
+    import opencc
+    from opencc import OpenCC
+
+    converter = OpenCC("t2s")
+    payload = {
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "openccModule": str(getattr(opencc, "__file__", "") or ""),
+        "results": {
+            "繁體中文": converter.convert("繁體中文"),
+            "軟體與資料庫": converter.convert("軟體與資料庫"),
+        },
+    }
+    print(json.dumps(payload, ensure_ascii=True))
+
+
 def main() -> None:
+    if "--smoke-opencc" in sys.argv[1:]:
+        _run_opencc_smoke()
+        return
+
     start_desktop_parent_watchdog_from_env()
     configure_native_core_entrypoint()
     from wechat_decrypt_tool.api import app

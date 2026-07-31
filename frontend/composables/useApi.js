@@ -400,6 +400,43 @@ export const useApi = () => {
     })
   }
 
+  const getVoiceTranscriptionStatus = async () => {
+    return await request('/chat/media/voice/transcription/status')
+  }
+
+  const setVoiceTranscriptionDevice = async (device) => {
+    return await request('/chat/media/voice/transcription/settings', {
+      method: 'PUT',
+      body: { device: String(device || '').trim().toLowerCase() }
+    })
+  }
+
+  const transcribeChatVoice = async (data = {}) => {
+    return await request('/chat/media/voice/transcription', {
+      method: 'POST',
+      body: {
+        account: data.account || null,
+        // svr_id 是 19 位大整数，超出 JS Number 安全范围，必须以字符串原样传输，
+        // 避免精度丢失导致后端查不到语音数据（后端 pydantic 会将精确字符串解析为 int）。
+        server_id: String(data.server_id ?? '').trim(),
+        force: !!data.force
+      }
+    })
+  }
+
+  // 批量读取语音转写缓存（仅恢复展示，不触发识别；serverIdStr 精确字符串数组）
+  const lookupChatVoiceTranscriptionCache = async (data = {}) => {
+    return await request('/chat/media/voice/transcription/cache_lookup', {
+      method: 'POST',
+      body: {
+        account: data.account || null,
+        server_ids: Array.isArray(data.server_ids)
+          ? data.server_ids.map((v) => String(v ?? '').trim()).filter(Boolean)
+          : []
+      }
+    })
+  }
+
   // 聊天记录导出（离线zip）
   const createChatExport = async (data = {}) => {
     return await request('/chat/exports', {
@@ -422,7 +459,8 @@ export const useApi = () => {
         download_remote_media: !!data.download_remote_media,
         html_page_size: data.html_page_size != null ? Number(data.html_page_size) : 1000,
         privacy_mode: !!data.privacy_mode,
-        file_name: data.file_name || null
+        file_name: data.file_name || null,
+        transcribe_voice: !!data.transcribe_voice
       }
     })
   }
@@ -824,6 +862,10 @@ export const useApi = () => {
     saveMediaKeys,
     getSavedKeys,
     decryptAllMedia,
+    getVoiceTranscriptionStatus,
+    setVoiceTranscriptionDevice,
+    transcribeChatVoice,
+    lookupChatVoiceTranscriptionCache,
     createChatExport,
     getChatExport,
     listChatExports,

@@ -327,7 +327,8 @@ export default defineComponent({
 
     return {
       ...props.state,
-      messageState: props.state,
+      // 合并转发浮窗中的语音仅支持播放，不显示“转文字”面板（转写只在主聊天页和导出 HTML 提供）
+      messageState: { ...props.state, transcribeVoice: undefined },
       recordTextSegments,
       openRecordUrl,
       copyRecordUrl,

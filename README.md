@@ -112,6 +112,35 @@
 
 > Excel 格式生成 `.xlsx` 文件；聊天记录、朋友圈和收藏会将对应格式文件与必要资源一起打包为 ZIP。
 
+### 本地语音转文字（Whisper）
+
+聊天页可以在保留原语音播放的同时，按需将语音识别为中文；HTML、JSON、TXT 和 Excel 导出也可以选择把转写文字与原语音一起写入归档。转写结果按账号、消息 ID、音频内容和模型缓存在账号目录的 `_cache/voice_transcripts.sqlite3`，重复查看或导出不会再次识别。
+
+该能力是可选依赖，从源码运行时安装：
+
+```powershell
+uv sync --no-editable --extra voice-transcription
+```
+
+默认配置使用 CPU、`medium` 模型和中文识别，并且不会自动联网下载模型。推荐提前下载模型并指定本地目录：
+
+```powershell
+$env:WECHAT_TOOL_WHISPER_MODEL = 'D:\models\faster-whisper-medium'
+$env:WECHAT_TOOL_WHISPER_DEVICE = 'cpu'
+$env:WECHAT_TOOL_WHISPER_COMPUTE_TYPE = 'int8'
+```
+
+也可以明确允许首次识别时下载模型，此操作会访问 Hugging Face，模型文件较大：
+
+```powershell
+$env:WECHAT_TOOL_WHISPER_MODEL = 'medium'
+$env:WECHAT_TOOL_WHISPER_ALLOW_DOWNLOAD = '1'
+```
+
+使用 NVIDIA GPU 时可改为 `WECHAT_TOOL_WHISPER_DEVICE=cuda` 和 `WECHAT_TOOL_WHISPER_COMPUTE_TYPE=float16`。设置 `WECHAT_TOOL_WHISPER_ENABLED=0` 可以完全关闭该能力。隐私模式导出始终禁用语音转写，不会把语音内容写入归档。
+
+应用设置页也可以选择 CPU 或 NVIDIA GPU。GPU 探测、CUDA 初始化失败自动回退 CPU，以及 RTX 5060 验收步骤见 [RTX 5060 faster-whisper CUDA 验收说明](docs/rtx5060-faster-whisper-gpu.md)。
+
 ## 加入群聊
 
 也欢迎加入下方 QQ 群一起讨论。
@@ -147,7 +176,7 @@ cd WeChatDataAnalysis
 
 ```bash
 # 使用uv (推荐)
-uv sync
+uv sync --no-editable
 ```
 
 #### 2.3 安装 WCDB 隔离运行时
@@ -185,8 +214,10 @@ npm run dev
 #### 启动后端API服务
 ```bash
 # 在项目根目录
-uv run main.py
+uv run --no-sync main.py
 ```
+
+`main.py` 会在任何项目包导入前优先加入当前仓库的 `src`，并在启动日志中打印 `wechat_decrypt_tool` 的代码来源。开发运行时应指向当前仓库的 `src/wechat_decrypt_tool/__init__.py`，而不是 `.venv/Lib/site-packages` 中的旧副本。Windows 中文路径下不要改用 editable 安装；Python 3.11 可能按系统代码页读取 uv 生成的 UTF-8 `.pth`，导致解释器启动失败。
 
 #### 启动前端开发服务器
 ```bash

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, SecretStr
 from ..chat_export_service import CHAT_EXPORT_MANAGER, get_chat_export_targets_preview
 from ..native_core_export import decode_export_content_key, erase_export_content_key
 from ..path_fix import PathFixRoute
+from ..voice_transcription import VoiceTranscriptionError, get_voice_transcription_service
 
 router = APIRouter(route_class=PathFixRoute)
 
@@ -76,10 +77,19 @@ class ChatExportCreateRequest(BaseModel):
         None,
         description="WEC1 的 32 字节 Base64 内容密钥；仅 encrypt=true 时使用",
     )
+    transcribe_voice: bool = Field(False, description="使用本地 Whisper 将语音消息转成中文并写入导出文件")
 
 
 @router.post("/api/chat/exports", summary="创建聊天记录导出任务（离线 zip）")
 async def create_chat_export(req: ChatExportCreateRequest):
+    if req.transcribe_voice and not req.privacy_mode:
+        try:
+            await asyncio.to_thread(get_voice_transcription_service().ensure_available)
+        except VoiceTranscriptionError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": exc.code, "message": exc.user_message},
+            ) from exc
     try:
         content_key = decode_export_content_key(
             req.content_key_base64.get_secret_value() if req.content_key_base64 else None,
@@ -109,6 +119,7 @@ async def create_chat_export(req: ChatExportCreateRequest):
             file_name=req.file_name,
             encrypt=bool(req.encrypt),
             content_key=content_key,
+            transcribe_voice=req.transcribe_voice,
         )
     except ValueError as e:
         erase_export_content_key(content_key)
