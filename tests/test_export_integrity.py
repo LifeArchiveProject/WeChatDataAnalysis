@@ -37,6 +37,11 @@ class TestExportIntegrity(unittest.TestCase):
             with self.subTest(kind=kind):
                 self.assertIn(selector, export_css(kind))
 
+        chat_css = export_css("chat")
+        compact_chat_css = "".join(chat_css.split())
+        self.assertIn(".wechat-voice-transcript", chat_css)
+        self.assertIn(".wechat-voice-wrapper{display:flex;flex-direction:column", compact_chat_css)
+
         exposed_sources = [
             ROOT / "frontend" / "pages" / "contacts.vue",
             ROOT / "src" / "wechat_decrypt_tool" / "routers" / "chat_contacts.py",

@@ -139,7 +139,9 @@ html:not([data-wce-integrity-ok="1"]) .wce-index { visibility: hidden; }
 .wce-audio-actions a:hover { text-decoration: underline; }
 
 /* Voice message fallback styles (keep close to `frontend/pages/chat/[[username]].vue`). */
-.wechat-voice-wrapper { display: flex; width: 100%; position: relative; }
+.wechat-voice-wrapper { display: flex; flex-direction: column; width: 100%; position: relative; gap: 6px; }
+.wechat-voice-wrapper--received { align-items: flex-start; }
+.wechat-voice-wrapper--sent { align-items: flex-end; }
 .wechat-voice-bubble {
   border-radius: var(--message-radius);
   position: relative;
@@ -189,6 +191,21 @@ html:not([data-wce-integrity-ok="1"]) .wce-index { visibility: hidden; }
   67%, 100% { opacity: 1; }
 }
 .wechat-voice-duration { font-size: 14px; color: #1a1a1a; }
+
+/* Voice transcript bubble (export page: static light theme, values mirror voice bubbles). */
+.wechat-voice-transcript {
+  width: fit-content;
+  max-width: min(404px, 100%);
+  padding: 8px 12px;
+  border-radius: var(--message-radius);
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.wechat-voice-transcript--received { background: #fff; color: #1a1a1a; }
+.wechat-voice-transcript--sent { background: #95EC69; color: #1a1a1a; }
+.wechat-voice-transcript--error { background: #fff; color: #b45309; }
 .wechat-voice-unread {
   position: absolute;
   top: 50%;

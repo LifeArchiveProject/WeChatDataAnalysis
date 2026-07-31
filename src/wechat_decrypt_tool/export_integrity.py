@@ -24,15 +24,8 @@ def load_wce_integrity_native() -> Any:
         return existing
 
     repo_root = Path(__file__).resolve().parents[2]
-    candidates = [
-        repo_root / "native" / "wce_integrity" / "target" / "release" / "wce_integrity.dll",
-        repo_root / "native" / "wce_integrity" / "target-next" / "release" / "wce_integrity.dll",
-        repo_root / "native" / "wce_integrity" / "target" / "release" / "libwce_integrity.dylib",
-        repo_root / "native" / "wce_integrity" / "target" / "release" / "libwce_integrity.so",
-        Path(__file__).resolve().parent / "native" / "wce_integrity.pyd",
-        Path(__file__).resolve().parent / "native" / "libwce_integrity.dylib",
-        Path(__file__).resolve().parent / "native" / "libwce_integrity.so",
-    ]
+    package_native_dir = Path(__file__).resolve().parent / "native"
+    candidates: list[Path] = []
     architecture = (platform.machine() or "").lower()
     if architecture in {"arm64", "aarch64"}:
         candidates.append(
@@ -47,6 +40,17 @@ def load_wce_integrity_native() -> Any:
                 executable_native / "libwce_integrity.so",
             )
         )
+    if sys.platform == "win32":
+        candidates.append(package_native_dir / "wce_integrity.pyd")
+    else:
+        candidates.extend(
+            (
+                repo_root / "native" / "wce_integrity" / "target" / "release" / "libwce_integrity.dylib",
+                repo_root / "native" / "wce_integrity" / "target" / "release" / "libwce_integrity.so",
+                package_native_dir / "libwce_integrity.dylib",
+                package_native_dir / "libwce_integrity.so",
+            )
+        )
     bundle_root = getattr(sys, "_MEIPASS", None)
     if bundle_root:
         bundled_native = Path(bundle_root) / "wechat_decrypt_tool" / "native"
@@ -57,9 +61,12 @@ def load_wce_integrity_native() -> Any:
                 bundled_native / "libwce_integrity.so",
             )
         )
-    candidates = [path for path in candidates if path.is_file()]
-    candidates.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+    seen: set[str] = set()
     for build_path in candidates:
+        candidate_key = str(build_path)
+        if candidate_key in seen or not build_path.is_file():
+            continue
+        seen.add(candidate_key)
         try:
             loader = importlib.machinery.ExtensionFileLoader(module_name, str(build_path))
             spec = importlib.util.spec_from_file_location(module_name, build_path, loader=loader)

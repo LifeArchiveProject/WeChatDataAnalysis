@@ -32,6 +32,10 @@ dependencies = [
 build = [
     "pyinstaller>=6.0.0",
 ]
+voice-transcription = [
+    "faster-whisper>=1.1.0",
+    "opencc-python-reimplemented>=0.1.7",
+]
 
 [dependency-groups]
 dev = [
@@ -47,6 +51,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wechat_decrypt_tool"]
+artifacts = [
+    "src/wechat_decrypt_tool/native/*.pyd",
+]
 include = [
     "src/wechat_decrypt_tool/native/VoipEngine.dll",
     "src/wechat_decrypt_tool/native/wcdb_api.dll",

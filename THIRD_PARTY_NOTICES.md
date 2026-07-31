@@ -28,3 +28,18 @@ Desktop distributions include the platform-specific FFmpeg executable from `ffmp
 - Binary builds: https://github.com/ffbinaries/ffbinaries-prebuilt/releases
 - Package license: GPL-3.0-or-later
 - Distributed license files: `ffmpeg/LICENSE` and `ffmpeg/ffmpeg.LICENSE`
+
+## Optional voice transcription runtime
+
+The optional local voice transcription feature uses the following Python packages. Windows standalone backends built with the `voice-transcription` extra bundle these packages and their required runtime data.
+
+| Package | Upstream project | License |
+| --- | --- | --- |
+| `faster-whisper` | https://github.com/SYSTRAN/faster-whisper | MIT |
+| `CTranslate2` | https://github.com/OpenNMT/CTranslate2 | MIT |
+| `PyAV` | https://github.com/PyAV-Org/PyAV | BSD-3-Clause |
+| `OpenCC Python Reimplemented` | https://github.com/yichen0831/opencc-python | Apache-2.0 |
+| `ONNX Runtime` | https://github.com/microsoft/onnxruntime | MIT |
+| `Hugging Face tokenizers` | https://github.com/huggingface/tokenizers | Apache-2.0 |
+
+Whisper model weights are not included in this repository or its pull request. Users download or provide model weights separately and must follow the license and usage terms published with the selected model.

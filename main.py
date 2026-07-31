@@ -10,13 +10,23 @@
 
 import multiprocessing
 import os
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent
+SOURCE_ROOT = REPO_ROOT / "src"
+if SOURCE_ROOT.is_dir():
+    source_path = str(SOURCE_ROOT)
+    if source_path in sys.path:
+        sys.path.remove(source_path)
+    sys.path.insert(0, source_path)
 
 # Keep standalone/frozen launches safe when scanner code uses multiprocessing.
 if __name__ == "__main__":
     multiprocessing.freeze_support()
 
 import uvicorn
+import wechat_decrypt_tool
 from wechat_decrypt_tool.network_access import get_lan_access_host
 from wechat_decrypt_tool.runtime_settings import read_effective_backend_host, read_effective_backend_port
 
@@ -44,6 +54,7 @@ def main():
     else:
         print("监听地址来源: 默认值")
     print(f"监听地址: {host}")
+    print(f"代码来源: {Path(wechat_decrypt_tool.__file__).resolve()}")
     print(f"API文档: http://{access_host}:{port}/docs")
     print(f"健康检查: http://{access_host}:{port}/api/health")
     if lan_access_host != access_host:
@@ -51,7 +62,6 @@ def main():
     print("按 Ctrl+C 停止服务")
     print("=" * 60)
     
-    repo_root = Path(__file__).resolve().parent
     enable_reload = os.environ.get("WECHAT_TOOL_RELOAD", "0") == "1"
 
     # 启动API服务
@@ -60,7 +70,7 @@ def main():
         host=host,
         port=port,
         reload=enable_reload,
-        reload_dirs=[str(repo_root / "src")] if enable_reload else None,
+        reload_dirs=[str(REPO_ROOT / "src")] if enable_reload else None,
         reload_excludes=[
             "output/*",
             "output/**",

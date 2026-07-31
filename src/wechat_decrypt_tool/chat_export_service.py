@@ -88,6 +88,7 @@ from .wcdb_realtime import (
     get_sessions as _wcdb_get_sessions,
     open_message_cursor as _wcdb_open_message_cursor,
 )
+from .voice_transcription import VoiceTranscriptionError, get_voice_transcription_service
 
 logger = get_logger(__name__)
 
@@ -1020,6 +1021,7 @@ class ChatExportManager:
         html_page_size: int = 1000,
         privacy_mode: bool,
         file_name: Optional[str],
+        transcribe_voice: bool = False,
     ) -> ExportJob:
         account_dir = _resolve_account_dir(account)
         source_requested = _normalize_chat_source(source, default="auto")
@@ -1071,6 +1073,7 @@ class ChatExportManager:
                 "htmlPageSize": int(html_page_size) if int(html_page_size or 0) > 0 else int(html_page_size or 0),
                 "privacyMode": bool(privacy_mode),
                 "fileName": str(file_name or "").strip(),
+                "transcribeVoice": bool(transcribe_voice),
             },
         )
 
@@ -1145,6 +1148,7 @@ class ChatExportManager:
                 "htmlPageSize": 1000,
                 "privacyMode": False,
                 "fileName": str(file_name or "").strip(),
+                "transcribeVoice": False,
                 "_archiveTitle": str(title or "").strip() or "聊天记录",
                 "_preparedConversations": prepared,
             },
@@ -1242,6 +1246,8 @@ class ChatExportManager:
         allow_process_key_extract = bool(opts.get("allowProcessKeyExtract"))
         download_remote_media = bool(opts.get("downloadRemoteMedia"))
         privacy_mode = bool(opts.get("privacyMode"))
+        transcribe_voice = bool(opts.get("transcribeVoice")) and not privacy_mode
+        job.options["_transcribeVoiceActive"] = transcribe_voice
         try:
             html_page_size = int(opts.get("htmlPageSize") or 1000)
         except Exception:
@@ -1292,6 +1298,7 @@ class ChatExportManager:
             htmlPageSize=html_page_size,
             downloadRemoteMedia=download_remote_media,
             privacyMode=privacy_mode,
+            transcribeVoice=transcribe_voice,
         )
         _raise_if_job_cancelled(job, "options_resolved", trace)
 
@@ -2115,6 +2122,7 @@ class ChatExportManager:
                         "downloadRemoteMedia": bool(download_remote_media),
                         "htmlPageSize": int(html_page_size) if export_format == "html" else None,
                         "privacyMode": privacy_mode,
+                        "transcribeVoice": transcribe_voice,
                         "sourceRequested": source_requested,
                     },
                     "stats": {
@@ -3719,6 +3727,13 @@ def _write_conversation_json(
                         serverId=msg.get("serverId"),
                     )
 
+                _attach_voice_transcript(
+                    account_dir=account_dir,
+                    msg=msg,
+                    report=report,
+                    job=job,
+                )
+
                 if not first:
                     tw.write(",\n")
                 tw.write("    " + json.dumps(msg, ensure_ascii=False))
@@ -3780,13 +3795,17 @@ def _write_conversation_excel(**kwargs: Any) -> int:
         rows: list[list[str]] = []
         for index, message_raw in enumerate(messages if isinstance(messages, list) else [], start=1):
             message = message_raw if isinstance(message_raw, dict) else {"value": message_raw}
-            content = str(
-                message.get("content")
-                or message.get("title")
-                or message.get("description")
-                or message.get("fileName")
-                or ""
-            ).strip()
+            if str(message.get("renderType") or "") == "voice" and message.get("voiceTranscriptStatus") == "success":
+                transcript = str(message.get("voiceTranscript") or "").strip() or "[未识别到文字]"
+                content = f"{message.get('content') or '[语音]'} 转写：{transcript}"
+            else:
+                content = str(
+                    message.get("content")
+                    or message.get("title")
+                    or message.get("description")
+                    or message.get("fileName")
+                    or ""
+                ).strip()
             if not content:
                 content = json.dumps(message, ensure_ascii=False, default=str, sort_keys=True)
             rows.append(
@@ -4063,6 +4082,13 @@ def _write_conversation_txt(
                         localId=msg.get("localId"),
                         serverId=msg.get("serverId"),
                     )
+
+                _attach_voice_transcript(
+                    account_dir=account_dir,
+                    msg=msg,
+                    report=report,
+                    job=job,
+                )
 
                 tw.write(_format_message_line_txt(msg=msg) + "\n")
 
@@ -4949,6 +4975,13 @@ def _write_conversation_html(
                         serverId=msg.get("serverId"),
                     )
 
+                _attach_voice_transcript(
+                    account_dir=account_dir,
+                    msg=msg,
+                    report=report,
+                    job=job,
+                )
+
                 rt = str(msg.get("renderType") or "text").strip() or "text"
                 create_time_text = str(msg.get("createTimeText") or "").strip()
                 try:
@@ -5091,9 +5124,11 @@ def _write_conversation_html(
                     voice_dir_cls = "wechat-voice-sent" if is_sent else "wechat-voice-received"
                     content_dir_cls = " flex-row-reverse" if is_sent else ""
                     icon_dir_cls = "voice-icon-sent" if is_sent else "voice-icon-received"
+                    wrapper_dir_cls = "wechat-voice-wrapper--sent" if is_sent else "wechat-voice-wrapper--received"
+                    transcript_dir_cls = "wechat-voice-transcript--sent" if is_sent else "wechat-voice-transcript--received"
                     voice_id = str(msg.get("id") or "").strip()
 
-                    tw.write('                  <div class="wechat-voice-wrapper">\n')
+                    tw.write(f'                  <div class="wechat-voice-wrapper {esc_attr(wrapper_dir_cls)}">\n')
                     tw.write(
                         f'                    <div class="wechat-voice-bubble msg-radius {esc_attr(voice_dir_cls)}" style="width: {esc_attr(width)}" data-voice-id="{esc_attr(voice_id)}">\n'
                     )
@@ -5116,6 +5151,22 @@ def _write_conversation_html(
                     tw.write("                    </div>\n")
                     if voice:
                         tw.write(f'                    <audio src="{esc_attr(voice)}" preload="none" class="hidden"></audio>\n')
+                    transcript = str(msg.get("voiceTranscript") or "").strip()
+                    transcript_status = str(msg.get("voiceTranscriptStatus") or "").strip()
+                    transcript_error = str(msg.get("voiceTranscriptError") or "").strip()
+                    if transcript_status == "success":
+                        display_transcript = transcript or "未识别到文字"
+                        tw.write(
+                            '                    <div class="wechat-voice-transcript wechat-voice-transcript--success '
+                            f'{esc_attr(transcript_dir_cls)}">'
+                            f'{esc_text(display_transcript)}</div>\n'
+                        )
+                    elif transcript_status == "error" and transcript_error:
+                        tw.write(
+                            '                    <div class="wechat-voice-transcript wechat-voice-transcript--error '
+                            f'{esc_attr(transcript_dir_cls)}">'
+                            f'转写失败：{esc_text(transcript_error)}</div>\n'
+                        )
                     tw.write("                  </div>\n")
                 elif rt == "location":
                     title = str(
@@ -5797,6 +5848,15 @@ def _format_message_line_txt(*, msg: dict[str, Any]) -> str:
         if lat and lng:
             details.append(f"坐标={lng},{lat}")
         extra = (" " + " ".join(details)) if details else ""
+    elif rt == "voice":
+        transcript = str(msg.get("voiceTranscript") or "").strip()
+        transcript_error = str(msg.get("voiceTranscriptError") or "").strip()
+        if transcript:
+            extra = f" 转写={transcript}"
+        elif str(msg.get("voiceTranscriptStatus") or "") == "success":
+            extra = " 转写=[未识别到文字]"
+        elif transcript_error:
+            extra = f" 转写失败={transcript_error}"
 
     media = msg.get("offlineMedia") or []
     media_desc = ""
@@ -5908,11 +5968,62 @@ def _privacy_scrub_message(
         "locationLng",
         "locationPoiname",
         "locationLabel",
+        "voiceTranscript",
+        "voiceTranscriptStatus",
+        "voiceTranscriptError",
+        "voiceTranscriptLanguage",
+        "voiceTranscriptModel",
     ):
         if k in msg:
             msg[k] = ""
 
     msg.pop("offlineMedia", None)
+
+
+def _attach_voice_transcript(
+    *,
+    account_dir: Path,
+    msg: dict[str, Any],
+    report: dict[str, Any],
+    job: ExportJob,
+) -> None:
+    if not bool((job.options or {}).get("_transcribeVoiceActive")):
+        return
+    if str(msg.get("renderType") or "").strip() != "voice":
+        return
+
+    server_id = int(msg.get("serverId") or 0)
+    if server_id <= 0:
+        return
+    _raise_if_job_cancelled(job, "voice_transcription.start", serverId=server_id)
+
+    stats = report.setdefault(
+        "voiceTranscription",
+        {"success": 0, "failed": 0, "cached": 0},
+    )
+    try:
+        result = get_voice_transcription_service().transcribe_voice(
+            account_dir=account_dir,
+            server_id=server_id,
+        )
+        msg["voiceTranscript"] = str(result.get("text") or "").strip()
+        msg["voiceTranscriptStatus"] = "success"
+        msg["voiceTranscriptError"] = ""
+        msg["voiceTranscriptLanguage"] = str(result.get("language") or "").strip()
+        msg["voiceTranscriptModel"] = str(result.get("model") or "").strip()
+        stats["success"] = int(stats.get("success") or 0) + 1
+        if result.get("cached"):
+            stats["cached"] = int(stats.get("cached") or 0) + 1
+    except VoiceTranscriptionError as exc:
+        msg["voiceTranscript"] = ""
+        msg["voiceTranscriptStatus"] = "error"
+        msg["voiceTranscriptError"] = exc.user_message
+        stats["failed"] = int(stats.get("failed") or 0) + 1
+    except Exception as exc:
+        msg["voiceTranscript"] = ""
+        msg["voiceTranscriptStatus"] = "error"
+        msg["voiceTranscriptError"] = f"语音识别失败：{type(exc).__name__}"
+        stats["failed"] = int(stats.get("failed") or 0) + 1
 
 
 def _attach_offline_media(

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from ..chat_export_service import CHAT_EXPORT_MANAGER, get_chat_export_targets_preview
 from ..path_fix import PathFixRoute
+from ..voice_transcription import VoiceTranscriptionError, get_voice_transcription_service
 
 router = APIRouter(route_class=PathFixRoute)
 
@@ -70,10 +71,19 @@ class ChatExportCreateRequest(BaseModel):
         description="隐私模式导出：隐藏会话/用户名/内容，不打包头像与媒体",
     )
     file_name: Optional[str] = Field(None, description="导出 zip 文件名（可选，不含/含 .zip 都可）")
+    transcribe_voice: bool = Field(False, description="使用本地 Whisper 将语音消息转成中文并写入导出文件")
 
 
 @router.post("/api/chat/exports", summary="创建聊天记录导出任务（离线 zip）")
 async def create_chat_export(req: ChatExportCreateRequest):
+    if req.transcribe_voice and not req.privacy_mode:
+        try:
+            await asyncio.to_thread(get_voice_transcription_service().ensure_available)
+        except VoiceTranscriptionError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": exc.code, "message": exc.user_message},
+            ) from exc
     try:
         job = CHAT_EXPORT_MANAGER.create_job(
             account=req.account,
@@ -94,6 +104,7 @@ async def create_chat_export(req: ChatExportCreateRequest):
             html_page_size=req.html_page_size,
             privacy_mode=req.privacy_mode,
             file_name=req.file_name,
+            transcribe_voice=req.transcribe_voice,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -1,9 +1,15 @@
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const entry = path.join(repoRoot, "src", "wechat_decrypt_tool", "backend_entry.py");
+const venvPythonExecutable = path.join(
+  repoRoot,
+  ".venv",
+  process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+);
 
 const distDir = path.join(repoRoot, "desktop", "resources", "backend");
 const workDir = path.join(repoRoot, "desktop", "build", "pyinstaller");
@@ -16,7 +22,36 @@ fs.mkdirSync(specDir, { recursive: true });
 const integrityManifest = path.join(repoRoot, "native", "wce_integrity", "Cargo.toml");
 const integrityTargetDir = path.join(repoRoot, "native", "wce_integrity", "target", "release");
 let integrityNativeBinary = null;
-if (process.platform === "darwin" || process.platform === "linux") {
+if (process.platform === "win32") {
+  const nativeBuild = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(repoRoot, "tools", "build_wce_integrity.ps1"),
+    ],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        WCE_UI_PUBLIC_DIR: path.join(repoRoot, "frontend", ".output", "public"),
+      },
+      stdio: "inherit",
+    }
+  );
+  if ((nativeBuild.status ?? 1) !== 0) {
+    console.error("Failed to build the Windows wce_integrity module.");
+    process.exit(nativeBuild.status ?? 1);
+  }
+  const windowsNativeDir = path.join(repoRoot, "src", "wechat_decrypt_tool", "native");
+  integrityNativeBinary = path.join(windowsNativeDir, "wce_integrity.pyd");
+  if (!fs.existsSync(integrityNativeBinary)) {
+    console.error("Windows wce_integrity build completed without the canonical wce_integrity.pyd artifact.");
+    process.exit(1);
+  }
+} else if (process.platform === "darwin" || process.platform === "linux") {
   const fileName = process.platform === "darwin" ? "libwce_integrity.dylib" : "libwce_integrity.so";
   const nativeBuild = spawnSync(
     "cargo",
@@ -41,17 +76,23 @@ if (process.platform === "darwin" || process.platform === "linux") {
   }
 }
 
+if (!fs.existsSync(venvPythonExecutable)) {
+  console.error(`Missing virtual environment Python: ${venvPythonExecutable}`);
+  process.exit(1);
+}
 const integrityPreflight = spawnSync(
-  "uv",
+  venvPythonExecutable,
   [
-    "run",
-    "python",
     "-c",
     [
       "from wechat_decrypt_tool.export_integrity import load_wce_integrity_native",
       "w=load_wce_integrity_native()",
       "required=('chat','sns','records-project','records-generic','contacts')",
       "assert all(w.export_css(kind).strip() for kind in required)",
+      "css=w.export_css('chat')",
+      "compact=''.join(css.split())",
+      "assert '.wechat-voice-transcript' in css",
+      "assert '.wechat-voice-wrapper{display:flex;flex-direction:column' in compact",
       "assert callable(w.record_file) and callable(w.seal_export)",
     ].join(";"),
   ],
@@ -132,6 +173,7 @@ if (fs.existsSync(wasmDir)) {
 if (process.platform === "win32") {
   for (const item of fs.readdirSync(nativeDir, { withFileTypes: true })) {
     if (!item.isFile() || !/\.(dll|pyd)$/i.test(item.name)) continue;
+    if (/^wce_integrity.*\.pyd$/i.test(item.name) && item.name.toLowerCase() !== "wce_integrity.pyd") continue;
     fs.copyFileSync(path.join(nativeDir, item.name), path.join(runtimeNativeDir, item.name));
   }
 } else if (process.platform === "darwin") {
@@ -162,8 +204,6 @@ if (process.platform === "win32") {
 }
 
 const args = [
-  "run",
-  "pyinstaller",
   "--noconfirm",
   "--clean",
   "--name",
@@ -179,6 +219,14 @@ const args = [
   pyInstallerAddData(runtimeNativeDir, "wechat_decrypt_tool/native"),
   "--add-data",
   pyInstallerAddData(skillDir, "skills/wechat-mcp-copilot"),
+  "--collect-all",
+  "faster_whisper",
+  "--collect-all",
+  "ctranslate2",
+  "--collect-all",
+  "av",
+  "--collect-all",
+  "opencc",
   entry,
 ];
 
@@ -198,9 +246,57 @@ if (integrityNativeBinary) {
   );
 }
 
-const r = spawnSync("uv", args, { cwd: repoRoot, stdio: "inherit" });
+const pyInstallerExecutable = path.join(
+  repoRoot,
+  ".venv",
+  process.platform === "win32" ? "Scripts/pyinstaller.exe" : "bin/pyinstaller",
+);
+if (!fs.existsSync(pyInstallerExecutable)) {
+  console.error(`Missing PyInstaller executable: ${pyInstallerExecutable}`);
+  process.exit(1);
+}
+const r = spawnSync(pyInstallerExecutable, args, { cwd: repoRoot, stdio: "inherit" });
 if ((r.status ?? 1) !== 0) {
   process.exit(r.status ?? 1);
+}
+
+const packagedBackend = path.join(
+  distDir,
+  process.platform === "win32" ? "wechat-backend.exe" : "wechat-backend",
+);
+const openccSmokeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wda-opencc-smoke-"));
+try {
+  const smokeEnv = { ...process.env, PYTHONPATH: "" };
+  delete smokeEnv.PYTHONHOME;
+  const smoke = spawnSync(packagedBackend, ["--smoke-opencc"], {
+    cwd: openccSmokeDir,
+    env: smokeEnv,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if ((smoke.status ?? 1) !== 0) {
+    process.stderr.write(smoke.stderr || smoke.stdout || "Packaged OpenCC smoke test failed.\n");
+    process.exit(smoke.status ?? 1);
+  }
+  const outputLines = String(smoke.stdout || "").trim().split(/\r?\n/).filter(Boolean);
+  let payload;
+  try {
+    payload = JSON.parse(outputLines.at(-1) || "");
+  } catch {
+    console.error(`Packaged OpenCC smoke test returned invalid JSON: ${smoke.stdout || "<empty>"}`);
+    process.exit(1);
+  }
+  const expected = {
+    "繁體中文": "繁体中文",
+    "軟體與資料庫": "软体与资料库",
+  };
+  if (!payload.frozen || JSON.stringify(payload.results) !== JSON.stringify(expected)) {
+    console.error(`Packaged OpenCC smoke test returned an unexpected result: ${JSON.stringify(payload)}`);
+    process.exit(1);
+  }
+  console.log(`Packaged OpenCC smoke test passed: ${JSON.stringify(payload)}`);
+} finally {
+  fs.rmSync(openccSmokeDir, { recursive: true, force: true });
 }
 
 // Keep a stable external native folder for packaged runtime to avoid relying on
