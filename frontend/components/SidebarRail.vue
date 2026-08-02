@@ -42,22 +42,6 @@
         </div>
       </div>
 
-      <!-- Edits -->
-      <div
-        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
-        title="修改记录"
-        @click="goEdits"
-      >
-        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
-          <div class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': isEditsRoute }">
-            <svg class="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-            </svg>
-          </div>
-        </div>
-      </div>
-
       <!-- Moments -->
       <div
         class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
@@ -474,7 +458,7 @@
         </template>
 
         <div class="rounded-[8px] border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-relaxed text-amber-900">
-          仅删除本项目中的该账号解析数据/缓存/编辑记录，不会删除微信客户端中的任何聊天内容或账号数据。
+          仅删除本项目中的该账号解析数据和缓存，不会删除微信客户端中的任何聊天内容或账号数据。
         </div>
 
         <button
@@ -736,7 +720,6 @@ const selectAccountFromDialog = async (account) => {
 }
 
 const isChatRoute = computed(() => route.path?.startsWith('/chat'))
-const isEditsRoute = computed(() => route.path?.startsWith('/edits'))
 const isSnsRoute = computed(() => route.path?.startsWith('/sns'))
 const isFavoritesRoute = computed(() => route.path?.startsWith('/favorites'))
 const isContactsRoute = computed(() => route.path?.startsWith('/contacts'))
@@ -747,7 +730,6 @@ const isPaymentsRoute = computed(() => route.path?.startsWith('/payments'))
 const isWrappedRoute = computed(() => route.path?.startsWith('/wrapped'))
 
 const goChat = async () => { await navigateTo('/chat') }
-const goEdits = async () => { await navigateTo('/edits') }
 const goSns = async () => { await navigateTo('/sns') }
 const goFavorites = async () => { await navigateTo('/favorites') }
 const goContacts = async () => { await navigateTo('/contacts') }
@@ -776,7 +758,7 @@ const deleteCurrentAccountData = async () => {
 
   if (process.client && typeof window !== 'undefined') {
     const confirmed = window.confirm(
-      '将删除当前账号在本项目中的数据（解析缓存、编辑记录、导出缓存等），不会删除微信客户端内容。确认删除吗？'
+      '将删除当前账号在本项目中的数据（解析缓存、导出缓存等），不会删除微信客户端内容。确认删除吗？'
     )
     if (!confirmed) return
   }

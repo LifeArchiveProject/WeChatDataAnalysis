@@ -6,7 +6,6 @@ const { pipeline } = require("stream/promises");
 const SENTINEL_NAMES = [
   "account_keys.json",
   "runtime_settings.json",
-  "message_edits.db",
   "databases",
   "exports",
   "logs",

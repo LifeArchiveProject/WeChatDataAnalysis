@@ -488,17 +488,13 @@ const editingState = useChatEditing({
   api,
   selectedAccount,
   selectedContact,
-  refreshSelectedMessages,
-  normalizeMessage,
-  allMessages,
   locateMessageByServerId
 })
 
 const {
   contextMenu,
   closeContextMenu,
-  closeMessageEditModal,
-  closeMessageFieldsModal
+  closeModifyTextUnavailableDialog
 } = editingState
 
 const {
@@ -520,8 +516,7 @@ const resetAccountScopedState = () => {
   resetMessageState()
   searchState.resetSearchState()
   closeContextMenu()
-  closeMessageEditModal()
-  closeMessageFieldsModal()
+  closeModifyTextUnavailableDialog()
   clearContactProfileHoverHideTimer()
   closeContactProfileCard()
 }

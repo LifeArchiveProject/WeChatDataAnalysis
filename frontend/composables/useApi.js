@@ -173,66 +173,6 @@ export const useApi = () => {
     return await request(url)
   }
 
-  const editChatMessage = async (payload = {}) => {
-    return await request('/chat/messages/edit', {
-      method: 'POST',
-      body: payload
-    })
-  }
-
-  const repairChatMessageSender = async (payload = {}) => {
-    return await request('/chat/messages/repair_sender', {
-      method: 'POST',
-      body: payload
-    })
-  }
-
-  // Flip message direction in the WeChat client by swapping packed_info_data (unsafe, but undoable via reset).
-  const flipChatMessageDirection = async (payload = {}) => {
-    return await request('/chat/messages/flip_direction', {
-      method: 'POST',
-      body: payload
-    })
-  }
-
-  const listChatEditedSessions = async (params = {}) => {
-    const query = new URLSearchParams()
-    if (params && params.account) query.set('account', params.account)
-    const url = '/chat/edits/sessions' + (query.toString() ? `?${query.toString()}` : '')
-    return await request(url)
-  }
-
-  const listChatEditedMessages = async (params = {}) => {
-    const query = new URLSearchParams()
-    if (params && params.account) query.set('account', params.account)
-    if (params && params.username) query.set('username', params.username)
-    const url = '/chat/edits/messages' + (query.toString() ? `?${query.toString()}` : '')
-    return await request(url)
-  }
-
-  const getChatEditStatus = async (params = {}) => {
-    const query = new URLSearchParams()
-    if (params && params.account) query.set('account', params.account)
-    if (params && params.username) query.set('username', params.username)
-    if (params && params.message_id) query.set('message_id', params.message_id)
-    const url = '/chat/edits/message_status' + (query.toString() ? `?${query.toString()}` : '')
-    return await request(url)
-  }
-
-  const resetChatEditedMessage = async (payload = {}) => {
-    return await request('/chat/edits/reset_message', {
-      method: 'POST',
-      body: payload
-    })
-  }
-
-  const resetChatEditedSession = async (payload = {}) => {
-    return await request('/chat/edits/reset_session', {
-      method: 'POST',
-      body: payload
-    })
-  }
-
   const getChatRealtimeStatus = async (params = {}) => {
     const query = new URLSearchParams()
     if (params && params.account) query.set('account', params.account)
@@ -851,14 +791,6 @@ export const useApi = () => {
     listChatSessions,
     listChatMessages,
     getChatMessageRaw,
-    editChatMessage,
-    repairChatMessageSender,
-    flipChatMessageDirection,
-    listChatEditedSessions,
-    listChatEditedMessages,
-    getChatEditStatus,
-    resetChatEditedMessage,
-    resetChatEditedSession,
     getChatRealtimeStatus,
     syncChatRealtimeMessages,
     syncChatRealtimeAll,

@@ -46,7 +46,6 @@ def test_account_dependent_pages_share_the_no_account_guide():
 
     for route in (
         "/chat",
-        "/edits",
         "/sns",
         "/favorites",
         "/contacts",

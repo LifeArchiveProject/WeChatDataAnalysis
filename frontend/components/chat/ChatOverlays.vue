@@ -966,152 +966,28 @@
         打开文件夹
       </button>
 
-      <div class="border-t border-gray-200"></div>
-
-      <button
-        v-if="contextMenu.message?.id"
-        class="chat-context-menu__item block w-full text-left px-3 py-2"
-        type="button"
-        @click="onEditMessageClick"
-      >
-        {{ isLikelyTextMessage(contextMenu.message) ? '修改消息' : '编辑源码' }}
-      </button>
-      <button
-        v-if="contextMenu.message?.id"
-        class="chat-context-menu__item block w-full text-left px-3 py-2"
-        type="button"
-        @click="onEditMessageFieldsClick"
-      >
-        字段编辑
-      </button>
-      <button
-        v-if="contextMenu.editStatus?.modified"
-        class="chat-context-menu__item block w-full text-left px-3 py-2 text-red-600"
-        type="button"
-        @click="onResetEditedMessageClick"
-      >
-        恢复原消息
-      </button>
-      <button
-        v-if="contextMenu.message?.id"
-        class="chat-context-menu__item block w-full text-left px-3 py-2"
-        type="button"
-        @click="onRepairMessageSenderAsMeClick"
-      >
-        修复为我发送
-      </button>
-      <button
-        v-if="contextMenu.message?.id"
-        class="chat-context-menu__item block w-full text-left px-3 py-2 text-orange-600"
-        type="button"
-        @click="onFlipWechatMessageDirectionClick"
-      >
-        反转微信气泡位置
-      </button>
-      <div v-if="contextMenu.editStatusLoading" class="px-3 py-2 text-xs text-gray-400">检查修改状态…</div>
+      <template v-if="isLikelyTextMessage(contextMenu.message)">
+        <div class="border-t border-gray-200"></div>
+        <button
+          class="chat-context-menu__item block w-full text-left px-3 py-2"
+          type="button"
+          @click="onEditMessageClick"
+        >
+          修改文字
+        </button>
+      </template>
     </div>
 
-    <!-- 修改消息弹窗 -->
-    <div v-if="messageEditModal.open" class="fixed inset-0 z-[11000] flex items-center justify-center">
-      <div class="absolute inset-0 bg-black/40" @click="closeMessageEditModal"></div>
-      <div class="chat-edit-modal relative w-[860px] max-w-[95vw] rounded-lg overflow-hidden">
-        <div class="px-5 py-4 border-b border-gray-200 flex items-center">
-          <div class="text-base font-medium text-gray-900">{{ messageEditModal.mode === 'content' ? '修改消息' : '编辑源码' }}</div>
-          <button class="ml-auto text-gray-400 hover:text-gray-600" type="button" @click="closeMessageEditModal">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="p-5 max-h-[75vh] overflow-y-auto space-y-3">
-          <ErrorNotice v-if="messageEditModal.error" :message="messageEditModal.error" compact class="text-sm text-red-600" />
-          <div v-if="messageEditModal.loading" class="text-sm text-gray-500">加载中…</div>
-
-          <textarea
-            v-model="messageEditModal.draft"
-            class="w-full min-h-[240px] rounded-md border border-gray-200 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#03C160]/20"
-            :disabled="messageEditModal.loading || messageEditModal.saving"
-            :placeholder="messageEditModal.mode === 'content' ? '请输入新的消息内容' : '请输入新的 message_content（可输入 0x... 写入 BLOB）'"
-          ></textarea>
-
-          <details v-if="messageEditModal.rawRow" class="text-xs">
-            <summary class="cursor-pointer select-none text-gray-700 hover:text-gray-900">查看源消息（raw）</summary>
-            <div class="mt-2 rounded border border-gray-200 bg-gray-50 p-2 overflow-auto">
-              <pre class="text-[11px] leading-snug whitespace-pre-wrap break-words">{{ prettyJson(messageEditModal.rawRow) }}</pre>
-            </div>
-          </details>
-        </div>
-
-        <div class="px-5 py-3 border-t border-gray-200 flex items-center justify-end gap-2">
-          <button class="text-sm px-4 py-2 rounded border border-gray-200 hover:bg-gray-50" type="button" @click="closeMessageEditModal">取消</button>
-          <button
-            class="text-sm px-4 py-2 rounded bg-[#03C160] text-white hover:bg-[#02ad55]"
-            type="button"
-            :disabled="messageEditModal.loading || messageEditModal.saving"
-            :class="messageEditModal.loading || messageEditModal.saving ? 'opacity-60 cursor-not-allowed' : ''"
-            @click="saveMessageEditModal"
-          >
-            保存
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 字段编辑弹窗 -->
-    <div v-if="messageFieldsModal.open" class="fixed inset-0 z-[11000] flex items-center justify-center">
-      <div class="absolute inset-0 bg-black/40" @click="closeMessageFieldsModal"></div>
-      <div class="chat-edit-modal relative w-[920px] max-w-[95vw] rounded-lg overflow-hidden">
-        <div class="px-5 py-4 border-b border-gray-200 flex items-center">
-          <div class="text-base font-medium text-gray-900">字段编辑</div>
-          <button class="ml-auto text-gray-400 hover:text-gray-600" type="button" @click="closeMessageFieldsModal">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="p-5 max-h-[75vh] overflow-y-auto space-y-3">
-          <ErrorNotice v-if="messageFieldsModal.error" :message="messageFieldsModal.error" compact class="text-sm text-red-600" />
-          <div v-if="messageFieldsModal.loading" class="text-sm text-gray-500">加载中…</div>
-
-          <div class="flex items-center gap-3">
-            <label class="flex items-center gap-2 text-sm text-gray-700">
-              <input v-model="messageFieldsModal.unsafe" type="checkbox" class="rounded border-gray-300" />
-              <span>我已知风险（允许修改 local_id / WCDB_CT / BLOB 等）</span>
-            </label>
-            <div class="text-xs text-gray-500">修改时间/类型会自动同步 message_resource 关键字段</div>
-          </div>
-
-          <textarea
-            v-model="messageFieldsModal.editsJson"
-            class="w-full min-h-[320px] rounded-md border border-gray-200 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#03C160]/20"
-            :disabled="messageFieldsModal.loading || messageFieldsModal.saving"
-            placeholder='{ "message_content": "...", "create_time": 123 }'
-          ></textarea>
-
-          <details v-if="messageFieldsModal.rawRow" class="text-xs">
-            <summary class="cursor-pointer select-none text-gray-700 hover:text-gray-900">查看源消息（raw）</summary>
-            <div class="mt-2 rounded border border-gray-200 bg-gray-50 p-2 overflow-auto">
-              <pre class="text-[11px] leading-snug whitespace-pre-wrap break-words">{{ prettyJson(messageFieldsModal.rawRow) }}</pre>
-            </div>
-          </details>
-        </div>
-
-        <div class="px-5 py-3 border-t border-gray-200 flex items-center justify-end gap-2">
-          <button class="text-sm px-4 py-2 rounded border border-gray-200 hover:bg-gray-50" type="button" @click="closeMessageFieldsModal">取消</button>
-          <button
-            class="text-sm px-4 py-2 rounded bg-[#03C160] text-white hover:bg-[#02ad55]"
-            type="button"
-            :disabled="messageFieldsModal.loading || messageFieldsModal.saving"
-            :class="messageFieldsModal.loading || messageFieldsModal.saving ? 'opacity-60 cursor-not-allowed' : ''"
-            @click="saveMessageFieldsModal"
-          >
-            保存
-          </button>
-        </div>
-      </div>
-    </div>
+    <GuideDialog
+      :open="modifyTextUnavailableDialogOpen"
+      eyebrow=""
+      title="操作失败"
+      :description="modifyTextUnavailableMessage"
+      primary-label="关闭"
+      tone="warning"
+      @primary="closeModifyTextUnavailableDialog"
+      @close="closeModifyTextUnavailableDialog"
+    />
 
     <!-- 导出弹窗 -->
     <ChatExportDialog v-if="exportModalOpen" :state="state" />
@@ -1121,6 +997,7 @@
 import { computed, defineComponent, ref, watch } from 'vue'
 import ChatExportDialog from '~/components/chat/ChatExportDialog.vue'
 import ChatHistoryFloatingWindows from '~/components/chat/ChatHistoryFloatingWindows.vue'
+import GuideDialog from '~/components/GuideDialog.vue'
 
 const PREVIEW_IMAGE_MIN_SCALE = 0.2
 const PREVIEW_IMAGE_MAX_SCALE = 8
@@ -1139,7 +1016,7 @@ const readMaybeRef = (value) => {
 
 export default defineComponent({
   name: 'ChatOverlays',
-  components: { ChatExportDialog, ChatHistoryFloatingWindows },
+  components: { ChatExportDialog, ChatHistoryFloatingWindows, GuideDialog },
   props: {
     state: { type: Object, required: true }
   },

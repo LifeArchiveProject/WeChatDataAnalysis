@@ -89,7 +89,6 @@ let firstUseNavigationPending = false
 
 const accountDataRoutePrefixes = [
   '/chat',
-  '/edits',
   '/sns',
   '/favorites',
   '/contacts',
