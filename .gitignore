@@ -10,6 +10,12 @@ wheels/
 # Virtual environments
 .venv
 /output/
+/.native-core-cache-v1/
+/.native-core-license-v1/
+/.playwright-cli/
+/.pnpm-store/
+/.pytest-tmp-*/
+/.testdeps/
 /.idea
 /.history/
 /.augment/
@@ -21,8 +27,7 @@ wheels/
 .ace-tool/
 pnpm-lock.yaml
 /tools/tmp_isaac64_compare.js
-/native/wce_integrity/target/
-/native/wce_integrity/target-*/
+/native/wce_integrity/
 /.claude/settings.local.json
 .env
 .env.*
@@ -43,13 +48,25 @@ pnpm-lock.yaml
 # Electron desktop app
 /desktop/node_modules/
 /desktop/dist/
+/desktop/dist-controlled-*/
 /desktop/dist-updater-test/
 /desktop/build/
 /desktop/resources/ui/*
 !/desktop/resources/ui/.gitkeep
 /desktop/resources/backend/*
 !/desktop/resources/backend/.gitkeep
+/desktop/resources/signing/*
+!/desktop/resources/signing/.gitkeep
 /desktop/resources/icon.ico
+
+# Native-core developer artifacts are supplied by the producer workflow.
+/src/wechat_decrypt_tool/native/wechatdb_client.dll
+/src/wechat_decrypt_tool/native/wechatdb_broker.exe
+/src/wechat_decrypt_tool/native/wechatdb_native_build.json
+
+# Local diagnostics and rollout notes
+/*.log
+/NATIVE_CORE_ROLLOUT.md
 
 # Local scratch file accidentally generated during development
 /bento-summary.html
