@@ -12,10 +12,16 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from ..chat_helpers import _resolve_account_dir
 from ..export_integrity import IntegrityZipWriter, write_zip_integrity_sidecars
+from ..native_core_export import (
+    decode_export_content_key,
+    encrypt_export_file_and_remove_source,
+    erase_export_content_key,
+)
+from ..native_core_telemetry import record_product_event
 from ..path_fix import PathFixRoute
 
 router = APIRouter(route_class=PathFixRoute)
@@ -27,6 +33,11 @@ class AccountArchiveExportRequest(BaseModel):
     include_databases: bool = Field(True, description="Whether to include decrypted database files.")
     include_resources: bool = Field(True, description="Whether to include resource folders.")
     file_name: Optional[str] = Field(None, description="Optional zip file name, with or without .zip.")
+    encrypt: bool = Field(False, description="Encrypt the completed archive as a WEC1 file.")
+    content_key_base64: Optional[SecretStr] = Field(
+        None,
+        description="Base64-encoded 32-byte WEC1 content key; used only when encrypt=true.",
+    )
 
 
 class AccountArchiveCancelled(Exception):
@@ -61,6 +72,8 @@ class AccountArchiveExportJob:
     created_at: int = field(default_factory=lambda: int(time.time()))
     updated_at: int = field(default_factory=lambda: int(time.time()))
     cancel_requested: bool = False
+    encrypted: bool = False
+    content_key: Optional[bytearray] = field(default=None, repr=False)
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +93,7 @@ class AccountArchiveExportJob:
             "createdAt": int(self.created_at or 0),
             "updatedAt": int(self.updated_at or 0),
             "cancelRequested": bool(self.cancel_requested),
+            "encrypted": bool(self.encrypted),
         }
 
 
@@ -87,6 +101,7 @@ _SAFE_NAME_RE = re.compile(r"[^0-9A-Za-z._-]+")
 # 账号归档以账号目录为边界。数据库通常在账号目录顶层，资源文件通常在子目录中。
 _DB_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".db3"}
 _META_FILE_NAMES = {"_source.json", "_media_keys.json", "_sns_realtime_sync_state.json"}
+_SQLITE_HEADER = b"SQLite format 3\x00"
 _JOBS: dict[str, AccountArchiveExportJob] = {}
 _JOBS_LOCK = threading.RLock()
 
@@ -102,6 +117,27 @@ def _normalize_zip_name(value: object, fallback: str) -> str:
     if not name.lower().endswith(".zip"):
         name += ".zip"
     return name
+
+
+def _is_valid_sqlite(path: Path) -> bool:
+    try:
+        if not path.is_file():
+            return False
+        with path.open("rb") as source:
+            return source.read(len(_SQLITE_HEADER)) == _SQLITE_HEADER
+    except OSError:
+        return False
+
+
+def _require_portable_database_pair(account_dir: Path) -> None:
+    required_names = ("contact.db", "session.db")
+    missing = [name for name in required_names if not _is_valid_sqlite(account_dir / name)]
+    if not missing:
+        return
+    raise FileNotFoundError(
+        "所选账号缺少可迁移的已解密数据库（需要有效的 contact.db 和 session.db）。"
+        "实时读取可用不代表已有可导入备份，请先在原电脑完成数据库解密，再重新导出。"
+    )
 
 
 def _resolve_output_dir(account_dir: Path, output_dir_raw: object) -> Path:
@@ -308,6 +344,9 @@ def _run_account_archive_export(export_id: str, payload: dict[str, Any]) -> None
         _check_cancel(job)
         account_dir = _resolve_account_dir(payload.get("account"))
         account_name = account_dir.name
+        _update_job(export_id, account=account_name)
+        if include_databases:
+            _require_portable_database_pair(account_dir)
         output_dir = _resolve_output_dir(account_dir, payload.get("output_dir"))
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -315,13 +354,14 @@ def _run_account_archive_export(export_id: str, payload: dict[str, Any]) -> None
         fallback_name = f"wechat_archive_{_safe_file_name(account_name, 'account')}_{stamp}.zip"
         zip_name = _normalize_zip_name(payload.get("file_name"), fallback_name)
         zip_path = (output_dir / zip_name).resolve()
+        final_path = zip_path.with_name(zip_path.name + ".wec") if job.content_key is not None else zip_path
         tmp_path = zip_path.with_suffix(zip_path.suffix + ".tmp")
 
         _update_job(
             export_id,
             account=account_name,
-            file_name=zip_name,
-            zip_path=str(zip_path),
+            file_name=final_path.name,
+            zip_path=str(final_path),
             progress=1,
             message="Scanning export content...",
             detail="Calculating total archive size.",
@@ -412,9 +452,17 @@ def _run_account_archive_export(export_id: str, payload: dict[str, Any]) -> None
 
         _check_cancel(job, tmp_path)
         _update_job(export_id, progress=97, message="Finalizing ZIP archive...", detail="Moving archive to target folder.")
-        if zip_path.exists():
-            zip_path.unlink()
-        shutil.move(str(tmp_path), str(zip_path))
+        if final_path.exists():
+            final_path.unlink()
+        if job.content_key is not None:
+            encrypt_export_file_and_remove_source(
+                tmp_path,
+                final_path,
+                export_id=export_id,
+                content_key=job.content_key,
+            )
+        else:
+            shutil.move(str(tmp_path), str(final_path))
 
         _update_job(
             export_id,
@@ -426,9 +474,10 @@ def _run_account_archive_export(export_id: str, payload: dict[str, Any]) -> None
             resource_file_count=resource_file_count,
             total_bytes=total_bytes,
             processed_bytes=processed_bytes,
-            zip_path=str(zip_path),
-            file_name=zip_path.name,
+            zip_path=str(final_path),
+            file_name=final_path.name,
         )
+        record_product_event("export_completed")
     except AccountArchiveCancelled:
         try:
             if tmp_path is not None and tmp_path.exists():
@@ -443,12 +492,24 @@ def _run_account_archive_export(export_id: str, payload: dict[str, Any]) -> None
         except Exception:
             pass
         _update_job(export_id, status="error", error=str(exc), message="Export failed.", detail="")
+        record_product_event("export_failed")
+    finally:
+        erase_export_content_key(job.content_key)
+        job.content_key = None
 
 
 @router.post("/api/account/archive_export", summary="Create account archive export job")
 async def export_account_archive(req: AccountArchiveExportRequest):
     if not req.include_databases and not req.include_resources:
         raise HTTPException(status_code=400, detail="Please select at least one export option.")
+
+    try:
+        content_key = decode_export_content_key(
+            req.content_key_base64.get_secret_value() if req.content_key_base64 else None,
+            enabled=bool(req.encrypt),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     payload = {
         "account": req.account,
@@ -458,12 +519,22 @@ async def export_account_archive(req: AccountArchiveExportRequest):
         "file_name": req.file_name,
     }
     export_id = uuid.uuid4().hex
-    job = AccountArchiveExportJob(export_id=export_id)
+    job = AccountArchiveExportJob(
+        export_id=export_id,
+        encrypted=bool(req.encrypt),
+        content_key=content_key,
+    )
     with _JOBS_LOCK:
         _JOBS[export_id] = job
 
     thread = threading.Thread(target=_run_account_archive_export, args=(export_id, payload), daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        with _JOBS_LOCK:
+            _JOBS.pop(export_id, None)
+        erase_export_content_key(content_key)
+        raise
     return {"status": "success", "job": job.to_public_dict()}
 
 
@@ -472,9 +543,13 @@ async def download_account_archive(path: str):
     zip_path = Path(str(path or "").strip()).expanduser().resolve()
     if not zip_path.exists() or not zip_path.is_file():
         raise HTTPException(status_code=404, detail="Export file not found.")
-    if zip_path.suffix.lower() != ".zip":
+    if zip_path.suffix.lower() not in {".zip", ".wec"}:
         raise HTTPException(status_code=400, detail="Invalid export file.")
-    return FileResponse(str(zip_path), media_type="application/zip", filename=zip_path.name)
+    return FileResponse(
+        str(zip_path),
+        media_type="application/octet-stream" if zip_path.suffix.lower() == ".wec" else "application/zip",
+        filename=zip_path.name,
+    )
 
 
 @router.get("/api/account/archive_export/{export_id}", summary="Get account archive export job")

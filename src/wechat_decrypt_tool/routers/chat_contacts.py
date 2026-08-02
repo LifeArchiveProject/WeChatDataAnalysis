@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 try:
     from pypinyin import Style, lazy_pinyin
@@ -38,10 +38,17 @@ from ..source_fallback import build_source_fallback_meta
 from ..export_integrity import (
     export_css,
     load_wce_integrity_native,
+    native_file_integrity_sidecar_paths,
+    remove_file_export_artifacts,
     seal_bytes_artifact,
     seal_protected_html_bytes,
     write_file_integrity_sidecars,
     write_protected_html_file,
+)
+from ..native_core_export import (
+    decode_export_content_key,
+    encrypt_export_file_and_remove_source,
+    erase_export_content_key,
 )
 from ..xlsx_export import build_xlsx_workbook
 from ..wcdb_realtime import (
@@ -289,6 +296,11 @@ class ContactExportRequest(BaseModel):
     include_avatar_link: bool = Field(True, description="是否导出 avatarLink 字段")
     contact_types: ContactTypeFilter = Field(default_factory=ContactTypeFilter)
     keyword: Optional[str] = Field(None, description="关键词筛选（可选）")
+    encrypt: bool = Field(False, description="是否使用 WEC1 加密最终导出文件")
+    content_key_base64: Optional[SecretStr] = Field(
+        None,
+        description="WEC1 的 32 字节 Base64 内容密钥；仅 encrypt=true 时使用",
+    )
 
 
 class ContactBrowserExportSealRequest(BaseModel):
@@ -2421,7 +2433,25 @@ def export_chat_contacts(request: Request, req: ContactExportRequest):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_account = _safe_export_part(account_dir.name)
     extension = "xlsx" if fmt == "excel" else fmt
-    output_path = output_dir / f"contacts_{safe_account}_{ts}.{extension}"
+    encrypted_requested = bool(req.encrypt)
+    requested_output_path = output_dir / f"contacts_{safe_account}_{ts}.{extension}"
+    plaintext_output_path = (
+        requested_output_path.with_name(
+            f".{requested_output_path.name}.{export_id}.plain"
+        )
+        if encrypted_requested
+        else requested_output_path
+    )
+    output_path = plaintext_output_path
+    encrypted_output_path: Path | None = None
+
+    try:
+        content_key = decode_export_content_key(
+            req.content_key_base64.get_secret_value() if req.content_key_base64 else None,
+            enabled=bool(req.encrypt),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         if fmt == "json":
@@ -2465,8 +2495,35 @@ def export_chat_contacts(request: Request, req: ContactExportRequest):
             )
         if fmt != "html":
             integrity_manifest_path, integrity_signature_path = write_file_integrity_sidecars(output_path, export_id)
+        native_integrity_manifest_path, native_integrity_signature_path = (
+            native_file_integrity_sidecar_paths(output_path)
+        )
+        if content_key is not None:
+            encrypted_path = requested_output_path.with_name(requested_output_path.name + ".wec")
+            if encrypted_path.exists():
+                encrypted_path = requested_output_path.with_name(
+                    f"{requested_output_path.stem}_{export_id}{requested_output_path.suffix}.wec"
+                )
+            encrypted_output_path = encrypted_path
+            encrypt_export_file_and_remove_source(
+                plaintext_output_path,
+                encrypted_path,
+                export_id=export_id,
+                content_key=content_key,
+                overwrite=False,
+            )
+            remove_file_export_artifacts(plaintext_output_path, export_id)
+            output_path = encrypted_path
     except Exception as e:
+        if encrypted_requested:
+            try:
+                remove_file_export_artifacts(plaintext_output_path, export_id)
+            finally:
+                if encrypted_output_path is not None:
+                    encrypted_output_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Failed to export contacts: {e}")
+    finally:
+        erase_export_content_key(content_key)
 
     return {
         "status": "success",
@@ -2475,8 +2532,23 @@ def export_chat_contacts(request: Request, req: ContactExportRequest):
         **source_meta,
         "format": fmt,
         "outputPath": str(output_path),
-        "integrityManifestPath": str(integrity_manifest_path),
-        "integritySignaturePath": str(integrity_signature_path),
+        "integrityManifestPath": "" if encrypted_requested else str(integrity_manifest_path),
+        "integritySignaturePath": "" if encrypted_requested else str(integrity_signature_path),
+        "nativeIntegrityManifestPath": (
+            str(native_integrity_manifest_path)
+            if (not encrypted_requested) and native_integrity_manifest_path.is_file()
+            else ""
+        ),
+        "nativeIntegritySignaturePath": (
+            str(native_integrity_signature_path)
+            if (not encrypted_requested) and native_integrity_signature_path.is_file()
+            else ""
+        ),
+        "authoritativeSealFormat": (
+            "WEC1"
+            if encrypted_requested
+            else ("WES1" if native_integrity_signature_path.is_file() else "legacy")
+        ),
         "count": len(export_contacts),
     }
 

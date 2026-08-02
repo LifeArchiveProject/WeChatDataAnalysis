@@ -13,7 +13,7 @@
             接入已准备好的本地数据
           </h1>
           <p class="mt-3 max-w-2xl text-[14px] leading-7 text-[#6B7280]">
-            选择已解密的微信备份目录，先检查账号与文件结构，确认后再导入到本地数据区。
+            选择账号归档 ZIP（无需解压）或已解密的微信备份目录，确认后再导入到本地数据区。
           </p>
         </div>
 
@@ -35,12 +35,13 @@
               <svg class="h-5 w-5 text-[#07C160]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
               </svg>
-              <span>选择哪个目录</span>
+              <span>选择哪种备份</span>
             </div>
             <p class="mt-3 text-[13px] leading-6 text-[#6B7280]">
-              建议直接选择账号目录。如果是 wxdump 导出，且 output 下只有一个账号，也可以选择 output 根目录。
+              本应用导出的账号归档请直接选择原始 ZIP，无需解压。导入已解密目录时，可选择账号目录或仅含一个账号的 output 根目录。
             </p>
             <div class="mt-4 flex flex-wrap gap-2">
+              <span class="rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2.5 py-1 text-[12px] font-mono text-[#4A4A4A]">wechat_archive_*.zip</span>
               <span class="rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2.5 py-1 text-[12px] font-mono text-[#4A4A4A]">wxid_xxxxx/</span>
               <span class="rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2.5 py-1 text-[12px] font-mono text-[#4A4A4A]">databases/</span>
               <span class="rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2.5 py-1 text-[12px] font-mono text-[#4A4A4A]">database/</span>
@@ -54,8 +55,8 @@
               <div class="flex gap-3">
                 <span class="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-[#CFEEDB] text-[11px] font-medium text-[#07C160]">1</span>
                 <div>
-                  <div class="text-[13px] font-medium text-[#000000d9]">选择目录</div>
-                  <p class="mt-2 text-[12px] leading-5 text-[#7F7F7F]">使用系统目录选择器定位备份。</p>
+                  <div class="text-[13px] font-medium text-[#000000d9]">选择备份</div>
+                  <p class="mt-2 text-[12px] leading-5 text-[#7F7F7F]">选择原始 ZIP 或已解密目录。</p>
                 </div>
               </div>
               <div class="flex gap-3">
@@ -277,13 +278,23 @@
                 <p class="mt-1 break-all text-[13px] leading-6 text-[#7A4B4B]">{{ selectedImportPath }}</p>
               </div>
 
-              <button
-                type="button"
-                class="inline-flex w-full items-center justify-center rounded-lg border border-[#DDEBE0] bg-[#F7FCF8]/86 px-4 py-3 text-sm font-medium text-[#4A4A4A] transition hover:bg-[#F1FAF4] focus:outline-none focus:ring-2 focus:ring-[#07C160]/15"
-                @click="retryPickDirectory"
-              >
-                重新选择目录
-              </button>
+              <div class="grid gap-3" :class="isDesktopShell() ? 'sm:grid-cols-2' : ''">
+                <button
+                  v-if="isDesktopShell()"
+                  type="button"
+                  class="inline-flex w-full items-center justify-center rounded-lg bg-[#07C160] px-4 py-3 text-sm font-medium text-white transition hover:bg-[#06AD56] focus:outline-none focus:ring-2 focus:ring-[#07C160]/25"
+                  @click="handlePickArchive"
+                >
+                  选择原始 ZIP
+                </button>
+                <button
+                  type="button"
+                  class="inline-flex w-full items-center justify-center rounded-lg border border-[#DDEBE0] bg-[#F7FCF8]/86 px-4 py-3 text-sm font-medium text-[#4A4A4A] transition hover:bg-[#F1FAF4] focus:outline-none focus:ring-2 focus:ring-[#07C160]/15"
+                  @click="retryPickDirectory"
+                >
+                  重新选择目录
+                </button>
+              </div>
             </div>
           </div>
         </div>

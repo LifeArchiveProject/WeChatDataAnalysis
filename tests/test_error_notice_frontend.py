@@ -100,6 +100,13 @@ class ErrorNoticeFrontendTest(unittest.TestCase):
             for marker in markers:
                 self.assertIn(marker, source, f"{path}: {marker}")
 
+    def test_import_error_offers_the_original_archive_without_extraction(self):
+        source = read_frontend("pages/import.vue")
+
+        self.assertIn("账号归档 ZIP（无需解压）", source)
+        self.assertIn("选择原始 ZIP", source)
+        self.assertIn('@click="handlePickArchive"', source)
+
     def test_native_operational_failures_use_the_shared_helper(self):
         paths = (
             "stores/imgHelper.js",

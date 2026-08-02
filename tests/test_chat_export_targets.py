@@ -341,7 +341,7 @@ class TestChatExportTargets(unittest.TestCase):
                 db_path = Path(path)
                 if "sqlite_master" in sql:
                     return [{"name": table_name}]
-                if "FROM Name2Id" in sql:
+                if sql.startswith("SELECT rowid AS rowid FROM Name2Id"):
                     return [{"rowid": 1}]
                 if "SELECT COUNT(*) AS count" in sql:
                     return [{"count": 1}]
