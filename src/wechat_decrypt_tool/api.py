@@ -40,6 +40,10 @@ from .routers.general import router as _general_router
 from .routers.favorites import router as _favorites_router
 from .routers.record_export import router as _record_export_router
 from .request_logging import log_server_errors_middleware
+from .native_core_telemetry import (
+    record_product_event,
+    shutdown_product_telemetry,
+)
 from .wcdb_realtime import WCDB_REALTIME, shutdown as _wcdb_shutdown
 from .img_helper import IMG_HELPER
 from .routers.biz import router as _biz_router
@@ -70,6 +74,50 @@ async def _log_server_errors(request: Request, call_next):
     # the idempotent filter before access logging runs for each request.
     install_sensitive_query_log_filter()
     return await log_server_errors_middleware(request_logger, request, call_next)
+
+
+_ASYNC_EXPORT_PATHS = {
+    "/api/account/archive_export",
+    "/api/chat/exports",
+    "/api/sns/exports",
+}
+_SYNC_EXPORT_PATHS = {
+    "/api/chat/contacts/export",
+    "/api/chat/contacts/export/seal",
+    "/api/records/export",
+}
+_USAGE_EVENT_PATHS = {
+    "/api/chat/messages": "message_page",
+    "/api/chat/search": "search",
+    "/api/chat/sessions": "conversation_list",
+}
+
+
+@app.middleware("http")
+async def _record_content_free_product_events(request: Request, call_next):
+    path = request.url.path
+    is_export = request.method == "POST" and path in (
+        _ASYNC_EXPORT_PATHS | _SYNC_EXPORT_PATHS
+    )
+    if is_export:
+        record_product_event("export_started")
+    try:
+        response = await call_next(request)
+    except BaseException:
+        if is_export:
+            record_product_event("export_failed")
+        raise
+    if response.status_code < 400:
+        usage_event = (
+            _USAGE_EVENT_PATHS.get(path) if request.method == "GET" else None
+        )
+        if usage_event is not None:
+            record_product_event(usage_event)
+        if is_export and path in _SYNC_EXPORT_PATHS:
+            record_product_event("export_completed")
+    elif is_export:
+        record_product_event("export_failed")
+    return response
 
 
 app.include_router(_health_router)
@@ -187,6 +235,14 @@ _maybe_mount_frontend()
 
 
 @app.on_event("startup")
+async def _startup_native_core() -> None:
+    from .native_core_client import configure_native_core_entrypoint
+
+    configure_native_core_entrypoint()
+    record_product_event("app_open")
+
+
+@app.on_event("startup")
 async def _startup_background_jobs() -> None:
     try:
         CHAT_REALTIME_AUTOSYNC.start()
@@ -228,6 +284,7 @@ async def _shutdown_wcdb_realtime() -> None:
     else:
         # If some conn locks were busy, other threads may still be running WCDB calls; avoid shutting down the lib.
         logger.warning("[wcdb] close_all not fully completed; skip wcdb_shutdown")
+    shutdown_product_telemetry()
 
 
 if __name__ == "__main__":
