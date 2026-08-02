@@ -2543,6 +2543,7 @@ async def get_chat_image(
                     str(file_id),
                     kind="image",
                     username=str(username or ""),
+                    allow_global_scan=bool(deep_scan),
                 )
                 if hit:
                     p = Path(hit)
@@ -2588,6 +2589,7 @@ async def get_chat_image(
                 str(file_id),
                 kind="image",
                 username=str(username or ""),
+                allow_global_scan=bool(deep_scan),
             )
             if hit:
                 p = Path(hit)
@@ -3038,6 +3040,7 @@ async def get_chat_video_thumb(
                 file_id_norm,
                 kind="video_thumb",
                 username=str(username or ""),
+                allow_global_scan=bool(deep_scan),
             )
             if hit:
                 p = Path(hit)
@@ -3248,6 +3251,7 @@ async def get_chat_video(
                 file_id_norm,
                 kind="video",
                 username=str(username or ""),
+                allow_global_scan=bool(deep_scan),
             )
             if hit:
                 p = Path(hit)

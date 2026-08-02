@@ -684,6 +684,7 @@ def _load_group_nickname_map(
     chatroom_id: str,
     sender_usernames: list[str],
     rt_conn=None,
+    allow_native_fallback: bool = True,
 ) -> dict[str, str]:
     """Resolve group member nickname (group card) via WCDB and contact.db ext_buffer (best-effort)."""
 
@@ -697,16 +698,19 @@ def _load_group_nickname_map(
     except Exception:
         contact_map = {}
 
+    targets = list(dict.fromkeys(str(value or "").strip() for value in sender_usernames if str(value or "").strip()))
+    unresolved = [username for username in targets if username not in contact_map]
     wcdb_map: dict[str, str] = {}
-    try:
-        wcdb_map = _load_group_nickname_map_from_wcdb(
-            account_dir=account_dir,
-            chatroom_id=chatroom_id,
-            sender_usernames=sender_usernames,
-            rt_conn=rt_conn,
-        )
-    except Exception:
-        wcdb_map = {}
+    if unresolved and allow_native_fallback:
+        try:
+            wcdb_map = _load_group_nickname_map_from_wcdb(
+                account_dir=account_dir,
+                chatroom_id=chatroom_id,
+                sender_usernames=unresolved,
+                rt_conn=rt_conn,
+            )
+        except Exception:
+            wcdb_map = {}
 
     if not contact_map and not wcdb_map:
         return {}
@@ -969,25 +973,37 @@ def _lookup_contact_alias(
     return alias
 
 
-def _scan_db_storage_mtime_ns(db_storage_dir: Path) -> int:
+def _scan_db_storage_mtime_ns(db_storage_dir: Path, *, scope: str = "all") -> int:
     try:
         base = str(db_storage_dir)
     except Exception:
         return 0
 
+    scope_norm = "chat" if str(scope or "").strip().lower() == "chat" else "all"
+    chat_only = scope_norm == "chat"
+    allowed_buckets = {"message", "session"} if chat_only else {
+        "message",
+        "session",
+        "contact",
+        "head_image",
+        "bizchat",
+        "sns",
+        "general",
+        "favorite",
+    }
     max_ns = 0
     try:
         for root, dirs, files in os.walk(base):
-            # Most installs keep databases under these buckets.
             if root == base:
-                allow = {"message", "session", "contact", "head_image", "bizchat", "sns", "general", "favorite"}
-                dirs[:] = [d for d in dirs if str(d or "").lower() in allow]
+                dirs[:] = [d for d in dirs if str(d or "").lower() in allowed_buckets]
 
             for fn in files:
                 name = str(fn or "").lower()
-                if not name.endswith((".db", ".db-wal", ".db-shm")):
+                # WAL and database mtimes represent writes. SHM can change when this app
+                # merely reads a database and must not trigger a self-refresh loop.
+                if not name.endswith((".db", ".db-wal")):
                     continue
-                if not (
+                if (not chat_only) and not (
                     ("message" in name)
                     or ("session" in name)
                     or ("contact" in name)
@@ -1105,6 +1121,7 @@ async def stream_chat_realtime_events(
     request: Request,
     account: Optional[str] = None,
     interval_ms: int = 500,
+    scope: str = "all",
 ):
     """监听 db_storage 目录的变更，通过 SSE 推送事件（用于前端触发增量刷新）。"""
     if interval_ms < 100:
@@ -1118,15 +1135,24 @@ async def stream_chat_realtime_events(
     if not db_storage_dir.exists() or not db_storage_dir.is_dir():
         raise HTTPException(status_code=400, detail="db_storage directory not found for this account.")
 
+    scope_norm = "chat" if str(scope or "").strip().lower() == "chat" else "all"
     logger.info(
-        "[realtime] SSE stream open account=%s interval_ms=%s db_storage=%s",
+        "[realtime] SSE stream open account=%s scope=%s interval_ms=%s db_storage=%s",
         account_dir.name,
+        scope_norm,
         int(interval_ms),
         str(db_storage_dir),
     )
 
     async def gen():
-        last_mtime_ns = 0
+        try:
+            last_mtime_ns = await asyncio.to_thread(
+                _scan_db_storage_mtime_ns,
+                db_storage_dir,
+                scope=scope_norm,
+            )
+        except Exception:
+            last_mtime_ns = 0
         last_heartbeat = 0.0
 
         # initial snapshot
@@ -1134,6 +1160,8 @@ async def stream_chat_realtime_events(
             "type": "ready",
             "account": account_dir.name,
             "dbStorageDir": str(db_storage_dir),
+            "scope": scope_norm,
+            "mtimeNs": int(last_mtime_ns),
             "ts": int(time.time() * 1000),
         }
         yield f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
@@ -1146,7 +1174,11 @@ async def stream_chat_realtime_events(
                 # Avoid blocking the event loop on a potentially large directory walk.
                 scan_t0 = time.perf_counter()
                 try:
-                    mtime_ns = await asyncio.to_thread(_scan_db_storage_mtime_ns, db_storage_dir)
+                    mtime_ns = await asyncio.to_thread(
+                        _scan_db_storage_mtime_ns,
+                        db_storage_dir,
+                        scope=scope_norm,
+                    )
                 except Exception:
                     mtime_ns = 0
                 scan_ms = (time.perf_counter() - scan_t0) * 1000.0
@@ -1158,6 +1190,7 @@ async def stream_chat_realtime_events(
                     payload = {
                         "type": "change",
                         "account": account_dir.name,
+                        "scope": scope_norm,
                         "mtimeNs": int(mtime_ns),
                         "ts": int(time.time() * 1000),
                     }
@@ -4757,35 +4790,20 @@ def list_chat_sessions(
         localAvatarCount=len(local_avatar_usernames),
     )
 
-    # Some sessions (notably enterprise groups / openim-related IDs) may be missing from decrypted contact.db
-    # (or lack nickname/avatar columns). In that case, fall back to WCDB APIs (same as WeFlow) to resolve
-    # display names + avatar URLs.
+    # Some sessions (notably enterprise groups / openim-related IDs) may be missing from decrypted contact.db.
+    # Only unresolved display names need the native fallback; avatars use the unified endpoint below.
     wcdb_display_names: dict[str, str] = {}
-    wcdb_avatar_urls: dict[str, str] = {}
     try:
         need_display: list[str] = []
-        need_avatar: list[str] = []
-        if source_norm == "realtime":
-            # In realtime mode, always ask WCDB for display names: decrypted contact.db can be stale.
-            need_display = [str(u or "").strip() for u in usernames if str(u or "").strip()]
         for u in usernames:
             if not u:
                 continue
-            if source_norm != "realtime":
-                row = contact_rows.get(u)
-                if _pick_display_name(row, u) == u:
-                    need_display.append(u)
-            if source_norm == "realtime":
-                # In realtime mode, prefer WCDB-resolved avatar URLs (contact.db can be stale).
-                if u not in local_avatar_usernames:
-                    need_avatar.append(u)
-            else:
-                if u not in local_avatar_usernames:
-                    need_avatar.append(u)
+            row = contact_rows.get(u)
+            if _pick_display_name(row, u) == u:
+                need_display.append(u)
 
         need_display = list(dict.fromkeys(need_display))
-        need_avatar = list(dict.fromkeys(need_avatar))
-        if need_display or need_avatar:
+        if need_display:
             wcdb_conn = rt_conn
             if wcdb_conn is None:
                 status = WCDB_REALTIME.get_status(account_dir)
@@ -4796,18 +4814,14 @@ def list_chat_sessions(
                     wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
             if wcdb_conn is not None:
                 with wcdb_conn.lock:
-                    if need_display:
-                        wcdb_display_names = _wcdb_get_display_names(wcdb_conn.handle, need_display)
-                    if need_avatar:
-                        wcdb_avatar_urls = _wcdb_get_avatar_urls(wcdb_conn.handle, need_avatar)
+                    wcdb_display_names = _wcdb_get_display_names(wcdb_conn.handle, need_display)
     except Exception:
         wcdb_display_names = {}
-        wcdb_avatar_urls = {}
 
     trace(
         "wcdb-fallback:loaded",
         displayNameCount=len(wcdb_display_names),
-        avatarUrlCount=len(wcdb_avatar_urls),
+        avatarUrlCount=0,
     )
 
     preview_mode = str(preview or "").strip().lower()
@@ -5737,12 +5751,13 @@ def _fetch_realtime_message_rows_via_exec(
     username: str,
     take: int,
 ) -> tuple[list[dict[str, Any]], bool, Optional[Path], str, Optional[int]]:
+    db_storage_dir = _resolve_account_db_storage_dir(account_dir)
     batch = _shared_fetch_realtime_rows_via_exec(
         rt_conn=rt_conn,
         account_dir=account_dir,
         username=username,
         take=take,
-        db_storage_dir=_resolve_account_db_storage_dir(account_dir),
+        db_storage_dir=db_storage_dir,
         exec_query=_wcdb_exec_query,
         normalize_item=_normalize_realtime_message_item,
     )
@@ -7149,34 +7164,25 @@ def list_chat_messages(
         localSenderAvatarCount=len(local_sender_avatars),
     )
 
-    # contact.db may not include enterprise/openim contacts (or group chatroom records). WCDB has a more complete
-    # view of display names + avatar URLs, so we use it as a best-effort fallback.
+    # contact.db may not include enterprise/openim contacts (or group chatroom records), so unresolved
+    # display names use the native database as a best-effort fallback.
     wcdb_display_names: dict[str, str] = {}
-    wcdb_avatar_urls: dict[str, str] = {}
     try:
         need_display: list[str] = []
-        need_avatar: list[str] = []
         for u in uniq_senders:
             if not u:
                 continue
             row = sender_contact_rows.get(u)
             if _pick_display_name(row, u) == u:
                 need_display.append(u)
-            if u not in local_sender_avatars:
-                need_avatar.append(u)
 
         need_display = list(dict.fromkeys(need_display))
-        need_avatar = list(dict.fromkeys(need_avatar))
-        if need_display or need_avatar:
+        if need_display:
             wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
             with wcdb_conn.lock:
-                if need_display:
-                    wcdb_display_names = _wcdb_get_display_names(wcdb_conn.handle, need_display)
-                if need_avatar:
-                    wcdb_avatar_urls = _wcdb_get_avatar_urls(wcdb_conn.handle, need_avatar)
+                wcdb_display_names = _wcdb_get_display_names(wcdb_conn.handle, need_display)
     except Exception:
         wcdb_display_names = {}
-        wcdb_avatar_urls = {}
 
     group_nicknames = _load_group_nickname_map(
         account_dir=account_dir,
@@ -7187,7 +7193,7 @@ def list_chat_messages(
     trace(
         "sender-fallbacks:loaded",
         wcdbDisplayNameCount=len(wcdb_display_names),
-        wcdbAvatarUrlCount=len(wcdb_avatar_urls),
+        wcdbAvatarUrlCount=0,
         groupNicknameCount=len(group_nicknames),
     )
 

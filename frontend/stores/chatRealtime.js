@@ -3,9 +3,21 @@ import { defineStore } from 'pinia'
 import { showErrorAlert } from '~/composables/useErrorNotice'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 
+const STREAM_REGISTRY_KEY = Symbol.for('wechat-data-analysis.chat-realtime-streams')
+const CHANGE_DEBOUNCE_MS = 750
+const CHANGE_MAX_WAIT_MS = 2000
+const INITIAL_SNAPSHOT_WINDOW_MS = 1500
 const REALTIME_STREAM_RECONNECT_BASE_MS = 1_000
 const REALTIME_STREAM_RECONNECT_MAX_MS = 30_000
 const REALTIME_STREAM_STABLE_MS = 10_000
+
+const getStreamRegistry = () => {
+  if (typeof window === 'undefined') return null
+  if (!(window[STREAM_REGISTRY_KEY] instanceof Map)) {
+    window[STREAM_REGISTRY_KEY] = new Map()
+  }
+  return window[STREAM_REGISTRY_KEY]
+}
 
 export const useChatRealtimeStore = defineStore('chatRealtime', () => {
   const chatAccounts = useChatAccountsStore()
@@ -20,20 +32,33 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
   const lastToggleAction = ref('')
   const changeSeq = ref(0)
   const priorityUsername = ref('')
+  const streamScope = ref('all')
 
   let eventSource = null
+  let eventSourceAccount = ''
+  let eventSourceScope = ''
   let changeDebounceTimer = null
+  let changeDebounceStartedAt = 0
   let streamReconnectTimer = null
   let streamStabilityTimer = null
   let streamReconnectAttempt = 0
   let streamGeneration = 0
   let statusRequestGeneration = 0
+  let lifecycleSeq = 0
+  let closedStreamState = null
+  const streamOwner = Symbol('chat-realtime-store')
 
   const getAccount = () => String(chatAccounts.selectedAccount || '').trim()
 
   const setPriorityUsername = (username) => {
     priorityUsername.value = String(username || '').trim()
   }
+
+  const normalizeStreamScope = (scope) => (
+    String(scope || '').trim().toLowerCase() === 'chat' ? 'chat' : 'all'
+  )
+
+  const getStreamKey = (account, scope) => `${account}:${normalizeStreamScope(scope)}`
 
   const ensureReadyAccount = async () => {
     if (!process.client) return false
@@ -161,11 +186,22 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
   const closeEventSource = () => {
     clearStreamStabilityTimer()
     const source = eventSource
+    const account = eventSourceAccount
+    const scope = eventSourceScope
     eventSource = null
+    eventSourceAccount = ''
+    eventSourceScope = ''
     if (!source) return
     try {
       source.close()
     } catch {}
+    const registry = getStreamRegistry()
+    const streamKey = account ? getStreamKey(account, scope) : ''
+    const registered = streamKey ? registry?.get(streamKey) : null
+    if (registered?.source === source && registered?.owner === streamOwner) {
+      closedStreamState = registered
+      registry.delete(streamKey)
+    }
   }
 
   const stopStream = () => {
@@ -179,14 +215,21 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
       } catch {}
       changeDebounceTimer = null
     }
+    changeDebounceStartedAt = 0
+    closedStreamState = null
   }
 
   const bumpChangeSeqDebounced = () => {
-    if (changeDebounceTimer) return
+    const now = Date.now()
+    if (!changeDebounceStartedAt) changeDebounceStartedAt = now
+    if (changeDebounceTimer) clearTimeout(changeDebounceTimer)
+    const maxWaitRemaining = Math.max(0, CHANGE_MAX_WAIT_MS - (now - changeDebounceStartedAt))
+    const delayMs = Math.min(CHANGE_DEBOUNCE_MS, maxWaitRemaining)
     changeDebounceTimer = setTimeout(() => {
       changeDebounceTimer = null
+      changeDebounceStartedAt = 0
       changeSeq.value += 1
-    }, 500)
+    }, delayMs)
   }
 
   const streamIsCurrent = (generation, account) => (
@@ -217,19 +260,51 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
 
     closeEventSource()
     const apiBase = useApiBase()
-    const url = `${apiBase}/chat/realtime/stream?account=${encodeURIComponent(account)}`
+    const scope = normalizeStreamScope(streamScope.value)
+    const url = `${apiBase}/chat/realtime/stream?account=${encodeURIComponent(account)}&scope=${encodeURIComponent(streamScope.value)}`
+    const registry = getStreamRegistry()
+    const streamKey = getStreamKey(account, scope)
+    const registered = registry?.get(streamKey)
+    const previous = registered || (
+      closedStreamState?.account === account && closedStreamState?.scope === scope
+        ? closedStreamState
+        : null
+    )
+    if (previous?.source) {
+      try { previous.source.close() } catch {}
+    }
     let source = null
     try {
       source = new EventSource(url)
       eventSource = source
+      eventSourceAccount = account
+      eventSourceScope = scope
     } catch {
       eventSource = null
+      eventSourceAccount = ''
+      eventSourceScope = ''
       scheduleStreamReconnect(generation, account)
       return
     }
 
+    const streamState = {
+      account,
+      scope,
+      source,
+      owner: streamOwner,
+      openedAt: Date.now(),
+      lastMtimeNs: String(previous?.lastMtimeNs || '').trim(),
+      initialSnapshotPending: true,
+    }
+    closedStreamState = null
+    registry?.set(streamKey, streamState)
+
     source.onopen = () => {
-      if (!streamIsCurrent(generation, account) || eventSource !== source) {
+      if (
+        !streamIsCurrent(generation, account)
+        || eventSource !== source
+        || registry?.get(streamKey)?.source !== source
+      ) {
         try {
           source.close()
         } catch {}
@@ -244,10 +319,29 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
     }
 
     source.onmessage = (ev) => {
-      if (!streamIsCurrent(generation, account) || eventSource !== source) return
+      if (
+        !streamIsCurrent(generation, account)
+        || eventSource !== source
+        || registry?.get(streamKey)?.source !== source
+      ) return
       try {
         const data = JSON.parse(String(ev.data || '{}'))
+        if (String(data?.type || '') === 'ready') {
+          const mtimeNs = String(data?.mtimeNs || '').trim()
+          if (mtimeNs) {
+            streamState.lastMtimeNs = mtimeNs
+            streamState.initialSnapshotPending = false
+          }
+          return
+        }
         if (String(data?.type || '') === 'change') {
+          const mtimeNs = String(data?.mtimeNs || '').trim()
+          const isInitialSnapshot = streamState.initialSnapshotPending
+            && (Date.now() - streamState.openedAt) <= INITIAL_SNAPSHOT_WINDOW_MS
+          streamState.initialSnapshotPending = false
+          if (mtimeNs && mtimeNs === streamState.lastMtimeNs) return
+          streamState.lastMtimeNs = mtimeNs
+          if (isInitialSnapshot) return
           bumpChangeSeqDebounced()
         }
       } catch {}
@@ -266,20 +360,35 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
   }
 
   const startStream = () => {
-    stopStream()
     if (!process.client || typeof window === 'undefined') return
     if (!enabled.value) return
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      stopStream()
+      return
+    }
     const account = getAccount()
     if (!account) return
     if (typeof EventSource === 'undefined') return
+    const scope = normalizeStreamScope(streamScope.value)
+    if (
+      eventSource
+      && eventSourceAccount === account
+      && eventSourceScope === scope
+      && eventSource.readyState !== 2
+    ) return
+
+    stopStream()
     openStream(streamGeneration, account)
   }
 
-  const enable = async ({ silent = false } = {}) => {
+  const enable = async ({ silent = false, scope = streamScope.value } = {}) => {
     if (toggling.value) return false
+    const actionSeq = ++lifecycleSeq
+    streamScope.value = normalizeStreamScope(scope)
     toggling.value = true
     try {
       const ok = await ensureReadyAccount()
+      if (actionSeq !== lifecycleSeq) return false
       if (!ok) {
         if (!silent && process.client && typeof window !== 'undefined') {
           window.alert('未检测到已解密账号，请先解密数据库。')
@@ -291,6 +400,7 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
       }
 
       const statusResult = await fetchStatus()
+      if (actionSeq !== lifecycleSeq) return false
       if (!statusResult || statusResult.stale) return false
       if (!statusResult.available) {
         if (!silent && process.client && typeof window !== 'undefined') {
@@ -303,8 +413,10 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
 
       enabled.value = true
       startStream()
-      lastToggleAction.value = 'enabled'
-      toggleSeq.value += 1
+      if (!silent) {
+        lastToggleAction.value = 'enabled'
+        toggleSeq.value += 1
+      }
       return true
     } finally {
       toggling.value = false
@@ -312,25 +424,21 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
   }
 
   const disable = async ({ silent = false } = {}) => {
-    if (toggling.value) return false
-    toggling.value = true
-    try {
-      const account = getAccount()
-      enabled.value = false
-      stopStream()
+    lifecycleSeq += 1
+    const account = getAccount()
+    enabled.value = false
+    stopStream()
 
+    if (!silent) {
       if (!account) {
         lastToggleAction.value = 'disabled'
         toggleSeq.value += 1
-        return true
+      } else {
+        lastToggleAction.value = 'disabled'
+        toggleSeq.value += 1
       }
-
-      lastToggleAction.value = 'disabled'
-      toggleSeq.value += 1
-      return true
-    } finally {
-      toggling.value = false
     }
+    return true
   }
 
   const toggle = async (opts = {}) => {
@@ -338,12 +446,28 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
   }
 
   if (process.client) {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        stopStream()
+        return
+      }
+      if (enabled.value) startStream()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
     watch(
       () => chatAccounts.selectedAccount,
       async () => {
         setPriorityUsername('')
+        const account = getAccount()
         const statusResult = await fetchStatus()
-        if (!statusResult?.stale && statusResult?.available && enabled.value) {
+        if (
+          !statusResult?.stale
+          && statusResult?.available
+          && enabled.value
+          && account
+          && account === getAccount()
+        ) {
           startStream()
         }
       },
@@ -362,6 +486,7 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
     lastToggleAction,
     changeSeq,
     priorityUsername,
+    streamScope,
 
     setPriorityUsername,
     ensureReadyAccount,

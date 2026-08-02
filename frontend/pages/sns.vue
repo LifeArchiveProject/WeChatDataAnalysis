@@ -310,18 +310,17 @@
                         @mouseenter="onLivePhotoEnter(post.id, 0, post.media[0])"
                         @mouseleave="onLivePhotoLeave(post.id, 0, post.media[0])"
                     >
-                      <video
+                      <img
                           v-if="Number(post.media[0]?.type || 0) === 6"
-                          :src="getSnsRemoteVideoSrc(post, post.media[0])"
-                          :poster="getMediaThumbSrc(post, post.media[0], 0)"
+                          v-chat-lazy-src="getMediaThumbSrc(post, post.media[0], 0)"
                           class="rounded-sm max-h-[360px] max-w-full object-cover"
-                          autoplay
-                          loop
-                          muted
-                          playsinline
-                          @loadeddata="onLocalVideoLoaded(post.id, post.media[0].id)"
-                          @error="onLocalVideoError(post.id, post.media[0].id)"
-                      ></video>
+                          alt="视频缩略图"
+                          loading="lazy"
+                          decoding="async"
+                          fetchpriority="low"
+                          referrerpolicy="no-referrer"
+                          @error="onMediaError(post.id, 0)"
+                      />
 
                       <video
                           v-else-if="isLivePhotoMedia(post.media[0]) && isLivePhotoActive(post.id, 0) && !hasLivePhotoVideoError(post.id, 0)"
@@ -338,15 +337,17 @@
 
                       <img
                           v-else
-                          :src="getMediaThumbSrc(post, post.media[0], 0)"
+                          v-chat-lazy-src="getMediaThumbSrc(post, post.media[0], 0)"
                           class="rounded-sm max-h-[360px] object-cover"
                           alt=""
                           loading="lazy"
+                          decoding="async"
+                          fetchpriority="low"
                           referrerpolicy="no-referrer"
                           @error="onMediaError(post.id, 0)"
                       />
                       <div
-                          v-if="Number(post.media[0]?.type || 0) === 6 && !isLocalVideoLoaded(post.id, post.media[0].id)"
+                          v-if="Number(post.media[0]?.type || 0) === 6"
                           class="absolute inset-0 flex items-center justify-center pointer-events-none"
                       >
                         <div class="w-12 h-12 rounded-full bg-black/45 flex items-center justify-center">
@@ -411,18 +412,17 @@
                         @mouseenter="onLivePhotoEnter(post.id, idx, m)"
                         @mouseleave="onLivePhotoLeave(post.id, idx, m)"
                     >
-                      <video
-                          v-if="!hasMediaError(post.id, idx) && Number(m?.type || 0) === 6"
-                          :src="getSnsRemoteVideoSrc(post, m)"
-                          :poster="getMediaThumbSrc(post, m, idx)"
+                      <img
+                          v-if="!hasMediaError(post.id, idx) && Number(m?.type || 0) === 6 && getMediaThumbSrc(post, m, idx)"
+                          v-chat-lazy-src="getMediaThumbSrc(post, m, idx)"
                           class="w-full h-full object-cover"
-                          autoplay
-                          loop
-                          muted
-                          playsinline
-                          @loadeddata="onLocalVideoLoaded(post.id, m.id)"
-                          @error="onLocalVideoError(post.id, m.id)"
-                      ></video>
+                          alt="视频缩略图"
+                          loading="lazy"
+                          decoding="async"
+                          fetchpriority="low"
+                          referrerpolicy="no-referrer"
+                          @error="onMediaError(post.id, idx)"
+                      />
                       <video
                           v-else-if="isLivePhotoMedia(m) && isLivePhotoActive(post.id, idx) && !hasLivePhotoVideoError(post.id, idx)"
                           ref="livePhotoHoverVideoEl"
@@ -437,10 +437,12 @@
                       ></video>
                       <img
                           v-else-if="!hasMediaError(post.id, idx) && getMediaThumbSrc(post, m, idx)"
-                          :src="getMediaThumbSrc(post, m, idx)"
+                          v-chat-lazy-src="getMediaThumbSrc(post, m, idx)"
                           class="w-full h-full object-cover"
                           alt=""
                           loading="lazy"
+                          decoding="async"
+                          fetchpriority="low"
                           referrerpolicy="no-referrer"
                           @error="onMediaError(post.id, idx)"
                       />
@@ -448,7 +450,7 @@
                       <span v-else class="text-[10px] text-gray-400">图片失败</span>
 
                       <div
-                          v-if="Number(m?.type || 0) === 6 && !isLocalVideoLoaded(post.id, m.id)"
+                          v-if="Number(m?.type || 0) === 6"
                           class="absolute inset-0 flex items-center justify-center pointer-events-none"
                       >
                         <div class="w-10 h-10 rounded-full bg-black/45 flex items-center justify-center">
@@ -2381,23 +2383,6 @@ const getSnsRemoteVideoSrc = (post, m) => {
   if (!snsUseCache.value) parts.set('_t', String(Date.now()))
   parts.set('v', '1')
   return `${apiBase}/sns/video_remote?${parts.toString()}`
-}
-
-const localVideoStatus = ref({})
-
-const videoStatusKey = (postId, mediaId) => `${String(postId)}:${String(mediaId)}`
-
-const onLocalVideoLoaded = (postId, mediaId) => {
-  localVideoStatus.value[videoStatusKey(postId, mediaId)] = 'loaded'
-}
-
-const onLocalVideoError = (postId, mediaId) => {
-  localVideoStatus.value[videoStatusKey(postId, mediaId)] = 'error'
-}
-
-
-const isLocalVideoLoaded = (postId, mediaId) => {
-  return localVideoStatus.value[videoStatusKey(postId, mediaId)] === 'loaded'
 }
 
 // 实况（Live Photo）：鼠标悬停播放远程解密视频

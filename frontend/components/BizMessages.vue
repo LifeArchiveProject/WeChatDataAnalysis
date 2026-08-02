@@ -386,7 +386,7 @@ const handleScroll = (e) => {
 
 watch(selectedDbAccount, async (next, prev) => {
   if (String(next || '').trim() === String(prev || '').trim()) return
-  await realtimeStore.enable({ silent: true })
+  await realtimeStore.enable({ silent: true, scope: 'all' })
   selectedBizAccount.value = null
   resetMessagesState()
   searchQuery.value = ''
@@ -406,7 +406,7 @@ watch(changeSeq, (next, prev) => {
 
 onMounted(async () => {
   await chatAccountsStore.ensureLoaded()
-  await realtimeStore.enable({ silent: true })
+  await realtimeStore.enable({ silent: true, scope: 'all' })
   await fetchAccounts({ preserveSelection: false })
 })
 

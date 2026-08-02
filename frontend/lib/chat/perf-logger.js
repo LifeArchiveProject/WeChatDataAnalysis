@@ -9,6 +9,18 @@ const isDesktopShell = () => {
   return !!window.wechatDesktop?.__brand
 }
 
+const CHAT_PERF_STORAGE_KEY = 'debug.chat.performance'
+
+export const isChatPerfLoggingEnabled = () => {
+  if (typeof window === 'undefined') return false
+  if (window.__WECHAT_CHAT_PERF_ENABLED__ === true) return true
+  try {
+    return window.localStorage?.getItem(CHAT_PERF_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 export const nowPerfMs = () => {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
     return performance.now()
@@ -17,6 +29,7 @@ export const nowPerfMs = () => {
 }
 
 export const logPerfChannel = (channel, phase, details = {}) => {
+  if (!isChatPerfLoggingEnabled()) return
   const payload = { ...details }
   if (isDesktopShell()) {
     try {
@@ -30,6 +43,12 @@ export const logPerfChannel = (channel, phase, details = {}) => {
 
 export const createPerfTrace = (channel, baseDetails = {}) => {
   const traceId = `${channel}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  if (!isChatPerfLoggingEnabled()) {
+    return {
+      id: traceId,
+      log() { return null }
+    }
+  }
   const startedAt = nowPerfMs()
   let lastAt = startedAt
 

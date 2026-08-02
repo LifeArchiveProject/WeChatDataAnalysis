@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -31,6 +35,107 @@ class RealtimeMessageBatch:
     tables_found: int = 0
     databases_probed: int = 0
     diagnostics: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _MessageTableResolutionCacheEntry:
+    candidate_signature: tuple[str, ...]
+    resolved: tuple[tuple[str, str], ...]
+    cached_at: float
+
+
+_MESSAGE_TABLE_CACHE_LIMIT = 2048
+_MESSAGE_TABLE_CACHE_TTL_SECONDS = 30.0
+_MESSAGE_TABLE_NEGATIVE_CACHE_TTL_SECONDS = 2.0
+_QUERY_CAPABILITY_CACHE_LIMIT = 2048
+_reader_cache_lock = threading.RLock()
+_message_table_cache: OrderedDict[
+    tuple[str, str, str], _MessageTableResolutionCacheEntry
+] = OrderedDict()
+_query_capability_cache: OrderedDict[tuple[str, str, str], int] = OrderedDict()
+
+
+def _normalized_path_key(path: Path | str) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
+def _connection_cache_id(rt_conn: Any) -> str:
+    handle = getattr(rt_conn, "handle", None)
+    return str(handle) if handle is not None else f"object:{id(rt_conn)}"
+
+
+def _message_table_cache_key(
+    rt_conn: Any,
+    db_storage_dir: Optional[Path],
+    username: str,
+) -> tuple[str, str, str]:
+    root = _normalized_path_key(db_storage_dir) if db_storage_dir is not None else ""
+    return _connection_cache_id(rt_conn), root, str(username or "").strip()
+
+
+def _get_cached_message_tables(
+    *,
+    rt_conn: Any,
+    db_storage_dir: Optional[Path],
+    username: str,
+    candidates: list[Path],
+) -> Optional[list[tuple[Path, str]]]:
+    key = _message_table_cache_key(rt_conn, db_storage_dir, username)
+    signature = tuple(_normalized_path_key(path) for path in candidates)
+    now = time.monotonic()
+    with _reader_cache_lock:
+        entry = _message_table_cache.pop(key, None)
+        if entry is None:
+            return None
+        ttl = (
+            _MESSAGE_TABLE_CACHE_TTL_SECONDS
+            if entry.resolved
+            else _MESSAGE_TABLE_NEGATIVE_CACHE_TTL_SECONDS
+        )
+        if entry.candidate_signature != signature or now - entry.cached_at > ttl:
+            return None
+        _message_table_cache[key] = entry
+    return [(Path(path), table) for path, table in entry.resolved]
+
+
+def _cache_message_tables(
+    *,
+    rt_conn: Any,
+    db_storage_dir: Optional[Path],
+    username: str,
+    candidates: list[Path],
+    resolved: list[tuple[Path, str]],
+) -> None:
+    key = _message_table_cache_key(rt_conn, db_storage_dir, username)
+    entry = _MessageTableResolutionCacheEntry(
+        candidate_signature=tuple(_normalized_path_key(path) for path in candidates),
+        resolved=tuple((str(path), str(table)) for path, table in resolved),
+        cached_at=time.monotonic(),
+    )
+    with _reader_cache_lock:
+        _message_table_cache.pop(key, None)
+        _message_table_cache[key] = entry
+        while len(_message_table_cache) > _MESSAGE_TABLE_CACHE_LIMIT:
+            _message_table_cache.popitem(last=False)
+
+
+def _query_capability_key(
+    rt_conn: Any,
+    db_path: Path,
+    statements: tuple[str, ...],
+) -> tuple[str, str, str]:
+    table = ""
+    if statements:
+        match = re.search(r'\bFROM\s+"((?:[^"]|"")+)"\s+m\b', statements[0], re.I)
+        if match:
+            table = match.group(1).replace('""', '"').lower()
+    return _connection_cache_id(rt_conn), _normalized_path_key(db_path), table
+
+
+def _clear_realtime_reader_caches() -> None:
+    with _reader_cache_lock:
+        _message_table_cache.clear()
+        _query_capability_cache.clear()
 
 
 def _pick(item: Any, *keys: str) -> Any:
@@ -115,7 +220,11 @@ def _message_db_paths(db_storage_dir: Optional[Path], username: str) -> list[Pat
                 normal.append(path)
             elif re.match(r"^biz_message(_\d+)?\.db$", name):
                 biz.append(path)
-            elif name.endswith(".db") and "message" in name:
+            elif (
+                name.endswith(".db")
+                and "message" in name
+                and name not in {"message_fts.db", "message_resource.db"}
+            ):
                 other.append(path)
     except Exception:
         return []
@@ -141,6 +250,15 @@ def _resolve_tables(
         + ") LIMIT 1"
     )
     candidates = _message_db_paths(db_storage_dir, username)
+    cached = _get_cached_message_tables(
+        rt_conn=rt_conn,
+        db_storage_dir=db_storage_dir,
+        username=username,
+        candidates=candidates,
+    )
+    if cached is not None:
+        return cached, len(candidates), len(candidates), []
+
     resolved: list[tuple[Path, str]] = []
     probed = 0
     diagnostics: list[str] = []
@@ -163,16 +281,18 @@ def _resolve_tables(
             if actual:
                 resolved.append((db_path, actual))
                 break
+    if probed == len(candidates):
+        _cache_message_tables(
+            rt_conn=rt_conn,
+            db_storage_dir=db_storage_dir,
+            username=username,
+            candidates=candidates,
+            resolved=resolved,
+        )
     return resolved, len(candidates), probed, diagnostics
 
 
-def _lookup_my_rowid(
-    *,
-    rt_conn: Any,
-    account_dir: Path,
-    db_path: Path,
-    exec_query: ExecQuery,
-) -> Optional[int]:
+def _account_username_candidates(rt_conn: Any, account_dir: Path) -> tuple[str, ...]:
     candidates: list[str] = []
     for value in (
         getattr(rt_conn, "native_wxid", ""),
@@ -182,6 +302,17 @@ def _lookup_my_rowid(
         text = str(value or "").strip()
         if text and text not in candidates:
             candidates.append(text)
+    return tuple(candidates)
+
+
+def _lookup_my_rowid(
+    *,
+    rt_conn: Any,
+    account_dir: Path,
+    db_path: Path,
+    exec_query: ExecQuery,
+) -> Optional[int]:
+    candidates = _account_username_candidates(rt_conn, account_dir)
     if not candidates:
         return None
 
@@ -209,15 +340,32 @@ def _lookup_my_rowid(
     return rowid if rowid > 0 else None
 
 
-def _select_candidates(table_name: str, limit: int) -> tuple[str, ...]:
+def _select_candidates(
+    table_name: str,
+    limit: int,
+    *,
+    my_usernames: tuple[str, ...] = (),
+) -> tuple[str, ...]:
     table = _quote_ident(table_name)
+    my_rowid_select = "NULL AS __my_rowid, "
+    if my_usernames:
+        values = ", ".join(_sql_literal(value) for value in my_usernames)
+        order = " ".join(
+            f"WHEN user_name = {_sql_literal(value)} THEN {index}"
+            for index, value in enumerate(my_usernames)
+        )
+        my_rowid_select = (
+            "(SELECT rowid FROM Name2Id "
+            f"WHERE user_name IN ({values}) "
+            f"ORDER BY CASE {order} ELSE {len(my_usernames)} END LIMIT 1) AS __my_rowid, "
+        )
     base = (
         "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, "
-        "m.create_time, m.message_content, m.compress_content, "
+        "m.create_time, m.message_content, m.compress_content, " + my_rowid_select
     )
     tail = (
         f"FROM {table} m LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
-        "ORDER BY m.create_time DESC, m.sort_seq DESC, m.local_id DESC "
+        "ORDER BY m.sort_seq DESC, m.local_id DESC "
         f"LIMIT {int(limit)}"
     )
     return (
@@ -267,10 +415,22 @@ def _query_first_supported(
     statements: tuple[str, ...],
     exec_query: ExecQuery,
 ) -> list[dict[str, Any]]:
+    capability_key = _query_capability_key(rt_conn, db_path, statements)
+    with _reader_cache_lock:
+        preferred = _query_capability_cache.pop(capability_key, None)
+        if preferred is not None:
+            _query_capability_cache[capability_key] = preferred
+
+    candidate_indexes = list(range(len(statements)))
+    if preferred is not None and 0 <= preferred < len(statements):
+        candidate_indexes.remove(preferred)
+        candidate_indexes.insert(0, preferred)
+
     last_error: Optional[Exception] = None
-    for sql in statements:
+    for index in candidate_indexes:
+        sql = statements[index]
         try:
-            return list(
+            rows = list(
                 _locked_call(
                     rt_conn,
                     exec_query,
@@ -281,8 +441,17 @@ def _query_first_supported(
                 )
                 or []
             )
+            with _reader_cache_lock:
+                _query_capability_cache.pop(capability_key, None)
+                _query_capability_cache[capability_key] = index
+                while len(_query_capability_cache) > _QUERY_CAPABILITY_CACHE_LIMIT:
+                    _query_capability_cache.popitem(last=False)
+            return rows
         except Exception as exc:
             last_error = exc
+            if preferred == index:
+                with _reader_cache_lock:
+                    _query_capability_cache.pop(capability_key, None)
     raise RealtimeMessageReadError(f"Cannot query realtime table {db_path.name}: {last_error or 'unknown error'}")
 
 
@@ -703,33 +872,28 @@ def fetch_rows_via_exec(
     first_table_name = ""
     first_my_rowid: Optional[int] = None
     probe_limit = take + 1
+    my_usernames = _account_username_candidates(rt_conn, account_dir)
 
     for db_path, table_name in resolved:
-        my_rowid = _lookup_my_rowid(
+        raw_rows = _query_first_supported(
             rt_conn=rt_conn,
-            account_dir=account_dir,
             db_path=db_path,
+            statements=_select_candidates(
+                table_name,
+                probe_limit,
+                my_usernames=my_usernames,
+            ),
             exec_query=exec_query,
         )
-        raw_rows: Optional[list[dict[str, Any]]] = None
-        last_error: Optional[Exception] = None
-        for sql in _select_candidates(table_name, probe_limit):
-            try:
-                raw_rows = _locked_call(
-                    rt_conn,
-                    exec_query,
-                    rt_conn.handle,
-                    kind="message",
-                    path=str(db_path),
-                    sql=sql,
-                )
-                break
-            except Exception as exc:
-                last_error = exc
-        if raw_rows is None:
-            raise RealtimeMessageReadError(
-                f"Cannot query realtime table {db_path.name}/{table_name}: {last_error or 'unknown error'}"
-            )
+
+        my_rowid = next(
+            (
+                value
+                for value in (_to_int(_pick(raw, "__my_rowid")) for raw in raw_rows or [])
+                if value > 0
+            ),
+            None,
+        )
 
         if first_db_path is None:
             first_db_path = db_path

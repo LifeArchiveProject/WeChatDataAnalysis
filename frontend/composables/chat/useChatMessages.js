@@ -6,7 +6,7 @@ import {
   getVoiceDurationInSeconds,
   getVoiceWidth
 } from '~/lib/chat/formatters'
-import { createPerfTrace } from '~/lib/chat/perf-logger'
+import { createPerfTrace, isChatPerfLoggingEnabled, logPerfChannel } from '~/lib/chat/perf-logger'
 import {
   buildImageGroupKey,
   deriveImageGroupMessages,
@@ -39,6 +39,35 @@ export const useChatMessages = ({
   const showJumpToBottom = ref(false)
   let lastRenderMessagesFingerprint = ''
   let messageLoadSeq = 0
+  let messageLoadController = null
+  let messageLoadTargetUsername = ''
+  let realtimeRefreshController = null
+  let realtimeRefreshTargetUsername = ''
+
+  const isAbortError = (error, controller = null) => {
+    return !!(
+      controller?.signal?.aborted
+      || error?.name === 'AbortError'
+      || error?.cause?.name === 'AbortError'
+      || error?.message === 'This operation was aborted'
+    )
+  }
+
+  const abortMessageLoad = () => {
+    const controller = messageLoadController
+    messageLoadController = null
+    messageLoadTargetUsername = ''
+    if (!controller || controller.signal.aborted) return
+    try { controller.abort() } catch {}
+  }
+
+  const abortRealtimeRefresh = () => {
+    const controller = realtimeRefreshController
+    realtimeRefreshController = null
+    realtimeRefreshTargetUsername = ''
+    if (!controller || controller.signal.aborted) return
+    try { controller.abort() } catch {}
+  }
 
   const isDesktopRenderer = () => {
     if (!process.client || typeof window === 'undefined') return false
@@ -52,14 +81,7 @@ export const useChatMessages = ({
       activeMessagesFor: String(activeMessagesFor.value || '').trim(),
       ...details
     }
-
-    if (isDesktopRenderer()) {
-      try {
-        window.wechatDesktop?.logDebug?.('chat-messages', phase, payload)
-      } catch {}
-    }
-
-    console.info(`[chat-messages] ${phase}`, payload)
+    logPerfChannel('chat-messages', phase, payload)
   }
 
   const summarizeRenderTypes = (list) => {
@@ -283,7 +305,9 @@ export const useChatMessages = ({
     const reverseSides = !!reverseMessageSides.value
     const expansionFingerprint = Array.from(expandedImageGroupKeys.value).sort().join('|')
     const fingerprint = `${String(selectedContact.value?.username || '').trim()}:${list.length}:${reverseSides ? '1' : '0'}:${expansionFingerprint}`
-    const shouldLogRender = isDesktopRenderer() && fingerprint !== lastRenderMessagesFingerprint
+    const shouldLogRender = isDesktopRenderer()
+      && isChatPerfLoggingEnabled()
+      && fingerprint !== lastRenderMessagesFingerprint
     if (shouldLogRender) {
       logMessagePhase('renderMessages:start', {
         count: list.length,
@@ -1363,6 +1387,10 @@ export const useChatMessages = ({
   const loadMessages = async ({ username, reset }) => {
     if (!username || !selectedAccount.value) return
 
+    abortMessageLoad()
+    const requestController = typeof AbortController === 'function' ? new AbortController() : null
+    messageLoadController = requestController
+    messageLoadTargetUsername = String(username || '').trim()
     const loadSeq = ++messageLoadSeq
     const accountAtStart = String(selectedAccount.value || '').trim()
     const filterAtStart = String(messageTypeFilter.value || 'all').trim() || 'all'
@@ -1425,6 +1453,7 @@ export const useChatMessages = ({
           params.scan_limit = messageTypeFilterScanPageSize
         }
         params.source = DEFAULT_CHAT_SOURCE
+        if (requestController) params.signal = requestController.signal
         trace.log('loadMessages:request:start', {
           requestIndex,
           offset: requestOffset,
@@ -1572,6 +1601,10 @@ export const useChatMessages = ({
         message: String(error?.message || ''),
         errorName: String(error?.name || '')
       })
+      if (isAbortError(error, requestController)) {
+        trace.log('loadMessages:request:aborted')
+        return
+      }
       console.error('[chat-messages] loadMessages:error', {
         account: String(selectedAccount.value || '').trim(),
         username: String(username || '').trim(),
@@ -1582,6 +1615,10 @@ export const useChatMessages = ({
         messagesError.value = error?.message || '加载聊天记录失败'
       }
     } finally {
+      if (messageLoadController === requestController) {
+        messageLoadController = null
+        messageLoadTargetUsername = ''
+      }
       if (loadSeq === messageLoadSeq) {
         isLoadingMessages.value = false
       }
@@ -1650,6 +1687,11 @@ export const useChatMessages = ({
       params.render_types = messageTypeFilter.value
     }
 
+    abortRealtimeRefresh()
+    const requestController = typeof AbortController === 'function' ? new AbortController() : null
+    realtimeRefreshController = requestController
+    realtimeRefreshTargetUsername = String(username || '').trim()
+    if (requestController) params.signal = requestController.signal
     try {
       const response = await api.listChatMessages(params)
       if (selectedContact.value?.username !== username) return
@@ -1677,11 +1719,17 @@ export const useChatMessages = ({
       }
       updateJumpToBottomState()
     } catch (error) {
+      if (isAbortError(error, requestController)) return
       console.error('[chat-messages] refreshRealtimeIncremental:error', {
         account: String(selectedAccount.value || '').trim(),
         username: String(username || '').trim(),
         error
       })
+    } finally {
+      if (realtimeRefreshController === requestController) {
+        realtimeRefreshController = null
+        realtimeRefreshTargetUsername = ''
+      }
     }
   }
 
@@ -1714,6 +1762,8 @@ export const useChatMessages = ({
   }
 
   const resetMessageState = () => {
+    abortMessageLoad()
+    abortRealtimeRefresh()
     clearVoicePlaybackState()
     allMessages.value = {}
     messagesMeta.value = {}
@@ -1731,18 +1781,59 @@ export const useChatMessages = ({
   const contactProfileCardMessageId = ref('')
   const contactProfileLoading = ref(false)
   const contactProfileVerificationLoading = ref(false)
+  const contactProfileVerificationLoaded = ref(false)
+  const contactProfileVerificationError = ref('')
   const contactProfileError = ref('')
   const contactProfileData = ref(null)
   const CONTACT_PROFILE_REQUEST_TIMEOUT_MS = 4500
+  const CONTACT_PROFILE_HOVER_INTENT_MS = 250
+  const CONTACT_PROFILE_CACHE_TTL_MS = 5 * 60 * 1000
+  const CONTACT_VERIFICATION_CACHE_TTL_MS = 5 * 60 * 1000
+  const CONTACT_PROFILE_CACHE_MAX_ENTRIES = 128
+  const contactProfileCache = new Map()
+  const contactProfileInflight = new Map()
+  const contactVerificationCache = new Map()
+  const contactVerificationInflight = new Map()
   let contactProfileFetchSeq = 0
+  let contactProfileHoverIntentTimer = null
   let contactProfileHoverHideTimer = null
+  let activeContactProfileRequest = null
+  let activeContactVerificationRequest = null
 
-  const withContactProfileTimeout = (promise, ms, message = '请求超时') => {
+  const makeContactProfileCacheKey = (account, username) => (
+    `${String(account || '').trim()}\u0000${String(username || '').trim()}`
+  )
+
+  const readTimedCache = (cache, key, ttlMs) => {
+    const entry = cache.get(key)
+    if (!entry) return null
+    if ((Date.now() - Number(entry.updatedAt || 0)) > ttlMs) {
+      cache.delete(key)
+      return null
+    }
+    return entry
+  }
+
+  const writeTimedCache = (cache, key, data) => {
+    cache.delete(key)
+    cache.set(key, { updatedAt: Date.now(), data })
+    while (cache.size > CONTACT_PROFILE_CACHE_MAX_ENTRIES) {
+      const oldestKey = cache.keys().next().value
+      if (oldestKey == null) break
+      cache.delete(oldestKey)
+    }
+  }
+
+  const withContactProfileTimeout = (promise, ms, message = '请求超时', controller = null) => {
     let timer = null
     return new Promise((resolve, reject) => {
       timer = setTimeout(() => {
+        timer = null
         const error = new Error(message)
         error.code = 'ETIMEDOUT'
+        if (controller && !controller.signal.aborted) {
+          try { controller.abort() } catch {}
+        }
         reject(error)
       }, Math.max(1, Number(ms || 0)))
 
@@ -1759,6 +1850,121 @@ export const useChatMessages = ({
         }
       )
     })
+  }
+
+  const abortInflightRequest = (entry, inflight) => {
+    if (!entry) return
+    if (inflight.get(entry.key) === entry) inflight.delete(entry.key)
+    if (entry.controller && !entry.controller.signal.aborted) {
+      try { entry.controller.abort() } catch {}
+    }
+  }
+
+  const abortActiveContactProfileRequest = () => {
+    const entry = activeContactProfileRequest
+    activeContactProfileRequest = null
+    abortInflightRequest(entry, contactProfileInflight)
+  }
+
+  const abortActiveContactVerificationRequest = () => {
+    const entry = activeContactVerificationRequest
+    activeContactVerificationRequest = null
+    abortInflightRequest(entry, contactVerificationInflight)
+  }
+
+  const abortContactRequestsExcept = (key) => {
+    if (activeContactProfileRequest?.key && activeContactProfileRequest.key !== key) {
+      abortActiveContactProfileRequest()
+    }
+    if (activeContactVerificationRequest?.key && activeContactVerificationRequest.key !== key) {
+      abortActiveContactVerificationRequest()
+    }
+  }
+
+  const requestContactProfile = ({ account, username }) => {
+    const key = makeContactProfileCacheKey(account, username)
+    const cached = readTimedCache(contactProfileCache, key, CONTACT_PROFILE_CACHE_TTL_MS)
+    if (cached) return Promise.resolve(cached.data)
+
+    const pending = contactProfileInflight.get(key)
+    if (pending) {
+      activeContactProfileRequest = pending
+      return pending.promise
+    }
+
+    const controller = typeof AbortController === 'function' ? new AbortController() : null
+    const params = {
+      account,
+      source: DEFAULT_CHAT_SOURCE,
+      username
+    }
+    if (controller) params.signal = controller.signal
+
+    const entry = { key, controller, promise: null }
+    entry.promise = withContactProfileTimeout(
+      api.getChatContactProfile(params),
+      CONTACT_PROFILE_REQUEST_TIMEOUT_MS,
+      '联系人资料加载超时',
+      controller
+    ).then((response) => {
+      writeTimedCache(contactProfileCache, key, response)
+      return response
+    }).finally(() => {
+      if (contactProfileInflight.get(key) === entry) contactProfileInflight.delete(key)
+      if (activeContactProfileRequest === entry) activeContactProfileRequest = null
+    })
+    contactProfileInflight.set(key, entry)
+    activeContactProfileRequest = entry
+    return entry.promise
+  }
+
+  const requestContactFriendVerifications = ({ account, username }) => {
+    const key = makeContactProfileCacheKey(account, username)
+    const cached = readTimedCache(contactVerificationCache, key, CONTACT_VERIFICATION_CACHE_TTL_MS)
+    if (cached) return Promise.resolve(cached.data)
+
+    const pending = contactVerificationInflight.get(key)
+    if (pending) {
+      activeContactVerificationRequest = pending
+      return pending.promise
+    }
+
+    const controller = typeof AbortController === 'function' ? new AbortController() : null
+    const params = {
+      account,
+      q: username,
+      source: 'realtime',
+      limit: 200,
+      offset: 0
+    }
+    if (controller) params.signal = controller.signal
+
+    const entry = { key, controller, promise: null }
+    entry.promise = withContactProfileTimeout(
+      api.listFriendVerifications(params),
+      CONTACT_PROFILE_REQUEST_TIMEOUT_MS,
+      '好友验证记录加载超时',
+      controller
+    ).then((response) => {
+      const records = (Array.isArray(response?.items) ? response.items : [])
+        .filter((item) => String(item?.userName || '').trim() === username)
+        .map((item) => ({
+          userName: username,
+          isSender: !!item?.isSender,
+          content: String(item?.content || '').trim(),
+          remark: String(item?.remark || '').trim(),
+          timeText: String(item?.timeText || '').trim(),
+          timestamp: Number(item?.timestamp || 0)
+        }))
+      writeTimedCache(contactVerificationCache, key, records)
+      return records
+    }).finally(() => {
+      if (contactVerificationInflight.get(key) === entry) contactVerificationInflight.delete(key)
+      if (activeContactVerificationRequest === entry) activeContactVerificationRequest = null
+    })
+    contactVerificationInflight.set(key, entry)
+    activeContactVerificationRequest = entry
+    return entry.promise
   }
 
   const contactProfileInitialLoading = computed(() => (
@@ -1873,42 +2079,44 @@ export const useChatMessages = ({
     return Number.isFinite(scene) ? scene : null
   })
 
-  const loadContactFriendVerifications = async ({ seq, account, username }) => {
+  const applyCachedContactVerifications = (profile, account, username) => {
+    const key = makeContactProfileCacheKey(account, username)
+    const cached = readTimedCache(contactVerificationCache, key, CONTACT_VERIFICATION_CACHE_TTL_MS)
+    contactProfileVerificationLoaded.value = !!cached
+    contactProfileVerificationError.value = ''
+    return {
+      ...profile,
+      friendVerifications: cached ? cached.data : []
+    }
+  }
+
+  const loadContactFriendVerifications = async () => {
+    const seq = contactProfileFetchSeq
+    const account = String(selectedAccount.value || '').trim()
+    const username = String(contactProfileData.value?.username || '').trim()
+    if (!account || !username || !contactProfileIsFriend.value) return
+
+    const key = makeContactProfileCacheKey(account, username)
+    abortContactRequestsExcept(key)
     contactProfileVerificationLoading.value = true
+    contactProfileVerificationError.value = ''
     try {
-      const response = await withContactProfileTimeout(
-        api.listFriendVerifications({
-          account,
-          q: username,
-          source: 'realtime',
-          limit: 200,
-          offset: 0
-        }),
-        CONTACT_PROFILE_REQUEST_TIMEOUT_MS,
-        '好友验证记录加载超时'
-      )
-      if (seq !== contactProfileFetchSeq) return
-      const records = (Array.isArray(response?.items) ? response.items : [])
-        .filter((item) => String(item?.userName || '').trim() === username)
-        .map((item) => ({
-          userName: username,
-          isSender: !!item?.isSender,
-          content: String(item?.content || '').trim(),
-          remark: String(item?.remark || '').trim(),
-          timeText: String(item?.timeText || '').trim(),
-          timestamp: Number(item?.timestamp || 0)
-        }))
+      const records = await requestContactFriendVerifications({ account, username })
+      if (
+        seq !== contactProfileFetchSeq
+        || String(contactProfileData.value?.username || '').trim() !== username
+      ) return
       contactProfileData.value = {
         ...(contactProfileData.value || {}),
         friendVerifications: records
       }
-    } catch {
-      if (seq === contactProfileFetchSeq) {
-        contactProfileData.value = {
-          ...(contactProfileData.value || {}),
-          friendVerifications: []
-        }
-      }
+      contactProfileVerificationLoaded.value = true
+    } catch (error) {
+      if (seq !== contactProfileFetchSeq || isAbortError(error)) return
+      contactProfileVerificationLoaded.value = false
+      contactProfileVerificationError.value = error?.code === 'ETIMEDOUT'
+        ? '加载超时，请重试'
+        : (error?.message || '好友验证记录加载失败')
     } finally {
       if (seq === contactProfileFetchSeq) contactProfileVerificationLoading.value = false
     }
@@ -1925,6 +2133,8 @@ export const useChatMessages = ({
       contactProfileLoading.value = false
       return
     }
+    const key = makeContactProfileCacheKey(account, username)
+    abortContactRequestsExcept(key)
 
     const contextPatch = {
       groupNickname: String(options?.groupNickname || contactProfileData.value?.groupNickname || '').trim(),
@@ -1934,15 +2144,7 @@ export const useChatMessages = ({
     contactProfileLoading.value = true
     contactProfileError.value = ''
     try {
-      const response = await withContactProfileTimeout(
-        api.getChatContactProfile({
-          account,
-          source: DEFAULT_CHAT_SOURCE,
-          username
-        }),
-        CONTACT_PROFILE_REQUEST_TIMEOUT_MS,
-        '联系人资料加载超时'
-      )
+      const response = await requestContactProfile({ account, username })
       if (seq !== contactProfileFetchSeq) return
       const matched = response?.contact && typeof response.contact === 'object' ? response.contact : null
       if (matched) {
@@ -1953,12 +2155,12 @@ export const useChatMessages = ({
         if (!String(normalized.avatar || '').trim() && avatarFallback) {
           normalized.avatar = avatarFallback
         }
-        contactProfileData.value = { ...normalized, friendVerifications: [] }
+        contactProfileData.value = applyCachedContactVerifications(normalized, account, username)
       } else {
         const fallbackType = username.endsWith('@chatroom')
           ? 'group'
           : (username.startsWith('gh_') ? 'official' : 'friend')
-        contactProfileData.value = {
+        contactProfileData.value = applyCachedContactVerifications({
           username,
           type: fallbackType,
           displayName: displayNameFallback || selectedContact.value?.name || username,
@@ -1976,16 +2178,13 @@ export const useChatMessages = ({
           addTimeText: '',
           commonChatroomCount: null,
           commonChatrooms: [],
-          friendVerifications: [],
           ...contextPatch
-        }
-      }
-      if (contactProfileIsFriend.value) {
-        await loadContactFriendVerifications({ seq, account, username })
+        }, account, username)
       }
     } catch (error) {
       if (seq !== contactProfileFetchSeq) return
-      contactProfileData.value = {
+      if (isAbortError(error)) return
+      contactProfileData.value = applyCachedContactVerifications({
         username,
         type: username.endsWith('@chatroom') ? 'group' : (username.startsWith('gh_') ? 'official' : 'friend'),
         displayName: displayNameFallback || selectedContact.value?.name || username,
@@ -2003,12 +2202,18 @@ export const useChatMessages = ({
         addTimeText: '',
         commonChatroomCount: null,
         commonChatrooms: [],
-        friendVerifications: [],
         ...contextPatch
-      }
+      }, account, username)
       contactProfileError.value = error?.code === 'ETIMEDOUT' ? '' : (error?.message || '加载联系人资料失败')
     } finally {
       if (seq === contactProfileFetchSeq) contactProfileLoading.value = false
+    }
+  }
+
+  const clearContactProfileHoverIntentTimer = () => {
+    if (contactProfileHoverIntentTimer) {
+      clearTimeout(contactProfileHoverIntentTimer)
+      contactProfileHoverIntentTimer = null
     }
   }
 
@@ -2020,11 +2225,80 @@ export const useChatMessages = ({
   }
 
   const closeContactProfileCard = () => {
+    clearContactProfileHoverIntentTimer()
+    clearContactProfileHoverHideTimer()
     contactProfileFetchSeq++
+    abortActiveContactProfileRequest()
+    abortActiveContactVerificationRequest()
     contactProfileLoading.value = false
     contactProfileVerificationLoading.value = false
+    contactProfileVerificationLoaded.value = false
+    contactProfileVerificationError.value = ''
     contactProfileCardOpen.value = false
     contactProfileCardMessageId.value = ''
+  }
+
+  const applyContactProfilePreview = (options = {}) => {
+    const username = String(options?.username || '').trim()
+    const account = String(selectedAccount.value || '').trim()
+    if (!username || !account) return
+    const displayName = String(options?.displayName || username).trim() || username
+    const avatar = String(options?.avatar || '').trim()
+    const avatarColor = String(options?.avatarColor || '').trim()
+    const groupNickname = String(options?.groupNickname || '').trim()
+    const currentUsername = String(contactProfileData.value?.username || '').trim()
+
+    if (currentUsername !== username) {
+      contactProfileData.value = applyCachedContactVerifications({
+        username,
+        type: username.endsWith('@chatroom') ? 'group' : (username.startsWith('gh_') ? 'official' : 'friend'),
+        displayName,
+        avatar,
+        avatarColor,
+        nickname: '',
+        alias: '',
+        gender: null,
+        region: '',
+        remark: '',
+        signature: '',
+        source: '',
+        sourceScene: null,
+        addTime: null,
+        addTimeText: '',
+        commonChatroomCount: null,
+        commonChatrooms: [],
+        groupNickname
+      }, account, username)
+      return
+    }
+
+    contactProfileData.value = applyCachedContactVerifications({
+      ...(contactProfileData.value || {}),
+      displayName: String(contactProfileData.value?.displayName || '').trim() || displayName,
+      avatar: String(contactProfileData.value?.avatar || '').trim() || avatar,
+      avatarColor: avatarColor || String(contactProfileData.value?.avatarColor || '').trim(),
+      groupNickname
+    }, account, username)
+  }
+
+  const openContactProfileCardAfterIntent = ({ cardId, ...options }) => {
+    const username = String(options?.username || '').trim()
+    const account = String(selectedAccount.value || '').trim()
+    if (!cardId || !username || !account) return
+    abortContactRequestsExcept(makeContactProfileCacheKey(account, username))
+    applyContactProfilePreview({ ...options, username })
+    contactProfileCardMessageId.value = cardId
+    contactProfileCardOpen.value = true
+    void fetchContactProfile({ ...options, username })
+  }
+
+  const scheduleContactProfileCard = (options = {}) => {
+    clearContactProfileHoverIntentTimer()
+    clearContactProfileHoverHideTimer()
+    contactProfileHoverIntentTimer = setTimeout(() => {
+      contactProfileHoverIntentTimer = null
+      openContactProfileCardAfterIntent(options)
+    }, CONTACT_PROFILE_HOVER_INTENT_MS)
   }
 
   const getMentionContactProfileCardId = (message, user) => {
@@ -2040,7 +2314,7 @@ export const useChatMessages = ({
     return String(contactProfileCardMessageId.value || '').startsWith(`mention:${messageId}:`)
   }
 
-  const onMessageAvatarMouseEnter = async (message) => {
+  const onMessageAvatarMouseEnter = (message) => {
     if (!!message?.isSent) return
     const messageId = String(message?.id ?? '').trim()
     if (!messageId) return
@@ -2049,41 +2323,8 @@ export const useChatMessages = ({
 
     const senderName = String(message?.senderDisplayName || message?.sender || '').trim()
     const senderAvatar = String(message?.avatar || '').trim()
-    if (!contactProfileData.value || String(contactProfileData.value?.username || '').trim() !== username) {
-      contactProfileData.value = {
-        username,
-        displayName: senderName || username,
-        avatar: senderAvatar,
-        avatarColor: String(message?.avatarColor || '').trim(),
-        nickname: '',
-        alias: '',
-        gender: null,
-        region: '',
-        remark: '',
-        signature: '',
-        source: '',
-        sourceScene: null,
-        addTime: null,
-        addTimeText: '',
-        commonChatroomCount: null,
-        commonChatrooms: [],
-        groupNickname: message?.isGroup ? senderName : '',
-      }
-    } else {
-      if (!String(contactProfileData.value?.displayName || '').trim() && senderName) {
-        contactProfileData.value.displayName = senderName
-      }
-      if (!String(contactProfileData.value?.avatar || '').trim() && senderAvatar) {
-        contactProfileData.value.avatar = senderAvatar
-      }
-      contactProfileData.value.avatarColor = String(message?.avatarColor || contactProfileData.value?.avatarColor || '').trim()
-      contactProfileData.value.groupNickname = message?.isGroup ? senderName : ''
-    }
-
-    clearContactProfileHoverHideTimer()
-    contactProfileCardMessageId.value = messageId
-    contactProfileCardOpen.value = true
-    await fetchContactProfile({
+    scheduleContactProfileCard({
+      cardId: messageId,
       username,
       displayName: senderName,
       avatar: senderAvatar,
@@ -2092,7 +2333,7 @@ export const useChatMessages = ({
     })
   }
 
-  const onMentionMouseEnter = async (message, user) => {
+  const onMentionMouseEnter = (message, user) => {
     const username = String(user?.username || '').trim()
     if (!username) return
     if (username === 'notify@all') return
@@ -2101,41 +2342,8 @@ export const useChatMessages = ({
 
     const displayName = String(user?.displayName || user?.nickname || user?.remark || username).trim()
     const avatar = String(user?.avatar || '').trim()
-    if (!contactProfileData.value || String(contactProfileData.value?.username || '').trim() !== username) {
-      contactProfileData.value = {
-        username,
-        displayName: displayName || username,
-        avatar,
-        avatarColor: String(user?.avatarColor || '').trim(),
-        nickname: '',
-        alias: '',
-        gender: null,
-        region: '',
-        remark: '',
-        signature: '',
-        source: '',
-        sourceScene: null,
-        addTime: null,
-        addTimeText: '',
-        commonChatroomCount: null,
-        commonChatrooms: [],
-        groupNickname: displayName,
-      }
-    } else {
-      if (!String(contactProfileData.value?.displayName || '').trim() && displayName) {
-        contactProfileData.value.displayName = displayName
-      }
-      if (!String(contactProfileData.value?.avatar || '').trim() && avatar) {
-        contactProfileData.value.avatar = avatar
-      }
-      contactProfileData.value.avatarColor = String(user?.avatarColor || contactProfileData.value?.avatarColor || '').trim()
-      contactProfileData.value.groupNickname = displayName
-    }
-
-    clearContactProfileHoverHideTimer()
-    contactProfileCardMessageId.value = cardId
-    contactProfileCardOpen.value = true
-    await fetchContactProfile({
+    scheduleContactProfileCard({
+      cardId,
       username,
       displayName,
       avatar,
@@ -2145,6 +2353,7 @@ export const useChatMessages = ({
   }
 
   const onMessageAvatarMouseLeave = () => {
+    clearContactProfileHoverIntentTimer()
     clearContactProfileHoverHideTimer()
     contactProfileHoverHideTimer = setTimeout(() => {
       closeContactProfileCard()
@@ -2156,12 +2365,20 @@ export const useChatMessages = ({
   }
 
   const onContactCardMouseEnter = () => {
+    clearContactProfileHoverIntentTimer()
     clearContactProfileHoverHideTimer()
   }
 
   watch(
     () => selectedContact.value?.username,
-    () => {
+    (username) => {
+      const nextUsername = String(username || '').trim()
+      if (messageLoadTargetUsername && messageLoadTargetUsername !== nextUsername) {
+        abortMessageLoad()
+      }
+      if (realtimeRefreshTargetUsername && realtimeRefreshTargetUsername !== nextUsername) {
+        abortRealtimeRefresh()
+      }
       clearExpandedImageGroups()
       loadLargeImagePreferences()
       clearContactProfileHoverHideTimer()
@@ -2189,10 +2406,15 @@ export const useChatMessages = ({
   )
 
   onUnmounted(() => {
+    abortMessageLoad()
+    abortRealtimeRefresh()
     if (highlightTimer) clearTimeout(highlightTimer)
     highlightTimer = null
     cancelImageGroupTransition()
+    clearContactProfileHoverIntentTimer()
     clearContactProfileHoverHideTimer()
+    abortActiveContactProfileRequest()
+    abortActiveContactVerificationRequest()
     clearVoicePlaybackState()
   })
 
@@ -2242,6 +2464,8 @@ export const useChatMessages = ({
     contactProfileLoading,
     contactProfileInitialLoading,
     contactProfileVerificationLoading,
+    contactProfileVerificationLoaded,
+    contactProfileVerificationError,
     contactProfileError,
     contactProfileData,
     contactProfileResolvedName,
@@ -2313,6 +2537,7 @@ export const useChatMessages = ({
     queueRealtimeRefresh,
     resetMessageState,
     fetchContactProfile,
+    loadContactFriendVerifications,
     clearContactProfileHoverHideTimer,
     closeContactProfileCard,
     getMentionContactProfileCardId,

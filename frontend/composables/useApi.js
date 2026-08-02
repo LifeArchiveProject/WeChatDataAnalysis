@@ -4,6 +4,14 @@ import { useChatAccountsStore } from '~/stores/chatAccounts'
 const chatContactsListCache = new Map()
 const CHAT_CONTACTS_LIST_CACHE_TTL_MS = 3000
 
+const isAbortRequestError = (error) => {
+  return !!(
+    error?.name === 'AbortError'
+    || error?.cause?.name === 'AbortError'
+    || error?.message === 'This operation was aborted'
+  )
+}
+
 // API请求组合式函数
 export const useApi = () => {
   const baseURL = useApiBase()
@@ -25,8 +33,11 @@ export const useApi = () => {
         baseURL,
         ...options,
         async onResponseError({ response }) {
-          if (response.status === 400) {
-            throw new Error(responseDetailMessage(response, '请求参数错误'))
+          if (response.status >= 400 && response.status < 500) {
+            const fallback = response.status === 400
+              ? '请求参数错误'
+              : `请求失败 (${response.status})`
+            throw new Error(responseDetailMessage(response, fallback))
           } else if (response.status >= 500) {
             const backendDetail = responseDetailMessage(response)
             const message = backendDetail || '服务器错误，请稍后重试'
@@ -46,7 +57,9 @@ export const useApi = () => {
       chatAccounts.applySourceResponse(response)
       return response
     } catch (error) {
-      console.error('API请求错误:', error)
+      if (!isAbortRequestError(error)) {
+        console.error('API请求错误:', error)
+      }
       throw error
     }
   }
@@ -132,7 +145,7 @@ export const useApi = () => {
     if (params && params.include_official != null) query.set('include_official', String(!!params.include_official))
     if (params && params.source) query.set('source', params.source)
     const url = '/chat/sessions' + (query.toString() ? `?${query.toString()}` : '')
-    return await request(url)
+    return await request(url, params?.signal ? { signal: params.signal } : {})
   }
 
   const listChatMessages = async (params = {}) => {
@@ -148,7 +161,7 @@ export const useApi = () => {
     if (params && params.scan_limit != null) query.set('scan_limit', String(params.scan_limit))
     if (params && params.source) query.set('source', params.source)
     const url = '/chat/messages' + (query.toString() ? `?${query.toString()}` : '')
-    return await request(url)
+    return await request(url, params?.signal ? { signal: params.signal } : {})
   }
 
   const getChatMessageRaw = async (params = {}) => {
@@ -568,7 +581,7 @@ export const useApi = () => {
     if (params && params.source) query.set('source', params.source)
     if (params && params.username) query.set('username', params.username)
     const url = '/chat/contacts/profile' + (query.toString() ? `?${query.toString()}` : '')
-    return await request(url)
+    return await request(url, params?.signal ? { signal: params.signal } : {})
   }
 
   const exportChatContacts = async (payload = {}) => {
@@ -737,7 +750,10 @@ export const useApi = () => {
   }
 
   const listFriendVerifications = async (params = {}) => {
-    return await request(buildGeneralUrl('friend-verifications', params))
+    return await request(
+      buildGeneralUrl('friend-verifications', params),
+      params?.signal ? { signal: params.signal } : {}
+    )
   }
 
   const listMiniPrograms = async (params = {}) => {

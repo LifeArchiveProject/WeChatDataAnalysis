@@ -27,6 +27,103 @@ class _DummyConn:
 
 
 class TestChatSourceAuto(unittest.TestCase):
+    def test_complete_local_group_nicknames_skip_native_fallback(self):
+        with (
+            patch.object(
+                chat_router,
+                "_load_group_nickname_map_from_contact_db",
+                return_value={"wxid_sender": "Local group card"},
+            ),
+            patch.object(chat_router, "_load_group_nickname_map_from_wcdb", return_value={}) as native_loader,
+        ):
+            result = chat_router._load_group_nickname_map(
+                account_dir=Path("account"),
+                contact_db_path=Path("contact.db"),
+                chatroom_id="123@chatroom",
+                sender_usernames=["wxid_sender"],
+            )
+
+        self.assertEqual(result, {"wxid_sender": "Local group card"})
+        native_loader.assert_not_called()
+
+    def test_message_list_can_disable_blocking_native_group_nickname_fallback(self):
+        with (
+            patch.object(
+                chat_router,
+                "_load_group_nickname_map_from_contact_db",
+                return_value={"wxid_known": "Local group card"},
+            ),
+            patch.object(chat_router, "_load_group_nickname_map_from_wcdb", return_value={}) as native_loader,
+        ):
+            result = chat_router._load_group_nickname_map(
+                account_dir=Path("account"),
+                contact_db_path=Path("contact.db"),
+                chatroom_id="123@chatroom",
+                sender_usernames=["wxid_known", "wxid_missing"],
+                allow_native_fallback=False,
+            )
+
+        self.assertEqual(result, {"wxid_known": "Local group card"})
+        native_loader.assert_not_called()
+
+    def test_realtime_sessions_do_not_refresh_complete_local_contact_metadata(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            conn = _DummyConn()
+            username = "wxid_realtime"
+
+            with (
+                patch.object(chat_router, "_resolve_account_dir", return_value=account_dir),
+                patch.object(chat_router.WCDB_REALTIME, "ensure_connected", return_value=conn),
+                patch.object(
+                    chat_router,
+                    "_wcdb_get_sessions",
+                    return_value=[
+                        {
+                            "username": username,
+                            "summary": "from realtime",
+                            "draft": "",
+                            "unread_count": 0,
+                            "is_hidden": 0,
+                            "last_timestamp": 123,
+                            "sort_timestamp": 123,
+                            "last_msg_type": 1,
+                            "last_msg_sub_type": 0,
+                        }
+                    ],
+                ),
+                patch.object(
+                    chat_router,
+                    "_load_contact_rows",
+                    return_value={
+                        username: {
+                            "username": username,
+                            "remark": "",
+                            "nick_name": "Cached contact name",
+                            "alias": "",
+                        }
+                    },
+                ),
+                patch.object(chat_router, "_query_head_image_usernames", return_value=set()),
+                patch.object(chat_router, "_wcdb_get_display_names", return_value={}) as display_names,
+                patch.object(chat_router, "_wcdb_get_avatar_urls", return_value={}) as avatar_urls,
+                patch.object(chat_router, "_avatar_url_unified", return_value="/avatar"),
+            ):
+                resp = chat_router.list_chat_sessions(
+                    _DummyRequest(),
+                    account="acc",
+                    limit=50,
+                    include_hidden=True,
+                    include_official=True,
+                    preview="session",
+                    source="realtime",
+                )
+
+        self.assertEqual((resp.get("sessions") or [])[0].get("name"), "Cached contact name")
+        display_names.assert_not_called()
+        avatar_urls.assert_not_called()
+
     def test_sessions_auto_prefers_realtime_when_available(self):
         with TemporaryDirectory() as td:
             account_dir = Path(td) / "acc"
@@ -214,7 +311,7 @@ class TestChatSourceAuto(unittest.TestCase):
                 self.assertEqual(Path(path), live_db)
                 if "sqlite_master" in sql:
                     return [{"name": table_name}]
-                if "FROM Name2Id" in sql:
+                if sql.startswith("SELECT rowid AS rowid FROM Name2Id"):
                     return [{"rowid": 1}]
                 if f"FROM \"{table_name}\"" in sql:
                     return [
@@ -379,7 +476,7 @@ class TestChatSourceAuto(unittest.TestCase):
                 db_path = Path(path)
                 if "sqlite_master" in sql:
                     return [{"name": table_name}]
-                if "FROM Name2Id" in sql:
+                if sql.startswith("SELECT rowid AS rowid FROM Name2Id"):
                     return [{"rowid": 1}]
                 if f"FROM \"{table_name}\"" not in sql:
                     return []
