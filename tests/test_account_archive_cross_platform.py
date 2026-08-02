@@ -100,6 +100,77 @@ async def _consume_import(path: Path) -> list[dict]:
 
 
 class TestAccountArchiveCrossPlatform(unittest.TestCase):
+    def test_direct_only_account_does_not_produce_unimportable_archive(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account_dir = root / "windows-output" / "wxid_direct_only"
+            account_dir.mkdir(parents=True)
+            (account_dir / "_source.json").write_text(
+                json.dumps(
+                    {
+                        "db_storage_path": str(root / "live" / "db_storage"),
+                        "wxid_dir": str(root / "live"),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (account_dir / "resource").mkdir()
+            (account_dir / "resource" / "photo.bin").write_bytes(b"resource-only")
+
+            job = account_archive_export.AccountArchiveExportJob(export_id="direct-only-export")
+            with account_archive_export._JOBS_LOCK:
+                account_archive_export._JOBS[job.export_id] = job
+            try:
+                with (
+                    patch.object(account_archive_export, "_resolve_account_dir", return_value=account_dir),
+                    patch.object(account_archive_export, "write_zip_integrity_sidecars", return_value=None),
+                ):
+                    account_archive_export._run_account_archive_export(
+                        job.export_id,
+                        {
+                            "account": account_dir.name,
+                            "output_dir": str(root / "exports"),
+                            "include_databases": True,
+                            "include_resources": True,
+                            "file_name": "must-not-exist.zip",
+                        },
+                    )
+            finally:
+                with account_archive_export._JOBS_LOCK:
+                    account_archive_export._JOBS.pop(job.export_id, None)
+
+            self.assertEqual(job.status, "error")
+            self.assertIn("contact.db", job.error)
+            self.assertIn("session.db", job.error)
+            self.assertFalse((root / "exports" / "must-not-exist.zip").exists())
+
+    def test_extracted_archive_root_and_account_directory_are_both_recognized(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account_dir = root / "windows-output" / "wxid_cross_platform"
+            _create_account(account_dir)
+            archive_path = _export_account(account_dir, root / "exports")
+            extracted_root = root / "windows-account-export"
+
+            with zipfile.ZipFile(archive_path) as archive:
+                archive.extractall(extracted_root)
+
+            root_preview = import_decrypted._validate_import_structure(extracted_root)
+            account_preview = import_decrypted._validate_import_structure(
+                extracted_root / "wxid_cross_platform"
+            )
+
+            self.assertEqual(root_preview["username"], "wxid_cross_platform")
+            self.assertEqual(account_preview["username"], "wxid_cross_platform")
+            self.assertEqual(
+                Path(root_preview["db_dir"]),
+                extracted_root / "wxid_cross_platform",
+            )
+            self.assertEqual(
+                Path(account_preview["db_dir"]),
+                extracted_root / "wxid_cross_platform",
+            )
+
     def test_exported_account_zip_round_trips_into_new_data_directory(self):
         with TemporaryDirectory() as td:
             root = Path(td)

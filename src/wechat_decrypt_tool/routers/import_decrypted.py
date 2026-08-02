@@ -106,7 +106,14 @@ def _pick_database_dir(account_dir: Path) -> Path:
         db_dir = account_dir / name
         if db_dir.exists() and db_dir.is_dir():
             return db_dir
-    raise HTTPException(status_code=400, detail="Missing databases or database directory")
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "未找到可导入的 contact.db 和 session.db。"
+            "如果这是本应用导出的账号归档，请直接选择原始 ZIP（无需解压）；"
+            "如果 ZIP 内也缺少数据库，请回到原电脑完成数据库解密后重新导出。"
+        ),
+    )
 
 
 def _pick_resource_dir(account_dir: Path) -> Optional[Path]:
@@ -248,7 +255,10 @@ def _validate_import_archive(import_path: Path) -> dict:
         if len(candidates) != 1:
             raise HTTPException(
                 status_code=400,
-                detail="Archive must contain exactly one account with valid contact.db and session.db",
+                detail=(
+                    "账号归档必须包含同一账号下有效的 contact.db 和 session.db。"
+                    "请确认导出时包含已解密数据库。"
+                ),
             )
 
         db_prefix = candidates[0].strip("/")

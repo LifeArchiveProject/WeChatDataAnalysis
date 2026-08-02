@@ -433,6 +433,28 @@ class TestChatExportMessageTypesSemantics(unittest.TestCase):
                     self.assertFalse(msg.get("offlineMedia"))
 
                 self.assertFalse(bool(manifest.get("options", {}).get("includeMedia")))
+                self.assertEqual(manifest.get("account"), "hidden")
+                self.assertEqual(manifest.get("accountsAvailable"), [])
+
+                with zipfile.ZipFile(job.zip_path, "r") as zf:
+                    report = json.loads(zf.read("report.json").decode("utf-8"))
+                    self.assertEqual(report.get("account"), "hidden")
+                    text_entries = []
+                    for name in zf.namelist():
+                        if name.endswith("/") or name.endswith(".wes"):
+                            continue
+                        try:
+                            text_entries.append(zf.read(name).decode("utf-8"))
+                        except UnicodeDecodeError:
+                            continue
+                    exported_text = "\n".join(text_entries)
+                    for private_value in (
+                        account,
+                        username,
+                        "测试好友",
+                        "普通文本消息",
+                    ):
+                        self.assertNotIn(private_value, exported_text)
             finally:
                 if prev_data is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)

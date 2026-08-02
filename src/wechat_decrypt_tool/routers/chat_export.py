@@ -5,9 +5,10 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from ..chat_export_service import CHAT_EXPORT_MANAGER, get_chat_export_targets_preview
+from ..native_core_export import decode_export_content_key, erase_export_content_key
 from ..path_fix import PathFixRoute
 
 router = APIRouter(route_class=PathFixRoute)
@@ -70,10 +71,22 @@ class ChatExportCreateRequest(BaseModel):
         description="隐私模式导出：隐藏会话/用户名/内容，不打包头像与媒体",
     )
     file_name: Optional[str] = Field(None, description="导出 zip 文件名（可选，不含/含 .zip 都可）")
+    encrypt: bool = Field(False, description="是否使用 WEC1 加密最终导出文件")
+    content_key_base64: Optional[SecretStr] = Field(
+        None,
+        description="WEC1 的 32 字节 Base64 内容密钥；仅 encrypt=true 时使用",
+    )
 
 
 @router.post("/api/chat/exports", summary="创建聊天记录导出任务（离线 zip）")
 async def create_chat_export(req: ChatExportCreateRequest):
+    try:
+        content_key = decode_export_content_key(
+            req.content_key_base64.get_secret_value() if req.content_key_base64 else None,
+            enabled=bool(req.encrypt),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     try:
         job = CHAT_EXPORT_MANAGER.create_job(
             account=req.account,
@@ -94,9 +107,15 @@ async def create_chat_export(req: ChatExportCreateRequest):
             html_page_size=req.html_page_size,
             privacy_mode=req.privacy_mode,
             file_name=req.file_name,
+            encrypt=bool(req.encrypt),
+            content_key=content_key,
         )
     except ValueError as e:
+        erase_export_content_key(content_key)
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        erase_export_content_key(content_key)
+        raise
     return {"status": "success", "job": job.to_public_dict()}
 
 
@@ -145,7 +164,7 @@ async def download_chat_export(export_id: str):
         raise HTTPException(status_code=409, detail="Export not ready.")
     return FileResponse(
         str(job.zip_path),
-        media_type="application/zip",
+        media_type="application/octet-stream" if job.zip_path.suffix.lower() == ".wec" else "application/zip",
         filename=job.zip_path.name,
     )
 

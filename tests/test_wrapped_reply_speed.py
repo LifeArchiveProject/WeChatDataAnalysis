@@ -220,8 +220,7 @@ class TestWrappedReplySpeedInitiative(unittest.TestCase):
         self.assertEqual(top_by_me[0]["username"], a)
         self.assertEqual(top_by_me[0]["count"], 2)
         self.assertEqual(top_by_me[0]["displayName"], f"Nick_{a}")
-        self.assertTrue(top_by_me[0]["maskedName"].startswith("N"))
-        self.assertIn("*", top_by_me[0]["maskedName"])
+        self.assertEqual(top_by_me[0]["maskedName"], "******")
 
         top_to_me = initiative["topInitiatedToMe"]
         self.assertEqual([(x["username"], x["count"]) for x in top_to_me], [(a, 1), (b, 1)])

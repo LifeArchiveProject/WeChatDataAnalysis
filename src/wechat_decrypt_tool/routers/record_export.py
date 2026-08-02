@@ -10,14 +10,21 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from ..chat_export_service import export_prepared_chat_archive
 from ..export_integrity import (
     export_css,
     load_wce_integrity_native,
+    native_file_integrity_sidecar_paths,
+    remove_file_export_artifacts,
     write_file_integrity_sidecars,
     write_protected_html_file,
+)
+from ..native_core_export import (
+    decode_export_content_key,
+    encrypt_export_file_and_remove_source,
+    erase_export_content_key,
 )
 from ..xlsx_export import build_xlsx_workbook
 from .biz import get_biz_messages, get_wechat_pay_records
@@ -63,6 +70,8 @@ class RecordExportRequest(BaseModel):
     query: str = ""
     output_dir: str
     file_name: str = ""
+    encrypt: bool = False
+    content_key_base64: Optional[SecretStr] = None
 
 
 def _clean_text(value: Any) -> str:
@@ -795,6 +804,13 @@ def export_records(request: Request, req: RecordExportRequest):
             }
         ]
         try:
+            content_key = decode_export_content_key(
+                req.content_key_base64.get_secret_value() if req.content_key_base64 else None,
+                enabled=bool(req.encrypt),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
             job = export_prepared_chat_archive(
                 account=account or req.account,
                 output_dir=output_dir,
@@ -805,9 +821,13 @@ def export_records(request: Request, req: RecordExportRequest):
                 include_media=True,
                 media_kinds=["image", "emoji", "video", "video_thumb", "voice", "file"],
                 message_types=sorted(selected_types),
+                encrypt=bool(req.encrypt),
+                content_key=content_key,
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to export favorites: {exc}") from exc
+        finally:
+            erase_export_content_key(content_key)
         if job.status != "done" or not job.zip_path:
             raise HTTPException(status_code=500, detail=job.error or "Failed to export favorites archive.")
         return {
@@ -844,8 +864,25 @@ def export_records(request: Request, req: RecordExportRequest):
     default_stem = f"{req.dataset}_{scope_stem}_{timestamp}"
     stem = _safe_file_stem(req.file_name, default_stem)
     extension = "xlsx" if req.format == "excel" else req.format
-    output_path = output_dir / f"{stem}.{extension}"
     export_id = uuid.uuid4().hex
+    encrypted_requested = bool(req.encrypt)
+    requested_output_path = output_dir / f"{stem}.{extension}"
+    plaintext_output_path = (
+        requested_output_path.with_name(
+            f".{requested_output_path.name}.{export_id}.plain"
+        )
+        if encrypted_requested
+        else requested_output_path
+    )
+    output_path = plaintext_output_path
+    encrypted_output_path: Path | None = None
+    try:
+        content_key = decode_export_content_key(
+            req.content_key_base64.get_secret_value() if req.content_key_base64 else None,
+            enabled=bool(req.encrypt),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         if req.format == "json":
             content = json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n"
@@ -860,8 +897,35 @@ def export_records(request: Request, req: RecordExportRequest):
             integrity_manifest_path, integrity_signature_path = write_protected_html_file(output_path, content, export_id)
         if req.format != "html":
             integrity_manifest_path, integrity_signature_path = write_file_integrity_sidecars(output_path, export_id)
+        native_integrity_manifest_path, native_integrity_signature_path = (
+            native_file_integrity_sidecar_paths(output_path)
+        )
+        if content_key is not None:
+            encrypted_path = requested_output_path.with_name(requested_output_path.name + ".wec")
+            if encrypted_path.exists():
+                encrypted_path = requested_output_path.with_name(
+                    f"{requested_output_path.stem}_{export_id}{requested_output_path.suffix}.wec"
+                )
+            encrypted_output_path = encrypted_path
+            encrypt_export_file_and_remove_source(
+                plaintext_output_path,
+                encrypted_path,
+                export_id=export_id,
+                content_key=content_key,
+                overwrite=False,
+            )
+            remove_file_export_artifacts(plaintext_output_path, export_id)
+            output_path = encrypted_path
     except Exception as exc:
+        if encrypted_requested:
+            try:
+                remove_file_export_artifacts(plaintext_output_path, export_id)
+            finally:
+                if encrypted_output_path is not None:
+                    encrypted_output_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Failed to export records: {exc}") from exc
+    finally:
+        erase_export_content_key(content_key)
 
     return {
         "status": "success",
@@ -871,8 +935,23 @@ def export_records(request: Request, req: RecordExportRequest):
         "format": req.format,
         "dataSource": payload["dataSource"],
         "outputPath": str(output_path),
-        "integrityManifestPath": str(integrity_manifest_path),
-        "integritySignaturePath": str(integrity_signature_path),
+        "integrityManifestPath": "" if encrypted_requested else str(integrity_manifest_path),
+        "integritySignaturePath": "" if encrypted_requested else str(integrity_signature_path),
+        "nativeIntegrityManifestPath": (
+            str(native_integrity_manifest_path)
+            if (not encrypted_requested) and native_integrity_manifest_path.is_file()
+            else ""
+        ),
+        "nativeIntegritySignaturePath": (
+            str(native_integrity_signature_path)
+            if (not encrypted_requested) and native_integrity_signature_path.is_file()
+            else ""
+        ),
+        "authoritativeSealFormat": (
+            "WEC1"
+            if encrypted_requested
+            else ("WES1" if native_integrity_signature_path.is_file() else "legacy")
+        ),
         "count": len(items),
         "types": sorted(selected_types),
     }

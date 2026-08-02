@@ -73,7 +73,13 @@ from .perf_trace import create_perf_trace
 from .source_fallback import build_source_fallback_meta
 from .export_integrity import export_css as _native_export_css
 from .export_integrity import load_wce_integrity_native
+from .export_integrity import write_active_html_zip_integrity
 from .export_integrity import write_zip_integrity_sidecars
+from .native_core_export import (
+    encrypt_export_file_and_remove_source,
+    erase_export_content_key,
+)
+from .native_core_telemetry import record_product_event
 from .xlsx_export import build_xlsx_workbook
 from .wcdb_realtime import (
     WCDB_REALTIME,
@@ -922,6 +928,7 @@ class ExportJob:
     options: dict[str, Any] = field(default_factory=dict)
     progress: ExportProgress = field(default_factory=ExportProgress)
     cancel_requested: bool = False
+    content_key: Optional[bytearray] = field(default=None, repr=False)
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -1020,7 +1027,11 @@ class ChatExportManager:
         html_page_size: int = 1000,
         privacy_mode: bool,
         file_name: Optional[str],
+        encrypt: bool = False,
+        content_key: bytearray | None = None,
     ) -> ExportJob:
+        if bool(encrypt) != (content_key is not None):
+            raise ValueError("encrypted chat export requires one validated content key")
         account_dir = _resolve_account_dir(account)
         source_requested = _normalize_chat_source(source, default="auto")
         source_norm = source_requested
@@ -1071,7 +1082,9 @@ class ChatExportManager:
                 "htmlPageSize": int(html_page_size) if int(html_page_size or 0) > 0 else int(html_page_size or 0),
                 "privacyMode": bool(privacy_mode),
                 "fileName": str(file_name or "").strip(),
+                "encrypted": bool(encrypt),
             },
+            content_key=content_key,
         )
 
         with self._lock:
@@ -1097,15 +1110,30 @@ class ChatExportManager:
         t.start()
         return job
 
-    def _run_job_safe(self, job: ExportJob, account_dir: Path) -> None:
+    def _run_job_safe(
+        self,
+        job: ExportJob,
+        account_dir: Path,
+        *,
+        report_outcome: bool = True,
+    ) -> None:
+        outcome: str | None = None
         try:
             self._run_job(job, account_dir)
+            if job.status == "done":
+                outcome = "export_completed"
         except Exception as e:
             logger.exception(f"export job failed: {job.export_id}: {e}")
             with self._lock:
                 job.status = "error"
                 job.error = str(e)
                 job.finished_at = time.time()
+            outcome = "export_failed"
+        finally:
+            erase_export_content_key(job.content_key)
+            job.content_key = None
+            if report_outcome and outcome is not None:
+                record_product_event(outcome)
 
     def run_prepared_archive(
         self,
@@ -1119,7 +1147,11 @@ class ChatExportManager:
         include_media: bool,
         media_kinds: list[MediaKind],
         message_types: list[str],
+        encrypt: bool = False,
+        content_key: bytearray | None = None,
     ) -> ExportJob:
+        if bool(encrypt) != (content_key is not None):
+            raise ValueError("encrypted chat export requires one validated content key")
         if export_format not in {"html", "json", "txt", "excel"}:
             raise ValueError(f"Unsupported export format: {export_format}")
         prepared = [copy.deepcopy(item) for item in conversations if isinstance(item, dict)]
@@ -1145,11 +1177,13 @@ class ChatExportManager:
                 "htmlPageSize": 1000,
                 "privacyMode": False,
                 "fileName": str(file_name or "").strip(),
+                "encrypted": bool(encrypt),
                 "_archiveTitle": str(title or "").strip() or "聊天记录",
                 "_preparedConversations": prepared,
             },
+            content_key=content_key,
         )
-        self._run_job_safe(job, Path(account_dir))
+        self._run_job_safe(job, Path(account_dir), report_outcome=False)
         return job
 
     def _should_cancel(self, job: ExportJob) -> bool:
@@ -1485,7 +1519,7 @@ class ChatExportManager:
         report: dict[str, Any] = {
             "schemaVersion": 1,
             "exportId": job.export_id,
-            "account": account_dir.name,
+            "account": "hidden" if privacy_mode else account_dir.name,
             "createdAt": _now_iso(),
             "missingMedia": [],
             "errors": [],
@@ -1498,6 +1532,7 @@ class ChatExportManager:
             job.progress.media_missing = 0
         _safe_trace(trace, "progress_initialized", conversationCount=len(target_usernames))
 
+        encrypted_output_path: Optional[Path] = None
         try:
             if tmp_zip.exists():
                 try:
@@ -2123,25 +2158,14 @@ class ChatExportManager:
                         "mediaCopied": job.progress.media_copied,
                         "mediaMissing": job.progress.media_missing,
                     },
-                    "accountsAvailable": _list_decrypted_accounts(),
+                    "accountsAvailable": [] if privacy_mode else _list_decrypted_accounts(),
                 }
                 zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
                 zf.writestr("report.json", json.dumps(report, ensure_ascii=False, indent=2))
                 if export_format == "html":
                     try:
                         html_assets = dict(job.options.get("_htmlAssets") or {})
-                        integrity_asset_path = str(html_assets.get("integrityPath") or _html_export_asset_paths(job.export_id)[2])
-                        manifest_asset_path = str(html_assets.get("manifestPath") or _html_export_integrity_sidecar_paths(job.export_id)[0])
-                        signature_asset_path = str(html_assets.get("signaturePath") or _html_export_integrity_sidecar_paths(job.export_id)[1])
-                        sealed = _seal_html_export_with_native(
-                            native_integrity=native_integrity,
-                            export_id=job.export_id,
-                            entries=zf.integrity_entries() if hasattr(zf, "integrity_entries") else [],
-                            html_assets=html_assets,
-                        )
-                        zf.writestr(manifest_asset_path, str(sealed.get("manifestJson") or sealed.get("manifestCanonical") or ""))
-                        zf.writestr(signature_asset_path, str(sealed.get("signature") or "") + "\n")
-                        zf.writestr(integrity_asset_path, str(sealed.get("bundle") or ""))
+                        write_active_html_zip_integrity(zf, job.export_id, html_assets)
                     except Exception as e:
                         _safe_trace(trace, "html_integrity_bundle_failed", error=str(e))
                         raise
@@ -2162,20 +2186,35 @@ class ChatExportManager:
             _raise_if_job_cancelled(job, "before_finalize", trace)
 
             phase_started = time.perf_counter()
-            if final_zip.exists():
-                final_zip = (exports_root / f"{final_zip.stem}_{job.export_id}{final_zip.suffix}").resolve()
-            tmp_zip.replace(final_zip)
-            _safe_trace(trace, "zip_finalized", durationMs=_elapsed_ms(phase_started), finalZip=str(final_zip))
+            if job.content_key is not None:
+                final_out = final_zip.with_name(final_zip.name + ".wec")
+                if final_out.exists():
+                    final_out = final_out.with_name(
+                        f"{final_zip.stem}_{job.export_id}{final_zip.suffix}.wec"
+                    )
+                encrypted_output_path = final_out
+                encrypt_export_file_and_remove_source(
+                    tmp_zip,
+                    final_out,
+                    export_id=job.export_id,
+                    content_key=job.content_key,
+                )
+            else:
+                if final_zip.exists():
+                    final_zip = (exports_root / f"{final_zip.stem}_{job.export_id}{final_zip.suffix}").resolve()
+                tmp_zip.replace(final_zip)
+                final_out = final_zip
+            _safe_trace(trace, "zip_finalized", durationMs=_elapsed_ms(phase_started), finalZip=str(final_out))
 
             with self._lock:
                 job.status = "done"
-                job.zip_path = final_zip
+                job.zip_path = final_out
                 job.finished_at = time.time()
             _safe_trace(
                 trace,
                 "job_done",
                 durationMs=round(((job.finished_at or time.time()) - (job.started_at or job.created_at)) * 1000.0, 1),
-                finalZip=str(final_zip),
+                finalZip=str(final_out),
                 messagesExported=job.progress.messages_exported,
                 mediaCopied=job.progress.media_copied,
                 mediaMissing=job.progress.media_missing,
@@ -2186,6 +2225,8 @@ class ChatExportManager:
                     tmp_zip.unlink()
             except Exception:
                 pass
+            if encrypted_output_path is not None:
+                encrypted_output_path.unlink(missing_ok=True)
             with self._lock:
                 job.status = "cancelled"
                 job.finished_at = time.time()
@@ -2197,6 +2238,12 @@ class ChatExportManager:
                 mediaCopied=job.progress.media_copied,
                 mediaMissing=job.progress.media_missing,
             )
+        except Exception:
+            if job.content_key is not None:
+                tmp_zip.unlink(missing_ok=True)
+                if encrypted_output_path is not None:
+                    encrypted_output_path.unlink(missing_ok=True)
+            raise
         finally:
             if realtime_paused:
                 try:
@@ -6697,6 +6744,8 @@ def export_prepared_chat_archive(
     include_media: bool,
     media_kinds: list[MediaKind],
     message_types: list[str],
+    encrypt: bool = False,
+    content_key: bytearray | None = None,
 ) -> ExportJob:
     """Export pre-parsed messages through the standard chat archive pipeline."""
     resolved_account_dir = Path(account_dir) if account_dir is not None else _resolve_account_dir(account)
@@ -6710,4 +6759,6 @@ def export_prepared_chat_archive(
         include_media=include_media,
         media_kinds=media_kinds,
         message_types=message_types,
+        encrypt=encrypt,
+        content_key=content_key,
     )

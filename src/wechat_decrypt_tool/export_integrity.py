@@ -13,6 +13,8 @@ import platform
 from pathlib import Path
 from typing import Any, Iterable
 
+from .native_core_export import seal_export_manifest
+
 
 _NATIVE_ERROR = "导出完整性组件初始化失败。"
 
@@ -232,7 +234,42 @@ def seal_entries(
         raise RuntimeError("导出完整性组件生成签名失败。") from exc
     if not isinstance(result, dict) or not str(result.get("signature") or "").strip():
         raise RuntimeError("导出完整性组件返回结果为空。")
+    manifest_canonical = str(
+        result.get("manifestCanonical") or result.get("manifestJson") or ""
+    ).strip()
+    if not manifest_canonical:
+        raise RuntimeError("导出完整性组件返回结果为空。")
+    native_seal = seal_export_manifest(
+        str(export_id or ""),
+        manifest_canonical.encode("utf-8"),
+    )
+    result["authoritativeSealFormat"] = native_seal.seal_format
+    result["nativeManifestCanonical"] = manifest_canonical
+    result["nativeManifestSha256"] = native_seal.manifest_sha256
+    result["nativeEnvelope"] = native_seal.envelope
     return result
+
+
+def _native_zip_sidecar_paths(manifest_path: str) -> tuple[str, str]:
+    normalized = _arcname(manifest_path)
+    parent = normalized.rsplit("/", 1)[0] if "/" in normalized else "_integrity"
+    return f"{parent}/manifest.json", f"{parent}/signature.wes"
+
+
+def _write_native_zip_sidecars(
+    writer: IntegrityZipWriter,
+    sealed: dict[str, Any],
+    *,
+    manifest_path: str,
+) -> None:
+    envelope = sealed.get("nativeEnvelope")
+    if not isinstance(envelope, (bytes, bytearray, memoryview)):
+        return
+    native_manifest_path, native_signature_path = _native_zip_sidecar_paths(manifest_path)
+    writer.writestr(native_manifest_path, str(sealed.get("nativeManifestCanonical") or ""))
+    writer.writestr(native_signature_path, bytes(envelope))
+    sealed["nativeManifestPath"] = native_manifest_path
+    sealed["nativeSignaturePath"] = native_signature_path
 
 
 class IntegrityZipWriter:
@@ -285,6 +322,7 @@ def write_zip_integrity_sidecars(
     sealed = seal_entries(export_id, writer.integrity_entries(), html_assets=assets)
     writer.writestr(assets["manifestPath"], str(sealed.get("manifestJson") or sealed.get("manifestCanonical") or ""))
     writer.writestr(assets["signaturePath"], str(sealed.get("signature") or "") + "\n")
+    _write_native_zip_sidecars(writer, sealed, manifest_path=assets["manifestPath"])
     return sealed
 
 
@@ -300,6 +338,7 @@ def write_active_html_zip_integrity(
     )
     writer.writestr(assets["signaturePath"], str(sealed.get("signature") or "") + "\n")
     writer.writestr(assets["integrityPath"], str(sealed.get("bundle") or ""))
+    _write_native_zip_sidecars(writer, sealed, manifest_path=assets["manifestPath"])
     return sealed
 
 
@@ -321,7 +360,54 @@ def write_file_integrity_sidecars(path: Path, export_id: str) -> tuple[Path, Pat
         newline="\n",
     )
     signature_path.write_text(str(sealed.get("signature") or "") + "\n", encoding="utf-8", newline="\n")
+    envelope = sealed.get("nativeEnvelope")
+    if isinstance(envelope, (bytes, bytearray, memoryview)):
+        target.with_name(target.name + ".manifest.json").write_text(
+            str(sealed.get("nativeManifestCanonical") or ""),
+            encoding="utf-8",
+            newline="\n",
+        )
+        target.with_name(target.name + ".signature.wes").write_bytes(bytes(envelope))
     return manifest_path, signature_path
+
+
+def native_file_integrity_sidecar_paths(path: Path) -> tuple[Path, Path]:
+    target = Path(path)
+    return (
+        target.with_name(target.name + ".manifest.json"),
+        target.with_name(target.name + ".signature.wes"),
+    )
+
+
+def file_export_artifact_paths(path: Path, export_id: str) -> tuple[Path, ...]:
+    """Return every plaintext/sidecar path created for one single-file export."""
+
+    target = Path(path)
+    safe_name = target.name or "export.bin"
+    short = hashlib.sha256(f"{export_id}:{safe_name}".encode("utf-8")).hexdigest()[:16]
+    native_manifest_path, native_signature_path = native_file_integrity_sidecar_paths(target)
+    return (
+        target,
+        target.with_name(target.name + ".tmp"),
+        target.with_name(target.name + ".wce"),
+        target.with_name(target.name + ".wce.sig"),
+        target.with_name(f"{safe_name}.{short}.wce.js"),
+        native_manifest_path,
+        native_signature_path,
+    )
+
+
+def remove_file_export_artifacts(path: Path, export_id: str) -> None:
+    errors: list[OSError] = []
+    for candidate in file_export_artifact_paths(path, export_id):
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError as exc:
+            errors.append(exc)
+    if errors:
+        raise OSError(
+            "failed to remove one or more plaintext export artifacts"
+        ) from errors[0]
 
 
 def _prepare_inline_protected_html(file_name: str, document: str, export_id: str) -> tuple[str, dict[str, str]]:
@@ -365,7 +451,15 @@ def write_protected_html_file(path: Path, document: str, export_id: str) -> tupl
     integrity_path = target.with_name(assets["integrityPath"])
     manifest_path = target.with_name(assets["manifestPath"])
     signature_path = target.with_name(assets["signaturePath"])
-    candidates = [target, integrity_path, manifest_path, signature_path]
+    native_manifest_path, native_signature_path = native_file_integrity_sidecar_paths(target)
+    candidates = [
+        target,
+        integrity_path,
+        manifest_path,
+        signature_path,
+        native_manifest_path,
+        native_signature_path,
+    ]
     try:
         target.write_text(protected, encoding="utf-8", newline="\n")
         sealed = seal_entries(export_id, [native_file_entry(target, target.name)], html_assets=assets)
@@ -376,6 +470,14 @@ def write_protected_html_file(path: Path, document: str, export_id: str) -> tupl
             newline="\n",
         )
         signature_path.write_text(str(sealed.get("signature") or "") + "\n", encoding="utf-8", newline="\n")
+        envelope = sealed.get("nativeEnvelope")
+        if isinstance(envelope, (bytes, bytearray, memoryview)):
+            native_manifest_path.write_text(
+                str(sealed.get("nativeManifestCanonical") or ""),
+                encoding="utf-8",
+                newline="\n",
+            )
+            native_signature_path.write_bytes(bytes(envelope))
     except Exception:
         for candidate in candidates:
             try:
@@ -395,7 +497,7 @@ def seal_protected_html_bytes(file_name: str, data: bytes, export_id: str) -> di
     protected, assets = _prepare_inline_protected_html(safe_name, document, export_id)
     protected_bytes = protected.encode("utf-8")
     sealed = seal_entries(export_id, [_native_entry_bytes(safe_name, protected_bytes)], html_assets=assets)
-    return {
+    response = {
         "protectedContentBase64": base64.b64encode(protected_bytes).decode("ascii"),
         "integrityFileName": assets["integrityPath"],
         "integrity": str(sealed.get("bundle") or ""),
@@ -403,7 +505,19 @@ def seal_protected_html_bytes(file_name: str, data: bytes, export_id: str) -> di
         "signatureFileName": assets["signaturePath"],
         "manifest": str(sealed.get("manifestJson") or sealed.get("manifestCanonical") or ""),
         "signature": str(sealed.get("signature") or "") + "\n",
+        "authoritativeSealFormat": str(sealed.get("authoritativeSealFormat") or "legacy"),
     }
+    envelope = sealed.get("nativeEnvelope")
+    if isinstance(envelope, (bytes, bytearray, memoryview)):
+        response.update(
+            {
+                "nativeManifestFileName": safe_name + ".manifest.json",
+                "nativeManifest": str(sealed.get("nativeManifestCanonical") or ""),
+                "nativeSignatureFileName": safe_name + ".signature.wes",
+                "nativeSignatureBase64": base64.b64encode(bytes(envelope)).decode("ascii"),
+            }
+        )
+    return response
 
 
 def seal_bytes_artifact(file_name: str, data: bytes, export_id: str) -> dict[str, str]:
@@ -418,9 +532,21 @@ def seal_bytes_artifact(file_name: str, data: bytes, export_id: str) -> dict[str
             "signaturePath": signature_name,
         },
     )
-    return {
+    response = {
         "manifestFileName": manifest_name,
         "signatureFileName": signature_name,
         "manifest": str(sealed.get("manifestJson") or sealed.get("manifestCanonical") or ""),
         "signature": str(sealed.get("signature") or "") + "\n",
+        "authoritativeSealFormat": str(sealed.get("authoritativeSealFormat") or "legacy"),
     }
+    envelope = sealed.get("nativeEnvelope")
+    if isinstance(envelope, (bytes, bytearray, memoryview)):
+        response.update(
+            {
+                "nativeManifestFileName": safe_name + ".manifest.json",
+                "nativeManifest": str(sealed.get("nativeManifestCanonical") or ""),
+                "nativeSignatureFileName": safe_name + ".signature.wes",
+                "nativeSignatureBase64": base64.b64encode(bytes(envelope)).decode("ascii"),
+            }
+        )
+    return response

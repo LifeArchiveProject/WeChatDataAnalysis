@@ -32,6 +32,8 @@ from .export_integrity import (
     write_active_html_zip_integrity,
     write_zip_integrity_sidecars,
 )
+from .native_core_export import encrypt_export_file_and_remove_source, erase_export_content_key
+from .native_core_telemetry import record_product_event
 from .xlsx_export import build_xlsx_workbook
 
 # Reuse wxemoji mapping and static asset copying from chat export.
@@ -828,6 +830,7 @@ class ExportJob:
     options: dict[str, Any] = field(default_factory=dict)
     progress: ExportProgress = field(default_factory=ExportProgress)
     cancel_requested: bool = False
+    content_key: Optional[bytearray] = field(default=None, repr=False)
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -896,7 +899,11 @@ class SnsExportManager:
         use_cache: bool,
         output_dir: Optional[str],
         file_name: Optional[str],
+        encrypt: bool = False,
+        content_key: bytearray | None = None,
     ) -> ExportJob:
+        if bool(encrypt) != (content_key is not None):
+            raise ValueError("encrypted SNS export requires one validated content key")
         account_dir = _resolve_account_dir(account)
         export_id = uuid.uuid4().hex[:12]
 
@@ -911,7 +918,9 @@ class SnsExportManager:
                 "useCache": bool(use_cache),
                 "outputDir": str(output_dir or "").strip(),
                 "fileName": str(file_name or "").strip(),
+                "encrypted": bool(encrypt),
             },
+            content_key=content_key,
         )
 
         with self._lock:
@@ -932,8 +941,11 @@ class SnsExportManager:
 
     def _run_job_safe(self, job: ExportJob, account_dir: Path) -> None:
         tmp_zip: Optional[Path] = None
+        outcome: str | None = None
         try:
             tmp_zip = self._run_job(job, account_dir)
+            if job.status == "done":
+                outcome = "export_completed"
         except _JobCancelled:
             logger.info("sns export cancelled: %s", job.export_id)
             with self._lock:
@@ -950,11 +962,17 @@ class SnsExportManager:
                 job.status = "error"
                 job.error = str(e)
                 job.finished_at = time.time()
+            outcome = "export_failed"
             if tmp_zip is not None:
                 try:
                     tmp_zip.unlink(missing_ok=True)
                 except Exception:
                     pass
+        finally:
+            erase_export_content_key(job.content_key)
+            job.content_key = None
+            if outcome is not None:
+                record_product_event(outcome)
 
     def _run_job(self, job: ExportJob, account_dir: Path) -> Path:
         with self._lock:
@@ -2597,11 +2615,24 @@ class SnsExportManager:
             except Exception:
                 pass
 
-        try:
-            os.replace(str(tmp_zip), str(final_zip))
-            final_out = final_zip
-        except Exception:
-            final_out = tmp_zip
+        if job.content_key is not None:
+            final_out = final_zip.with_name(final_zip.name + ".wec")
+            if final_out.exists():
+                final_out = final_out.with_name(
+                    f"{final_zip.stem}_{job.export_id}{final_zip.suffix}.wec"
+                )
+            encrypt_export_file_and_remove_source(
+                tmp_zip,
+                final_out,
+                export_id=job.export_id,
+                content_key=job.content_key,
+            )
+        else:
+            try:
+                os.replace(str(tmp_zip), str(final_zip))
+                final_out = final_zip
+            except Exception:
+                final_out = tmp_zip
 
         with self._lock:
             job.zip_path = final_out

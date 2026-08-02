@@ -1,6 +1,7 @@
 import hashlib
 import base64
 import json
+import sqlite3
 import sys
 import unittest
 import zipfile
@@ -80,7 +81,13 @@ class TestExportIntegrity(unittest.TestCase):
             root = Path(td)
             account_dir = root / "wxid_test"
             account_dir.mkdir()
-            (account_dir / "message.db").write_bytes(b"sqlite-test")
+            for db_name in ("contact.db", "session.db"):
+                connection = sqlite3.connect(account_dir / db_name)
+                try:
+                    connection.execute("CREATE TABLE metadata (value TEXT)")
+                    connection.commit()
+                finally:
+                    connection.close()
             output_dir = root / "exports"
             job = account_archive_export.AccountArchiveExportJob(export_id="archive-test")
             with account_archive_export._JOBS_LOCK:

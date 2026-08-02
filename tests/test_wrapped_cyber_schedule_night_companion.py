@@ -150,9 +150,8 @@ class TestWrappedCyberScheduleNightCompanion(unittest.TestCase):
             self.assertEqual(partner["nightMessages"], 6)
             self.assertAlmostEqual(partner["sharePct"], 75.0)
             self.assertEqual(partner["displayName"], f"Nick_{friend_a}")
-            # 打码：首尾保留，中间打星。
-            self.assertTrue(partner["maskedName"].startswith("N"))
-            self.assertIn("*", partner["maskedName"])
+            # 打码不保留任何原字符，且长度最多为 6。
+            self.assertEqual(partner["maskedName"], "******")
             self.assertTrue(partner["avatarUrl"])
 
     def test_latest_moment_uses_late_night_scoring(self):

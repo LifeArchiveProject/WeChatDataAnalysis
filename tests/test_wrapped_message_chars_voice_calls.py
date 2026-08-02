@@ -257,7 +257,7 @@ class TestWrappedMessageCharsVoiceCalls(unittest.TestCase):
             self.assertEqual(longest["direction"], "received")
             self.assertEqual(longest["username"], friend_b)
             self.assertEqual(longest["displayName"], "好友2")
-            self.assertEqual(longest["maskedName"], "好*2")
+            self.assertEqual(longest["maskedName"], "***")
             self.assertTrue(str(longest["avatarUrl"]).startswith("/api/chat/avatar"))
             self.assertEqual(longest["date"], "2025-05-20")
 
@@ -345,7 +345,7 @@ class TestWrappedMessageCharsVoiceCalls(unittest.TestCase):
             self.assertEqual(top["seconds"], 3742)
             self.assertEqual(top["count"], 7)
             self.assertEqual(top["displayName"], "好友1")
-            self.assertEqual(top["maskedName"], "好*1")
+            self.assertEqual(top["maskedName"], "***")
 
     def test_shard_without_my_name2id_still_counts_received(self):
         # 本人不在某分片的 Name2Id（该分片里从未发过消息）时，收到的语音/通话不得丢失。

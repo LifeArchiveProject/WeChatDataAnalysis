@@ -5,9 +5,10 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from ..path_fix import PathFixRoute
+from ..native_core_export import decode_export_content_key, erase_export_content_key
 from ..sns_export_service import SNS_EXPORT_MANAGER
 
 router = APIRouter(route_class=PathFixRoute)
@@ -24,19 +25,37 @@ class SnsExportCreateRequest(BaseModel):
     use_cache: bool = Field(True, description="是否复用导出过程中的本地缓存（默认开启）")
     output_dir: Optional[str] = Field(None, description="导出目录绝对路径（可选；不填时使用默认目录）")
     file_name: Optional[str] = Field(None, description="导出 zip 文件名（可选，不含/含 .zip 都可）")
+    encrypt: bool = Field(False, description="是否使用 WEC1 加密最终导出文件")
+    content_key_base64: Optional[SecretStr] = Field(
+        None,
+        description="WEC1 的 32 字节 Base64 内容密钥；仅 encrypt=true 时使用",
+    )
 
 
 @router.post("/api/sns/exports", summary="创建朋友圈导出任务（离线 ZIP，支持 HTML/JSON/TXT/Excel）")
 async def create_sns_export(req: SnsExportCreateRequest):
-    job = SNS_EXPORT_MANAGER.create_job(
-        account=req.account,
-        scope=req.scope,
-        usernames=req.usernames,
-        export_format=req.format,
-        use_cache=bool(req.use_cache),
-        output_dir=req.output_dir,
-        file_name=req.file_name,
-    )
+    try:
+        content_key = decode_export_content_key(
+            req.content_key_base64.get_secret_value() if req.content_key_base64 else None,
+            enabled=bool(req.encrypt),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        job = SNS_EXPORT_MANAGER.create_job(
+            account=req.account,
+            scope=req.scope,
+            usernames=req.usernames,
+            export_format=req.format,
+            use_cache=bool(req.use_cache),
+            output_dir=req.output_dir,
+            file_name=req.file_name,
+            encrypt=bool(req.encrypt),
+            content_key=content_key,
+        )
+    except Exception:
+        erase_export_content_key(content_key)
+        raise
     return {"status": "success", "job": job.to_public_dict()}
 
 
@@ -64,7 +83,7 @@ async def download_sns_export(export_id: str):
         raise HTTPException(status_code=409, detail="Export not ready.")
     return FileResponse(
         str(job.zip_path),
-        media_type="application/zip",
+        media_type="application/octet-stream" if job.zip_path.suffix.lower() == ".wec" else "application/zip",
         filename=job.zip_path.name,
     )
 
