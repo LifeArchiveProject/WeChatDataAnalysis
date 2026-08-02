@@ -1,0 +1,2 @@
+# This policy is hash-pinned at runtime and must remain byte-stable on Windows.
+desktop/scripts/windows-private-pki.ps1 text eol=lf
