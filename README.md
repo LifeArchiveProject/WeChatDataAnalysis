@@ -173,14 +173,24 @@ cd WeChatDataAnalysis
 uv sync
 ```
 
-#### 2.3 安装前端依赖
+#### 2.3 安装 WCDB 隔离运行时
+
+实时聊天读取需要 Electron 隔离进程。全新克隆或 `desktop/package-lock.json` 更新后必须同步桌面端依赖：
+
+```bash
+cd desktop
+npm ci
+cd ..
+```
+
+#### 2.4 安装前端依赖
 
 ```bash
 cd frontend
-npm install
+npm ci
 ```
 
-#### 2.4 启动服务
+#### 2.5 启动服务
 
 #### 启动后端API服务
 ```bash
@@ -195,7 +205,7 @@ cd frontend
 npm run dev
 ```
 
-#### 2.5 访问应用
+#### 2.6 访问应用
 
 - 前端界面: http://localhost:3000
 - API服务(默认): http://localhost:10392 （可通过环境变量 WECHAT_TOOL_PORT 修改）
@@ -212,13 +222,19 @@ npm run dev
 ```bash
 # 1) 安装桌面端依赖
 cd desktop
-npm install
+npm ci
 
 # 2) 打包（会自动：nuxt generate -> 拷贝静态资源 -> PyInstaller 打包后端 -> electron-builder 生成安装包）
 npm run dist
 ```
 
 输出位置：`desktop/dist/WeChatDataAnalysis Setup <version>.exe`
+
+## macOS 桌面端
+
+公开发布流程目前仅生成 Windows 安装包。macOS 构建依赖未公开的完整性模块源码，维护者恢复受控源码后仍可在本地执行 `npm run dist:mac`；公共 GitHub Actions 不会尝试读取或发布该源码。
+
+内置 Mac 原生资源的来源、哈希、修改内容和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 安全说明
 

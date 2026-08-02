@@ -43,6 +43,10 @@ const {
   shouldRetryBackendOnDifferentPort,
 } = require("./backend-startup.cjs");
 const { applyNativeCoreRuntimePolicy } = require("./native-core-runtime.cjs");
+const {
+  configurePrivatePkiUpdateVerification,
+  ensurePrivatePkiIssuerCached,
+} = require("./windows-private-pki-runtime.cjs");
 
 const DEFAULT_BACKEND_HOST = "127.0.0.1";
 const LAN_BACKEND_HOST = "0.0.0.0";
@@ -1517,6 +1521,11 @@ function initAutoUpdater() {
   // Don't install automatically on quit; let the user choose when to restart/install.
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.disableDifferentialDownload = true;
+  configurePrivatePkiUpdateVerification(autoUpdater, {
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    resourcesPath: process.resourcesPath,
+  });
 
   autoUpdater.on("download-progress", (progress) => {
     sendToRenderer("app:downloadProgress", progress);
@@ -2938,6 +2947,14 @@ async function ensureMainWindowReady() {
 
 async function main() {
   await app.whenReady();
+  if (app.isPackaged && process.platform === "win32") {
+    const evidence = ensurePrivatePkiIssuerCached({
+      resourcesPath: process.resourcesPath,
+    });
+    logMain(
+      `[private-pki] issuer=${evidence.issuerStore} root=${evidence.rootSha256.slice(0, 12)} newlyAdded=${evidence.newlyAdded === true}`
+    );
+  }
   await refreshRendererCacheForPackagedUi();
   Menu.setApplicationMenu(null);
   registerWindowIpc();

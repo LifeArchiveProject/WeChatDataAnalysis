@@ -13,6 +13,8 @@
     "verify:mac:native": "node scripts/verify-macos-native.cjs --arch arm64 --require-host-arch",
     "verify:mac:distribution": "node scripts/verify-macos-distribution.cjs",
     "smoke:mac": "node scripts/smoke-macos-package.cjs",
+    "smoke:win": "node scripts/smoke-windows-package.cjs",
+    "smoke:win:real": "node scripts/smoke-windows-real-database.cjs",
     "dist": "npm run dist:win",
     "dist:win": "npm run build:ui && npm run build:backend && npm run build:icon && electron-builder --win --x64 --publish never",
     "dist:mac": "npm run dist:mac:arm64",
@@ -21,14 +23,14 @@
   },
   "dependencies": {
     "electron-updater": "^6.7.3",
-    "ffmpeg-static": "^5.3.0",
-    "koffi": "^2.15.2"
+    "ffmpeg-static": "^5.3.0"
   },
   "build": {
     "appId": "com.lifearchive.wechatdataanalysis",
     "productName": "WeChatDataAnalysis",
     "artifactName": "${productName}-${version}-Setup.${ext}",
     "icon": "build/icon.ico",
+    "beforePack": "scripts/native-core-before-pack.cjs",
     "asar": true,
     "directories": {
       "output": "dist"
@@ -37,6 +39,7 @@
     "afterSign": "scripts/after-sign.cjs",
     "files": [
       "src/**/*",
+      "!src/wcdb-sidecar.cjs",
       "package.json",
       {
         "from": "node_modules",
@@ -57,13 +60,9 @@
           "graceful-fs/**/*",
           "jsonfile/**/*",
           "universalify/**/*",
-          "semver/**/*",
-          "koffi/**/*"
+          "semver/**/*"
         ]
       }
-    ],
-    "asarUnpack": [
-      "node_modules/koffi/**/*"
     ],
     "extraResources": [
       {
@@ -75,12 +74,12 @@
         "to": "backend"
       },
       {
-        "from": "src/wcdb-sidecar.cjs",
-        "to": "wcdb-sidecar.cjs"
-      },
-      {
-        "from": "src/icon.png",
-        "to": "icon.png"
+        "from": "resources/signing",
+        "to": "signing",
+        "filter": [
+          "windows-private-pki-root.cer",
+          "windows-private-pki.ps1"
+        ]
       },
       {
         "from": "node_modules/ffmpeg-static",
@@ -96,6 +95,23 @@
     ],
     "win": {
       "icon": "build/icon.ico",
+      "forceCodeSigning": true,
+      "signExts": [
+        "!wechatdb_broker.exe",
+        "!wechatdb_client.dll",
+        "wce_integrity.pyd",
+        "img_helper.dll"
+      ],
+      "signtoolOptions": {
+        "sign": "./scripts/windows-private-pki-sign.cjs",
+        "publisherName": [
+          "WDA Private PKI"
+        ],
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com"
+      },
       "target": [
         "nsis"
       ]

@@ -1,4 +1,4 @@
-name: Release (Windows and macOS ARM64)
+name: Release (Windows)
 
 on:
   push:
@@ -6,26 +6,173 @@ on:
       - "v*"
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, wce-production-signing]
+    environment: windows-private-pki-production
+    timeout-minutes: 120
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release tag is on origin/main
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $tagRef = "refs/tags/$tag"
+          $head = (git rev-parse HEAD).Trim()
+          $tagCommit = (git rev-parse --verify "$tagRef^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0 -or $tagCommit -cne $head) {
+            throw "Release tag commit '$tagCommit' does not match checkout HEAD '$head'."
+          }
+
+          git rev-parse --verify origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "The checkout does not contain the fetched origin/main reference."
+          }
+          git merge-base --is-ancestor $tagRef origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag '$tag' is not an ancestor of origin/main."
+          }
 
       - name: Derive version from tag
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
           if ([string]::IsNullOrWhiteSpace($version)) {
             throw "Invalid tag: '${{ github.ref_name }}' (expected like v1.0.0)"
           }
+          "TAG_NAME=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Require pinned native artifact source
+        id: native-artifact-source
+        shell: pwsh
+        env:
+          NATIVE_ARTIFACT_REPOSITORY: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_REPOSITORY }}
+          NATIVE_ARTIFACT_RUN_ID: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_RUN_ID }}
+          NATIVE_SOURCE_REVISION: ${{ vars.WCE_NATIVE_CORE_SOURCE_REVISION }}
+          NATIVE_BUILD_ID: ${{ vars.WCE_NATIVE_CORE_BUILD_ID }}
+          NATIVE_CLIENT_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 }}
+          NATIVE_BROKER_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_BROKER_SIGNER_SHA256 }}
+          PRIVATE_ROOT_SHA256: ${{ vars.WCE_WINDOWS_PRIVATE_ROOT_SHA256 }}
+        run: |
+          $repository = [string]$env:NATIVE_ARTIFACT_REPOSITORY
+          $repository = $repository.Trim()
+          if ($repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+            throw "WCE_NATIVE_CORE_ARTIFACT_REPOSITORY must be an explicit owner/repository value."
+          }
+
+          $rawRunId = ([string]$env:NATIVE_ARTIFACT_RUN_ID).Trim()
+          [long]$runId = 0
+          if (-not [long]::TryParse($rawRunId, [ref]$runId) -or $runId -le 0) {
+            throw "WCE_NATIVE_CORE_ARTIFACT_RUN_ID must be an explicit positive workflow run ID."
+          }
+
+          $sourceRevision = ([string]$env:NATIVE_SOURCE_REVISION).Trim()
+          if ($sourceRevision -cnotmatch '^[0-9a-f]{40}$') {
+            throw "WCE_NATIVE_CORE_SOURCE_REVISION must be an exact lowercase 40-character Git revision."
+          }
+          $buildId = ([string]$env:NATIVE_BUILD_ID).Trim()
+          if ($buildId -notmatch '^[A-Za-z0-9._-]{8,128}$' -or
+              $buildId -match '(^|[._-])(dev|debug|test|local|snapshot|staging)([._-]|$)') {
+            throw "WCE_NATIVE_CORE_BUILD_ID must be an immutable production build ID."
+          }
+
+          $clientSigner = ([string]$env:NATIVE_CLIENT_SIGNER_SHA256).Trim().ToUpperInvariant()
+          $brokerSigner = ([string]$env:NATIVE_BROKER_SIGNER_SHA256).Trim().ToUpperInvariant()
+          if ($clientSigner -notmatch '^[0-9A-F]{64}$') {
+            throw "WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 must be a 64-character hexadecimal certificate pin."
+          }
+          if ($brokerSigner -notmatch '^[0-9A-F]{64}$') {
+            throw "WCE_NATIVE_CORE_BROKER_SIGNER_SHA256 must be a 64-character hexadecimal certificate pin."
+          }
+          if ($clientSigner -ceq $brokerSigner) {
+            throw "Native client and broker signer pins must be distinct."
+          }
+
+          $privateRoot = ([string]$env:PRIVATE_ROOT_SHA256).Trim().ToUpperInvariant()
+          if ($privateRoot -notmatch '^[0-9A-F]{64}$' -or $privateRoot -match '^0{64}$') {
+            throw "WCE_WINDOWS_PRIVATE_ROOT_SHA256 must be a non-zero 64-character hexadecimal pin."
+          }
+
+          "repository=$repository" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "run-id=$runId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "source-revision=$sourceRevision" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "build-id=$buildId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "client-signer-sha256=$clientSigner" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "broker-signer-sha256=$brokerSigner" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "private-root-sha256=$privateRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Generate release notes from commits
+        shell: pwsh
+        run: |
+          git fetch --force --tags
+
+          $tag = $env:TAG_NAME
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "TAG_NAME is empty"
+          }
+
+          $repo = "${{ github.repository }}"
+
+          $prev = ""
+          try {
+            $commit = (git rev-list -n 1 $tag).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($commit)) {
+              $prev = (git describe --tags --abbrev=0 "$commit^" 2>$null).Trim()
+            }
+          } catch {}
+
+          if ([string]::IsNullOrWhiteSpace($prev)) {
+            # Fallback: best-effort previous version tag by semver-ish sorting.
+            $prev = (git tag --list "v*" --sort=-v:refname | Where-Object { $_ -ne $tag } | Select-Object -First 1)
+          }
+
+          $range = ""
+          if (-not [string]::IsNullOrWhiteSpace($prev)) {
+            $range = "$prev..$tag"
+          }
+
+          $lines = @()
+          if (-not [string]::IsNullOrWhiteSpace($range)) {
+            $lines = @(git log --no-merges --pretty=format:"- %s (%h)" --reverse $range)
+          } else {
+            # First release tag / missing history: include a small recent window.
+            $lines = @(git log --no-merges --pretty=format:"- %s (%h)" --reverse -n 50)
+          }
+
+          if (-not $lines -or $lines.Count -eq 0) {
+            $lines = @("- 修复了一些已知问题，提升了稳定性。")
+          }
+
+          $max = 60
+          if ($lines.Count -gt $max) {
+            $total = $lines.Count
+            $lines = @($lines | Select-Object -First $max)
+            $lines += "- ...（共 $total 条提交，更多请查看完整变更链接）"
+          }
+
+          $body = @()
+          $body += "## 更新内容 ($tag)"
+          $body += ""
+          $body += $lines
+
+          if (-not [string]::IsNullOrWhiteSpace($prev)) {
+            $body += ""
+            $body += "完整变更: https://github.com/$repo/compare/$prev...$tag"
+          }
+
+          ($body -join "`n") | Out-File -FilePath release-notes.md -Encoding utf8
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: npm
@@ -33,8 +180,175 @@ jobs:
             frontend/package-lock.json
             desktop/package-lock.json
 
+      - name: Download pinned native production artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: wechatdb-native-windows-x64-production
+          path: ${{ runner.temp }}/wechatdb-native-windows-x64-production
+          repository: ${{ steps.native-artifact-source.outputs.repository }}
+          run-id: ${{ steps.native-artifact-source.outputs.run-id }}
+          github-token: ${{ secrets.WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN || github.token }}
+
+      - name: Validate native production artifact
+        working-directory: desktop
+        shell: pwsh
+        env:
+          CI: "true"
+          WCE_NATIVE_CORE_ARTIFACT_DIR: ${{ runner.temp }}/wechatdb-native-windows-x64-production
+          WCE_NATIVE_CORE_REQUIRED: "1"
+          WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
+          WCE_NATIVE_CORE_BROKER_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.broker-signer-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ vars.WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH }}
+          WCE_NATIVE_CORE_ARTIFACT_REPOSITORY: ${{ steps.native-artifact-source.outputs.repository }}
+          WCE_NATIVE_CORE_ARTIFACT_RUN_ID: ${{ steps.native-artifact-source.outputs.run-id }}
+          WCE_NATIVE_CORE_SOURCE_REVISION: ${{ steps.native-artifact-source.outputs.source-revision }}
+          WCE_NATIVE_CORE_BUILD_ID: ${{ steps.native-artifact-source.outputs.build-id }}
+        run: |
+          $manifestPath = Join-Path `
+            $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'wechatdb_native_build.json'
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ($manifest.buildId -cne $env:WCE_NATIVE_CORE_BUILD_ID) {
+            throw "Native manifest build ID does not match the pinned release build."
+          }
+          $manifestFields = @($manifest.PSObject.Properties.Name)
+          if ($manifestFields -contains 'distributionCapsule') {
+            throw "GitHub releases must not contain a recipient-bound distribution capsule."
+          }
+          if (($manifestFields -notcontains 'distributionMode') -or
+              $manifest.distributionMode -cne 'public') {
+            throw "GitHub releases require the shared public native distribution mode."
+          }
+          if ([uint64]$manifest.offlineBootstrapFeatureBits -ne 3 -or
+              $manifest.offlineExportSealFormat -cne 'WES2') {
+            throw "Native production artifact does not provide the required offline 3/WES2 contract."
+          }
+          if ($manifest.securityNoticeId -cne
+                'WCE-AUTOMATED-ANALYSIS-NOTICE-V2' -or
+              $manifest.securityNoticeSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $manifest.securityCheckpointSetId -cne
+                'WCE-AI-CHECKPOINT-SET-V3' -or
+              [uint32]$manifest.securityCheckpointCount -ne 7 -or
+              $manifest.securityCheckpointSetSha256 -cnotmatch
+                '^[0-9a-f]{64}$') {
+            throw "Native production artifact does not satisfy the V2/V3 security metadata contract."
+          }
+          if ($manifest.stagingPinnedSignerTrust -ne $false) {
+            throw "Native production artifact enables staging pinned-signer trust: $manifestPath"
+          }
+          if ($manifest.windowsClientSignerSha256 -cne
+              $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256) {
+            throw "Native manifest client signer does not match the pinned release identity: $manifestPath"
+          }
+          if ($manifest.windowsBrokerSignerSha256 -cne
+              $env:WCE_NATIVE_CORE_BROKER_SIGNER_SHA256) {
+            throw "Native manifest broker signer does not match the pinned release identity: $manifestPath"
+          }
+          if ($manifest.windowsSignerTrustMode -cne 'private-pki' -or
+              $manifest.windowsPrivateRootSha256 -cne
+                $env:WCE_WINDOWS_PRIVATE_ROOT_SHA256 -or
+              $manifest.windowsPrivatePkiLeafRevocation -cne
+                'build-and-lease-only') {
+            throw "Native manifest does not match the pinned private-PKI trust domain: $manifestPath"
+          }
+
+          $provenancePath = Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'provenance.json'
+          $checksumsPath = Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'SHA256SUMS.txt'
+          $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json
+          if ($provenance.schemaVersion -ne 1 -or
+              $provenance.artifactName -cne 'wechatdb-native-windows-x64-production' -or
+              $provenance.source.repository -cne $env:WCE_NATIVE_CORE_ARTIFACT_REPOSITORY -or
+              $provenance.source.revision -cne $env:WCE_NATIVE_CORE_SOURCE_REVISION -or
+              $provenance.build.id -cne $env:WCE_NATIVE_CORE_BUILD_ID -or
+              $provenance.build.distributionMode -cne 'public' -or
+              [long]$provenance.build.issuedAtUnix -ne
+                [long]$manifest.buildIssuedAtUnix -or
+              [long]$provenance.build.expiresAtUnix -ne
+                [long]$manifest.buildExpiresAtUnix -or
+              [uint64]$provenance.build.offlineBootstrapFeatureBits -ne
+                [uint64]$manifest.offlineBootstrapFeatureBits -or
+              $provenance.build.offlineExportSealFormat -cne
+                $manifest.offlineExportSealFormat -or
+              $provenance.build.workflowRunId -cne $env:WCE_NATIVE_CORE_ARTIFACT_RUN_ID -or
+              $provenance.build.windowsSignerTrustMode -cne 'private-pki' -or
+              $provenance.build.windowsPrivateRootSha256 -cne
+                $env:WCE_WINDOWS_PRIVATE_ROOT_SHA256 -or
+              $provenance.build.windowsPrivatePkiLeafRevocation -cne
+                'build-and-lease-only' -or
+              $provenance.build.securityNoticeId -cne
+                $manifest.securityNoticeId -or
+              $provenance.build.securityNoticeSha256 -cne
+                $manifest.securityNoticeSha256 -or
+              $provenance.build.securityCheckpointSetId -cne
+                $manifest.securityCheckpointSetId -or
+              [uint32]$provenance.build.securityCheckpointCount -ne
+                [uint32]$manifest.securityCheckpointCount -or
+              $provenance.build.securityCheckpointSetSha256 -cne
+                $manifest.securityCheckpointSetSha256 -or
+              $provenance.signers.client.certificateSha256 -cne
+                $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 -or
+              $provenance.signers.broker.certificateSha256 -cne
+                $env:WCE_NATIVE_CORE_BROKER_SIGNER_SHA256) {
+            throw "Native artifact provenance does not match the pinned producer run."
+          }
+
+          $artifactNames = @(
+            'wechatdb_client.dll',
+            'wechatdb_broker.exe',
+            'wechatdb_native_build.json'
+          )
+          $records = @($provenance.artifacts)
+          if ($records.Count -ne $artifactNames.Count) {
+            throw "Native provenance must describe exactly the reviewed runtime trio."
+          }
+          $checksumRecords = @{}
+          foreach ($line in @(Get-Content -LiteralPath $checksumsPath)) {
+            if ($line -cnotmatch '^([0-9A-F]{64}) \*(.+)$') {
+              throw "Malformed native checksum record."
+            }
+            $checksumRecords[$Matches[2]] = $Matches[1]
+          }
+          if ($checksumRecords.Count -ne $artifactNames.Count) {
+            throw "Native checksum manifest must describe exactly the reviewed runtime trio."
+          }
+          foreach ($name in $artifactNames) {
+            $path = Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR $name
+            $file = Get-Item -LiteralPath $path
+            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
+            $record = @($records | Where-Object { $_.path -ceq $name })
+            if ($record.Count -ne 1 -or
+                $record[0].sha256 -cne $actualHash -or
+                [int64]$record[0].size -ne [int64]$file.Length -or
+                $checksumRecords[$name] -cne $actualHash) {
+              throw "Native artifact checksum or provenance mismatch: $name"
+            }
+          }
+
+          node .\scripts\windows-private-pki-sign.cjs verify `
+            --path (Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'wechatdb_client.dll') `
+            --signer-sha256 $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 `
+            --root-sha256 $env:WCE_WINDOWS_PRIVATE_ROOT_SHA256 `
+            --root-certificate $env:WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH
+          node .\scripts\windows-private-pki-sign.cjs verify `
+            --path (Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'wechatdb_broker.exe') `
+            --signer-sha256 $env:WCE_NATIVE_CORE_BROKER_SIGNER_SHA256 `
+            --root-sha256 $env:WCE_WINDOWS_PRIVATE_ROOT_SHA256 `
+            --root-certificate $env:WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH
+          node -e "require('./scripts/build-backend.cjs').resolveNativeCoreArtifacts({ platform: 'win32' })"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Downloaded native artifact failed the production policy."
+          }
+          "WCE_NATIVE_CORE_ARTIFACT_DIR=$env:WCE_NATIVE_CORE_ARTIFACT_DIR" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "WCE_NATIVE_CORE_REQUIRED=1" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "WCE_NATIVE_CORE_SECURITY_NOTICE_SHA256=$($manifest.securityNoticeSha256)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "WCE_NATIVE_CORE_SECURITY_CHECKPOINT_SET_SHA256=$($manifest.securityCheckpointSetSha256)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version-file: .python-version
 
@@ -59,16 +373,242 @@ jobs:
         working-directory: desktop
         run: npm version $env:VERSION --no-git-tag-version --allow-same-version
 
+      - name: Validate TPM-backed Windows client signing identity
+        working-directory: desktop
+        shell: pwsh
+        env:
+          WCE_WINDOWS_CLIENT_CERT_THUMBPRINT: ${{ vars.WCE_WINDOWS_CLIENT_CERT_THUMBPRINT }}
+          WCE_WINDOWS_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ vars.WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH }}
+          WCE_RFC3161_TIMESTAMP_URL: ${{ vars.WCE_RFC3161_TIMESTAMP_URL }}
+          WCE_SIGNTOOL_PATH: ${{ vars.WCE_SIGNTOOL_PATH }}
+        run: |
+          node .\scripts\windows-private-pki-sign.cjs preflight
+
       - name: Build Windows installer
         working-directory: desktop
+        env:
+          WCE_WINDOWS_CLIENT_CERT_THUMBPRINT: ${{ vars.WCE_WINDOWS_CLIENT_CERT_THUMBPRINT }}
+          WCE_WINDOWS_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ vars.WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH }}
+          WCE_RFC3161_TIMESTAMP_URL: ${{ vars.WCE_RFC3161_TIMESTAMP_URL }}
+          WCE_SIGNTOOL_PATH: ${{ vars.WCE_SIGNTOOL_PATH }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run dist:win
+
+      - name: Verify signed unpacked Windows runtime
+        shell: pwsh
+        env:
+          WCE_NATIVE_CORE_ARTIFACT_DIR: ${{ runner.temp }}/wechatdb-native-windows-x64-production
+          WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
+          WCE_NATIVE_CORE_BROKER_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.broker-signer-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ vars.WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH }}
+        run: |
+          function Assert-Authenticode {
+            param(
+              [Parameter(Mandatory = $true)][string]$Path,
+              [Parameter(Mandatory = $true)][string]$ExpectedSigner,
+              [Parameter(Mandatory = $true)][string]$Role
+            )
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+              throw "Missing signed $Role`: $Path"
+            }
+            node .\desktop\scripts\windows-private-pki-sign.cjs verify `
+              --path $Path `
+              --signer-sha256 $ExpectedSigner `
+              --root-sha256 $env:WCE_WINDOWS_PRIVATE_ROOT_SHA256 `
+              --root-certificate $env:WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH
+            if ($LASTEXITCODE -ne 0) {
+              throw "$Role failed the private-PKI Authenticode policy: $Path"
+            }
+          }
+
+          function Assert-ByteIdentical {
+            param(
+              [Parameter(Mandatory = $true)][string]$Source,
+              [Parameter(Mandatory = $true)][string]$Packaged,
+              [Parameter(Mandatory = $true)][string]$Role
+            )
+            $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Source).Hash
+            $packagedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Packaged).Hash
+            if ($sourceHash -cne $packagedHash) {
+              throw "Packaged $Role differs from the reviewed native artifact."
+            }
+          }
+
+          $backendRoot = Join-Path $PWD 'desktop\dist\win-unpacked\resources\backend'
+          $nativeRoot = Join-Path $backendRoot 'native'
+          $backend = Join-Path $backendRoot 'wechat-backend.exe'
+          $client = Join-Path $nativeRoot 'wechatdb_client.dll'
+          $broker = Join-Path $nativeRoot 'wechatdb_broker.exe'
+          $manifest = Join-Path $nativeRoot 'wechatdb_native_build.json'
+          $integrity = Join-Path $nativeRoot 'wce_integrity.pyd'
+          $imageHelper = Join-Path $nativeRoot 'img_helper.dll'
+
+          Assert-Authenticode $backend $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 'packaged backend'
+          Assert-Authenticode $client $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 'packaged native client'
+          Assert-Authenticode $broker $env:WCE_NATIVE_CORE_BROKER_SIGNER_SHA256 'packaged native broker'
+          Assert-Authenticode $integrity $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 'packaged export native module'
+          Assert-Authenticode $imageHelper $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 'packaged image native helper'
+          Assert-ByteIdentical `
+            (Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'wechatdb_client.dll') `
+            $client 'native client'
+          Assert-ByteIdentical `
+            (Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'wechatdb_broker.exe') `
+            $broker 'native broker'
+          Assert-ByteIdentical `
+            (Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'wechatdb_native_build.json') `
+            $manifest 'native manifest'
+
+          $appExecutables = @(Get-ChildItem -LiteralPath `
+            (Join-Path $PWD 'desktop\dist\win-unpacked') -Filter '*.exe' -File)
+          if ($appExecutables.Count -ne 1) {
+            throw "Expected exactly one unpacked application executable."
+          }
+          Assert-Authenticode `
+            $appExecutables[0].FullName $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 `
+            'unpacked application'
+          $installers = @(Get-ChildItem -LiteralPath (Join-Path $PWD 'desktop\dist') `
+            -Filter '*Setup*.exe' -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one signed Windows installer."
+          }
+          Assert-Authenticode `
+            $installers[0].FullName $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 `
+            'Windows installer'
+
+      - name: Smoke-test packaged Windows native runtime
+        working-directory: desktop
+        env:
+          WCE_WINDOWS_INSTALLER_SMOKE_ALLOWED: "1"
+        run: npm run smoke:win
 
       - name: Run desktop tests
         working-directory: desktop
         run: node --test tests/*.test.cjs
 
+      - name: Generate Windows release checksums and provenance
+        shell: pwsh
+        env:
+          WDA_REPOSITORY: ${{ github.repository }}
+          WDA_REVISION: ${{ github.sha }}
+          WDA_TAG: ${{ github.ref_name }}
+          NATIVE_REPOSITORY: ${{ steps.native-artifact-source.outputs.repository }}
+          NATIVE_RUN_ID: ${{ steps.native-artifact-source.outputs.run-id }}
+          NATIVE_REVISION: ${{ steps.native-artifact-source.outputs.source-revision }}
+          NATIVE_BUILD_ID: ${{ steps.native-artifact-source.outputs.build-id }}
+          NATIVE_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
+          NATIVE_BROKER_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.broker-signer-sha256 }}
+          WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          $distRoot = Join-Path $PWD 'desktop\dist'
+          $installers = @(Get-ChildItem -LiteralPath $distRoot -Filter '*Setup*.exe' -File)
+          $blockmaps = @(Get-ChildItem -LiteralPath $distRoot -Filter '*Setup*.exe.blockmap' -File)
+          $latestFiles = @(Get-ChildItem -LiteralPath $distRoot -Filter 'latest.yml' -File)
+          if ($installers.Count -ne 1 -or $blockmaps.Count -ne 1 -or
+              $latestFiles.Count -ne 1) {
+            throw "Expected exactly one Setup.exe, one blockmap, and one latest.yml release asset."
+          }
+
+          $assets = @($installers[0], $blockmaps[0], $latestFiles[0])
+          $artifactRecords = @()
+          $checksumLines = @()
+          foreach ($asset in $assets) {
+            if ($asset.Name -cnotmatch '^[\x20-\x7E]+$') {
+              throw "Release asset name is not ASCII: $($asset.Name)"
+            }
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $asset.FullName).Hash
+            $artifactRecords += [ordered]@{
+              path = $asset.Name
+              sha256 = $hash
+              size = [int64]$asset.Length
+            }
+            $checksumLines += "$hash *$($asset.Name)"
+          }
+
+          [long]$nativeRunId = 0
+          [long]$workflowRunId = 0
+          [int]$workflowRunAttempt = 0
+          if (-not [long]::TryParse($env:NATIVE_RUN_ID, [ref]$nativeRunId) -or
+              $nativeRunId -le 0) {
+            throw "Native producer run ID is invalid."
+          }
+          if (-not [long]::TryParse($env:WORKFLOW_RUN_ID, [ref]$workflowRunId) -or
+              $workflowRunId -le 0) {
+            throw "Release workflow run ID is invalid."
+          }
+          if (-not [int]::TryParse($env:WORKFLOW_RUN_ATTEMPT, [ref]$workflowRunAttempt) -or
+              $workflowRunAttempt -le 0) {
+            throw "Release workflow run attempt is invalid."
+          }
+          if ($env:WCE_NATIVE_CORE_SECURITY_NOTICE_SHA256 -cnotmatch
+                '^[0-9a-f]{64}$' -or
+              $env:WCE_NATIVE_CORE_SECURITY_CHECKPOINT_SET_SHA256 -cnotmatch
+                '^[0-9a-f]{64}$') {
+            throw "Validated native V2/V3 security metadata is unavailable."
+          }
+
+          $revision = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $revision -cne $env:WDA_REVISION) {
+            throw "Release provenance revision does not match checkout HEAD."
+          }
+          $provenance = [ordered]@{
+            schemaVersion = 1
+            artifactName = 'release-windows'
+            source = [ordered]@{
+              repository = $env:WDA_REPOSITORY
+              revision = $revision
+              tag = $env:WDA_TAG
+            }
+            native = [ordered]@{
+              repository = $env:NATIVE_REPOSITORY
+              workflowRunId = $nativeRunId
+              revision = $env:NATIVE_REVISION
+              buildId = $env:NATIVE_BUILD_ID
+              distributionMode = 'public'
+              offlineBootstrapFeatureBits = [uint64]3
+              offlineExportSealFormat = 'WES2'
+              securityNoticeId = 'WCE-AUTOMATED-ANALYSIS-NOTICE-V2'
+              securityNoticeSha256 = $env:WCE_NATIVE_CORE_SECURITY_NOTICE_SHA256
+              securityCheckpointSetId = 'WCE-AI-CHECKPOINT-SET-V3'
+              securityCheckpointCount = [uint32]7
+              securityCheckpointSetSha256 = `
+                $env:WCE_NATIVE_CORE_SECURITY_CHECKPOINT_SET_SHA256
+              signers = [ordered]@{
+                clientCertificateSha256 = $env:NATIVE_CLIENT_SIGNER_SHA256
+                brokerCertificateSha256 = $env:NATIVE_BROKER_SIGNER_SHA256
+              }
+              windowsPrivateRootSha256 = $env:WINDOWS_PRIVATE_ROOT_SHA256
+              windowsPrivatePkiLeafRevocation = 'build-and-lease-only'
+            }
+            build = [ordered]@{
+              workflowRunId = $workflowRunId
+              workflowRunAttempt = $workflowRunAttempt
+            }
+            artifacts = $artifactRecords
+          }
+
+          $checksumsPath = Join-Path $distRoot 'SHA256SUMS.txt'
+          [System.IO.File]::WriteAllLines(
+            $checksumsPath,
+            $checksumLines,
+            [System.Text.Encoding]::ASCII
+          )
+          $provenancePath = Join-Path $distRoot 'release-provenance.json'
+          $json = $provenance | ConvertTo-Json -Depth 8
+          [System.IO.File]::WriteAllText(
+            $provenancePath,
+            "$json`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
       - name: Upload Windows release files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-windows
           if-no-files-found: error
@@ -76,138 +616,22 @@ jobs:
             desktop/dist/*Setup*.exe
             desktop/dist/*Setup*.exe.blockmap
             desktop/dist/latest.yml
-
-  build-macos-arm64:
-    runs-on: macos-15
-    timeout-minutes: 90
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Verify Apple Silicon runner
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = "arm64"
-          version="${GITHUB_REF_NAME#v}"
-          test -n "$version" || { echo "Invalid tag: '$GITHUB_REF_NAME' (expected like v1.0.0)" >&2; exit 1; }
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-
-      - name: Require Developer ID and Apple notarization secrets
-        shell: bash
-        env:
-          CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.MACOS_APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MACOS_APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.MACOS_APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-            test -n "${!name:-}" || { echo "Missing required macOS release secret: $name" >&2; exit 1; }
-          done
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: |
-            frontend/package-lock.json
-            desktop/package-lock.json
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: .python-version
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            native/wce_integrity/target
-          key: macos-arm64-rust-${{ hashFiles('native/wce_integrity/Cargo.lock') }}
-
-      - name: Install uv
-        run: python -m pip install uv
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Install desktop dependencies
-        working-directory: desktop
-        run: npm ci
-
-      - name: Restore macOS native helper permissions
-        run: chmod +x src/wechat_decrypt_tool/native/macos/universal/image_scan_helper
-
-      - name: Verify self-contained macOS native resources
-        working-directory: desktop
-        run: npm run verify:mac:native
-
-      - name: Set desktop app version
-        working-directory: desktop
-        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
-
-      - name: Build, sign, and notarize macOS DMG and ZIP
-        working-directory: desktop
-        env:
-          CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.MACOS_APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MACOS_APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.MACOS_APPLE_TEAM_ID }}
-        run: npm run dist:mac:arm64:release
-
-      - name: Run Python tests on macOS
-        env:
-          PYTHONPATH: src
-        run: uv run pytest -q
-
-      - name: Run desktop tests
-        working-directory: desktop
-        run: node --test tests/*.test.cjs
-
-      - name: Smoke-test packaged macOS runtime
-        working-directory: desktop
-        run: npm run smoke:mac
-
-      - name: Verify Developer ID distribution in ZIP and DMG
-        working-directory: desktop
-        env:
-          APPLE_TEAM_ID: ${{ secrets.MACOS_APPLE_TEAM_ID }}
-        run: npm run verify:mac:distribution
-
-      - name: Upload macOS release files
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-macos-arm64
-          if-no-files-found: error
-          path: |
-            desktop/dist/*.dmg
-            desktop/dist/*.zip
-            desktop/dist/*.blockmap
-            desktop/dist/latest-mac.yml
+            desktop/dist/SHA256SUMS.txt
+            desktop/dist/release-provenance.json
 
   publish-release:
     needs:
       - build-windows
-      - build-macos-arm64
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release history
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Download release files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-assets
           merge-multiple: true
@@ -235,7 +659,7 @@ jobs:
           } > release-notes.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

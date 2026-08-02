@@ -2,13 +2,19 @@
 
 const assert = require("node:assert/strict");
 const { spawn, spawnSync } = require("node:child_process");
-const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { verifyAppBundle, withMacosArtifacts } = require("./macos-package-verifier.cjs");
+
+const { validatePackagedBackend } = require("./native-core-before-pack.cjs");
+const {
+  ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD,
+  ENV_NATIVE_CORE_MODE,
+  applyNativeCoreRuntimePolicy,
+} = require("../src/native-core-runtime.cjs");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const SUPPORTED_ARCHITECTURE = "arm64";
@@ -75,106 +81,6 @@ function assertArchitecture(filePath, architecture, { universal = false } = {}) 
   if (universal) {
     assert.ok(output.includes("arm64") && output.includes("x86_64"), `${filePath} is not universal2`);
   }
-}
-
-function createEncryptedSessionFixture(rootDir) {
-  const koffi = require("koffi");
-  const plainPath = path.join(rootDir, "plain-session.db");
-  const encryptedPath = path.join(rootDir, "session.db");
-  const sqlite = koffi.load("/usr/lib/libsqlite3.dylib");
-  const sqliteOpen = sqlite.func("int sqlite3_open(const char* filename, _Out_ void** db)");
-  const sqliteFileControl = sqlite.func(
-    "int sqlite3_file_control(void* db, const char* dbName, int op, _Inout_ int* value)"
-  );
-  const sqliteExec = sqlite.func(
-    "int sqlite3_exec(void* db, const char* sql, void* callback, void* context, _Out_ void** error)"
-  );
-  const sqliteFree = sqlite.func("void sqlite3_free(void* value)");
-  const sqliteClose = sqlite.func("int sqlite3_close(void* db)");
-
-  const db = [null];
-  assert.equal(sqliteOpen(plainPath, db), 0, "failed to create the native WCDB smoke fixture");
-  try {
-    const reserveBytes = [80];
-    assert.equal(
-      sqliteFileControl(db[0], "main", 38, reserveBytes),
-      0,
-      "failed to configure SQLite reserve bytes"
-    );
-
-    const error = [null];
-    const sql = `
-      PRAGMA page_size=4096;
-      CREATE TABLE SessionTable (
-        username TEXT PRIMARY KEY,
-        sort_timestamp INTEGER,
-        last_timestamp INTEGER,
-        summary TEXT,
-        unread_count INTEGER,
-        is_hidden INTEGER,
-        draft TEXT,
-        status INTEGER
-      );
-      INSERT INTO SessionTable VALUES (
-        'wxid_friend', 1735689600, 1735689600, 'macOS WCDB smoke', 0, 0, '', 0
-      );
-    `;
-    const rc = Number(sqliteExec(db[0], sql, null, null, error));
-    try {
-      const message = error[0] ? koffi.decode(error[0], "char", -1) : "";
-      assert.equal(rc, 0, message || "failed to seed the native WCDB smoke fixture");
-    } finally {
-      if (error[0]) sqliteFree(error[0]);
-    }
-  } finally {
-    sqliteClose(db[0]);
-  }
-
-  const pageSize = 4096;
-  const saltSize = 16;
-  const ivSize = 16;
-  const hmacSize = 64;
-  const reserveSize = ivSize + hmacSize;
-  const plain = fs.readFileSync(plainPath);
-  assert.equal(plain.length % pageSize, 0);
-  assert.equal(plain.subarray(0, 16).toString("binary"), "SQLite format 3\0");
-  assert.equal(plain[20], reserveSize);
-
-  const keyMaterial = Buffer.alloc(32, 0x11);
-  const salt = crypto.randomBytes(saltSize);
-  const encryptionKey = crypto.pbkdf2Sync(keyMaterial, salt, 256000, 32, "sha512");
-  const macSalt = Buffer.from(salt.map((byte) => byte ^ 0x3a));
-  const macKey = crypto.pbkdf2Sync(encryptionKey, macSalt, 2, 32, "sha512");
-  const encrypted = Buffer.alloc(plain.length);
-
-  for (let pageOffset = 0, pageNumber = 1; pageOffset < plain.length; pageOffset += pageSize, pageNumber += 1) {
-    const sourcePage = plain.subarray(pageOffset, pageOffset + pageSize);
-    const targetPage = encrypted.subarray(pageOffset, pageOffset + pageSize);
-    const payloadOffset = pageNumber === 1 ? saltSize : 0;
-    const iv = crypto.randomBytes(ivSize);
-    const cipher = crypto.createCipheriv("aes-256-cbc", encryptionKey, iv);
-    cipher.setAutoPadding(false);
-    const ciphertext = Buffer.concat([
-      cipher.update(sourcePage.subarray(payloadOffset, pageSize - reserveSize)),
-      cipher.final(),
-    ]);
-
-    if (pageNumber === 1) salt.copy(targetPage, 0);
-    ciphertext.copy(targetPage, payloadOffset);
-    iv.copy(targetPage, pageSize - reserveSize);
-
-    const pageNumberBytes = Buffer.alloc(4);
-    pageNumberBytes.writeUInt32LE(pageNumber);
-    const digest = crypto
-      .createHmac("sha512", macKey)
-      .update(targetPage.subarray(payloadOffset, pageSize - hmacSize))
-      .update(pageNumberBytes)
-      .digest();
-    digest.copy(targetPage, pageSize - hmacSize);
-  }
-
-  fs.writeFileSync(encryptedPath, encrypted);
-  return { path: encryptedPath, key: keyMaterial.toString("hex") };
 }
 
 function getFreePort() {
@@ -352,20 +258,33 @@ async function runPackagedRuntimeSmoke(appPath) {
   const resources = path.join(contents, "Resources");
   const infoPlist = path.join(contents, "Info.plist");
   const electronExecutable = path.join(contents, "MacOS", path.basename(appPath, ".app"));
-  const backend = path.join(resources, "backend", "wechat-backend");
-  const nativeRoot = path.join(resources, "backend", "native");
-  const wcdbApi = path.join(nativeRoot, "macos", "arm64", "libwcdb_api.dylib");
+  const backendRoot = path.join(resources, "backend");
+  const backend = path.join(backendRoot, "wechat-backend");
+  const nativeRoot = path.join(backendRoot, "native");
+  const nativeClient = path.join(nativeRoot, "libwechatdb_client.dylib");
+  const nativeBroker = path.join(nativeRoot, "wechatdb_broker");
+  const nativeManifest = path.join(nativeRoot, "wechatdb_native_build.json");
   const wcdb = path.join(nativeRoot, "macos", "universal", "libWCDB.dylib");
   const imageLibrary = path.join(nativeRoot, "macos", "universal", "libwx_key.dylib");
   const imageHelper = path.join(nativeRoot, "macos", "universal", "image_scan_helper");
   const integrity = path.join(nativeRoot, "libwce_integrity.dylib");
-  const sidecar = path.join(resources, "wcdb-sidecar.cjs");
   const ffmpeg = path.join(resources, "ffmpeg", "ffmpeg");
-  const koffiDir = path.join(resources, "app.asar.unpacked", "node_modules", "koffi");
-  const koffiNative = path.join(koffiDir, "build", "koffi", "darwin_arm64", "koffi.node");
 
-  for (const filePath of [electronExecutable, backend, wcdbApi, wcdb, imageLibrary, imageHelper, integrity, sidecar, ffmpeg, koffiNative]) {
-    requirePath(filePath, { executable: [electronExecutable, backend, imageHelper, ffmpeg].includes(filePath) });
+  for (const filePath of [
+    electronExecutable,
+    backend,
+    nativeClient,
+    nativeBroker,
+    nativeManifest,
+    wcdb,
+    imageLibrary,
+    imageHelper,
+    integrity,
+    ffmpeg,
+  ]) {
+    requirePath(filePath, {
+      executable: [electronExecutable, backend, nativeBroker, imageHelper, ffmpeg].includes(filePath),
+    });
   }
   requirePath(path.join(resources, "backend", "THIRD_PARTY_NOTICES.md"));
   requirePath(path.join(nativeRoot, "macos", "WEFLOW_LICENSE.txt"));
@@ -383,25 +302,51 @@ async function runPackagedRuntimeSmoke(appPath) {
     "Info.plist must match the minimum version supported by bundled native resources"
   );
 
+  for (const retiredPath of [
+    path.join(nativeRoot, "macos", "arm64", "libwcdb_api.dylib"),
+    path.join(resources, "wcdb-sidecar.cjs"),
+    path.join(resources, "app.asar.unpacked", "node_modules", "koffi"),
+  ]) {
+    assert.equal(fs.existsSync(retiredPath), false, `Retired WCDB runtime was packaged: ${retiredPath}`);
+  }
+
+  const packagedNative = validatePackagedBackend({ backendDir: backendRoot, platform: "darwin" });
+  assert.equal(path.resolve(packagedNative.nativeDir), path.resolve(nativeRoot));
+
+  const nativeCoreEnv = {};
+  const nativeCorePolicy = applyNativeCoreRuntimePolicy(nativeCoreEnv, {
+    isPackaged: true,
+    nativeDir: nativeRoot,
+    platform: "darwin",
+  });
+  assert.equal(nativeCorePolicy.artifactState, "production");
+  assert.equal(nativeCorePolicy.manifest.buildId, packagedNative.manifest.buildId);
+  assert.equal(nativeCoreEnv[ENV_NATIVE_CORE_MODE], "required");
+  assert.equal(nativeCoreEnv[ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD], undefined);
+
   assertArchitecture(electronExecutable, "arm64");
   assertArchitecture(backend, "arm64");
-  assertArchitecture(wcdbApi, "arm64");
+  assertArchitecture(nativeClient, "arm64");
+  assertArchitecture(nativeBroker, "arm64");
   assertArchitecture(integrity, "arm64");
-  assertArchitecture(koffiNative, "arm64");
   assertArchitecture(wcdb, "arm64", { universal: true });
   assertArchitecture(imageLibrary, "arm64", { universal: true });
   assertArchitecture(imageHelper, "arm64", { universal: true });
   assertArchitecture(ffmpeg, "arm64");
 
-  for (const filePath of [electronExecutable, backend, wcdbApi, wcdb, imageLibrary, imageHelper, integrity, ffmpeg]) {
+  for (const filePath of [
+    electronExecutable,
+    backend,
+    nativeClient,
+    nativeBroker,
+    wcdb,
+    imageLibrary,
+    imageHelper,
+    integrity,
+    ffmpeg,
+  ]) {
     assertMinimumOSCompatible(filePath, packageMinimumOS);
   }
-
-  const wcdbApiId = run("otool", ["-D", wcdbApi], { capture: true });
-  assert.match(wcdbApiId, /@loader_path\/libwcdb_api\.dylib/);
-  const wcdbApiDependencies = run("otool", ["-L", wcdbApi], { capture: true });
-  assert.match(wcdbApiDependencies, /@loader_path\/\.\.\/universal\/libWCDB\.dylib/);
-  assert.doesNotMatch(wcdbApiDependencies, /(?:^|\/)WeFlow(?:-|\/)/m);
 
   const ffmpegVersion = run(ffmpeg, ["-version"], { capture: true });
   assert.match(ffmpegVersion, /^ffmpeg version/m);
@@ -416,6 +361,8 @@ async function runPackagedRuntimeSmoke(appPath) {
   assert.doesNotMatch(imageHelperOutput, /dlopen failed|symbol not found/i);
   assert.match(String(imageHelperProbe.stdout || ""), /"success":(?:true|false)/);
 
+  run("codesign", ["--verify", "--strict", "--verbose=2", nativeClient]);
+  run("codesign", ["--verify", "--strict", "--verbose=2", nativeBroker]);
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
   const entitlements = run("codesign", ["-d", "--entitlements", "-", electronExecutable], { capture: true });
   assert.match(entitlements, /com\.apple\.security\.cs\.allow-jit/);
@@ -424,113 +371,52 @@ async function runPackagedRuntimeSmoke(appPath) {
 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wda-macos-smoke-"));
   let backendProc = null;
-  let sidecarProc = null;
   try {
     await probePackagedImageScanner(imageHelper, tempRoot);
 
     const backendPort = await getFreePort();
-    const sidecarPort = await getFreePort();
-    const sidecarToken = "package-smoke-token";
-    const sidecarEnv = {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
-      WECHAT_TOOL_WCDB_SIDECAR_HOST: "127.0.0.1",
-      WECHAT_TOOL_WCDB_SIDECAR_PORT: String(sidecarPort),
-      WECHAT_TOOL_WCDB_SIDECAR_TOKEN: sidecarToken,
-      WECHAT_TOOL_WCDB_API_DLL_PATH: wcdbApi,
-      WECHAT_TOOL_WCDB_DLL_DIR: path.dirname(wcdbApi),
-      WECHAT_TOOL_WCDB_RESOURCE_PATHS: JSON.stringify([path.dirname(wcdbApi), path.dirname(wcdb), resources]),
-      WECHAT_TOOL_KOFFI_DIR: koffiDir,
-    };
-    sidecarProc = startProcess(electronExecutable, [sidecar], { cwd: resources, env: sidecarEnv });
-    sidecarProc.once("exit", (code, signal) => {
-      if (code && code !== 0) process.stderr.write(sidecarProc.output());
-    });
-    const sidecarHealth = await waitForJson(`http://127.0.0.1:${sidecarPort}/health`);
-    assert.equal(sidecarHealth.body.ok, true);
-    const sidecarInit = await requestJson(`http://127.0.0.1:${sidecarPort}/call`, {
-      method: "POST",
-      headers: { "x-wcdb-sidecar-token": sidecarToken },
-      body: { action: "init", payload: {} },
-      timeoutMs: 15_000,
-    });
-    assert.equal(sidecarInit.statusCode, 200);
-    assert.equal(sidecarInit.body?.ok, true, sidecarInit.text || sidecarProc.output());
-    assert.equal(sidecarInit.body?.result?.initialized, true);
-
-    const fixture = createEncryptedSessionFixture(tempRoot);
-    const opened = await requestJson(`http://127.0.0.1:${sidecarPort}/call`, {
-      method: "POST",
-      headers: { "x-wcdb-sidecar-token": sidecarToken },
-      body: { action: "open_account", payload: { path: fixture.path, key: fixture.key } },
-      timeoutMs: 15_000,
-    });
-    assert.equal(opened.statusCode, 200, opened.text || sidecarProc.output());
-    assert.equal(opened.body?.ok, true, opened.text || sidecarProc.output());
-    const fixtureHandle = Number(opened.body?.result?.handle || 0);
-    assert.ok(fixtureHandle > 0, "packaged WCDB did not return an account handle");
-    try {
-      const sessions = await requestJson(`http://127.0.0.1:${sidecarPort}/call`, {
-        method: "POST",
-        headers: { "x-wcdb-sidecar-token": sidecarToken },
-        body: { action: "get_sessions", payload: { handle: fixtureHandle } },
-        timeoutMs: 15_000,
-      });
-      assert.equal(sessions.statusCode, 200, sessions.text || sidecarProc.output());
-      assert.equal(sessions.body?.ok, true, sessions.text || sidecarProc.output());
-      const rows = JSON.parse(String(sessions.body?.result?.payload || "[]"));
-      assert.ok(
-        Array.isArray(rows) && rows.some((row) => String(row?.username || "") === "wxid_friend"),
-        "packaged WCDB did not return the synthetic realtime session"
-      );
-    } finally {
-      await requestJson(`http://127.0.0.1:${sidecarPort}/call`, {
-        method: "POST",
-        headers: { "x-wcdb-sidecar-token": sidecarToken },
-        body: { action: "close_account", payload: { handle: fixtureHandle } },
-        timeoutMs: 5_000,
-      });
-    }
-
     const backendEnv = {
       ...process.env,
+      ...nativeCoreEnv,
       WECHAT_TOOL_HOST: "127.0.0.1",
       WECHAT_TOOL_PORT: String(backendPort),
       WECHAT_TOOL_DATA_DIR: path.join(tempRoot, "data"),
       WECHAT_TOOL_OUTPUT_DIR: path.join(tempRoot, "output"),
       WECHAT_TOOL_UI_DIR: path.join(resources, "ui"),
-      WECHAT_TOOL_WCDB_SIDECAR_URL: `http://127.0.0.1:${sidecarPort}`,
-      WECHAT_TOOL_WCDB_SIDECAR_TOKEN: sidecarToken,
-      WECHAT_TOOL_WCDB_API_DLL_PATH: wcdbApi,
+      WECHAT_TOOL_NATIVE_CORE_LICENSE_URL: "https://license.invalid/v1/leases",
+      WECHAT_TOOL_NATIVE_CORE_LICENSE_TOKEN: "package-smoke-no-network",
+      WECHAT_TOOL_NATIVE_CORE_LICENSE_TIMEOUT_SECONDS: "1",
       WECHAT_TOOL_FFMPEG: ffmpeg,
     };
+    for (const name of [
+      ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD,
+      "WECHAT_TOOL_NATIVE_CORE_ALLOW_STAGING_BUILD_FOR_TESTS",
+      "WECHAT_TOOL_NATIVE_CORE_LIBRARY",
+      "WECHAT_TOOL_NATIVE_CORE_BROKER",
+      "WECHAT_TOOL_NATIVE_CORE_ENDPOINT",
+      "WECHAT_TOOL_NATIVE_CORE_TRUST_KEY_PATH",
+      "WECHAT_TOOL_WCDB_API_DLL_PATH",
+      "WECHAT_TOOL_WCDB_DLL_DIR",
+      "WECHAT_TOOL_WCDB_RESOURCE_PATHS",
+      "WECHAT_TOOL_WCDB_SIDECAR",
+      "WECHAT_TOOL_WCDB_SIDECAR_HOST",
+      "WECHAT_TOOL_WCDB_SIDECAR_PORT",
+      "WECHAT_TOOL_WCDB_SIDECAR_TOKEN",
+      "WECHAT_TOOL_WCDB_SIDECAR_URL",
+      "WECHAT_TOOL_KOFFI_DIR",
+    ]) {
+      delete backendEnv[name];
+    }
     backendProc = startProcess(backend, [], { cwd: path.dirname(backend), env: backendEnv });
     backendProc.once("exit", (code, signal) => {
       if (code && code !== 0) process.stderr.write(backendProc.output());
     });
     const health = await waitForJson(`http://127.0.0.1:${backendPort}/api/health`);
+    assert.equal(health.statusCode, 200, health.text || backendProc.output());
     assert.equal(health.body?.status, "healthy");
     assert.equal(health.body?.service, "微信解密工具");
-
-    const platform = await requestJson(`http://127.0.0.1:${backendPort}/api/system/platform`);
-    assert.equal(platform.statusCode, 200);
-    assert.equal(platform.body?.platform, "macos");
-    assert.equal(platform.body?.database_key_extraction, false);
-    assert.equal(platform.body?.database_key_manual_input, true);
-    assert.equal(platform.body?.database_decryption, true);
-    assert.equal(platform.body?.image_key_memory_scan, true);
-    assert.equal(platform.body?.realtime_wcdb, true);
-    assert.equal(platform.body?.account_archive_cross_platform, true);
-
-    const keys = await requestJson(`http://127.0.0.1:${backendPort}/api/get_keys`);
-    assert.equal(keys.statusCode, 200);
-    assert.equal(keys.body?.data?.platform, "macos");
-    assert.equal(keys.body?.data?.database_key_extraction, false);
-    assert.equal(keys.body?.data?.manual_input_supported, true);
-    assert.match(String(keys.body?.errmsg || ""), /手动填写/);
   } finally {
     await stopProcess(backendProc);
-    await stopProcess(sidecarProc);
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 
