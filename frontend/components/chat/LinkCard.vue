@@ -3,6 +3,11 @@ import { defineComponent, h, ref, watch } from 'vue'
 import miniProgramIconUrl from '~/assets/images/wechat/mini-program.svg'
 
 const finderLogoUrl = '/assets/images/wechat/channels-logo.svg'
+const lazyRemoteImageAttrs = {
+  loading: 'lazy',
+  decoding: 'async',
+  fetchpriority: 'low'
+}
 
 export default defineComponent({
   name: 'LinkCard',
@@ -99,6 +104,7 @@ export default defineComponent({
             showFromAvatarText ? (fromAvatarText || '\u200B') : null,
             showFromAvatarImg
               ? h('img', {
+                  ...lazyRemoteImageAttrs,
                   src: fromAvatarUrl,
                   alt: '',
                   class: 'wechat-link-cover-from-avatar-img',
@@ -142,6 +148,7 @@ export default defineComponent({
             showPreview
               ? h('div', { class: 'wechat-link-cover-image-wrap' }, [
                   h('img', {
+                    ...lazyRemoteImageAttrs,
                     src: props.preview,
                     alt: props.heading || '链接封面',
                     class: 'wechat-link-cover-image',
@@ -186,6 +193,7 @@ export default defineComponent({
             h('div', { class: ['wechat-link-finder-cover', !showPreview ? 'wechat-link-finder-cover--empty' : ''].filter(Boolean).join(' ') }, [
               showPreview
                 ? h('img', {
+                    ...lazyRemoteImageAttrs,
                     src: props.preview,
                     alt: props.heading || '视频号封面',
                     class: 'wechat-link-finder-cover-img',
@@ -257,6 +265,7 @@ export default defineComponent({
                   showFromAvatarText ? (fromAvatarText || '\u200B') : null,
                   showFromAvatarImg
                     ? h('img', {
+                        ...lazyRemoteImageAttrs,
                         src: fromAvatarUrl,
                         alt: '',
                         class: 'wechat-link-mini-header-avatar-img',
@@ -272,6 +281,7 @@ export default defineComponent({
               h('div', { class: ['wechat-link-mini-preview', !showPreview ? 'wechat-link-mini-preview--empty' : ''].filter(Boolean).join(' ') }, [
                 showPreview
                   ? h('img', {
+                      ...lazyRemoteImageAttrs,
                       src: props.preview,
                       alt: props.heading || '小程序预览',
                       class: 'wechat-link-mini-preview-img',
@@ -329,6 +339,7 @@ export default defineComponent({
                   showPreview
                     ? h('div', { class: 'wechat-link-thumb' }, [
                         h('img', {
+                          ...lazyRemoteImageAttrs,
                           src: props.preview,
                           alt: props.heading || '链接预览',
                           class: 'wechat-link-thumb-img',
@@ -345,6 +356,7 @@ export default defineComponent({
               showFromAvatarText ? (fromAvatarText || '\u200B') : null,
               showFromAvatarImg
                 ? h('img', {
+                    ...lazyRemoteImageAttrs,
                     src: fromAvatarUrl,
                     alt: '',
                     class: 'wechat-link-from-avatar-img',

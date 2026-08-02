@@ -1334,7 +1334,8 @@ def list_friend_verifications(
         rows = conn.execute(
             """
             SELECT user_name_, type_, timestamp_, encrypt_user_name_, content_, is_sender_,
-                   ticket_, scene_, fmessage_detail_buf_, remark_, label_ids_
+                   ticket_, scene_, length(CAST(fmessage_detail_buf_ AS BLOB)) AS fmessage_detail_size_,
+                   remark_, label_ids_
             FROM FMessageTable
             ORDER BY timestamp_ DESC
             """
@@ -1353,7 +1354,7 @@ def list_friend_verifications(
                 "isSender": bool(_safe_int(r["is_sender_"], 0)),
                 "ticket": _text(r["ticket_"], max_len=260),
                 "scene": _safe_int(r["scene_"], 0),
-                "detailSize": _blob_len(r["fmessage_detail_buf_"]),
+                "detailSize": _safe_int(r["fmessage_detail_size_"], 0),
                 "remark": _text(r["remark_"]),
                 "labelIds": _text(r["label_ids_"]),
             }

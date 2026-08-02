@@ -3026,11 +3026,13 @@ def _fallback_search_media_by_file_id(
     file_id: str,
     kind: str = "",
     username: str = "",
+    allow_global_scan: bool = True,
 ) -> Optional[str]:
     """在微信数据目录里按文件名（file_id）兜底查找媒体文件。
 
     一些微信版本的图片消息不再直接提供 32 位 MD5，而是提供形如 `cdnthumburl` 的长串标识，
     本函数用于按文件名/前缀在 msg/attach、cache 等目录中定位对应的 .dat 资源文件。
+    聊天交互路径应传入 ``allow_global_scan=False``，避免切换会话后继续递归整个微信目录。
     """
     if not weixin_root_str or not file_id:
         return None
@@ -3043,22 +3045,40 @@ def _fallback_search_media_by_file_id(
     fid = str(file_id or "").strip()
     if not fid:
         return None
+    if fid in {".", ".."} or "\x00" in fid or "/" in fid or "\\" in fid:
+        return None
 
-    # 优先在当前会话的 attach 子目录中查找（显著减少扫描范围）
+    # 先查当前会话目录。xWeChat 的 file_id 图片通常位于
+    # cache/YYYY-MM/Message/<md5(username)>/Thumb，而不是 msg/attach。
     search_dirs: list[Path] = []
     if username:
         try:
             chat_hash = hashlib.md5(str(username).encode()).hexdigest()
+            cache_root = root / "cache"
+            for message_dir_name in ("Message", "message"):
+                search_dirs.append(cache_root / message_dir_name / chat_hash)
+            try:
+                cache_period_dirs = sorted(
+                    (path for path in cache_root.iterdir() if path.is_dir()),
+                    key=lambda path: path.name,
+                    reverse=True,
+                )
+            except Exception:
+                cache_period_dirs = []
+            for period_dir in cache_period_dirs:
+                for message_dir_name in ("Message", "message"):
+                    search_dirs.append(period_dir / message_dir_name / chat_hash)
             search_dirs.append(root / "msg" / "attach" / chat_hash)
         except Exception:
             pass
 
-    if kind_key == "file":
-        search_dirs.extend([root / "msg" / "file"])
-    elif kind_key == "video" or kind_key == "video_thumb":
-        search_dirs.extend([root / "msg" / "video", root / "cache"])
-    else:
-        search_dirs.extend([root / "msg" / "attach", root / "cache", root / "msg" / "file", root / "msg" / "video"])
+    if allow_global_scan:
+        if kind_key == "file":
+            search_dirs.extend([root / "msg" / "file"])
+        elif kind_key == "video" or kind_key == "video_thumb":
+            search_dirs.extend([root / "msg" / "video", root / "cache"])
+        else:
+            search_dirs.extend([root / "msg" / "attach", root / "cache", root / "msg" / "file", root / "msg" / "video"])
 
     # de-dup while keeping order
     seen: set[str] = set()
@@ -3076,24 +3096,30 @@ def _fallback_search_media_by_file_id(
     base = glob.escape(fid)
     has_suffix = bool(Path(fid).suffix)
 
-    patterns: list[str] = []
+    exact_names: list[str] = []
     if has_suffix:
-        patterns.append(base)
+        exact_names.append(fid)
     else:
-        patterns.extend(
+        exact_names.extend(
             [
-                f"{base}_h.dat",
-                f"{base}_t.dat",
-                f"{base}.dat",
-                f"{base}*.dat",
-                f"{base}.jpg",
-                f"{base}.jpeg",
-                f"{base}.png",
-                f"{base}.gif",
-                f"{base}.webp",
-                f"{base}*",
+                f"{fid}_h.dat",
+                f"{fid}_t.dat",
+                f"{fid}.dat",
+                f"{fid}_thumb.jpg",
+                f"{fid}_thumb.jpeg",
+                f"{fid}_thumb.png",
+                f"{fid}_thumb.webp",
+                f"{fid}.jpg",
+                f"{fid}.jpeg",
+                f"{fid}.png",
+                f"{fid}.gif",
+                f"{fid}.webp",
             ]
         )
+
+    exact_rank = {name.lower(): index for index, name in enumerate(exact_names)}
+    direct_subdirs = ("", "ImageTemp", "Thumb", "Bubble", "VoiceTemp")
+    recursive_pattern = base if has_suffix else f"{base}*"
 
     for d in uniq_dirs:
         try:
@@ -3101,16 +3127,41 @@ def _fallback_search_media_by_file_id(
                 continue
         except Exception:
             continue
-        for pat in patterns:
+
+        # Known cache layouts can be resolved with direct stat calls and no directory walk.
+        for name in exact_names:
+            for subdir in direct_subdirs:
+                candidate = d / subdir / name if subdir else d / name
+                try:
+                    if candidate.is_file():
+                        return str(candidate)
+                except Exception:
+                    continue
+
+        # Unknown nested layouts get one prefix walk. The old implementation walked the
+        # same large tree up to nine times, which made a single miss take tens of seconds.
+        matches: list[Path] = []
+        try:
+            for p in d.rglob(recursive_pattern):
+                try:
+                    if p.is_file():
+                        matches.append(p)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+        if matches:
             try:
-                for p in d.rglob(pat):
-                    try:
-                        if p.is_file():
-                            return str(p)
-                    except Exception:
-                        continue
+                matches.sort(
+                    key=lambda path: (
+                        exact_rank.get(path.name.lower(), len(exact_rank)),
+                        len(path.name),
+                        path.name.lower(),
+                    )
+                )
             except Exception:
-                continue
+                pass
+            return str(matches[0])
     return None
 
 

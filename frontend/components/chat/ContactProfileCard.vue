@@ -82,15 +82,26 @@
       </div>
 
       <div
-        v-if="contactProfileIsFriend && (contactProfileVerificationLoading || contactProfileFriendVerifications.length)"
+        v-if="contactProfileIsFriend"
         class="contact-profile-section contact-verification-section"
       >
         <div class="contact-verification-head">
           <div class="contact-label">好友验证</div>
-          <span v-if="contactProfileVerificationLoading">加载中...</span>
-          <span v-else>{{ contactProfileFriendVerifications.length }} 条</span>
+          <span v-if="contactProfileVerificationLoaded">{{ contactProfileFriendVerifications.length }} 条</span>
+          <button
+            v-else
+            type="button"
+            class="contact-verification-load"
+            :disabled="contactProfileVerificationLoading"
+            @click.stop="loadContactFriendVerifications"
+          >
+            {{ contactProfileVerificationLoading ? '加载中...' : '查看好友验证' }}
+          </button>
         </div>
-        <div v-if="contactProfileFriendVerifications.length" class="contact-verification-list">
+        <div v-if="contactProfileVerificationError" class="contact-verification-error">
+          {{ contactProfileVerificationError }}
+        </div>
+        <div v-if="contactProfileVerificationLoaded && contactProfileFriendVerifications.length" class="contact-verification-list">
           <article
             v-for="(record, index) in contactProfileFriendVerifications"
             :key="`${record.timestamp || 0}-${index}`"
@@ -119,6 +130,9 @@
             <p v-else class="contact-verification-empty">未保存验证消息</p>
           </article>
         </div>
+        <p v-else-if="contactProfileVerificationLoaded" class="contact-verification-empty-state">
+          暂无好友验证记录
+        </p>
       </div>
 
       <div
@@ -641,6 +655,38 @@ html[data-theme='dark'] .contact-error {
   color: var(--app-text-muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+.contact-verification-load {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 4px;
+  color: var(--app-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.contact-verification-load:hover:not(:disabled) {
+  color: var(--app-text-primary);
+  border-color: var(--app-text-muted);
+}
+
+.contact-verification-load:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.contact-verification-error,
+.contact-verification-empty-state {
+  margin: 6px 0 0;
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+
+.contact-verification-error {
+  color: var(--app-danger, #b42318);
 }
 
 .contact-verification-list {

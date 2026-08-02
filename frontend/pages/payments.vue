@@ -505,7 +505,7 @@ watch(realtimeChangeSeq, (next, previous) => {
 onMounted(async () => {
   privacyStore.init()
   await chatAccounts.ensureLoaded()
-  await realtimeStore.enable({ silent: true })
+  await realtimeStore.enable({ silent: true, scope: 'all' })
   await loadItems()
 })
 
