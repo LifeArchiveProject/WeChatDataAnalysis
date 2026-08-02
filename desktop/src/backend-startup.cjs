@@ -34,13 +34,6 @@ function shouldRetryBackendOnDifferentPort({
   );
 }
 
-function shouldWaitForBackendReplacement({
-  allowBackendReplacement = false,
-  sidecarRestartInProgress = false,
-} = {}) {
-  return Boolean(allowBackendReplacement && sidecarRestartInProgress);
-}
-
 function parseHealthJson(response) {
   if (Number(response?.statusCode) !== 200) return null;
   try {
@@ -56,17 +49,10 @@ function isBackendHealthResponse(response) {
   return payload?.status === "healthy" && payload?.service === "微信解密工具";
 }
 
-function isWcdbSidecarHealthResponse(response) {
-  const payload = parseHealthJson(response);
-  return payload?.ok === true;
-}
-
 module.exports = {
   DEVELOPMENT_BACKEND_STARTUP_TIMEOUT_MS,
   PACKAGED_BACKEND_STARTUP_TIMEOUT_MS,
   isBackendHealthResponse,
-  isWcdbSidecarHealthResponse,
   resolveBackendStartupTimeoutMs,
   shouldRetryBackendOnDifferentPort,
-  shouldWaitForBackendReplacement,
 };

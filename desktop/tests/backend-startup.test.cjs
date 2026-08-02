@@ -5,10 +5,8 @@ const {
   DEVELOPMENT_BACKEND_STARTUP_TIMEOUT_MS,
   PACKAGED_BACKEND_STARTUP_TIMEOUT_MS,
   isBackendHealthResponse,
-  isWcdbSidecarHealthResponse,
   resolveBackendStartupTimeoutMs,
   shouldRetryBackendOnDifferentPort,
-  shouldWaitForBackendReplacement,
 } = require("../src/backend-startup.cjs");
 
 test("health checks require the expected 200 JSON identity", () => {
@@ -23,14 +21,6 @@ test("health checks require the expected 200 JSON identity", () => {
   assert.equal(isBackendHealthResponse({ statusCode: 200, body: "not-json" }), false);
   assert.equal(
     isBackendHealthResponse({ statusCode: 200, body: JSON.stringify({ status: "healthy" }) }),
-    false
-  );
-  assert.equal(
-    isWcdbSidecarHealthResponse({ statusCode: 200, body: JSON.stringify({ ok: true }) }),
-    true
-  );
-  assert.equal(
-    isWcdbSidecarHealthResponse({ statusCode: 401, body: JSON.stringify({ ok: true }) }),
     false
   );
 });
@@ -76,30 +66,6 @@ test("a slow live process does not trigger port walking even after binding its p
   );
   assert.equal(
     shouldRetryBackendOnDifferentPort({ isPackaged: false, portAvailableAfterFailure: false }),
-    false
-  );
-});
-
-test("only an explicit outer waiter tolerates the sidecar backend hand-off", () => {
-  assert.equal(
-    shouldWaitForBackendReplacement({
-      allowBackendReplacement: true,
-      sidecarRestartInProgress: true,
-    }),
-    true
-  );
-  assert.equal(
-    shouldWaitForBackendReplacement({
-      allowBackendReplacement: false,
-      sidecarRestartInProgress: true,
-    }),
-    false
-  );
-  assert.equal(
-    shouldWaitForBackendReplacement({
-      allowBackendReplacement: true,
-      sidecarRestartInProgress: false,
-    }),
     false
   );
 });

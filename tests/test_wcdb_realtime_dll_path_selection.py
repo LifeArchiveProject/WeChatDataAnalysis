@@ -1,9 +1,6 @@
-import os
+import inspect
 import sys
-import threading
-import time
 import unittest
-import urllib.error
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -12,330 +9,122 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from wechat_decrypt_tool import wcdb_realtime
+from wechat_decrypt_tool import native_core_realtime, wcdb_realtime
 
 
-class TestWcdbRealtimeDllPathSelection(unittest.TestCase):
-    def setUp(self) -> None:
-        wcdb_realtime._WCDB_API_DLL_SELECTED = None
-
-    def tearDown(self) -> None:
-        wcdb_realtime._WCDB_API_DLL_SELECTED = None
-
-    def test_resolve_rejects_external_native_library_override(self) -> None:
-        self.assertTrue(wcdb_realtime._DEFAULT_WCDB_API_DLL.exists())
-        with TemporaryDirectory() as td:
-            external_library = Path(td) / wcdb_realtime._wcdb_native_relative_path().name
-            external_library.write_bytes(b"external fixture")
-            with patch.dict(
-                os.environ,
-                {"WECHAT_TOOL_WCDB_API_DLL_PATH": str(external_library)},
-                clear=False,
-            ):
-                resolved = wcdb_realtime._resolve_wcdb_api_dll_path()
-
-        self.assertEqual(
-            resolved.resolve(),
-            wcdb_realtime._DEFAULT_WCDB_API_DLL.resolve(),
-        )
-
-    def test_resolve_accepts_project_packaged_override(self) -> None:
-        with TemporaryDirectory() as td:
-            packaged_dll = (
-                Path(td)
-                / "backend"
-                / "native"
-                / wcdb_realtime._wcdb_native_relative_path()
-            )
-            packaged_dll.parent.mkdir(parents=True)
-            packaged_dll.write_bytes(b"packaged fixture")
-            with patch.dict(
-                os.environ,
-                {"WECHAT_TOOL_WCDB_API_DLL_PATH": str(packaged_dll)},
-                clear=False,
-            ):
-                resolved = wcdb_realtime._resolve_wcdb_api_dll_path()
-
-            self.assertEqual(resolved.resolve(), packaged_dll.resolve())
-
-    def test_sidecar_transport_failure_does_not_claim_vc_runtime_is_missing(self) -> None:
-        manager = wcdb_realtime.WCDBRealtimeManager()
-        manager._conns["wxid_demo"] = wcdb_realtime.WCDBRealtimeConnection(
-            account="wxid_demo",
-            native_wxid="wxid_demo",
-            handle=7,
-            db_storage_dir=ROOT,
-            session_db_path=ROOT / "session.db",
-            connected_at=0.0,
-            lock=threading.Lock(),
-        )
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "WECHAT_TOOL_WCDB_SIDECAR_URL": "http://127.0.0.1:65534",
-                    "WECHAT_TOOL_WCDB_SIDECAR_TOKEN": "test-token",
-                },
-                clear=False,
-            ),
-            patch.object(
-                wcdb_realtime.urllib.request,
-                "urlopen",
-                side_effect=urllib.error.URLError(OSError(10061, "connection refused")),
-            ),
-            patch.object(wcdb_realtime.time, "sleep", return_value=None),
-            patch.object(wcdb_realtime, "WCDB_REALTIME", manager),
+class TestWcdbRealtimeNativeFacade(unittest.TestCase):
+    def test_legacy_dll_and_sidecar_runtime_are_absent(self) -> None:
+        source = inspect.getsource(wcdb_realtime).lower()
+        for marker in (
+            "ctypes",
+            "urllib",
+            "sidecar",
+            "wcdb_api.dll",
+            "_ensure_initialized",
+            "_load_wcdb_lib",
+            "_validate_session_db_key",
         ):
-            with self.assertRaises(wcdb_realtime.WCDBRealtimeError) as raised:
-                wcdb_realtime._sidecar_call("get_sessions", {"handle": 1}, timeout=1.0)
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, source)
 
-        message = str(raised.exception)
-        self.assertIn("WCDB sidecar unavailable", message)
-        self.assertIn("辅助进程已退出或正在重启", message)
-        self.assertNotIn("Visual C++ Redistributable", message)
-        self.assertNotIn("latest-supported-vc-redist", message)
-        self.assertIsInstance(raised.exception, wcdb_realtime.WCDBSidecarUnavailableError)
-        self.assertFalse(manager.is_connected("wxid_demo"))
+        for symbol in (
+            "WCDBSidecarUnavailableError",
+            "_DEFAULT_WCDB_API_DLL",
+            "_resolve_wcdb_api_dll_path",
+            "_sidecar_call",
+        ):
+            with self.subTest(symbol=symbol):
+                self.assertFalse(hasattr(wcdb_realtime, symbol))
 
-    def test_source_sidecar_requires_electron_runtime(self) -> None:
+    def test_open_account_delegates_with_inferred_native_context(self) -> None:
         with TemporaryDirectory() as td:
-            repo_root = Path(td)
-            sidecar_script = repo_root / "desktop" / "src" / "wcdb-sidecar.cjs"
-            koffi_dir = repo_root / "desktop" / "vendor" / "koffi"
-            sidecar_script.parent.mkdir(parents=True)
-            koffi_dir.mkdir(parents=True)
-            sidecar_script.write_text("", encoding="utf-8")
-
-            with patch.object(wcdb_realtime, "_repo_root", return_value=repo_root):
-                assets = wcdb_realtime._source_sidecar_assets()
-
-        self.assertIsNone(assets)
-
-    def test_session_db_key_mismatch_is_rejected_before_native_open(self) -> None:
-        with TemporaryDirectory() as td:
-            session_db = Path(td) / "session.db"
-            session_db.write_bytes(b"encrypted-page".ljust(4096, b"\x00"))
-
-            with patch.object(wcdb_realtime, "_ensure_initialized") as ensure_initialized:
-                with self.assertRaises(wcdb_realtime.WCDBRealtimeError) as raised:
-                    wcdb_realtime.open_account(session_db, "11" * 32)
-
-        message = str(raised.exception)
-        ensure_initialized.assert_not_called()
-        self.assertIn("数据库密钥与当前 session.db 不匹配", message)
-        self.assertIn("重新获取当前账号", message)
-        self.assertNotIn("Visual C++ Redistributable", message)
-
-    def test_key_mismatch_does_not_get_hidden_by_failure_cache(self) -> None:
-        with TemporaryDirectory() as td:
-            root = Path(td)
-            account_dir = root / "wxid_demo"
-            db_storage = root / "source" / "db_storage"
-            session_db = db_storage / "session" / "session.db"
-            account_dir.mkdir(parents=True)
+            storage = Path(td) / "wxid_demo_1234" / "db_storage"
+            session_db = storage / "session" / "session.db"
             session_db.parent.mkdir(parents=True)
-            session_db.write_bytes(b"encrypted-page".ljust(4096, b"\x00"))
+            session_db.write_bytes(b"synthetic-session")
 
-            manager = wcdb_realtime.WCDBRealtimeManager()
-            with patch.object(wcdb_realtime, "_resolve_account_db_storage_dir", return_value=db_storage):
-                for _ in range(2):
-                    with self.assertRaises(wcdb_realtime.WCDBRealtimeError) as raised:
-                        manager.ensure_connected(account_dir, key_hex="45" * 32, timeout=3.0)
-                    self.assertIn("数据库密钥与当前 session.db 不匹配", str(raised.exception))
+            with patch.object(
+                native_core_realtime, "open_account", return_value=123
+            ) as native_open:
+                handle = wcdb_realtime.open_account(
+                    session_db, "12" * 32, timeout=0.01
+                )
 
-        self.assertNotIn("wxid_demo", manager._failed)
+        self.assertEqual(handle, 123)
+        native_open.assert_called_once_with(
+            account="wxid_demo_1234",
+            native_wxid="wxid_demo",
+            db_storage_dir=storage.resolve(),
+            session_db_path=session_db.resolve(),
+            key_hex="12" * 32,
+        )
 
-    def test_session_db_key_preflight_accepts_matching_raw_key(self) -> None:
-        from wechat_decrypt_tool.wechat_decrypt import _compute_page_hmac, _derive_mac_key
+    def test_facade_delegates_reads_without_transforming_results(self) -> None:
+        cases = (
+            ("get_sessions", (7,), {}, [{"username": "wxid_friend"}]),
+            (
+                "get_messages",
+                (7, "wxid_friend"),
+                {"limit": 8, "offset": 3},
+                [{"local_id": 1}],
+            ),
+            ("get_message_count", (7, "wxid_friend"), {}, 42),
+            (
+                "get_display_names",
+                (7, ["wxid_friend"]),
+                {},
+                {"wxid_friend": "Friend"},
+            ),
+            (
+                "get_contacts_compact",
+                (7, []),
+                {},
+                [{"username": "wxid_friend"}],
+            ),
+        )
+        for name, args, kwargs, expected in cases:
+            with self.subTest(name=name), patch.object(
+                native_core_realtime, name, return_value=expected
+            ) as delegated:
+                actual = getattr(wcdb_realtime, name)(*args, **kwargs)
+                self.assertEqual(actual, expected)
+                delegated.assert_called_once_with(*args, **kwargs)
 
-        key = bytes.fromhex("23" * 32)
-        page = bytearray(b"salt-for-page-01" + b"\x5a" * (4096 - 16))
-        page[-64:] = _compute_page_hmac(_derive_mac_key(key, bytes(page[:16])), bytes(page), 1)
+    def test_message_cursor_accepts_lite_but_does_not_forward_it(self) -> None:
+        with patch.object(
+            native_core_realtime, "open_message_cursor", return_value=321
+        ) as native_open:
+            cursor = wcdb_realtime.open_message_cursor(
+                7,
+                "wxid_friend",
+                batch_size=100,
+                ascending=True,
+                begin_timestamp=1,
+                end_timestamp=2,
+                lite=True,
+            )
 
-        with TemporaryDirectory() as td:
-            session_db = Path(td) / "session.db"
-            session_db.write_bytes(bytes(page))
-            mode = wcdb_realtime._validate_session_db_key(session_db, key.hex())
+        self.assertEqual(cursor, 321)
+        native_open.assert_called_once_with(
+            7,
+            "wxid_friend",
+            batch_size=100,
+            ascending=True,
+            begin_timestamp=1,
+            end_timestamp=2,
+        )
 
-        self.assertEqual(mode, "raw_enc_key")
-
-    def test_realtime_connection_reads_the_manually_saved_account_key(self) -> None:
-        with TemporaryDirectory() as td:
-            root = Path(td)
-            account_dir = root / "wxid_demo"
-            db_storage = root / "source" / "db_storage"
-            session_db = db_storage / "session" / "session.db"
-            account_dir.mkdir(parents=True)
-            session_db.parent.mkdir(parents=True)
-            session_db.write_bytes(b"fixture")
-            manual_key = "67" * 32
-
-            manager = wcdb_realtime.WCDBRealtimeManager()
-            with (
-                patch.object(
-                    wcdb_realtime,
-                    "get_account_keys_from_store",
-                    return_value={"db_key": manual_key},
-                ) as key_store,
-                patch.object(
-                    wcdb_realtime,
-                    "_resolve_account_db_storage_dir",
-                    return_value=db_storage,
-                ),
-                patch.object(wcdb_realtime, "_resolve_session_db_path", return_value=session_db),
-                patch.object(wcdb_realtime, "open_account", return_value=77) as open_account,
-                patch.object(wcdb_realtime, "set_my_wxid", return_value=True),
+    def test_native_errors_are_exposed_as_facade_errors(self) -> None:
+        with patch.object(
+            native_core_realtime,
+            "get_sessions",
+            side_effect=native_core_realtime.NativeCoreRealtimeError("query failed"),
+        ):
+            with self.assertRaisesRegex(
+                wcdb_realtime.WCDBRealtimeError,
+                "Native core get sessions failed: query failed",
             ):
-                connection = manager.ensure_connected(account_dir, timeout=3.0)
-
-        key_store.assert_called_once_with("wxid_demo")
-        self.assertEqual(open_account.call_args.args, (session_db, manual_key))
-        self.assertEqual(connection.handle, 77)
-        self.assertEqual(connection.db_storage_dir, db_storage)
-
-    def test_inprocess_open_timeout_poison_runtime_without_vc_hint(self) -> None:
-        release_open = threading.Event()
-        late_handle_closed = threading.Event()
-        original_poison = wcdb_realtime._inprocess_runtime_poisoned_reason
-
-        def hanging_open(*_args, **_kwargs) -> int:
-            release_open.wait(timeout=2.0)
-            return 1
-
-        try:
-            with TemporaryDirectory() as td:
-                root = Path(td)
-                account_dir = root / "wxid_demo"
-                db_storage = root / "source" / "db_storage"
-                session_db = db_storage / "session" / "session.db"
-                account_dir.mkdir(parents=True)
-                session_db.parent.mkdir(parents=True)
-                session_db.write_bytes(b"placeholder")
-
-                manager = wcdb_realtime.WCDBRealtimeManager()
-                with (
-                    patch.object(wcdb_realtime, "_resolve_account_db_storage_dir", return_value=db_storage),
-                    patch.object(wcdb_realtime, "open_account", side_effect=hanging_open),
-                    patch.object(wcdb_realtime, "_sidecar_enabled", return_value=False),
-                    patch.object(wcdb_realtime, "close_account", side_effect=lambda _handle: late_handle_closed.set()),
-                ):
-                    with self.assertRaises(wcdb_realtime.WCDBRealtimeError) as raised:
-                        manager.ensure_connected(account_dir, key_hex="34" * 32, timeout=0.05)
-                    release_open.set()
-                    self.assertTrue(late_handle_closed.wait(timeout=1.0))
-
-            message = str(raised.exception)
-            self.assertIn("当前为进程内 WCDB", message)
-            self.assertIn("原生调用无法安全终止", message)
-            self.assertIn("npm ci", message)
-            self.assertNotIn("Visual C++ Redistributable", message)
-            self.assertTrue(wcdb_realtime._inprocess_runtime_poisoned_reason)
-        finally:
-            release_open.set()
-            wcdb_realtime._inprocess_runtime_poisoned_reason = original_poison
-
-    def test_post_open_setup_timeout_closes_late_handle_without_caching_it(self) -> None:
-        setup_started = threading.Event()
-        release_setup = threading.Event()
-        late_handle_closed = threading.Event()
-        original_poison = wcdb_realtime._inprocess_runtime_poisoned_reason
-
-        def hanging_set_my_wxid(*_args, **_kwargs) -> bool:
-            setup_started.set()
-            release_setup.wait(timeout=2.0)
-            return True
-
-        try:
-            with TemporaryDirectory() as td:
-                root = Path(td)
-                account_dir = root / "wxid_setup_timeout"
-                db_storage = root / "source" / "db_storage"
-                session_db = db_storage / "session" / "session.db"
-                account_dir.mkdir(parents=True)
-                session_db.parent.mkdir(parents=True)
-                session_db.write_bytes(b"placeholder")
-
-                manager = wcdb_realtime.WCDBRealtimeManager()
-                with (
-                    patch.object(wcdb_realtime, "_resolve_account_db_storage_dir", return_value=db_storage),
-                    patch.object(wcdb_realtime, "_resolve_session_db_path", return_value=session_db),
-                    patch.object(wcdb_realtime, "open_account", return_value=91),
-                    patch.object(wcdb_realtime, "set_my_wxid", side_effect=hanging_set_my_wxid),
-                    patch.object(wcdb_realtime, "_sidecar_enabled", return_value=False),
-                    patch.object(wcdb_realtime, "close_account", side_effect=lambda _handle: late_handle_closed.set()) as close_account,
-                ):
-                    started_at = time.monotonic()
-                    with self.assertRaises(wcdb_realtime.WCDBRealtimeError) as raised:
-                        manager.ensure_connected(account_dir, key_hex="56" * 32, timeout=0.05)
-                    elapsed = time.monotonic() - started_at
-
-                    self.assertTrue(setup_started.is_set())
-                    self.assertLess(elapsed, 0.5)
-                    self.assertIn("connection setup timed out", str(raised.exception))
-                    self.assertFalse(manager.is_connected("wxid_setup_timeout"))
-
-                    release_setup.set()
-                    self.assertTrue(late_handle_closed.wait(timeout=1.0))
-                    close_account.assert_called_once_with(91)
-                    self.assertFalse(manager.is_connected("wxid_setup_timeout"))
-        finally:
-            release_setup.set()
-            wcdb_realtime._inprocess_runtime_poisoned_reason = original_poison
-
-    def test_disconnect_prevents_inflight_old_source_handle_from_being_cached(self) -> None:
-        setup_started = threading.Event()
-        release_setup = threading.Event()
-        late_handle_closed = threading.Event()
-        result: dict[str, object] = {}
-
-        def blocking_set_my_wxid(*_args, **_kwargs) -> bool:
-            setup_started.set()
-            release_setup.wait(timeout=2.0)
-            return True
-
-        with TemporaryDirectory() as td:
-            root = Path(td)
-            account_dir = root / "wxid_source_change"
-            old_db_storage = root / "old-source" / "db_storage"
-            old_session_db = old_db_storage / "session" / "session.db"
-            account_dir.mkdir(parents=True)
-            old_session_db.parent.mkdir(parents=True)
-            old_session_db.write_bytes(b"placeholder")
-
-            manager = wcdb_realtime.WCDBRealtimeManager()
-
-            def connect_old_source() -> None:
-                try:
-                    result["connection"] = manager.ensure_connected(
-                        account_dir,
-                        key_hex="78" * 32,
-                        timeout=1.0,
-                    )
-                except Exception as exc:
-                    result["error"] = exc
-
-            with (
-                patch.object(wcdb_realtime, "_resolve_account_db_storage_dir", return_value=old_db_storage),
-                patch.object(wcdb_realtime, "_resolve_session_db_path", return_value=old_session_db),
-                patch.object(wcdb_realtime, "open_account", return_value=101),
-                patch.object(wcdb_realtime, "set_my_wxid", side_effect=blocking_set_my_wxid),
-                patch.object(wcdb_realtime, "close_account", side_effect=lambda _handle: late_handle_closed.set()) as close_account,
-            ):
-                connect_thread = threading.Thread(target=connect_old_source)
-                connect_thread.start()
-                self.assertTrue(setup_started.wait(timeout=1.0))
-
-                manager.disconnect("wxid_source_change")
-                release_setup.set()
-                connect_thread.join(timeout=1.0)
-
-                self.assertFalse(connect_thread.is_alive())
-                self.assertIsInstance(result.get("error"), wcdb_realtime.WCDBRealtimeError)
-                self.assertIn("invalidated while opening", str(result.get("error")))
-                self.assertNotIn("connection", result)
-                self.assertTrue(late_handle_closed.wait(timeout=1.0))
-                close_account.assert_called_once_with(101)
-                self.assertFalse(manager.is_connected("wxid_source_change"))
+                wcdb_realtime.get_sessions(7)
 
 
 if __name__ == "__main__":

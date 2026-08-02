@@ -103,7 +103,7 @@ function killChild(child) {
 function spawnLogged(command, args, options, prefix) {
   const child = spawn(command, args, {
     ...options,
-    shell: process.platform === "win32",
+    shell: options.shell ?? (process.platform === "win32"),
     stdio: ["inherit", "pipe", "pipe"],
   });
   prefixPipe(child.stdout, `${prefix}`);
@@ -141,7 +141,8 @@ async function main() {
   };
 
   const npmCommand = "npm";
-  const electronCommand = "electron";
+  // Track electron.exe itself instead of an intermediate command shell.
+  const electronCommand = require("electron");
   const children = new Set();
   let shuttingDown = false;
 
@@ -165,7 +166,18 @@ async function main() {
   await waitForUrl(startUrl, frontend, 60_000);
   log("frontend is ready, starting Electron");
 
-  const electron = spawnLogged(electronCommand, ["."], { cwd: desktopDir, env: sharedEnv }, "[electron]");
+  const electron = spawnLogged(
+    electronCommand,
+    ["."],
+    {
+      cwd: desktopDir,
+      env: sharedEnv,
+      shell: false,
+      // SW_HIDE propagates to Electron's first BrowserWindow on Windows.
+      windowsHide: false,
+    },
+    "[electron]"
+  );
   children.add(electron);
   electron.once("exit", (code, signal) => {
     log(`electron exited code=${code} signal=${signal}`);

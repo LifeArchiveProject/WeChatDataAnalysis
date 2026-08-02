@@ -66,7 +66,7 @@ if os.name == 'nt':
     OpenProcess.restype = wintypes.HANDLE
 
     ReadProcessMemory = kernel32.ReadProcessMemory
-    ReadProcessMemory.argtypes = [wintypes.HANDLE, wintypes.LPCVOID, ctypes.LPVOID, ctypes.c_size_t,
+    ReadProcessMemory.argtypes = [wintypes.HANDLE, wintypes.LPCVOID, wintypes.LPVOID, ctypes.c_size_t,
                                   ctypes.POINTER(ctypes.c_size_t)]
     ReadProcessMemory.restype = wintypes.BOOL
 
