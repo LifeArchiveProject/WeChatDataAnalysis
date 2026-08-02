@@ -1,6 +1,6 @@
 <template>
   <div class="conversation-pane flex-1 flex flex-col min-h-0 min-w-0">
-    <div v-if="selectedContact" class="flex-1 flex flex-col min-h-0 relative">
+    <div v-if="selectedContact" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
       <div class="chat-header">
         <div class="flex items-center gap-3">
           <h2 class="chat-header-title text-base font-medium" :class="{ 'privacy-blur': privacyMode }">

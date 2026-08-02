@@ -1,9 +1,9 @@
 <template>
-  <div class="chat-page-shell h-screen flex overflow-hidden">
+  <div class="chat-page-shell h-screen w-full min-w-0 flex overflow-hidden">
     <SessionListPanel :state="chatState" />
 
-    <div class="chat-page-main flex-1 flex flex-col min-h-0">
-      <div class="flex-1 flex min-h-0">
+    <div class="chat-page-main flex-1 flex flex-col min-h-0 min-w-0">
+      <div class="flex-1 flex min-h-0 min-w-0">
         <ConversationPane :state="chatState" />
       </div>
     </div>

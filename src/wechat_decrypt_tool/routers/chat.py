@@ -28,6 +28,7 @@ from ..chat_helpers import (
     _decode_message_content,
     _decode_sqlite_text,
     _extract_chatroom_top_message_metadata,
+    _extract_image_group_info,
     _extract_md5_from_packed_info,
     _extract_sender_from_group_xml,
     _extract_xml_attr,
@@ -3364,6 +3365,9 @@ def _append_full_messages_from_rows(
         thumb_url = ""
         image_url = ""
         image_file_id = ""
+        image_group_type = ""
+        image_group_id = ""
+        image_group_count = 0
         video_md5 = ""
         video_thumb_md5 = ""
         video_file_id = ""
@@ -3466,6 +3470,10 @@ def _append_full_messages_from_rows(
             quote_voice_length = str(parsed.get("quoteVoiceLength") or "")
         elif local_type == 3:
             render_type = "image"
+            image_group_info = _extract_image_group_info(raw_text)
+            image_group_type = str(image_group_info.get("type") or "")
+            image_group_id = str(image_group_info.get("id") or "")
+            image_group_count = int(image_group_info.get("count") or 0)
             # 先尝试从 XML 中提取 md5（不同版本字段可能不同）
             image_md5 = _extract_xml_attr(raw_text, "md5") or _extract_xml_tag_text(raw_text, "md5")
             if not image_md5:
@@ -3727,6 +3735,9 @@ def _append_full_messages_from_rows(
                 "recordItem": record_item,
                 "imageMd5": image_md5,
                 "imageFileId": image_file_id,
+                "imageGroupType": image_group_type,
+                "imageGroupId": image_group_id,
+                "imageGroupCount": image_group_count,
                 "emojiMd5": emoji_md5,
                 "emojiUrl": emoji_url,
                 "thumbUrl": thumb_url,
@@ -5210,6 +5221,9 @@ def _collect_chat_messages(
                 thumb_url = ""
                 image_url = ""
                 image_file_id = ""
+                image_group_type = ""
+                image_group_id = ""
+                image_group_count = 0
                 video_md5 = ""
                 video_thumb_md5 = ""
                 video_file_id = ""
@@ -5311,6 +5325,10 @@ def _collect_chat_messages(
                     quote_voice_length = str(parsed.get("quoteVoiceLength") or "")
                 elif local_type == 3:
                     render_type = "image"
+                    image_group_info = _extract_image_group_info(raw_text)
+                    image_group_type = str(image_group_info.get("type") or "")
+                    image_group_id = str(image_group_info.get("id") or "")
+                    image_group_count = int(image_group_info.get("count") or 0)
                     # 先尝试从 XML 中提取 md5（不同版本字段可能不同）
                     image_md5 = _extract_xml_attr(raw_text, "md5") or _extract_xml_tag_text(raw_text, "md5")
                     if not image_md5:
@@ -5570,6 +5588,9 @@ def _collect_chat_messages(
                         "recordItem": record_item,
                         "imageMd5": image_md5,
                         "imageFileId": image_file_id,
+                        "imageGroupType": image_group_type,
+                        "imageGroupId": image_group_id,
+                        "imageGroupCount": image_group_count,
                         "emojiMd5": emoji_md5,
                         "emojiUrl": emoji_url,
                         "thumbUrl": thumb_url,

@@ -1,7 +1,7 @@
 <template>
   <div :class="rootClass">
     <SidebarRail v-if="showSidebar" />
-    <div class="flex-1 flex flex-col min-h-0">
+    <div class="flex-1 flex flex-col min-h-0 min-w-0">
       <!-- Desktop titlebar lives above the page content (right column) -->
       <DesktopTitleBar v-if="showDesktopTitleBar" />
       <DataSourceFallbackBanner v-if="route.path !== '/agreement'" :status="selectedDataSourceStatus" />
@@ -265,8 +265,8 @@ const rootClass = computed(() => {
 
 const contentClass = computed(() =>
   isDesktop.value
-    ? 'wechat-desktop-content flex-1 overflow-auto min-h-0'
-    : 'flex-1 overflow-auto min-h-0'
+    ? 'wechat-desktop-content flex-1 overflow-auto min-h-0 min-w-0'
+    : 'flex-1 overflow-auto min-h-0 min-w-0'
 )
 
 const showDesktopTitleBar = computed(() => isDesktop.value)

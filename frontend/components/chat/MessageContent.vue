@@ -28,13 +28,26 @@
                       <span>微信电脑版</span>
                     </div>
                   </div>
+                  <ImageGroupStack
+                    v-else-if="message.renderType === 'image' && message.imageGroupCollapsed"
+                    :message="message"
+                    :state="state"
+                  />
                   <div v-else-if="message.renderType === 'image'"
                     class="max-w-sm flex items-center group"
                     :class="message.isSent ? 'flex-row-reverse' : ''">
-                  <div class="msg-radius overflow-hidden cursor-pointer flex-shrink-0" :class="message.isSent ? '' : ''" @click="message.imageUrl && openImagePreview(message.imageUrl)" @contextmenu="openMediaContextMenu($event, message, 'image')">
+                  <div
+                    class="msg-radius overflow-hidden cursor-pointer flex-shrink-0"
+                    :class="message.isSent ? '' : ''"
+                    :data-image-group-key="message.imageGroupKey || undefined"
+                    :data-image-group-item-index="message.imageGroupExpanded ? message.imageGroupItemIndex : undefined"
+                    :data-image-group-message-id="message.imageGroupExpanded ? message.id : undefined"
+                    @click="message.imageUrl && openImagePreview(message.imageUrl)"
+                    @contextmenu="openMediaContextMenu($event, message, 'image')"
+                  >
                       <img
                         v-if="message.imageUrl && !message._imageRenderError"
-                        v-chat-lazy-src="message.imageUrl"
+                        v-chat-lazy-src="imageGroupLazySource(message)"
                         alt="图片"
                         class="block min-w-[96px] min-h-[96px] max-w-[240px] max-h-[240px] object-cover bg-gray-100 hover:opacity-90 transition-opacity"
                         loading="lazy"
@@ -52,6 +65,17 @@
                         {{ message.content }}
                       </div>
                     </div>
+                    <button
+                      v-if="message.imageGroupExpanded && message.imageGroupIsFirst"
+                      type="button"
+                      class="image-group-collapse"
+                      :class="message.isSent ? 'mr-2' : 'ml-2'"
+                      :disabled="imageGroupTransitioning"
+                      :data-image-group-control-key="message.imageGroupKey || ''"
+                      @click.stop="toggleImageGroupWithTransition(message.imageGroupKey)"
+                    >
+                      收起 {{ message.imageGroupProtocolCount || message.imageGroupItems?.length || '' }}
+                    </button>
                     <div
                       v-if="shouldShowImageLargeReload(message)"
                       class="flex max-w-[260px] flex-col gap-1"
@@ -399,6 +423,7 @@ import { defineComponent } from 'vue'
 import wechatPcLogoUrl from '~/assets/images/wechat/WeChat-Icon-Logo.wine.svg'
 import ChatLocationCard from '~/components/ChatLocationCard.vue'
 import FileTypeIcon from '~/components/chat/FileTypeIcon.vue'
+import ImageGroupStack from '~/components/chat/ImageGroupStack.vue'
 import LinkCard from '~/components/chat/LinkCard.vue'
 import { linkifyMessageSegments, openMessageExternalUrl } from '~/lib/chat/message-links'
 
@@ -497,13 +522,34 @@ const buildMentionRanges = (message) => {
 
 export default defineComponent({
   name: 'MessageContent',
-  components: { ChatLocationCard, FileTypeIcon, LinkCard },
+  components: { ChatLocationCard, FileTypeIcon, ImageGroupStack, LinkCard },
   props: {
     state: { type: Object, required: true },
     message: { type: Object, required: true },
     hideTypeFooter: { type: Boolean, default: false }
   },
   setup(props) {
+    const readMaybeRef = (value) => (
+      value && typeof value === 'object' && 'value' in value ? value.value : value
+    )
+    const isActiveImageGroupTransition = (message) => (
+      !!message?.imageGroupExpanded
+      && String(readMaybeRef(props.state?.activeImageGroupTransitionKey) || '')
+        === String(message?.imageGroupKey || '')
+    )
+    const imageGroupLazySource = (message) => {
+      const src = String(message?.imageUrl || '').trim()
+      return isActiveImageGroupTransition(message) ? { src, eager: true } : src
+    }
+    const toggleImageGroupWithTransition = (groupKey) => {
+      const transition = props.state?.transitionImageGroupExpanded
+      if (typeof transition === 'function') {
+        void transition(groupKey)
+        return
+      }
+      props.state?.toggleImageGroupExpanded?.(groupKey)
+    }
+
     const parseEmojiSegments = (text) => {
       const fn = props.state?.parseTextWithEmoji
       if (typeof fn === 'function') return fn(String(text || ''))
@@ -587,7 +633,6 @@ export default defineComponent({
 
     return {
       ...props.state,
-      message: props.message,
       hideTypeFooter: props.hideTypeFooter,
       parseMessageTextSegments,
       openMessageUrl,
@@ -596,6 +641,8 @@ export default defineComponent({
       onMessageImageRenderError,
       onMessageVideoThumbRenderError,
       onMessageEmojiRenderError,
+      imageGroupLazySource,
+      toggleImageGroupWithTransition,
       wechatPcLogoUrl
     }
   }
@@ -647,4 +694,30 @@ export default defineComponent({
 .wechat-media-placeholder--image { width: 160px; height: 128px; }
 .wechat-media-placeholder--video { width: 220px; height: 124px; color: #d1d5db; background: #34383d; }
 .wechat-media-placeholder--emoji { width: 96px; height: 96px; background: rgba(255, 255, 255, 0.58); }
+
+.image-group-collapse {
+  height: 30px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--app-text-muted);
+  background: var(--app-surface-muted);
+  font-size: 12px;
+  line-height: 30px;
+  white-space: nowrap;
+}
+
+.image-group-collapse:hover {
+  color: var(--app-text-secondary);
+  background: var(--app-list-hover);
+}
+
+.image-group-collapse:focus-visible {
+  outline: 2px solid rgba(7, 193, 96, 0.72);
+  outline-offset: 2px;
+}
+
+.image-group-collapse:disabled {
+  cursor: default;
+}
 </style>

@@ -7,9 +7,16 @@ import {
   getVoiceWidth
 } from '~/lib/chat/formatters'
 import { createPerfTrace } from '~/lib/chat/perf-logger'
+import {
+  buildImageGroupKey,
+  deriveImageGroupMessages,
+  findImageGroupKeyByMessageId
+} from '~/lib/chat/image-groups'
 import { createMessageNormalizer, dedupeMessagesById } from '~/lib/chat/message-normalizer'
 
 const DEFAULT_CHAT_SOURCE = 'auto'
+const IMAGE_GROUP_LAYOUT_DURATION_MS = 250
+const IMAGE_GROUP_LAYOUT_EASING = 'cubic-bezier(0.2, 0, 0, 1)'
 
 export const useChatMessages = ({
   api,
@@ -87,7 +94,14 @@ export const useChatMessages = ({
 
   const highlightServerIdStr = ref('')
   const highlightMessageId = ref('')
+  const expandedImageGroupKeys = ref(new Set())
+  const imageGroupActiveItemIds = ref(new Map())
+  const activeImageGroupTransitionKey = ref('')
+  const imageGroupTransitioning = ref(false)
   let highlightTimer = null
+  let activeImageGroupAnimations = []
+  let activeImageGroupMotionCleanups = []
+  let imageGroupTransitionSequence = 0
 
   const messageTypeFilter = ref('all')
   const localMediaVersion = ref(0)
@@ -267,7 +281,8 @@ export const useChatMessages = ({
   const renderMessages = computed(() => {
     const list = messages.value || []
     const reverseSides = !!reverseMessageSides.value
-    const fingerprint = `${String(selectedContact.value?.username || '').trim()}:${list.length}:${reverseSides ? '1' : '0'}`
+    const expansionFingerprint = Array.from(expandedImageGroupKeys.value).sort().join('|')
+    const fingerprint = `${String(selectedContact.value?.username || '').trim()}:${list.length}:${reverseSides ? '1' : '0'}:${expansionFingerprint}`
     const shouldLogRender = isDesktopRenderer() && fingerprint !== lastRenderMessagesFingerprint
     if (shouldLogRender) {
       logMessagePhase('renderMessages:start', {
@@ -275,16 +290,28 @@ export const useChatMessages = ({
         reverseSides
       })
     }
+    const displayMessages = deriveImageGroupMessages(list, expandedImageGroupKeys.value)
     let previousTs = 0
-    const rendered = list.map((message) => {
+    const rendered = displayMessages.map((message) => {
       const ts = Number(message.createTime || 0)
       const show = !previousTs || (ts && Math.abs(ts - previousTs) >= 300)
       if (ts) previousTs = ts
       const originalIsSent = !!message?.isSent
+      const imageGroupItems = Array.isArray(message?.imageGroupItems)
+        ? message.imageGroupItems.map((item) => {
+            const itemOriginalIsSent = !!item?.isSent
+            return {
+              ...item,
+              _originalIsSent: itemOriginalIsSent,
+              isSent: reverseSides ? !itemOriginalIsSent : itemOriginalIsSent
+            }
+          })
+        : null
       return {
         ...message,
         _originalIsSent: originalIsSent,
         isSent: reverseSides ? !originalIsSent : originalIsSent,
+        ...(imageGroupItems ? { imageGroupItems } : {}),
         showTimeDivider: !!show,
         timeDivider: formatTimeDivider(ts)
       }
@@ -326,12 +353,358 @@ export const useChatMessages = ({
     }, 2200)
   }
 
+  const toggleImageGroupExpanded = (groupKey, forceExpanded = null) => {
+    const key = String(groupKey || '').trim()
+    if (!key) return false
+    const next = new Set(expandedImageGroupKeys.value)
+    const shouldExpand = typeof forceExpanded === 'boolean' ? forceExpanded : !next.has(key)
+    if (shouldExpand) next.add(key)
+    else next.delete(key)
+    expandedImageGroupKeys.value = next
+    return shouldExpand
+  }
+
+  const getImageGroupActiveItemId = (groupKey) => (
+    imageGroupActiveItemIds.value.get(String(groupKey || '').trim()) || ''
+  )
+
+  const setImageGroupActiveItemId = (groupKey, messageId) => {
+    const key = String(groupKey || '').trim()
+    const id = String(messageId || '').trim()
+    if (!key || !id || imageGroupActiveItemIds.value.get(key) === id) return false
+    const next = new Map(imageGroupActiveItemIds.value)
+    next.set(key, id)
+    imageGroupActiveItemIds.value = next
+    return true
+  }
+
+  const captureImageGroupActiveItem = (groupKey) => {
+    const container = messageContainerRef.value
+    const key = String(groupKey || '').trim()
+    if (!container || !key) return ''
+    const stack = Array.from(
+      container.querySelectorAll?.('[data-testid="image-group-stack"][data-group-key]') || []
+    ).find((element) => String(element?.dataset?.groupKey || '') === key)
+    const activeIndex = Number.parseInt(String(stack?.dataset?.activeIndex || ''), 10)
+    const activeCard = Number.isSafeInteger(activeIndex)
+      ? Array.from(stack?.querySelectorAll?.('[data-card-index]') || []).find(
+          (element) => Number.parseInt(String(element?.dataset?.cardIndex || ''), 10) === activeIndex
+        )
+      : null
+    const messageId = String(activeCard?.dataset?.messageId || '').trim()
+    if (messageId) setImageGroupActiveItemId(key, messageId)
+    return messageId
+  }
+
+  const findMessageElementById = (container, messageId) => {
+    const target = String(messageId || '').trim()
+    if (!container || !target) return null
+    return Array.from(container.querySelectorAll?.('[data-msg-id]') || []).find(
+      (element) => String(element?.dataset?.msgId || '').trim() === target
+    ) || null
+  }
+
+  const captureImageGroupScrollAnchor = (groupKey) => {
+    const container = messageContainerRef.value
+    if (!container) return null
+    const first = (messages.value || []).find((message) => buildImageGroupKey(message) === groupKey)
+    const messageId = String(first?.id || '').trim()
+    const element = findMessageElementById(container, messageId)
+    if (!element) return null
+    return {
+      container,
+      messageId,
+      top: element.getBoundingClientRect().top
+    }
+  }
+
+  const restoreImageGroupScrollAnchor = (anchor) => {
+    if (!anchor?.container?.isConnected) return
+    const element = findMessageElementById(anchor.container, anchor.messageId)
+    if (!element) return
+    const delta = element.getBoundingClientRect().top - Number(anchor.top || 0)
+    if (Number.isFinite(delta) && Math.abs(delta) >= 0.5) {
+      anchor.container.scrollTop += delta
+    }
+    updateJumpToBottomState()
+  }
+
+  const readImageGroupElementPose = (element) => {
+    if (!element?.isConnected || typeof window === 'undefined') return null
+    const rect = element.getBoundingClientRect()
+    const style = window.getComputedStyle(element)
+    let scaleX = 1
+    let scaleY = 1
+    let rotation = 0
+    if (style.transform && style.transform !== 'none' && typeof DOMMatrixReadOnly === 'function') {
+      try {
+        const matrix = new DOMMatrixReadOnly(style.transform)
+        scaleX = Math.max(0.001, Math.hypot(matrix.a, matrix.b))
+        scaleY = Math.max(0.001, Math.hypot(matrix.c, matrix.d))
+        rotation = Math.atan2(matrix.b, matrix.a) * (180 / Math.PI)
+      } catch {}
+    }
+    const layoutWidth = Math.max(1, Number(element.offsetWidth || rect.width || 1))
+    const layoutHeight = Math.max(1, Number(element.offsetHeight || rect.height || 1))
+    return {
+      centerX: rect.left + (rect.width / 2),
+      centerY: rect.top + (rect.height / 2),
+      width: layoutWidth * scaleX,
+      height: layoutHeight * scaleY,
+      rotation,
+      opacity: Math.max(0, Math.min(1, Number.parseFloat(style.opacity) || 0)),
+      zIndex: Number.parseInt(style.zIndex, 10) || 0
+    }
+  }
+
+  const captureImageGroupLayout = (groupKey) => {
+    const container = messageContainerRef.value
+    const key = String(groupKey || '').trim()
+    const cards = new Map()
+    if (!container || !key) return { cards, control: null }
+
+    for (const element of container.querySelectorAll?.('[data-image-group-key][data-image-group-item-index]') || []) {
+      if (String(element?.dataset?.imageGroupKey || '') !== key) continue
+      const index = Number.parseInt(String(element?.dataset?.imageGroupItemIndex || ''), 10)
+      const pose = readImageGroupElementPose(element)
+      if (!Number.isSafeInteger(index) || index < 0 || !pose) continue
+      cards.set(index, { element, pose })
+    }
+
+    const controlElement = Array.from(
+      container.querySelectorAll?.('[data-image-group-control-key]') || []
+    ).find((element) => String(element?.dataset?.imageGroupControlKey || '') === key)
+    const controlPose = readImageGroupElementPose(controlElement)
+    return {
+      cards,
+      control: controlElement && controlPose ? { element: controlElement, pose: controlPose } : null
+    }
+  }
+
+  const readImageGroupMotionTarget = (element) => {
+    if (!element?.isConnected || typeof window === 'undefined') return null
+    const previousTransition = element.style.transition
+    const previousTransform = element.style.transform
+    const previousTransformOrigin = element.style.transformOrigin
+    const previousWillChange = element.style.willChange
+    const previousPosition = element.style.position
+    const previousZIndex = element.style.zIndex
+    const finalStyle = window.getComputedStyle(element)
+    const finalTransform = previousTransform || (
+      finalStyle.transform && finalStyle.transform !== 'none' ? finalStyle.transform : 'none'
+    )
+    const finalOpacity = Math.max(0, Math.min(1, Number.parseFloat(finalStyle.opacity) || 0))
+
+    element.style.transition = 'none'
+    element.style.transform = 'none'
+    const baseRect = element.getBoundingClientRect()
+    element.style.transform = previousTransform
+    element.style.transition = previousTransition
+
+    return {
+      baseRect,
+      finalTransform,
+      finalOpacity,
+      restore: () => {
+        element.style.transition = previousTransition
+        element.style.transform = previousTransform
+        element.style.transformOrigin = previousTransformOrigin
+        element.style.willChange = previousWillChange
+        element.style.position = previousPosition
+        element.style.zIndex = previousZIndex
+      }
+    }
+  }
+
+  const buildImageGroupStartTransform = (sourcePose, baseRect) => {
+    const baseWidth = Math.max(1, Number(baseRect?.width || 1))
+    const baseHeight = Math.max(1, Number(baseRect?.height || 1))
+    const baseCenterX = Number(baseRect?.left || 0) + (baseWidth / 2)
+    const baseCenterY = Number(baseRect?.top || 0) + (baseHeight / 2)
+    const translateX = Number(sourcePose?.centerX || 0) - baseCenterX
+    const translateY = Number(sourcePose?.centerY || 0) - baseCenterY
+    const scaleX = Math.max(0.001, Number(sourcePose?.width || 1) / baseWidth)
+    const scaleY = Math.max(0.001, Number(sourcePose?.height || 1) / baseHeight)
+    const rotation = Number(sourcePose?.rotation || 0)
+    return `translate3d(${translateX}px, ${translateY}px, 0) rotate(${rotation}deg) scale(${scaleX}, ${scaleY})`
+  }
+
+  const registerImageGroupMotionCleanup = (cleanup) => {
+    if (typeof cleanup === 'function') activeImageGroupMotionCleanups.push(cleanup)
+  }
+
+  const animateImageGroupMotionElement = (element, sourcePose, { fadeLabel = false } = {}) => {
+    const target = readImageGroupMotionTarget(element)
+    if (!target || typeof element.animate !== 'function') return null
+
+    element.style.transformOrigin = '50% 50%'
+    element.style.willChange = 'transform, opacity'
+    if (!element.closest?.('[data-testid="image-group-stack"]')) {
+      element.style.position = 'relative'
+      element.style.zIndex = String(100 + Number(sourcePose?.zIndex || 0))
+    }
+    registerImageGroupMotionCleanup(target.restore)
+
+    return element.animate([
+      {
+        transform: buildImageGroupStartTransform(sourcePose, target.baseRect),
+        opacity: fadeLabel ? 0.25 : Number(sourcePose?.opacity ?? 1)
+      },
+      {
+        transform: target.finalTransform,
+        opacity: target.finalOpacity
+      }
+    ], {
+      duration: IMAGE_GROUP_LAYOUT_DURATION_MS,
+      easing: IMAGE_GROUP_LAYOUT_EASING,
+      fill: 'both'
+    })
+  }
+
+  const clearActiveImageGroupMotion = () => {
+    const animations = activeImageGroupAnimations
+    const cleanups = activeImageGroupMotionCleanups
+    activeImageGroupAnimations = []
+    activeImageGroupMotionCleanups = []
+    for (const animation of animations) {
+      try { animation.cancel() } catch {}
+    }
+    for (const cleanup of cleanups.reverse()) {
+      try { cleanup() } catch {}
+    }
+  }
+
+  const animateImageGroupLayout = async (sourceLayout, groupKey) => {
+    const targetLayout = captureImageGroupLayout(groupKey)
+    const animations = []
+
+    for (const [index, source] of sourceLayout?.cards || []) {
+      const target = targetLayout.cards.get(index)
+      if (!target) continue
+      const animation = animateImageGroupMotionElement(target.element, source.pose)
+      if (animation) animations.push(animation)
+    }
+
+    if (sourceLayout?.control && targetLayout.control) {
+      const animation = animateImageGroupMotionElement(
+        targetLayout.control.element,
+        sourceLayout.control.pose,
+        { fadeLabel: true }
+      )
+      if (animation) animations.push(animation)
+    }
+
+    activeImageGroupAnimations = animations
+    await Promise.allSettled(animations.map((animation) => animation.finished))
+  }
+
+  const clearImageGroupTransitionState = (sequence = null) => {
+    if (sequence != null && sequence !== imageGroupTransitionSequence) return
+    clearActiveImageGroupMotion()
+    activeImageGroupTransitionKey.value = ''
+    imageGroupTransitioning.value = false
+    if (typeof document !== 'undefined') {
+      delete document.documentElement.dataset.imageGroupTransition
+      delete document.documentElement.dataset.imageGroupTransitionKey
+    }
+  }
+
+  const cancelImageGroupTransition = () => {
+    imageGroupTransitionSequence += 1
+    clearImageGroupTransitionState()
+  }
+
+  const shouldReduceImageGroupMotion = () => (
+    typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  )
+
+  const transitionImageGroupExpanded = async (groupKey, forceExpanded = null) => {
+    const key = String(groupKey || '').trim()
+    if (!key) return false
+
+    const currentlyExpanded = expandedImageGroupKeys.value.has(key)
+    const shouldExpand = typeof forceExpanded === 'boolean' ? forceExpanded : !currentlyExpanded
+    if (shouldExpand === currentlyExpanded) return currentlyExpanded
+    if (imageGroupTransitioning.value) return currentlyExpanded
+
+    const canAnimate = (
+      typeof document !== 'undefined'
+      && document.visibilityState === 'visible'
+      && typeof Element !== 'undefined'
+      && typeof Element.prototype?.animate === 'function'
+      && !shouldReduceImageGroupMotion()
+    )
+    if (!canAnimate) {
+      if (shouldExpand) captureImageGroupActiveItem(key)
+      return toggleImageGroupExpanded(key, shouldExpand)
+    }
+
+    const sequence = ++imageGroupTransitionSequence
+    const direction = shouldExpand ? 'expand' : 'collapse'
+    let committed = false
+
+    imageGroupTransitioning.value = true
+    activeImageGroupTransitionKey.value = key
+    document.documentElement.dataset.imageGroupTransition = direction
+    document.documentElement.dataset.imageGroupTransitionKey = key
+    await nextTick()
+    if (sequence !== imageGroupTransitionSequence) return currentlyExpanded
+    if (shouldExpand) captureImageGroupActiveItem(key)
+    const anchor = captureImageGroupScrollAnchor(key)
+    const sourceLayout = captureImageGroupLayout(key)
+
+    try {
+      committed = true
+      toggleImageGroupExpanded(key, shouldExpand)
+      await nextTick()
+      if (sequence !== imageGroupTransitionSequence) return shouldExpand
+      restoreImageGroupScrollAnchor(anchor)
+      await animateImageGroupLayout(sourceLayout, key)
+    } catch {
+      if (!committed && sequence === imageGroupTransitionSequence) {
+        committed = true
+        toggleImageGroupExpanded(key, shouldExpand)
+        await nextTick()
+        restoreImageGroupScrollAnchor(anchor)
+      }
+    } finally {
+      if (!committed && sequence === imageGroupTransitionSequence) {
+        toggleImageGroupExpanded(key, shouldExpand)
+        await nextTick()
+        restoreImageGroupScrollAnchor(anchor)
+      }
+      clearImageGroupTransitionState(sequence)
+      await nextTick()
+    }
+
+    return shouldExpand
+  }
+
+  const clearExpandedImageGroups = () => {
+    cancelImageGroupTransition()
+    if (expandedImageGroupKeys.value.size) expandedImageGroupKeys.value = new Set()
+    if (imageGroupActiveItemIds.value.size) imageGroupActiveItemIds.value = new Map()
+  }
+
   const scrollToMessageId = async (id) => {
     const target = String(id || '').trim()
     if (!target) return false
+    const groupKey = findImageGroupKeyByMessageId(messages.value, target)
+    if (groupKey && !expandedImageGroupKeys.value.has(groupKey)) {
+      toggleImageGroupExpanded(groupKey, true)
+    }
     await nextTick()
     const container = messageContainerRef.value
-    const element = container?.querySelector?.(`[data-msg-id="${CSS.escape(target)}"]`)
+    let element = container?.querySelector?.(`[data-msg-id="${CSS.escape(target)}"]`)
+    if (!element) {
+      if (groupKey) {
+        toggleImageGroupExpanded(groupKey, true)
+        await nextTick()
+        element = container?.querySelector?.(`[data-msg-id="${CSS.escape(target)}"]`)
+      }
+    }
     if (!element || typeof element.scrollIntoView !== 'function') return false
     element.scrollIntoView({ block: 'center', behavior: 'smooth' })
     return true
@@ -1347,6 +1720,7 @@ export const useChatMessages = ({
     messagesError.value = ''
     highlightMessageId.value = ''
     highlightServerIdStr.value = ''
+    clearExpandedImageGroups()
     closeImagePreview()
     closeVideoPreview()
     resetResourceState()
@@ -1788,6 +2162,7 @@ export const useChatMessages = ({
   watch(
     () => selectedContact.value?.username,
     () => {
+      clearExpandedImageGroups()
       loadLargeImagePreferences()
       clearContactProfileHoverHideTimer()
       closeContactProfileCard()
@@ -1803,6 +2178,7 @@ export const useChatMessages = ({
   watch(
     () => selectedAccount.value,
     () => {
+      clearExpandedImageGroups()
       loadLargeImagePreferences()
       clearContactProfileHoverHideTimer()
       closeContactProfileCard()
@@ -1815,6 +2191,7 @@ export const useChatMessages = ({
   onUnmounted(() => {
     if (highlightTimer) clearTimeout(highlightTimer)
     highlightTimer = null
+    cancelImageGroupTransition()
     clearContactProfileHoverHideTimer()
     clearVoicePlaybackState()
   })
@@ -1856,6 +2233,10 @@ export const useChatMessages = ({
     playingVoiceId,
     highlightServerIdStr,
     highlightMessageId,
+    expandedImageGroupKeys,
+    imageGroupActiveItemIds,
+    activeImageGroupTransitionKey,
+    imageGroupTransitioning,
     contactProfileCardOpen,
     contactProfileCardMessageId,
     contactProfileLoading,
@@ -1888,6 +2269,10 @@ export const useChatMessages = ({
     scrollToBottom,
     flashMessage,
     scrollToMessageId,
+    toggleImageGroupExpanded,
+    transitionImageGroupExpanded,
+    getImageGroupActiveItemId,
+    setImageGroupActiveItemId,
     openImagePreview,
     closeImagePreview,
     showPrevPreviewImage,
