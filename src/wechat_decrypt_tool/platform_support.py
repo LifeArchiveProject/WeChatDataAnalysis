@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import platform
 import sys
@@ -90,12 +91,41 @@ def mac_image_scan_library_path() -> Path:
     )
 
 
-def mac_wcdb_api_path(architecture: str | None = None) -> Path:
-    arch = str(architecture or platform.machine() or "").strip().lower()
-    arch_dir = "arm64" if arch in {"arm64", "aarch64"} else "x64"
-    return _first_existing_native_resource(
-        Path("macos") / arch_dir / "libwcdb_api.dylib",
-        explicit=str(os.environ.get("WECHAT_TOOL_WCDB_API_DLL_PATH", "") or "").strip(),
+def mac_native_core_paths() -> tuple[Path, Path, Path]:
+    return (
+        _first_existing_native_resource(
+            Path("libwechatdb_client.dylib"),
+            explicit=str(
+                os.environ.get("WECHAT_TOOL_NATIVE_CORE_LIBRARY", "") or ""
+            ).strip(),
+        ),
+        _first_existing_native_resource(
+            Path("wechatdb_broker"),
+            explicit=str(
+                os.environ.get("WECHAT_TOOL_NATIVE_CORE_BROKER", "") or ""
+            ).strip(),
+        ),
+        _first_existing_native_resource(Path("wechatdb_native_build.json")),
+    )
+
+
+def _native_core_resources_ready(paths: tuple[Path, Path, Path]) -> bool:
+    client, broker, manifest_path = paths
+    try:
+        if not client.is_file() or not broker.is_file() or not manifest_path.is_file():
+            return False
+        if client.stat().st_size <= 0 or broker.stat().st_size <= 0:
+            return False
+        if manifest_path.stat().st_size <= 0 or manifest_path.stat().st_size > 16 * 1024:
+            return False
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(
+        isinstance(manifest, dict)
+        and manifest.get("schemaVersion") == 2
+        and str(manifest.get("buildId") or "").strip()
+        and isinstance(manifest.get("developmentBuild"), bool)
     )
 
 
@@ -105,7 +135,7 @@ def runtime_capabilities() -> dict[str, Any]:
     apple_silicon = system == "macos" and architecture in {"arm64", "aarch64"}
     helper = mac_image_scan_helper_path() if system == "macos" else None
     image_scan_library = mac_image_scan_library_path() if system == "macos" else None
-    wcdb_api = mac_wcdb_api_path(architecture) if system == "macos" else None
+    native_core_paths = mac_native_core_paths() if system == "macos" else None
     image_scan_ready = bool(
         helper
         and image_scan_library
@@ -113,7 +143,11 @@ def runtime_capabilities() -> dict[str, Any]:
         and image_scan_library.is_file()
         and helper.parent.resolve() == image_scan_library.parent.resolve()
     )
-    realtime_ready = bool(apple_silicon and wcdb_api and wcdb_api.is_file())
+    realtime_ready = bool(
+        apple_silicon
+        and native_core_paths
+        and _native_core_resources_ready(native_core_paths)
+    )
     return {
         "platform": system,
         "platform_release": platform.release(),
@@ -162,6 +196,6 @@ __all__ = [
     "is_windows",
     "mac_image_scan_helper_path",
     "mac_image_scan_library_path",
-    "mac_wcdb_api_path",
+    "mac_native_core_paths",
     "runtime_capabilities",
 ]

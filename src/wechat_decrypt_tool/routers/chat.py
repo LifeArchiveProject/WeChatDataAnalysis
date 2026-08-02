@@ -4337,7 +4337,7 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
         fallback_reason = str(realtime_status.get("error") or "").strip()
         if not fallback_reason:
             if not realtime_status.get("dll_present"):
-                fallback_reason = "wcdb_api.dll 不可用"
+                fallback_reason = "wechatdb native core 不可用"
             elif not realtime_status.get("key_present"):
                 fallback_reason = "当前账号缺少可用的数据库密钥"
             elif not realtime_db_storage:

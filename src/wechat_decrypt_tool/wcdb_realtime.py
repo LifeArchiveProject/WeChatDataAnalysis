@@ -1,102 +1,60 @@
-import atexit
-import ctypes
-import base64
-import binascii
-import json
-import os
+from __future__ import annotations
+
 import re
-import socket
-import subprocess
+import os
 import sys
-import platform
 import threading
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 
+from . import native_core_realtime
 from .key_store import get_account_keys_from_store
 from .logging_config import get_logger
 from .media_helpers import _resolve_account_db_storage_dir
+from .native_core_broker import resolve_native_core_broker, stop_native_core_broker
+from .native_core_client import native_core_mode, resolve_native_core_library
+
 
 logger = get_logger(__name__)
-
-_VC_REDIST_HELP_URL = "https://learn.microsoft.com/zh-cn/cpp/windows/latest-supported-vc-redist?view=msvc-170"
-_VC_REDIST_HELP_TEXT = (
-    "如果这是首次运行或换电脑后出现，请下载安装最新版 Microsoft Visual C++ Redistributable"
-    "（建议安装 x64 和 x86 两个版本），安装后重启电脑再运行。"
-    f"下载地址：{_VC_REDIST_HELP_URL}"
-)
-
-
-def _with_vc_redist_help(message: str) -> str:
-    text = str(message or "").strip()
-    if not sys.platform.startswith("win"):
-        return text
-    if _VC_REDIST_HELP_URL in text:
-        return text
-    return f"{text} {_VC_REDIST_HELP_TEXT}" if text else _VC_REDIST_HELP_TEXT
+_T = TypeVar("_T")
 
 
 class WCDBRealtimeError(RuntimeError):
     pass
 
 
-class WCDBSidecarUnavailableError(WCDBRealtimeError):
-    pass
+def _native_call(
+    operation: str,
+    function: Callable[..., _T],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> _T:
+    try:
+        return function(*args, **kwargs)
+    except WCDBRealtimeError:
+        raise
+    except Exception as exc:
+        detail = str(exc).strip() or exc.__class__.__name__
+        raise WCDBRealtimeError(f"Native core {operation} failed: {detail}") from exc
 
 
-_WCDB_OPEN_HELP_TEXT = (
-    "请重新获取当前账号的数据库密钥，并确认密钥来源与当前 db_storage 一致；"
-    "若密钥正确，请关闭微信后重试，以排除数据库占用或文件未写完整。"
-)
-
-
-def _with_wcdb_open_help(message: str) -> str:
-    text = str(message or "").strip()
-    if _WCDB_OPEN_HELP_TEXT in text:
-        return text
-    return f"{text} {_WCDB_OPEN_HELP_TEXT}" if text else _WCDB_OPEN_HELP_TEXT
-
-
-def _should_cache_open_failure(exc: Exception) -> bool:
-    if isinstance(exc, WCDBSidecarUnavailableError):
-        return False
-    message = str(exc or "")
-    non_native_failures = (
-        "数据库密钥与当前 session.db 不匹配",
-        "session.db 文件不完整",
-        "无法读取 session.db 进行密钥校验",
-        "Invalid db key",
-    )
-    return not any(marker in message for marker in non_native_failures)
-
-
-def _clean_weflow_account_dir_name(dir_name: str) -> str:
-    """调用 WCDB 前使用与 WeFlow 相同的账号/wxid 清理规则。"""
+def _normalize_native_account_name(dir_name: str) -> str:
     trimmed = str(dir_name or "").strip()
     if not trimmed:
         return trimmed
 
     if trimmed.lower().startswith("wxid_"):
         match = re.match(r"^(wxid_[^_]+)", trimmed, flags=re.IGNORECASE)
-        if match:
-            return match.group(1)
-        return trimmed
+        return match.group(1) if match else trimmed
 
     suffix_match = re.match(r"^(.+)_([a-zA-Z0-9]{4})$", trimmed)
     return suffix_match.group(1) if suffix_match else trimmed
 
 
-def _derive_weflow_wcdb_wxid(account: str, db_storage_dir: Optional[Path] = None) -> str:
-    """推导传给 native WCDB 的 wxid，语义对齐 WeFlow。
-
-    output 账号目录可能带随机后缀，例如 `Murderers_0e5d`。
-    WeFlow 在调用 `wcdb_set_my_wxid` 前会去掉这个后缀；如果传带后缀的名字，
-    native 会话/消息查询可能只返回很少结果。
-    """
+def _derive_native_wxid(account: str, db_storage_dir: Optional[Path] = None) -> str:
     candidates: list[str] = []
     if db_storage_dir is not None:
         try:
@@ -107,1392 +65,148 @@ def _derive_weflow_wcdb_wxid(account: str, db_storage_dir: Optional[Path] = None
             pass
     candidates.append(str(account or ""))
 
-    for item in candidates:
-        cleaned = _clean_weflow_account_dir_name(item)
-        if cleaned:
-            return cleaned
+    for candidate in candidates:
+        normalized = _normalize_native_account_name(candidate)
+        if normalized:
+            return normalized
     return str(account or "").strip()
 
 
-_NATIVE_DIR = Path(__file__).resolve().parent / "native"
+def _native_core_mode_value() -> str:
+    return native_core_mode().value
 
 
-def _wcdb_native_relative_path() -> Path:
-    if sys.platform == "darwin":
-        arch = "arm64" if platform.machine().lower() in {"arm64", "aarch64"} else "x64"
-        return Path("macos") / arch / "libwcdb_api.dylib"
-    return Path("wcdb_api.dll")
+def _is_native_core_handle(handle: int) -> bool:
+    return native_core_realtime.is_native_core_handle(handle)
 
 
-_DEFAULT_WCDB_API_DLL = _NATIVE_DIR / _wcdb_native_relative_path()
-_WCDB_API_DLL_SELECTED: Optional[Path] = None
+def _infer_db_storage_dir(session_db_path: Path) -> Path:
+    session_path = Path(session_db_path).expanduser().resolve(strict=True)
+    for parent in session_path.parents:
+        if parent.name.lower() == "db_storage":
+            return parent
+    if session_path.parent.name.lower() == "session":
+        return session_path.parent.parent
+    return session_path.parent
 
 
-def _iter_runtime_wcdb_api_dll_paths() -> tuple[Path, ...]:
-    candidates: list[Path] = []
-    seen: set[str] = set()
-
-    def add_anchor(anchor: str | Path | None) -> None:
-        if not anchor:
-            return
-        try:
-            base = Path(anchor).resolve()
-        except Exception:
-            base = Path(anchor)
-        for candidate in (
-            base / "native" / _wcdb_native_relative_path(),
-            base / "wechat_decrypt_tool" / "native" / _wcdb_native_relative_path(),
-        ):
-            key = os.path.normcase(str(candidate.resolve(strict=False)))
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append(candidate)
-
-    add_anchor(os.environ.get("WECHAT_TOOL_DATA_DIR", "").strip())
-    add_anchor(Path.cwd())
-    if getattr(sys, "frozen", False):
-        add_anchor(Path(sys.executable).resolve().parent)
-
-    return tuple(candidates)
-
-
-def _is_project_wcdb_api_dll_path(path: Path) -> bool:
-    try:
-        resolved = path.resolve(strict=False)
-    except Exception:
-        resolved = path
-
-    try:
-        default_resolved = _DEFAULT_WCDB_API_DLL.resolve(strict=False)
-    except Exception:
-        default_resolved = _DEFAULT_WCDB_API_DLL
-
-    if resolved == default_resolved:
-        return True
-
-    for candidate in _iter_runtime_wcdb_api_dll_paths():
-        try:
-            if resolved == candidate.resolve(strict=False):
-                return True
-        except Exception:
-            if resolved == candidate:
-                return True
-
-    parts = tuple(str(part).lower() for part in resolved.parts)
-    relative_parts = tuple(str(part).lower() for part in _wcdb_native_relative_path().parts)
-    allowed_suffixes = (
-        ("backend", "native", *relative_parts),
-        ("wechat_decrypt_tool", "native", *relative_parts),
+def open_account(
+    session_db_path: Path,
+    key_hex: str,
+    *,
+    timeout: float = 30.0,
+    account: str | None = None,
+    native_wxid: str | None = None,
+    db_storage_dir: Path | None = None,
+) -> int:
+    del timeout
+    session_path = Path(session_db_path).expanduser().resolve(strict=True)
+    storage = (
+        Path(db_storage_dir).expanduser().resolve(strict=True)
+        if db_storage_dir is not None
+        else _infer_db_storage_dir(session_path)
     )
-    return any(parts[-len(suffix) :] == suffix for suffix in allowed_suffixes)
-
-
-def _candidate_wcdb_api_dll_paths() -> list[Path]:
-    """Return allowed locations for wcdb_api.dll."""
-    cands: list[Path] = []
-
-    env = str(os.environ.get("WECHAT_TOOL_WCDB_API_DLL_PATH", "") or "").strip()
-    if env:
-        env_path = Path(env)
-        if _is_project_wcdb_api_dll_path(env_path):
-            cands.append(env_path)
-        else:
-            logger.warning("[wcdb] ignore external wcdb_api.dll override: %s", env_path)
-
-    for p in (_DEFAULT_WCDB_API_DLL,):
-        if p not in cands:
-            cands.append(p)
-
-    return cands
-
-
-def _resolve_wcdb_api_dll_path() -> Path:
-    global _WCDB_API_DLL_SELECTED
-    if _WCDB_API_DLL_SELECTED is not None:
-        return _WCDB_API_DLL_SELECTED
-
-    for p in _candidate_wcdb_api_dll_paths():
-        try:
-            if p.exists() and p.is_file():
-                _WCDB_API_DLL_SELECTED = p
-                return p
-        except Exception:
-            continue
-
-    # Fall back to the default path even if it doesn't exist; caller will raise a clear error.
-    _WCDB_API_DLL_SELECTED = _DEFAULT_WCDB_API_DLL
-    return _WCDB_API_DLL_SELECTED
-
-_lib_lock = threading.RLock()
-_lib: Optional[ctypes.CDLL] = None
-_initialized = False
-_inprocess_runtime_poisoned_reason = ""
-_loaded_wcdb_api_dll: Optional[Path] = None
-_preloaded_native_libs: list[ctypes.CDLL] = []
-_protection_checked = False
-_protection_result: Optional[tuple[int, str]] = None
-_AUTO_SIDECAR_LOCK = threading.Lock()
-_AUTO_SIDECAR_PROC: Optional[subprocess.Popen] = None
-_AUTO_SIDECAR_URL = ""
-_AUTO_SIDECAR_TOKEN = ""
-_AUTO_SIDECAR_MISSING_WARNED = False
-
-
-def _is_windows() -> bool:
-    return sys.platform.startswith("win")
-
-
-def _is_macos() -> bool:
-    return sys.platform == "darwin"
-
-
-def _is_supported_native_platform() -> bool:
-    return _is_windows() or _is_macos()
-
-
-def _iter_wcdb_resource_paths(wcdb_api_dll: Path) -> tuple[Path, ...]:
-    candidates: list[Path] = []
-    seen: set[str] = set()
-
-    def add(path: str | Path | None) -> None:
-        if not path:
-            return
-        try:
-            resolved = Path(path).resolve()
-        except Exception:
-            resolved = Path(path)
-        key = str(resolved).replace("/", "\\").rstrip("\\").lower()
-        if key in seen:
-            return
-        seen.add(key)
-        candidates.append(resolved)
-
-    dll_dir = wcdb_api_dll.parent
-    add(dll_dir)
-    add(dll_dir.parent)
-    add(_NATIVE_DIR)
-    add(_NATIVE_DIR.parent)
-
-    cwd = Path.cwd()
-    add(cwd)
-    add(cwd / "resources")
-
-    data_dir = str(os.environ.get("WECHAT_TOOL_DATA_DIR", "") or "").strip()
-    if data_dir:
-        add(data_dir)
-        add(Path(data_dir) / "resources")
-
-    if getattr(sys, "frozen", False):
-        try:
-            exe_dir = Path(sys.executable).resolve().parent
-        except Exception:
-            exe_dir = Path(sys.executable).parent
-        add(exe_dir)
-        add(exe_dir / "resources")
-
-    return tuple(candidates)
-
-
-def _preload_wcdb_dependencies(wcdb_api_dll: Path) -> None:
-    dll_dir = wcdb_api_dll.parent
-    if _is_macos():
-        dependency_paths = (dll_dir.parent / "universal" / "libWCDB.dylib",)
-    else:
-        dependency_paths = tuple(dll_dir / name for name in ("WCDB.dll", "SDL2.dll", "VoipEngine.dll"))
-
-    for dep_path in dependency_paths:
-        if not dep_path.exists():
-            continue
-        try:
-            mode = getattr(ctypes, "RTLD_GLOBAL", 0) if _is_macos() else 0
-            _preloaded_native_libs.append(ctypes.CDLL(str(dep_path), mode=mode))
-            logger.info("[wcdb] preloaded dependency: %s", dep_path)
-        except Exception as exc:
-            logger.warning("[wcdb] preload dependency failed: %s err=%s", dep_path, exc)
-
-
-def _run_init_protection(lib: ctypes.CDLL, wcdb_api_dll: Path) -> None:
-    global _protection_checked, _protection_result
-    if _protection_checked:
-        return
-    _protection_checked = True
-
-    fn = getattr(lib, "InitProtection", None)
-    if not fn:
-        logger.info("[wcdb] InitProtection not exported: %s", wcdb_api_dll)
-        return
-
-    try:
-        fn.argtypes = [ctypes.c_char_p]
-        fn.restype = ctypes.c_int32
-    except Exception:
-        pass
-
-    best: Optional[tuple[int, str]] = None
-    for resource_path in _iter_wcdb_resource_paths(wcdb_api_dll):
-        try:
-            rc = int(fn(str(resource_path).encode("utf-8")))
-            logger.info("[wcdb] InitProtection rc=%s path=%s", rc, resource_path)
-            if rc == 0:
-                _protection_result = (rc, str(resource_path))
-                return
-            if best is None:
-                best = (rc, str(resource_path))
-        except Exception as exc:
-            logger.warning("[wcdb] InitProtection exception path=%s err=%s", resource_path, exc)
-
-    _protection_result = best
-
-
-def _format_protection_hint() -> str:
-    if not _protection_result:
-        return ""
-    rc, resource_path = _protection_result
-    return f" protection_rc={rc} protection_path={resource_path}"
-
-
-def _sidecar_url() -> str:
-    return str(os.environ.get("WECHAT_TOOL_WCDB_SIDECAR_URL", "") or "").strip().rstrip("/")
-
-
-def _sidecar_enabled() -> bool:
-    return bool(_sidecar_url())
-
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
-def _source_sidecar_assets() -> tuple[Path, Path, Path] | None:
-    if getattr(sys, "frozen", False):
-        return None
-
-    repo_root = _repo_root()
-    if _is_macos():
-        electron_exe = (
-            repo_root
-            / "desktop"
-            / "node_modules"
-            / "electron"
-            / "dist"
-            / "Electron.app"
-            / "Contents"
-            / "MacOS"
-            / "Electron"
-        )
-    else:
-        electron_exe = repo_root / "desktop" / "node_modules" / "electron" / "dist" / "electron.exe"
-    sidecar_script = repo_root / "desktop" / "src" / "wcdb-sidecar.cjs"
-    koffi_dir = repo_root / "desktop" / "node_modules" / "koffi"
-
-    try:
-        if electron_exe.is_file() and sidecar_script.is_file() and koffi_dir.exists():
-            return electron_exe, sidecar_script, koffi_dir
-    except Exception:
-        return None
-    return None
-
-
-def _auto_sidecar_started_here() -> bool:
-    with _AUTO_SIDECAR_LOCK:
-        return bool(_AUTO_SIDECAR_URL and _AUTO_SIDECAR_TOKEN)
-
-
-def _parse_port(value: object) -> Optional[int]:
-    try:
-        raw = str(value or "").strip()
-        if not raw:
-            return None
-        port = int(raw, 10)
-    except Exception:
-        return None
-    if 1 <= port <= 65535:
-        return port
-    return None
-
-
-def _pick_free_port() -> int:
-    requested = _parse_port(os.environ.get("WECHAT_TOOL_WCDB_SIDECAR_PORT"))
-    if requested is not None:
-        return requested
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        sock.listen(1)
-        return int(sock.getsockname()[1])
-
-
-def _build_auto_sidecar_resource_paths(wcdb_api_dll: Path) -> list[str]:
-    items: list[str] = []
-    seen: set[str] = set()
-
-    def add(path: str | Path | None) -> None:
-        if not path:
-            return
-        try:
-            resolved = Path(path).resolve()
-        except Exception:
-            resolved = Path(path)
-        key = str(resolved).replace("/", "\\").rstrip("\\").lower()
-        if not key or key in seen:
-            return
-        seen.add(key)
-        items.append(str(resolved))
-
-    repo_root = _repo_root()
-    dll_dir = wcdb_api_dll.parent
-    add(dll_dir)
-    add(dll_dir.parent)
-    add(repo_root)
-    add(repo_root / "resources")
-
-    data_dir = str(os.environ.get("WECHAT_TOOL_DATA_DIR", "") or "").strip()
-    if data_dir:
-        add(data_dir)
-        add(Path(data_dir) / "resources")
-    else:
-        add(Path.cwd())
-        add(Path.cwd() / "resources")
-
-    return items
-
-
-def _stop_auto_sidecar() -> None:
-    global _AUTO_SIDECAR_PROC, _AUTO_SIDECAR_URL, _AUTO_SIDECAR_TOKEN
-
-    with _AUTO_SIDECAR_LOCK:
-        proc = _AUTO_SIDECAR_PROC
-        owned_url = _AUTO_SIDECAR_URL
-        owned_token = _AUTO_SIDECAR_TOKEN
-        _AUTO_SIDECAR_PROC = None
-        _AUTO_SIDECAR_URL = ""
-        _AUTO_SIDECAR_TOKEN = ""
-
-    if owned_url and os.environ.get("WECHAT_TOOL_WCDB_SIDECAR_URL") == owned_url:
-        os.environ.pop("WECHAT_TOOL_WCDB_SIDECAR_URL", None)
-    if owned_token and os.environ.get("WECHAT_TOOL_WCDB_SIDECAR_TOKEN") == owned_token:
-        os.environ.pop("WECHAT_TOOL_WCDB_SIDECAR_TOKEN", None)
-
-    if proc is None:
-        return
-
-    try:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=2.0)
-            except Exception:
-                proc.kill()
-    except Exception:
-        pass
-
-
-atexit.register(_stop_auto_sidecar)
-
-
-def _maybe_start_auto_sidecar() -> bool:
-    global _AUTO_SIDECAR_PROC, _AUTO_SIDECAR_URL, _AUTO_SIDECAR_TOKEN, _AUTO_SIDECAR_MISSING_WARNED
-
-    if _sidecar_enabled() or not _is_supported_native_platform():
-        return False
-
-    assets = _source_sidecar_assets()
-    if not assets:
-        if not _AUTO_SIDECAR_MISSING_WARNED:
-            _AUTO_SIDECAR_MISSING_WARNED = True
-            logger.warning(
-                "[wcdb] isolated sidecar unavailable; source runs require "
-                "desktop/node_modules/electron, desktop/src/wcdb-sidecar.cjs, and desktop/node_modules/koffi. "
-                "Using in-process WCDB fallback. Run `cd desktop; npm ci` to enable crash isolation."
-            )
-        return False
-
-    wcdb_api_dll = _resolve_wcdb_api_dll_path()
-    try:
-        if not wcdb_api_dll.exists():
-            return False
-    except Exception:
-        return False
-
-    runtime_exe, sidecar_script, koffi_dir = assets
-    repo_root = _repo_root()
-
-    with _AUTO_SIDECAR_LOCK:
-        proc = _AUTO_SIDECAR_PROC
-        if proc is not None and proc.poll() is None and _AUTO_SIDECAR_URL and _AUTO_SIDECAR_TOKEN:
-            os.environ["WECHAT_TOOL_WCDB_SIDECAR_URL"] = _AUTO_SIDECAR_URL
-            os.environ["WECHAT_TOOL_WCDB_SIDECAR_TOKEN"] = _AUTO_SIDECAR_TOKEN
-            return True
-
-        if proc is not None and proc.poll() is not None:
-            _AUTO_SIDECAR_PROC = None
-            _AUTO_SIDECAR_URL = ""
-            _AUTO_SIDECAR_TOKEN = ""
-
-        port = _pick_free_port()
-        token = os.urandom(24).hex()
-        url = f"http://127.0.0.1:{port}"
-        env = os.environ.copy()
-        env.update(
-            {
-                "ELECTRON_RUN_AS_NODE": "1",
-                "WECHAT_TOOL_WCDB_SIDECAR_HOST": "127.0.0.1",
-                "WECHAT_TOOL_WCDB_SIDECAR_PORT": str(port),
-                "WECHAT_TOOL_WCDB_SIDECAR_TOKEN": token,
-                "WECHAT_TOOL_WCDB_API_DLL_PATH": str(wcdb_api_dll),
-                "WECHAT_TOOL_WCDB_DLL_DIR": str(wcdb_api_dll.parent),
-                "WECHAT_TOOL_WCDB_RESOURCE_PATHS": json.dumps(
-                    _build_auto_sidecar_resource_paths(wcdb_api_dll), ensure_ascii=False
-                ),
-                "WECHAT_TOOL_KOFFI_DIR": str(koffi_dir),
-            }
-        )
-
-        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
-        try:
-            proc = subprocess.Popen(
-                [str(runtime_exe), str(sidecar_script)],
-                cwd=str(repo_root),
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=creationflags,
-            )
-        except Exception as exc:
-            logger.warning("[wcdb] auto sidecar start failed: %s", exc)
-            return False
-
-        _AUTO_SIDECAR_PROC = proc
-        _AUTO_SIDECAR_URL = url
-        _AUTO_SIDECAR_TOKEN = token
-        os.environ["WECHAT_TOOL_WCDB_SIDECAR_URL"] = url
-        os.environ["WECHAT_TOOL_WCDB_SIDECAR_TOKEN"] = token
-
-    logger.info(
-        "[wcdb] auto-started sidecar url=%s runtime=%s dll=%s",
-        _AUTO_SIDECAR_URL,
-        runtime_exe,
-        wcdb_api_dll,
+    account_name = str(account or storage.parent.name).strip()
+    wxid = str(native_wxid or _derive_native_wxid(account_name, storage)).strip()
+    return _native_call(
+        "open account",
+        native_core_realtime.open_account,
+        account=account_name,
+        native_wxid=wxid,
+        db_storage_dir=storage,
+        session_db_path=session_path,
+        key_hex=str(key_hex or "").strip(),
     )
-    return True
-
-
-def _invalidate_sidecar_runtime(reason: str) -> None:
-    global _initialized
-
-    with _lib_lock:
-        _initialized = False
-
-    manager = globals().get("WCDB_REALTIME")
-    if manager is not None:
-        try:
-            manager.invalidate_runtime(reason=reason)
-        except Exception:
-            pass
-
-    if _auto_sidecar_started_here():
-        _stop_auto_sidecar()
-
-
-def _sidecar_call(action: str, payload: Optional[dict[str, Any]] = None, *, timeout: float = 30.0) -> dict[str, Any]:
-    base_url = _sidecar_url()
-    if not base_url:
-        raise WCDBRealtimeError("WCDB sidecar is not configured.")
-
-    token = str(os.environ.get("WECHAT_TOOL_WCDB_SIDECAR_TOKEN", "") or "").strip()
-    body = json.dumps(
-        {
-            "action": str(action or "").strip(),
-            "payload": payload or {},
-        },
-        ensure_ascii=False,
-    ).encode("utf-8")
-
-    deadline = time.monotonic() + max(1.0, float(timeout or 30.0))
-    last_err: Exception | None = None
-    attempts = 20 if action == "init" else 3
-    for attempt in range(attempts):
-        headers = {
-            "Content-Type": "application/json; charset=utf-8",
-            "Accept": "application/json",
-        }
-        if token:
-            headers["X-WCDB-Sidecar-Token"] = token
-        req = urllib.request.Request(
-            f"{base_url}/call",
-            data=body,
-            headers=headers,
-            method="POST",
-        )
-        try:
-            remaining = max(0.5, deadline - time.monotonic())
-            with urllib.request.urlopen(req, timeout=min(remaining, max(0.5, timeout))) as resp:
-                raw = resp.read()
-            decoded = json.loads(raw.decode("utf-8", errors="replace") or "{}")
-            if not isinstance(decoded, dict):
-                raise WCDBRealtimeError("WCDB sidecar returned invalid response.")
-            if decoded.get("ok"):
-                result = decoded.get("result")
-                return result if isinstance(result, dict) else {}
-            rc = decoded.get("rc")
-            err = str(decoded.get("error") or "WCDB sidecar call failed")
-            logs = decoded.get("logs")
-            hint = ""
-            if isinstance(logs, list) and logs:
-                hint = f" logs={[str(x) for x in logs[:6]]}"
-            message = f"{err} rc={rc}.{hint}"
-            if str(action or "").strip() == "init":
-                message = _with_vc_redist_help(message)
-            elif str(action or "").strip() == "open_account":
-                message = _with_wcdb_open_help(message)
-            raise WCDBRealtimeError(message)
-        except WCDBRealtimeError:
-            raise
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            last_err = exc
-            if attempt >= attempts - 1 or time.monotonic() >= deadline:
-                break
-            time.sleep(0.15)
-        except Exception as exc:
-            last_err = exc
-            break
-
-    message = (
-        f"WCDB sidecar unavailable: {last_err}. "
-        "WCDB 辅助进程已退出或正在重启，也可能暂时无响应；请稍后重试，若仍失败请重启应用。"
-    )
-    _invalidate_sidecar_runtime(message)
-    raise WCDBSidecarUnavailableError(message)
-
-
-def _sidecar_payload(action: str, payload: Optional[dict[str, Any]] = None, *, timeout: float = 30.0) -> str:
-    result = _sidecar_call(action, payload, timeout=timeout)
-    return str(result.get("payload") or "")
-
-
-def _load_wcdb_lib() -> ctypes.CDLL:
-    global _lib, _loaded_wcdb_api_dll
-    with _lib_lock:
-        if _lib is not None:
-            return _lib
-
-        if not _is_supported_native_platform():
-            raise WCDBRealtimeError("WCDB realtime mode is only supported on Windows and macOS.")
-
-        wcdb_api_dll = _resolve_wcdb_api_dll_path()
-        if not wcdb_api_dll.exists():
-            raise WCDBRealtimeError(f"Missing WCDB native library at: {wcdb_api_dll}")
-
-        # Ensure dependent DLLs (e.g. WCDB.dll) can be found.
-        if _is_windows():
-            try:
-                os.add_dll_directory(str(wcdb_api_dll.parent))
-            except Exception:
-                pass
-
-        _preload_wcdb_dependencies(wcdb_api_dll)
-        lib = ctypes.CDLL(str(wcdb_api_dll))
-        logger.info("[wcdb] using native library: %s", wcdb_api_dll)
-
-        # Signatures
-        lib.wcdb_init.argtypes = []
-        lib.wcdb_init.restype = ctypes.c_int
-
-        lib.wcdb_shutdown.argtypes = []
-        lib.wcdb_shutdown.restype = ctypes.c_int
-
-        lib.wcdb_open_account.argtypes = [
-            ctypes.c_char_p,
-            ctypes.c_char_p,
-            ctypes.POINTER(ctypes.c_int64),
-        ]
-        lib.wcdb_open_account.restype = ctypes.c_int
-
-        lib.wcdb_close_account.argtypes = [ctypes.c_int64]
-        lib.wcdb_close_account.restype = ctypes.c_int
-
-        # Optional: wcdb_set_my_wxid(handle, wxid)
-        try:
-            lib.wcdb_set_my_wxid.argtypes = [ctypes.c_int64, ctypes.c_char_p]
-            lib.wcdb_set_my_wxid.restype = ctypes.c_int
-        except Exception:
-            pass
-
-        lib.wcdb_get_sessions.argtypes = [ctypes.c_int64, ctypes.POINTER(ctypes.c_char_p)]
-        lib.wcdb_get_sessions.restype = ctypes.c_int
-
-        lib.wcdb_get_messages.argtypes = [
-            ctypes.c_int64,
-            ctypes.c_char_p,
-            ctypes.c_int32,
-            ctypes.c_int32,
-            ctypes.POINTER(ctypes.c_char_p),
-        ]
-        lib.wcdb_get_messages.restype = ctypes.c_int
-
-        lib.wcdb_get_message_count.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int32)]
-        lib.wcdb_get_message_count.restype = ctypes.c_int
-
-        lib.wcdb_get_display_names.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_char_p)]
-        lib.wcdb_get_display_names.restype = ctypes.c_int
-
-        lib.wcdb_get_avatar_urls.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_char_p)]
-        lib.wcdb_get_avatar_urls.restype = ctypes.c_int
-
-        # Optional (newer DLLs): wcdb_get_contact(handle, username, out_json)
-        try:
-            lib.wcdb_get_contact.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_char_p)]
-            lib.wcdb_get_contact.restype = ctypes.c_int
-        except Exception:
-            pass
-
-        # Optional (newer DLLs): compact contact list API exported by our bundled WCDB DLL.
-        try:
-            lib.wcdb_get_contacts_compact.argtypes = [
-                ctypes.c_int64,
-                ctypes.c_char_p,
-                ctypes.POINTER(ctypes.c_char_p),
-            ]
-            lib.wcdb_get_contacts_compact.restype = ctypes.c_int
-        except Exception:
-            pass
-
-        lib.wcdb_get_group_member_count.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int32)]
-        lib.wcdb_get_group_member_count.restype = ctypes.c_int
-
-        lib.wcdb_get_group_members.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.POINTER(ctypes.c_char_p)]
-        lib.wcdb_get_group_members.restype = ctypes.c_int
-
-        # Optional (newer DLLs): wcdb_get_group_nicknames(handle, chatroom_id, out_json)
-        try:
-            lib.wcdb_get_group_nicknames.argtypes = [
-                ctypes.c_int64,
-                ctypes.c_char_p,
-                ctypes.POINTER(ctypes.c_char_p),
-            ]
-            lib.wcdb_get_group_nicknames.restype = ctypes.c_int
-        except Exception:
-            pass
-
-        # Optional: execute arbitrary SQL on a selected database kind/path.
-        # Signature: wcdb_exec_query(handle, kind, path, sql, out_json)
-        try:
-            lib.wcdb_exec_query.argtypes = [
-                ctypes.c_int64,
-                ctypes.c_char_p,
-                ctypes.c_char_p,
-                ctypes.c_char_p,
-                ctypes.POINTER(ctypes.c_char_p),
-            ]
-            lib.wcdb_exec_query.restype = ctypes.c_int
-        except Exception:
-            pass
-
-        # Optional (newer DLLs): native message cursor used by WeFlow for stable
-        # latest/history paging across message_*.db shards.
-        try:
-            lib.wcdb_open_message_cursor.argtypes = [
-                ctypes.c_int64,
-                ctypes.c_char_p,
-                ctypes.c_int32,
-                ctypes.c_int32,
-                ctypes.c_int32,
-                ctypes.c_int32,
-                ctypes.POINTER(ctypes.c_int64),
-            ]
-            lib.wcdb_open_message_cursor.restype = ctypes.c_int
-        except Exception:
-            pass
-        try:
-            lib.wcdb_open_message_cursor_lite.argtypes = [
-                ctypes.c_int64,
-                ctypes.c_char_p,
-                ctypes.c_int32,
-                ctypes.c_int32,
-                ctypes.c_int32,
-                ctypes.c_int32,
-                ctypes.POINTER(ctypes.c_int64),
-            ]
-            lib.wcdb_open_message_cursor_lite.restype = ctypes.c_int
-        except Exception:
-            pass
-        try:
-            lib.wcdb_fetch_message_batch.argtypes = [
-                ctypes.c_int64,
-                ctypes.c_int64,
-                ctypes.POINTER(ctypes.c_char_p),
-                ctypes.POINTER(ctypes.c_int32),
-            ]
-            lib.wcdb_fetch_message_batch.restype = ctypes.c_int
-        except Exception:
-            pass
-        try:
-            lib.wcdb_close_message_cursor.argtypes = [ctypes.c_int64, ctypes.c_int64]
-            lib.wcdb_close_message_cursor.restype = ctypes.c_int
-        except Exception:
-            pass
-
-        # Optional (newer DLLs): update a single message content in message db.
-        # Signature: wcdb_update_message(handle, sessionId, localId, createTime, newContent, outError)
-        try:
-            lib.wcdb_update_message.argtypes = [
-                ctypes.c_int64,
-                ctypes.c_char_p,
-                ctypes.c_int64,
-                ctypes.c_int32,
-                ctypes.c_char_p,
-                ctypes.POINTER(ctypes.c_char_p),
-            ]
-            lib.wcdb_update_message.restype = ctypes.c_int
-        except Exception:
-            pass
-
-        # Optional (newer DLLs): delete a single message in message db.
-        # Signature: wcdb_delete_message(handle, sessionId, localId, createTime, dbPathHint, outError)
-        try:
-            lib.wcdb_delete_message.argtypes = [
-                ctypes.c_int64,
-                ctypes.c_char_p,
-                ctypes.c_int64,
-                ctypes.c_int32,
-                ctypes.c_char_p,
-                ctypes.POINTER(ctypes.c_char_p),
-            ]
-            lib.wcdb_delete_message.restype = ctypes.c_int
-        except Exception:
-            pass
-
-        # Optional (newer DLLs): wcdb_get_sns_timeline(handle, limit, offset, usernames_json, keyword, start_time, end_time, out_json)
-        try:
-            lib.wcdb_get_sns_timeline.argtypes = [
-                ctypes.c_int64,
-                ctypes.c_int32,
-                ctypes.c_int32,
-                ctypes.c_char_p,
-                ctypes.c_char_p,
-                ctypes.c_int32,
-                ctypes.c_int32,
-                ctypes.POINTER(ctypes.c_char_p),
-            ]
-            lib.wcdb_get_sns_timeline.restype = ctypes.c_int
-        except Exception:
-            # Older wcdb_api.dll may not expose this export.
-            pass
-
-        # Optional (newer DLLs): wcdb_decrypt_sns_image(encrypted_data, len, key, out_hex)
-        # WeFlow uses this to decrypt Moments CDN images.
-        try:
-            lib.wcdb_decrypt_sns_image.argtypes = [
-                ctypes.c_void_p,
-                ctypes.c_int32,
-                ctypes.c_char_p,
-                ctypes.POINTER(ctypes.c_void_p),
-            ]
-            lib.wcdb_decrypt_sns_image.restype = ctypes.c_int32
-        except Exception:
-            pass
-
-        lib.wcdb_get_logs.argtypes = [ctypes.POINTER(ctypes.c_char_p)]
-        lib.wcdb_get_logs.restype = ctypes.c_int
-
-        lib.wcdb_free_string.argtypes = [ctypes.c_char_p]
-        lib.wcdb_free_string.restype = None
-
-        _loaded_wcdb_api_dll = wcdb_api_dll
-        _lib = lib
-        return lib
-
-
-def _ensure_initialized() -> None:
-    global _initialized, _loaded_wcdb_api_dll, _protection_result
-    _maybe_start_auto_sidecar()
-    if _sidecar_enabled():
-        with _lib_lock:
-            if _initialized:
-                return
-        try:
-            result = _sidecar_call("init", timeout=30.0)
-            dll_path = str(result.get("libraryPath") or result.get("dllPath") or "").strip()
-            if dll_path:
-                try:
-                    _loaded_wcdb_api_dll = Path(dll_path)
-                except Exception:
-                    pass
-            protection = result.get("protection")
-            if isinstance(protection, list):
-                for item in protection:
-                    if isinstance(item, dict) and "rc" in item:
-                        try:
-                            _protection_result = (int(item.get("rc")), str(item.get("path") or ""))
-                            if int(item.get("rc")) == 0:
-                                break
-                        except Exception:
-                            continue
-            with _lib_lock:
-                _initialized = True
-            return
-        except Exception as exc:
-            if not _auto_sidecar_started_here():
-                raise
-            if _is_macos():
-                _stop_auto_sidecar()
-                raise WCDBRealtimeError(
-                    "macOS WCDB 隔离辅助进程启动失败。为避免原生库阻塞主服务，已拒绝回退到进程内模式："
-                    f"{exc}"
-                ) from exc
-            logger.warning("[wcdb] auto sidecar init failed, fallback to in-process wcdb")
-            _stop_auto_sidecar()
-
-    lib = _load_wcdb_lib()
-    with _lib_lock:
-        if _initialized:
-            return
-        wcdb_api_dll = _loaded_wcdb_api_dll or _resolve_wcdb_api_dll_path()
-        _run_init_protection(lib, wcdb_api_dll)
-        rc = int(lib.wcdb_init())
-        if rc != 0:
-            logs = get_native_logs(require_initialized=False)
-            hint = _format_protection_hint()
-            if logs:
-                hint += f" logs={logs[:6]}"
-            raise WCDBRealtimeError(_with_vc_redist_help(f"wcdb_init failed: {rc}.{hint}"))
-        _initialized = True
-
-
-def _safe_load_json(payload: str) -> Any:
-    try:
-        return json.loads(payload)
-    except Exception:
-        return None
-
-
-def _call_out_json(fn, *args) -> str:
-    lib = _load_wcdb_lib()
-    out = ctypes.c_char_p()
-    rc = int(fn(*args, ctypes.byref(out)))
-    try:
-        if rc != 0:
-            logs = get_native_logs()
-            hint = ""
-            if logs:
-                hint = f" logs={logs[:6]}"
-            raise WCDBRealtimeError(f"wcdb api call failed: {rc}.{hint}")
-
-        raw = out.value or b""
-        try:
-            return raw.decode("utf-8", errors="replace")
-        except Exception:
-            return ""
-    finally:
-        try:
-            if out.value:
-                lib.wcdb_free_string(out)
-        except Exception:
-            pass
-
-
-def _call_out_error(fn, *args) -> None:
-    lib = _load_wcdb_lib()
-    out = ctypes.c_char_p()
-    rc = int(fn(*args, ctypes.byref(out)))
-    try:
-        if rc != 0:
-            err = ""
-            try:
-                if out.value:
-                    err = (out.value or b"").decode("utf-8", errors="replace")
-            except Exception:
-                err = ""
-
-            logs = get_native_logs()
-            hint = f" logs={logs[:6]}" if logs else ""
-            if err:
-                raise WCDBRealtimeError(f"wcdb api call failed: {rc}. error={err}.{hint}")
-            raise WCDBRealtimeError(f"wcdb api call failed: {rc}.{hint}")
-    finally:
-        try:
-            if out.value:
-                lib.wcdb_free_string(out)
-        except Exception:
-            pass
-
-
-def get_native_logs(*, require_initialized: bool = True) -> list[str]:
-    if _sidecar_enabled():
-        if require_initialized:
-            try:
-                _ensure_initialized()
-            except Exception:
-                return []
-        try:
-            result = _sidecar_call("get_logs", timeout=5.0)
-            logs = result.get("logs")
-            if isinstance(logs, list):
-                return [str(x) for x in logs]
-            return []
-        except Exception:
-            return []
-
-    if require_initialized:
-        try:
-            _ensure_initialized()
-        except Exception:
-            return []
-    lib = _load_wcdb_lib()
-    out = ctypes.c_char_p()
-    rc = int(lib.wcdb_get_logs(ctypes.byref(out)))
-    try:
-        if rc != 0 or not out.value:
-            return []
-        payload = out.value.decode("utf-8", errors="replace")
-        decoded = _safe_load_json(payload)
-        if isinstance(decoded, list):
-            return [str(x) for x in decoded]
-        return []
-    except Exception:
-        return []
-    finally:
-        try:
-            if out.value:
-                lib.wcdb_free_string(out)
-        except Exception:
-            pass
-
-
-def _validate_session_db_key(session_db_path: Path, key_hex: str) -> str:
-    p = Path(session_db_path)
-    if not p.exists():
-        raise WCDBRealtimeError(f"session db not found: {p}")
-    key = str(key_hex or "").strip()
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", key):
-        raise WCDBRealtimeError("Invalid db key (must be 64 hex chars).")
-
-    try:
-        from .wechat_decrypt import PAGE_SIZE, SQLITE_HEADER, _resolve_page1_key_material
-
-        with p.open("rb") as f:
-            page1 = f.read(PAGE_SIZE)
-    except WCDBRealtimeError:
-        raise
-    except Exception as exc:
-        raise WCDBRealtimeError(f"无法读取 session.db 进行密钥校验: {p}: {exc}") from exc
-
-    if page1.startswith(SQLITE_HEADER):
-        return "plaintext"
-    if len(page1) < PAGE_SIZE:
-        raise WCDBRealtimeError(f"session.db 文件不完整（不足 {PAGE_SIZE} 字节）: {p}")
-
-    resolved = _resolve_page1_key_material(bytes.fromhex(key), page1)
-    if resolved is None:
-        raise WCDBRealtimeError(
-            f"数据库密钥与当前 session.db 不匹配: {p}。"
-            "请重新获取当前账号的数据库密钥，勿复用其他账号或旧 db_storage 的密钥。"
-        )
-    return str(resolved[2] or "unknown")
-
-
-def open_account(session_db_path: Path, key_hex: str, *, timeout: float = 30.0) -> int:
-    p = Path(session_db_path)
-    key = str(key_hex or "").strip()
-    key_mode = _validate_session_db_key(p, key)
-    logger.info("[wcdb] session db key preflight passed mode=%s path=%s", key_mode, p)
-
-    _ensure_initialized()
-
-    if not _sidecar_enabled() and _inprocess_runtime_poisoned_reason:
-        raise WCDBRealtimeError(
-            "进程内 WCDB 曾发生不可回收的原生调用超时，请重启应用。"
-            "源码运行请先执行 `cd desktop; npm ci`，启用隔离的 WCDB sidecar 后再试。"
-        )
-
-    if _sidecar_enabled():
-        result = _sidecar_call(
-            "open_account",
-            {
-                "path": str(p),
-                "key": key,
-            },
-            timeout=max(0.5, float(timeout or 30.0)),
-        )
-        handle = int(result.get("handle") or 0)
-        if handle <= 0:
-            raise WCDBRealtimeError(_with_wcdb_open_help("wcdb_open_account failed: invalid sidecar handle."))
-        return handle
-
-    lib = _load_wcdb_lib()
-    out_handle = ctypes.c_int64(0)
-    rc = int(lib.wcdb_open_account(str(p).encode("utf-8"), key.encode("utf-8"), ctypes.byref(out_handle)))
-    if rc != 0 or int(out_handle.value) <= 0:
-        logs = get_native_logs()
-        hint = f" logs={logs[:6]}" if logs else ""
-        raise WCDBRealtimeError(_with_wcdb_open_help(f"wcdb_open_account failed: {rc}.{hint}"))
-    return int(out_handle.value)
-
-
-def set_my_wxid(handle: int, wxid: str) -> bool:
-    """Best-effort set the "my wxid" context for some WCDB APIs."""
-    try:
-        _ensure_initialized()
-    except Exception:
-        return False
-
-    w = str(wxid or "").strip()
-    if not w:
-        return False
-
-    if _sidecar_enabled():
-        try:
-            result = _sidecar_call("set_my_wxid", {"handle": int(handle), "wxid": w}, timeout=10.0)
-            return bool(result.get("success"))
-        except Exception:
-            return False
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_set_my_wxid", None)
-    if not fn:
-        return False
-
-    try:
-        rc = int(fn(ctypes.c_int64(int(handle)), w.encode("utf-8")))
-    except Exception:
-        return False
-
-    return rc == 0
 
 
 def close_account(handle: int) -> None:
-    try:
-        h = int(handle)
-    except Exception:
-        return
-    if h <= 0:
-        return
-    try:
-        _ensure_initialized()
-    except Exception:
-        return
-    if _sidecar_enabled():
-        try:
-            _sidecar_call("close_account", {"handle": h}, timeout=5.0)
-        except Exception:
-            pass
-        return
-    lib = _load_wcdb_lib()
-    try:
-        lib.wcdb_close_account(ctypes.c_int64(h))
-    except Exception:
-        return
+    native_core_realtime.close_account(handle)
 
 
 def get_sessions(handle: int) -> list[dict[str, Any]]:
-    _ensure_initialized()
-    if _sidecar_enabled():
-        payload = _sidecar_payload("get_sessions", {"handle": int(handle)}, timeout=30.0)
-        decoded = _safe_load_json(payload)
-        if isinstance(decoded, list):
-            return [x for x in decoded if isinstance(x, dict)]
-        return []
-
-    lib = _load_wcdb_lib()
-    payload = _call_out_json(lib.wcdb_get_sessions, ctypes.c_int64(int(handle)))
-    decoded = _safe_load_json(payload)
-    if isinstance(decoded, list):
-        out: list[dict[str, Any]] = []
-        for x in decoded:
-            if isinstance(x, dict):
-                out.append(x)
-        return out
-    return []
+    return _native_call("get sessions", native_core_realtime.get_sessions, handle)
 
 
-def get_messages(handle: int, username: str, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
-    _ensure_initialized()
-    u = str(username or "").strip()
-    if not u:
-        return []
-    if _sidecar_enabled():
-        payload = _sidecar_payload(
-            "get_messages",
-            {
-                "handle": int(handle),
-                "username": u,
-                "limit": int(limit),
-                "offset": int(offset),
-            },
-            timeout=30.0,
-        )
-        decoded = _safe_load_json(payload)
-        if isinstance(decoded, list):
-            return [x for x in decoded if isinstance(x, dict)]
-        return []
-
-    lib = _load_wcdb_lib()
-    payload = _call_out_json(
-        lib.wcdb_get_messages,
-        ctypes.c_int64(int(handle)),
-        u.encode("utf-8"),
-        ctypes.c_int32(int(limit)),
-        ctypes.c_int32(int(offset)),
+def get_messages(
+    handle: int,
+    username: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    return _native_call(
+        "get messages",
+        native_core_realtime.get_messages,
+        handle,
+        username,
+        limit=limit,
+        offset=offset,
     )
-    decoded = _safe_load_json(payload)
-    if isinstance(decoded, list):
-        out: list[dict[str, Any]] = []
-        for x in decoded:
-            if isinstance(x, dict):
-                out.append(x)
-        return out
-    return []
 
 
 def get_message_count(handle: int, username: str) -> int:
-    _ensure_initialized()
-    u = str(username or "").strip()
-    if not u:
-        return 0
-    if _sidecar_enabled():
-        result = _sidecar_call(
-            "get_message_count",
-            {"handle": int(handle), "username": u},
-            timeout=30.0,
-        )
-        try:
-            return int(result.get("count") or 0)
-        except Exception:
-            return 0
-
-    lib = _load_wcdb_lib()
-    out_count = ctypes.c_int32(0)
-    rc = int(lib.wcdb_get_message_count(ctypes.c_int64(int(handle)), u.encode("utf-8"), ctypes.byref(out_count)))
-    if rc != 0:
-        return 0
-    return int(out_count.value)
+    return _native_call(
+        "get message count", native_core_realtime.get_message_count, handle, username
+    )
 
 
 def get_display_names(handle: int, usernames: list[str]) -> dict[str, str]:
-    _ensure_initialized()
-    uniq = [str(u or "").strip() for u in usernames if str(u or "").strip()]
-    uniq = list(dict.fromkeys(uniq))
-    if not uniq:
-        return {}
-    if _sidecar_enabled():
-        out_json = _sidecar_payload(
-            "get_display_names",
-            {"handle": int(handle), "usernames": uniq},
-            timeout=30.0,
-        )
-        decoded = _safe_load_json(out_json)
-        if isinstance(decoded, dict):
-            return {str(k): str(v) for k, v in decoded.items()}
-        return {}
-
-    lib = _load_wcdb_lib()
-    payload = json.dumps(uniq, ensure_ascii=False).encode("utf-8")
-    out_json = _call_out_json(lib.wcdb_get_display_names, ctypes.c_int64(int(handle)), payload)
-    decoded = _safe_load_json(out_json)
-    if isinstance(decoded, dict):
-        return {str(k): str(v) for k, v in decoded.items()}
-    return {}
+    return _native_call(
+        "get display names", native_core_realtime.get_display_names, handle, usernames
+    )
 
 
 def get_avatar_urls(handle: int, usernames: list[str]) -> dict[str, str]:
-    _ensure_initialized()
-    uniq = [str(u or "").strip() for u in usernames if str(u or "").strip()]
-    uniq = list(dict.fromkeys(uniq))
-    if not uniq:
-        return {}
-    if _sidecar_enabled():
-        out_json = _sidecar_payload(
-            "get_avatar_urls",
-            {"handle": int(handle), "usernames": uniq},
-            timeout=30.0,
-        )
-        decoded = _safe_load_json(out_json)
-        if isinstance(decoded, dict):
-            return {str(k): str(v) for k, v in decoded.items()}
-        return {}
-
-    lib = _load_wcdb_lib()
-    payload = json.dumps(uniq, ensure_ascii=False).encode("utf-8")
-    out_json = _call_out_json(lib.wcdb_get_avatar_urls, ctypes.c_int64(int(handle)), payload)
-    decoded = _safe_load_json(out_json)
-    if isinstance(decoded, dict):
-        return {str(k): str(v) for k, v in decoded.items()}
-    return {}
+    return _native_call(
+        "get avatar URLs", native_core_realtime.get_avatar_urls, handle, usernames
+    )
 
 
 def get_contact(handle: int, username: str) -> dict[str, Any]:
-    _ensure_initialized()
-    u = str(username or "").strip()
-    if not u:
-        return {}
-
-    if _sidecar_enabled():
-        out_json = _sidecar_payload(
-            "get_contact",
-            {"handle": int(handle), "username": u},
-            timeout=30.0,
-        )
-        decoded = _safe_load_json(out_json)
-        return decoded if isinstance(decoded, dict) else {}
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_get_contact", None)
-    if not fn:
-        raise WCDBRealtimeError("Current wcdb_api.dll does not support get_contact.")
-
-    out_json = _call_out_json(fn, ctypes.c_int64(int(handle)), u.encode("utf-8"))
-    decoded = _safe_load_json(out_json)
-    return decoded if isinstance(decoded, dict) else {}
+    return _native_call("get contact", native_core_realtime.get_contact, handle, username)
 
 
-def get_contacts_compact(handle: int, usernames: Optional[list[str]] = None) -> list[dict[str, Any]]:
-    """Return contacts through the bundled native compact contact API.
-
-    Passing no usernames intentionally uses NULL for the native `usernamesJson`
-    argument, which requests the full compact contact list.
-    """
-    _ensure_initialized()
-    uniq = [str(u or "").strip() for u in (usernames or []) if str(u or "").strip()]
-    uniq = list(dict.fromkeys(uniq))
-
-    if _sidecar_enabled():
-        out_json = _sidecar_payload(
-            "get_contacts_compact",
-            {"handle": int(handle), "usernames": uniq},
-            timeout=60.0,
-        )
-        decoded = _safe_load_json(out_json)
-        if isinstance(decoded, list):
-            return [x for x in decoded if isinstance(x, dict)]
-        return []
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_get_contacts_compact", None)
-    if not fn:
-        raise WCDBRealtimeError("Current wcdb_api.dll does not support get_contacts_compact.")
-
-    payload = json.dumps(uniq, ensure_ascii=False).encode("utf-8") if uniq else None
-    out_json = _call_out_json(fn, ctypes.c_int64(int(handle)), payload)
-    decoded = _safe_load_json(out_json)
-    if isinstance(decoded, list):
-        return [x for x in decoded if isinstance(x, dict)]
-    return []
+def get_contacts_compact(
+    handle: int, usernames: Optional[list[str]] = None
+) -> list[dict[str, Any]]:
+    return _native_call(
+        "get contacts", native_core_realtime.get_contacts_compact, handle, usernames
+    )
 
 
 def get_group_members(handle: int, chatroom_id: str) -> list[dict[str, Any]]:
-    _ensure_initialized()
-    cid = str(chatroom_id or "").strip()
-    if not cid:
-        return []
-    if _sidecar_enabled():
-        out_json = _sidecar_payload(
-            "get_group_members",
-            {"handle": int(handle), "chatroom_id": cid},
-            timeout=30.0,
-        )
-        decoded = _safe_load_json(out_json)
-        if isinstance(decoded, list):
-            return [x for x in decoded if isinstance(x, dict)]
-        return []
-
-    lib = _load_wcdb_lib()
-    out_json = _call_out_json(lib.wcdb_get_group_members, ctypes.c_int64(int(handle)), cid.encode("utf-8"))
-    decoded = _safe_load_json(out_json)
-    if isinstance(decoded, list):
-        out: list[dict[str, Any]] = []
-        for x in decoded:
-            if isinstance(x, dict):
-                out.append(x)
-        return out
-    return []
+    return _native_call(
+        "get group members",
+        native_core_realtime.get_group_members,
+        handle,
+        chatroom_id,
+    )
 
 
 def get_group_nicknames(handle: int, chatroom_id: str) -> dict[str, str]:
-    _ensure_initialized()
-    cid = str(chatroom_id or "").strip()
-    if not cid:
-        return {}
-
-    if _sidecar_enabled():
-        try:
-            out_json = _sidecar_payload(
-                "get_group_nicknames",
-                {"handle": int(handle), "chatroom_id": cid},
-                timeout=30.0,
-            )
-        except Exception:
-            return {}
-        decoded = _safe_load_json(out_json)
-        if isinstance(decoded, dict):
-            return {str(k): str(v) for k, v in decoded.items()}
-        return {}
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_get_group_nicknames", None)
-    if not fn:
-        return {}
-
-    out_json = _call_out_json(fn, ctypes.c_int64(int(handle)), cid.encode("utf-8"))
-    decoded = _safe_load_json(out_json)
-    if isinstance(decoded, dict):
-        return {str(k): str(v) for k, v in decoded.items()}
-    return {}
-
-
-def exec_query(handle: int, *, kind: str, path: Optional[str], sql: str) -> list[dict[str, Any]]:
-    """Execute raw SQL on a specific db kind/path via WCDB.
-
-    This is primarily used for SNS/other dbs that are not directly exposed by dedicated APIs.
-    """
-    _ensure_initialized()
-    k = str(kind or "").strip()
-    if not k:
-        raise WCDBRealtimeError("Missing kind for exec_query.")
-
-    s = str(sql or "").strip()
-    if not s:
-        return []
-
-    p = None if path is None else str(path or "").strip()
-
-    if _sidecar_enabled():
-        out_json = _sidecar_payload(
-            "exec_query",
-            {
-                "handle": int(handle),
-                "kind": k,
-                "path": p,
-                "sql": s,
-            },
-            timeout=60.0,
-        )
-        decoded = _safe_load_json(out_json)
-        if isinstance(decoded, list):
-            return [x for x in decoded if isinstance(x, dict)]
-        return []
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_exec_query", None)
-    if not fn:
-        raise WCDBRealtimeError("Current wcdb_api.dll does not support exec_query.")
-
-    out_json = _call_out_json(
-        fn,
-        ctypes.c_int64(int(handle)),
-        k.encode("utf-8"),
-        None if p is None else p.encode("utf-8"),
-        s.encode("utf-8"),
+    return _native_call(
+        "get group nicknames",
+        native_core_realtime.get_group_nicknames,
+        handle,
+        chatroom_id,
     )
-    decoded = _safe_load_json(out_json)
-    if isinstance(decoded, list):
-        out: list[dict[str, Any]] = []
-        for x in decoded:
-            if isinstance(x, dict):
-                out.append(x)
-        return out
-    return []
+
+
+def exec_query(
+    handle: int,
+    *,
+    kind: str,
+    path: Optional[str],
+    sql: str,
+) -> list[dict[str, Any]]:
+    return _native_call(
+        "execute query",
+        native_core_realtime.exec_query,
+        handle,
+        kind=kind,
+        path=path,
+        sql=sql,
+    )
 
 
 def open_message_cursor(
@@ -1505,211 +219,36 @@ def open_message_cursor(
     end_timestamp: int = 0,
     lite: bool = False,
 ) -> int:
-    """Open the native WeFlow-style message cursor.
-
-    The cursor API is important for live chat paging because the native layer
-    owns cross-`message_*.db` discovery/merge and can see the same live view
-    WeFlow uses instead of a single explicit SQL table.
-    """
-
-    _ensure_initialized()
-    sid = str(session_id or "").strip()
-    if not sid:
-        return 0
-    size = max(1, int(batch_size or 1))
-    asc = 1 if ascending else 0
-    begin = max(0, int(begin_timestamp or 0))
-    end = max(0, int(end_timestamp or 0))
-
-    action = "open_message_cursor_lite" if lite else "open_message_cursor"
-    if _sidecar_enabled():
-        result = _sidecar_call(
-            action,
-            {
-                "handle": int(handle),
-                "session_id": sid,
-                "batch_size": int(size),
-                "ascending": bool(ascending),
-                "begin_timestamp": int(begin),
-                "end_timestamp": int(end),
-            },
-            timeout=30.0,
-        )
-        try:
-            return int(result.get("cursor") or 0)
-        except Exception:
-            return 0
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_open_message_cursor_lite" if lite else "wcdb_open_message_cursor", None)
-    if not fn:
-        if lite:
-            fn = getattr(lib, "wcdb_open_message_cursor", None)
-        if not fn:
-            return 0
-
-    out_cursor = ctypes.c_int64(0)
-    rc = int(
-        fn(
-            ctypes.c_int64(int(handle)),
-            sid.encode("utf-8"),
-            ctypes.c_int32(int(size)),
-            ctypes.c_int32(int(asc)),
-            ctypes.c_int32(int(begin)),
-            ctypes.c_int32(int(end)),
-            ctypes.byref(out_cursor),
-        )
+    del lite
+    return _native_call(
+        "open message cursor",
+        native_core_realtime.open_message_cursor,
+        handle,
+        session_id,
+        batch_size=batch_size,
+        ascending=ascending,
+        begin_timestamp=begin_timestamp,
+        end_timestamp=end_timestamp,
     )
-    if rc != 0 or int(out_cursor.value) <= 0:
-        return 0
-    return int(out_cursor.value)
 
 
-def fetch_message_batch(handle: int, cursor: int) -> tuple[list[dict[str, Any]], bool]:
-    _ensure_initialized()
-    cur = int(cursor or 0)
-    if cur <= 0:
-        return [], False
-
-    if _sidecar_enabled():
-        result = _sidecar_call(
-            "fetch_message_batch",
-            {"handle": int(handle), "cursor": int(cur)},
-            timeout=30.0,
-        )
-        decoded = _safe_load_json(str(result.get("payload") or ""))
-        rows = [x for x in decoded if isinstance(x, dict)] if isinstance(decoded, list) else []
-        return rows, bool(result.get("hasMore"))
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_fetch_message_batch", None)
-    if not fn:
-        return [], False
-
-    out_json = ctypes.c_char_p()
-    out_has_more = ctypes.c_int32(0)
-    rc = int(fn(ctypes.c_int64(int(handle)), ctypes.c_int64(cur), ctypes.byref(out_json), ctypes.byref(out_has_more)))
-    try:
-        if rc != 0 or not out_json.value:
-            return [], False
-        payload = out_json.value.decode("utf-8", errors="replace")
-    finally:
-        try:
-            if out_json.value:
-                lib.wcdb_free_string(out_json)
-        except Exception:
-            pass
-    decoded = _safe_load_json(payload)
-    rows = [x for x in decoded if isinstance(x, dict)] if isinstance(decoded, list) else []
-    return rows, bool(int(out_has_more.value or 0) == 1)
+def fetch_message_batch(
+    handle: int, cursor: int
+) -> tuple[list[dict[str, Any]], bool]:
+    return _native_call(
+        "fetch message batch",
+        native_core_realtime.fetch_message_batch,
+        handle,
+        cursor,
+    )
 
 
 def close_message_cursor(handle: int, cursor: int) -> None:
-    _ensure_initialized()
-    cur = int(cursor or 0)
-    if cur <= 0:
-        return
-
-    if _sidecar_enabled():
-        try:
-            _sidecar_call("close_message_cursor", {"handle": int(handle), "cursor": int(cur)}, timeout=5.0)
-        except Exception:
-            pass
-        return
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_close_message_cursor", None)
-    if not fn:
-        return
-    try:
-        fn(ctypes.c_int64(int(handle)), ctypes.c_int64(cur))
-    except Exception:
-        return
-
-
-def update_message(handle: int, *, session_id: str, local_id: int, create_time: int, new_content: str) -> None:
-    """Update a single message content in the live encrypted db_storage via WCDB.
-
-    Requires wcdb_update_message export in wcdb_api.dll.
-    """
-    _ensure_initialized()
-    sid = str(session_id or "").strip()
-    if not sid:
-        raise WCDBRealtimeError("Missing session_id for update_message.")
-
-    if _sidecar_enabled():
-        _sidecar_call(
-            "update_message",
-            {
-                "handle": int(handle),
-                "session_id": sid,
-                "local_id": int(local_id or 0),
-                "create_time": int(create_time or 0),
-                "new_content": str(new_content or ""),
-            },
-            timeout=30.0,
-        )
-        return
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_update_message", None)
-    if not fn:
-        raise WCDBRealtimeError("Current wcdb_api.dll does not support update_message.")
-
-    _call_out_error(
-        fn,
-        ctypes.c_int64(int(handle)),
-        sid.encode("utf-8"),
-        ctypes.c_int64(int(local_id or 0)),
-        ctypes.c_int32(int(create_time or 0)),
-        str(new_content or "").encode("utf-8"),
-    )
-
-
-def delete_message(
-    handle: int,
-    *,
-    session_id: str,
-    local_id: int,
-    create_time: int,
-    db_path_hint: str | None = None,
-) -> None:
-    """Delete a single message in the live encrypted db_storage via WCDB.
-
-    Requires wcdb_delete_message export in wcdb_api.dll.
-    """
-    _ensure_initialized()
-    sid = str(session_id or "").strip()
-    if not sid:
-        raise WCDBRealtimeError("Missing session_id for delete_message.")
-
-    hint = str(db_path_hint or "").strip()
-    if _sidecar_enabled():
-        _sidecar_call(
-            "delete_message",
-            {
-                "handle": int(handle),
-                "session_id": sid,
-                "local_id": int(local_id or 0),
-                "create_time": int(create_time or 0),
-                "db_path_hint": hint,
-            },
-            timeout=30.0,
-        )
-        return
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_delete_message", None)
-    if not fn:
-        raise WCDBRealtimeError("Current wcdb_api.dll does not support delete_message.")
-
-    _call_out_error(
-        fn,
-        ctypes.c_int64(int(handle)),
-        sid.encode("utf-8"),
-        ctypes.c_int64(int(local_id or 0)),
-        ctypes.c_int32(int(create_time or 0)),
-        hint.encode("utf-8"),
+    _native_call(
+        "close message cursor",
+        native_core_realtime.close_message_cursor,
+        handle,
+        cursor,
     )
 
 
@@ -1723,204 +262,54 @@ def get_sns_timeline(
     start_time: int = 0,
     end_time: int = 0,
 ) -> list[dict[str, Any]]:
-    """Read Moments (SnsTimeLine) from the live encrypted db_storage via WCDB.
-
-    Requires a newer wcdb_api.dll export: wcdb_get_sns_timeline.
-    """
-    _ensure_initialized()
-    lim = max(0, int(limit or 0))
-    off = max(0, int(offset or 0))
-
-    users = [str(u or "").strip() for u in (usernames or []) if str(u or "").strip()]
-    users = list(dict.fromkeys(users))
-    users_json = json.dumps(users, ensure_ascii=False) if users else ""
-
-    kw = str(keyword or "").strip()
-
-    if _sidecar_enabled():
-        payload = _sidecar_payload(
-            "get_sns_timeline",
-            {
-                "handle": int(handle),
-                "limit": lim,
-                "offset": off,
-                "usernames": users,
-                "keyword": kw,
-                "start_time": int(start_time or 0),
-                "end_time": int(end_time or 0),
-            },
-            timeout=60.0,
-        )
-        decoded = _safe_load_json(payload)
-        if isinstance(decoded, list):
-            return [x for x in decoded if isinstance(x, dict)]
-        return []
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_get_sns_timeline", None)
-    if not fn:
-        raise WCDBRealtimeError("Current wcdb_api.dll does not support sns timeline.")
-
-    payload = _call_out_json(
-        fn,
-        ctypes.c_int64(int(handle)),
-        ctypes.c_int32(lim),
-        ctypes.c_int32(off),
-        users_json.encode("utf-8"),
-        kw.encode("utf-8"),
-        ctypes.c_int32(int(start_time or 0)),
-        ctypes.c_int32(int(end_time or 0)),
+    return _native_call(
+        "get SNS timeline",
+        native_core_realtime.get_sns_timeline,
+        handle,
+        limit=limit,
+        offset=offset,
+        usernames=usernames,
+        keyword=keyword,
+        start_time=start_time,
+        end_time=end_time,
     )
-    decoded = _safe_load_json(payload)
-    if isinstance(decoded, list):
-        out: list[dict[str, Any]] = []
-        for x in decoded:
-            if isinstance(x, dict):
-                out.append(x)
-        return out
-    return []
 
 
 def decrypt_sns_image(encrypted_data: bytes, key: str) -> bytes:
-    """Decrypt Moments CDN image bytes using WCDB DLL (WeFlow compatible).
-
-    Notes:
-    - Requires a newer wcdb_api.dll export: wcdb_decrypt_sns_image.
-    - On failure, returns the original encrypted_data (best-effort behavior like WeFlow).
-    """
-    _ensure_initialized()
-    raw = bytes(encrypted_data or b"")
-    if not raw:
-        return b""
-
-    k = str(key or "").strip()
-    if not k:
-        return raw
-
-    if _sidecar_enabled():
-        result = _sidecar_call(
-            "decrypt_sns_image",
-            {
-                "data_b64": base64.b64encode(raw).decode("ascii"),
-                "key": k,
-            },
-            timeout=60.0,
-        )
-        data_b64 = str(result.get("data_b64") or "")
-        if not data_b64:
-            return raw
-        try:
-            return base64.b64decode(data_b64)
-        except Exception:
-            return raw
-
-    lib = _load_wcdb_lib()
-    fn = getattr(lib, "wcdb_decrypt_sns_image", None)
-    if not fn:
-        raise WCDBRealtimeError("Current wcdb_api.dll does not support sns image decryption.")
-
-    out_ptr = ctypes.c_void_p()
-    buf = ctypes.create_string_buffer(raw, len(raw))
-    rc = 0
-    try:
-        rc = int(
-            fn(
-                ctypes.cast(buf, ctypes.c_void_p),
-                ctypes.c_int32(len(raw)),
-                k.encode("utf-8"),
-                ctypes.byref(out_ptr),
-            )
-        )
-
-        if rc != 0 or not out_ptr.value:
-            return raw
-
-        hex_bytes = ctypes.cast(out_ptr, ctypes.c_char_p).value or b""
-        if not hex_bytes:
-            return raw
-
-        # Defensive: keep only hex chars (some builds may include whitespace).
-        hex_clean = re.sub(rb"[^0-9a-fA-F]", b"", hex_bytes)
-        if not hex_clean:
-            return raw
-        try:
-            return binascii.unhexlify(hex_clean)
-        except Exception:
-            return raw
-    finally:
-        try:
-            if out_ptr.value:
-                lib.wcdb_free_string(ctypes.cast(out_ptr, ctypes.c_char_p))
-        except Exception:
-            pass
-
-
-def shutdown() -> None:
-    global _initialized
-    if _sidecar_enabled():
-        with _lib_lock:
-            should_shutdown = bool(_initialized)
-        try:
-            if should_shutdown:
-                _sidecar_call("shutdown", timeout=5.0)
-        finally:
-            with _lib_lock:
-                _initialized = False
-            if _auto_sidecar_started_here():
-                _stop_auto_sidecar()
-        return
-
-    lib = _load_wcdb_lib()
-    with _lib_lock:
-        if not _initialized:
-            return
-        try:
-            lib.wcdb_shutdown()
-        finally:
-            _initialized = False
-    if _auto_sidecar_started_here():
-        _stop_auto_sidecar()
+    return _native_call(
+        "decrypt SNS image",
+        native_core_realtime.decrypt_sns_image,
+        encrypted_data,
+        key,
+    )
 
 
 def _resolve_session_db_path(db_storage_dir: Path) -> Path:
-    # Prefer current WeChat 4.x naming/layout:
-    # - db_storage/session/session.db
-    # - (fallback) db_storage/session.db
-    candidates = [
-        db_storage_dir / "session" / "session.db",
-        db_storage_dir / "session.db",
-        db_storage_dir / "Session.db",
-        db_storage_dir / "MicroMsg.db",
-    ]
-    for c in candidates:
+    root = Path(db_storage_dir)
+    candidates = (
+        root / "session" / "session.db",
+        root / "session.db",
+        root / "Session.db",
+        root / "MicroMsg.db",
+    )
+    for candidate in candidates:
         try:
-            if c.exists() and c.is_file():
-                return c
-        except Exception:
+            if candidate.is_file():
+                return candidate
+        except OSError:
             continue
 
-    # Fallback: recursive search (some installs keep DBs in subfolders).
-    try:
-        for p in db_storage_dir.rglob("session.db"):
-            try:
-                if p.exists() and p.is_file():
-                    return p
-            except Exception:
-                continue
-    except Exception:
-        pass
-
-    try:
-        for p in db_storage_dir.rglob("MicroMsg.db"):
-            try:
-                if p.exists() and p.is_file():
-                    return p
-            except Exception:
-                continue
-    except Exception:
-        pass
-
-    raise WCDBRealtimeError(f"Cannot find session db in: {db_storage_dir}")
+    for name in ("session.db", "MicroMsg.db"):
+        try:
+            for candidate in root.rglob(name):
+                try:
+                    if candidate.is_file():
+                        return candidate
+                except OSError:
+                    continue
+        except OSError:
+            continue
+    raise WCDBRealtimeError(f"Cannot find session db in: {root}")
 
 
 @dataclass(frozen=True)
@@ -1935,27 +324,58 @@ class WCDBRealtimeConnection:
 
 
 class WCDBRealtimeManager:
-    _FAILED_TTL = 60.0  # seconds before retrying a failed connection
+    _FAILED_TTL = 60.0
 
     def __init__(self) -> None:
         self._mu = threading.Lock()
         self._conns: dict[str, WCDBRealtimeConnection] = {}
         self._connecting: dict[str, threading.Event] = {}
-        self._connection_epochs: dict[str, int] = {}
-        # Negative cache: account -> (monotonic failure timestamp, original reason).
+        self._connecting_roots: dict[str, threading.Event] = {}
         self._failed: dict[str, tuple[float, str]] = {}
+        self._prime_stop = threading.Event()
+        self._prime_thread: threading.Thread | None = None
+
+    @staticmethod
+    def _database_root_key(path: Path) -> str:
+        resolved = Path(path).expanduser().resolve(strict=False)
+        return "root:" + os.path.normcase(str(resolved))
+
+    @staticmethod
+    def _unique_connections(
+        connections: list[WCDBRealtimeConnection],
+    ) -> list[WCDBRealtimeConnection]:
+        unique: list[WCDBRealtimeConnection] = []
+        seen: set[int] = set()
+        for connection in connections:
+            identity = id(connection)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            unique.append(connection)
+        return unique
+
+    def _connection_for_root_locked(
+        self, root_key: str
+    ) -> WCDBRealtimeConnection | None:
+        for connection in self._unique_connections(list(self._conns.values())):
+            if self._database_root_key(connection.db_storage_dir) != root_key:
+                continue
+            if connection.handle > 0 and _is_native_core_handle(connection.handle):
+                return connection
+            for alias, cached in tuple(self._conns.items()):
+                if cached is connection:
+                    self._conns.pop(alias, None)
+        return None
 
     def _recent_failure_locked(self, account: str) -> dict[str, Any]:
         cached = self._failed.get(str(account or ""))
         if cached is None:
             return {"active": False, "reason": "", "retry_after_seconds": 0}
         if isinstance(cached, tuple):
-            failed_at = float(cached[0])
-            reason = str(cached[1] or "").strip()
+            failed_at, reason = float(cached[0]), str(cached[1] or "").strip()
         else:
-            # Backward compatibility for a process that populated the old float-only cache.
             failed_at = float(cached)
-            reason = "WCDB realtime connection failed."
+            reason = "Native-core realtime connection failed."
         remaining = self._FAILED_TTL - (time.monotonic() - failed_at)
         if remaining <= 0:
             self._failed.pop(str(account or ""), None)
@@ -1972,283 +392,201 @@ class WCDBRealtimeManager:
 
     def _record_failure(self, account: str, reason: Any) -> None:
         with self._mu:
-            self._failed[str(account or "")] = (time.monotonic(), str(reason or "").strip())
+            self._failed[str(account or "")] = (
+                time.monotonic(),
+                str(reason or "").strip(),
+            )
+
+    def get_connection(self, account: str) -> WCDBRealtimeConnection | None:
+        name = str(account or "").strip()
+        with self._mu:
+            connection = self._conns.get(name)
+            if connection is None:
+                return None
+            if connection.handle > 0 and _is_native_core_handle(connection.handle):
+                return connection
+            for alias, cached in tuple(self._conns.items()):
+                if cached is connection:
+                    self._conns.pop(alias, None)
+            return None
+
+    def is_connected(self, account: str) -> bool:
+        return self.get_connection(account) is not None
 
     def get_status(self, account_dir: Path) -> dict[str, Any]:
-        account = str(account_dir.name)
+        account_path = Path(account_dir)
+        account = str(account_path.name)
         key_item = get_account_keys_from_store(account)
         key_hex = str((key_item or {}).get("db_key") or "").strip()
-        key_ok = len(key_hex) == 64
 
-        db_storage_dir = None
-        session_db_path = None
+        db_storage_dir: Path | None = None
+        session_db_path: Path | None = None
         native_wxid = ""
-        err = ""
+        errors: list[str] = []
         try:
-            db_storage_dir = _resolve_account_db_storage_dir(account_dir)
+            db_storage_dir = _resolve_account_db_storage_dir(account_path)
             if db_storage_dir is not None:
-                native_wxid = _derive_weflow_wcdb_wxid(account, db_storage_dir)
+                native_wxid = _derive_native_wxid(account, db_storage_dir)
                 session_db_path = _resolve_session_db_path(db_storage_dir)
-        except Exception as e:
-            err = str(e)
-            native_wxid = _derive_weflow_wcdb_wxid(account, db_storage_dir)
+        except Exception as exc:
+            errors.append(str(exc))
+            native_wxid = _derive_native_wxid(account, db_storage_dir)
 
-        dll_path = _resolve_wcdb_api_dll_path()
         try:
-            dll_ok = bool(dll_path.exists())
-        except Exception:
-            dll_ok = False
-        connected = self.is_connected(account)
+            client_path = resolve_native_core_library()
+            broker_path = resolve_native_core_broker()
+        except Exception as exc:
+            errors.append(str(exc))
+            native_dir = Path(__file__).resolve().parent / "native"
+            if sys.platform.startswith("win"):
+                client_path = native_dir / "wechatdb_client.dll"
+                broker_path = native_dir / "wechatdb_broker.exe"
+            else:
+                client_path = native_dir / "libwechatdb_client.dylib"
+                broker_path = native_dir / "wechatdb_broker"
+        manifest_path = client_path.with_name("wechatdb_native_build.json")
+        components_present = all(
+            path.is_file() for path in (client_path, broker_path, manifest_path)
+        )
         recent_failure = self.get_recent_failure(account)
         return {
             "account": account,
-            "dll_present": bool(dll_ok),
-            "wcdb_api_dll": str(dll_path),
-            "key_present": bool(key_ok),
+            "dll_present": components_present,
+            "wcdb_api_dll": str(client_path),
+            "native_core": True,
+            "native_core_mode": _native_core_mode_value(),
+            "native_core_client": str(client_path),
+            "native_core_broker": str(broker_path),
+            "native_core_manifest": str(manifest_path),
+            "key_present": bool(re.fullmatch(r"[0-9a-fA-F]{64}", key_hex)),
             "native_wxid": native_wxid,
             "db_storage_dir": str(db_storage_dir) if db_storage_dir else "",
             "session_db_path": str(session_db_path) if session_db_path else "",
-            "connected": bool(connected),
-            "error": err,
+            "connected": self.is_connected(account),
+            "error": "; ".join(error for error in errors if error),
             "recent_failure": bool(recent_failure.get("active")),
             "failure_reason": str(recent_failure.get("reason") or ""),
-            "retry_after_seconds": int(recent_failure.get("retry_after_seconds") or 0),
+            "retry_after_seconds": int(
+                recent_failure.get("retry_after_seconds") or 0
+            ),
         }
-
-    def is_connected(self, account: str) -> bool:
-        with self._mu:
-            conn = self._conns.get(str(account))
-            return bool(conn and conn.handle > 0)
 
     def invalidate_runtime(self, *, reason: str = "") -> None:
         with self._mu:
-            connection_count = len(self._conns)
-            waiters = list(self._connecting.values())
-            invalidated_accounts = set(self._conns) | set(self._connecting)
-            for account in invalidated_accounts:
-                self._connection_epochs[account] = int(self._connection_epochs.get(account) or 0) + 1
+            connections = self._unique_connections(list(self._conns.values()))
+            waiters = list(
+                {
+                    id(waiter): waiter
+                    for waiter in (
+                        *self._connecting.values(),
+                        *self._connecting_roots.values(),
+                    )
+                }.values()
+            )
             self._conns.clear()
             self._connecting.clear()
+            self._connecting_roots.clear()
             self._failed.clear()
+        for connection in connections:
+            try:
+                close_account(connection.handle)
+            except Exception:
+                pass
+        native_core_realtime.close_all()
         for waiter in waiters:
             waiter.set()
         logger.warning(
-            "[wcdb] invalidated cached runtime handles connections=%s reason=%s",
-            connection_count,
+            "[native-core] invalidated cached handles connections=%s reason=%s",
+            len(connections),
             str(reason or "runtime unavailable")[:500],
         )
 
     def ensure_connected(
-        self, account_dir: Path, *, key_hex: Optional[str] = None, timeout: float = 5.0
+        self,
+        account_dir: Path,
+        *,
+        key_hex: Optional[str] = None,
+        timeout: float = 5.0,
     ) -> WCDBRealtimeConnection:
-        account = str(account_dir.name)
-        try:
-            timeout_seconds = max(0.1, float(timeout))
-        except (TypeError, ValueError):
-            timeout_seconds = 5.0
+        account_path = Path(account_dir)
+        account = str(account_path.name)
+        deadline = time.monotonic() + max(0.0, float(timeout))
 
-        # Fast-reject if this account failed recently to avoid repeated timeouts.
-        with self._mu:
-            recent_failure = self._recent_failure_locked(account)
-        if recent_failure.get("active"):
-            retry_after = int(recent_failure.get("retry_after_seconds") or self._FAILED_TTL)
-            original_reason = str(recent_failure.get("reason") or "").strip()
-            logger.warning("[wcdb] recent failure cache hit account=%s retry_after=%ss", account, retry_after)
-            message = f"WCDB connection recently failed; retry after {retry_after}s."
-            if original_reason:
-                message += f" Last error: {original_reason}"
-            raise WCDBRealtimeError(message)
+        db_storage_dir = _resolve_account_db_storage_dir(account_path)
+        if db_storage_dir is None:
+            raise WCDBRealtimeError(
+                "Cannot resolve db_storage directory for this account."
+            )
+        db_storage_dir = Path(db_storage_dir).expanduser().resolve(strict=True)
+        root_key = self._database_root_key(db_storage_dir)
+        session_db_path = _resolve_session_db_path(db_storage_dir)
+        native_wxid = _derive_native_wxid(account, db_storage_dir)
+        _native_core_mode_value()
 
-        deadline = time.monotonic() + timeout_seconds
-
-        connecting_event: Optional[threading.Event] = None
-        connection_epoch = 0
         while True:
             with self._mu:
+                recent_failure = self._recent_failure_locked(account)
+                root_failure = self._recent_failure_locked(root_key)
+                if not recent_failure.get("active") and root_failure.get("active"):
+                    recent_failure = root_failure
+                if recent_failure.get("active"):
+                    retry_after = int(
+                        recent_failure.get("retry_after_seconds") or self._FAILED_TTL
+                    )
+                    original_reason = str(recent_failure.get("reason") or "").strip()
+                    message = (
+                        f"WCDB connection recently failed; retry after {retry_after}s."
+                    )
+                    if original_reason:
+                        message += f" Last error: {original_reason}"
+                    raise WCDBRealtimeError(message)
+
                 existing = self._conns.get(account)
-                if existing is not None and existing.handle > 0:
+                if existing is not None:
+                    if existing.handle > 0 and _is_native_core_handle(existing.handle):
+                        return existing
+                    self._conns.pop(account, None)
+
+                existing = self._connection_for_root_locked(root_key)
+                if existing is not None:
+                    self._conns[account] = existing
+                    self._failed.pop(account, None)
                     return existing
 
-                waiter = self._connecting.get(account)
+                waiter = self._connecting_roots.get(root_key)
                 if waiter is None:
                     waiter = threading.Event()
                     self._connecting[account] = waiter
-                    connecting_event = waiter
-                    connection_epoch = int(self._connection_epochs.get(account) or 0)
+                    self._connecting_roots[root_key] = waiter
                     break
 
-            # Another thread is connecting; wait a bit and retry.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise WCDBRealtimeError("Timed out waiting for WCDB connection.")
+                raise WCDBRealtimeError("Timed out waiting for native-core connection.")
             waiter.wait(timeout=min(remaining, 10.0))
-            if time.monotonic() >= deadline:
-                raise WCDBRealtimeError("Timed out waiting for WCDB connection.")
 
-        key = str(key_hex or "").strip()
-        if not key:
-            key_item = get_account_keys_from_store(account)
-            key = str((key_item or {}).get("db_key") or "").strip()
-
+        cache_failure = False
         try:
+            key = str(key_hex or "").strip()
+            if not key:
+                key_item = get_account_keys_from_store(account)
+                key = str((key_item or {}).get("db_key") or "").strip()
             if not re.fullmatch(r"[0-9a-fA-F]{64}", key):
-                logger.warning("[wcdb] missing/invalid db key account=%s key_len=%s", account, len(key))
-                raise WCDBRealtimeError("Missing db key for this account (call /api/keys or decrypt first).")
-            db_storage_dir = _resolve_account_db_storage_dir(account_dir)
-            if db_storage_dir is None:
-                logger.warning("[wcdb] db_storage resolve failed account=%s account_dir=%s", account, account_dir)
-                raise WCDBRealtimeError("Cannot resolve db_storage directory for this account.")
-
-            session_db_path = _resolve_session_db_path(db_storage_dir)
-            native_wxid = _derive_weflow_wcdb_wxid(account, db_storage_dir)
-
-            # Both native open and post-open setup run in the same deadline-bound
-            # worker.  A timed-out worker retains responsibility for closing any
-            # handle that arrives later and can never publish it into _conns.
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                timeout_message = (
-                    f"WCDB connection setup timed out after {timeout_seconds:g}s "
-                    f"before opening {session_db_path}."
+                raise WCDBRealtimeError(
+                    "Missing db key for this account (call /api/keys or decrypt first)."
                 )
-                self._record_failure(account, timeout_message)
-                raise WCDBRealtimeError(_with_wcdb_open_help(timeout_message))
 
-            request_timeout = max(0.5, remaining - 0.5)
-            setup_lock = threading.Lock()
-            setup_state: dict[str, Any] = {
-                "timed_out": False,
-                "runtime_isolated": False,
-                "handle": 0,
-                "error": None,
-            }
-
-            def _close_late_handle(handle_value: int) -> None:
-                handle_value = int(handle_value or 0)
-                if handle_value <= 0:
-                    return
-                with setup_lock:
-                    runtime_isolated = bool(setup_state.get("runtime_isolated"))
-                if runtime_isolated:
-                    return
-                try:
-                    close_account(handle_value)
-                    logger.info(
-                        "[wcdb] closed late account handle account=%s handle=%s",
-                        account,
-                        handle_value,
-                    )
-                except Exception:
-                    logger.exception(
-                        "[wcdb] failed to close late account handle account=%s handle=%s",
-                        account,
-                        handle_value,
-                    )
-
-            def _do_open_and_configure() -> None:
-                handle_value = 0
-                try:
-                    handle_value = int(open_account(session_db_path, key, timeout=request_timeout))
-                except Exception as exc:
-                    with setup_lock:
-                        if not setup_state.get("timed_out"):
-                            setup_state["error"] = exc
-                    return
-
-                with setup_lock:
-                    timed_out = bool(setup_state.get("timed_out"))
-                if timed_out:
-                    _close_late_handle(handle_value)
-                    return
-
-                # Keep the WeFlow-compatible context setup best-effort, but keep
-                # it inside the same wall-clock budget as opening the account.
-                try:
-                    set_my_wxid(handle_value, native_wxid)
-                except Exception:
-                    pass
-
-                with setup_lock:
-                    timed_out = bool(setup_state.get("timed_out"))
-                    if not timed_out:
-                        setup_state["handle"] = handle_value
-                        handle_value = 0
-
-                if timed_out:
-                    _close_late_handle(handle_value)
-
-            open_thread = threading.Thread(
-                target=_do_open_and_configure,
-                name=f"wcdb-connect-{account}",
-                daemon=True,
+            cache_failure = True
+            handle = _native_call(
+                "open account",
+                native_core_realtime.open_account,
+                account=account,
+                native_wxid=native_wxid,
+                db_storage_dir=db_storage_dir,
+                session_db_path=session_db_path,
+                key_hex=key,
             )
-            open_thread.start()
-            open_thread.join(timeout=remaining)
-
-            if open_thread.is_alive() or time.monotonic() >= deadline:
-                sidecar_enabled = _sidecar_enabled()
-                runtime_isolated = bool(sidecar_enabled and _auto_sidecar_started_here())
-                with setup_lock:
-                    setup_state["timed_out"] = True
-                    setup_state["runtime_isolated"] = runtime_isolated
-                    late_handle = int(setup_state.get("handle") or 0)
-                    setup_state["handle"] = 0
-
-                if late_handle > 0 and not runtime_isolated:
-                    threading.Thread(
-                        target=_close_late_handle,
-                        args=(late_handle,),
-                        name=f"wcdb-close-late-{account}",
-                        daemon=True,
-                    ).start()
-
-                if sidecar_enabled:
-                    _invalidate_sidecar_runtime(
-                        f"connection setup timed out account={account} session_db={session_db_path}"
-                    )
-                    timeout_message = (
-                        f"WCDB connection setup timed out after {timeout_seconds:g}s for {session_db_path}. "
-                        "原生调用已隔离，WCDB 运行时将重启。"
-                    )
-                else:
-                    global _inprocess_runtime_poisoned_reason
-                    _inprocess_runtime_poisoned_reason = (
-                        f"connection setup timeout account={account} session_db={session_db_path}"
-                    )
-                    timeout_message = (
-                        f"WCDB connection setup timed out after {timeout_seconds:g}s for {session_db_path}. "
-                        "当前为进程内 WCDB，原生调用无法安全终止；请重启应用。"
-                        "源码运行请先执行 `cd desktop; npm ci` 以启用隔离 sidecar。"
-                    )
-                self._record_failure(account, timeout_message)
-                logger.warning(
-                    "[wcdb] connection setup timeout account=%s timeout=%ss session_db=%s",
-                    account,
-                    timeout_seconds,
-                    session_db_path,
-                )
-                raise WCDBRealtimeError(_with_wcdb_open_help(timeout_message))
-
-            with setup_lock:
-                open_error = setup_state.get("error")
-                handle = int(setup_state.get("handle") or 0)
-                setup_state["handle"] = 0
-
-            if isinstance(open_error, Exception):
-                if _should_cache_open_failure(open_error):
-                    self._record_failure(account, open_error)
-                logger.warning(
-                    "[wcdb] open_account failed account=%s session_db=%s error=%s",
-                    account,
-                    session_db_path,
-                    open_error,
-                )
-                raise open_error
-            if handle <= 0:
-                logger.warning("[wcdb] open_account returned no handle account=%s session_db=%s", account, session_db_path)
-                raise WCDBRealtimeError(_with_wcdb_open_help("open_account returned no handle."))
-
-            conn = WCDBRealtimeConnection(
+            connection = WCDBRealtimeConnection(
                 account=account,
                 native_wxid=native_wxid,
                 handle=handle,
@@ -2257,85 +595,191 @@ class WCDBRealtimeManager:
                 connected_at=time.time(),
                 lock=threading.Lock(),
             )
-
             with self._mu:
-                connection_invalidated = int(self._connection_epochs.get(account) or 0) != connection_epoch
-                if not connection_invalidated:
-                    self._conns[account] = conn
-                    self._failed.pop(account, None)
-
-            if connection_invalidated:
-                threading.Thread(
-                    target=_close_late_handle,
-                    args=(handle,),
-                    name=f"wcdb-close-invalidated-{account}",
-                    daemon=True,
-                ).start()
-                raise WCDBRealtimeError(
-                    "WCDB connection was invalidated while opening; retry with the latest key and db_storage source."
-                )
+                self._conns[account] = connection
+                self._failed.pop(account, None)
             logger.info(
-                "[wcdb] connected account=%s native_wxid=%s handle=%s session_db=%s",
+                "[native-core] connected account=%s native_wxid=%s handle=%s session_db=%s",
                 account,
                 native_wxid,
                 int(handle),
                 session_db_path,
             )
-            return conn
+            return connection
+        except Exception as exc:
+            error = (
+                exc
+                if isinstance(exc, WCDBRealtimeError)
+                else WCDBRealtimeError(str(exc).strip() or exc.__class__.__name__)
+            )
+            if cache_failure:
+                self._record_failure(account, error)
+                self._record_failure(root_key, error)
+            if error is exc:
+                raise
+            raise error from exc
         finally:
             with self._mu:
-                ev = None
-                if connecting_event is not None and self._connecting.get(account) is connecting_event:
-                    ev = self._connecting.pop(account, None)
-                if ev is not None:
-                    ev.set()
+                event = self._connecting.pop(account, None)
+                if self._connecting_roots.get(root_key) is event:
+                    self._connecting_roots.pop(root_key, None)
+                if event is not None:
+                    event.set()
 
     def disconnect(self, account: str) -> None:
-        a = str(account or "").strip()
-        if not a:
+        name = str(account or "").strip()
+        if not name:
             return
         with self._mu:
-            self._connection_epochs[a] = int(self._connection_epochs.get(a) or 0) + 1
-            conn = self._conns.pop(a, None)
-            self._failed.pop(a, None)  # clear negative cache on explicit disconnect
-        if conn is None:
+            connection = self._conns.pop(name, None)
+            self._failed.pop(name, None)
+            if connection is not None:
+                root_key = self._database_root_key(connection.db_storage_dir)
+                self._failed.pop(root_key, None)
+                for alias, cached in tuple(self._conns.items()):
+                    if cached is connection:
+                        self._conns.pop(alias, None)
+        if connection is None:
             return
         try:
-            with conn.lock:
-                close_account(conn.handle)
+            with connection.lock:
+                close_account(connection.handle)
         except Exception:
             pass
 
     def close_all(self, *, lock_timeout_s: float | None = None) -> bool:
-        """Close all known WCDB realtime connections.
-
-        When `lock_timeout_s` is None, this waits indefinitely for per-connection locks.
-        When provided, this will skip busy connections after the timeout and return False.
-        """
         with self._mu:
-            conns = list(self._conns.values())
+            connections = self._unique_connections(list(self._conns.values()))
+            waiters = list(
+                {
+                    id(waiter): waiter
+                    for waiter in (
+                        *self._connecting.values(),
+                        *self._connecting_roots.values(),
+                    )
+                }.values()
+            )
             self._conns.clear()
+            self._connecting.clear()
+            self._connecting_roots.clear()
+            self._failed.clear()
+        for waiter in waiters:
+            waiter.set()
+
         ok = True
-        for conn in conns:
+        for connection in connections:
+            acquired = False
             try:
                 if lock_timeout_s is None:
-                    with conn.lock:
-                        close_account(conn.handle)
-                    continue
-
-                acquired = conn.lock.acquire(timeout=float(lock_timeout_s))
+                    connection.lock.acquire()
+                    acquired = True
+                else:
+                    acquired = connection.lock.acquire(timeout=float(lock_timeout_s))
                 if not acquired:
                     ok = False
-                    logger.warning("[wcdb] close_all skip busy conn account=%s", conn.account)
+                    with self._mu:
+                        self._conns.setdefault(connection.account, connection)
                     continue
-                try:
-                    close_account(conn.handle)
-                finally:
-                    conn.lock.release()
+                close_account(connection.handle)
             except Exception:
                 ok = False
-                continue
+            finally:
+                if acquired:
+                    connection.lock.release()
         return ok
+
+    def _prime_available_accounts_once(self) -> None:
+        from .chat_accounts import list_chat_account_contexts
+
+        for context in list_chat_account_contexts():
+            if self._prime_stop.is_set():
+                return
+            if context.mode != "direct" or not context.db_key_present:
+                continue
+            started = time.perf_counter()
+            try:
+                self.ensure_connected(context.account_dir, timeout=30.0)
+            except Exception as exc:
+                logger.warning(
+                    "[native-core] background account preparation failed account=%s error=%s",
+                    context.name,
+                    str(exc).strip() or exc.__class__.__name__,
+                )
+                continue
+            logger.info(
+                "[native-core] background account prepared account=%s elapsed_ms=%.1f",
+                context.name,
+                (time.perf_counter() - started) * 1000.0,
+            )
+
+    def start_background_prime(self) -> None:
+        enabled = str(
+            os.environ.get("WECHAT_TOOL_NATIVE_CORE_BACKGROUND_PRIME", "1") or ""
+        ).strip().lower()
+        if enabled in {"0", "false", "no", "off"}:
+            return
+        with self._mu:
+            if self._prime_thread is not None and self._prime_thread.is_alive():
+                return
+            self._prime_stop.clear()
+            thread = threading.Thread(
+                target=self._prime_available_accounts_once,
+                name="native-core-account-prime",
+                daemon=True,
+            )
+            self._prime_thread = thread
+            thread.start()
+
+    def stop_background_prime(self, *, timeout: float = 5.0) -> bool:
+        with self._mu:
+            thread = self._prime_thread
+        if thread is None:
+            return True
+        self._prime_stop.set()
+        if thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, float(timeout)))
+        stopped = not thread.is_alive()
+        if stopped:
+            with self._mu:
+                if self._prime_thread is thread:
+                    self._prime_thread = None
+        return stopped
 
 
 WCDB_REALTIME = WCDBRealtimeManager()
+
+
+def shutdown() -> None:
+    WCDB_REALTIME.stop_background_prime()
+    WCDB_REALTIME.close_all()
+    native_core_realtime.close_all()
+    try:
+        stop_native_core_broker()
+    except Exception:
+        pass
+
+
+__all__ = [
+    "WCDB_REALTIME",
+    "WCDBRealtimeConnection",
+    "WCDBRealtimeError",
+    "WCDBRealtimeManager",
+    "close_account",
+    "close_message_cursor",
+    "decrypt_sns_image",
+    "exec_query",
+    "fetch_message_batch",
+    "get_avatar_urls",
+    "get_contact",
+    "get_contacts_compact",
+    "get_display_names",
+    "get_group_members",
+    "get_group_nicknames",
+    "get_message_count",
+    "get_messages",
+    "get_sessions",
+    "get_sns_timeline",
+    "open_account",
+    "open_message_cursor",
+    "shutdown",
+]

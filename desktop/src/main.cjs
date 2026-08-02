@@ -18,7 +18,6 @@ try {
   autoUpdaterLoadError = err;
 }
 const { spawn, spawnSync } = require("child_process");
-const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
 const net = require("net");
@@ -40,11 +39,10 @@ const {
 } = require("./desktop-settings.cjs");
 const {
   isBackendHealthResponse,
-  isWcdbSidecarHealthResponse,
   resolveBackendStartupTimeoutMs,
   shouldRetryBackendOnDifferentPort,
-  shouldWaitForBackendReplacement,
 } = require("./backend-startup.cjs");
+const { applyNativeCoreRuntimePolicy } = require("./native-core-runtime.cjs");
 
 const DEFAULT_BACKEND_HOST = "127.0.0.1";
 const LAN_BACKEND_HOST = "0.0.0.0";
@@ -52,18 +50,6 @@ const DEFAULT_BACKEND_PORT = parsePort(process.env.WECHAT_TOOL_PORT) ?? 10392;
 const DESKTOP_TITLEBAR_HEIGHT = 32;
 
 let backendProc = null;
-let wcdbSidecarProc = null;
-let wcdbSidecarPort = null;
-let wcdbSidecarUrl = "";
-let wcdbSidecarToken = "";
-let wcdbSidecarRestartTimer = null;
-let wcdbSidecarRestartInProgress = false;
-let wcdbSidecarRestartHistory = [];
-let wcdbSidecarHealthTimer = null;
-let wcdbSidecarHealthInFlight = false;
-let wcdbSidecarHealthFailures = 0;
-let wcdbSidecarHealthGeneration = 0;
-const WCDB_SIDECAR_HEALTH_FAILURE_LIMIT = 15;
 let resolvedDataDir = null;
 let mainWindow = null;
 let mainWindowLaunchPromise = null;
@@ -578,6 +564,19 @@ function removeAccountFromKeyStore(outputDir, accountName) {
   }
 }
 
+function clearNativeCoreRawKeyCache() {
+  const dataDir = resolveDataDir();
+  if (!dataDir) return false;
+  const cacheDir = path.join(dataDir, ".native-core-cache-v1");
+  try {
+    if (!fs.existsSync(cacheDir)) return false;
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function deleteAccountDataFromDisk(account) {
   const { outputDir, databasesDir, accountName, accountDir } = resolveAccountDirInOutput(account);
   if (!fs.existsSync(accountDir) || !fs.statSync(accountDir).isDirectory()) {
@@ -603,6 +602,7 @@ async function deleteAccountDataFromDisk(account) {
 
     fs.rmSync(accountDir, { recursive: true, force: true });
     const removedKeyCache = removeAccountFromKeyStore(outputDir, accountName);
+    const removedNativeCoreCache = clearNativeCoreRawKeyCache();
     const accounts = listDecryptedAccountsOnDisk(databasesDir);
     result = {
       status: "success",
@@ -610,6 +610,7 @@ async function deleteAccountDataFromDisk(account) {
       accounts,
       default_account: accounts.length ? accounts[0] : null,
       removed_key_cache: removedKeyCache,
+      removed_native_core_cache: removedNativeCoreCache,
     };
   } finally {
     if (wasBackendRunning) {
@@ -989,7 +990,6 @@ async function applyOutputDirChange(nextValue) {
     // Persist the target before touching either directory. A restart can then
     // replay or recover every interruption point in the filesystem commit.
     setPendingOutputDirSetting(nextPath, { throwOnError: true });
-    await waitForWcdbRuntimeRestartToSettle();
     wasBackendRunning = !!backendProc;
     setOutputDirChangeProgressState({
       active: true,
@@ -1932,337 +1932,51 @@ function getFfmpegPath() {
   }
 }
 
-function getPackagedWcdbDllPath() {
-  if (process.platform === "darwin") {
-    const arch = process.arch === "arm64" ? "arm64" : "x64";
-    return path.join(process.resourcesPath, "backend", "native", "macos", arch, "libwcdb_api.dylib");
-  }
-  return path.join(process.resourcesPath, "backend", "native", "wcdb_api.dll");
-}
-
-function getDevWcdbDllPath() {
-  if (process.platform === "darwin") {
-    const arch = process.arch === "arm64" ? "arm64" : "x64";
-    return path.join(repoRoot(), "src", "wechat_decrypt_tool", "native", "macos", arch, "libwcdb_api.dylib");
-  }
-  return path.join(repoRoot(), "src", "wechat_decrypt_tool", "native", "wcdb_api.dll");
-}
-
-function getWcdbDllPath() {
-  return app.isPackaged ? getPackagedWcdbDllPath() : getDevWcdbDllPath();
-}
-
-function getWcdbDllDir() {
-  return path.dirname(getWcdbDllPath());
-}
-
-function getWcdbSidecarScriptPath() {
+function getNativeCoreRuntimeDir() {
   return app.isPackaged
-    ? path.join(process.resourcesPath, "wcdb-sidecar.cjs")
-    : path.join(__dirname, "wcdb-sidecar.cjs");
+    ? path.join(process.resourcesPath, "backend", "native")
+    : path.join(repoRoot(), "src", "wechat_decrypt_tool", "native");
 }
 
-function getKoffiDir() {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, "app.asar.unpacked", "node_modules", "koffi")
-    : path.join(repoRoot(), "desktop", "node_modules", "koffi");
-}
-
-function getWcdbSidecarStdioLogPath(dataDir) {
-  return path.join(dataDir, "wcdb-sidecar-stdio.log");
-}
-
-function getWcdbSidecarPort() {
-  if (parsePort(wcdbSidecarPort) != null) return wcdbSidecarPort;
-  const envPort = parsePort(process.env.WECHAT_TOOL_WCDB_SIDECAR_PORT);
-  wcdbSidecarPort = envPort ?? Math.min(65535, getBackendPort() + 101);
-  return wcdbSidecarPort;
-}
-
-async function prepareWcdbSidecarPort() {
-  if (parsePort(wcdbSidecarPort) != null) return wcdbSidecarPort;
-  const envPort = parsePort(process.env.WECHAT_TOOL_WCDB_SIDECAR_PORT);
-  if (envPort != null) {
-    wcdbSidecarPort = envPort;
-    return wcdbSidecarPort;
-  }
-  const preferred = Math.min(65535, getBackendPort() + 101);
-  wcdbSidecarPort = await chooseAvailablePort(preferred, "127.0.0.1");
-  if (wcdbSidecarPort == null) wcdbSidecarPort = preferred;
-  return wcdbSidecarPort;
-}
-
-function getWcdbResourcePaths() {
-  const out = [];
-  const seen = new Set();
-
-  const add = (value) => {
-    const raw = String(value || "").trim();
-    if (!raw) return;
-    const resolved = path.resolve(raw);
-    const key = resolved.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(resolved);
-  };
-
-  const dllDir = getWcdbDllDir();
-  add(dllDir);
-  add(path.dirname(dllDir));
-  add(repoRoot());
-  add(path.join(repoRoot(), "resources"));
-  const dataDir = resolveDataDir();
-  if (dataDir) {
-    add(dataDir);
-    add(path.join(dataDir, "resources"));
-  }
-  return out;
-}
-
-function ensureWcdbSidecarEnv(env) {
-  if (!wcdbSidecarUrl || !wcdbSidecarToken) return env;
-  env.WECHAT_TOOL_WCDB_SIDECAR_URL = wcdbSidecarUrl;
-  env.WECHAT_TOOL_WCDB_SIDECAR_TOKEN = wcdbSidecarToken;
-  return env;
-}
-
-function stopWcdbSidecarHealthMonitor() {
-  wcdbSidecarHealthGeneration += 1;
-  if (wcdbSidecarHealthTimer) clearInterval(wcdbSidecarHealthTimer);
-  wcdbSidecarHealthTimer = null;
-  wcdbSidecarHealthInFlight = false;
-  wcdbSidecarHealthFailures = 0;
-}
-
-async function probeWcdbSidecarHealth(proc) {
-  if (!proc || proc.exitCode != null || !wcdbSidecarUrl) return false;
-  try {
-    const response = await httpGet(`${wcdbSidecarUrl}/health`);
-    return isWcdbSidecarHealthResponse(response);
-  } catch {
-    return false;
-  }
-}
-
-function startWcdbSidecarHealthMonitor(proc) {
-  stopWcdbSidecarHealthMonitor();
-  if (!proc) return;
-
-  const generation = wcdbSidecarHealthGeneration;
-  const startedAt = Date.now();
-  wcdbSidecarHealthTimer = setInterval(() => {
-    if (generation !== wcdbSidecarHealthGeneration || wcdbSidecarHealthInFlight) return;
-    if (wcdbSidecarProc !== proc || proc.exitCode != null) {
-      stopWcdbSidecarHealthMonitor();
-      return;
-    }
-
-    wcdbSidecarHealthInFlight = true;
-    void probeWcdbSidecarHealth(proc)
-      .then((healthy) => {
-        if (generation !== wcdbSidecarHealthGeneration) return;
-        if (
-          outputDirChangeInProgress ||
-          backendPortChangeInProgress ||
-          accountDataChangeInProgress
-        ) {
-          wcdbSidecarHealthFailures = 0;
-          return;
-        }
-        if (healthy) {
-          wcdbSidecarHealthFailures = 0;
-          return;
-        }
-        if (Date.now() - startedAt < 4_000) return;
-
-        wcdbSidecarHealthFailures += 1;
-        logMain(`[wcdb-sidecar] health probe failed count=${wcdbSidecarHealthFailures}`);
-        // Most sidecar calls allow up to 30 seconds. Recycle only after that
-        // request window has elapsed, so a slow valid query is not interrupted.
-        if (wcdbSidecarHealthFailures < WCDB_SIDECAR_HEALTH_FAILURE_LIMIT) return;
-
-        logMain("[wcdb-sidecar] unresponsive; terminating runtime for clean restart");
-        stopWcdbSidecarHealthMonitor();
-        try {
-          proc.kill();
-        } catch (err) {
-          logMain(`[wcdb-sidecar] watchdog kill failed: ${err?.message || err}`);
-        }
-      })
-      .finally(() => {
-        if (generation === wcdbSidecarHealthGeneration) wcdbSidecarHealthInFlight = false;
-      });
-  }, 2_000);
-  wcdbSidecarHealthTimer.unref?.();
-}
-
-function cancelWcdbRuntimeRestart() {
-  if (!wcdbSidecarRestartTimer) return;
-  clearTimeout(wcdbSidecarRestartTimer);
-  wcdbSidecarRestartTimer = null;
-}
-
-async function waitForWcdbRuntimeRestartToSettle({ timeoutMs } = {}) {
-  cancelWcdbRuntimeRestart();
-  const effectiveTimeoutMs =
-    Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? timeoutMs
-      : getBackendStartupTimeoutMs() + 15_000;
-  const startedAt = Date.now();
-  while (
-    wcdbSidecarRestartInProgress ||
-    (!!wcdbSidecarProc && wcdbSidecarProc.exitCode == null && wcdbSidecarProc.killed)
-  ) {
-    if (Date.now() - startedAt > effectiveTimeoutMs) {
-      throw new Error("WCDB 运行时仍在重启，暂时无法安全执行后端维护");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-}
-
-function scheduleWcdbRuntimeRestart(code, signal) {
-  if (
-    isQuitting ||
-    outputDirChangeInProgress ||
-    backendPortChangeInProgress ||
-    accountDataChangeInProgress ||
-    !backendProc ||
-    wcdbSidecarRestartTimer ||
-    wcdbSidecarRestartInProgress
-  )
-    return;
-
-  const now = Date.now();
-  wcdbSidecarRestartHistory = wcdbSidecarRestartHistory.filter((timestamp) => now - timestamp < 60_000);
-  if (wcdbSidecarRestartHistory.length >= 3) {
-    logMain("[wcdb-sidecar] restart suppressed after 3 failures in 60s");
-    return;
-  }
-  wcdbSidecarRestartHistory.push(now);
-  const delayMs = Math.min(4_000, 500 * 2 ** (wcdbSidecarRestartHistory.length - 1));
-  logMain(`[wcdb-sidecar] scheduling runtime restart in ${delayMs}ms code=${code} signal=${signal}`);
-
-  wcdbSidecarRestartTimer = setTimeout(() => {
-    wcdbSidecarRestartTimer = null;
-    if (
-      isQuitting ||
-      outputDirChangeInProgress ||
-      backendPortChangeInProgress ||
-      accountDataChangeInProgress ||
-      !backendProc ||
-      wcdbSidecarRestartInProgress
-    )
-      return;
-    wcdbSidecarRestartInProgress = true;
-
-    void (async () => {
-      try {
-        // A restarted sidecar has no knowledge of the backend's cached native handles.
-        // Restart both processes so the next request opens a fresh WCDB account.
-        const stopped = await stopBackendAndWait({ timeoutMs: 10_000 });
-        if (!stopped) {
-          throw new Error("后端进程未能停止，无法安全恢复 WCDB 运行时");
-        }
-        if (isQuitting) return;
-        startBackend();
-        await waitForBackend({ timeoutMs: getBackendStartupTimeoutMs() });
-        logMain("[wcdb-sidecar] runtime restart completed");
-      } catch (err) {
-        logMain(`[wcdb-sidecar] runtime restart failed: ${err?.stack || String(err)}`);
-      } finally {
-        wcdbSidecarRestartInProgress = false;
-      }
-    })();
-  }, delayMs);
-}
-
-function startWcdbSidecar() {
-  if (process.env.WECHAT_TOOL_WCDB_SIDECAR === "0") return null;
-  if (wcdbSidecarProc && wcdbSidecarProc.exitCode == null) return wcdbSidecarProc;
-  if (!["win32", "darwin"].includes(process.platform)) return null;
-
-  const dllPath = getWcdbDllPath();
-  const sidecarScript = getWcdbSidecarScriptPath();
-  const koffiDir = getKoffiDir();
-  if (!fs.existsSync(dllPath)) {
-    logMain(`[wcdb-sidecar] skip: missing native library ${dllPath}`);
-    return null;
-  }
-  if (!fs.existsSync(sidecarScript)) {
-    logMain(`[wcdb-sidecar] skip: missing sidecar script ${sidecarScript}`);
-    return null;
-  }
-  if (!fs.existsSync(koffiDir)) {
-    logMain(`[wcdb-sidecar] skip: missing koffi runtime ${koffiDir}`);
-    return null;
-  }
-
-  const port = getWcdbSidecarPort();
-  const host = "127.0.0.1";
-  wcdbSidecarUrl = `http://${host}:${port}`;
-  wcdbSidecarToken = wcdbSidecarToken || crypto.randomBytes(24).toString("hex");
-
-  const env = {
-    ...process.env,
-    ELECTRON_RUN_AS_NODE: "1",
-    WECHAT_TOOL_WCDB_SIDECAR_HOST: host,
-    WECHAT_TOOL_WCDB_SIDECAR_PORT: String(port),
-    WECHAT_TOOL_WCDB_SIDECAR_TOKEN: wcdbSidecarToken,
-    WECHAT_TOOL_WCDB_API_DLL_PATH: dllPath,
-    WECHAT_TOOL_WCDB_DLL_DIR: getWcdbDllDir(),
-    WECHAT_TOOL_WCDB_RESOURCE_PATHS: JSON.stringify(getWcdbResourcePaths()),
-    WECHAT_TOOL_KOFFI_DIR: koffiDir,
-  };
-
-  logMain(`[wcdb-sidecar] starting url=${wcdbSidecarUrl} dll=${dllPath}`);
-  wcdbSidecarProc = spawn(process.execPath, [sidecarScript], {
-    cwd: path.dirname(sidecarScript),
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
+function configureNativeCoreRuntime(env) {
+  const policy = applyNativeCoreRuntimePolicy(env, {
+    isPackaged: app.isPackaged,
+    nativeDir: getNativeCoreRuntimeDir(),
+    platform: process.platform,
   });
-
-  const dataDir = resolveDataDir() || getUserDataDir() || repoRoot();
-  attachBackendStdio(wcdbSidecarProc, getWcdbSidecarStdioLogPath(dataDir));
-
-  const proc = wcdbSidecarProc;
-  proc.on("exit", (code, signal) => {
-    const unexpected = wcdbSidecarProc === proc;
-    if (unexpected) {
-      wcdbSidecarProc = null;
-      stopWcdbSidecarHealthMonitor();
-    }
-    logMain(`[wcdb-sidecar] exited code=${code} signal=${signal}`);
-    if (unexpected) scheduleWcdbRuntimeRestart(code, signal);
-  });
-  startWcdbSidecarHealthMonitor(proc);
-
-  process.env.WECHAT_TOOL_WCDB_SIDECAR_URL = wcdbSidecarUrl;
-  process.env.WECHAT_TOOL_WCDB_SIDECAR_TOKEN = wcdbSidecarToken;
-  return wcdbSidecarProc;
+  logMain(
+    `[native-core] mode=${policy.mode} source=${policy.reason} artifacts=${policy.artifactState} packaged=${app.isPackaged}`
+  );
+  return policy;
 }
 
-function stopWcdbSidecar() {
-  cancelWcdbRuntimeRestart();
-  stopWcdbSidecarHealthMonitor();
-  if (!wcdbSidecarProc) return;
-  const pid = wcdbSidecarProc.pid;
-  logMain(`[wcdb-sidecar] stop pid=${pid || "?"}`);
-  try {
-    wcdbSidecarProc.kill();
-  } catch {}
-  wcdbSidecarProc = null;
+function clearLegacyWcdbEnvironment(targetEnv = process.env) {
+  const names = [
+    "WECHAT_TOOL_WCDB_SIDECAR",
+    "WECHAT_TOOL_WCDB_SIDECAR_URL",
+    "WECHAT_TOOL_WCDB_SIDECAR_TOKEN",
+    "WECHAT_TOOL_WCDB_SIDECAR_HOST",
+    "WECHAT_TOOL_WCDB_SIDECAR_PORT",
+    "WECHAT_TOOL_WCDB_API_DLL_PATH",
+    "WECHAT_TOOL_WCDB_DLL_DIR",
+    "WECHAT_TOOL_WCDB_RESOURCE_PATHS",
+    "WECHAT_TOOL_KOFFI_DIR",
+  ];
+  for (const name of names) {
+    delete process.env[name];
+    if (targetEnv && targetEnv !== process.env) delete targetEnv[name];
+  }
 }
 
 function startBackend() {
   if (backendProc && backendProc.exitCode == null) return backendProc;
   backendProc = null;
-  startWcdbSidecar();
 
   const resolvedDataPath = resolveDataDir() || getUserDataDir() || repoRoot();
   const resolvedOutputPath = resolveOutputDir() || getDefaultOutputDir() || path.join(resolvedDataPath, "output");
   const env = {
     ...process.env,
+    WECHAT_TOOL_DESKTOP_PARENT_PID: String(process.pid),
     WECHAT_TOOL_HOST: getBackendBindHost(),
     WECHAT_TOOL_PORT: String(getBackendPort()),
     WECHAT_TOOL_DATA_DIR: resolvedDataPath,
@@ -2270,7 +1984,8 @@ function startBackend() {
     // Make sure Python prints UTF-8 to stdout/stderr.
     PYTHONIOENCODING: process.env.PYTHONIOENCODING || "utf-8",
   };
-  ensureWcdbSidecarEnv(env);
+  configureNativeCoreRuntime(env);
+  clearLegacyWcdbEnvironment(env);
   logMain(
     `[main] startBackend packaged=${app.isPackaged} port=${env.WECHAT_TOOL_PORT} dataDir=${env.WECHAT_TOOL_DATA_DIR} outputDir=${env.WECHAT_TOOL_OUTPUT_DIR}`
   );
@@ -2296,14 +2011,6 @@ function startBackend() {
     if (!fs.existsSync(backendExe)) {
       throw new Error(`Packaged backend not found: ${backendExe}. Run the platform backend build before packaging.`);
     }
-    const packagedWcdbDll = getPackagedWcdbDllPath();
-    if (fs.existsSync(packagedWcdbDll)) {
-      env.WECHAT_TOOL_WCDB_API_DLL_PATH = packagedWcdbDll;
-      logMain(`[main] using packaged WCDB native library: ${packagedWcdbDll}`);
-    } else {
-      logMain(`[main] packaged WCDB native library not found: ${packagedWcdbDll}`);
-    }
-
     const backendCwd = path.dirname(backendExe);
     backendProc = spawn(backendExe, [], {
       cwd: backendCwd,
@@ -2446,7 +2153,7 @@ function httpGet(url) {
   });
 }
 
-async function waitForBackend({ timeoutMs, healthUrl, allowBackendReplacement = false } = {}) {
+async function waitForBackend({ timeoutMs, healthUrl } = {}) {
   const url = String(healthUrl || getBackendHealthUrl()).trim();
   const effectiveTimeoutMs =
     Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : getBackendStartupTimeoutMs();
@@ -2459,22 +2166,6 @@ async function waitForBackend({ timeoutMs, healthUrl, allowBackendReplacement = 
   while (true) {
     // If the backend process died, fail fast (otherwise we'd wait for the full timeout).
     if (!backendProc) {
-      // A WCDB sidecar crash intentionally replaces the backend. Do not let the
-      // short hand-off window abort another startup waiter in the main flow.
-      if (
-        shouldWaitForBackendReplacement({
-          allowBackendReplacement,
-          sidecarRestartInProgress: wcdbSidecarRestartInProgress,
-        })
-      ) {
-        if (Date.now() - startedAt > effectiveTimeoutMs) {
-          throw new Error(
-            `Backend replacement did not start in ${effectiveTimeoutMs}ms: ${url}`
-          );
-        }
-        await new Promise((r) => setTimeout(r, 300));
-        continue;
-      }
       throw new Error(`Backend process exited before becoming ready: ${url}`);
     }
     if (backendProc.exitCode != null) {
@@ -2849,7 +2540,6 @@ function registerWindowIpc() {
 
     backendPortChangeInProgress = true;
     try {
-      await waitForWcdbRuntimeRestartToSettle();
       const bindHost = getBackendBindHost();
       const ok = await isPortAvailable(nextPort, bindHost);
       if (!ok) throw new Error(`端口 ${nextPort} 已被占用，请换一个端口`);
@@ -2930,7 +2620,6 @@ function registerWindowIpc() {
 
     backendPortChangeInProgress = true;
     try {
-      await waitForWcdbRuntimeRestartToSettle();
       setMcpLanAccessSetting(nextEnabled);
       try {
         await restartBackend();
@@ -3077,7 +2766,6 @@ function registerWindowIpc() {
     }
     accountDataChangeInProgress = true;
     try {
-      await waitForWcdbRuntimeRestartToSettle();
       return await deleteAccountDataFromDisk(account);
     } catch (e) {
       throw new Error(e?.message || String(e));
@@ -3164,7 +2852,7 @@ async function ensureBackendReadyWithFallback() {
   startBackend();
   const startupTimeoutMs = getBackendStartupTimeoutMs();
   try {
-    await waitForBackend({ timeoutMs: startupTimeoutMs, allowBackendReplacement: true });
+    await waitForBackend({ timeoutMs: startupTimeoutMs });
   } catch (err) {
     // In some environments a specific port may be blocked/reserved (WSAEACCES) or taken.
     // Only change ports when the failed port cannot be bound. A PyInstaller onefile
@@ -3262,8 +2950,6 @@ async function main() {
   await applyPendingOutputDirOnStartup();
   ensureOutputLink();
   await ensureBackendPortAvailableOnStartup();
-  await prepareWcdbSidecarPort();
-
   logMain(`[main] app.isPackaged=${app.isPackaged} argv=${JSON.stringify(process.argv)}`);
 
   await ensureMainWindowReady();
@@ -3293,7 +2979,6 @@ app.on("before-quit", () => {
   isQuitting = true;
   destroyTray();
   stopBackend();
-  stopWcdbSidecar();
 });
 
 if (gotSingleInstanceLock) {
@@ -3303,7 +2988,6 @@ if (gotSingleInstanceLock) {
     console.error(err);
     logMain(`[main] fatal: ${err?.stack || String(err)}`);
     stopBackend();
-    stopWcdbSidecar();
     try {
       const dir = getUserDataDir();
       const outputDir = resolveOutputDir({ ensureExists: false });

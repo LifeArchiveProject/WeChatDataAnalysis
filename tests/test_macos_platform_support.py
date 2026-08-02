@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import platform
 import sys
@@ -21,21 +22,41 @@ class TestMacosPlatformSupport(unittest.TestCase):
     def test_bundled_macos_resources_are_self_contained(self) -> None:
         helper = platform_support.mac_image_scan_helper_path()
         image_library = platform_support.mac_image_scan_library_path()
-        wcdb_api = platform_support.mac_wcdb_api_path("arm64")
 
         self.assertTrue(helper.is_file())
         self.assertTrue(image_library.is_file())
-        self.assertTrue(wcdb_api.is_file())
         self.assertEqual(helper.parent, image_library.parent)
         self.assertIn("wechat_decrypt_tool/native/macos", helper.as_posix())
         self.assertNotIn("WeFlow", helper.as_posix())
 
     def test_apple_silicon_capabilities_only_disable_db_key_extraction(self) -> None:
-        with (
-            patch.object(platform_support, "current_platform", return_value="macos"),
-            patch.object(platform, "machine", return_value="arm64"),
-        ):
-            capabilities = platform_support.runtime_capabilities()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            native_root = Path(temp_dir)
+            client = native_root / "libwechatdb_client.dylib"
+            broker = native_root / "wechatdb_broker"
+            manifest = native_root / "wechatdb_native_build.json"
+            client.write_bytes(b"client")
+            broker.write_bytes(b"broker")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 2,
+                        "buildId": "dev-local",
+                        "developmentBuild": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(platform_support, "current_platform", return_value="macos"),
+                patch.object(platform, "machine", return_value="arm64"),
+                patch.object(
+                    platform_support,
+                    "mac_native_core_paths",
+                    return_value=(client, broker, manifest),
+                ),
+            ):
+                capabilities = platform_support.runtime_capabilities()
 
         self.assertFalse(capabilities["database_key_extraction"])
         self.assertTrue(capabilities["database_key_manual_input"])
@@ -43,6 +64,28 @@ class TestMacosPlatformSupport(unittest.TestCase):
         self.assertTrue(capabilities["image_key_memory_scan"])
         self.assertTrue(capabilities["realtime_wcdb"])
         self.assertTrue(capabilities["account_archive_cross_platform"])
+
+    def test_macos_realtime_capability_rejects_an_incomplete_native_core(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            native_root = Path(temp_dir)
+            client = native_root / "libwechatdb_client.dylib"
+            broker = native_root / "wechatdb_broker"
+            manifest = native_root / "wechatdb_native_build.json"
+            client.write_bytes(b"client")
+            manifest.write_text("{}", encoding="utf-8")
+            with (
+                patch.object(platform_support, "current_platform", return_value="macos"),
+                patch.object(platform, "machine", return_value="arm64"),
+                patch.object(
+                    platform_support,
+                    "mac_native_core_paths",
+                    return_value=(client, broker, manifest),
+                ),
+            ):
+                capabilities = platform_support.runtime_capabilities()
+
+        self.assertFalse(capabilities["realtime_wcdb"])
+        self.assertIn("原生资源缺失", capabilities["realtime_wcdb_note"])
 
     def test_database_key_endpoint_returns_manual_input_guidance_on_macos(self) -> None:
         with patch.object(keys_router, "is_macos", return_value=True):

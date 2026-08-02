@@ -245,6 +245,10 @@ async def _startup_native_core() -> None:
 @app.on_event("startup")
 async def _startup_background_jobs() -> None:
     try:
+        WCDB_REALTIME.start_background_prime()
+    except Exception:
+        logger.exception("Failed to start native-core account preparation")
+    try:
         CHAT_REALTIME_AUTOSYNC.start()
     except Exception:
         logger.exception("Failed to start realtime autosync service")
@@ -254,6 +258,10 @@ async def _startup_background_jobs() -> None:
 async def _shutdown_wcdb_realtime() -> None:
     try:
         CHAT_REALTIME_AUTOSYNC.stop()
+    except Exception:
+        pass
+    try:
+        WCDB_REALTIME.stop_background_prime()
     except Exception:
         pass
     
@@ -290,8 +298,10 @@ async def _shutdown_wcdb_realtime() -> None:
 if __name__ == "__main__":
     import uvicorn
 
+    from .native_core_client import configure_native_core_entrypoint
     from .runtime_settings import read_effective_backend_port
 
+    configure_native_core_entrypoint()
     host = os.environ.get("WECHAT_TOOL_HOST", "127.0.0.1")
     port, _ = read_effective_backend_port(default=10392)
     uvicorn.run(app, host=host, port=port)
