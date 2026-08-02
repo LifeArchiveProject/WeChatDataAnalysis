@@ -64,11 +64,17 @@ const normalizeLazySrc = (value) => {
   return String(value || '').trim()
 }
 
+const normalizeLazyBinding = (value) => ({
+  src: normalizeLazySrc(value),
+  eager: !!(value && typeof value === 'object' && value.eager)
+})
+
 const ensureLazySrcState = (element) => {
   if (!element.__chatLazySrcState) {
     element.__chatLazySrcState = {
       src: '',
       loadedSrc: '',
+      eager: false,
       observer: null,
       timer: null,
       requestedAt: 0,
@@ -121,10 +127,11 @@ const applyLazySrc = (element, reason = '') => {
 
 const updateLazySrc = (element, binding, reason = '') => {
   const state = ensureLazySrcState(element)
-  const nextSrc = normalizeLazySrc(binding?.value)
+  const { src: nextSrc, eager } = normalizeLazyBinding(binding?.value)
 
   cleanupLazySrcObserver(element)
   state.src = nextSrc
+  state.eager = eager
   state.requestedAt = nowPerfMs()
   state.observerStartedAt = 0
   state.appliedAt = 0
@@ -136,10 +143,17 @@ const updateLazySrc = (element, binding, reason = '') => {
     return
   }
 
+  if (state.loadedSrc === nextSrc && readImageSrc(element) === nextSrc) return
+
   if (state.loadedSrc !== nextSrc || readImageSrc(element) !== nextSrc) {
     state.loadedSrc = ''
     try { element.removeAttribute('src') } catch {}
     try { element.setAttribute('data-chat-lazy-src', nextSrc) } catch {}
+  }
+
+  if (eager) {
+    applyLazySrc(element, `${reason}:eager`)
+    return
   }
 
   if (typeof window === 'undefined' || typeof window.IntersectionObserver !== 'function') {
@@ -278,8 +292,12 @@ export default defineNuxtPlugin((nuxtApp) => {
     },
     updated(element, binding) {
       const state = ensureLazySrcState(element)
-      const nextSrc = normalizeLazySrc(binding?.value)
-      if (nextSrc === state.src && (state.loadedSrc === nextSrc || !readImageSrc(element))) {
+      const { src: nextSrc, eager } = normalizeLazyBinding(binding?.value)
+      if (
+        nextSrc === state.src
+        && eager === state.eager
+        && (state.loadedSrc === nextSrc || !readImageSrc(element))
+      ) {
         return
       }
       updateLazySrc(element, binding, 'updated')

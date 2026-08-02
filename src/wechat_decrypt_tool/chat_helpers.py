@@ -4,6 +4,8 @@ import html
 import os
 import re
 import sqlite3
+import uuid
+import xml.etree.ElementTree as ET
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -766,6 +768,63 @@ def _extract_xml_tag_or_attr(xml_text: str, name: str) -> str:
     if v:
         return v
     return _extract_xml_attr(xml_text, name)
+
+
+_IMAGE_GROUP_INFO_BLOCK_RE = re.compile(
+    r"<groupinfo\b[^>]*>.*?</groupinfo\s*>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_STANDARD_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    flags=re.IGNORECASE,
+)
+
+
+def _extract_image_group_info(xml_text: str) -> dict[str, Any]:
+    """Return validated image group metadata from the groupinfo element only."""
+    if not xml_text:
+        return {}
+
+    block_match = _IMAGE_GROUP_INFO_BLOCK_RE.search(str(xml_text))
+    if not block_match:
+        return {}
+
+    try:
+        group_node = ET.fromstring(block_match.group(0))
+    except (ET.ParseError, TypeError, ValueError):
+        return {}
+
+    values: dict[str, str] = {}
+    for child in list(group_node):
+        tag = child.tag
+        if not isinstance(tag, str):
+            continue
+        local_name = tag.rsplit("}", 1)[-1].lower()
+        if local_name not in {"type", "id", "count"} or local_name in values:
+            continue
+        values[local_name] = "".join(child.itertext()).strip()
+
+    group_type = values.get("type", "").strip()
+    group_id = values.get("id", "").strip()
+    count_text = values.get("count", "").strip()
+    if not group_type or not group_id or not count_text:
+        return {}
+    if not _STANDARD_UUID_RE.fullmatch(group_id):
+        return {}
+
+    try:
+        normalized_id = str(uuid.UUID(group_id))
+        group_count = int(count_text, 10)
+    except (ValueError, TypeError, AttributeError):
+        return {}
+    if group_count < 2:
+        return {}
+
+    return {
+        "type": group_type,
+        "id": normalized_id,
+        "count": group_count,
+    }
 
 
 def _parse_location_message(text: str) -> dict[str, Any]:

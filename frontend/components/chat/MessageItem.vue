@@ -102,8 +102,7 @@ export default defineComponent({
   },
   setup(props) {
     return {
-      ...props.state,
-      message: props.message
+      ...props.state
     }
   }
 })

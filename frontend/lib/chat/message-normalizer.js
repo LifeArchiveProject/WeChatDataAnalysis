@@ -1,4 +1,5 @@
 import { formatMessageFullTime, formatMessageTime } from '~/lib/chat/formatters'
+import { normalizeImageGroupMetadata } from '~/lib/chat/image-groups'
 
 const normalizeMaybeUrl = (value) => (typeof value === 'string' ? value.trim() : '')
 
@@ -301,6 +302,7 @@ export const createMessageNormalizer = ({
       recordItem: msg.recordItem || '',
       imageMd5: msg.imageMd5 || '',
       imageFileId: msg.imageFileId || '',
+      ...normalizeImageGroupMetadata(msg),
       emojiMd5: msg.emojiMd5 || '',
       emojiUrl: normalizedEmojiUrl || '',
       emojiLocalUrl: localEmojiUrl || '',
