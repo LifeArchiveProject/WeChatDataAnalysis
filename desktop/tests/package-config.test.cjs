@@ -279,28 +279,25 @@ test("macOS native resources expose reproducible build and architecture verifica
   assert.match(buildScript, /"x86_64"/);
   assert.match(verifyScript, /only arm64 is complete/);
   assert.match(verifyScript, /maximumNativeMinOS/);
-  assert.match(verifyScript, /@loader_path\/\.\.\/universal\/libWCDB\.dylib/);
   assert.match(verifyScript, /ffmpeg-static/);
-  assert.match(verifyScript, /darwin_arm64/);
-  assert.match(verifyScript, /run\("nm", \["-gU", filePath\]\)/);
-  for (const symbol of [
-    "InitProtection",
-    "wcdb_init",
-    "wcdb_open_account",
-    "wcdb_close_account",
-    "wcdb_set_my_wxid",
-    "wcdb_get_sessions",
-    "wcdb_get_messages",
-    "wcdb_open_message_cursor",
-    "wcdb_fetch_message_batch",
-    "wcdb_get_contacts_compact",
-    "wcdb_get_sns_timeline",
-    "wcdb_list_media_dbs",
-    "wcdb_scan_media_stream",
-    "wcdb_exec_query",
-    "wcdb_free_string",
+  assert.match(verifyScript, /resolveNativeCoreArtifacts\(\{[\s\S]*platform:\s*"darwin"/);
+  for (const resource of [
+    "libwechatdb_client.dylib",
+    "wechatdb_broker",
+    "wechatdb_native_build.json",
+    "libwx_key.dylib",
+    "image_scan_helper",
   ]) {
-    assert.match(verifyScript, new RegExp(`"${symbol}"`));
+    assert.match(verifyScript, new RegExp(resource.replace(".", "\\.")));
+  }
+  for (const retiredResource of [
+    "libwcdb_api.dylib",
+    "libWCDB.dylib",
+    "koffi",
+    "InitProtection",
+    "wcdb_open_account",
+  ]) {
+    assert.doesNotMatch(verifyScript, new RegExp(retiredResource.replace(".", "\\.")));
   }
 });
 

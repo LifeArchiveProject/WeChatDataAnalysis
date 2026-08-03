@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { resolveNativeCoreArtifacts } = require("./build-backend.cjs");
 
 const SUPPORTED_ARCHITECTURE = "arm64";
 const MAXIMUM_NATIVE_MIN_OS = "15.0";
@@ -16,26 +17,6 @@ const architectureIndex = process.argv.indexOf("--arch");
 const targetArchitecture = architectureIndex >= 0
   ? String(process.argv[architectureIndex + 1] || "").trim()
   : SUPPORTED_ARCHITECTURE;
-const REQUIRED_WCDB_API_EXPORTS = [
-  "InitProtection",
-  "wcdb_init",
-  "wcdb_shutdown",
-  "wcdb_open_account",
-  "wcdb_close_account",
-  "wcdb_set_my_wxid",
-  "wcdb_get_sessions",
-  "wcdb_get_messages",
-  "wcdb_open_message_cursor",
-  "wcdb_fetch_message_batch",
-  "wcdb_close_message_cursor",
-  "wcdb_get_contacts_compact",
-  "wcdb_get_sns_timeline",
-  "wcdb_list_media_dbs",
-  "wcdb_scan_media_stream",
-  "wcdb_exec_query",
-  "wcdb_get_logs",
-  "wcdb_free_string",
-];
 
 function fail(message) {
   throw new Error(message);
@@ -139,21 +120,6 @@ function verifyBinary(filePath, { requiredArchitectures, executable = false } = 
   return { path: path.relative(repoRoot, filePath), architectures: fileArchitectures, minOs: minOsValues };
 }
 
-function verifyRequiredExports(filePath, requiredExports) {
-  const symbols = new Set(
-    run("nm", ["-gU", filePath])
-      .split(/\r?\n/)
-      .map((line) => line.trim().split(/\s+/).at(-1) || "")
-      .filter((name) => name.startsWith("_"))
-      .map((name) => name.slice(1))
-  );
-  const missing = requiredExports.filter((name) => !symbols.has(name));
-  if (missing.length > 0) {
-    fail(`${filePath} is missing required WCDB exports: ${missing.join(", ")}`);
-  }
-  return [...requiredExports];
-}
-
 function main() {
   if (process.platform !== "darwin") fail("macOS native resource verification must run on macOS");
   if (targetArchitecture !== SUPPORTED_ARCHITECTURE) {
@@ -165,45 +131,30 @@ function main() {
     );
   }
 
-  const wcdbApi = path.join(nativeRoot, targetArchitecture, "libwcdb_api.dylib");
-  const wcdb = path.join(nativeRoot, "universal", "libWCDB.dylib");
+  const nativeCore = resolveNativeCoreArtifacts({ env: process.env, platform: "darwin" });
+  const nativeClient = path.join(nativeCore.artifactDir, "libwechatdb_client.dylib");
+  const nativeBroker = path.join(nativeCore.artifactDir, "wechatdb_broker");
+  const nativeManifest = path.join(nativeCore.artifactDir, "wechatdb_native_build.json");
   const imageLibrary = path.join(nativeRoot, "universal", "libwx_key.dylib");
   const imageHelper = path.join(nativeRoot, "universal", "image_scan_helper");
   verifyHelperManifest(imageHelper);
   const ffmpegRoot = path.join(desktopRoot, "node_modules", "ffmpeg-static");
   const ffmpeg = path.join(ffmpegRoot, "ffmpeg");
-  const koffiNative = path.join(
-    desktopRoot,
-    "node_modules",
-    "koffi",
-    "build",
-    "koffi",
-    "darwin_arm64",
-    "koffi.node"
-  );
-  const wcdbApiSummary = verifyBinary(wcdbApi, { requiredArchitectures: [targetArchitecture] });
-  const wcdbApiExports = verifyRequiredExports(wcdbApi, REQUIRED_WCDB_API_EXPORTS);
+  requireRegularFile(nativeManifest);
   const summaries = [
-    { ...wcdbApiSummary, requiredExports: wcdbApiExports },
-    verifyBinary(wcdb, { requiredArchitectures: ["arm64", "x86_64"] }),
+    verifyBinary(nativeClient, { requiredArchitectures: [targetArchitecture] }),
+    // GitHub artifact extraction does not preserve executable bits. The
+    // backend staging step restores the broker mode before PyInstaller runs.
+    verifyBinary(nativeBroker, { requiredArchitectures: [targetArchitecture] }),
+    {
+      path: path.relative(repoRoot, nativeManifest),
+      kind: "native-core-manifest",
+      buildId: nativeCore.manifest.buildId,
+    },
     verifyBinary(imageLibrary, { requiredArchitectures: ["arm64", "x86_64"] }),
     verifyBinary(imageHelper, { requiredArchitectures: ["arm64", "x86_64"], executable: true }),
     verifyBinary(ffmpeg, { requiredArchitectures: [targetArchitecture], executable: true }),
-    verifyBinary(koffiNative, { requiredArchitectures: [targetArchitecture] }),
   ];
-
-  const apiId = run("otool", ["-D", wcdbApi]);
-  if (!apiId.includes("@loader_path/libwcdb_api.dylib")) {
-    fail(`Unexpected libwcdb_api install ID:\n${apiId}`);
-  }
-  const apiDependencies = run("otool", ["-L", wcdbApi]);
-  if (!apiDependencies.includes("@loader_path/../universal/libWCDB.dylib")) {
-    fail(`libwcdb_api is not self-contained:\n${apiDependencies}`);
-  }
-  const dependencyEntries = apiDependencies.split(/\r?\n/).slice(1).join("\n");
-  if (dependencyEntries.includes(repoRoot) || /(?:^|\/)WeFlow(?:-|\/)/m.test(dependencyEntries)) {
-    fail(`libwcdb_api references a source checkout:\n${apiDependencies}`);
-  }
 
   for (const required of [
     path.join(nativeRoot, "WEFLOW_LICENSE.txt"),
