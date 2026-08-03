@@ -2,9 +2,11 @@
 
 const fs = require("node:fs");
 const crypto = require("node:crypto");
-const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const {
+  extractCodeSigningLeafCertificate,
+} = require("./macos-codesign-certificates.cjs");
 
 function run(command, args, { capture = false } = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", stdio: capture ? "pipe" : "inherit" });
@@ -20,22 +22,13 @@ function inspectSignedIdentity(filePath) {
   if (!identifier || /^Signature=adhoc$/m.test(details)) {
     throw new Error(`Signed file has no certificate-backed identity: ${filePath}`);
   }
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wda-after-sign-cert-"));
-  try {
-    const prefix = path.join(tempDir, "leaf");
-    run("codesign", ["-d", "--extract-certificates", prefix, filePath], { capture: true });
-    const certPath = `${prefix}0`;
-    if (!fs.existsSync(certPath)) throw new Error(`Missing leaf certificate: ${filePath}`);
-    const cert = new crypto.X509Certificate(fs.readFileSync(certPath));
-    return {
-      details,
-      identifier,
-      leafSha256: cert.fingerprint256.replaceAll(":", "").toLowerCase(),
-      leafSha1: cert.fingerprint.replaceAll(":", "").toLowerCase(),
-    };
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
+  const cert = new crypto.X509Certificate(extractCodeSigningLeafCertificate(filePath));
+  return {
+    details,
+    identifier,
+    leafSha256: cert.fingerprint256.replaceAll(":", "").toLowerCase(),
+    leafSha1: cert.fingerprint.replaceAll(":", "").toLowerCase(),
+  };
 }
 
 function verifyDesignatedRequirement(filePath, identifier, leafSha1) {

@@ -6,6 +6,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const {
+  extractCodeSigningLeafCertificate,
+} = require("./macos-codesign-certificates.cjs");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(desktopRoot, "package.json"), "utf8"));
@@ -80,22 +83,15 @@ function codeSignIdentity(filePath) {
   const details = codeSignDetails(filePath);
   const identifier = details.match(/^Identifier=(.+)$/m)?.[1]?.trim() || "";
   assert.ok(identifier, `Missing codesign Identifier: ${filePath}`);
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wda-package-cert-"));
-  try {
-    const prefix = path.join(tempDir, "leaf");
-    run("codesign", ["-d", "--extract-certificates", prefix, filePath]);
-    const certPath = `${prefix}0`;
-    requireRegularFile(certPath);
-    const certificate = new crypto.X509Certificate(fs.readFileSync(certPath));
-    return {
-      details,
-      identifier,
-      leafSha256: certificate.fingerprint256.replaceAll(":", "").toLowerCase(),
-      leafSha1: certificate.fingerprint.replaceAll(":", "").toLowerCase(),
-    };
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
+  const certificate = new crypto.X509Certificate(
+    extractCodeSigningLeafCertificate(filePath)
+  );
+  return {
+    details,
+    identifier,
+    leafSha256: certificate.fingerprint256.replaceAll(":", "").toLowerCase(),
+    leafSha1: certificate.fingerprint.replaceAll(":", "").toLowerCase(),
+  };
 }
 
 function requirePinnedDesignatedRequirement(filePath, identifier, leafSha1) {

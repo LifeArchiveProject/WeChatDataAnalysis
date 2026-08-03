@@ -13,6 +13,43 @@ const workflow = fs.readFileSync(
   "utf8"
 );
 
+test("macOS certificate extraction uses codesign's fixed filenames in an isolated cwd", () => {
+  const {
+    extractCodeSigningCertificateChain,
+  } = require("../scripts/macos-codesign-certificates.cjs");
+  let extractionCwd = "";
+  const targetPath = path.join(desktopRoot, "fixture.app");
+  const certificates = extractCodeSigningCertificateChain(targetPath, {
+    spawnSyncImpl(command, args, options) {
+      assert.equal(command, "/usr/bin/codesign");
+      assert.deepEqual(args, ["--display", "--extract-certificates", targetPath]);
+      assert.ok(path.isAbsolute(options.cwd));
+      assert.ok(fs.statSync(options.cwd).isDirectory());
+      extractionCwd = options.cwd;
+      fs.writeFileSync(path.join(options.cwd, "codesign0"), "leaf-certificate");
+      fs.writeFileSync(path.join(options.cwd, "codesign1"), "root-certificate");
+      return { status: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  assert.deepEqual(certificates, [
+    Buffer.from("leaf-certificate"),
+    Buffer.from("root-certificate"),
+  ]);
+  assert.equal(fs.existsSync(extractionCwd), false);
+
+  for (const scriptName of [
+    "macos-xkey-packaging.cjs",
+    "sign-macos.cjs",
+    "after-sign.cjs",
+    "macos-package-verifier.cjs",
+  ]) {
+    const script = fs.readFileSync(path.join(desktopRoot, "scripts", scriptName), "utf8");
+    assert.match(script, /extractCodeSigningLeafCertificate/);
+    assert.doesNotMatch(script, /--extract-certificates/);
+  }
+});
+
 test("macOS signing preserves the producer helper and pins the direct backend parent", () => {
   assert.match(source, /WCE_MACOS_KEY_HELPER_SIGNER_SHA256/);
   assert.match(source, /WCE_MACOS_WCDA_HOST_SIGNER_SHA256/);

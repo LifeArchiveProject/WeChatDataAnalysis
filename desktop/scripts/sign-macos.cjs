@@ -2,11 +2,13 @@
 
 const fs = require("node:fs");
 const crypto = require("node:crypto");
-const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { signAsync } = require("@electron/osx-sign");
 const { contract: macosXkeyContract } = require("./macos-xkey-packaging.cjs");
+const {
+  extractCodeSigningLeafCertificate,
+} = require("./macos-codesign-certificates.cjs");
 
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 
@@ -33,26 +35,13 @@ function inspectCodeSignature(filePath) {
   if ((details.status ?? 1) !== 0 || !identifier) {
     throw new Error(`Unable to read code signature identifier: ${filePath}`);
   }
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wda-macos-sign-cert-"));
-  try {
-    const prefix = path.join(tempDir, "leaf");
-    const extracted = spawnSync(
-      "/usr/bin/codesign",
-      ["-d", "--extract-certificates", prefix, filePath],
-      { stdio: "ignore" }
-    );
-    const certPath = `${prefix}0`;
-    if ((extracted.status ?? 1) !== 0 || !fs.existsSync(certPath)) {
-      throw new Error(`Unable to extract code signature leaf certificate: ${filePath}`);
-    }
-    const certificate = new crypto.X509Certificate(fs.readFileSync(certPath));
-    return {
-      identifier,
-      leafSha256: certificate.fingerprint256.replaceAll(":", "").toLowerCase(),
-    };
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
+  const certificate = new crypto.X509Certificate(
+    extractCodeSigningLeafCertificate(filePath)
+  );
+  return {
+    identifier,
+    leafSha256: certificate.fingerprint256.replaceAll(":", "").toLowerCase(),
+  };
 }
 
 function ignoreList(value) {

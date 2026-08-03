@@ -2,9 +2,11 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const {
+  extractCodeSigningLeafCertificate,
+} = require("./macos-codesign-certificates.cjs");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const contract = Object.freeze(JSON.parse(fs.readFileSync(path.join(
@@ -177,30 +179,17 @@ function defaultBinaryInspector(helperPath) {
   const detailText = `${details.stdout || ""}\n${details.stderr || ""}`;
   const identifier = /^Identifier=([^\r\n]+)$/m.exec(detailText)?.[1]?.trim();
   if ((details.status ?? 1) !== 0 || !identifier) throw new Error("helper identifier inspection failed");
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wda-xkey-cert-"));
-  try {
-    const prefix = path.join(tempDir, "leaf");
-    const extract = spawnSync(
-      "/usr/bin/codesign",
-      ["-d", "--extract-certificates", prefix, helperPath],
-      { stdio: "ignore" }
-    );
-    const certPath = `${prefix}0`;
-    if ((extract.status ?? 1) !== 0 || !fs.existsSync(certPath)) {
-      throw new Error("helper leaf certificate extraction failed");
-    }
-    const certificate = new crypto.X509Certificate(fs.readFileSync(certPath));
-    const leafSha256 = certificate.fingerprint256.replaceAll(":", "").toLowerCase();
-    const lipo = spawnSync("/usr/bin/lipo", ["-archs", helperPath], { encoding: "utf8" });
-    if ((lipo.status ?? 1) !== 0) throw new Error("helper architecture inspection failed");
-    return {
-      identifier,
-      leafSha256,
-      architectures: new Set(String(lipo.stdout || "").trim().split(/\s+/).filter(Boolean)),
-    };
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
+  const certificate = new crypto.X509Certificate(
+    extractCodeSigningLeafCertificate(helperPath)
+  );
+  const leafSha256 = certificate.fingerprint256.replaceAll(":", "").toLowerCase();
+  const lipo = spawnSync("/usr/bin/lipo", ["-archs", helperPath], { encoding: "utf8" });
+  if ((lipo.status ?? 1) !== 0) throw new Error("helper architecture inspection failed");
+  return {
+    identifier,
+    leafSha256,
+    architectures: new Set(String(lipo.stdout || "").trim().split(/\s+/).filter(Boolean)),
+  };
 }
 
 function requiredEnv(env, name, pattern) {
