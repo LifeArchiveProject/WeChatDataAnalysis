@@ -59,7 +59,7 @@
                   <svg v-else class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
-                  {{ !platformCapabilitiesLoaded ? '正在检测系统' : (isGettingDbKey ? '获取中...' : (isMacos ? '查看 Mac 获取方式' : '一键获取数据库密钥')) }}
+                  {{ !platformCapabilitiesLoaded ? '正在检测系统' : (isGettingDbKey ? '获取中...' : '一键获取数据库密钥') }}
                 </button>
               </div>
               <p v-if="formErrors.key" class="mt-1 text-sm text-red-600 flex items-center">
@@ -73,7 +73,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 {{ isMacos
-                  ? 'macOS 版不提取数据库密钥。请使用支持 Mac 的同类本地工具获取后，在上方手动填写 64 位密钥；填写后实时消息等功能仍可使用。'
+                  ? '点击后将调用安装包内的本地受控组件，并联网完成一次性安全校验；密钥只在本机进程间传递，不会上传。您也可以手动输入已有的 64 位密钥。'
                   : '点击按钮将优先使用 V4 内存扫描获取【数据库解密密钥】；失败时会询问您是否改用 Hook。您也可以手动输入已知的64位密钥。' }}
               </p>
               <p v-if="!isMacos" class="mt-2 text-xs text-[#7F7F7F] flex items-start">
@@ -1345,24 +1345,46 @@ const handleGetDbKey = async () => {
   if (isGettingDbKey.value) return
 
   if (isMacos.value) {
-    const openTool = await requestGuideDialog({
-      eyebrow: 'macOS 数据库密钥',
-      title: '请使用支持 Mac 的同类工具获取密钥',
-      description: platformCapabilities.value?.database_key_guidance || 'macOS 版不提供数据库密钥提取，请获取后回到这里手动填写。',
-      details: [
-        '仅处理您本人账号的数据，并妥善保存密钥',
-        '获取 64 位数据库密钥后粘贴到当前输入框',
-        '本应用仍会负责解密、实时消息、图片密钥和后续分析'
-      ],
-      note: '本应用不会调用或依赖外部工具；链接仅用于帮助您获取密钥。',
-      primaryLabel: '打开 WeFlow 项目页',
-      secondaryLabel: '返回手动填写',
-      tone: 'guide'
-    })
-    if (openTool && process.client && typeof window !== 'undefined') {
-      const url = 'https://github.com/hicccc77/WeFlow'
-      if (window.wechatDesktop?.openExternalUrl) await window.wechatDesktop.openExternalUrl(url)
-      else window.open(url, '_blank', 'noopener,noreferrer')
+    if (platformCapabilities.value?.database_key_extraction !== true) {
+      error.value = platformCapabilities.value?.database_key_guidance || 'macOS 数据库密钥组件不可用，请更新或重新安装正式版本。'
+      return
+    }
+
+    const requestRevision = ++dbKeyRequestRevision
+    const requestController = new AbortController()
+    dbKeyRequestController = requestController
+    isGettingDbKey.value = true
+    error.value = ''
+    warning.value = '正在验证本地组件并完成联网安全校验，请保持微信运行。'
+    formErrors.key = ''
+
+    try {
+      const res = await getKeys({
+        db_storage_path: String(formData.db_storage_path || '').trim(),
+        key_mode: 'macos_private_helper',
+        signal: requestController.signal
+      })
+      if (!isDbKeyRequestActive(requestRevision, requestController)) return
+      const key = String(res?.data?.db_key || '').trim().toLowerCase()
+      if (res?.status === 0 && /^[0-9a-f]{64}$/.test(key)) {
+        formData.key = key
+        warning.value = '数据库解密密钥已通过 macOS 本地受控组件获取成功！'
+        setTimeout(() => {
+          if (requestRevision === dbKeyRequestRevision && warning.value.includes('获取成功')) warning.value = ''
+        }, 3000)
+      } else {
+        error.value = res?.errmsg || 'macOS 数据库密钥获取失败，请保持微信运行后重试。'
+        warning.value = ''
+      }
+    } catch (e) {
+      if (!isDbKeyRequestActive(requestRevision, requestController) || e?.name === 'AbortError') return
+      error.value = e?.message || 'macOS 数据库密钥获取失败，请稍后重试。'
+      warning.value = ''
+    } finally {
+      if (isDbKeyRequestActive(requestRevision, requestController)) {
+        dbKeyRequestController = null
+        isGettingDbKey.value = false
+      }
     }
     return
   }
@@ -2358,6 +2380,10 @@ onMounted(async () => {
       const macos = /Macintosh|Mac OS X/i.test(String(navigator.userAgent || ''))
       platformCapabilities.value = {
         platform: macos ? 'macos' : 'windows',
+        database_key_extraction: !macos,
+        database_key_guidance: macos
+          ? '未能确认 macOS 数据库密钥组件，请检查本地服务或更新完整应用。'
+          : '',
         image_key_memory_scan: !macos,
         image_key_memory_scan_note: macos
           ? '未能确认 macOS 图片密钥扫描资源，请检查本地服务后重试。'

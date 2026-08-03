@@ -112,6 +112,18 @@ def test_database_key_action_waits_for_platform_detection():
     assert "!platformCapabilitiesLoaded ? '正在检测系统'" in source
 
 
+def test_macos_database_key_uses_the_bundled_authorized_helper_without_external_guidance():
+    source = read_decrypt_page()
+
+    assert "key_mode: 'macos_private_helper'" in source
+    assert "platformCapabilities.value?.database_key_extraction !== true" in source
+    assert "正在验证本地组件并完成联网安全校验" in source
+    assert "数据库解密密钥已通过 macOS 本地受控组件获取成功" in source
+    assert "打开 WeFlow 项目页" not in source
+    assert "https://github.com/hicccc77/WeFlow" not in source
+    assert "查看 Mac 获取方式" not in source
+
+
 def test_db_key_persistence_failure_warns_without_blocking_image_key_step():
     source = read_decrypt_page()
 

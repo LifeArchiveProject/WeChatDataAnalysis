@@ -66,12 +66,14 @@ def test_find_wechat_pids_returns_all_matching_processes() -> None:
         return (
             _FakeProcess(41, "Weixin.exe"),
             _FakeProcess(12, "wechat.EXE"),
+            _FakeProcess(18, "微信"),
+            _FakeProcess(77, "WeChatAppEx"),
             _FakeProcess(41, "Weixin.exe"),
             _FakeProcess(99, "helper.exe"),
             _FakeProcess(0, "WeChat.exe"),
         )
 
-    assert find_wechat_pids(process_iter=process_iter) == (12, 41)
+    assert find_wechat_pids(process_iter=process_iter) == (12, 18, 41)
     assert requested_attrs == [("pid", "name")]
 
 

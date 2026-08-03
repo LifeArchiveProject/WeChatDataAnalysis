@@ -31,7 +31,7 @@ from .platform_support import mac_image_scan_helper_path, mac_image_scan_library
 
 
 WECHAT_EXECUTABLE_NAMES = frozenset(("weixin.exe", "wechat.exe"))
-MACOS_WECHAT_EXECUTABLE_NAMES = frozenset(("wechat",))
+MACOS_WECHAT_EXECUTABLE_NAMES = frozenset(("wechat", "微信"))
 
 PROCESS_VM_READ = 0x0010
 PROCESS_QUERY_INFORMATION = 0x0400

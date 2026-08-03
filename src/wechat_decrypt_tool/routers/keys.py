@@ -1,10 +1,13 @@
+import asyncio
+import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from ..logging_config import get_logger
+from ..macos_db_key_helper import MacosDbKeyError
 from ..key_store import get_account_keys_from_store, normalize_key_store_path
 from ..key_service import (
     get_db_key_workflow,
@@ -13,7 +16,7 @@ from ..key_service import (
 )
 from ..media_helpers import _load_media_keys, _resolve_account_dir
 from ..path_fix import PathFixRoute
-from ..platform_support import MAC_DB_KEY_GUIDANCE, current_platform, is_macos
+from ..platform_support import current_platform, is_macos
 
 router = APIRouter(route_class=PathFixRoute)
 logger = get_logger(__name__)
@@ -308,32 +311,15 @@ async def get_saved_keys(
 
 @router.get("/api/get_keys", summary="自动获取微信数据库密钥")
 async def get_wechat_db_key(
+    request: Request,
     wechat_install_path: Optional[str] = None,
     db_storage_path: Optional[str] = None,
     key_mode: Optional[str] = None,
 ):
     """
-    自动流程：
-    1. 优先自动扫描 DLL 辅助 key，再使用 key_v4 从运行中的微信进程扫描并校验数据库密钥
-    2. key_v4 不可用或失败时回退到 wx_key Hook 流程
+    Windows 优先使用 key_v4，失败时由前端明确确认后再使用 Hook。
+    macOS 通过发行包内受控 helper 完成在线安全校验和单次获取。
     """
-    if is_macos():
-        return {
-            "status": -3,
-            "errmsg": MAC_DB_KEY_GUIDANCE,
-            "data": {
-                "platform": "macos",
-                "database_key_extraction": False,
-                "manual_input_supported": True,
-                "suggested_tools": [
-                    {
-                        "name": "WeFlow",
-                        "url": "https://github.com/hicccc77/WeFlow",
-                    }
-                ],
-            },
-        }
-
     try:
         logger.info(
             "[keys] get_wechat_db_key start: wechat_install_path=%s db_storage_path=%s key_mode=%s",
@@ -341,11 +327,43 @@ async def get_wechat_db_key(
             str(db_storage_path or "").strip(),
             str(key_mode or "auto").strip(),
         )
-        keys_data = get_db_key_workflow(
-            wechat_install_path=wechat_install_path,
-            db_storage_path=db_storage_path,
-            key_mode=key_mode or "auto",
-        )
+        if is_macos():
+            cancel_event = threading.Event()
+            async def watch_disconnect() -> None:
+                while not cancel_event.is_set():
+                    if await request.is_disconnected():
+                        cancel_event.set()
+                        return
+                    await asyncio.sleep(0.2)
+
+            worker = asyncio.create_task(
+                asyncio.to_thread(
+                    get_db_key_workflow,
+                    wechat_install_path=wechat_install_path,
+                    db_storage_path=db_storage_path,
+                    key_mode=key_mode or "macos_private_helper",
+                    cancel_event=cancel_event,
+                )
+            )
+            disconnect_watcher = asyncio.create_task(watch_disconnect())
+            try:
+                keys_data = await worker
+            except asyncio.CancelledError:
+                cancel_event.set()
+                raise
+            finally:
+                cancel_event.set()
+                disconnect_watcher.cancel()
+                try:
+                    await disconnect_watcher
+                except asyncio.CancelledError:
+                    pass
+        else:
+            keys_data = get_db_key_workflow(
+                wechat_install_path=wechat_install_path,
+                db_storage_path=db_storage_path,
+                key_mode=key_mode or "auto",
+            )
 
         return {
             "status": 0,
@@ -354,6 +372,25 @@ async def get_wechat_db_key(
         }
 
     except TimeoutError as e:
+        if is_macos():
+            known_error = isinstance(e, MacosDbKeyError)
+            return {
+                "status": -1,
+                "errmsg": (
+                    str(e).strip()
+                    if known_error
+                    else "macOS 数据库密钥获取超时，请保持微信运行后重试。"
+                ),
+                "data": {
+                    "platform": "macos",
+                    "method": "macos_private_helper",
+                    "error_code": str(getattr(e, "code", "TIMEOUT") or "TIMEOUT")
+                    if known_error
+                    else "TIMEOUT",
+                    "retryable": bool(getattr(e, "retryable", True)) if known_error else True,
+                    "manual_input_supported": True,
+                },
+            }
         mode = str(key_mode or "auto").strip().lower()
         if mode in {"v4", "key_v4", "memory", "memory_scan"}:
             return {
@@ -371,6 +408,25 @@ async def get_wechat_db_key(
             "data": {"platform": current_platform()}
         }
     except Exception as e:
+        if is_macos():
+            known_error = isinstance(e, MacosDbKeyError)
+            return {
+                "status": -1,
+                "errmsg": (
+                    str(e).strip()
+                    if known_error
+                    else "macOS 数据库密钥获取失败，请更新或重新安装完整应用后重试。"
+                ),
+                "data": {
+                    "platform": "macos",
+                    "method": "macos_private_helper",
+                    "error_code": str(getattr(e, "code", "INTERNAL_ERROR") or "INTERNAL_ERROR")
+                    if known_error
+                    else "INTERNAL_ERROR",
+                    "retryable": bool(getattr(e, "retryable", False)) if known_error else False,
+                    "manual_input_supported": True,
+                },
+            }
         mode = str(key_mode or "auto").strip().lower()
         if mode in {"v4", "key_v4", "memory", "memory_scan"}:
             return {

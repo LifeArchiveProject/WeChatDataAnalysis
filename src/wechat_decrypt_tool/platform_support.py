@@ -9,8 +9,8 @@ from typing import Any
 
 
 MAC_DB_KEY_GUIDANCE = (
-    "macOS 版不提供数据库密钥提取。请使用支持 macOS 的同类本地工具获取您本人账号的数据库密钥，"
-    "然后回到本应用手动填写；填写后数据库解密、实时消息和分析功能仍可使用。"
+    "macOS 数据库密钥获取需要完整安装包中的本地受控组件，并在每次获取时完成联网安全校验。"
+    "若组件缺失、已过期或校验失败，请更新到最新正式版本；您仍可手动填写已有的 64 位密钥。"
 )
 
 
@@ -75,6 +75,27 @@ def _first_existing_native_resource(relative_path: Path, *, explicit: str = "") 
         except OSError:
             continue
     return candidates[0]
+
+
+def mac_db_key_bundle_dir() -> Path:
+    explicit = str(os.environ.get("WECHAT_TOOL_MACOS_DB_KEY_BUNDLE", "") or "").strip()
+    if getattr(sys, "frozen", False):
+        # A packaged backend must execute only the helper sealed into its own
+        # application resources.  Honouring a process-environment path here
+        # would let an alternate, self-described artifact bypass that boundary.
+        explicit = ""
+    candidates = _bundled_native_candidates(
+        Path("macos") / "db-key" / "wda_xkey_helper",
+        explicit=str(Path(explicit).expanduser() / "wda_xkey_helper") if explicit else "",
+    )
+    roots = [candidate.parent for candidate in candidates]
+    for root in roots:
+        try:
+            if root.is_dir():
+                return root.resolve()
+        except OSError:
+            continue
+    return roots[0]
 
 
 def mac_image_scan_helper_path() -> Path:
@@ -148,12 +169,26 @@ def runtime_capabilities() -> dict[str, Any]:
         and native_core_paths
         and _native_core_resources_ready(native_core_paths)
     )
+    mac_db_key_status: dict[str, Any] = {
+        "available": False,
+        "note": MAC_DB_KEY_GUIDANCE,
+    }
+    if system == "macos":
+        try:
+            from .macos_db_key_helper import inspect_macos_db_key_bundle
+
+            mac_db_key_status = inspect_macos_db_key_bundle().as_capability()
+        except Exception:
+            mac_db_key_status = {
+                "available": False,
+                "note": "macOS 数据库密钥本地组件校验失败，请更新或重新安装正式版本。",
+            }
     return {
         "platform": system,
         "platform_release": platform.release(),
         "architecture": architecture,
         "apple_silicon": apple_silicon,
-        "database_key_extraction": system == "windows",
+        "database_key_extraction": system == "windows" or bool(mac_db_key_status["available"]),
         "database_key_manual_input": True,
         "database_decryption": True,
         "image_key_memory_scan": system == "windows" or image_scan_ready,
@@ -174,18 +209,19 @@ def runtime_capabilities() -> dict[str, Any]:
         "account_archive_export": True,
         "account_archive_import": True,
         "account_archive_cross_platform": True,
-        "database_key_guidance": MAC_DB_KEY_GUIDANCE if system == "macos" else "",
-        "suggested_key_tools": (
-            [
-                {
-                    "name": "WeFlow",
-                    "url": "https://github.com/hicccc77/WeFlow",
-                    "purpose": "获取 macOS 微信数据库密钥",
-                }
-            ]
+        "database_key_guidance": (
+            str(mac_db_key_status.get("note") or MAC_DB_KEY_GUIDANCE)
             if system == "macos"
-            else []
+            else ""
         ),
+        "database_key_build_id": (
+            str(mac_db_key_status.get("build_id") or "") if system == "macos" else ""
+        ),
+        "database_key_build_expires_at_unix": (
+            mac_db_key_status.get("build_expires_at_unix") if system == "macos" else None
+        ),
+        "database_key_online_authorization_required": system == "macos",
+        "suggested_key_tools": [],
     }
 
 
@@ -196,6 +232,7 @@ __all__ = [
     "is_windows",
     "mac_image_scan_helper_path",
     "mac_image_scan_library_path",
+    "mac_db_key_bundle_dir",
     "mac_native_core_paths",
     "runtime_capabilities",
 ]

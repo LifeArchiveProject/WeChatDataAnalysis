@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -19,6 +20,29 @@ from wechat_decrypt_tool.routers import keys as keys_router
 
 
 class TestMacosPlatformSupport(unittest.TestCase):
+    def test_packaged_database_key_bundle_ignores_environment_override(self) -> None:
+        bundled_helper = Path(
+            "/Applications/WeChatDataAnalysis.app/Contents/Resources/backend/"
+            "native/macos/db-key/wda_xkey_helper"
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"WECHAT_TOOL_MACOS_DB_KEY_BUNDLE": "/tmp/untrusted-xkey"},
+                clear=False,
+            ),
+            patch.object(platform_support.sys, "frozen", True, create=True),
+            patch.object(
+                platform_support,
+                "_bundled_native_candidates",
+                return_value=(bundled_helper,),
+            ) as candidates,
+        ):
+            root = platform_support.mac_db_key_bundle_dir()
+
+        self.assertEqual(root, bundled_helper.parent)
+        self.assertEqual(candidates.call_args.kwargs["explicit"], "")
+
     def test_bundled_macos_resources_are_self_contained(self) -> None:
         helper = platform_support.mac_image_scan_helper_path()
         image_library = platform_support.mac_image_scan_library_path()
@@ -29,7 +53,7 @@ class TestMacosPlatformSupport(unittest.TestCase):
         self.assertIn("wechat_decrypt_tool/native/macos", helper.as_posix())
         self.assertNotIn("WeFlow", helper.as_posix())
 
-    def test_apple_silicon_capabilities_only_disable_db_key_extraction(self) -> None:
+    def test_apple_silicon_capabilities_enable_validated_db_key_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             native_root = Path(temp_dir)
             client = native_root / "libwechatdb_client.dylib"
@@ -55,10 +79,21 @@ class TestMacosPlatformSupport(unittest.TestCase):
                     "mac_native_core_paths",
                     return_value=(client, broker, manifest),
                 ),
+                patch(
+                    "wechat_decrypt_tool.macos_db_key_helper.inspect_macos_db_key_bundle",
+                    return_value=SimpleNamespace(
+                        as_capability=lambda: {
+                            "available": True,
+                            "note": "ready",
+                            "build_id": "wda-xkey-20260803",
+                            "build_expires_at_unix": 2_000_000_000,
+                        }
+                    ),
+                ),
             ):
                 capabilities = platform_support.runtime_capabilities()
 
-        self.assertFalse(capabilities["database_key_extraction"])
+        self.assertTrue(capabilities["database_key_extraction"])
         self.assertTrue(capabilities["database_key_manual_input"])
         self.assertTrue(capabilities["database_decryption"])
         self.assertTrue(capabilities["image_key_memory_scan"])
@@ -87,27 +122,83 @@ class TestMacosPlatformSupport(unittest.TestCase):
         self.assertFalse(capabilities["realtime_wcdb"])
         self.assertIn("原生资源缺失", capabilities["realtime_wcdb_note"])
 
-    def test_database_key_endpoint_returns_manual_input_guidance_on_macos(self) -> None:
-        with patch.object(keys_router, "is_macos", return_value=True):
-            result = asyncio.run(keys_router.get_wechat_db_key())
+    def test_database_key_endpoint_invokes_private_helper_on_macos(self) -> None:
+        class ConnectedRequest:
+            async def is_disconnected(self) -> bool:
+                return False
 
-        self.assertEqual(result["status"], -3)
-        self.assertFalse(result["data"]["database_key_extraction"])
-        self.assertTrue(result["data"]["manual_input_supported"])
-        self.assertIn("手动填写", result["errmsg"])
+        with (
+            patch.object(keys_router, "is_macos", return_value=True),
+            patch.object(
+                keys_router,
+                "get_db_key_workflow",
+                return_value={"db_key": "ab" * 32, "method": "macos_private_helper"},
+            ) as workflow,
+        ):
+            result = asyncio.run(keys_router.get_wechat_db_key(ConnectedRequest()))
 
-    def test_database_key_service_never_starts_extraction_on_macos(self) -> None:
+        self.assertEqual(result["status"], 0)
+        self.assertEqual(result["data"]["method"], "macos_private_helper")
+        self.assertEqual(workflow.call_args.kwargs["key_mode"], "macos_private_helper")
+        self.assertIsNotNone(workflow.call_args.kwargs["cancel_event"])
+
+    def test_macos_database_key_endpoint_redacts_unknown_internal_errors(self) -> None:
+        class ConnectedRequest:
+            async def is_disconnected(self) -> bool:
+                return False
+
+        secret_detail = "/Users/private/internal-state=do-not-leak"
+        with (
+            patch.object(keys_router, "is_macos", return_value=True),
+            patch.object(
+                keys_router,
+                "get_db_key_workflow",
+                side_effect=RuntimeError(secret_detail),
+            ),
+        ):
+            result = asyncio.run(keys_router.get_wechat_db_key(ConnectedRequest()))
+
+        self.assertEqual(result["status"], -1)
+        self.assertEqual(result["data"]["error_code"], "INTERNAL_ERROR")
+        self.assertNotIn(secret_detail, result["errmsg"])
+
+    def test_macos_database_key_endpoint_redacts_unknown_timeout_details(self) -> None:
+        class ConnectedRequest:
+            async def is_disconnected(self) -> bool:
+                return False
+
+        secret_detail = "private://internal-state=do-not-leak"
+        with (
+            patch.object(keys_router, "is_macos", return_value=True),
+            patch.object(
+                keys_router,
+                "get_db_key_workflow",
+                side_effect=TimeoutError(secret_detail),
+            ),
+        ):
+            result = asyncio.run(keys_router.get_wechat_db_key(ConnectedRequest()))
+
+        self.assertEqual(result["status"], -1)
+        self.assertEqual(result["data"]["error_code"], "TIMEOUT")
+        self.assertNotIn(secret_detail, result["errmsg"])
+
+    def test_database_key_service_uses_only_private_helper_on_macos(self) -> None:
         with (
             patch.object(key_service, "is_macos", return_value=True),
+            patch(
+                "wechat_decrypt_tool.macos_db_key_helper.capture_macos_database_key",
+                return_value={"db_key": "cd" * 32, "method": "macos_private_helper"},
+            ) as capture,
             patch.object(key_service, "_get_db_key_with_v4") as memory_scan,
             patch.object(key_service, "WeChatKeyFetcher") as hook_fetcher,
         ):
-            with self.assertRaisesRegex(RuntimeError, "手动填写"):
-                key_service.get_db_key_workflow(
-                    db_storage_path="/tmp/wxid_demo/db_storage",
-                    key_mode="auto",
-                )
+            result = key_service.get_db_key_workflow(
+                db_storage_path="/tmp/wxid_demo/db_storage",
+                key_mode="auto",
+            )
 
+        self.assertEqual(result["method"], "macos_private_helper")
+        capture.assert_called_once()
         memory_scan.assert_not_called()
         hook_fetcher.assert_not_called()
 

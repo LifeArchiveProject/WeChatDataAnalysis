@@ -1,7 +1,7 @@
 # import sys
 # import requests
 
-from .platform_support import MAC_DB_KEY_GUIDANCE, is_macos, is_windows
+from .platform_support import is_macos, is_windows
 
 try:
     import wx_key
@@ -674,9 +674,19 @@ def get_db_key_workflow(
         db_storage_path: Optional[str] = None,
         internal_db_key: Optional[str] = None,
         key_mode: str = "auto",
+        cancel_event: Any = None,
+        timeout_seconds: float = 120.0,
 ):
     if is_macos():
-        raise RuntimeError(MAC_DB_KEY_GUIDANCE)
+        mode = str(key_mode or "auto").strip().lower()
+        if mode not in {"auto", "macos_private_helper", "mac_private_helper"}:
+            raise RuntimeError(f"macOS 不支持数据库密钥获取模式: {key_mode}")
+        from .macos_db_key_helper import capture_macos_database_key
+
+        return capture_macos_database_key(
+            timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
+        )
     if not is_windows():
         raise RuntimeError("当前平台不支持自动获取数据库密钥，请使用同类工具获取后手动填写。")
 
