@@ -31,7 +31,12 @@ const NATIVE_CORE_ARTIFACTS = Object.freeze({
   darwin: ["libwechatdb_client.dylib", "wechatdb_broker", NATIVE_CORE_MANIFEST],
 });
 const NATIVE_CORE_FILE_NAMES = new Set(Object.values(NATIVE_CORE_ARTIFACTS).flat());
-const LEGACY_WCDB_FILE_NAMES = new Set(["wcdb_api.dll", "WCDB.dll", "libwcdb_api.dylib"]);
+const LEGACY_WCDB_FILE_NAMES = new Set([
+  "wcdb_api.dll",
+  "WCDB.dll",
+  "libwcdb_api.dylib",
+  "libWCDB.dylib",
+]);
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["", "0", "false", "no", "off"]);
 const NON_PRODUCTION_BUILD_ID_PATTERN =

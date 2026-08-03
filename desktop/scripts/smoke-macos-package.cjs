@@ -266,7 +266,6 @@ async function runPackagedRuntimeSmoke(appPath) {
   const nativeClient = path.join(nativeRoot, "libwechatdb_client.dylib");
   const nativeBroker = path.join(nativeRoot, "wechatdb_broker");
   const nativeManifest = path.join(nativeRoot, "wechatdb_native_build.json");
-  const wcdb = path.join(nativeRoot, "macos", "universal", "libWCDB.dylib");
   const imageLibrary = path.join(nativeRoot, "macos", "universal", "libwx_key.dylib");
   const imageHelper = path.join(nativeRoot, "macos", "universal", "image_scan_helper");
   const xkeyRoot = path.join(nativeRoot, ...String(macosXkeyContract.bundleRelativePath).split("/"));
@@ -280,7 +279,6 @@ async function runPackagedRuntimeSmoke(appPath) {
     nativeClient,
     nativeBroker,
     nativeManifest,
-    wcdb,
     imageLibrary,
     imageHelper,
     xkeyHelper,
@@ -327,6 +325,7 @@ async function runPackagedRuntimeSmoke(appPath) {
 
   for (const retiredPath of [
     path.join(nativeRoot, "macos", "arm64", "libwcdb_api.dylib"),
+    path.join(nativeRoot, "macos", "universal", "libWCDB.dylib"),
     path.join(resources, "wcdb-sidecar.cjs"),
     path.join(resources, "app.asar.unpacked", "node_modules", "koffi"),
   ]) {
@@ -352,7 +351,6 @@ async function runPackagedRuntimeSmoke(appPath) {
   assertArchitecture(nativeClient, "arm64");
   assertArchitecture(nativeBroker, "arm64");
   assertArchitecture(integrity, "arm64");
-  assertArchitecture(wcdb, "arm64", { universal: true });
   assertArchitecture(imageLibrary, "arm64", { universal: true });
   assertArchitecture(imageHelper, "arm64", { universal: true });
   assertArchitecture(xkeyHelper, "arm64", { universal: true });
@@ -363,7 +361,6 @@ async function runPackagedRuntimeSmoke(appPath) {
     backend,
     nativeClient,
     nativeBroker,
-    wcdb,
     imageLibrary,
     imageHelper,
     xkeyHelper,

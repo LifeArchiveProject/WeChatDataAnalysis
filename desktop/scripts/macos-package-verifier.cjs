@@ -9,6 +9,7 @@ const { spawnSync } = require("node:child_process");
 const {
   extractCodeSigningLeafCertificate,
 } = require("./macos-codesign-certificates.cjs");
+const { validatePackagedBackend } = require("./native-core-before-pack.cjs");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(desktopRoot, "package.json"), "utf8"));
@@ -130,10 +131,14 @@ function findSingleApp(root) {
 function verifyAppBundle(appPath, { distribution = false, source = "package" } = {}) {
   const contents = path.join(appPath, "Contents");
   const resources = path.join(contents, "Resources");
-  const nativeRoot = path.join(resources, "backend", "native");
+  const backendRoot = path.join(resources, "backend");
+  const packagedNative = validatePackagedBackend({ backendDir: backendRoot, platform: "darwin" });
+  const nativeRoot = packagedNative.nativeDir;
   const electronExecutable = path.join(contents, "MacOS", path.basename(appPath, ".app"));
-  const backend = path.join(resources, "backend", "wechat-backend");
-  const wcdb = path.join(nativeRoot, "macos", "universal", "libWCDB.dylib");
+  const backend = path.join(backendRoot, "wechat-backend");
+  const nativeClient = path.join(nativeRoot, "libwechatdb_client.dylib");
+  const nativeBroker = path.join(nativeRoot, "wechatdb_broker");
+  const nativeManifest = path.join(nativeRoot, "wechatdb_native_build.json");
   const imageLibrary = path.join(nativeRoot, "macos", "universal", "libwx_key.dylib");
   const imageHelper = path.join(nativeRoot, "macos", "universal", "image_scan_helper");
   const xkeyRoot = path.join(nativeRoot, ...String(macosXkeyContract.bundleRelativePath).split("/"));
@@ -143,8 +148,21 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   const integrity = path.join(nativeRoot, "libwce_integrity.dylib");
   const ffmpeg = path.join(resources, "ffmpeg", "ffmpeg");
 
-  for (const filePath of [electronExecutable, backend, wcdb, imageLibrary, imageHelper, xkeyHelper, integrity, ffmpeg]) {
-    requireRegularFile(filePath, { executable: [electronExecutable, backend, imageHelper, xkeyHelper, ffmpeg].includes(filePath) });
+  for (const filePath of [
+    electronExecutable,
+    backend,
+    nativeClient,
+    nativeBroker,
+    nativeManifest,
+    imageLibrary,
+    imageHelper,
+    xkeyHelper,
+    integrity,
+    ffmpeg,
+  ]) {
+    requireRegularFile(filePath, {
+      executable: [electronExecutable, backend, nativeBroker, imageHelper, xkeyHelper, ffmpeg].includes(filePath),
+    });
   }
   for (const filePath of [
     path.join(resources, "backend", "THIRD_PARTY_NOTICES.md"),
@@ -163,6 +181,7 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   }
   for (const retiredPath of [
     path.join(nativeRoot, "macos", "arm64", "libwcdb_api.dylib"),
+    path.join(nativeRoot, "macos", "universal", "libWCDB.dylib"),
     path.join(resources, "wcdb-sidecar.cjs"),
     path.join(resources, "app.asar.unpacked", "node_modules", "koffi"),
   ]) {
@@ -176,17 +195,30 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
 
   requireArchitectures(electronExecutable, ["arm64"]);
   requireArchitectures(backend, ["arm64"]);
+  requireArchitectures(nativeClient, ["arm64"]);
+  requireArchitectures(nativeBroker, ["arm64"]);
   requireArchitectures(integrity, ["arm64"]);
   requireArchitectures(ffmpeg, ["arm64"]);
-  requireArchitectures(wcdb, ["arm64", "x86_64"]);
   requireArchitectures(imageLibrary, ["arm64", "x86_64"]);
   requireArchitectures(imageHelper, ["arm64", "x86_64"]);
   requireArchitectures(xkeyHelper, ["arm64", "x86_64"]);
-  for (const filePath of [electronExecutable, backend, wcdb, imageLibrary, imageHelper, xkeyHelper, integrity, ffmpeg]) {
+  for (const filePath of [
+    electronExecutable,
+    backend,
+    nativeClient,
+    nativeBroker,
+    imageLibrary,
+    imageHelper,
+    xkeyHelper,
+    integrity,
+    ffmpeg,
+  ]) {
     requireCompatibleMinimumOs(filePath);
   }
 
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
+  run("codesign", ["--verify", "--strict", "--verbose=2", nativeClient]);
+  run("codesign", ["--verify", "--strict", "--verbose=2", nativeBroker]);
   run("codesign", ["--verify", "--strict", "--verbose=2", xkeyHelper]);
   const xkeyManifest = JSON.parse(fs.readFileSync(xkeyManifestPath, "utf8"));
   const xkeyTrust = JSON.parse(fs.readFileSync(xkeyTrustPath, "utf8"));

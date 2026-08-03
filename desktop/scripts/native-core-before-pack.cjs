@@ -8,7 +8,14 @@ const {
 } = require("./build-backend.cjs");
 
 const desktopRoot = path.resolve(__dirname, "..");
-const LEGACY_WCDB_FILES = ["wcdb_api.dll", "WCDB.dll", "libwcdb_api.dylib"];
+const LEGACY_WCDB_PATHS = [
+  "wcdb_api.dll",
+  "WCDB.dll",
+  "libwcdb_api.dylib",
+  "libWCDB.dylib",
+  path.join("macos", "arm64", "libwcdb_api.dylib"),
+  path.join("macos", "universal", "libWCDB.dylib"),
+];
 const PRIVATE_PKI_ROOT_NAME = "windows-private-pki-root.cer";
 const PRIVATE_PKI_POLICY_NAME = "windows-private-pki.ps1";
 const privatePkiPolicySource = path.join(__dirname, PRIVATE_PKI_POLICY_NAME);
@@ -109,9 +116,9 @@ function validatePackagedBackend({
   for (const name of names) {
     requireRegularFile(path.join(nativeDir, name), `wechatdb native component ${name}`);
   }
-  for (const name of LEGACY_WCDB_FILES) {
-    if (fs.existsSync(path.join(nativeDir, name))) {
-      throw new Error(`Legacy WCDB runtime must not be packaged: ${name}`);
+  for (const relativePath of LEGACY_WCDB_PATHS) {
+    if (fs.existsSync(path.join(nativeDir, relativePath))) {
+      throw new Error(`Legacy WCDB runtime must not be packaged: ${relativePath}`);
     }
   }
 

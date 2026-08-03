@@ -41,16 +41,22 @@ test("desktop package ships the platform ffmpeg binary and license", () => {
   assert.ok(resource.filter.includes("LICENSE"));
 });
 
-test("macOS package keeps image scanning helpers and stages the new native core trio", () => {
+test("macOS package keeps image scanning resources, removes retired WCDB, and stages the native core trio", () => {
   const nativeRoot = path.join(repoRoot, "src", "wechat_decrypt_tool", "native", "macos");
   const required = [
-    path.join(nativeRoot, "universal", "libWCDB.dylib"),
     path.join(nativeRoot, "universal", "libwx_key.dylib"),
     path.join(nativeRoot, "universal", "image_scan_helper"),
     path.join(nativeRoot, "source", "image_scan_helper.c"),
     path.join(nativeRoot, "source", "image_scan_entitlements.plist"),
+    path.join(nativeRoot, "WEFLOW_LICENSE.txt"),
   ];
   for (const resource of required) assert.ok(fs.existsSync(resource), resource);
+  for (const retiredResource of [
+    path.join(nativeRoot, "arm64", "libwcdb_api.dylib"),
+    path.join(nativeRoot, "universal", "libWCDB.dylib"),
+  ]) {
+    assert.equal(fs.existsSync(retiredResource), false, retiredResource);
+  }
   fs.accessSync(path.join(nativeRoot, "universal", "image_scan_helper"), fs.constants.X_OK);
 
   const buildBackend = fs.readFileSync(
@@ -58,6 +64,16 @@ test("macOS package keeps image scanning helpers and stages the new native core 
     "utf8"
   );
   assert.match(buildBackend, /darwin:\s*\["libwechatdb_client\.dylib", "wechatdb_broker", NATIVE_CORE_MANIFEST\]/);
+});
+
+test("macOS image resources retain WeFlow attribution without retired WCDB notices", () => {
+  const notices = fs.readFileSync(path.join(repoRoot, "THIRD_PARTY_NOTICES.md"), "utf8");
+  assert.match(notices, /WeFlow macOS native resources/);
+  assert.match(notices, /native\/macos\/WEFLOW_LICENSE\.txt/);
+  assert.match(notices, /native\/macos\/universal\/libwx_key\.dylib/);
+  assert.match(notices, /native\/macos\/universal\/image_scan_helper/);
+  assert.doesNotMatch(notices, /libwcdb_api\.dylib/);
+  assert.doesNotMatch(notices, /libWCDB\.dylib/);
 });
 
 test("Windows package uses private-PKI signing while preserving producer signatures", () => {
@@ -392,16 +408,44 @@ test("macOS archive verification checks ZIP, mounted DMG, signing, and distribut
   assert.match(verifier, /macosXkeyContract\.checksumsFileName/);
   assert.match(verifier, /macosXkeyContract\.provenanceFileName/);
   assert.match(verifier, /macosXkeyContract\.thirdPartyNoticeFileName/);
+  assert.match(
+    verifier,
+    /validatePackagedBackend\(\{ backendDir: backendRoot, platform: "darwin" \}\)/
+  );
+  for (const nativeCoreResource of [
+    "libwechatdb_client.dylib",
+    "wechatdb_broker",
+    "wechatdb_native_build.json",
+  ]) {
+    assert.match(verifier, new RegExp(nativeCoreResource.replace(".", "\\.")));
+  }
+  assert.match(verifier, /requireArchitectures\(nativeClient, \["arm64"\]\)/);
+  assert.match(verifier, /requireArchitectures\(nativeBroker, \["arm64"\]\)/);
+  assert.match(verifier, /requireCompatibleMinimumOs\(filePath\)/);
+  assert.match(
+    verifier,
+    /codesign", \["--verify", "--strict", "--verbose=2", nativeClient\]/
+  );
+  assert.match(
+    verifier,
+    /codesign", \["--verify", "--strict", "--verbose=2", nativeBroker\]/
+  );
   const retiredVerifierBlock = verifier.match(
     /for \(const retiredPath of \[([\s\S]*?)\]\) \{([\s\S]*?)\n  \}/
   )?.[0] || "";
-  for (const retiredResource of ["libwcdb_api.dylib", "wcdb-sidecar.cjs", "koffi"]) {
+  for (const retiredResource of ["libwcdb_api.dylib", "libWCDB.dylib", "wcdb-sidecar.cjs", "koffi"]) {
     assert.match(retiredVerifierBlock, new RegExp(retiredResource.replace(".", "\\.")));
   }
   assert.match(
     retiredVerifierBlock,
     /assert\.equal\(fs\.existsSync\(retiredPath\), false, `Retired WCDB runtime was packaged:/
   );
+  const retiredSmokeBlock = smoke.match(
+    /for \(const retiredPath of \[([\s\S]*?)\]\) \{([\s\S]*?)\n  \}/
+  )?.[0] || "";
+  for (const retiredResource of ["libwcdb_api.dylib", "libWCDB.dylib", "wcdb-sidecar.cjs", "koffi"]) {
+    assert.match(retiredSmokeBlock, new RegExp(retiredResource.replace(".", "\\.")));
+  }
   const xkeyContract = JSON.parse(fs.readFileSync(
     path.join(repoRoot, "src", "wechat_decrypt_tool", "resources", "macos_db_key_contract.json"),
     "utf8"

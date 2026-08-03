@@ -151,12 +151,28 @@ test("beforePack rejects stale legacy WCDB files and partial trios", () => {
 
 test("beforePack rejects the retired macOS WCDB bridge", () => {
   const backendDir = makeBackend("darwin");
-  const legacy = path.join(backendDir, "native", "libwcdb_api.dylib");
+  const legacy = path.join(backendDir, "native", "macos", "arm64", "libwcdb_api.dylib");
   try {
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
     fs.writeFileSync(legacy, "legacy");
     assert.throws(
       () => validatePackagedBackend({ backendDir, platform: "darwin" }),
-      /Legacy WCDB runtime must not be packaged: libwcdb_api\.dylib/
+      /Legacy WCDB runtime must not be packaged: .*libwcdb_api\.dylib/
+    );
+  } finally {
+    fs.rmSync(backendDir, { recursive: true, force: true });
+  }
+});
+
+test("beforePack rejects the retired macOS WCDB dynamic library", () => {
+  const backendDir = makeBackend("darwin");
+  const legacy = path.join(backendDir, "native", "macos", "universal", "libWCDB.dylib");
+  try {
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(legacy, "legacy");
+    assert.throws(
+      () => validatePackagedBackend({ backendDir, platform: "darwin" }),
+      /Legacy WCDB runtime must not be packaged: .*libWCDB\.dylib/
     );
   } finally {
     fs.rmSync(backendDir, { recursive: true, force: true });

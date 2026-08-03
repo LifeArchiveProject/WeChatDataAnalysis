@@ -104,6 +104,7 @@ test("runtime staging filters checked-out native and legacy WCDB files", () => {
   fs.writeFileSync(path.join(source, "wcdb_api.dll"), "legacy");
   fs.writeFileSync(path.join(source, "WCDB.dll"), "legacy-dependency");
   fs.writeFileSync(path.join(source, "libwcdb_api.dylib"), "legacy-macos");
+  fs.writeFileSync(path.join(source, "libWCDB.dylib"), "legacy-macos-dependency");
   fs.writeFileSync(path.join(source, "nested", "resource.bin"), "nested");
 
   try {
@@ -116,6 +117,7 @@ test("runtime staging filters checked-out native and legacy WCDB files", () => {
     assert.equal(fs.existsSync(path.join(destination, "wcdb_api.dll")), false);
     assert.equal(fs.existsSync(path.join(destination, "WCDB.dll")), false);
     assert.equal(fs.existsSync(path.join(destination, "libwcdb_api.dylib")), false);
+    assert.equal(fs.existsSync(path.join(destination, "libWCDB.dylib")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
