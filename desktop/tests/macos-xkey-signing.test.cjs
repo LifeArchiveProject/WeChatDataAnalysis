@@ -127,3 +127,10 @@ test("macOS private workflow keeps the canonical Producer and WCDA certificate v
     assert.doesNotMatch(workflow, new RegExp(`\\b${retiredAlias}\\b`));
   }
 });
+
+test("macOS private workflow retries transient Producer artifact downloads from a clean directory", () => {
+  assert.match(workflow, /for attempt in 1 2 3/);
+  assert.match(workflow, /rm -rf "\$artifact_dir"[\s\S]*gh run download/);
+  assert.match(workflow, /if gh run download[\s\S]*downloaded=1[\s\S]*break/);
+  assert.match(workflow, /test "\$downloaded" = 1/);
+});

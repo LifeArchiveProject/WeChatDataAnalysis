@@ -61,6 +61,7 @@ jobs:
           test -n "$WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY"
 
       - name: Download exact Producer helper artifact
+        timeout-minutes: 15
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.WCE_MACOS_PRODUCER_READ_TOKEN }}
@@ -68,12 +69,23 @@ jobs:
           set -euo pipefail
           test -n "$GH_TOKEN"
           artifact_dir="$RUNNER_TEMP/wda-xkey"
-          rm -rf "$artifact_dir"
-          mkdir -p "$artifact_dir"
-          gh run download "$WCE_MACOS_XKEY_ARTIFACT_RUN_ID" \
-            --repo "$WCE_MACOS_XKEY_ARTIFACT_REPOSITORY" \
-            --name wda-xkey-macos-universal-production \
-            --dir "$artifact_dir"
+          downloaded=0
+          for attempt in 1 2 3; do
+            rm -rf "$artifact_dir"
+            mkdir -p "$artifact_dir"
+            if gh run download "$WCE_MACOS_XKEY_ARTIFACT_RUN_ID" \
+              --repo "$WCE_MACOS_XKEY_ARTIFACT_REPOSITORY" \
+              --name wda-xkey-macos-universal-production \
+              --dir "$artifact_dir"
+            then
+              downloaded=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep "$((attempt * 15))"
+            fi
+          done
+          test "$downloaded" = 1
           test -f "$artifact_dir/wda_xkey_helper"
           echo "WCE_MACOS_XKEY_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
 
