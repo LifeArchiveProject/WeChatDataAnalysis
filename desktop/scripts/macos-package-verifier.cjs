@@ -137,7 +137,6 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   const nativeRoot = path.join(resources, "backend", "native");
   const electronExecutable = path.join(contents, "MacOS", path.basename(appPath, ".app"));
   const backend = path.join(resources, "backend", "wechat-backend");
-  const wcdbApi = path.join(nativeRoot, "macos", "arm64", "libwcdb_api.dylib");
   const wcdb = path.join(nativeRoot, "macos", "universal", "libWCDB.dylib");
   const imageLibrary = path.join(nativeRoot, "macos", "universal", "libwx_key.dylib");
   const imageHelper = path.join(nativeRoot, "macos", "universal", "image_scan_helper");
@@ -147,13 +146,11 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   const xkeyTrustPath = path.join(xkeyRoot, macosXkeyContract.trustFileName);
   const integrity = path.join(nativeRoot, "libwce_integrity.dylib");
   const ffmpeg = path.join(resources, "ffmpeg", "ffmpeg");
-  const koffi = path.join(resources, "app.asar.unpacked", "node_modules", "koffi", "build", "koffi", "darwin_arm64", "koffi.node");
 
-  for (const filePath of [electronExecutable, backend, wcdbApi, wcdb, imageLibrary, imageHelper, xkeyHelper, integrity, ffmpeg, koffi]) {
+  for (const filePath of [electronExecutable, backend, wcdb, imageLibrary, imageHelper, xkeyHelper, integrity, ffmpeg]) {
     requireRegularFile(filePath, { executable: [electronExecutable, backend, imageHelper, xkeyHelper, ffmpeg].includes(filePath) });
   }
   for (const filePath of [
-    path.join(resources, "wcdb-sidecar.cjs"),
     path.join(resources, "backend", "THIRD_PARTY_NOTICES.md"),
     path.join(nativeRoot, "macos", "WEFLOW_LICENSE.txt"),
     path.join(nativeRoot, "macos", "source", "image_scan_helper.c"),
@@ -168,6 +165,13 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   ]) {
     requireRegularFile(filePath);
   }
+  for (const retiredPath of [
+    path.join(nativeRoot, "macos", "arm64", "libwcdb_api.dylib"),
+    path.join(resources, "wcdb-sidecar.cjs"),
+    path.join(resources, "app.asar.unpacked", "node_modules", "koffi"),
+  ]) {
+    assert.equal(fs.existsSync(retiredPath), false, `Retired WCDB runtime was packaged: ${retiredPath}`);
+  }
 
   const packagedVersion = run("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", path.join(contents, "Info.plist")]).trim();
   const packagedMinimum = run("plutil", ["-extract", "LSMinimumSystemVersion", "raw", "-o", "-", path.join(contents, "Info.plist")]).trim();
@@ -176,21 +180,15 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
 
   requireArchitectures(electronExecutable, ["arm64"]);
   requireArchitectures(backend, ["arm64"]);
-  requireArchitectures(wcdbApi, ["arm64"]);
   requireArchitectures(integrity, ["arm64"]);
-  requireArchitectures(koffi, ["arm64"]);
   requireArchitectures(ffmpeg, ["arm64"]);
   requireArchitectures(wcdb, ["arm64", "x86_64"]);
   requireArchitectures(imageLibrary, ["arm64", "x86_64"]);
   requireArchitectures(imageHelper, ["arm64", "x86_64"]);
   requireArchitectures(xkeyHelper, ["arm64", "x86_64"]);
-  for (const filePath of [electronExecutable, backend, wcdbApi, wcdb, imageLibrary, imageHelper, xkeyHelper, integrity, ffmpeg, koffi]) {
+  for (const filePath of [electronExecutable, backend, wcdb, imageLibrary, imageHelper, xkeyHelper, integrity, ffmpeg]) {
     requireCompatibleMinimumOs(filePath);
   }
-
-  const dependencies = run("otool", ["-L", wcdbApi]);
-  assert.match(dependencies, /@loader_path\/\.\.\/universal\/libWCDB\.dylib/);
-  assert.doesNotMatch(dependencies, /(?:^|\/)WeFlow(?:-|\/)/m);
 
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
   run("codesign", ["--verify", "--strict", "--verbose=2", xkeyHelper]);

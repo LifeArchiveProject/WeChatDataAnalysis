@@ -395,6 +395,16 @@ test("macOS archive verification checks ZIP, mounted DMG, signing, and distribut
   assert.match(verifier, /macosXkeyContract\.checksumsFileName/);
   assert.match(verifier, /macosXkeyContract\.provenanceFileName/);
   assert.match(verifier, /macosXkeyContract\.thirdPartyNoticeFileName/);
+  const retiredVerifierBlock = verifier.match(
+    /for \(const retiredPath of \[([\s\S]*?)\]\) \{([\s\S]*?)\n  \}/
+  )?.[0] || "";
+  for (const retiredResource of ["libwcdb_api.dylib", "wcdb-sidecar.cjs", "koffi"]) {
+    assert.match(retiredVerifierBlock, new RegExp(retiredResource.replace(".", "\\.")));
+  }
+  assert.match(
+    retiredVerifierBlock,
+    /assert\.equal\(fs\.existsSync\(retiredPath\), false, `Retired WCDB runtime was packaged:/
+  );
   const xkeyContract = JSON.parse(fs.readFileSync(
     path.join(repoRoot, "src", "wechat_decrypt_tool", "resources", "macos_db_key_contract.json"),
     "utf8"
