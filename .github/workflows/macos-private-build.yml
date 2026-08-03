@@ -78,6 +78,7 @@ jobs:
           echo "WCE_MACOS_XKEY_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
 
       - name: Import persistent self-signed host identity
+        timeout-minutes: 5
         shell: bash
         env:
           WCE_MACOS_WCDA_HOST_P12_BASE64: ${{ secrets.WCE_MACOS_WCDA_HOST_P12_BASE64 }}
@@ -148,10 +149,16 @@ jobs:
           openssl x509 -in "$p12_leaf" -outform DER -out "$RUNNER_TEMP/wda-host-leaf.cer"
           actual_host_leaf_sha256="$(shasum -a 256 "$RUNNER_TEMP/wda-host-leaf.cer" | awk '{print tolower($1)}')"
           test "$actual_host_leaf_sha256" = "$WCE_MACOS_WCDA_HOST_SIGNER_SHA256"
+          echo "Importing host identity into an isolated keychain"
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
-          security add-trusted-cert -r trustRoot -p codeSign -k "$keychain" "$root_cert"
+          # Trust Settings for a custom keychain may wait for UI that hosted CI
+          # cannot display. The public root is therefore trusted only in this
+          # disposable GitHub-hosted VM's non-interactive admin domain. The VM
+          # never receives the root private key and is destroyed after the job.
+          sudo -n security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$root_cert"
           security import "$p12" -k "$keychain" -P "$WCE_MACOS_WCDA_HOST_P12_PASSWORD" \
             -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
@@ -228,7 +235,8 @@ jobs:
         shell: bash
         run: |
           set +e
-          security remove-trusted-cert "$RUNNER_TEMP/wda-self-signed-root.cer" 2>/dev/null
+          # The public root lives only in this disposable hosted runner. Trying
+          # to mutate Trust Settings again during cleanup can wait for hidden UI.
           security delete-keychain "$WCE_MACOS_BUILD_KEYCHAIN" 2>/dev/null
           rm -f "$RUNNER_TEMP/wda-host.p12"
           rm -f "$RUNNER_TEMP/wda-self-signed-root.cer"
