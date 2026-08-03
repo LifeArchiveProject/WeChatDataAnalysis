@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -11,6 +12,7 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(desktopRoot, "package.j
 const productName = packageJson.build.productName;
 const version = packageJson.version;
 const packageMinimumMacos = packageJson.build.mac.minimumSystemVersion;
+const { contract: macosXkeyContract } = require("./macos-xkey-packaging.cjs");
 
 function run(command, args, { capture = true } = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", stdio: capture ? "pipe" : "inherit" });
@@ -74,6 +76,49 @@ function codeSignDetails(filePath) {
   return run("codesign", ["-dv", "--verbose=4", filePath]);
 }
 
+function codeSignIdentity(filePath) {
+  const details = codeSignDetails(filePath);
+  const identifier = details.match(/^Identifier=(.+)$/m)?.[1]?.trim() || "";
+  assert.ok(identifier, `Missing codesign Identifier: ${filePath}`);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "wda-package-cert-"));
+  try {
+    const prefix = path.join(tempDir, "leaf");
+    run("codesign", ["-d", "--extract-certificates", prefix, filePath]);
+    const certPath = `${prefix}0`;
+    requireRegularFile(certPath);
+    const certificate = new crypto.X509Certificate(fs.readFileSync(certPath));
+    return {
+      details,
+      identifier,
+      leafSha256: certificate.fingerprint256.replaceAll(":", "").toLowerCase(),
+      leafSha1: certificate.fingerprint.replaceAll(":", "").toLowerCase(),
+    };
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function requirePinnedDesignatedRequirement(filePath, identifier, leafSha1) {
+  const requirement = run("codesign", ["-d", "-r-", filePath]);
+  const designated = requirement
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^designated\s*=>/i.test(line));
+  assert.equal(designated.length, 1, `${filePath} has an ambiguous designated requirement`);
+  const normalized = designated[0].replace(/\s+/g, " ").replace(/;$/, "").toLowerCase();
+  assert.doesNotMatch(normalized, /\b(?:anchor|trusted)\b/i, `${filePath} relies on mutable trust settings`);
+  assert.equal(
+    normalized,
+    `designated => identifier "${identifier}" and certificate leaf = h"${leafSha1}"`.toLowerCase(),
+    `${filePath} lacks the exact fixed identifier + leaf designated requirement`
+  );
+  run("codesign", [
+    "--verify", "--strict", "--verbose=2",
+    `-R=identifier "${identifier}" and certificate leaf = H"${leafSha1}"`,
+    filePath,
+  ]);
+}
+
 function teamIdentifier(details) {
   return details.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim() || "";
 }
@@ -96,12 +141,16 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   const wcdb = path.join(nativeRoot, "macos", "universal", "libWCDB.dylib");
   const imageLibrary = path.join(nativeRoot, "macos", "universal", "libwx_key.dylib");
   const imageHelper = path.join(nativeRoot, "macos", "universal", "image_scan_helper");
+  const xkeyRoot = path.join(nativeRoot, ...String(macosXkeyContract.bundleRelativePath).split("/"));
+  const xkeyHelper = path.join(xkeyRoot, macosXkeyContract.helperFileName);
+  const xkeyManifestPath = path.join(xkeyRoot, macosXkeyContract.manifestFileName);
+  const xkeyTrustPath = path.join(xkeyRoot, macosXkeyContract.trustFileName);
   const integrity = path.join(nativeRoot, "libwce_integrity.dylib");
   const ffmpeg = path.join(resources, "ffmpeg", "ffmpeg");
   const koffi = path.join(resources, "app.asar.unpacked", "node_modules", "koffi", "build", "koffi", "darwin_arm64", "koffi.node");
 
-  for (const filePath of [electronExecutable, backend, wcdbApi, wcdb, imageLibrary, imageHelper, integrity, ffmpeg, koffi]) {
-    requireRegularFile(filePath, { executable: [electronExecutable, backend, imageHelper, ffmpeg].includes(filePath) });
+  for (const filePath of [electronExecutable, backend, wcdbApi, wcdb, imageLibrary, imageHelper, xkeyHelper, integrity, ffmpeg, koffi]) {
+    requireRegularFile(filePath, { executable: [electronExecutable, backend, imageHelper, xkeyHelper, ffmpeg].includes(filePath) });
   }
   for (const filePath of [
     path.join(resources, "wcdb-sidecar.cjs"),
@@ -111,6 +160,11 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
     path.join(nativeRoot, "macos", "source", "image_scan_entitlements.plist"),
     path.join(resources, "ffmpeg", "LICENSE"),
     path.join(resources, "ffmpeg", "ffmpeg.LICENSE"),
+    xkeyManifestPath,
+    xkeyTrustPath,
+    path.join(xkeyRoot, macosXkeyContract.checksumsFileName),
+    path.join(xkeyRoot, macosXkeyContract.provenanceFileName),
+    path.join(xkeyRoot, macosXkeyContract.thirdPartyNoticeFileName),
   ]) {
     requireRegularFile(filePath);
   }
@@ -129,7 +183,8 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   requireArchitectures(wcdb, ["arm64", "x86_64"]);
   requireArchitectures(imageLibrary, ["arm64", "x86_64"]);
   requireArchitectures(imageHelper, ["arm64", "x86_64"]);
-  for (const filePath of [electronExecutable, backend, wcdbApi, wcdb, imageLibrary, imageHelper, integrity, ffmpeg, koffi]) {
+  requireArchitectures(xkeyHelper, ["arm64", "x86_64"]);
+  for (const filePath of [electronExecutable, backend, wcdbApi, wcdb, imageLibrary, imageHelper, xkeyHelper, integrity, ffmpeg, koffi]) {
     requireCompatibleMinimumOs(filePath);
   }
 
@@ -138,27 +193,71 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   assert.doesNotMatch(dependencies, /(?:^|\/)WeFlow(?:-|\/)/m);
 
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
+  run("codesign", ["--verify", "--strict", "--verbose=2", xkeyHelper]);
+  const xkeyManifest = JSON.parse(fs.readFileSync(xkeyManifestPath, "utf8"));
+  const xkeyTrust = JSON.parse(fs.readFileSync(xkeyTrustPath, "utf8"));
+  for (const name of [
+    macosXkeyContract.helperFileName,
+    macosXkeyContract.thirdPartyNoticeFileName,
+  ]) {
+    const packagedFile = path.join(xkeyRoot, name);
+    const bytes = fs.readFileSync(packagedFile);
+    assert.equal(
+      crypto.createHash("sha256").update(bytes).digest("hex"),
+      xkeyManifest.files[name].sha256,
+      `macOS database key resource hash differs from its manifest: ${name}`
+    );
+    assert.equal(bytes.length, xkeyManifest.files[name].size);
+  }
+  const xkeyBytes = fs.readFileSync(xkeyHelper);
+  assert.equal(
+    crypto.createHash("sha256").update(xkeyBytes).digest("hex"),
+    xkeyManifest.files[macosXkeyContract.helperFileName].sha256,
+    "macOS database key helper hash differs from its manifest"
+  );
+  assert.equal(xkeyBytes.length, xkeyManifest.files[macosXkeyContract.helperFileName].size);
+  const xkeyIdentity = codeSignIdentity(xkeyHelper);
+  const backendIdentity = codeSignIdentity(backend);
+  const appIdentity = codeSignIdentity(appPath);
+  assert.equal(xkeyIdentity.identifier, macosXkeyContract.bundleId);
+  assert.equal(xkeyIdentity.leafSha256, xkeyTrust.helperLeafCertificateSha256);
+  assert.equal(backendIdentity.identifier, macosXkeyContract.hostSigningIdentifier);
+  assert.equal(backendIdentity.leafSha256, xkeyTrust.hostLeafCertificateSha256);
   const mainEntitlements = run("codesign", ["-d", "--entitlements", "-", electronExecutable]);
   const helperEntitlements = run("codesign", ["-d", "--entitlements", "-", imageHelper]);
   assert.match(mainEntitlements, /com\.apple\.security\.cs\.allow-jit/);
   assert.match(helperEntitlements, /com\.apple\.security\.cs\.debugger/);
 
   if (distribution) {
-    const expectedTeam = String(process.env.APPLE_TEAM_ID || "").trim();
-    assert.ok(expectedTeam, "APPLE_TEAM_ID is required for distribution verification");
-    for (const filePath of [appPath, imageHelper]) {
-      const details = codeSignDetails(filePath);
-      assert.match(details, /^Authority=Developer ID Application:/m, `${filePath} lacks Developer ID Application authority`);
-      assert.doesNotMatch(details, /^Signature=adhoc$/m, `${filePath} is ad-hoc signed`);
-      assert.equal(teamIdentifier(details), expectedTeam, `${filePath} was signed by an unexpected Apple team`);
+    assert.doesNotMatch(codeSignDetails(appPath), /^Signature=adhoc$/m, `${appPath} is ad-hoc signed`);
+    assert.doesNotMatch(backendIdentity.details, /^Signature=adhoc$/m, `${backend} is ad-hoc signed`);
+    if (xkeyManifest.signing.mode === "developer-id") {
+      const expectedTeam = String(process.env.APPLE_TEAM_ID || "").trim();
+      assert.ok(expectedTeam, "APPLE_TEAM_ID is required for Developer ID verification");
+      for (const filePath of [appPath, backend]) {
+        const details = codeSignDetails(filePath);
+        assert.match(details, /^Authority=Developer ID Application:/m, `${filePath} lacks Developer ID Application authority`);
+        assert.equal(teamIdentifier(details), expectedTeam, `${filePath} was signed by an unexpected Apple team`);
+      }
+      run("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
+      run("syspolicy_check", ["distribution", appPath]);
+      run("xcrun", ["stapler", "validate", "-v", appPath]);
+    } else {
+      assert.equal(xkeyManifest.signing.mode, "self-signed");
+      assert.equal(backendIdentity.leafSha256, xkeyTrust.hostLeafCertificateSha256);
+      assert.equal(appIdentity.identifier, packageJson.build.appId);
+      assert.equal(appIdentity.leafSha256, xkeyTrust.hostLeafCertificateSha256);
+      requirePinnedDesignatedRequirement(appPath, packageJson.build.appId, appIdentity.leafSha1);
+      requirePinnedDesignatedRequirement(
+        backend,
+        macosXkeyContract.hostSigningIdentifier,
+        backendIdentity.leafSha1
+      );
     }
     assert.doesNotMatch(mainEntitlements, /com\.apple\.security\.get-task-allow/);
-    run("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
-    run("syspolicy_check", ["distribution", appPath]);
-    run("xcrun", ["stapler", "validate", "-v", appPath]);
   }
 
-  process.stdout.write(`Verified ${distribution ? "Developer ID distribution" : "packaged"} app from ${source}: ${appPath}\n`);
+  process.stdout.write(`Verified ${distribution ? `${xkeyManifest.signing.mode} distribution` : "packaged"} app from ${source}: ${appPath}\n`);
 }
 
 function detachMountedDmg(mountRoot, runCommand = run) {

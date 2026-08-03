@@ -1,6 +1,10 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const {
+  contract: MACOS_XKEY_CONTRACT,
+  stageMacosXkeyArtifacts,
+} = require("./macos-xkey-packaging.cjs");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const entry = path.join(repoRoot, "src", "wechat_decrypt_tool", "backend_entry.py");
@@ -13,6 +17,13 @@ const runtimeNativeDir = path.join(repoRoot, "desktop", "build", "native-runtime
 const skillDir = path.join(repoRoot, "skills", "wechat-mcp-copilot");
 const projectToml = path.join(repoRoot, "pyproject.toml");
 const thirdPartyNotices = path.join(repoRoot, "THIRD_PARTY_NOTICES.md");
+const macosXkeyContractPath = path.join(
+  repoRoot,
+  "src",
+  "wechat_decrypt_tool",
+  "resources",
+  "macos_db_key_contract.json"
+);
 
 const NATIVE_CORE_MANIFEST = "wechatdb_native_build.json";
 const NATIVE_CORE_ARTIFACTS = Object.freeze({
@@ -263,6 +274,10 @@ function prepareRuntimeNativeDir(sourceDir, destinationDir) {
     filter(sourcePath) {
       const relative = path.relative(sourceDir, sourcePath);
       if (!relative) return true;
+      const normalizedRelative = relative.split(path.sep).join("/");
+      if (normalizedRelative === "macos/db-key" || normalizedRelative.startsWith("macos/db-key/")) {
+        return false;
+      }
       const name = path.basename(relative);
       return !NATIVE_CORE_FILE_NAMES.has(name) && !LEGACY_WCDB_FILE_NAMES.has(name);
     },
@@ -305,6 +320,15 @@ function validateRuntimeNativeHelpers(destinationDir, platform = process.platfor
     throw new Error(`Missing macOS image scan helper: ${imageScanHelper}`);
   }
   fs.chmodSync(imageScanHelper, 0o755);
+  const databaseKeyHelper = path.join(
+    destinationDir,
+    ...String(MACOS_XKEY_CONTRACT.bundleRelativePath).split("/"),
+    MACOS_XKEY_CONTRACT.helperFileName
+  );
+  if (!fs.existsSync(databaseKeyHelper)) {
+    throw new Error(`Missing controlled macOS database key helper: ${databaseKeyHelper}`);
+  }
+  fs.chmodSync(databaseKeyHelper, 0o755);
 }
 
 function runIntegrityPreflight(env = process.env) {
@@ -421,6 +445,7 @@ function main() {
   const integrityNativeBinary = buildIntegrityNativeBinary();
   prepareRuntimeNativeDir(nativeDir, runtimeNativeDir);
   stageNativeCoreArtifacts();
+  stageMacosXkeyArtifacts({ destinationNativeDir: runtimeNativeDir });
   validateRuntimeNativeHelpers(runtimeNativeDir);
   runIntegrityPreflight();
 
@@ -456,6 +481,8 @@ function main() {
     pyInstallerAddData(runtimeNativeDir, "wechat_decrypt_tool/native"),
     "--add-data",
     pyInstallerAddData(skillDir, "skills/wechat-mcp-copilot"),
+    "--add-data",
+    pyInstallerAddData(macosXkeyContractPath, "wechat_decrypt_tool/resources"),
     entry,
   ];
 

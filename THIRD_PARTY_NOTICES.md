@@ -22,6 +22,10 @@ The application does not load files from a WeFlow checkout at runtime. The files
 
 The `libwcdb_api.dylib` C API used here is ARM64. Consequently, full WCDB realtime support on macOS is currently limited to Apple Silicon; no Intel desktop artifact is published. The bundled macOS native resources target macOS 15.0 or earlier, and the desktop package declares macOS 15.0 as its minimum. The image scanning helper, `libwx_key.dylib`, and `libWCDB.dylib` are universal binaries.
 
+## Frida Core
+
+The protected macOS database-key helper embeds Frida Core `17.16.4`; it does not require a separately installed Frida or Python runtime. Frida Core is distributed under the wxWindows Library Licence, Version 3.1. The complete upstream license text is included in every helper artifact and packaged application at `native/macos/db-key/THIRD_PARTY_NOTICES/FRIDA-COPYING.txt`. Its digest and file size are pinned by the signed helper manifest and verified again during staging, package verification, and runtime startup.
+
 ## ffmpeg-static
 
 Desktop distributions include the platform-specific FFmpeg executable from `ffmpeg-static` so voice messages can be converted to browser-compatible MP3 without a separate system install.

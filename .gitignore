@@ -44,6 +44,11 @@ pnpm-lock.yaml
 /WeFlow-*/
 /win95/
 /py_wx_key/
+/Xkey-main/
+/Xkey-private/
+/native/macos-xkey/
+/native/macos_xkey/
+/private-native/macos-xkey/
 
 # Electron desktop app
 /desktop/node_modules/
@@ -63,6 +68,7 @@ pnpm-lock.yaml
 /src/wechat_decrypt_tool/native/wechatdb_client.dll
 /src/wechat_decrypt_tool/native/wechatdb_broker.exe
 /src/wechat_decrypt_tool/native/wechatdb_native_build.json
+/src/wechat_decrypt_tool/native/macos/db-key/
 
 # Local diagnostics and rollout notes
 /*.log

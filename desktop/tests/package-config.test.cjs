@@ -248,6 +248,8 @@ test("macOS release exposes a reusable packaged smoke test", () => {
   const smokeSource = fs.readFileSync(smokeScript, "utf8");
   assert.match(smokeSource, /libwechatdb_client\.dylib/);
   assert.match(smokeSource, /wechatdb_native_build\.json/);
+  assert.match(smokeSource, /macosXkeyContract/);
+  assert.match(smokeSource, /database_key_online_authorization_required/);
   assert.match(smokeSource, /\/api\/health/);
   assert.doesNotMatch(smokeSource, /require\(["']koffi["']\)/);
   assert.doesNotMatch(smokeSource, /sidecarProc|sidecarPort|sidecarToken/);
@@ -390,6 +392,16 @@ test("macOS archive verification checks ZIP, mounted DMG, signing, and distribut
   assert.match(verifier, /syspolicy_check/);
   assert.match(verifier, /stapler/);
   assert.match(verifier, /withMacosArtifacts/);
+  assert.match(verifier, /macosXkeyContract\.checksumsFileName/);
+  assert.match(verifier, /macosXkeyContract\.provenanceFileName/);
+  assert.match(verifier, /macosXkeyContract\.thirdPartyNoticeFileName/);
+  const xkeyContract = JSON.parse(fs.readFileSync(
+    path.join(repoRoot, "src", "wechat_decrypt_tool", "resources", "macos_db_key_contract.json"),
+    "utf8"
+  ));
+  for (const [, field] of verifier.matchAll(/macosXkeyContract\.([A-Za-z0-9_]+)/g)) {
+    assert.ok(Object.hasOwn(xkeyContract, field), `unknown macOS Xkey contract field: ${field}`);
+  }
   assert.match(smoke, /withMacosArtifacts\(\{ distribution: false \}, async \(\{ zipAppPath \}\)/);
   assert.match(smoke, /runPackagedRuntimeSmoke\(zipAppPath\)/);
   assert.doesNotMatch(smoke, /findPackagedApp/);
@@ -451,7 +463,7 @@ test("Windows packages are built only by the tag-triggered release workflow", ()
 
   for (const entry of fs.readdirSync(workflowsDir)) {
     const source = fs.readFileSync(path.join(workflowsDir, entry), "utf8");
-    if (!/npm run (dist|smoke):/.test(source)) continue;
+    if (!/npm run (?:dist|smoke):win/.test(source)) continue;
     assert.equal(
       entry,
       "release.yml",

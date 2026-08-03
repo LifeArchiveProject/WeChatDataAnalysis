@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -8,6 +9,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { verifyAppBundle, withMacosArtifacts } = require("./macos-package-verifier.cjs");
+const { contract: macosXkeyContract } = require("./macos-xkey-packaging.cjs");
 
 const { validatePackagedBackend } = require("./native-core-before-pack.cjs");
 const {
@@ -267,6 +269,8 @@ async function runPackagedRuntimeSmoke(appPath) {
   const wcdb = path.join(nativeRoot, "macos", "universal", "libWCDB.dylib");
   const imageLibrary = path.join(nativeRoot, "macos", "universal", "libwx_key.dylib");
   const imageHelper = path.join(nativeRoot, "macos", "universal", "image_scan_helper");
+  const xkeyRoot = path.join(nativeRoot, ...String(macosXkeyContract.bundleRelativePath).split("/"));
+  const xkeyHelper = path.join(xkeyRoot, macosXkeyContract.helperFileName);
   const integrity = path.join(nativeRoot, "libwce_integrity.dylib");
   const ffmpeg = path.join(resources, "ffmpeg", "ffmpeg");
 
@@ -279,17 +283,36 @@ async function runPackagedRuntimeSmoke(appPath) {
     wcdb,
     imageLibrary,
     imageHelper,
+    xkeyHelper,
     integrity,
     ffmpeg,
   ]) {
     requirePath(filePath, {
-      executable: [electronExecutable, backend, nativeBroker, imageHelper, ffmpeg].includes(filePath),
+      executable: [electronExecutable, backend, nativeBroker, imageHelper, xkeyHelper, ffmpeg].includes(filePath),
     });
   }
   requirePath(path.join(resources, "backend", "THIRD_PARTY_NOTICES.md"));
   requirePath(path.join(nativeRoot, "macos", "WEFLOW_LICENSE.txt"));
   requirePath(path.join(resources, "ffmpeg", "LICENSE"));
   requirePath(path.join(resources, "ffmpeg", "ffmpeg.LICENSE"));
+  for (const name of [
+    macosXkeyContract.manifestFileName,
+    macosXkeyContract.trustFileName,
+    macosXkeyContract.checksumsFileName,
+    macosXkeyContract.provenanceFileName,
+    macosXkeyContract.thirdPartyNoticeFileName,
+  ]) {
+    requirePath(path.join(xkeyRoot, name));
+  }
+  const xkeyManifest = JSON.parse(
+    fs.readFileSync(path.join(xkeyRoot, macosXkeyContract.manifestFileName), "utf8")
+  );
+  const fridaNotice = fs.readFileSync(path.join(xkeyRoot, macosXkeyContract.thirdPartyNoticeFileName));
+  assert.equal(
+    crypto.createHash("sha256").update(fridaNotice).digest("hex"),
+    xkeyManifest.files[macosXkeyContract.thirdPartyNoticeFileName].sha256,
+    "Packaged Frida license notice differs from the producer manifest"
+  );
 
   const packageMinimumOS = run(
     "plutil",
@@ -332,6 +355,7 @@ async function runPackagedRuntimeSmoke(appPath) {
   assertArchitecture(wcdb, "arm64", { universal: true });
   assertArchitecture(imageLibrary, "arm64", { universal: true });
   assertArchitecture(imageHelper, "arm64", { universal: true });
+  assertArchitecture(xkeyHelper, "arm64", { universal: true });
   assertArchitecture(ffmpeg, "arm64");
 
   for (const filePath of [
@@ -342,6 +366,7 @@ async function runPackagedRuntimeSmoke(appPath) {
     wcdb,
     imageLibrary,
     imageHelper,
+    xkeyHelper,
     integrity,
     ffmpeg,
   ]) {
@@ -363,6 +388,7 @@ async function runPackagedRuntimeSmoke(appPath) {
 
   run("codesign", ["--verify", "--strict", "--verbose=2", nativeClient]);
   run("codesign", ["--verify", "--strict", "--verbose=2", nativeBroker]);
+  run("codesign", ["--verify", "--strict", "--verbose=2", xkeyHelper]);
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
   const entitlements = run("codesign", ["-d", "--entitlements", "-", electronExecutable], { capture: true });
   assert.match(entitlements, /com\.apple\.security\.cs\.allow-jit/);
@@ -415,6 +441,12 @@ async function runPackagedRuntimeSmoke(appPath) {
     assert.equal(health.statusCode, 200, health.text || backendProc.output());
     assert.equal(health.body?.status, "healthy");
     assert.equal(health.body?.service, "微信解密工具");
+    const capabilities = await waitForJson(`http://127.0.0.1:${backendPort}/api/system/platform`);
+    assert.equal(capabilities.statusCode, 200, capabilities.text || backendProc.output());
+    assert.equal(capabilities.body?.platform, "macos");
+    assert.equal(capabilities.body?.database_key_extraction, true);
+    assert.equal(capabilities.body?.database_key_online_authorization_required, true);
+    assert.match(String(capabilities.body?.database_key_build_id || ""), /^[A-Za-z0-9._-]+$/);
   } finally {
     await stopProcess(backendProc);
     fs.rmSync(tempRoot, { recursive: true, force: true });

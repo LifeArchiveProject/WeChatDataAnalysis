@@ -25,10 +25,30 @@ module.exports = async function afterPack(context) {
   if (!fs.existsSync(entitlements)) throw new Error(`macOS entitlements not found: ${entitlements}`);
 
   if (process.env.MACOS_DISTRIBUTION_BUILD === "1") {
-    for (const name of ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"]) {
-      if (!String(process.env[name] || "").trim()) {
-        throw new Error(`Missing required macOS distribution environment variable: ${name}`);
+    const mode = String(process.env.WCE_MACOS_SIGNING_MODE || "").trim().toLowerCase();
+    if (mode === "self-signed") {
+      for (const name of [
+        "WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY",
+        "WCE_MACOS_WCDA_HOST_SIGNER_SHA256",
+        "WCE_MACOS_KEY_HELPER_SIGNER_SHA256",
+      ]) {
+        if (!String(process.env[name] || "").trim()) {
+          throw new Error(`Missing required self-signed macOS environment variable: ${name}`);
+        }
       }
+      for (const name of ["APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"]) {
+        if (String(process.env[name] || "").trim()) {
+          throw new Error(`Self-signed macOS builds must not configure notarization: ${name}`);
+        }
+      }
+      process.stdout.write(`Persistent self-signed identity will seal macOS application bundle: ${appPath}\n`);
+      return;
+    }
+    if (mode !== "developer-id") {
+      throw new Error("WCE_MACOS_SIGNING_MODE must be self-signed or developer-id for distribution builds.");
+    }
+    for (const name of ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"]) {
+      if (!String(process.env[name] || "").trim()) throw new Error(`Missing required macOS distribution environment variable: ${name}`);
     }
     process.stdout.write(`Developer ID signing will seal macOS application bundle: ${appPath}\n`);
     return;
