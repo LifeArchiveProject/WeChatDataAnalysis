@@ -1,0 +1,237 @@
+name: macOS Private Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (for example 1.18.5)
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  build-macos-arm64:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-14
+    environment: macos-private-pki-production
+    timeout-minutes: 120
+    env:
+      WCE_MACOS_SIGNING_MODE: self-signed
+      WCE_MACOS_XKEY_ARTIFACT_REPOSITORY: ${{ vars.WCE_MACOS_XKEY_ARTIFACT_REPOSITORY }}
+      WCE_MACOS_XKEY_ARTIFACT_RUN_ID: ${{ vars.WCE_MACOS_XKEY_ARTIFACT_RUN_ID }}
+      WCE_MACOS_XKEY_SOURCE_REVISION: ${{ vars.WCE_MACOS_XKEY_SOURCE_REVISION }}
+      WCE_MACOS_XKEY_BUILD_ID: ${{ vars.WCE_MACOS_XKEY_BUILD_ID }}
+      WCE_MACOS_KEY_HELPER_SIGNER_SHA256: ${{ vars.WCE_MACOS_KEY_HELPER_SIGNER_SHA256 }}
+      WCE_MACOS_WCDA_HOST_SIGNER_SHA256: ${{ vars.WCE_MACOS_WCDA_HOST_SIGNER_SHA256 }}
+      WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY: ${{ vars.WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY }}
+      WCE_MACOS_XKEY_ALLOW_DEVELOPMENT_ARTIFACTS: "0"
+      MACOS_DISTRIBUTION_BUILD: "1"
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      CI: "true"
+      PACKAGE_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout exact main revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify immutable source and protected pins
+        shell: bash
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$WORKFLOW_REF" = "refs/heads/main"
+          [[ "$WORKFLOW_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_REVISION"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]
+          [[ "$WCE_MACOS_XKEY_ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$WCE_MACOS_XKEY_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$WCE_MACOS_XKEY_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WCE_MACOS_XKEY_BUILD_ID" =~ ^[A-Za-z0-9._-]{8,128}$ ]]
+          [[ "$WCE_MACOS_KEY_HELPER_SIGNER_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$WCE_MACOS_WCDA_HOST_SIGNER_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test -n "$WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY"
+
+      - name: Download exact Producer helper artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WCE_MACOS_PRODUCER_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          artifact_dir="$RUNNER_TEMP/wda-xkey"
+          rm -rf "$artifact_dir"
+          mkdir -p "$artifact_dir"
+          gh run download "$WCE_MACOS_XKEY_ARTIFACT_RUN_ID" \
+            --repo "$WCE_MACOS_XKEY_ARTIFACT_REPOSITORY" \
+            --name wda-xkey-macos-universal-production \
+            --dir "$artifact_dir"
+          test -f "$artifact_dir/wda_xkey_helper"
+          echo "WCE_MACOS_XKEY_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+
+      - name: Import persistent self-signed host identity
+        shell: bash
+        env:
+          WCE_MACOS_WCDA_HOST_P12_BASE64: ${{ secrets.WCE_MACOS_WCDA_HOST_P12_BASE64 }}
+          WCE_MACOS_WCDA_HOST_P12_PASSWORD: ${{ secrets.WCE_MACOS_WCDA_HOST_P12_PASSWORD }}
+          ROOT_CERT_BASE64: ${{ secrets.WCE_MACOS_SELF_SIGNED_ROOT_CERT_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$WCE_MACOS_WCDA_HOST_P12_BASE64"
+          test -n "$WCE_MACOS_WCDA_HOST_P12_PASSWORD"
+          test -n "$ROOT_CERT_BASE64"
+          keychain="$RUNNER_TEMP/wda-signing.keychain-db"
+          p12="$RUNNER_TEMP/wda-host.p12"
+          root_cert="$RUNNER_TEMP/wda-self-signed-root.cer"
+          root_pem="$RUNNER_TEMP/wda-self-signed-root.pem"
+          p12_leaf="$RUNNER_TEMP/wda-host-leaf.pem"
+          p12_chain="$RUNNER_TEMP/wda-host-chain.pem"
+          keychain_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$keychain_password"
+          ROOT_CERT_BASE64="$ROOT_CERT_BASE64" python3 - <<'PY'
+          import base64, os, pathlib
+          pathlib.Path(os.environ["RUNNER_TEMP"], "wda-host.p12").write_bytes(
+              base64.b64decode(os.environ["WCE_MACOS_WCDA_HOST_P12_BASE64"], validate=True)
+          )
+          pathlib.Path(os.environ["RUNNER_TEMP"], "wda-self-signed-root.cer").write_bytes(
+              base64.b64decode(os.environ["ROOT_CERT_BASE64"], validate=True)
+          )
+          PY
+          critical_extension_value() {
+            local certificate="$1"
+            local extension="$2"
+            openssl x509 -in "$certificate" -noout -text | awk -v extension="$extension" '
+              index($0, "X509v3 " extension ":") {
+                found = 1
+                if (index($0, "critical") == 0) exit 2
+                if (getline <= 0) exit 3
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+                print $0
+                exit
+              }
+              END { if (!found) exit 4 }
+            '
+          }
+          P12_PASSWORD="$WCE_MACOS_WCDA_HOST_P12_PASSWORD" \
+            openssl pkcs12 -in "$p12" -clcerts -nokeys \
+              -passin env:P12_PASSWORD -out "$p12_leaf"
+          P12_PASSWORD="$WCE_MACOS_WCDA_HOST_P12_PASSWORD" \
+            openssl pkcs12 -in "$p12" -cacerts -nokeys \
+              -passin env:P12_PASSWORD -out "$p12_chain"
+          test "$(grep -c -- '-----BEGIN CERTIFICATE-----' "$p12_leaf")" = 1
+          test "$(grep -c -- '-----BEGIN CERTIFICATE-----' "$p12_chain")" = 1
+          openssl x509 -inform DER -in "$root_cert" -out "$root_pem"
+          openssl x509 -in "$p12_chain" -outform DER -out "$RUNNER_TEMP/wda-host-chain.cer"
+          cmp "$RUNNER_TEMP/wda-host-chain.cer" "$root_cert"
+          openssl verify -CAfile "$root_pem" "$p12_leaf"
+          test "$(critical_extension_value "$root_pem" 'Basic Constraints')" = 'CA:TRUE, pathlen:0'
+          test "$(critical_extension_value "$root_pem" 'Key Usage')" = 'Certificate Sign, CRL Sign'
+          test "$(critical_extension_value "$p12_leaf" 'Basic Constraints')" = 'CA:FALSE'
+          test "$(critical_extension_value "$p12_leaf" 'Key Usage')" = 'Digital Signature'
+          test "$(critical_extension_value "$p12_leaf" 'Extended Key Usage')" = 'Code Signing'
+          root_subject="$(openssl x509 -in "$root_pem" -noout -subject -nameopt RFC2253 | sed 's/^subject=//')"
+          root_issuer="$(openssl x509 -in "$root_pem" -noout -issuer -nameopt RFC2253 | sed 's/^issuer=//')"
+          leaf_subject="$(openssl x509 -in "$p12_leaf" -noout -subject -nameopt RFC2253 | sed 's/^subject=//')"
+          leaf_issuer="$(openssl x509 -in "$p12_leaf" -noout -issuer -nameopt RFC2253 | sed 's/^issuer=//')"
+          test "$root_subject" = "$root_issuer"
+          test "$leaf_issuer" = "$root_subject"
+          [[ "$root_subject" == *'O=WCDA Private Distribution'* ]]
+          [[ "$leaf_subject" == *'O=WCDA Private Distribution'* ]]
+          openssl x509 -in "$p12_leaf" -outform DER -out "$RUNNER_TEMP/wda-host-leaf.cer"
+          actual_host_leaf_sha256="$(shasum -a 256 "$RUNNER_TEMP/wda-host-leaf.cer" | awk '{print tolower($1)}')"
+          test "$actual_host_leaf_sha256" = "$WCE_MACOS_WCDA_HOST_SIGNER_SHA256"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security add-trusted-cert -r trustRoot -p codeSign -k "$keychain" "$root_cert"
+          security import "$p12" -k "$keychain" -P "$WCE_MACOS_WCDA_HOST_P12_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          echo "WCE_MACOS_BUILD_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: .python-version
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install uv
+          npm ci --prefix frontend
+          npm ci --prefix desktop
+
+      - name: Validate adapter and packaging contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src uv run pytest -q \
+            tests/test_macos_db_key_helper.py \
+            tests/test_macos_platform_support.py \
+            tests/test_decrypt_image_keys_frontend.py
+          node --test \
+            desktop/tests/macos-xkey-packaging.test.cjs \
+            desktop/tests/macos-xkey-signing.test.cjs
+          node -e "require('./desktop/scripts/macos-xkey-packaging.cjs').resolveMacosXkeyArtifacts({ platform: 'darwin' })"
+
+      - name: Build signed macOS package
+        working-directory: desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm version "$PACKAGE_VERSION" --no-git-tag-version --allow-same-version
+          npm run dist:mac:arm64:release
+
+      - name: Verify and smoke-test packaged app
+        working-directory: desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run verify:mac:distribution
+          npm run smoke:mac
+          cd dist
+          shasum -a 256 -- *.dmg *.zip | LC_ALL=C sort > SHA256SUMS-macos.txt
+
+      - name: Upload private macOS package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: WeChatDataAnalysis-macos-arm64-${{ inputs.version }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/SHA256SUMS-macos.txt
+
+      - name: Remove temporary signing keychain
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          security remove-trusted-cert "$RUNNER_TEMP/wda-self-signed-root.cer" 2>/dev/null
+          security delete-keychain "$WCE_MACOS_BUILD_KEYCHAIN" 2>/dev/null
+          rm -f "$RUNNER_TEMP/wda-host.p12"
+          rm -f "$RUNNER_TEMP/wda-self-signed-root.cer"
+          rm -f "$RUNNER_TEMP/wda-self-signed-root.pem"
+          rm -f "$RUNNER_TEMP/wda-host-leaf.pem" "$RUNNER_TEMP/wda-host-leaf.cer"
+          rm -f "$RUNNER_TEMP/wda-host-chain.pem" "$RUNNER_TEMP/wda-host-chain.cer"
