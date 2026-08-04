@@ -490,8 +490,17 @@ async function runPackagedRuntimeSmoke(appPath) {
     const capabilities = await waitForJson(`http://127.0.0.1:${backendPort}/api/system/platform`);
     assert.equal(capabilities.statusCode, 200, capabilities.text || backendProc.output());
     assert.equal(capabilities.body?.platform, "macos");
-    assert.equal(capabilities.body?.database_key_extraction, true);
-    assert.equal(capabilities.body?.database_key_online_authorization_required, true);
+    const capabilityEvidence = JSON.stringify(capabilities.body || {});
+    assert.equal(
+      capabilities.body?.database_key_extraction,
+      true,
+      `Packaged database-key capability is unavailable: ${capabilityEvidence}`
+    );
+    assert.equal(
+      capabilities.body?.database_key_online_authorization_required,
+      true,
+      `Packaged database-key authorization policy is invalid: ${capabilityEvidence}`
+    );
     assert.match(String(capabilities.body?.database_key_build_id || ""), /^[A-Za-z0-9._-]+$/);
   } finally {
     await stopProcess(backendProc);
