@@ -20,6 +20,28 @@ from wechat_decrypt_tool.routers import keys as keys_router
 
 
 class TestMacosPlatformSupport(unittest.TestCase):
+    def test_packaged_native_resources_prefer_stable_sibling_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            backend = root / "WeChatDataAnalysis.app" / "Contents" / "Resources" / "backend"
+            external_helper = backend / "native" / "macos" / "db-key" / "wda_xkey_helper"
+            embedded_native = root / "_MEI" / "wechat_decrypt_tool" / "native"
+            embedded_helper = embedded_native / "macos" / "db-key" / "wda_xkey_helper"
+            external_helper.parent.mkdir(parents=True)
+            embedded_helper.parent.mkdir(parents=True)
+            external_helper.write_bytes(b"producer-signed-helper")
+            embedded_helper.write_bytes(b"pyinstaller-normalized-helper")
+
+            with (
+                patch.object(platform_support.sys, "frozen", True, create=True),
+                patch.object(platform_support.sys, "executable", str(backend / "wechat-backend")),
+                patch.object(platform_support, "_native_root", return_value=embedded_native),
+                patch.object(platform_support.sys, "_MEIPASS", str(root / "_MEI"), create=True),
+            ):
+                selected = platform_support.mac_db_key_bundle_dir()
+
+        self.assertEqual(selected, external_helper.parent.resolve())
+
     def test_packaged_database_key_bundle_ignores_environment_override(self) -> None:
         bundled_helper = Path(
             "/Applications/WeChatDataAnalysis.app/Contents/Resources/backend/"
