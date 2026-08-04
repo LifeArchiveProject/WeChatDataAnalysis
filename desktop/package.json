@@ -13,6 +13,7 @@
     "verify:mac:native": "node scripts/verify-macos-native.cjs --arch arm64 --require-host-arch",
     "verify:mac:distribution": "node scripts/verify-macos-distribution.cjs",
     "smoke:mac": "node scripts/smoke-macos-package.cjs",
+    "smoke:mac:image-scan": "node scripts/smoke-macos-package.cjs --synthetic-image-scan",
     "smoke:win": "node scripts/smoke-windows-package.cjs",
     "smoke:win:real": "node scripts/smoke-windows-real-database.cjs",
     "dist": "npm run dist:win",

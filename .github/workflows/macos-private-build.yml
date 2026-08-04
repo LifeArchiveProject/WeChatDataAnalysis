@@ -7,6 +7,11 @@ on:
         description: Package version (for example 1.18.5)
         required: true
         type: string
+      run_image_scan_diagnostic:
+        description: Run the non-blocking synthetic cross-process image-key scan
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -350,6 +355,13 @@ jobs:
           npm run smoke:mac
           cd dist
           shasum -a 256 -- *.dmg *.zip | LC_ALL=C sort > SHA256SUMS-macos.txt
+
+      - name: Run optional image-key cross-process diagnostic
+        if: ${{ inputs.run_image_scan_diagnostic }}
+        continue-on-error: true
+        working-directory: desktop
+        shell: bash
+        run: npm run smoke:mac:image-scan
 
       - name: Upload private macOS package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

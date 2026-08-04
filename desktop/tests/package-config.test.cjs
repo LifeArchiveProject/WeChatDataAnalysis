@@ -257,6 +257,10 @@ test("macOS release exposes a reusable packaged smoke test", () => {
   const smokeScript = path.join(desktopRoot, "scripts", "smoke-macos-package.cjs");
   assert.equal(packageJson.scripts["smoke:mac"], "node scripts/smoke-macos-package.cjs");
   assert.equal(
+    packageJson.scripts["smoke:mac:image-scan"],
+    "node scripts/smoke-macos-package.cjs --synthetic-image-scan"
+  );
+  assert.equal(
     packageJson.scripts["verify:mac:distribution"],
     "node scripts/verify-macos-distribution.cjs"
   );
@@ -372,9 +376,20 @@ test("macOS package smoke performs a real image-key memory scan", () => {
   assert.match(smokeScript, /createCipheriv\("aes-128-ecb"/);
   assert.match(smokeScript, /spawnSync\(imageHelper/);
   assert.match(smokeScript, /Buffer\.from\(helperPayload\.aesKey, "hex"\)/);
+  assert.match(smokeScript, /if \(runSyntheticImageScan\)/);
   assert.match(smokeScript, /await probePackagedImageScanner\(imageHelper, tempRoot\)/);
+  assert.match(smokeScript, /SYNTHETIC_IMAGE_SCAN_FLAG = "--synthetic-image-scan"/);
   assert.match(smokeScript, /timeout: 30_000/);
   assert.match(smokeScript, /30-second production budget/);
+
+  const workflow = fs.readFileSync(
+    path.join(repoRoot, ".github", "workflows", "macos-private-build.yml"),
+    "utf8"
+  );
+  assert.match(workflow, /run_image_scan_diagnostic:/);
+  assert.match(workflow, /if: \$\{\{ inputs\.run_image_scan_diagnostic \}\}/);
+  assert.match(workflow, /continue-on-error: true/);
+  assert.match(workflow, /npm run smoke:mac:image-scan/);
 });
 
 test("unsigned macOS CI packages are ad-hoc sealed before DMG creation", () => {

@@ -21,6 +21,8 @@ const {
 const desktopRoot = path.resolve(__dirname, "..");
 const SUPPORTED_ARCHITECTURE = "arm64";
 const PACKAGE_MINIMUM_MACOS_VERSION = "15.0";
+const SYNTHETIC_IMAGE_SCAN_FLAG = "--synthetic-image-scan";
+const runSyntheticImageScan = process.argv.slice(2).includes(SYNTHETIC_IMAGE_SCAN_FLAG);
 
 function fail(message) {
   throw new Error(message);
@@ -440,7 +442,9 @@ async function runPackagedRuntimeSmoke(appPath) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wda-macos-smoke-"));
   let backendProc = null;
   try {
-    await probePackagedImageScanner(imageHelper, tempRoot);
+    if (runSyntheticImageScan) {
+      await probePackagedImageScanner(imageHelper, tempRoot);
+    }
 
     const backendPort = await getFreePort();
     const backendEnv = {
@@ -505,7 +509,9 @@ async function main() {
     fail(`Apple Silicon runner required, got ${process.arch}`);
   }
 
-  const explicitAppPath = String(process.argv[2] || "").trim();
+  const explicitAppPath = String(
+    process.argv.slice(2).find((arg) => arg !== SYNTHETIC_IMAGE_SCAN_FLAG) || ""
+  ).trim();
   if (explicitAppPath) {
     const appPath = path.resolve(explicitAppPath);
     verifyAppBundle(appPath, { distribution: false, source: "explicit app bundle" });
