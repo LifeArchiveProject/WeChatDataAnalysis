@@ -112,6 +112,8 @@ test("self-signed private workflow imports a persistent identity and never notar
   assert.match(workflow, /Extended Key Usage/);
   assert.match(workflow, /actual_host_leaf_sha256/);
   assert.match(workflow, /security import/);
+  assert.match(workflow, /security default-keychain -d user -s "\$keychain"/);
+  assert.match(workflow, /per-device software identity/);
   assert.doesNotMatch(workflow, /security remove-trusted-cert/);
   assert.match(workflow, /security delete-keychain/);
   assert.doesNotMatch(workflow, /APPLE_ID|notarytool|stapler/);

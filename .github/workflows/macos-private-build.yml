@@ -295,6 +295,10 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
             -k "$keychain_password" "$keychain"
           security list-keychains -d user -s "$keychain"
+          # The broker creates its per-device software identity through the
+          # default Keychain API. Point that API at the same unlocked disposable
+          # keychain instead of the hosted runner's unavailable login keychain.
+          security default-keychain -d user -s "$keychain"
           echo "WCE_MACOS_BUILD_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
       - name: Setup Node.js
