@@ -44,6 +44,11 @@ const {
 } = require("./backend-startup.cjs");
 const { applyNativeCoreRuntimePolicy } = require("./native-core-runtime.cjs");
 const {
+  ENV_SOURCE_NATIVE_CORE_DIR,
+  ensureSourceNativeCore,
+} = require("./source-native-core-bootstrap.cjs");
+const { resolveNativeCoreRuntimeDir } = require("./native-core-path.cjs");
+const {
   configurePrivatePkiUpdateVerification,
   ensurePrivatePkiIssuerCached,
 } = require("./windows-private-pki-runtime.cjs");
@@ -1941,16 +1946,29 @@ function getFfmpegPath() {
   }
 }
 
-function getNativeCoreRuntimeDir() {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, "backend", "native")
-    : path.join(repoRoot(), "src", "wechat_decrypt_tool", "native");
+function getNativeCoreRuntimeDir(env = process.env) {
+  // dev.cjs performs this preflight before spawning the frontend. Keep this
+  // fallback for direct `electron .` and dev:static source launches.
+  if (
+    !app.isPackaged &&
+    process.platform === "darwin" &&
+    !String(env[ENV_SOURCE_NATIVE_CORE_DIR] || "").trim()
+  ) {
+    const sourceNativeCore = ensureSourceNativeCore({ env });
+    env[ENV_SOURCE_NATIVE_CORE_DIR] = sourceNativeCore.nativeDir;
+  }
+  return resolveNativeCoreRuntimeDir({
+    env,
+    isPackaged: app.isPackaged,
+    repoRoot: repoRoot(),
+    resourcesPath: process.resourcesPath,
+  });
 }
 
 function configureNativeCoreRuntime(env) {
   const policy = applyNativeCoreRuntimePolicy(env, {
     isPackaged: app.isPackaged,
-    nativeDir: getNativeCoreRuntimeDir(),
+    nativeDir: getNativeCoreRuntimeDir(env),
     platform: process.platform,
   });
   logMain(

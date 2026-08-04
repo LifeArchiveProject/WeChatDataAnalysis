@@ -234,6 +234,8 @@ npm run dist
 
 公开发布流程目前仅生成 Windows 安装包。macOS 构建依赖未公开的完整性模块源码，维护者恢复受控源码后仍可在本地执行 `npm run dist:mac`；公共 GitHub Actions 不会尝试读取或发布该源码。
 
+macOS 源码桌面模式使用 `cd desktop && npm run dev`。维护者首次运行前需让 GitHub CLI 登录到有权读取私有 Producer 的账号（`gh auth login`）；启动器会在产生任何子进程前下载、校验并缓存固定修订的开发制品。后续命中缓存可离线启动。该步骤仅属于源码开发环境，打包后的普通用户不需要 GitHub CLI 或 Producer 权限。
+
 内置 Mac 原生资源的来源、哈希、修改内容和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 安全说明

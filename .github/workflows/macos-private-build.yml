@@ -337,7 +337,8 @@ jobs:
             desktop/tests/macos-native-core-packaging.test.cjs \
             desktop/tests/integrity-native-packaging.test.cjs \
             desktop/tests/native-core-packaging.test.cjs \
-            desktop/tests/native-core-runtime.test.cjs
+            desktop/tests/native-core-runtime.test.cjs \
+            desktop/tests/source-native-core-bootstrap.test.cjs
           node -e "require('./desktop/scripts/macos-xkey-packaging.cjs').resolveMacosXkeyArtifacts({ platform: 'darwin' })"
           node -e "require('./desktop/scripts/macos-native-core-packaging.cjs').resolveMacosNativeCoreArtifacts({ platform: 'darwin' })"
           node -e "require('./desktop/scripts/integrity-native-packaging.cjs').resolveIntegrityNativeArtifact({ platform: 'darwin' })"

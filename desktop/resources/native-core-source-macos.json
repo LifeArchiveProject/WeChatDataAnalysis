@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "platform": "darwin",
+  "architecture": "arm64",
+  "artifactName": "wechatdb-native-macos-arm64-development",
+  "producerRepository": "2977094657/WCDB",
+  "producerWorkflow": ".github/workflows/macos-native-production.yml",
+  "producerWorkflowRunId": 30889464728,
+  "producerWorkflowRunAttempt": 1,
+  "sourceRevision": "d54688b2ea12d6cf25858ff3e41d7f6a1fb98f9f",
+  "checksumsSha256": "c656a5f5292a9106453fdea55a331c57d5e396d17618454a27dfa13e5cc9aa41"
+}

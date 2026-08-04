@@ -2,6 +2,10 @@ const http = require("http");
 const net = require("net");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
+const {
+  ENV_SOURCE_NATIVE_CORE_DIR,
+  ensureSourceNativeCore,
+} = require("../src/source-native-core-bootstrap.cjs");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const frontendDir = path.join(repoRoot, "frontend");
@@ -112,6 +116,9 @@ function spawnLogged(command, args, options, prefix) {
 }
 
 async function main() {
+  // Resolve the private macOS source runtime before starting any child process.
+  // Packaged apps never use this developer-only bootstrap.
+  const sourceNativeCore = ensureSourceNativeCore({ env: process.env });
   const frontendHost = String(process.env.NUXT_HOST || "127.0.0.1").trim() || "127.0.0.1";
   const requestedFrontendPort = parsePort(process.env.NUXT_PORT);
   const requestedBackendPort = parsePort(process.env.WECHAT_TOOL_PORT);
@@ -139,6 +146,10 @@ async function main() {
     WECHAT_TOOL_PORT: String(backendPort),
     ELECTRON_START_URL: startUrl,
   };
+  if (sourceNativeCore.nativeDir) {
+    sharedEnv[ENV_SOURCE_NATIVE_CORE_DIR] = sourceNativeCore.nativeDir;
+    log(`[native-core] source=${sourceNativeCore.reason}`);
+  }
 
   const npmCommand = "npm";
   // Track electron.exe itself instead of an intermediate command shell.
