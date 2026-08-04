@@ -57,7 +57,8 @@ function hasCompleteNativeCore(nativeDir, platform = process.platform, fsImpl = 
 
 function hasValidManifestIdentity(manifest) {
   return (
-    manifest?.schemaVersion === 2 &&
+    ((manifest?.schemaVersion === 2 && !Object.prototype.hasOwnProperty.call(manifest, "platform")) ||
+      (manifest?.schemaVersion === 3 && manifest?.platform === "macos")) &&
     typeof manifest?.buildId === "string" &&
     BUILD_ID_PATTERN.test(manifest.buildId)
   );
@@ -97,6 +98,13 @@ function hasNoDistributionCapsule(manifest) {
 }
 
 function hasExpectedLeafRevocation(manifest) {
+  if (manifest?.schemaVersion === 3) {
+    const expected =
+      manifest?.macosSignerTrustMode === "private-pki"
+        ? "build-and-lease-only"
+        : "not-applicable";
+    return manifest?.macosPrivatePkiLeafRevocation === expected;
+  }
   const expected =
     manifest?.windowsSignerTrustMode === "private-pki"
       ? "build-and-lease-only"
@@ -105,7 +113,7 @@ function hasExpectedLeafRevocation(manifest) {
 }
 
 function isProductionNativeCoreManifest(manifest, options = {}) {
-  return (
+  const common = (
     hasValidManifestIdentity(manifest) &&
     hasActiveProductionBuildWindow(manifest, options) &&
     manifest.distributionMode === "public" &&
@@ -118,6 +126,33 @@ function isProductionNativeCoreManifest(manifest, options = {}) {
     manifest.rootPublicKeyCompiled === true &&
     manifest.testHooksEnabled === false &&
     manifest.stagingPinnedSignerTrust === false &&
+    hasCurrentSecurityContract(manifest)
+  );
+  if (!common) return false;
+  if (manifest.schemaVersion === 3) {
+    const identifiers = [
+      manifest.macosClientSigningIdentifier,
+      manifest.macosBrokerSigningIdentifier,
+      manifest.macosHostSigningIdentifier,
+    ];
+    const pins = [
+      manifest.macosClientSignerSha256,
+      manifest.macosBrokerSignerSha256,
+      manifest.macosHostSignerSha256,
+      manifest.macosPrivateRootSha256,
+    ];
+    return (
+      manifest.platform === "macos" &&
+      manifest.macosSigningMode === "self-signed" &&
+      manifest.macosSignerTrustMode === "private-pki" &&
+      hasExpectedLeafRevocation(manifest) &&
+      identifiers.every((value) => /^[A-Za-z0-9.-]+$/.test(String(value || ""))) &&
+      new Set(identifiers).size === 3 &&
+      pins.every(isNonZeroSha256) &&
+      new Set(pins.map((value) => String(value).toLowerCase())).size === 4
+    );
+  }
+  return (
     isNonZeroSha256(manifest.windowsClientSignerSha256) &&
     isNonZeroSha256(manifest.windowsBrokerSignerSha256) &&
     String(manifest.windowsClientSignerSha256).toUpperCase() !==
@@ -127,13 +162,12 @@ function isProductionNativeCoreManifest(manifest, options = {}) {
     (manifest.windowsSignerTrustMode !== "private-pki" ||
       isNonZeroSha256(manifest.windowsPrivateRootSha256)) &&
     (manifest.windowsSignerTrustMode !== "public" ||
-      new Set(["", "0".repeat(64)]).has(String(manifest.windowsPrivateRootSha256 || ""))) &&
-    hasCurrentSecurityContract(manifest)
+      new Set(["", "0".repeat(64)]).has(String(manifest.windowsPrivateRootSha256 || "")))
   );
 }
 
 function isDevelopmentNativeCoreManifest(manifest) {
-  return (
+  const common = (
     hasValidManifestIdentity(manifest) &&
     manifest.distributionMode === "public" &&
     hasNoDistributionCapsule(manifest) &&
@@ -145,9 +179,38 @@ function isDevelopmentNativeCoreManifest(manifest) {
     manifest.rootPublicKeyCompiled === false &&
     manifest.testHooksEnabled === true &&
     manifest.stagingPinnedSignerTrust === false &&
-    manifest.windowsSignerTrustMode === "public" &&
-    hasExpectedLeafRevocation(manifest) &&
     hasCurrentSecurityContract(manifest)
+  );
+  if (!common) return false;
+  if (manifest.schemaVersion === 3) {
+    const identifiers = [
+      manifest.macosClientSigningIdentifier,
+      manifest.macosBrokerSigningIdentifier,
+      manifest.macosHostSigningIdentifier,
+    ];
+    const pins = [
+      manifest.macosClientSignerSha256,
+      manifest.macosBrokerSignerSha256,
+      manifest.macosHostSignerSha256,
+      manifest.macosPrivateRootSha256,
+    ];
+    return (
+      manifest.platform === "macos" &&
+      manifest.macosSigningMode === "self-signed" &&
+      manifest.macosSignerTrustMode === "development" &&
+      hasExpectedLeafRevocation(manifest) &&
+      identifiers.every((value) => /^[A-Za-z0-9.-]+$/.test(String(value || ""))) &&
+      new Set(identifiers).size === 3 &&
+      pins.every((value) => String(value || "") === "0".repeat(64))
+    );
+  }
+  return manifest.windowsSignerTrustMode === "public" && hasExpectedLeafRevocation(manifest);
+}
+
+function manifestMatchesPlatform(manifest, platform) {
+  return (
+    (platform === "win32" && manifest?.schemaVersion === 2) ||
+    (platform === "darwin" && manifest?.schemaVersion === 3 && manifest?.platform === "macos")
   );
 }
 
@@ -167,8 +230,9 @@ function resolveNativeCoreRuntimePolicy({
 
   const complete = hasCompleteNativeCore(directory, platform, fsImpl);
   const manifest = complete ? readNativeCoreManifest(directory, fsImpl) : null;
-  const production = complete && isProductionNativeCoreManifest(manifest, { nowUnix });
-  const development = complete && isDevelopmentNativeCoreManifest(manifest);
+  const platformMatch = complete && manifestMatchesPlatform(manifest, platform);
+  const production = platformMatch && isProductionNativeCoreManifest(manifest, { nowUnix });
+  const development = platformMatch && isDevelopmentNativeCoreManifest(manifest);
   const explicitValue = String(env[ENV_NATIVE_CORE_MODE] || "").trim().toLowerCase();
   const explicit = explicitValue !== "";
   if (explicit && !NATIVE_CORE_MODES.has(explicitValue)) {
