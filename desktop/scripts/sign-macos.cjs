@@ -6,6 +6,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { signAsync } = require("@electron/osx-sign");
 const { contract: macosXkeyContract } = require("./macos-xkey-packaging.cjs");
+const { macosNativeManifestErrors } = require("./macos-native-core-packaging.cjs");
 const {
   extractCodeSigningLeafCertificate,
 } = require("./macos-codesign-certificates.cjs");
@@ -125,6 +126,16 @@ module.exports = async function signMacos(options) {
   );
   const backendSuffix = path.join("Contents", "Resources", "backend", "wechat-backend");
   const backendPath = path.join(options.app, backendSuffix);
+  const nativeCoreDirectory = path.join(
+    options.app,
+    "Contents",
+    "Resources",
+    "backend",
+    "native"
+  );
+  const nativeClientPath = path.join(nativeCoreDirectory, "libwechatdb_client.dylib");
+  const nativeBrokerPath = path.join(nativeCoreDirectory, "wechatdb_broker");
+  const nativeManifestPath = path.join(nativeCoreDirectory, "wechatdb_native_build.json");
   const helperEntitlements = path.resolve(
     __dirname,
     "..",
@@ -142,6 +153,11 @@ module.exports = async function signMacos(options) {
     throw new Error(`Packaged macOS database key helper not found: ${databaseKeyHelperPath}`);
   }
   if (!fs.existsSync(backendPath)) throw new Error(`Packaged backend not found: ${backendPath}`);
+  for (const nativePath of [nativeClientPath, nativeBrokerPath, nativeManifestPath]) {
+    if (!fs.existsSync(nativePath)) {
+      throw new Error(`Packaged macOS native-core component not found: ${nativePath}`);
+    }
+  }
   const xkeyManifest = JSON.parse(fs.readFileSync(databaseKeyManifestPath, "utf8"));
   const xkeyTrust = JSON.parse(fs.readFileSync(databaseKeyTrustPath, "utf8"));
   const helperMetadata = xkeyManifest?.files?.[macosXkeyContract.helperFileName];
@@ -157,6 +173,7 @@ module.exports = async function signMacos(options) {
   const expectedHelperSigner = String(process.env.WCE_MACOS_KEY_HELPER_SIGNER_SHA256 || "").trim();
   const expectedHostSigner = String(process.env.WCE_MACOS_WCDA_HOST_SIGNER_SHA256 || "").trim();
   const signingMode = distribution ? requiredSigningMode() : null;
+  const nativeManifest = JSON.parse(fs.readFileSync(nativeManifestPath, "utf8"));
   if (
     distribution &&
     (!/^[0-9a-f]{64}$/.test(expectedHelperSigner) || !/^[0-9a-f]{64}$/.test(expectedHostSigner))
@@ -165,6 +182,70 @@ module.exports = async function signMacos(options) {
       "Distribution signing requires WCE_MACOS_KEY_HELPER_SIGNER_SHA256 and " +
       "WCE_MACOS_WCDA_HOST_SIGNER_SHA256."
     );
+  }
+  let expectedNativeClientSigner = "";
+  let expectedNativeBrokerSigner = "";
+  if (distribution) {
+    const nativeErrors = macosNativeManifestErrors(nativeManifest);
+    if (nativeErrors.length) {
+      throw new Error(`Packaged macOS native-core manifest is invalid: ${nativeErrors.join("; ")}`);
+    }
+    const requiredValue = (name, pattern) => {
+      const value = String(process.env[name] || "").trim();
+      if (!pattern.test(value)) throw new Error(`Missing or invalid ${name}.`);
+      return value;
+    };
+    expectedNativeClientSigner = requiredValue(
+      "WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256",
+      /^[0-9a-f]{64}$/
+    );
+    expectedNativeBrokerSigner = requiredValue(
+      "WCE_NATIVE_CORE_BROKER_SIGNER_SHA256",
+      /^[0-9a-f]{64}$/
+    );
+    const expectedNativeHostSigner = requiredValue(
+      "WCE_NATIVE_CORE_HOST_SIGNER_SHA256",
+      /^[0-9a-f]{64}$/
+    );
+    const expectedNativeRoot = requiredValue(
+      "WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256",
+      /^[0-9a-f]{64}$/
+    );
+    const expectedNativeClientIdentifier = requiredValue(
+      "WCE_NATIVE_CORE_CLIENT_SIGNING_IDENTIFIER",
+      /^[A-Za-z0-9.-]+$/
+    );
+    const expectedNativeBrokerIdentifier = requiredValue(
+      "WCE_NATIVE_CORE_BROKER_SIGNING_IDENTIFIER",
+      /^[A-Za-z0-9.-]+$/
+    );
+    const expectedNativeHostIdentifier = requiredValue(
+      "WCE_NATIVE_CORE_HOST_SIGNING_IDENTIFIER",
+      /^[A-Za-z0-9.-]+$/
+    );
+    if (
+      expectedNativeHostSigner !== expectedHostSigner ||
+      expectedNativeHostIdentifier !== macosXkeyContract.hostSigningIdentifier ||
+      nativeManifest.macosClientSignerSha256 !== expectedNativeClientSigner ||
+      nativeManifest.macosBrokerSignerSha256 !== expectedNativeBrokerSigner ||
+      nativeManifest.macosHostSignerSha256 !== expectedNativeHostSigner ||
+      nativeManifest.macosPrivateRootSha256 !== expectedNativeRoot ||
+      nativeManifest.macosClientSigningIdentifier !== expectedNativeClientIdentifier ||
+      nativeManifest.macosBrokerSigningIdentifier !== expectedNativeBrokerIdentifier ||
+      nativeManifest.macosHostSigningIdentifier !== expectedNativeHostIdentifier
+    ) {
+      throw new Error("Packaged macOS native-core identity does not match protected environment pins.");
+    }
+    const clientBefore = inspectCodeSignature(nativeClientPath);
+    const brokerBefore = inspectCodeSignature(nativeBrokerPath);
+    if (
+      clientBefore.identifier !== expectedNativeClientIdentifier ||
+      clientBefore.leafSha256 !== expectedNativeClientSigner ||
+      brokerBefore.identifier !== expectedNativeBrokerIdentifier ||
+      brokerBefore.leafSha256 !== expectedNativeBrokerSigner
+    ) {
+      throw new Error("Producer-signed macOS native-core identities do not match pins.");
+    }
   }
   if (distribution && xkeyManifest?.signing?.mode !== signingMode) {
     throw new Error("The selected macOS signing mode does not match the producer helper manifest.");
@@ -191,12 +272,17 @@ module.exports = async function signMacos(options) {
 
   const baseOptionsForFile = options.optionsForFile;
   const preservedHelperHash = sha256File(databaseKeyHelperPath);
+  const preservedNativeClientHash = sha256File(nativeClientPath);
+  const preservedNativeBrokerHash = sha256File(nativeBrokerPath);
+  const preservedNativeManifestHash = sha256File(nativeManifestPath);
   await signAsync({
     ...options,
     ...(explicitIdentity ? { identity: explicitIdentity.identity } : {}),
     ignore: [
       ...ignoreList(options.ignore),
       (filePath) => path.resolve(filePath) === path.resolve(databaseKeyHelperPath),
+      (filePath) => path.resolve(filePath) === path.resolve(nativeClientPath),
+      (filePath) => path.resolve(filePath) === path.resolve(nativeBrokerPath),
     ],
     optionsForFile(filePath) {
       const inherited = typeof baseOptionsForFile === "function" ? baseOptionsForFile(filePath) || {} : {};
@@ -227,6 +313,13 @@ module.exports = async function signMacos(options) {
   if (sha256File(databaseKeyHelperPath) !== preservedHelperHash) {
     throw new Error("macOS app signing modified the producer-signed database key helper.");
   }
+  if (
+    sha256File(nativeClientPath) !== preservedNativeClientHash ||
+    sha256File(nativeBrokerPath) !== preservedNativeBrokerHash ||
+    sha256File(nativeManifestPath) !== preservedNativeManifestHash
+  ) {
+    throw new Error("macOS app signing modified the producer native-core artifact.");
+  }
   if (distribution) {
     const helperAfter = inspectCodeSignature(databaseKeyHelperPath);
     if (
@@ -241,6 +334,16 @@ module.exports = async function signMacos(options) {
       backendAfter.leafSha256 !== expectedHostSigner
     ) {
       throw new Error("Signed backend identity does not match the helper caller pin.");
+    }
+    const nativeClientAfter = inspectCodeSignature(nativeClientPath);
+    const nativeBrokerAfter = inspectCodeSignature(nativeBrokerPath);
+    if (
+      nativeClientAfter.identifier !== nativeManifest.macosClientSigningIdentifier ||
+      nativeClientAfter.leafSha256 !== expectedNativeClientSigner ||
+      nativeBrokerAfter.identifier !== nativeManifest.macosBrokerSigningIdentifier ||
+      nativeBrokerAfter.leafSha256 !== expectedNativeBrokerSigner
+    ) {
+      throw new Error("macOS app signing replaced a producer native-core identity.");
     }
   }
 };

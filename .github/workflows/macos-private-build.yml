@@ -28,6 +28,19 @@ jobs:
       WCE_MACOS_WCDA_HOST_SIGNER_SHA256: ${{ vars.WCE_MACOS_WCDA_HOST_SIGNER_SHA256 }}
       WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY: ${{ vars.WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY }}
       WCE_MACOS_XKEY_ALLOW_DEVELOPMENT_ARTIFACTS: "0"
+      WCE_NATIVE_CORE_ARTIFACT_REPOSITORY: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_REPOSITORY }}
+      WCE_NATIVE_CORE_ARTIFACT_RUN_ID: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_RUN_ID }}
+      WCE_NATIVE_CORE_SOURCE_REVISION: ${{ vars.WCE_NATIVE_CORE_SOURCE_REVISION }}
+      WCE_NATIVE_CORE_BUILD_ID: ${{ vars.WCE_NATIVE_CORE_BUILD_ID }}
+      WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 }}
+      WCE_NATIVE_CORE_BROKER_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_BROKER_SIGNER_SHA256 }}
+      WCE_NATIVE_CORE_HOST_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_HOST_SIGNER_SHA256 }}
+      WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256: ${{ vars.WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256 }}
+      WCE_NATIVE_CORE_CLIENT_SIGNING_IDENTIFIER: ${{ vars.WCE_NATIVE_CORE_CLIENT_SIGNING_IDENTIFIER }}
+      WCE_NATIVE_CORE_BROKER_SIGNING_IDENTIFIER: ${{ vars.WCE_NATIVE_CORE_BROKER_SIGNING_IDENTIFIER }}
+      WCE_NATIVE_CORE_HOST_SIGNING_IDENTIFIER: ${{ vars.WCE_NATIVE_CORE_HOST_SIGNING_IDENTIFIER }}
+      WCE_NATIVE_CORE_REQUIRED: "1"
+      WCE_NATIVE_CORE_ALLOW_DEVELOPMENT_ARTIFACTS: "0"
       MACOS_DISTRIBUTION_BUILD: "1"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       CI: "true"
@@ -59,6 +72,25 @@ jobs:
           [[ "$WCE_MACOS_KEY_HELPER_SIGNER_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$WCE_MACOS_WCDA_HOST_SIGNER_SHA256" =~ ^[0-9a-f]{64}$ ]]
           test -n "$WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY"
+          [[ "$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$WCE_NATIVE_CORE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$WCE_NATIVE_CORE_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WCE_NATIVE_CORE_BUILD_ID" =~ ^[A-Za-z0-9._-]{8,128}$ ]]
+          for name in \
+              WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 \
+              WCE_NATIVE_CORE_BROKER_SIGNER_SHA256 \
+              WCE_NATIVE_CORE_HOST_SIGNER_SHA256 \
+              WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256; do
+            [[ "${!name:-}" =~ ^[0-9a-f]{64}$ ]]
+          done
+          for name in \
+              WCE_NATIVE_CORE_CLIENT_SIGNING_IDENTIFIER \
+              WCE_NATIVE_CORE_BROKER_SIGNING_IDENTIFIER \
+              WCE_NATIVE_CORE_HOST_SIGNING_IDENTIFIER; do
+            [[ "${!name:-}" =~ ^[A-Za-z0-9.-]+$ ]]
+          done
+          test "$WCE_NATIVE_CORE_HOST_SIGNER_SHA256" = "$WCE_MACOS_WCDA_HOST_SIGNER_SHA256"
+          test "$WCE_NATIVE_CORE_HOST_SIGNING_IDENTIFIER" = "com.lifearchive.wechatdataanalysis.backend"
 
       - name: Download exact Producer helper artifact
         timeout-minutes: 15
@@ -88,6 +120,37 @@ jobs:
           test "$downloaded" = 1
           test -f "$artifact_dir/wda_xkey_helper"
           echo "WCE_MACOS_XKEY_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+
+      - name: Download exact Producer native-core artifact
+        timeout-minutes: 15
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WCE_MACOS_PRODUCER_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          artifact_dir="$RUNNER_TEMP/wechatdb-native-macos-arm64-production"
+          downloaded=0
+          for attempt in 1 2 3; do
+            rm -rf "$artifact_dir"
+            mkdir -p "$artifact_dir"
+            if gh run download "$WCE_NATIVE_CORE_ARTIFACT_RUN_ID" \
+              --repo "$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY" \
+              --name wechatdb-native-macos-arm64-production \
+              --dir "$artifact_dir"
+            then
+              downloaded=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep "$((attempt * 15))"
+            fi
+          done
+          test "$downloaded" = 1
+          test -f "$artifact_dir/libwechatdb_client.dylib"
+          test -f "$artifact_dir/wechatdb_broker"
+          test -f "$artifact_dir/wechatdb_native_build.json"
+          echo "WCE_NATIVE_CORE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
 
       - name: Import persistent self-signed host identity
         timeout-minutes: 5
@@ -142,6 +205,8 @@ jobs:
           test "$(grep -c -- '-----BEGIN CERTIFICATE-----' "$p12_leaf")" = 1
           test "$(grep -c -- '-----BEGIN CERTIFICATE-----' "$p12_chain")" = 1
           openssl x509 -inform DER -in "$root_cert" -out "$root_pem"
+          actual_root_sha256="$(shasum -a 256 "$root_cert" | awk '{print tolower($1)}')"
+          test "$actual_root_sha256" = "$WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256"
           openssl x509 -in "$p12_chain" -outform DER -out "$RUNNER_TEMP/wda-host-chain.cer"
           cmp "$RUNNER_TEMP/wda-host-chain.cer" "$root_cert"
           openssl verify -CAfile "$root_pem" "$p12_leaf"
@@ -210,8 +275,12 @@ jobs:
             tests/test_decrypt_image_keys_frontend.py
           node --test \
             desktop/tests/macos-xkey-packaging.test.cjs \
-            desktop/tests/macos-xkey-signing.test.cjs
+            desktop/tests/macos-xkey-signing.test.cjs \
+            desktop/tests/macos-native-core-packaging.test.cjs \
+            desktop/tests/native-core-packaging.test.cjs \
+            desktop/tests/native-core-runtime.test.cjs
           node -e "require('./desktop/scripts/macos-xkey-packaging.cjs').resolveMacosXkeyArtifacts({ platform: 'darwin' })"
+          node -e "require('./desktop/scripts/macos-native-core-packaging.cjs').resolveMacosNativeCoreArtifacts({ platform: 'darwin' })"
 
       - name: Build signed macOS package
         working-directory: desktop

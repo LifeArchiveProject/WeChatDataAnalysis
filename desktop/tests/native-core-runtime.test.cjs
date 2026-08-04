@@ -60,6 +60,56 @@ const DEVELOPMENT_MANIFEST = Object.freeze({
   securityCheckpointSetSha256: "bb".repeat(32),
 });
 
+const MACOS_PRODUCTION_MANIFEST = Object.freeze({
+  schemaVersion: 3,
+  platform: "macos",
+  distributionMode: "public",
+  buildId: "wcdb-macos-20260804-abcd1234",
+  buildIssuedAtUnix: BUILD_ISSUED_AT_UNIX,
+  buildExpiresAtUnix: BUILD_ISSUED_AT_UNIX + BUILD_LIFETIME_SECONDS,
+  developmentBuild: false,
+  offlineBootstrapFeatureBits: 3,
+  offlineExportSealFormat: "WES2",
+  codeSignatureEnforced: true,
+  rootPublicKeyCompiled: true,
+  testHooksEnabled: false,
+  stagingPinnedSignerTrust: false,
+  macosSigningMode: "self-signed",
+  macosSignerTrustMode: "private-pki",
+  macosPrivatePkiLeafRevocation: "build-and-lease-only",
+  macosClientSigningIdentifier: "com.lifearchive.wechatdb.client",
+  macosBrokerSigningIdentifier: "com.lifearchive.wechatdb.broker",
+  macosHostSigningIdentifier: "com.lifearchive.wechatdataanalysis.backend",
+  macosClientSignerSha256: "11".repeat(32),
+  macosBrokerSignerSha256: "22".repeat(32),
+  macosHostSignerSha256: "33".repeat(32),
+  macosPrivateRootSha256: "44".repeat(32),
+  securityNoticeId: "WCE-AUTOMATED-ANALYSIS-NOTICE-V2",
+  securityNoticeSha256: "aa".repeat(32),
+  securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
+  securityCheckpointCount: 7,
+  securityCheckpointSetSha256: "bb".repeat(32),
+});
+
+const MACOS_DEVELOPMENT_MANIFEST = Object.freeze({
+  ...MACOS_PRODUCTION_MANIFEST,
+  buildId: "dev-local",
+  buildIssuedAtUnix: 0,
+  buildExpiresAtUnix: 0,
+  developmentBuild: true,
+  offlineBootstrapFeatureBits: 0,
+  offlineExportSealFormat: "none",
+  codeSignatureEnforced: false,
+  rootPublicKeyCompiled: false,
+  testHooksEnabled: true,
+  macosSignerTrustMode: "development",
+  macosPrivatePkiLeafRevocation: "not-applicable",
+  macosClientSignerSha256: "00".repeat(32),
+  macosBrokerSignerSha256: "00".repeat(32),
+  macosHostSignerSha256: "00".repeat(32),
+  macosPrivateRootSha256: "00".repeat(32),
+});
+
 function makeArtifacts(platform, manifest, { omit = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wda-native-runtime-"));
   for (const name of nativeCoreArtifactNames(platform)) {
@@ -156,6 +206,105 @@ test("packaged production artifacts auto-enable required mode without a developm
     assert.equal(env[ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD], undefined);
   } finally {
     cleanup(nativeDir);
+  }
+});
+
+test("packaged macOS production artifacts enable required mode", () => {
+  const nativeDir = makeArtifacts("darwin", MACOS_PRODUCTION_MANIFEST);
+  const env = {};
+  try {
+    const policy = applyNativeCoreRuntimePolicy(env, {
+      isPackaged: true,
+      nativeDir,
+      platform: "darwin",
+    });
+    assert.equal(policy.mode, "required");
+    assert.equal(policy.reason, "production-artifacts");
+    assert.equal(policy.manifest.platform, "macos");
+    assert.equal(env[ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD], undefined);
+  } finally {
+    cleanup(nativeDir);
+  }
+});
+
+test("source macOS development artifacts enable only the explicit development override", () => {
+  const nativeDir = makeArtifacts("darwin", MACOS_DEVELOPMENT_MANIFEST);
+  const env = {};
+  try {
+    const policy = applyNativeCoreRuntimePolicy(env, {
+      isPackaged: false,
+      nativeDir,
+      platform: "darwin",
+    });
+    assert.equal(policy.artifactState, "development");
+    assert.equal(policy.manifest.platform, "macos");
+    assert.equal(env[ENV_NATIVE_CORE_MODE], "required");
+    assert.equal(env[ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD], "1");
+  } finally {
+    cleanup(nativeDir);
+  }
+});
+
+test("Windows and macOS manifest schemas cannot cross platform boundaries", () => {
+  const windowsWithMacManifest = makeArtifacts("win32", MACOS_PRODUCTION_MANIFEST);
+  const macWithWindowsManifest = makeArtifacts("darwin", PRODUCTION_MANIFEST);
+  try {
+    assert.throws(
+      () => resolveNativeCoreRuntimePolicy({
+        env: {},
+        isPackaged: true,
+        nativeDir: windowsWithMacManifest,
+        platform: "win32",
+      }),
+      /requires an approved production/
+    );
+    assert.throws(
+      () => resolveNativeCoreRuntimePolicy({
+        env: {},
+        isPackaged: true,
+        nativeDir: macWithWindowsManifest,
+        platform: "darwin",
+      }),
+      /requires an approved production/
+    );
+  } finally {
+    cleanup(windowsWithMacManifest);
+    cleanup(macWithWindowsManifest);
+  }
+});
+
+test("macOS production identity substitution fails closed", () => {
+  const rejected = [
+    { ...MACOS_PRODUCTION_MANIFEST, macosSigningMode: "developer-id" },
+    { ...MACOS_PRODUCTION_MANIFEST, macosSignerTrustMode: "development" },
+    { ...MACOS_PRODUCTION_MANIFEST, macosPrivatePkiLeafRevocation: "not-applicable" },
+    {
+      ...MACOS_PRODUCTION_MANIFEST,
+      macosHostSigningIdentifier: MACOS_PRODUCTION_MANIFEST.macosBrokerSigningIdentifier,
+    },
+    {
+      ...MACOS_PRODUCTION_MANIFEST,
+      macosHostSignerSha256: MACOS_PRODUCTION_MANIFEST.macosClientSignerSha256,
+    },
+    { ...MACOS_PRODUCTION_MANIFEST, macosPrivateRootSha256: "00".repeat(32) },
+  ];
+  assert.equal(isProductionNativeCoreManifest(MACOS_PRODUCTION_MANIFEST), true);
+  for (const manifest of rejected) {
+    assert.equal(isProductionNativeCoreManifest(manifest), false);
+    const nativeDir = makeArtifacts("darwin", manifest);
+    try {
+      assert.throws(
+        () => resolveNativeCoreRuntimePolicy({
+          env: {},
+          isPackaged: true,
+          nativeDir,
+          platform: "darwin",
+        }),
+        /requires an approved production/
+      );
+    } finally {
+      cleanup(nativeDir);
+    }
   }
 });
 

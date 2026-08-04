@@ -59,6 +59,37 @@ const DEVELOPMENT_MANIFEST = Object.freeze({
   securityCheckpointSetSha256: "bb".repeat(32),
 });
 
+const MACOS_DEVELOPMENT_MANIFEST = Object.freeze({
+  schemaVersion: 3,
+  platform: "macos",
+  distributionMode: "public",
+  buildId: "dev-local",
+  buildIssuedAtUnix: 0,
+  buildExpiresAtUnix: 0,
+  developmentBuild: true,
+  offlineBootstrapFeatureBits: 0,
+  offlineExportSealFormat: "none",
+  codeSignatureEnforced: false,
+  rootPublicKeyCompiled: false,
+  testHooksEnabled: true,
+  stagingPinnedSignerTrust: false,
+  macosSigningMode: "self-signed",
+  macosSignerTrustMode: "development",
+  macosPrivatePkiLeafRevocation: "not-applicable",
+  macosClientSigningIdentifier: "com.lifearchive.wechatdb.client",
+  macosBrokerSigningIdentifier: "com.lifearchive.wechatdb.broker",
+  macosHostSigningIdentifier: "com.lifearchive.wechatdataanalysis.backend",
+  macosClientSignerSha256: "0".repeat(64),
+  macosBrokerSignerSha256: "0".repeat(64),
+  macosHostSignerSha256: "0".repeat(64),
+  macosPrivateRootSha256: "0".repeat(64),
+  securityNoticeId: "WCE-AUTOMATED-ANALYSIS-NOTICE-V2",
+  securityNoticeSha256: "aa".repeat(32),
+  securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
+  securityCheckpointCount: 7,
+  securityCheckpointSetSha256: "bb".repeat(32),
+});
+
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "wda-native-package-"));
 }
@@ -183,16 +214,19 @@ test("production staging copies the complete Windows trio", () => {
   }
 });
 
-test("production staging copies the complete macOS trio", () => {
+test("local macOS development staging copies the complete trio", () => {
   const root = makeTempDir();
   const artifactDir = path.join(root, "artifacts");
   const destination = path.join(root, "stage");
-  writeArtifactSet(artifactDir, "darwin", PRODUCTION_MANIFEST);
+  writeArtifactSet(artifactDir, "darwin", MACOS_DEVELOPMENT_MANIFEST);
 
   try {
     const result = stageNativeCoreArtifacts({
       destinationDir: destination,
-      env: { WCE_NATIVE_CORE_ARTIFACT_DIR: artifactDir },
+      env: {
+        WCE_NATIVE_CORE_ARTIFACT_DIR: artifactDir,
+        WCE_NATIVE_CORE_ALLOW_DEVELOPMENT_ARTIFACTS: "1",
+      },
       logger: quietLogger(),
       platform: "darwin",
     });
@@ -454,7 +488,7 @@ test("malformed and structurally invalid manifests fail even with a development 
     );
     assert.throws(
       () => resolveNativeCoreArtifacts({ env, platform: "win32" }),
-      /schemaVersion must equal 2; buildId must be a non-empty string/
+      /schemaVersion must equal 2 or 3; buildId must be a non-empty string/
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

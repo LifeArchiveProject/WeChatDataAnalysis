@@ -382,6 +382,67 @@ def test_device_credential_uses_current_user_dpapi_without_ui(tmp_path: Path) ->
     assert LEASE not in store.path.read_bytes()
 
 
+def test_device_credential_uses_bound_macos_keychain_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    items: dict[tuple[str, str], str] = {}
+
+    def fake_run(arguments: list[str], **_kwargs: object):
+        command = arguments[1]
+        account = arguments[arguments.index("-a") + 1]
+        service = arguments[arguments.index("-s") + 1]
+        key = (service, account)
+        if command == "add-generic-password":
+            items[key] = arguments[arguments.index("-w") + 1]
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        if command == "find-generic-password":
+            if key not in items:
+                return type("Result", (), {"returncode": 44, "stdout": "", "stderr": ""})()
+            return type(
+                "Result", (), {"returncode": 0, "stdout": items[key] + "\n", "stderr": ""}
+            )()
+        if command == "delete-generic-password":
+            return_code = 0 if items.pop(key, None) is not None else 44
+            return type(
+                "Result", (), {"returncode": return_code, "stdout": "", "stderr": ""}
+            )()
+        raise AssertionError(f"unexpected security command: {arguments}")
+
+    store = DeviceCredentialStore(path=tmp_path / "device.bin")
+    monkeypatch.setattr(native_core_device_credential.sys, "platform", "darwin")
+    monkeypatch.setattr(native_core_device_credential.subprocess, "run", fake_run)
+    credential = "device_" + "m" * 48
+
+    store.save(
+        credential,
+        LEASE,
+        device_id=DEVICE_ID,
+        build_id=BUILD_ID,
+        service_url=SERVICE_URL,
+    )
+    assert store.load(
+        device_id=DEVICE_ID,
+        build_id=BUILD_ID,
+        service_url=SERVICE_URL,
+    ) == StoredDeviceCredential(credential, LEASE, 2)
+    persisted = store.path.read_bytes()
+    assert credential.encode("ascii") not in persisted
+    assert LEASE not in persisted
+    assert native_core_device_credential._MACOS_KEYCHAIN_MAGIC in persisted
+    assert len(items) == 1
+
+    with pytest.raises(NativeCoreProtocolError, match="cannot be decrypted"):
+        store.load(
+            device_id=b"x" * 32,
+            build_id=BUILD_ID,
+            service_url=SERVICE_URL,
+        )
+
+    store.delete()
+    assert not store.path.exists()
+    assert items == {}
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows DPAPI only")
 def test_current_user_dpapi_reads_existing_schema1_record(tmp_path: Path) -> None:
     store = DeviceCredentialStore(path=tmp_path / "device.bin")

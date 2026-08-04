@@ -391,6 +391,20 @@ class NativeCoreBuildManifest:
     build_expires_at_unix: int = 0
     distribution_mode: str = "public"
     distribution_capsule: str | None = field(default=None, repr=False)
+    platform: str = "windows"
+    macos_client_signer_sha256: bytes = field(default=b"\0" * 32, repr=False)
+    macos_broker_signer_sha256: bytes = field(default=b"\0" * 32, repr=False)
+    macos_host_signer_sha256: bytes = field(default=b"\0" * 32, repr=False)
+    macos_private_root_sha256: bytes = field(default=b"\0" * 32, repr=False)
+    macos_client_signing_identifier: str = ""
+    macos_broker_signing_identifier: str = ""
+    macos_host_signing_identifier: str = ""
+
+    @property
+    def client_signer_sha256(self) -> bytes:
+        if self.platform == "macos":
+            return self.macos_client_signer_sha256
+        return self.windows_client_signer_sha256
 
 
 NativeCoreCell = None | int | float | str | bytes
@@ -791,6 +805,7 @@ def _load_native_core_build_manifest(
     root_public_key_compiled = payload.get("rootPublicKeyCompiled")
     test_hooks_enabled = payload.get("testHooksEnabled")
     staging_pinned_signer_trust = payload.get("stagingPinnedSignerTrust")
+    manifest_platform = "macos" if schema_version == 3 else "windows"
     windows_client_signer_sha256 = payload.get("windowsClientSignerSha256")
     offline_bootstrap_feature_bits_value = payload.get(
         "offlineBootstrapFeatureBits"
@@ -798,9 +813,17 @@ def _load_native_core_build_manifest(
     offline_export_seal_format = payload.get("offlineExportSealFormat")
     distribution_mode_value = payload.get("distributionMode")
     distribution_capsule_value = payload.get("distributionCapsule")
-    if type(schema_version) is not int or schema_version != 2:
+    if type(schema_version) is not int or schema_version not in {2, 3}:
         raise NativeCoreProtocolError(
             "wechatdb native build manifest has an unsupported schemaVersion."
+        )
+    if schema_version == 3 and payload.get("platform") != "macos":
+        raise NativeCoreProtocolError(
+            "wechatdb native schemaVersion 3 requires platform macos."
+        )
+    if schema_version == 2 and "platform" in payload:
+        raise NativeCoreProtocolError(
+            "wechatdb native schemaVersion 2 must not declare a platform."
         )
     if (
         not isinstance(build_id, str)
@@ -822,21 +845,100 @@ def _load_native_core_build_manifest(
         raise NativeCoreProtocolError(
             "wechatdb native build manifest security fields must be booleans."
         )
-    if development_build and windows_client_signer_sha256 in {None, ""}:
-        signer_digest = bytes(32)
-    elif (
-        not isinstance(windows_client_signer_sha256, str)
-        or not re.fullmatch(r"[0-9A-Fa-f]{64}", windows_client_signer_sha256)
-    ):
-        raise NativeCoreProtocolError(
-            "wechatdb native build manifest contains an invalid windowsClientSignerSha256."
-        )
+    macos_client_signer_digest = bytes(32)
+    macos_broker_signer_digest = bytes(32)
+    macos_host_signer_digest = bytes(32)
+    macos_private_root_digest = bytes(32)
+    macos_client_identifier = ""
+    macos_broker_identifier = ""
+    macos_host_identifier = ""
+    if manifest_platform == "windows":
+        if development_build and windows_client_signer_sha256 in {None, ""}:
+            signer_digest = bytes(32)
+        elif (
+            not isinstance(windows_client_signer_sha256, str)
+            or not re.fullmatch(r"[0-9A-Fa-f]{64}", windows_client_signer_sha256)
+        ):
+            raise NativeCoreProtocolError(
+                "wechatdb native build manifest contains an invalid windowsClientSignerSha256."
+            )
+        else:
+            signer_digest = bytes.fromhex(windows_client_signer_sha256)
+        if not development_build and not any(signer_digest):
+            raise NativeCoreProtocolError(
+                "wechatdb native build manifest contains an invalid windowsClientSignerSha256."
+            )
     else:
-        signer_digest = bytes.fromhex(windows_client_signer_sha256)
-    if not development_build and not any(signer_digest):
-        raise NativeCoreProtocolError(
-            "wechatdb native build manifest contains an invalid windowsClientSignerSha256."
+        signer_digest = bytes(32)
+        macos_identifiers = (
+            payload.get("macosClientSigningIdentifier"),
+            payload.get("macosBrokerSigningIdentifier"),
+            payload.get("macosHostSigningIdentifier"),
         )
+        if (
+            any(
+                not isinstance(value, str)
+                or re.fullmatch(r"[A-Za-z0-9.-]+", value) is None
+                for value in macos_identifiers
+            )
+            or len(set(macos_identifiers)) != 3
+        ):
+            raise NativeCoreProtocolError(
+                "wechatdb native build manifest contains invalid macOS signing identifiers."
+            )
+        macos_client_identifier, macos_broker_identifier, macos_host_identifier = (
+            macos_identifiers
+        )
+        macos_pin_values = (
+            payload.get("macosClientSignerSha256"),
+            payload.get("macosBrokerSignerSha256"),
+            payload.get("macosHostSignerSha256"),
+            payload.get("macosPrivateRootSha256"),
+        )
+        if any(
+            not isinstance(value, str)
+            or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in macos_pin_values
+        ):
+            raise NativeCoreProtocolError(
+                "wechatdb native build manifest contains invalid macOS signer pins."
+            )
+        (
+            macos_client_signer_digest,
+            macos_broker_signer_digest,
+            macos_host_signer_digest,
+            macos_private_root_digest,
+        ) = tuple(bytes.fromhex(value) for value in macos_pin_values)
+        macos_pin_digests = (
+            macos_client_signer_digest,
+            macos_broker_signer_digest,
+            macos_host_signer_digest,
+            macos_private_root_digest,
+        )
+        if development_build:
+            if any(any(value) for value in macos_pin_digests):
+                raise NativeCoreProtocolError(
+                    "Development macOS native builds must not carry production signer pins."
+                )
+            expected_trust_mode = "development"
+            expected_revocation = "not-applicable"
+        else:
+            if any(not any(value) for value in macos_pin_digests) or len(
+                set(macos_pin_digests)
+            ) != 4:
+                raise NativeCoreProtocolError(
+                    "Production macOS signer and root pins must be non-zero and distinct."
+                )
+            expected_trust_mode = "private-pki"
+            expected_revocation = "build-and-lease-only"
+        if (
+            payload.get("macosSigningMode") != "self-signed"
+            or payload.get("macosSignerTrustMode") != expected_trust_mode
+            or payload.get("macosPrivatePkiLeafRevocation") != expected_revocation
+        ):
+            raise NativeCoreProtocolError(
+                "wechatdb native build manifest contains an invalid macOS private-PKI policy."
+            )
     if (
         type(offline_bootstrap_feature_bits_value) is not int
         or offline_bootstrap_feature_bits_value < 0
@@ -951,6 +1053,14 @@ def _load_native_core_build_manifest(
         build_expires_at_unix=build_expires_at_unix,
         distribution_mode=distribution_mode,
         distribution_capsule=distribution_capsule,
+        platform=manifest_platform,
+        macos_client_signer_sha256=macos_client_signer_digest,
+        macos_broker_signer_sha256=macos_broker_signer_digest,
+        macos_host_signer_sha256=macos_host_signer_digest,
+        macos_private_root_sha256=macos_private_root_digest,
+        macos_client_signing_identifier=macos_client_identifier,
+        macos_broker_signing_identifier=macos_broker_identifier,
+        macos_host_signing_identifier=macos_host_identifier,
     )
 
 
@@ -964,6 +1074,10 @@ def _required_native_core_build_manifest(
         component_path,
         verify_distribution_artifact=verify_distribution_artifact,
     )
+    if not _manifest_matches_runtime_platform(manifest):
+        raise NativeCoreProtocolError(
+            "wechatdb native build manifest does not match the current platform."
+        )
     if _is_production_native_core_build_manifest(manifest):
         from .native_core_lease import validate_native_core_authorization_policy
 
@@ -1005,8 +1119,8 @@ def _is_production_native_core_build_manifest(manifest: NativeCoreBuildManifest)
         and manifest.root_public_key_compiled
         and not manifest.test_hooks_enabled
         and not manifest.staging_pinned_signer_trust
-        and len(manifest.windows_client_signer_sha256) == 32
-        and any(manifest.windows_client_signer_sha256)
+        and len(manifest.client_signer_sha256) == 32
+        and any(manifest.client_signer_sha256)
         and manifest.build_issued_at_unix > 0
         and manifest.build_expires_at_unix
         == manifest.build_issued_at_unix + _NATIVE_CORE_BUILD_LIFETIME_SECONDS
@@ -1032,7 +1146,8 @@ def _is_development_native_core_build_manifest(manifest: NativeCoreBuildManifest
 
 def _is_staging_native_core_build_manifest(manifest: NativeCoreBuildManifest) -> bool:
     return (
-        not manifest.development_build
+        manifest.platform == "windows"
+        and not manifest.development_build
         and manifest.code_signature_enforced
         and manifest.root_public_key_compiled
         and not manifest.test_hooks_enabled
@@ -1043,6 +1158,16 @@ def _is_staging_native_core_build_manifest(manifest: NativeCoreBuildManifest) ->
         == _NATIVE_CORE_OFFLINE_BOOTSTRAP_FEATURES
         and manifest.offline_export_seal_format == "WES2"
         and _NATIVE_CORE_STAGING_BUILD_ID_PATTERN.fullmatch(manifest.build_id) is not None
+    )
+
+
+def _manifest_matches_runtime_platform(
+    manifest: NativeCoreBuildManifest,
+    runtime_platform: str | None = None,
+) -> bool:
+    current = sys.platform if runtime_platform is None else runtime_platform
+    return (current.startswith("win") and manifest.platform == "windows") or (
+        current == "darwin" and manifest.platform == "macos"
     )
 
 
@@ -1204,6 +1329,10 @@ def configure_native_core_entrypoint() -> NativeCoreBuildManifest:
     )
 
     manifest = _load_native_core_build_manifest(library_path)
+    if not _manifest_matches_runtime_platform(manifest):
+        raise NativeCoreProtocolError(
+            "wechatdb native build manifest does not match the current platform."
+        )
     if _is_production_native_core_build_manifest(manifest):
         from .native_core_lease import validate_native_core_authorization_policy
 

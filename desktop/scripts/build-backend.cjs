@@ -5,6 +5,10 @@ const {
   contract: MACOS_XKEY_CONTRACT,
   stageMacosXkeyArtifacts,
 } = require("./macos-xkey-packaging.cjs");
+const {
+  macosNativeManifestErrors,
+  resolveMacosNativeCoreArtifacts,
+} = require("./macos-native-core-packaging.cjs");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const entry = path.join(repoRoot, "src", "wechat_decrypt_tool", "backend_entry.py");
@@ -74,7 +78,15 @@ function nativeCoreManifestErrors(manifest) {
   if (!manifest || Array.isArray(manifest) || typeof manifest !== "object") {
     return ["manifest must be a JSON object"];
   }
-  if (manifest.schemaVersion !== 2) errors.push("schemaVersion must equal 2");
+  if (!new Set([2, 3]).has(manifest.schemaVersion)) {
+    errors.push("schemaVersion must equal 2 or 3");
+  }
+  if (manifest.schemaVersion === 3 && manifest.platform !== "macos") {
+    errors.push("schemaVersion 3 requires platform macos");
+  }
+  if (manifest.schemaVersion === 2 && Object.prototype.hasOwnProperty.call(manifest, "platform")) {
+    errors.push("schemaVersion 2 must not declare platform");
+  }
   if (typeof manifest.buildId !== "string" || manifest.buildId.trim() === "") {
     errors.push("buildId must be a non-empty string");
   }
@@ -108,6 +120,9 @@ function nativeCoreProductionManifestErrors(
   manifest,
   { nowUnix = Math.floor(Date.now() / 1000) } = {}
 ) {
+  if (manifest?.schemaVersion === 3) {
+    return macosNativeManifestErrors(manifest, { nowUnix });
+  }
   const errors = nativeCoreManifestErrors(manifest);
   const buildIssuedAtUnix = manifest?.buildIssuedAtUnix;
   const buildExpiresAtUnix = manifest?.buildExpiresAtUnix;
@@ -227,6 +242,11 @@ function resolveNativeCoreArtifacts({ env = process.env, platform = process.plat
     throw new Error(
       "Missing WCE_NATIVE_CORE_ARTIFACT_DIR. Expected a directory containing: " + names.join(", ")
     );
+  }
+
+  if (platform === "darwin" && !allowDevelopment) {
+    const resolved = resolveMacosNativeCoreArtifacts({ env, platform });
+    return { ...resolved, allowDevelopment: false, required: true };
   }
 
   const artifactDir = path.resolve(explicitValue);

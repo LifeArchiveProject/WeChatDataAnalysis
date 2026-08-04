@@ -43,7 +43,10 @@ ENV_LICENSE_URL = "WECHAT_TOOL_NATIVE_CORE_LICENSE_URL"
 ENV_LICENSE_TOKEN = "WECHAT_TOOL_NATIVE_CORE_LICENSE_TOKEN"
 ENV_LICENSE_TIMEOUT_SECONDS = "WECHAT_TOOL_NATIVE_CORE_LICENSE_TIMEOUT_SECONDS"
 DEFAULT_PRODUCTION_LICENSE_URL = "https://license.fqyw.love/v1/leases"
-_PRODUCTION_APP_ID = "wechat-data-analysis.windows"
+_PRODUCTION_APP_IDS = {
+    "windows": "wechat-data-analysis.windows",
+    "macos": "wechat-data-analysis.macos",
+}
 _LICENSE_PROTOCOL_VERSION = 2
 _MAX_RESPONSE_BYTES = 64 * 1024
 _EXPECTED_LEASE_BYTES = 224
@@ -60,6 +63,15 @@ _heartbeat_due_monotonic = float("inf")
 _network_identity: tuple[str, bytes, bytes, NativeCoreClient] | None = None
 _network_failure_count = 0
 _network_retry_monotonic = 0.0
+
+
+def _production_app_id(manifest: NativeCoreBuildManifest) -> str:
+    app_id = _PRODUCTION_APP_IDS.get(manifest.platform)
+    if app_id is None:
+        raise NativeCoreProtocolError(
+            "Native core build manifest contains an unsupported production platform."
+        )
+    return app_id
 
 
 class _RejectLicenseRedirects(urllib.request.HTTPRedirectHandler):
@@ -671,10 +683,10 @@ def _request_lease(
         }
         if auth_token is None:
             manifest = client.build_manifest
-            signer_digest = bytes(manifest.windows_client_signer_sha256)
+            signer_digest = bytes(manifest.client_signer_sha256)
             if len(signer_digest) != 32 or not any(signer_digest):
                 raise NativeCoreProtocolError(
-                    "Native core build manifest does not contain a valid Windows client signer."
+                    "Native core build manifest does not contain a valid client signer."
                 )
             distribution_mode = manifest.distribution_mode
             distribution_capsule = manifest.distribution_capsule
@@ -690,7 +702,7 @@ def _request_lease(
                 )
             challenge_body.update(
                 {
-                    "appId": _PRODUCTION_APP_ID,
+                    "appId": _production_app_id(manifest),
                     "hostSignerId": _base64url(signer_digest),
                 }
             )

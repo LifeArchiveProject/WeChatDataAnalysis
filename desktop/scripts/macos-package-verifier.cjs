@@ -245,6 +245,48 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   const xkeyIdentity = codeSignIdentity(xkeyHelper);
   const backendIdentity = codeSignIdentity(backend);
   const appIdentity = codeSignIdentity(appPath);
+  const nativeClientIdentity = codeSignIdentity(nativeClient);
+  const nativeBrokerIdentity = codeSignIdentity(nativeBroker);
+  assert.equal(
+    nativeClientIdentity.identifier,
+    packagedNative.manifest.macosClientSigningIdentifier,
+    "macOS native client signing identifier differs from its manifest"
+  );
+  assert.equal(
+    nativeClientIdentity.leafSha256,
+    packagedNative.manifest.macosClientSignerSha256,
+    "macOS native client leaf differs from its manifest"
+  );
+  assert.equal(
+    nativeBrokerIdentity.identifier,
+    packagedNative.manifest.macosBrokerSigningIdentifier,
+    "macOS native broker signing identifier differs from its manifest"
+  );
+  assert.equal(
+    nativeBrokerIdentity.leafSha256,
+    packagedNative.manifest.macosBrokerSignerSha256,
+    "macOS native broker leaf differs from its manifest"
+  );
+  assert.equal(
+    backendIdentity.identifier,
+    packagedNative.manifest.macosHostSigningIdentifier,
+    "macOS backend identifier differs from the native-core host pin"
+  );
+  assert.equal(
+    backendIdentity.leafSha256,
+    packagedNative.manifest.macosHostSignerSha256,
+    "macOS backend leaf differs from the native-core host pin"
+  );
+  requirePinnedDesignatedRequirement(
+    nativeClient,
+    nativeClientIdentity.identifier,
+    nativeClientIdentity.leafSha1
+  );
+  requirePinnedDesignatedRequirement(
+    nativeBroker,
+    nativeBrokerIdentity.identifier,
+    nativeBrokerIdentity.leafSha1
+  );
   assert.equal(xkeyIdentity.identifier, macosXkeyContract.bundleId);
   assert.equal(xkeyIdentity.leafSha256, xkeyTrust.helperLeafCertificateSha256);
   assert.equal(backendIdentity.identifier, macosXkeyContract.hostSigningIdentifier);

@@ -40,6 +40,7 @@ test("macOS certificate extraction uses codesign's fixed filenames in an isolate
 
   for (const scriptName of [
     "macos-xkey-packaging.cjs",
+    "macos-native-core-packaging.cjs",
     "sign-macos.cjs",
     "after-sign.cjs",
     "macos-package-verifier.cjs",
@@ -62,6 +63,11 @@ test("macOS signing preserves the producer helper and pins the direct backend pa
   assert.match(source, /hostSigningIdentifier/);
   assert.match(source, /Signed backend identity does not match the helper caller pin/);
   assert.match(source, /app signing replaced the producer helper identity/);
+  assert.match(source, /libwechatdb_client\.dylib/);
+  assert.match(source, /preservedNativeClientHash/);
+  assert.match(source, /preservedNativeBrokerHash/);
+  assert.match(source, /WCE_NATIVE_CORE_HOST_SIGNER_SHA256/);
+  assert.match(source, /app signing replaced a producer native-core identity/);
 });
 
 test("self-signed production mode disables unavailable Apple timestamps without allowing ad-hoc", () => {
@@ -126,6 +132,10 @@ test("macOS private workflow keeps the canonical Producer and WCDA certificate v
   ]) {
     assert.doesNotMatch(workflow, new RegExp(`\\b${retiredAlias}\\b`));
   }
+  assert.match(workflow, /WCE_NATIVE_CORE_ARTIFACT_RUN_ID/);
+  assert.match(workflow, /wechatdb-native-macos-arm64-production/);
+  assert.match(workflow, /macos-native-core-packaging\.cjs/);
+  assert.match(workflow, /WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256/);
 });
 
 test("macOS private workflow retries transient Producer artifact downloads from a clean directory", () => {
