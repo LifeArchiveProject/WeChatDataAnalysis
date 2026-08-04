@@ -50,6 +50,10 @@ function ignoreList(value) {
   return Array.isArray(value) ? [...value] : [value];
 }
 
+function matchesIgnoreRule(filePath, rule) {
+  return typeof rule === "function" ? Boolean(rule(filePath)) : Boolean(filePath.match(rule));
+}
+
 function requiredSigningMode() {
   const mode = String(process.env.WCE_MACOS_SIGNING_MODE || "").trim().toLowerCase();
   if (!new Set(["self-signed", "developer-id"]).has(mode)) {
@@ -280,6 +284,12 @@ module.exports = async function signMacos(options) {
   }
 
   const baseOptionsForFile = options.optionsForFile;
+  const inheritedIgnoreRules = ignoreList(options.ignore);
+  const preservedProducerPaths = new Set([
+    databaseKeyHelperPath,
+    nativeClientPath,
+    nativeBrokerPath,
+  ].map((filePath) => path.resolve(filePath)));
   const preservedHelperHash = sha256File(databaseKeyHelperPath);
   const preservedNativeClientHash = sha256File(nativeClientPath);
   const preservedNativeBrokerHash = sha256File(nativeBrokerPath);
@@ -287,12 +297,12 @@ module.exports = async function signMacos(options) {
   await signAsync({
     ...options,
     ...(explicitIdentity ? { identity: explicitIdentity.identity } : {}),
-    ignore: [
-      ...ignoreList(options.ignore),
-      (filePath) => path.resolve(filePath) === path.resolve(databaseKeyHelperPath),
-      (filePath) => path.resolve(filePath) === path.resolve(nativeClientPath),
-      (filePath) => path.resolve(filePath) === path.resolve(nativeBrokerPath),
-    ],
+    // @electron/osx-sign 1.3.3 drops array-valued ignore rules while validating
+    // options. Keep one combined predicate so Producer signatures remain intact.
+    ignore(filePath) {
+      return preservedProducerPaths.has(path.resolve(filePath)) ||
+        inheritedIgnoreRules.some((rule) => matchesIgnoreRule(filePath, rule));
+    },
     optionsForFile(filePath) {
       const inherited = typeof baseOptionsForFile === "function" ? baseOptionsForFile(filePath) || {} : {};
       const effective = signingMode === "self-signed"

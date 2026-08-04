@@ -54,7 +54,9 @@ test("macOS certificate extraction uses codesign's fixed filenames in an isolate
 test("macOS signing preserves the producer helper and pins the direct backend parent", () => {
   assert.match(source, /WCE_MACOS_KEY_HELPER_SIGNER_SHA256/);
   assert.match(source, /WCE_MACOS_WCDA_HOST_SIGNER_SHA256/);
-  assert.match(source, /path\.resolve\(filePath\).*path\.resolve\(databaseKeyHelperPath\)/s);
+  assert.match(source, /preservedProducerPaths\.has\(path\.resolve\(filePath\)\)/);
+  assert.match(source, /inheritedIgnoreRules\.some/);
+  assert.doesNotMatch(source, /ignore:\s*\[/);
   assert.match(source, /--identifier/);
   assert.match(source, /requirements: backendRequirement/);
   assert.match(afterSign, /`-r\$\{appRequirement\}`/);
