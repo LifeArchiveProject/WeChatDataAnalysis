@@ -359,7 +359,11 @@ test("macOS package smoke performs a real image-key memory scan", () => {
     "utf8"
   );
 
-  assert.match(smokeScript, /image_key_candidate\[33\]/);
+  assert.match(smokeScript, /IMAGE_KEY_MAPPING_ADDRESS/);
+  assert.match(smokeScript, /0x10000000ULL/);
+  assert.match(smokeScript, /MAP_PRIVATE \| MAP_ANON \| MAP_FIXED/);
+  assert.match(smokeScript, /memcpy\(image_key_mapping, "0123456789abcdef", 16\)/);
+  assert.match(smokeScript, /ready mapping=%p/);
   assert.match(smokeScript, /createCipheriv\("aes-128-ecb"/);
   assert.match(smokeScript, /spawnSync\(imageHelper/);
   assert.match(smokeScript, /Buffer\.from\(helperPayload\.aesKey, "hex"\)/);

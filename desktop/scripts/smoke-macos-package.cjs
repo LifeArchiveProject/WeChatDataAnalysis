@@ -196,15 +196,35 @@ async function probePackagedImageScanner(imageHelper, tempRoot) {
   const targetPath = path.join(tempRoot, "image-key-target");
   fs.writeFileSync(sourcePath, `
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
-__attribute__((used)) volatile char image_key_candidate[33] =
-    "0123456789abcdef0123456789abcdef";
+#define IMAGE_KEY_MAPPING_ADDRESS ((void *)(uintptr_t)0x10000000ULL)
+#define IMAGE_KEY_MAPPING_SIZE 0x4000
 
 int main(void) {
-    if (image_key_candidate[0] == '\\0') return 1;
-    puts("ready");
+    void *image_key_mapping = mmap(
+        IMAGE_KEY_MAPPING_ADDRESS,
+        IMAGE_KEY_MAPPING_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANON | MAP_FIXED,
+        -1,
+        0
+    );
+    if (image_key_mapping == MAP_FAILED) {
+        perror("mmap image-key probe");
+        return 2;
+    }
+    if (image_key_mapping != IMAGE_KEY_MAPPING_ADDRESS) {
+        fprintf(stderr, "unexpected image-key mapping: %p\\n", image_key_mapping);
+        return 3;
+    }
+
+    memcpy(image_key_mapping, "0123456789abcdef", 16);
+    printf("ready mapping=%p\\n", image_key_mapping);
     fflush(stdout);
     for (;;) pause();
 }
@@ -223,7 +243,7 @@ int main(void) {
   let targetProc = null;
   try {
     targetProc = startProcess(targetPath, [], { cwd: tempRoot, env: process.env });
-    await waitForProcessOutput(targetProc, /(?:^|\n)ready\n/);
+    await waitForProcessOutput(targetProc, /(?:^|\n)ready mapping=0x[0-9a-f]+\n/i);
     assert.ok(Number(targetProc.pid) > 0, "synthetic image-key target has no PID");
 
     const expectedKey = "0123456789abcdef";
