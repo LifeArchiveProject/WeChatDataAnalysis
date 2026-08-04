@@ -204,7 +204,7 @@ async function probePackagedImageScanner(imageHelper, tempRoot) {
 #include <mach-o/dyld.h>
 #include <unistd.h>
 
-#define IMAGE_KEY_MAPPING_ADDRESS ((mach_vm_address_t)0x100000000ULL)
+#define IMAGE_KEY_MAPPING_ADDRESS ((mach_vm_address_t)0x1000000ULL)
 #define IMAGE_KEY_MAPPING_SIZE 0x4000
 
 int main(void) {
@@ -245,12 +245,10 @@ int main(void) {
     SUPPORTED_ARCHITECTURE,
     `-mmacosx-version-min=${PACKAGE_MINIMUM_MACOS_VERSION}`,
     "-O0",
-    // Keep PAGEZERO at the standard 4 GiB boundary while moving this throwaway
-    // non-PIE target above it. The resulting gap is the scanner's first
-    // readable/writable region and cannot overlap the target image.
-    "-Wl,-no_pie",
-    "-Wl,-pagezero_size,0x100000000",
-    "-Wl,-segaddr,__TEXT,0x200000000",
+    // Shrink PAGEZERO only for this throwaway target. The fixed page directly
+    // after it becomes the first readable/writable region without relocating
+    // the normal PIE image or colliding with macOS's dyld shared cache.
+    "-Wl,-pagezero_size,0x1000000",
     sourcePath,
     "-o",
     targetPath,
