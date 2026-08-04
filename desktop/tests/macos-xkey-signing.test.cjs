@@ -98,6 +98,8 @@ test("self-signed private workflow imports a persistent identity and never notar
   assert.match(workflow, /environment: macos-private-pki-production/);
   assert.match(workflow, /WCE_MACOS_WCDA_HOST_P12_BASE64/);
   assert.match(workflow, /WCE_MACOS_SELF_SIGNED_ROOT_CERT_BASE64/);
+  assert.match(workflow, /CSC_NAME: \$\{\{ vars\.WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY \}\}/);
+  assert.match(workflow, /test "\$CSC_NAME" = "\$WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY"/);
   assert.match(workflow, /timeout-minutes: 5/);
   assert.match(workflow, /sudo -n security add-trusted-cert -d -r trustRoot -p codeSign/);
   assert.match(workflow, /-k \/Library\/Keychains\/System\.keychain/);

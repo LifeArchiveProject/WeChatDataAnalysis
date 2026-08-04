@@ -51,6 +51,7 @@ jobs:
       WCE_INTEGRITY_REQUIRED: "1"
       MACOS_DISTRIBUTION_BUILD: "1"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      CSC_NAME: ${{ vars.WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY }}
       CI: "true"
       PACKAGE_VERSION: ${{ inputs.version }}
     steps:
@@ -80,6 +81,7 @@ jobs:
           [[ "$WCE_MACOS_KEY_HELPER_SIGNER_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$WCE_MACOS_WCDA_HOST_SIGNER_SHA256" =~ ^[0-9a-f]{64}$ ]]
           test -n "$WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY"
+          test "$CSC_NAME" = "$WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY"
           [[ "$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
           [[ "$WCE_NATIVE_CORE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$WCE_NATIVE_CORE_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]

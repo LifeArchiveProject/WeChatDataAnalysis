@@ -97,6 +97,7 @@ function requireSelfSignedIdentity(expectedLeafSha256) {
 }
 
 module.exports = async function signMacos(options) {
+  process.stdout.write(`Starting controlled macOS signing: ${options.app}\n`);
   const helperSuffix = path.join(
     "Contents",
     "Resources",
@@ -317,6 +318,7 @@ module.exports = async function signMacos(options) {
       return effective;
     },
   });
+  process.stdout.write(`Completed controlled macOS signing: ${options.app}\n`);
 
   if (sha256File(databaseKeyHelperPath) !== preservedHelperHash) {
     throw new Error("macOS app signing modified the producer-signed database key helper.");
