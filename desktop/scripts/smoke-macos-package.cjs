@@ -199,32 +199,32 @@ async function probePackagedImageScanner(imageHelper, tempRoot) {
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/mman.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <unistd.h>
 
-#define IMAGE_KEY_MAPPING_ADDRESS ((void *)(uintptr_t)0x10000000ULL)
+#define IMAGE_KEY_MAPPING_ADDRESS ((mach_vm_address_t)0x100000000ULL)
 #define IMAGE_KEY_MAPPING_SIZE 0x4000
 
 int main(void) {
-    void *image_key_mapping = mmap(
-        IMAGE_KEY_MAPPING_ADDRESS,
+    mach_vm_address_t image_key_mapping = IMAGE_KEY_MAPPING_ADDRESS;
+    kern_return_t allocation_result = mach_vm_allocate(
+        mach_task_self(),
+        &image_key_mapping,
         IMAGE_KEY_MAPPING_SIZE,
-        PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANON | MAP_FIXED,
-        -1,
-        0
+        VM_FLAGS_FIXED
     );
-    if (image_key_mapping == MAP_FAILED) {
-        perror("mmap image-key probe");
+    if (allocation_result != KERN_SUCCESS) {
+        fprintf(stderr, "mach_vm_allocate image-key probe failed: %d\\n", allocation_result);
         return 2;
     }
     if (image_key_mapping != IMAGE_KEY_MAPPING_ADDRESS) {
-        fprintf(stderr, "unexpected image-key mapping: %p\\n", image_key_mapping);
+        fprintf(stderr, "unexpected image-key mapping: 0x%llx\\n", image_key_mapping);
         return 3;
     }
 
-    memcpy(image_key_mapping, "0123456789abcdef", 16);
-    printf("ready mapping=%p\\n", image_key_mapping);
+    memcpy((void *)(uintptr_t)image_key_mapping, "0123456789abcdef", 16);
+    printf("ready mapping=0x%llx\\n", image_key_mapping);
     fflush(stdout);
     for (;;) pause();
 }
