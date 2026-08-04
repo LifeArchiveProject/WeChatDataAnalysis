@@ -41,9 +41,10 @@ def _bundled_native_candidates(relative_path: Path, *, explicit: str = "") -> li
     if explicit:
         candidates.append(Path(explicit).expanduser())
 
-    candidates.append(_native_root() / relative_path)
-
     if getattr(sys, "frozen", False):
+        # PyInstaller may normalize Mach-O files collected inside its onefile
+        # archive.  The sibling native directory is copied byte-for-byte into
+        # the signed app bundle specifically to provide stable runtime paths.
         executable_dir = Path(sys.executable).resolve().parent
         candidates.extend(
             (
@@ -62,6 +63,7 @@ def _bundled_native_candidates(relative_path: Path, *, explicit: str = "") -> li
             )
         )
 
+    candidates.append(_native_root() / relative_path)
     return candidates
 
 
