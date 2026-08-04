@@ -276,16 +276,16 @@ def _default_code_signature_verifier(helper_path: Path) -> MacosCodeSignatureInf
         if details.returncode != 0 or not identifier_match:
             raise OSError("codesign details failed")
         with tempfile.TemporaryDirectory(prefix="wda-xkey-cert-") as temp_dir:
-            prefix = Path(temp_dir) / "leaf"
             extracted = subprocess.run(
-                ["/usr/bin/codesign", "-d", "--extract-certificates", str(prefix), str(helper_path)],
+                ["/usr/bin/codesign", "--display", "--extract-certificates", str(helper_path)],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                cwd=temp_dir,
                 timeout=15,
                 check=False,
             )
-            cert_path = Path(f"{prefix}0")
+            cert_path = Path(temp_dir) / "codesign0"
             if extracted.returncode != 0 or not cert_path.is_file():
                 raise OSError("codesign certificate extraction failed")
             certificate = x509.load_der_x509_certificate(cert_path.read_bytes())

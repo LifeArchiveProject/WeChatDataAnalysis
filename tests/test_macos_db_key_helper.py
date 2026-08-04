@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -127,6 +128,52 @@ def _signature_info() -> helper.MacosCodeSignatureInfo:
         leaf_sha256=HELPER_SIGNER,
         architectures=frozenset({"arm64", "x86_64"}),
     )
+
+
+def test_default_signature_verifier_uses_system_certificate_export_convention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    helper_path = tmp_path / helper.HELPER_FILE_NAME
+    helper_path.write_bytes(b"signed-macho-test-fixture")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((list(argv), dict(kwargs)))
+        if "--extract-certificates" in argv:
+            Path(kwargs["cwd"], "codesign0").write_bytes(b"test-certificate")
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        if "--verbose=4" in argv:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=b"",
+                stderr=f"Identifier={helper.HELPER_BUNDLE_ID}\n".encode("ascii"),
+            )
+        if argv[:2] == ["/usr/bin/lipo", "-archs"]:
+            return SimpleNamespace(returncode=0, stdout=b"arm64 x86_64\n", stderr=b"")
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    class FakeCertificate:
+        @staticmethod
+        def fingerprint(_algorithm) -> bytes:
+            return bytes.fromhex(HELPER_SIGNER)
+
+    monkeypatch.setattr(helper.sys, "platform", "darwin")
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        helper.x509, "load_der_x509_certificate", lambda raw: FakeCertificate()
+    )
+
+    signature = helper._default_code_signature_verifier(helper_path)
+
+    extraction = next(call for call in calls if "--extract-certificates" in call[0])
+    assert extraction[0] == [
+        "/usr/bin/codesign",
+        "--display",
+        "--extract-certificates",
+        str(helper_path),
+    ]
+    assert Path(str(extraction[1]["cwd"])).name.startswith("wda-xkey-cert-")
+    assert signature == _signature_info()
 
 
 def _validated_bundle(tmp_path: Path) -> helper.ValidatedMacosDbKeyBundle:
