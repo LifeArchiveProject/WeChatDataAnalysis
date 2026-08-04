@@ -6,6 +6,7 @@ import html
 import importlib.machinery
 import importlib.util
 import json
+import os
 import re
 import sys
 import zipfile
@@ -26,7 +27,8 @@ def load_wce_integrity_native() -> Any:
         return existing
 
     repo_root = Path(__file__).resolve().parents[2]
-    candidates = [
+    explicit_native_path = str(os.environ.get("WCE_INTEGRITY_NATIVE_PATH") or "").strip()
+    candidates = ([Path(explicit_native_path)] if explicit_native_path else []) + [
         repo_root / "native" / "wce_integrity" / "target" / "release" / "wce_integrity.dll",
         repo_root / "native" / "wce_integrity" / "target-next" / "release" / "wce_integrity.dll",
         repo_root / "native" / "wce_integrity" / "target" / "release" / "libwce_integrity.dylib",
