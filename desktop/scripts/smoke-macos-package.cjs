@@ -201,12 +201,20 @@ async function probePackagedImageScanner(imageHelper, tempRoot) {
 #include <string.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <mach-o/dyld.h>
 #include <unistd.h>
 
 #define IMAGE_KEY_MAPPING_ADDRESS ((mach_vm_address_t)0x100000000ULL)
 #define IMAGE_KEY_MAPPING_SIZE 0x4000
 
 int main(void) {
+    uintptr_t image_base = (uintptr_t)_dyld_get_image_header(0);
+    if (image_base <= (uintptr_t)IMAGE_KEY_MAPPING_ADDRESS) {
+        fprintf(stderr, "synthetic image base is not above probe mapping: 0x%llx\\n",
+                (unsigned long long)image_base);
+        return 1;
+    }
+
     mach_vm_address_t image_key_mapping = IMAGE_KEY_MAPPING_ADDRESS;
     kern_return_t allocation_result = mach_vm_allocate(
         mach_task_self(),
@@ -224,7 +232,9 @@ int main(void) {
     }
 
     memcpy((void *)(uintptr_t)image_key_mapping, "0123456789abcdef", 16);
-    printf("ready mapping=0x%llx\\n", image_key_mapping);
+    printf("ready mapping=0x%llx image=0x%llx\\n",
+           image_key_mapping,
+           (unsigned long long)image_base);
     fflush(stdout);
     for (;;) pause();
 }
@@ -235,6 +245,12 @@ int main(void) {
     SUPPORTED_ARCHITECTURE,
     `-mmacosx-version-min=${PACKAGE_MINIMUM_MACOS_VERSION}`,
     "-O0",
+    // Keep PAGEZERO at the standard 4 GiB boundary while moving this throwaway
+    // non-PIE target above it. The resulting gap is the scanner's first
+    // readable/writable region and cannot overlap the target image.
+    "-Wl,-no_pie",
+    "-Wl,-pagezero_size,0x100000000",
+    "-Wl,-segaddr,__TEXT,0x200000000",
     sourcePath,
     "-o",
     targetPath,
@@ -243,7 +259,10 @@ int main(void) {
   let targetProc = null;
   try {
     targetProc = startProcess(targetPath, [], { cwd: tempRoot, env: process.env });
-    await waitForProcessOutput(targetProc, /(?:^|\n)ready mapping=0x[0-9a-f]+\n/i);
+    await waitForProcessOutput(
+      targetProc,
+      /(?:^|\n)ready mapping=0x[0-9a-f]+ image=0x[0-9a-f]+\n/i
+    );
     assert.ok(Number(targetProc.pid) > 0, "synthetic image-key target has no PID");
 
     const expectedKey = "0123456789abcdef";
