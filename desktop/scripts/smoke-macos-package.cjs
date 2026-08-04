@@ -234,10 +234,17 @@ int main(void) {
     const helperProbe = spawnSync(imageHelper, [String(targetProc.pid), ciphertext.toString("hex")], {
       encoding: "utf8",
       stdio: "pipe",
-      timeout: 15_000,
+      // Match the production direct-helper budget. The first invocation on a
+      // clean macOS VM also pays dyld and private-PKI validation cold-start cost.
+      timeout: 30_000,
     });
-    assert.ifError(helperProbe.error);
     const helperOutput = `${helperProbe.stdout || ""}\n${helperProbe.stderr || ""}`;
+    if (helperProbe.error) {
+      throw new Error(
+        `Packaged image helper failed or exceeded the 30-second production budget: ` +
+        `${helperProbe.error.message}\n${helperOutput}`
+      );
+    }
     assert.equal(helperProbe.status, 0, helperOutput);
     assert.doesNotMatch(helperOutput, /dlopen failed|symbol not found/i);
 

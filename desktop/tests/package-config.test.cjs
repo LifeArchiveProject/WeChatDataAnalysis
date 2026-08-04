@@ -364,6 +364,8 @@ test("macOS package smoke performs a real image-key memory scan", () => {
   assert.match(smokeScript, /spawnSync\(imageHelper/);
   assert.match(smokeScript, /Buffer\.from\(helperPayload\.aesKey, "hex"\)/);
   assert.match(smokeScript, /await probePackagedImageScanner\(imageHelper, tempRoot\)/);
+  assert.match(smokeScript, /timeout: 30_000/);
+  assert.match(smokeScript, /30-second production budget/);
 });
 
 test("unsigned macOS CI packages are ad-hoc sealed before DMG creation", () => {
