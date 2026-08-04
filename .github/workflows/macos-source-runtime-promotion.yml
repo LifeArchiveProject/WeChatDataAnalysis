@@ -1,0 +1,249 @@
+name: macOS public source runtime promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Immutable public source-runtime Release tag
+        required: true
+        type: string
+      native_core_run_id:
+        description: Exact private Producer run containing source-public native core
+        required: true
+        type: string
+      native_core_source_revision:
+        description: Exact native-core Producer revision
+        required: true
+        type: string
+      native_core_build_id:
+        description: Exact native-core build ID
+        required: true
+        type: string
+      xkey_run_id:
+        description: Exact private Producer run containing source-public XKey
+        required: true
+        type: string
+      xkey_source_revision:
+        description: Exact XKey Producer revision
+        required: true
+        type: string
+      xkey_build_id:
+        description: Exact XKey build ID
+        required: true
+        type: string
+      integrity_ui_source_revision:
+        description: WCDA revision pinned by the existing integrity artifact
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: macos-source-runtime-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-14
+    environment: macos-private-pki-production
+    timeout-minutes: 45
+    env:
+      LC_ALL: C
+      LANG: C
+      TZ: UTC
+      WCE_SOURCE_RUNTIME_RELEASE_TAG: ${{ inputs.release_tag }}
+      WCE_NATIVE_CORE_ARTIFACT_REPOSITORY: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_REPOSITORY }}
+      WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 }}
+      WCE_NATIVE_CORE_BROKER_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_BROKER_SIGNER_SHA256 }}
+      WCE_NATIVE_CORE_HOST_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_HOST_SIGNER_SHA256 }}
+      WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256: ${{ vars.WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256 }}
+      WCE_MACOS_XKEY_ARTIFACT_REPOSITORY: ${{ vars.WCE_MACOS_XKEY_ARTIFACT_REPOSITORY }}
+      WCE_INTEGRITY_ARTIFACT_REPOSITORY: ${{ vars.WCE_INTEGRITY_ARTIFACT_REPOSITORY }}
+      WCE_INTEGRITY_ARTIFACT_RUN_ID: ${{ vars.WCE_INTEGRITY_ARTIFACT_RUN_ID }}
+      WCE_INTEGRITY_SOURCE_REVISION: ${{ vars.WCE_INTEGRITY_SOURCE_REVISION }}
+      WCE_INTEGRITY_BUILD_ID: ${{ vars.WCE_INTEGRITY_BUILD_ID }}
+      WCE_INTEGRITY_BINARY_SHA256: ${{ vars.WCE_INTEGRITY_BINARY_SHA256 }}
+      WCE_INTEGRITY_UI_SOURCE_REPOSITORY: ${{ github.repository }}
+      WCE_INTEGRITY_UI_SOURCE_REVISION: ${{ inputs.integrity_ui_source_revision }}
+
+    steps:
+      - name: Check out exact public source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify immutable promotion coordinates
+        shell: bash
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REVISION: ${{ github.sha }}
+          NATIVE_RUN_ID: ${{ inputs.native_core_run_id }}
+          NATIVE_REVISION: ${{ inputs.native_core_source_revision }}
+          NATIVE_BUILD_ID: ${{ inputs.native_core_build_id }}
+          XKEY_RUN_ID: ${{ inputs.xkey_run_id }}
+          XKEY_REVISION: ${{ inputs.xkey_source_revision }}
+          XKEY_BUILD_ID: ${{ inputs.xkey_build_id }}
+        run: |
+          set -euo pipefail
+          test "$WORKFLOW_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_REVISION"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          [[ "$WCE_SOURCE_RUNTIME_RELEASE_TAG" =~ ^macos-source-runtime-[A-Za-z0-9._-]{8,96}$ ]]
+          for run_id in "$NATIVE_RUN_ID" "$XKEY_RUN_ID" "$WCE_INTEGRITY_ARTIFACT_RUN_ID"; do
+            [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          done
+          for revision in "$NATIVE_REVISION" "$XKEY_REVISION" \
+              "$WCE_INTEGRITY_SOURCE_REVISION" "$WCE_INTEGRITY_UI_SOURCE_REVISION"; do
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          done
+          for build_id in "$NATIVE_BUILD_ID" "$XKEY_BUILD_ID" "$WCE_INTEGRITY_BUILD_ID"; do
+            [[ "$build_id" =~ ^[A-Za-z0-9._-]{8,128}$ ]]
+            [[ ! "$build_id" =~ (^|[._-])(dev|debug|test|local|snapshot|staging)([._-]|$) ]]
+          done
+          for digest in \
+              "$WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256" \
+              "$WCE_NATIVE_CORE_BROKER_SIGNER_SHA256" \
+              "$WCE_NATIVE_CORE_HOST_SIGNER_SHA256" \
+              "$WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256" \
+              "$WCE_INTEGRITY_BINARY_SHA256"; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          done
+
+      - name: Download exact private Producer artifacts
+        timeout-minutes: 15
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WCE_MACOS_PRODUCER_READ_TOKEN }}
+          NATIVE_RUN_ID: ${{ inputs.native_core_run_id }}
+          XKEY_RUN_ID: ${{ inputs.xkey_run_id }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          download_artifact() {
+            local repository="$1"
+            local run_id="$2"
+            local artifact_name="$3"
+            local destination="$4"
+            local downloaded=0
+            for attempt in 1 2 3; do
+              rm -rf "$destination"
+              mkdir -p "$destination"
+              if gh run download "$run_id" --repo "$repository" \
+                  --name "$artifact_name" --dir "$destination"; then
+                downloaded=1
+                break
+              fi
+              sleep "$((attempt * 10))"
+            done
+            test "$downloaded" = 1
+          }
+          download_artifact "$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY" "$NATIVE_RUN_ID" \
+            wechatdb-native-macos-arm64-source-public "$RUNNER_TEMP/source-native-core"
+          download_artifact "$WCE_MACOS_XKEY_ARTIFACT_REPOSITORY" "$XKEY_RUN_ID" \
+            wda-xkey-macos-universal-source-public "$RUNNER_TEMP/source-xkey"
+          download_artifact "$WCE_INTEGRITY_ARTIFACT_REPOSITORY" "$WCE_INTEGRITY_ARTIFACT_RUN_ID" \
+            wce-integrity-macos-arm64-production "$RUNNER_TEMP/source-integrity"
+          echo "WCE_SOURCE_PUBLIC_NATIVE_CORE_DIR=$RUNNER_TEMP/source-native-core" >> "$GITHUB_ENV"
+          echo "WCE_SOURCE_PUBLIC_XKEY_DIR=$RUNNER_TEMP/source-xkey" >> "$GITHUB_ENV"
+          echo "WCE_INTEGRITY_ARTIFACT_DIR=$RUNNER_TEMP/source-integrity" >> "$GITHUB_ENV"
+
+      - name: Verify source-public native-core producer artifact
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ inputs.native_core_source_revision }}
+          BUILD_ID: ${{ inputs.native_core_build_id }}
+        run: |
+          set -euo pipefail
+          python3 "$WCE_SOURCE_PUBLIC_NATIVE_CORE_DIR/Test-MacosNativeSourcePublicArtifact.py" \
+            --artifact-dir "$WCE_SOURCE_PUBLIC_NATIVE_CORE_DIR" \
+            --source-revision "$SOURCE_REVISION" \
+            --build-id "$BUILD_ID" \
+            --client-signer-sha256 "$WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256" \
+            --broker-signer-sha256 "$WCE_NATIVE_CORE_BROKER_SIGNER_SHA256" \
+            --host-signer-sha256 "$WCE_NATIVE_CORE_HOST_SIGNER_SHA256" \
+            --private-root-sha256 "$WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256"
+
+      - name: Verify source-public XKey producer artifact
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ inputs.xkey_source_revision }}
+          BUILD_ID: ${{ inputs.xkey_build_id }}
+        run: |
+          set -euo pipefail
+          python3 "$WCE_SOURCE_PUBLIC_XKEY_DIR/Test-MacosKeySourcePublicArtifact.py" \
+            --artifact-dir "$WCE_SOURCE_PUBLIC_XKEY_DIR" \
+            --source-revision "$SOURCE_REVISION" \
+            --build-id "$BUILD_ID"
+
+      - name: Verify production export-integrity artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const { resolveIntegrityNativeArtifact } = require("./desktop/scripts/integrity-native-packaging.cjs");
+          const result = resolveIntegrityNativeArtifact({ platform: "darwin" });
+          process.stdout.write(`verified integrity ${result.manifest.buildId}\n`);
+          NODE
+
+      - name: Compose immutable public source runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/macos-source-runtime-promotion"
+          rm -rf "$output"
+          echo "WCE_SOURCE_RUNTIME_OUTPUT_DIR=$output" >> "$GITHUB_ENV"
+          WCE_SOURCE_RUNTIME_OUTPUT_DIR="$output" \
+            node desktop/scripts/macos-source-runtime-promotion.cjs
+          cat "$output/promotion-output.json"
+
+      - name: Publish public Release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$WCE_SOURCE_RUNTIME_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release tag already exists: $WCE_SOURCE_RUNTIME_RELEASE_TAG" >&2
+            exit 1
+          fi
+          output="$WCE_SOURCE_RUNTIME_OUTPUT_DIR"
+          gh release create "$WCE_SOURCE_RUNTIME_RELEASE_TAG" \
+            "$output/wechatdataanalysis-macos-source-runtime-arm64-v1.tar.gz#macOS arm64 source runtime" \
+            "$output/wechatdataanalysis-macos-source-runtime-arm64-v1.manifest.json#Source runtime manifest" \
+            "$output/SHA256SUMS-macos-source-runtime.txt#SHA-256 checksums" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "macOS public source runtime ${WCE_SOURCE_RUNTIME_RELEASE_TAG}" \
+            --notes "Restricted compiled runtime for public WCDA source checkouts. Fixed 45-day validity; not a packaged application." \
+            --latest=false
+
+      - name: Verify public no-auth download
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$WCE_SOURCE_RUNTIME_OUTPUT_DIR"
+          expected="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["assetSha256"])' "$output/promotion-output.json")"
+          public_asset="$RUNNER_TEMP/public-source-runtime.tar.gz"
+          env -u GH_TOKEN -u GITHUB_TOKEN curl --fail --location --silent --show-error \
+            --proto '=https' --proto-redir '=https' \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${WCE_SOURCE_RUNTIME_RELEASE_TAG}/wechatdataanalysis-macos-source-runtime-arm64-v1.tar.gz" \
+            --output "$public_asset"
+          actual="$(shasum -a 256 "$public_asset" | awk '{print tolower($1)}')"
+          test "$actual" = "$expected"
+
+      - name: Upload promotion evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-source-runtime-promotion-${{ inputs.release_tag }}
+          path: |
+            ${{ runner.temp }}/macos-source-runtime-promotion/promotion-output.json
+            ${{ runner.temp }}/macos-source-runtime-promotion/SHA256SUMS-macos-source-runtime.txt
+            ${{ runner.temp }}/macos-source-runtime-promotion/wechatdataanalysis-macos-source-runtime-arm64-v1.manifest.json
+          if-no-files-found: error
+          retention-days: 90
