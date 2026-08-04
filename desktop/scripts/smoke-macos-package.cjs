@@ -385,6 +385,7 @@ async function runPackagedRuntimeSmoke(appPath) {
 
   run("codesign", ["--verify", "--strict", "--verbose=2", nativeClient]);
   run("codesign", ["--verify", "--strict", "--verbose=2", nativeBroker]);
+  run("codesign", ["--verify", "--strict", "--verbose=2", integrity]);
   run("codesign", ["--verify", "--strict", "--verbose=2", xkeyHelper]);
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
   const entitlements = run("codesign", ["-d", "--entitlements", "-", electronExecutable], { capture: true });

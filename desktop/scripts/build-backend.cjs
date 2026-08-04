@@ -9,6 +9,9 @@ const {
   macosNativeManifestErrors,
   resolveMacosNativeCoreArtifacts,
 } = require("./macos-native-core-packaging.cjs");
+const {
+  resolveIntegrityNativeArtifact,
+} = require("./integrity-native-packaging.cjs");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const entry = path.join(repoRoot, "src", "wechat_decrypt_tool", "backend_entry.py");
@@ -312,7 +315,24 @@ function prepareRuntimeNativeDir(sourceDir, destinationDir) {
 function buildIntegrityNativeBinary({ env = process.env, platform = process.platform } = {}) {
   if (platform !== "darwin" && platform !== "linux") return null;
 
+  const artifactDir = String(env.WCE_INTEGRITY_ARTIFACT_DIR || "").trim();
+  if (platform === "darwin" && artifactDir) {
+    return resolveIntegrityNativeArtifact({ env, platform }).binaryPath;
+  }
+  const distributionRequired = platform === "darwin" && (
+    parseBooleanEnv(env, "WCE_INTEGRITY_REQUIRED") ||
+    String(env.MACOS_DISTRIBUTION_BUILD || "").trim() === "1"
+  );
+  if (distributionRequired) {
+    throw new Error("A pinned macOS wce_integrity production artifact is required.");
+  }
+
   const integrityManifest = path.join(repoRoot, "native", "wce_integrity", "Cargo.toml");
+  if (!fs.existsSync(integrityManifest)) {
+    throw new Error(
+      "Private wce_integrity source is unavailable. Configure WCE_INTEGRITY_ARTIFACT_DIR for macOS packaging."
+    );
+  }
   const integrityTargetDir = path.join(repoRoot, "native", "wce_integrity", "target", "release");
   const fileName = platform === "darwin" ? "libwce_integrity.dylib" : "libwce_integrity.so";
   const result = spawnSync(
@@ -356,7 +376,7 @@ function validateRuntimeNativeHelpers(destinationDir, platform = process.platfor
   fs.chmodSync(databaseKeyHelper, 0o755);
 }
 
-function runIntegrityPreflight(env = process.env) {
+function runIntegrityPreflight(env = process.env, integrityNativeBinary = null) {
   const result = spawnSync(
     "uv",
     [
@@ -375,6 +395,9 @@ function runIntegrityPreflight(env = process.env) {
       cwd: repoRoot,
       env: {
         ...env,
+        ...(integrityNativeBinary
+          ? { WCE_INTEGRITY_NATIVE_PATH: path.resolve(integrityNativeBinary) }
+          : {}),
         PYTHONPATH: [path.join(repoRoot, "src"), env.PYTHONPATH || ""].filter(Boolean).join(path.delimiter),
       },
       stdio: "inherit",
@@ -472,7 +495,7 @@ function main() {
   stageNativeCoreArtifacts();
   stageMacosXkeyArtifacts({ destinationNativeDir: runtimeNativeDir });
   validateRuntimeNativeHelpers(runtimeNativeDir);
-  runIntegrityPreflight();
+  runIntegrityPreflight(process.env, integrityNativeBinary);
 
   const desktopPackageJsonPath = path.join(repoRoot, "desktop", "package.json");
   let desktopVersion = "1.3.0";
@@ -562,6 +585,7 @@ module.exports = {
   nativeCoreArtifactNames,
   nativeCoreManifestErrors,
   nativeCoreProductionManifestErrors,
+  buildIntegrityNativeBinary,
   prepareRuntimeNativeDir,
   resolveNativeCoreArtifacts,
   stageNativeCoreArtifacts,

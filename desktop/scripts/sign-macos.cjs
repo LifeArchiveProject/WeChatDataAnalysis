@@ -136,6 +136,7 @@ module.exports = async function signMacos(options) {
   const nativeClientPath = path.join(nativeCoreDirectory, "libwechatdb_client.dylib");
   const nativeBrokerPath = path.join(nativeCoreDirectory, "wechatdb_broker");
   const nativeManifestPath = path.join(nativeCoreDirectory, "wechatdb_native_build.json");
+  const integrityPath = path.join(nativeCoreDirectory, "libwce_integrity.dylib");
   const helperEntitlements = path.resolve(
     __dirname,
     "..",
@@ -153,7 +154,7 @@ module.exports = async function signMacos(options) {
     throw new Error(`Packaged macOS database key helper not found: ${databaseKeyHelperPath}`);
   }
   if (!fs.existsSync(backendPath)) throw new Error(`Packaged backend not found: ${backendPath}`);
-  for (const nativePath of [nativeClientPath, nativeBrokerPath, nativeManifestPath]) {
+  for (const nativePath of [nativeClientPath, nativeBrokerPath, nativeManifestPath, integrityPath]) {
     if (!fs.existsSync(nativePath)) {
       throw new Error(`Packaged macOS native-core component not found: ${nativePath}`);
     }
@@ -246,6 +247,13 @@ module.exports = async function signMacos(options) {
     ) {
       throw new Error("Producer-signed macOS native-core identities do not match pins.");
     }
+    const expectedIntegrityHash = requiredValue(
+      "WCE_INTEGRITY_BINARY_SHA256",
+      /^[0-9a-f]{64}$/
+    );
+    if (sha256File(integrityPath) !== expectedIntegrityHash) {
+      throw new Error("Packaged export-integrity module does not match the protected artifact pin.");
+    }
   }
   if (distribution && xkeyManifest?.signing?.mode !== signingMode) {
     throw new Error("The selected macOS signing mode does not match the producer helper manifest.");
@@ -337,13 +345,17 @@ module.exports = async function signMacos(options) {
     }
     const nativeClientAfter = inspectCodeSignature(nativeClientPath);
     const nativeBrokerAfter = inspectCodeSignature(nativeBrokerPath);
+    const integrityAfter = inspectCodeSignature(integrityPath);
     if (
       nativeClientAfter.identifier !== nativeManifest.macosClientSigningIdentifier ||
       nativeClientAfter.leafSha256 !== expectedNativeClientSigner ||
       nativeBrokerAfter.identifier !== nativeManifest.macosBrokerSigningIdentifier ||
-      nativeBrokerAfter.leafSha256 !== expectedNativeBrokerSigner
+      nativeBrokerAfter.leafSha256 !== expectedNativeBrokerSigner ||
+      integrityAfter.leafSha256 !== expectedHostSigner
     ) {
-      throw new Error("macOS app signing replaced a producer native-core identity.");
+      throw new Error(
+        "macOS app signing replaced a producer native-core identity or failed to bind the export-integrity module."
+      );
     }
   }
 };

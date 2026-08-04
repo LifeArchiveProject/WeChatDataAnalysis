@@ -41,6 +41,14 @@ jobs:
       WCE_NATIVE_CORE_HOST_SIGNING_IDENTIFIER: ${{ vars.WCE_NATIVE_CORE_HOST_SIGNING_IDENTIFIER }}
       WCE_NATIVE_CORE_REQUIRED: "1"
       WCE_NATIVE_CORE_ALLOW_DEVELOPMENT_ARTIFACTS: "0"
+      WCE_INTEGRITY_ARTIFACT_REPOSITORY: ${{ vars.WCE_INTEGRITY_ARTIFACT_REPOSITORY }}
+      WCE_INTEGRITY_ARTIFACT_RUN_ID: ${{ vars.WCE_INTEGRITY_ARTIFACT_RUN_ID }}
+      WCE_INTEGRITY_SOURCE_REVISION: ${{ vars.WCE_INTEGRITY_SOURCE_REVISION }}
+      WCE_INTEGRITY_BUILD_ID: ${{ vars.WCE_INTEGRITY_BUILD_ID }}
+      WCE_INTEGRITY_BINARY_SHA256: ${{ vars.WCE_INTEGRITY_BINARY_SHA256 }}
+      WCE_INTEGRITY_UI_SOURCE_REPOSITORY: ${{ github.repository }}
+      WCE_INTEGRITY_UI_SOURCE_REVISION: ${{ github.sha }}
+      WCE_INTEGRITY_REQUIRED: "1"
       MACOS_DISTRIBUTION_BUILD: "1"
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       CI: "true"
@@ -91,6 +99,13 @@ jobs:
           done
           test "$WCE_NATIVE_CORE_HOST_SIGNER_SHA256" = "$WCE_MACOS_WCDA_HOST_SIGNER_SHA256"
           test "$WCE_NATIVE_CORE_HOST_SIGNING_IDENTIFIER" = "com.lifearchive.wechatdataanalysis.backend"
+          [[ "$WCE_INTEGRITY_ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$WCE_INTEGRITY_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$WCE_INTEGRITY_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WCE_INTEGRITY_BUILD_ID" =~ ^[A-Za-z0-9._-]{8,128}$ ]]
+          [[ "$WCE_INTEGRITY_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$WCE_INTEGRITY_UI_SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "$WCE_INTEGRITY_UI_SOURCE_REVISION" = "$WORKFLOW_REVISION"
 
       - name: Download exact Producer helper artifact
         timeout-minutes: 15
@@ -151,6 +166,38 @@ jobs:
           test -f "$artifact_dir/wechatdb_broker"
           test -f "$artifact_dir/wechatdb_native_build.json"
           echo "WCE_NATIVE_CORE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+
+      - name: Download exact private export-integrity artifact
+        timeout-minutes: 15
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WCE_MACOS_PRODUCER_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          artifact_dir="$RUNNER_TEMP/wce-integrity-macos-arm64-production"
+          downloaded=0
+          for attempt in 1 2 3; do
+            rm -rf "$artifact_dir"
+            mkdir -p "$artifact_dir"
+            if gh run download "$WCE_INTEGRITY_ARTIFACT_RUN_ID" \
+              --repo "$WCE_INTEGRITY_ARTIFACT_REPOSITORY" \
+              --name wce-integrity-macos-arm64-production \
+              --dir "$artifact_dir"
+            then
+              downloaded=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep "$((attempt * 15))"
+            fi
+          done
+          test "$downloaded" = 1
+          test -f "$artifact_dir/libwce_integrity.dylib"
+          test -f "$artifact_dir/wce_integrity_build.json"
+          test -f "$artifact_dir/provenance.json"
+          test -f "$artifact_dir/SHA256SUMS.txt"
+          echo "WCE_INTEGRITY_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
 
       - name: Import persistent self-signed host identity
         timeout-minutes: 5
@@ -277,10 +324,12 @@ jobs:
             desktop/tests/macos-xkey-packaging.test.cjs \
             desktop/tests/macos-xkey-signing.test.cjs \
             desktop/tests/macos-native-core-packaging.test.cjs \
+            desktop/tests/integrity-native-packaging.test.cjs \
             desktop/tests/native-core-packaging.test.cjs \
             desktop/tests/native-core-runtime.test.cjs
           node -e "require('./desktop/scripts/macos-xkey-packaging.cjs').resolveMacosXkeyArtifacts({ platform: 'darwin' })"
           node -e "require('./desktop/scripts/macos-native-core-packaging.cjs').resolveMacosNativeCoreArtifacts({ platform: 'darwin' })"
+          node -e "require('./desktop/scripts/integrity-native-packaging.cjs').resolveIntegrityNativeArtifact({ platform: 'darwin' })"
 
       - name: Build signed macOS package
         working-directory: desktop
