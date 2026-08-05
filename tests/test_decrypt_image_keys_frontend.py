@@ -136,10 +136,11 @@ def test_macos_database_key_clears_prefill_and_always_starts_real_capture():
     assert "saved_db_key" not in source[handler:request]
 
 
-def test_macos_saved_key_prefill_is_disabled_but_image_key_prefill_remains():
+def test_saved_database_key_prefill_remains_available_before_macos_recapture():
     source = read_decrypt_page()
 
-    assert "if (!isMacos.value && imageKeyContextStillSelected(context) && dbKey" in source
+    assert "if (imageKeyContextStillSelected(context) && dbKey" in source
+    assert "if (!isMacos.value && imageKeyContextStillSelected(context)" not in source
     assert "const cachedPair = normalizeCompleteImageKeys(xorKey, aesKey)" in source
 
 
