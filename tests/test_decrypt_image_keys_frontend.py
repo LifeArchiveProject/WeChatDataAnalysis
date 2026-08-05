@@ -134,6 +134,13 @@ def test_macos_database_key_does_not_repeat_capture_when_a_valid_key_is_loaded()
     assert "当前数据库密钥已就绪，无需重复获取" in source[guard:request]
 
 
+def test_macos_database_key_reports_backend_saved_key_reuse_without_capture_success_copy():
+    source = read_decrypt_page()
+
+    assert "res?.data?.method === 'saved_db_key'" in source
+    assert "当前数据库密钥已就绪，无需重复获取。" in source
+
+
 def test_db_key_persistence_failure_warns_without_blocking_image_key_step():
     source = read_decrypt_page()
 
