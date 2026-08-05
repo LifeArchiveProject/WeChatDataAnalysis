@@ -31,17 +31,22 @@ def _metadata(path: Path) -> dict[str, object]:
     }
 
 
-def _write_bundle(root: Path) -> tuple[Path, dict[str, object]]:
+def _write_bundle(
+    root: Path, *, source_runtime: bool = False
+) -> tuple[Path, dict[str, object]]:
     root.mkdir(parents=True, exist_ok=True)
     helper_path = root / helper.HELPER_FILE_NAME
     helper_path.write_bytes(b"universal-macho-test-fixture")
     notice_path = root / helper.THIRD_PARTY_NOTICE_FILE_NAME
     notice_path.parent.mkdir(parents=True)
     notice_path.write_text("Frida test license\n", encoding="utf-8")
+    artifact_name = (
+        helper.SOURCE_PUBLIC_ARTIFACT_NAME if source_runtime else helper.ARTIFACT_NAME
+    )
     manifest: dict[str, object] = {
         "schemaVersion": 1,
         "artifactType": "wda-xkey-macos-key-capture",
-        "artifactName": helper.ARTIFACT_NAME,
+        "artifactName": artifact_name,
         "distributionMode": "public",
         "platform": "macos",
         "architecture": "universal2",
@@ -71,12 +76,15 @@ def _write_bundle(root: Path) -> tuple[Path, dict[str, object]]:
             helper.THIRD_PARTY_NOTICE_FILE_NAME: _metadata(notice_path),
         },
     }
+    if source_runtime:
+        manifest["sourceRuntime"] = True
+        manifest["hostVerification"] = "same-user-direct-parent"
     manifest_path = root / helper.MANIFEST_FILE_NAME
     manifest_path.write_text(json.dumps(manifest, separators=(",", ":")), encoding="utf-8")
     manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     trust = {
         "schemaVersion": 1,
-        "artifactName": helper.ARTIFACT_NAME,
+        "artifactName": artifact_name,
         "sourceRevision": SOURCE_REVISION,
         "buildId": BUILD_NAME,
         "appId": helper.APP_ID,
@@ -111,7 +119,7 @@ def _write_bundle(root: Path) -> tuple[Path, dict[str, object]]:
         "runAttempt": 1,
         "sourceRevision": SOURCE_REVISION,
         "buildId": BUILD_NAME,
-        "artifactName": helper.ARTIFACT_NAME,
+        "artifactName": artifact_name,
         "manifestSha256": manifest_sha,
         "trustSha256": hashlib.sha256(trust_path.read_bytes()).hexdigest(),
         "checksumsSha256": hashlib.sha256(checksums_path.read_bytes()).hexdigest(),
@@ -196,6 +204,33 @@ def test_validate_bundle_accepts_minimal_signed_producer_artifact(tmp_path: Path
         "architecture", "architectures", "appId", "sourceRevision", "build",
         "authorizationMode", "onlineRequired", "signing", "files",
     }
+
+
+def test_validate_bundle_accepts_restricted_source_public_artifact(tmp_path: Path):
+    _write_bundle(tmp_path, source_runtime=True)
+    bundle = helper.validate_macos_db_key_bundle(
+        tmp_path,
+        now_unix=ISSUED_AT + 1,
+        code_signature_verifier=lambda _path: _signature_info(),
+    )
+
+    assert bundle.source_runtime is True
+    assert bundle.manifest["artifactName"] == helper.SOURCE_PUBLIC_ARTIFACT_NAME
+    assert bundle.manifest["hostVerification"] == "same-user-direct-parent"
+
+
+def test_validate_bundle_rejects_source_public_artifact_in_frozen_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _write_bundle(tmp_path, source_runtime=True)
+    monkeypatch.setattr(helper.sys, "frozen", True, raising=False)
+
+    with pytest.raises(helper.MacosDbKeyIntegrityError, match="宿主校验策略无效"):
+        helper.validate_macos_db_key_bundle(
+            tmp_path,
+            now_unix=ISSUED_AT + 1,
+            code_signature_verifier=lambda _path: _signature_info(),
+        )
 
 
 def test_validate_bundle_rejects_unexpected_manifest_metadata(tmp_path: Path):

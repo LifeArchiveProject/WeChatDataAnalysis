@@ -144,11 +144,25 @@ def _native_core_resources_ready(paths: tuple[Path, Path, Path]) -> bool:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return False
-    return bool(
-        isinstance(manifest, dict)
-        and manifest.get("schemaVersion") == 2
-        and str(manifest.get("buildId") or "").strip()
-        and isinstance(manifest.get("developmentBuild"), bool)
+    if (
+        not isinstance(manifest, dict)
+        or not str(manifest.get("buildId") or "").strip()
+        or not isinstance(manifest.get("developmentBuild"), bool)
+    ):
+        return False
+    if manifest.get("schemaVersion") == 2 and "platform" not in manifest:
+        return True
+    if manifest.get("schemaVersion") != 3 or manifest.get("platform") != "macos":
+        return False
+    source_fields = {
+        name
+        for name in ("sourceRuntime", "macosHostVerification")
+        if name in manifest
+    }
+    return not source_fields or (
+        source_fields == {"sourceRuntime", "macosHostVerification"}
+        and manifest.get("sourceRuntime") is True
+        and manifest.get("macosHostVerification") == "same-user-direct-parent"
     )
 
 

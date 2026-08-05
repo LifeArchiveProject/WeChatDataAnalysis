@@ -9,6 +9,7 @@ const {
   ENV_NATIVE_CORE_MODE,
   applyNativeCoreRuntimePolicy,
   isProductionNativeCoreManifest,
+  isSourcePublicNativeCoreManifest,
   nativeCoreArtifactNames,
   resolveNativeCoreRuntimePolicy,
 } = require("../src/native-core-runtime.cjs");
@@ -108,6 +109,12 @@ const MACOS_DEVELOPMENT_MANIFEST = Object.freeze({
   macosBrokerSignerSha256: "00".repeat(32),
   macosHostSignerSha256: "00".repeat(32),
   macosPrivateRootSha256: "00".repeat(32),
+});
+
+const MACOS_SOURCE_PUBLIC_MANIFEST = Object.freeze({
+  ...MACOS_PRODUCTION_MANIFEST,
+  sourceRuntime: true,
+  macosHostVerification: "same-user-direct-parent",
 });
 
 function makeArtifacts(platform, manifest, { omit = [] } = {}) {
@@ -227,8 +234,8 @@ test("packaged macOS production artifacts enable required mode", () => {
   }
 });
 
-test("source macOS development artifacts enable only the explicit development override", () => {
-  const nativeDir = makeArtifacts("darwin", MACOS_DEVELOPMENT_MANIFEST);
+test("source macOS restricted public artifacts enable required mode without a development override", () => {
+  const nativeDir = makeArtifacts("darwin", MACOS_SOURCE_PUBLIC_MANIFEST);
   const env = {};
   try {
     const policy = applyNativeCoreRuntimePolicy(env, {
@@ -236,12 +243,59 @@ test("source macOS development artifacts enable only the explicit development ov
       nativeDir,
       platform: "darwin",
     });
-    assert.equal(policy.artifactState, "development");
+    assert.equal(policy.artifactState, "source-public");
+    assert.equal(policy.reason, "source-public-artifacts");
     assert.equal(policy.manifest.platform, "macos");
     assert.equal(env[ENV_NATIVE_CORE_MODE], "required");
-    assert.equal(env[ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD], "1");
+    assert.equal(env[ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD], undefined);
   } finally {
     cleanup(nativeDir);
+  }
+});
+
+test("source macOS rejects the former dev-local artifact", () => {
+  const nativeDir = makeArtifacts("darwin", MACOS_DEVELOPMENT_MANIFEST);
+  try {
+    assert.throws(
+      () => applyNativeCoreRuntimePolicy({}, {
+        isPackaged: false,
+        nativeDir,
+        platform: "darwin",
+      }),
+      /requires the exact restricted source-public/
+    );
+  } finally {
+    cleanup(nativeDir);
+  }
+});
+
+test("packaged and source macOS artifact profiles cannot be swapped", () => {
+  const productionDir = makeArtifacts("darwin", MACOS_PRODUCTION_MANIFEST);
+  const sourceDir = makeArtifacts("darwin", MACOS_SOURCE_PUBLIC_MANIFEST);
+  try {
+    assert.equal(isProductionNativeCoreManifest(MACOS_SOURCE_PUBLIC_MANIFEST), false);
+    assert.equal(isSourcePublicNativeCoreManifest(MACOS_SOURCE_PUBLIC_MANIFEST), true);
+    assert.throws(
+      () => resolveNativeCoreRuntimePolicy({
+        env: {},
+        isPackaged: true,
+        nativeDir: sourceDir,
+        platform: "darwin",
+      }),
+      /requires an approved production/
+    );
+    assert.throws(
+      () => resolveNativeCoreRuntimePolicy({
+        env: {},
+        isPackaged: false,
+        nativeDir: productionDir,
+        platform: "darwin",
+      }),
+      /requires the exact restricted source-public/
+    );
+  } finally {
+    cleanup(productionDir);
+    cleanup(sourceDir);
   }
 });
 

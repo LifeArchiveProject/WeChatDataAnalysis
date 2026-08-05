@@ -169,6 +169,7 @@ if CONTRACT.get("schemaVersion") != 2:
     )
 
 ARTIFACT_NAME = str(CONTRACT["artifactName"])
+SOURCE_PUBLIC_ARTIFACT_NAME = "wda-xkey-macos-universal-source-public"
 APP_ID = str(CONTRACT["appId"])
 HELPER_FILE_NAME = str(CONTRACT["helperFileName"])
 MANIFEST_FILE_NAME = str(CONTRACT["manifestFileName"])
@@ -209,6 +210,7 @@ class ValidatedMacosDbKeyBundle:
     helper_bundle_id: str
     host_signing_identifier: str
     manifest: Mapping[str, object]
+    source_runtime: bool = False
 
 
 @dataclass(frozen=True)
@@ -376,19 +378,38 @@ def validate_macos_db_key_bundle(
     _provenance_raw, provenance = _read_json_file(
         bundle_root / PROVENANCE_FILE_NAME, label="生产溯源"
     )
-    _exact_keys(
-        manifest,
-        {
-            "schemaVersion", "artifactType", "artifactName", "distributionMode",
-            "platform", "architecture", "architectures", "appId", "sourceRevision",
-            "build", "authorizationMode", "onlineRequired", "signing", "files",
-        },
-        label="构建清单",
-    )
+    base_manifest_keys = {
+        "schemaVersion", "artifactType", "artifactName", "distributionMode",
+        "platform", "architecture", "architectures", "appId", "sourceRevision",
+        "build", "authorizationMode", "onlineRequired", "signing", "files",
+    }
+    source_field_names = {
+        name for name in ("sourceRuntime", "hostVerification") if name in manifest
+    }
+    source_runtime = bool(source_field_names)
+    if source_runtime:
+        _exact_keys(
+            manifest,
+            base_manifest_keys | {"sourceRuntime", "hostVerification"},
+            label="构建清单",
+        )
+        if (
+            getattr(sys, "frozen", False)
+            or manifest.get("sourceRuntime") is not True
+            or manifest.get("hostVerification") != "same-user-direct-parent"
+        ):
+            raise MacosDbKeyIntegrityError(
+                "macOS 源码数据库密钥组件的宿主校验策略无效。",
+                code="MANIFEST_MISMATCH",
+            )
+        expected_artifact_name = SOURCE_PUBLIC_ARTIFACT_NAME
+    else:
+        _exact_keys(manifest, base_manifest_keys, label="构建清单")
+        expected_artifact_name = ARTIFACT_NAME
     if (
         manifest.get("schemaVersion") != 1
         or manifest.get("artifactType") != "wda-xkey-macos-key-capture"
-        or manifest.get("artifactName") != ARTIFACT_NAME
+        or manifest.get("artifactName") != expected_artifact_name
         or manifest.get("distributionMode") != "public"
         or manifest.get("platform") != "macos"
         or manifest.get("architecture") != "universal2"
@@ -428,6 +449,11 @@ def validate_macos_db_key_bundle(
     if development and not allow_development:
         raise MacosDbKeyIntegrityError(
             "正式应用拒绝加载开发版 macOS 数据库密钥组件。",
+            code="DEVELOPMENT_BUILD_REJECTED",
+        )
+    if source_runtime and development:
+        raise MacosDbKeyIntegrityError(
+            "macOS 源码数据库密钥组件必须保留正式生产安全配置。",
             code="DEVELOPMENT_BUILD_REJECTED",
         )
     current_time = int(time.time()) if now_unix is None else int(now_unix)
@@ -524,7 +550,7 @@ def validate_macos_db_key_bundle(
     )
     if (
         trust.get("schemaVersion") != 1
-        or trust.get("artifactName") != ARTIFACT_NAME
+        or trust.get("artifactName") != expected_artifact_name
         or trust.get("appId") != APP_ID
         or trust.get("sourceRevision") != source_revision
         or trust.get("buildId") != build_id
@@ -559,7 +585,7 @@ def validate_macos_db_key_bundle(
         or int(provenance.get("runAttempt", 0)) <= 0
         or provenance.get("sourceRevision") != source_revision
         or provenance.get("buildId") != build_id
-        or provenance.get("artifactName") != ARTIFACT_NAME
+        or provenance.get("artifactName") != expected_artifact_name
         or provenance.get("manifestSha256") != manifest_sha
         or provenance.get("trustSha256") != trust_sha
         or provenance.get("checksumsSha256") != checksums_sha
@@ -596,6 +622,7 @@ def validate_macos_db_key_bundle(
         helper_bundle_id=HELPER_BUNDLE_ID,
         host_signing_identifier=HOST_SIGNING_IDENTIFIER,
         manifest=manifest,
+        source_runtime=source_runtime,
     )
 
 
@@ -863,6 +890,7 @@ def capture_macos_database_key(
 __all__ = [
     "APP_ID",
     "ARTIFACT_NAME",
+    "SOURCE_PUBLIC_ARTIFACT_NAME",
     "CONTRACT",
     "HELPER_BUNDLE_ID",
     "HOST_SIGNING_IDENTIFIER",

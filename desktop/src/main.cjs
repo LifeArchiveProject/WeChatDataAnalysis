@@ -44,7 +44,10 @@ const {
 } = require("./backend-startup.cjs");
 const { applyNativeCoreRuntimePolicy } = require("./native-core-runtime.cjs");
 const {
+  ENV_INTEGRITY_NATIVE_PATH,
+  ENV_MACOS_DB_KEY_BUNDLE,
   ENV_SOURCE_NATIVE_CORE_DIR,
+  applySourceRuntimeEnvironment,
   ensureSourceNativeCore,
 } = require("./source-native-core-bootstrap.cjs");
 const { resolveNativeCoreRuntimeDir } = require("./native-core-path.cjs");
@@ -1952,10 +1955,14 @@ function getNativeCoreRuntimeDir(env = process.env) {
   if (
     !app.isPackaged &&
     process.platform === "darwin" &&
-    !String(env[ENV_SOURCE_NATIVE_CORE_DIR] || "").trim()
+    (
+      !String(env[ENV_SOURCE_NATIVE_CORE_DIR] || "").trim() ||
+      !String(env[ENV_MACOS_DB_KEY_BUNDLE] || "").trim() ||
+      !String(env[ENV_INTEGRITY_NATIVE_PATH] || "").trim()
+    )
   ) {
     const sourceNativeCore = ensureSourceNativeCore({ env });
-    env[ENV_SOURCE_NATIVE_CORE_DIR] = sourceNativeCore.nativeDir;
+    applySourceRuntimeEnvironment(env, sourceNativeCore);
   }
   return resolveNativeCoreRuntimeDir({
     env,

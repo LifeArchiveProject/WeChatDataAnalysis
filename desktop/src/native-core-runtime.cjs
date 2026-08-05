@@ -112,7 +112,7 @@ function hasExpectedLeafRevocation(manifest) {
   return manifest?.windowsPrivatePkiLeafRevocation === expected;
 }
 
-function isProductionNativeCoreManifest(manifest, options = {}) {
+function isProductionNativeCoreManifestBase(manifest, options = {}) {
   const common = (
     hasValidManifestIdentity(manifest) &&
     hasActiveProductionBuildWindow(manifest, options) &&
@@ -163,6 +163,29 @@ function isProductionNativeCoreManifest(manifest, options = {}) {
       isNonZeroSha256(manifest.windowsPrivateRootSha256)) &&
     (manifest.windowsSignerTrustMode !== "public" ||
       new Set(["", "0".repeat(64)]).has(String(manifest.windowsPrivateRootSha256 || "")))
+  );
+}
+
+function hasSourceRuntimeFields(manifest) {
+  return (
+    Object.prototype.hasOwnProperty.call(manifest || {}, "sourceRuntime") ||
+    Object.prototype.hasOwnProperty.call(manifest || {}, "macosHostVerification")
+  );
+}
+
+function isProductionNativeCoreManifest(manifest, options = {}) {
+  return (
+    isProductionNativeCoreManifestBase(manifest, options) &&
+    !hasSourceRuntimeFields(manifest)
+  );
+}
+
+function isSourcePublicNativeCoreManifest(manifest, options = {}) {
+  return (
+    manifest?.schemaVersion === 3 &&
+    isProductionNativeCoreManifestBase(manifest, options) &&
+    manifest.sourceRuntime === true &&
+    manifest.macosHostVerification === "same-user-direct-parent"
   );
 }
 
@@ -232,6 +255,8 @@ function resolveNativeCoreRuntimePolicy({
   const manifest = complete ? readNativeCoreManifest(directory, fsImpl) : null;
   const platformMatch = complete && manifestMatchesPlatform(manifest, platform);
   const production = platformMatch && isProductionNativeCoreManifest(manifest, { nowUnix });
+  const sourcePublic =
+    platformMatch && isSourcePublicNativeCoreManifest(manifest, { nowUnix });
   const development = platformMatch && isDevelopmentNativeCoreManifest(manifest);
   const explicitValue = String(env[ENV_NATIVE_CORE_MODE] || "").trim().toLowerCase();
   const explicit = explicitValue !== "";
@@ -249,15 +274,28 @@ function resolveNativeCoreRuntimePolicy({
   if (isPackaged && !production) {
     throw new Error("Packaged WeChatDataAnalysis requires an approved production wechatdb native core");
   }
-  if (!isPackaged && !development) {
+  if (!isPackaged && platform === "darwin" && !sourcePublic) {
+    throw new Error(
+      "Source WeChatDataAnalysis on macOS requires the exact restricted source-public wechatdb native core"
+    );
+  }
+  if (!isPackaged && platform !== "darwin" && !development) {
     throw new Error("Source WeChatDataAnalysis requires the exact dev-local wechatdb native core");
   }
 
-  const enableDevelopmentOverride = !isPackaged;
-  const reason = isPackaged ? "production-artifacts" : "source-development-artifacts";
+  const enableDevelopmentOverride = !isPackaged && platform !== "darwin";
+  const reason = isPackaged
+    ? "production-artifacts"
+    : platform === "darwin"
+      ? "source-public-artifacts"
+      : "source-development-artifacts";
 
   return {
-    artifactState: isPackaged ? "production" : "development",
+    artifactState: isPackaged
+      ? "production"
+      : platform === "darwin"
+        ? "source-public"
+        : "development",
     enableDevelopmentOverride,
     explicit,
     manifest,
@@ -286,6 +324,7 @@ module.exports = {
   hasCompleteNativeCore,
   isDevelopmentNativeCoreManifest,
   isProductionNativeCoreManifest,
+  isSourcePublicNativeCoreManifest,
   nativeCoreArtifactNames,
   readNativeCoreManifest,
   resolveNativeCoreRuntimePolicy,
