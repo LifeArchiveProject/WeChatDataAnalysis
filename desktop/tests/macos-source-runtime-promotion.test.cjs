@@ -174,6 +174,9 @@ test("promotion authorizes and probes the exact XKey before publishing", () => {
   assert.ok(publish > probe);
   assert.match(workflow, /secrets\.WCE_MACOS_XKEY_PROMOTION_SSH_KEY/);
   assert.match(workflow, /StrictHostKeyChecking=yes/);
+  assert.match(workflow, /signerRouteVerified/);
+  assert.match(workflow, /servicesHealthy/);
+  assert.match(workflow, /XKey promotion postconditions are invalid/);
   assert.match(workflow, /requestedFeatures\": 16/);
   assert.match(workflow, /WeChatDataAnalysis-KeyBridge\/1/);
   assert.doesNotMatch(workflow, /root@\$\{?WCE_MACOS_XKEY_PROMOTION_HOST/);
