@@ -1125,7 +1125,7 @@ const prefillKeysForAccount = async (account) => {
     const keys = resp.keys || {}
 
     const dbKey = String(keys.db_key || '').trim()
-    if (!isMacos.value && imageKeyContextStillSelected(context) && dbKey && !String(formData.key || '').trim()) {
+    if (imageKeyContextStillSelected(context) && dbKey && !String(formData.key || '').trim()) {
       formData.key = dbKey
     }
 
