@@ -3,9 +3,9 @@
   "platform": "darwin",
   "architecture": "arm64",
   "publisherRepository": "LifeArchiveProject/WeChatDataAnalysis",
-  "releaseTag": "macos-source-runtime-20260804-92e9449b-ddfdbd94",
+  "releaseTag": "macos-source-runtime-20260805-833537ea-dd4ff0dd",
   "assetName": "wechatdataanalysis-macos-source-runtime-arm64-v1.tar.gz",
-  "assetSha256": "f50d6ce84635c5ec41b29f90f86a871cc30cea34c1aa0f7dfe50f9d4eb00c43f",
-  "runtimeManifestSha256": "5d15ee8fab26c0c6242955b4e21123a6ce32c8ed025e97e9501864b113e93fdc",
+  "assetSha256": "9ce50fd506e7bbe92203d48c715a8b53b7ad7b0bc81cdfbb92f9c510a9ad6ae6",
+  "runtimeManifestSha256": "0a8e2d29966ae32423796da94c72522f10692b54d1ab51ff449fe770cd599f4e",
   "expiresAtUnix": 1789718652
 }
