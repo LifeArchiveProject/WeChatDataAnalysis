@@ -82,6 +82,49 @@ def test_decrypt_database_keeps_sqlcipher_passphrase_compatibility(monkeypatch):
     assert _decrypt_sample(passphrase_key.hex(), encrypted_db, monkeypatch) == page1 + page2
 
 
+def test_realtime_key_probe_rejects_one_database_raw_key():
+    passphrase_key = bytes.fromhex("9f5dd0d3b6d0477ea5045c9e380ee272e53927993eb548dd98a022e842d5f7bd")
+    session_salt = bytes.fromhex("10f4090ef6897e146f94109f13743e34")
+    message_salt = bytes.fromhex("20f4090ef6897e146f94109f13743e34")
+    page1 = _build_plain_page(0x51, first_page=True)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir) / "db_storage"
+        session_db = root / "session" / "session.db"
+        message_db = root / "message" / "message_0.db"
+        session_db.parent.mkdir(parents=True)
+        message_db.parent.mkdir(parents=True)
+        session_db.write_bytes(
+            _encrypt_page(
+                passphrase_key,
+                page1,
+                1,
+                session_salt,
+                bytes.fromhex("0102030405060708090a0b0c0d0e0f10"),
+                passphrase=True,
+            )
+        )
+        message_db.write_bytes(
+            _encrypt_page(
+                passphrase_key,
+                page1,
+                1,
+                message_salt,
+                bytes.fromhex("1112131415161718191a1b1c1d1e1f20"),
+                passphrase=True,
+            )
+        )
+
+        valid = wechat_decrypt.validate_realtime_database_key(root, passphrase_key.hex())
+        assert valid["valid"] is True
+        assert valid["verified_roles"] == ["message", "session"]
+
+        message_raw_key = _derive_sqlcipher_enc_key(passphrase_key, message_salt)
+        partial = wechat_decrypt.validate_realtime_database_key(root, message_raw_key.hex())
+        assert partial["valid"] is False
+        assert partial["verified_roles"] == ["message"]
+
+
 def test_decrypt_database_keeps_page_when_non_first_hmac_mismatch(monkeypatch):
     raw_key = bytes.fromhex("00112233445566778899aabbccddeefffedcba98765432100123456789abcdef")
     salt = bytes.fromhex("60f4090ef6897e146f94109f13743e34")
