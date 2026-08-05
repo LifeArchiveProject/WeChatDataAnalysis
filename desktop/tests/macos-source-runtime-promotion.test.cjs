@@ -160,3 +160,21 @@ test("promotion workflow never exposes a private token in a public asset", () =>
   assert.match(workflow, /env -u GH_TOKEN -u GITHUB_TOKEN curl/);
   assert.doesNotMatch(workflow, /ghp_[A-Za-z0-9]+/);
 });
+
+test("promotion authorizes and probes the exact XKey before publishing", () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, "..", "..", ".github", "workflows", "macos-source-runtime-promotion.yml"),
+    "utf8"
+  );
+  const authorize = workflow.indexOf("Authorize verified source-public XKey");
+  const probe = workflow.indexOf("Verify XKey enrollment gate before publication");
+  const publish = workflow.indexOf("Publish public Release assets");
+  assert.ok(authorize > 0);
+  assert.ok(probe > authorize);
+  assert.ok(publish > probe);
+  assert.match(workflow, /secrets\.WCE_MACOS_XKEY_PROMOTION_SSH_KEY/);
+  assert.match(workflow, /StrictHostKeyChecking=yes/);
+  assert.match(workflow, /requestedFeatures\": 16/);
+  assert.match(workflow, /WeChatDataAnalysis-KeyBridge\/1/);
+  assert.doesNotMatch(workflow, /root@\$\{?WCE_MACOS_XKEY_PROMOTION_HOST/);
+});
