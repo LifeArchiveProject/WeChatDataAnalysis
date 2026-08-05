@@ -116,8 +116,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check --quiet cryptography
-          PYTHONPATH=src python3 - <<'PY'
+          venv="$RUNNER_TEMP/source-runtime-consumer-venv"
+          python3 -m venv "$venv"
+          "$venv/bin/python" -m pip install --disable-pip-version-check --quiet cryptography
+          PYTHONPATH=src "$venv/bin/python" - <<'PY'
           import json
           import os
           from pathlib import Path
