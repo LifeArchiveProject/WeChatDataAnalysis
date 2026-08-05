@@ -35,5 +35,8 @@ test("consumer workflow validates all three runtime components", () => {
   assert.match(source, /WCE_INTEGRITY_NATIVE_PATH/);
   assert.match(source, /codesign --verify --strict/);
   assert.match(source, /_required_native_core_build_manifest/);
+  assert.match(source, /configure_native_core_entrypoint/);
+  assert.match(source, /WECHAT_TOOL_NATIVE_CORE_LIBRARY/);
+  assert.match(source, /WECHAT_TOOL_NATIVE_CORE_BROKER/);
   assert.match(source, /validate_macos_db_key_bundle/);
 });

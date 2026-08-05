@@ -67,6 +67,8 @@ pnpm-lock.yaml
 # Native-core developer artifacts are supplied by the producer workflow.
 /src/wechat_decrypt_tool/native/wechatdb_client.dll
 /src/wechat_decrypt_tool/native/wechatdb_broker.exe
+/src/wechat_decrypt_tool/native/libwechatdb_client.dylib
+/src/wechat_decrypt_tool/native/wechatdb_broker
 /src/wechat_decrypt_tool/native/wechatdb_native_build.json
 /src/wechat_decrypt_tool/native/macos/db-key/
 

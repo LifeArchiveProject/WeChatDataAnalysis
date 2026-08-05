@@ -19,6 +19,7 @@ from wechat_decrypt_tool.native_core_client import (
     ENV_NATIVE_CORE_ENDPOINT,
     ENV_NATIVE_CORE_LIBRARY,
     ENV_NATIVE_CORE_MODE,
+    ENV_SOURCE_NATIVE_CORE_DIR,
     NativeCoreComponentMissingError,
     NativeCoreProtocolError,
     NativeCoreUnavailableError,
@@ -119,6 +120,55 @@ class TestWCDBRealtimeNativeCoreRequired(unittest.TestCase):
                     self.assertNotIn(name, os.environ)
                 ensure.assert_called_once_with(export_only=True)
                 stop.assert_called_once_with(_force=True)
+
+    def test_source_entrypoint_uses_bootstrap_runtime_directory(self) -> None:
+        with TemporaryDirectory() as td:
+            runtime = Path(td)
+            (runtime / "libwechatdb_client.dylib").write_bytes(b"client")
+            (runtime / "wechatdb_broker").write_bytes(b"broker")
+            (runtime / "wechatdb_native_build.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            manifest = SimpleNamespace(development_build=False)
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {ENV_SOURCE_NATIVE_CORE_DIR: str(runtime)},
+                    clear=True,
+                ),
+                patch.object(native_core_client.sys, "frozen", False, create=True),
+                patch.object(native_core_client.sys, "platform", "darwin"),
+                patch.object(
+                    native_core_client,
+                    "_required_native_core_build_manifest",
+                    return_value=manifest,
+                ),
+                patch.object(native_core_broker, "ensure_native_core_broker") as ensure,
+                patch.object(native_core_broker, "stop_native_core_broker") as stop,
+            ):
+                selected = native_core_client.configure_native_core_entrypoint()
+
+                self.assertIs(selected, manifest)
+                self.assertEqual(
+                    Path(os.environ[ENV_NATIVE_CORE_LIBRARY]),
+                    (runtime / "libwechatdb_client.dylib").resolve(),
+                )
+                self.assertEqual(
+                    Path(os.environ["WECHAT_TOOL_NATIVE_CORE_BROKER"]),
+                    (runtime / "wechatdb_broker").resolve(),
+                )
+                ensure.assert_called_once_with(export_only=True)
+                stop.assert_called_once_with(_force=True)
+
+    def test_source_runtime_directory_environment_matches_desktop_bootstrap(self) -> None:
+        desktop_contract = (ROOT / "desktop/src/native-core-path.cjs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            f'const ENV_SOURCE_NATIVE_CORE_DIR = "{ENV_SOURCE_NATIVE_CORE_DIR}";',
+            desktop_contract,
+        )
 
     def test_entrypoint_rejects_legacy_mode_external_overrides_and_missing_triple(self) -> None:
         with patch.dict(os.environ, {ENV_NATIVE_CORE_MODE: "off"}, clear=True):

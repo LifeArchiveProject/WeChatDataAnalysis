@@ -33,6 +33,7 @@ ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD = (
 ENV_NATIVE_CORE_ALLOW_STAGING_BUILD = (
     "WECHAT_TOOL_NATIVE_CORE_ALLOW_STAGING_BUILD_FOR_TESTS"
 )
+ENV_SOURCE_NATIVE_CORE_DIR = "WCE_NATIVE_CORE_SOURCE_DIR"
 
 _NATIVE_CORE_BUILD_MANIFEST_NAME = "wechatdb_native_build.json"
 _NATIVE_CORE_BUILD_MANIFEST_MAX_BYTES = 16 * 1024
@@ -1341,6 +1342,15 @@ def _native_core_broker_name() -> str:
 def _native_core_entrypoint_directory() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent / "native"
+    if sys.platform == "darwin":
+        configured = str(os.environ.get(ENV_SOURCE_NATIVE_CORE_DIR, "") or "").strip()
+        if configured:
+            try:
+                return Path(configured).expanduser().resolve(strict=False)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise NativeCoreComponentMissingError(
+                    f"Configured macOS source native-core directory is invalid: {configured}"
+                ) from exc
     return Path(__file__).resolve().parent / "native"
 
 
@@ -2961,6 +2971,7 @@ __all__ = [
     "ENV_NATIVE_CORE_ENDPOINT",
     "ENV_NATIVE_CORE_LIBRARY",
     "ENV_NATIVE_CORE_MODE",
+    "ENV_SOURCE_NATIVE_CORE_DIR",
     "NativeCoreClient",
     "NativeCoreBuildManifest",
     "NativeCoreComponentMissingError",

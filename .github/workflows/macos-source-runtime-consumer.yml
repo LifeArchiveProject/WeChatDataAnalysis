@@ -131,6 +131,12 @@ jobs:
           manifest = native_core_client._required_native_core_build_manifest(component)
           assert manifest.source_runtime is True
           assert manifest.macos_host_verification == "same-user-direct-parent"
+          entrypoint_manifest = native_core_client.configure_native_core_entrypoint()
+          assert entrypoint_manifest.build_id == manifest.build_id
+          assert Path(os.environ["WECHAT_TOOL_NATIVE_CORE_LIBRARY"]) == component.resolve()
+          assert Path(os.environ["WECHAT_TOOL_NATIVE_CORE_BROKER"]) == (
+              native_dir / "wechatdb_broker"
+          ).resolve()
           assert platform_support._native_core_resources_ready(
               (
                   component,
