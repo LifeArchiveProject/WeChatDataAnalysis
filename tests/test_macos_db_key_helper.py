@@ -333,6 +333,7 @@ def test_helper_invocation_exposes_only_pid_timeout_and_one_key_line(tmp_path: P
         (22, helper.MacosDbKeyAuthorizationError, "AUTHORIZATION_UNAVAILABLE"),
         (23, helper.MacosDbKeyUnavailableError, "CAPTURE_FAILED"),
         (24, helper.MacosDbKeyTimeoutError, "TIMEOUT"),
+        (25, helper.MacosDbKeyReloginRequiredError, "WECHAT_RELOGIN_REQUIRED"),
     ],
 )
 def test_helper_exit_codes_are_coarse_and_failure_stdout_must_be_empty(

@@ -73,7 +73,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 {{ isMacos
-                  ? '点击后将调用安装包内的本地受控组件，并联网完成一次性安全校验；密钥只在本机进程间传递，不会上传。您也可以手动输入已有的 64 位密钥。'
+                  ? '点击后将调用本地受控组件并等待微信产生新的密钥派生；若微信已经完成启动，请在“获取中”的 60 秒内仅退出当前账号再重新登录。密钥不会上传。'
                   : '点击按钮将优先使用 V4 内存扫描获取【数据库解密密钥】；失败时会询问您是否改用 Hook。您也可以手动输入已知的64位密钥。' }}
               </p>
               <p v-if="!isMacos" class="mt-2 text-xs text-[#7F7F7F] flex items-start">
@@ -1125,7 +1125,7 @@ const prefillKeysForAccount = async (account) => {
     const keys = resp.keys || {}
 
     const dbKey = String(keys.db_key || '').trim()
-    if (imageKeyContextStillSelected(context) && dbKey && !String(formData.key || '').trim()) {
+    if (!isMacos.value && imageKeyContextStillSelected(context) && dbKey && !String(formData.key || '').trim()) {
       formData.key = dbKey
     }
 
@@ -1345,20 +1345,11 @@ const handleGetDbKey = async () => {
   if (isGettingDbKey.value) return
 
   if (isMacos.value) {
+    formData.key = ''
+    formErrors.key = ''
+
     if (platformCapabilities.value?.database_key_extraction !== true) {
       error.value = platformCapabilities.value?.database_key_guidance || 'macOS 数据库密钥组件不可用，请更新或重新安装正式版本。'
-      return
-    }
-
-    const existingDbKey = String(formData.key || '').trim().toLowerCase()
-    if (/^[0-9a-f]{64}$/.test(existingDbKey)) {
-      formData.key = existingDbKey
-      error.value = ''
-      formErrors.key = ''
-      warning.value = '当前数据库密钥已就绪，无需重复获取。'
-      setTimeout(() => {
-        if (warning.value === '当前数据库密钥已就绪，无需重复获取。') warning.value = ''
-      }, 3000)
       return
     }
 
@@ -1367,8 +1358,7 @@ const handleGetDbKey = async () => {
     dbKeyRequestController = requestController
     isGettingDbKey.value = true
     error.value = ''
-    warning.value = '正在验证本地组件并完成联网安全校验，请保持微信运行。'
-    formErrors.key = ''
+    warning.value = '捕获已开始。若微信已经登录，请在 60 秒内仅退出当前账号并重新登录；不要退出微信程序或关闭 WCDA。'
 
     try {
       const res = await getKeys({
@@ -1380,13 +1370,11 @@ const handleGetDbKey = async () => {
       const key = String(res?.data?.db_key || '').trim().toLowerCase()
       if (res?.status === 0 && /^[0-9a-f]{64}$/.test(key)) {
         formData.key = key
-        warning.value = res?.data?.method === 'saved_db_key'
-          ? '当前数据库密钥已就绪，无需重复获取。'
-          : '数据库解密密钥已通过 macOS 本地受控组件获取成功！'
+        warning.value = '数据库解密密钥已通过 macOS 本地受控组件获取成功！'
         setTimeout(() => {
           if (
             requestRevision === dbKeyRequestRevision
-            && (warning.value.includes('获取成功') || warning.value.includes('无需重复获取'))
+            && warning.value.includes('获取成功')
           ) warning.value = ''
         }, 3000)
       } else {

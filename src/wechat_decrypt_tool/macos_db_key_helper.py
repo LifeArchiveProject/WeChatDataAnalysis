@@ -58,6 +58,20 @@ class MacosDbKeyTimeoutError(TimeoutError, MacosDbKeyError):
         MacosDbKeyError.__init__(self, message, code="TIMEOUT", retryable=True)
 
 
+class MacosDbKeyReloginRequiredError(TimeoutError, MacosDbKeyError):
+    def __init__(self) -> None:
+        MacosDbKeyError.__init__(
+            self,
+            (
+                "微信当前会话已完成数据库密钥初始化，本次没有产生新的密钥派生调用。"
+                "请重新点击获取，并在按钮显示“获取中”后的 60 秒内仅退出当前微信账号再重新登录；"
+                "不要退出微信程序或关闭 WCDA。"
+            ),
+            code="WECHAT_RELOGIN_REQUIRED",
+            retryable=True,
+        )
+
+
 class MacosDbKeyCancelledError(MacosDbKeyError):
     def __init__(self) -> None:
         super().__init__("macOS 数据库密钥获取已停止。", code="CANCELLED", retryable=True)
@@ -803,6 +817,8 @@ def _run_capture_helper(
             )
         if return_code == 24:
             raise MacosDbKeyTimeoutError()
+        if return_code == 25:
+            raise MacosDbKeyReloginRequiredError()
         raise MacosDbKeyUnavailableError(
             "macOS 数据库密钥组件意外退出。", code="HELPER_EXITED", retryable=True
         )
@@ -900,6 +916,7 @@ __all__ = [
     "MacosDbKeyCancelledError",
     "MacosDbKeyError",
     "MacosDbKeyIntegrityError",
+    "MacosDbKeyReloginRequiredError",
     "MacosDbKeyTimeoutError",
     "MacosDbKeyUnavailableError",
     "ValidatedMacosDbKeyBundle",

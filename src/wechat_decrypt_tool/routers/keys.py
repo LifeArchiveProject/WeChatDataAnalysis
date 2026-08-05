@@ -341,7 +341,6 @@ async def get_wechat_db_key(
     wechat_install_path: Optional[str] = None,
     db_storage_path: Optional[str] = None,
     key_mode: Optional[str] = None,
-    force_capture: bool = False,
 ):
     """
     Windows 优先使用 key_v4，失败时由前端明确确认后再使用 Hook。
@@ -349,48 +348,12 @@ async def get_wechat_db_key(
     """
     try:
         logger.info(
-            "[keys] get_wechat_db_key start: wechat_install_path=%s db_storage_path=%s key_mode=%s force_capture=%s",
+            "[keys] get_wechat_db_key start: wechat_install_path=%s db_storage_path=%s key_mode=%s",
             str(wechat_install_path or "").strip(),
             str(db_storage_path or "").strip(),
             str(key_mode or "auto").strip(),
-            bool(force_capture),
         )
         if is_macos():
-            normalized_db_storage_path = str(db_storage_path or "").strip()
-            if normalized_db_storage_path and not force_capture:
-                try:
-                    saved_response = await get_saved_keys(
-                        account=None,
-                        db_storage_path=normalized_db_storage_path,
-                        wxid_dir=None,
-                    )
-                    saved_data = (
-                        saved_response.get("keys", {})
-                        if isinstance(saved_response, dict)
-                        and saved_response.get("status") == "success"
-                        else {}
-                    )
-                    saved_key = str(saved_data.get("db_key") or "").strip().lower()
-                    if len(saved_key) == 64 and all(
-                        character in "0123456789abcdef" for character in saved_key
-                    ):
-                        logger.info(
-                            "[keys] macOS db-key capture skipped: source_matched_saved_key=True"
-                        )
-                        return {
-                            "status": 0,
-                            "errmsg": "ok",
-                            "data": {
-                                "db_key": saved_key,
-                                "method": "saved_db_key",
-                                "reused": True,
-                            },
-                        }
-                except Exception:
-                    logger.warning(
-                        "[keys] macOS saved db-key lookup failed; continuing with controlled capture"
-                    )
-
             cancel_event = threading.Event()
             async def watch_disconnect() -> None:
                 while not cancel_event.is_set():
