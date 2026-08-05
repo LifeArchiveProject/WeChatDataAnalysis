@@ -22,6 +22,7 @@ test("public macOS consumer workflow has no private Producer or secret dependenc
     /env -u GH_TOKEN -u GITHUB_TOKEN git[\s\S]*clone --depth 1[\s\S]*LifeArchiveProject\/WeChatDataAnalysis\.git/
   );
   assert.match(source, /env -u GH_TOKEN -u GITHUB_TOKEN node/);
+  assert.match(source, /python3 -m venv/);
   assert.match(source, /result\.reason !== "downloaded"/);
   assert.match(source, /result\.reason !== "verified-cache"/);
 });
