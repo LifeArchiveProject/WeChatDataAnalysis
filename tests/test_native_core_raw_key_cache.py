@@ -222,6 +222,22 @@ class TestNativeCoreRawKeyCache(unittest.TestCase):
             "success": 2,
             "source_wxid_dir": "D:/fixture/wxid_demo",
             "source_db_storage_path": "D:/fixture/wxid_demo/db_storage",
+            "db_diagnostics": {
+                "session.db": {
+                    "db_name": "session.db",
+                    "success": True,
+                    "key_mode": "sqlcipher_passphrase",
+                    "failed_pages": 0,
+                    "diagnostic_status": "ok",
+                },
+                "message_0.db": {
+                    "db_name": "message_0.db",
+                    "success": True,
+                    "key_mode": "sqlcipher_passphrase",
+                    "failed_pages": 0,
+                    "diagnostic_status": "ok",
+                },
+            },
         }
         with (
             patch.object(decrypt_router, "upsert_account_keys_in_store") as upsert,

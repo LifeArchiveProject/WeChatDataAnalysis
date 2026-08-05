@@ -275,6 +275,117 @@ def _resolve_page1_key_material(key_material: bytes, page1: bytes) -> tuple[byte
     return None
 
 
+def validate_realtime_database_key(
+    db_storage_path: str | Path,
+    key_hex: str,
+) -> dict[str, Any]:
+    """Verify one key against both database roles required by realtime chat.
+
+    Reading and authenticating page 1 is enough to distinguish an account
+    passphrase from a per-database raw encryption key without decrypting or
+    mutating the user's databases.  No key or salt material is returned.
+    """
+
+    encoded = str(key_hex or "").strip()
+    try:
+        key_material = bytes.fromhex(encoded)
+    except ValueError:
+        key_material = b""
+    if len(key_material) != KEY_SIZE:
+        return {
+            "valid": False,
+            "required_roles": ["message", "session"],
+            "verified_roles": [],
+            "modes": {},
+            "reason": "invalid_key_format",
+        }
+
+    try:
+        root = Path(db_storage_path).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return {
+            "valid": False,
+            "required_roles": ["message", "session"],
+            "verified_roles": [],
+            "modes": {},
+            "reason": "invalid_db_storage_path",
+        }
+    if not root.is_dir():
+        return {
+            "valid": False,
+            "required_roles": ["message", "session"],
+            "verified_roles": [],
+            "modes": {},
+            "reason": "invalid_db_storage_path",
+        }
+
+    def first_file(candidates: list[Path]) -> Path | None:
+        for candidate in candidates:
+            try:
+                if candidate.is_file():
+                    return candidate
+            except OSError:
+                continue
+        return None
+
+    combined = first_file([root / "MicroMsg.db", root / "micromsg.db"])
+    session = first_file(
+        [
+            root / "session" / "session.db",
+            root / "session.db",
+            root / "Session.db",
+        ]
+    ) or combined
+
+    message_candidates: list[Path] = []
+    for pattern_root, pattern in (
+        (root / "message", "message_*.db"),
+        (root, "message_*.db"),
+        (root, "MSG*.db"),
+        (root, "msg*.db"),
+    ):
+        try:
+            message_candidates.extend(sorted(pattern_root.glob(pattern)))
+        except OSError:
+            continue
+    message = first_file(message_candidates) or combined
+
+    role_paths = {"message": message, "session": session}
+    verified_roles: list[str] = []
+    modes_by_role: dict[str, str] = {}
+    path_results: dict[Path, str] = {}
+    for role, database_path in role_paths.items():
+        if database_path is None:
+            continue
+        mode = path_results.get(database_path)
+        if mode is None:
+            try:
+                with database_path.open("rb", buffering=0) as stream:
+                    page1 = stream.read(PAGE_SIZE)
+            except OSError:
+                page1 = b""
+            if page1.startswith(SQLITE_HEADER):
+                mode = ""
+            else:
+                resolved = _resolve_page1_key_material(key_material, page1)
+                mode = str(resolved[2]) if resolved is not None else ""
+            path_results[database_path] = mode
+        if mode:
+            verified_roles.append(role)
+            modes_by_role[role] = mode
+
+    verified_roles.sort()
+    valid = verified_roles == ["message", "session"]
+    missing_roles = [role for role in ("message", "session") if role not in verified_roles]
+    return {
+        "valid": valid,
+        "required_roles": ["message", "session"],
+        "verified_roles": verified_roles,
+        "modes": modes_by_role,
+        "reason": "" if valid else "unverified_roles:" + ",".join(missing_roles),
+    }
+
+
 def _decrypt_page(enc_key: bytes, page: bytes, page_num: int) -> bytes:
     iv = page[PAGE_SIZE - RESERVE_SIZE: PAGE_SIZE - RESERVE_SIZE + IV_SIZE]
     offset = SALT_SIZE if page_num == 1 else 0

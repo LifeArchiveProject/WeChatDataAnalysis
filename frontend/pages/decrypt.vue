@@ -802,7 +802,7 @@ const imageKeyMemoryScanNote = computed(() => String(
   || platformCapabilities.value?.image_key_memory_scan_note
   || '图片密钥扫描原生资源缺失或安装不完整，请重新安装完整发行包。'
 ))
-const DB_KEY_PERSISTENCE_WARNING = '数据库已解密，但密钥未能保存；修复数据目录权限并重新解密后才能使用实时消息。'
+const DB_KEY_PERSISTENCE_WARNING = '数据库密钥未通过完整实时库校验或无法安全保存；请重新获取并确认主要数据库解密成功，仍失败请检查数据目录权限。'
 const guideDialog = reactive({
   open: false,
   eyebrow: '操作提示',

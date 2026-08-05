@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -191,12 +192,89 @@ def _acquire_decrypt_account_guards(accounts: Any, *, reason: str) -> list[tuple
     return guards
 
 
+class _DbKeyPersistenceRejected(ValueError):
+    pass
+
+
+def _database_diagnostic_role(diagnostic: dict[str, Any]) -> str:
+    name = str(diagnostic.get("db_name") or "").strip().lower()
+    if not name:
+        name = Path(str(diagnostic.get("db_path") or "")).name.lower()
+    if name in {"session.db", "sessiondata.db"}:
+        return "session"
+    if re.fullmatch(r"message(?:_\d+)?\.db", name) or re.fullmatch(r"msg\d*\.db", name):
+        return "message"
+    if name == "micromsg.db":
+        return "combined"
+    return "other"
+
+
+def _database_diagnostic_verified(diagnostic: dict[str, Any]) -> bool:
+    return bool(
+        diagnostic.get("success") is True
+        and not bool(diagnostic.get("copied_as_sqlite"))
+        and str(diagnostic.get("key_mode") or "").strip()
+        in {"raw_enc_key", "sqlcipher_passphrase"}
+        and int(diagnostic.get("failed_pages") or 0) == 0
+        and str(diagnostic.get("diagnostic_status") or "").strip() == "ok"
+    )
+
+
+def _db_key_persistence_rejection(account_result: dict[str, Any]) -> str:
+    diagnostics_value = account_result.get("db_diagnostics")
+    if not isinstance(diagnostics_value, dict) or not diagnostics_value:
+        return "missing per-database key verification evidence"
+
+    diagnostics = [
+        dict(value)
+        for value in diagnostics_value.values()
+        if isinstance(value, dict)
+    ]
+    verified = [item for item in diagnostics if _database_diagnostic_verified(item)]
+    role_presence = {
+        role
+        for role in (_database_diagnostic_role(item) for item in diagnostics)
+        if role != "other"
+    }
+    verified_roles = {
+        role
+        for role in (_database_diagnostic_role(item) for item in verified)
+        if role != "other"
+    }
+
+    # Current WeChat 4.x splits realtime data between session.db and one or
+    # more message_N.db files.  A raw encryption key captured from the later
+    # two-iteration HMAC KDF can validate exactly one database, so accepting
+    # any-success here silently replaces the reusable account passphrase and
+    # makes native-core fail on its next session probe.
+    if "session" in role_presence or "message" in role_presence:
+        missing = [role for role in ("session", "message") if role not in verified_roles]
+        if missing:
+            return "required realtime databases did not verify: " + ",".join(missing)
+        return ""
+
+    # Older layouts may keep both roles in MicroMsg.db.  It still must have
+    # passed encrypted page-1 verification; a plaintext copy proves no key.
+    if "combined" in verified_roles:
+        return ""
+
+    # Unknown split layouts need corroboration from at least two encrypted
+    # databases before a durable key is allowed to replace the previous one.
+    if len(verified) < 2:
+        return "database key was verified by fewer than two encrypted databases"
+    return ""
+
+
 def _save_db_key_for_account(account: str, key: str, account_result: dict[str, Any] | None) -> bool:
     payload = dict(account_result or {})
     success_count = int(payload.get("success") or 0)
     if success_count <= 0:
         logger.info("[decrypt] skip saving db key for failed account=%s success=%s", account, success_count)
         return False
+
+    rejection = _db_key_persistence_rejection(payload)
+    if rejection:
+        raise _DbKeyPersistenceRejected(rejection)
 
     source_wxid_dir = str(payload.get("source_wxid_dir") or "").strip()
     source_db_storage_path = str(payload.get("source_db_storage_path") or "").strip()
@@ -273,6 +351,14 @@ def _persist_db_keys(
         account = str(account_name)
         try:
             attempted = _save_db_key_for_account(account, key, account_result) or attempted
+        except _DbKeyPersistenceRejected as exc:
+            attempted = True
+            failed_accounts.append(account)
+            logger.warning(
+                "[decrypt] rejected db key persistence account=%s reason=%s",
+                account,
+                str(exc),
+            )
         except Exception:
             attempted = True
             failed_accounts.append(account)

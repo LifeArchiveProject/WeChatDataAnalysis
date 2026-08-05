@@ -147,7 +147,7 @@ def test_saved_database_key_prefill_remains_available_before_macos_recapture():
 def test_db_key_persistence_failure_warns_without_blocking_image_key_step():
     source = read_decrypt_page()
 
-    warning = "数据库已解密，但密钥未能保存；修复数据目录权限并重新解密后才能使用实时消息。"
+    warning = "数据库密钥未通过完整实时库校验或无法安全保存；请重新获取并确认主要数据库解密成功，仍失败请检查数据目录权限。"
     assert warning in source
     assert "if (result?.db_key_persisted !== false) return" in source
     assert source.count("showDbKeyPersistenceWarning(") == 2

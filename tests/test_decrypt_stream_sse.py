@@ -31,6 +31,50 @@ def _close_logging_handlers() -> None:
 
 
 class TestDecryptStreamSSE(unittest.TestCase):
+    def test_db_key_persistence_rejects_one_database_raw_key(self):
+        import wechat_decrypt_tool.routers.decrypt as decrypt_router
+
+        account_results = {
+            "wxid_partial": {
+                "success": 1,
+                "source_wxid_dir": "/tmp/wxid_partial_1a2b",
+                "source_db_storage_path": "/tmp/wxid_partial_1a2b/db_storage",
+                "db_diagnostics": {
+                    "biz_message_0.db": {
+                        "db_name": "biz_message_0.db",
+                        "db_path": "/tmp/wxid_partial_1a2b/db_storage/message/biz_message_0.db",
+                        "success": True,
+                        "key_mode": "raw_enc_key",
+                        "failed_pages": 0,
+                        "hmac_warning_pages": 0,
+                        "diagnostic_status": "ok",
+                    },
+                    "message_0.db": {
+                        "db_name": "message_0.db",
+                        "db_path": "/tmp/wxid_partial_1a2b/db_storage/message/message_0.db",
+                        "success": False,
+                        "error": "key_mismatch",
+                    },
+                    "session.db": {
+                        "db_name": "session.db",
+                        "db_path": "/tmp/wxid_partial_1a2b/db_storage/session/session.db",
+                        "success": False,
+                        "error": "key_mismatch",
+                    },
+                },
+            }
+        }
+
+        with mock.patch.object(decrypt_router, "upsert_account_keys_in_store") as upsert:
+            persisted, failed_accounts = decrypt_router._persist_db_keys(
+                account_results,
+                "ab" * 32,
+            )
+
+        self.assertIs(persisted, False)
+        self.assertEqual(failed_accounts, ["wxid_partial"])
+        upsert.assert_not_called()
+
     def test_db_key_persistence_invalidates_main_and_source_alias_connections(self):
         import wechat_decrypt_tool.routers.decrypt as decrypt_router
         import wechat_decrypt_tool.wcdb_realtime as wcdb_realtime
@@ -49,9 +93,25 @@ class TestDecryptStreamSSE(unittest.TestCase):
 
         account_results = {
             "wxid_output": {
-                "success": 1,
+                "success": 2,
                 "source_wxid_dir": "/tmp/wxid_source_1a2b",
                 "source_db_storage_path": "/tmp/wxid_source_1a2b/db_storage",
+                "db_diagnostics": {
+                    "session.db": {
+                        "db_name": "session.db",
+                        "success": True,
+                        "key_mode": "sqlcipher_passphrase",
+                        "failed_pages": 0,
+                        "diagnostic_status": "ok",
+                    },
+                    "message_0.db": {
+                        "db_name": "message_0.db",
+                        "success": True,
+                        "key_mode": "sqlcipher_passphrase",
+                        "failed_pages": 0,
+                        "diagnostic_status": "ok",
+                    },
+                },
             }
         }
 
@@ -355,16 +415,11 @@ class TestDecryptStreamSSE(unittest.TestCase):
                 self.assertIn("progress", types)
                 self.assertEqual(events[-1].get("type"), "complete")
                 self.assertEqual(events[-1].get("status"), "completed")
-                upsert_mock.assert_called_once_with(
-                    "wxid_foo",
-                    db_key="00" * 32,
-                    aliases=["wxid_foo_bar"],
-                    db_key_source_wxid_dir=str(db_storage.parent.resolve()),
-                    db_key_source_db_storage_path=str(db_storage.resolve()),
-                    raise_on_write_error=True,
-                )
-                self.assertIs(events[-1].get("db_key_persisted"), True)
-                self.assertEqual(events[-1].get("db_key_persistence_errors"), [])
+                # A plaintext SQLite copy proves that the source is readable,
+                # but it does not verify the supplied encrypted database key.
+                upsert_mock.assert_not_called()
+                self.assertIs(events[-1].get("db_key_persisted"), False)
+                self.assertEqual(events[-1].get("db_key_persistence_errors"), ["wxid_foo"])
 
                 out = root / "output" / "databases" / "wxid_foo" / "MSG0.db"
                 self.assertTrue(out.exists())

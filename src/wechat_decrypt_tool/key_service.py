@@ -681,12 +681,42 @@ def get_db_key_workflow(
         mode = str(key_mode or "auto").strip().lower()
         if mode not in {"auto", "macos_private_helper", "mac_private_helper"}:
             raise RuntimeError(f"macOS 不支持数据库密钥获取模式: {key_mode}")
-        from .macos_db_key_helper import capture_macos_database_key
+        from .macos_db_key_helper import (
+            MacosDbKeyUnavailableError,
+            capture_macos_database_key,
+        )
+        from .wechat_decrypt import validate_realtime_database_key
 
-        return capture_macos_database_key(
+        result = capture_macos_database_key(
             timeout_seconds=timeout_seconds,
             cancel_event=cancel_event,
         )
+        validation = validate_realtime_database_key(
+            str(db_storage_path or ""),
+            str(result.get("db_key") or ""),
+        )
+        if validation.get("valid") is not True:
+            logger.warning(
+                "[db_key] rejected macOS captured key: reason=%s verified_roles=%s modes=%s",
+                str(validation.get("reason") or "verification_failed"),
+                list(validation.get("verified_roles") or []),
+                dict(validation.get("modes") or {}),
+            )
+            raise MacosDbKeyUnavailableError(
+                (
+                    "本次捕获到的密钥未通过当前账号的完整实时数据库校验，"
+                    "可能是单个数据库的派生密钥。请确认选择了正确账号，重新点击获取，"
+                    "并在按钮显示“获取中”后退出当前微信账号再重新登录。"
+                ),
+                code="CAPTURE_KEY_MISMATCH",
+                retryable=True,
+            )
+        logger.info(
+            "[db_key] macOS captured key verified for realtime roles=%s modes=%s",
+            list(validation.get("verified_roles") or []),
+            dict(validation.get("modes") or {}),
+        )
+        return result
     if not is_windows():
         raise RuntimeError("当前平台不支持自动获取数据库密钥，请使用同类工具获取后手动填写。")
 
