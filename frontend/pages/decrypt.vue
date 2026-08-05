@@ -1350,6 +1350,18 @@ const handleGetDbKey = async () => {
       return
     }
 
+    const existingDbKey = String(formData.key || '').trim().toLowerCase()
+    if (/^[0-9a-f]{64}$/.test(existingDbKey)) {
+      formData.key = existingDbKey
+      error.value = ''
+      formErrors.key = ''
+      warning.value = '当前数据库密钥已就绪，无需重复获取。'
+      setTimeout(() => {
+        if (warning.value === '当前数据库密钥已就绪，无需重复获取。') warning.value = ''
+      }, 3000)
+      return
+    }
+
     const requestRevision = ++dbKeyRequestRevision
     const requestController = new AbortController()
     dbKeyRequestController = requestController
