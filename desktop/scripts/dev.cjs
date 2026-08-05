@@ -3,7 +3,7 @@ const net = require("net");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const {
-  ENV_SOURCE_NATIVE_CORE_DIR,
+  applySourceRuntimeEnvironment,
   ensureSourceNativeCore,
 } = require("../src/source-native-core-bootstrap.cjs");
 
@@ -116,8 +116,8 @@ function spawnLogged(command, args, options, prefix) {
 }
 
 async function main() {
-  // Resolve the private macOS source runtime before starting any child process.
-  // Packaged apps never use this developer-only bootstrap.
+  // Resolve the pinned public macOS source runtime before starting any child
+  // process. Packaged apps use their sealed resources and never enter here.
   const sourceNativeCore = ensureSourceNativeCore({ env: process.env });
   const frontendHost = String(process.env.NUXT_HOST || "127.0.0.1").trim() || "127.0.0.1";
   const requestedFrontendPort = parsePort(process.env.NUXT_PORT);
@@ -147,8 +147,8 @@ async function main() {
     ELECTRON_START_URL: startUrl,
   };
   if (sourceNativeCore.nativeDir) {
-    sharedEnv[ENV_SOURCE_NATIVE_CORE_DIR] = sourceNativeCore.nativeDir;
-    log(`[native-core] source=${sourceNativeCore.reason}`);
+    applySourceRuntimeEnvironment(sharedEnv, sourceNativeCore);
+    log(`[native-core] source=${sourceNativeCore.reason} profile=source-public`);
   }
 
   const npmCommand = "npm";

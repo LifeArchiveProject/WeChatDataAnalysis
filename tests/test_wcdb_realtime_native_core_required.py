@@ -166,7 +166,7 @@ class TestWCDBRealtimeNativeCoreRequired(unittest.TestCase):
                 native_core_client.configure_native_core_entrypoint()
 
     def test_source_and_frozen_manifest_profiles_cannot_be_swapped(self) -> None:
-        cases = ((True, True, "rejected a non-production"),)
+        cases = ((True, True, "requires a production"),)
         for frozen, development, error in cases:
             with self.subTest(frozen=frozen), TemporaryDirectory() as td:
                 runtime = Path(td)

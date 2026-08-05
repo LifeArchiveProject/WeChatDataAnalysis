@@ -86,9 +86,12 @@ class TestMacosPlatformSupport(unittest.TestCase):
             manifest.write_text(
                 json.dumps(
                     {
-                        "schemaVersion": 2,
-                        "buildId": "dev-local",
-                        "developmentBuild": True,
+                        "schemaVersion": 3,
+                        "platform": "macos",
+                        "buildId": "wcdb-macos-source-public-fixture",
+                        "developmentBuild": False,
+                        "sourceRuntime": True,
+                        "macosHostVerification": "same-user-direct-parent",
                     }
                 ),
                 encoding="utf-8",

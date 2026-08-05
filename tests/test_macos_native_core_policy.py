@@ -15,10 +15,12 @@ sys.path.insert(0, str(ROOT / "src"))
 from wechat_decrypt_tool import native_core_client, native_core_lease
 
 
-def macos_manifest(*, development: bool = False) -> dict[str, object]:
+def macos_manifest(
+    *, development: bool = False, source_runtime: bool = False
+) -> dict[str, object]:
     issued = int(time.time()) - 60
     zero = "0" * 64
-    return {
+    manifest: dict[str, object] = {
         "schemaVersion": 3,
         "platform": "macos",
         "distributionMode": "public",
@@ -50,6 +52,10 @@ def macos_manifest(*, development: bool = False) -> dict[str, object]:
         "securityCheckpointCount": 7,
         "securityCheckpointSetSha256": "66" * 32,
     }
+    if source_runtime:
+        manifest["sourceRuntime"] = True
+        manifest["macosHostVerification"] = "same-user-direct-parent"
+    return manifest
 
 
 def load_manifest(tmp_path: Path, payload: dict[str, object]):
@@ -77,6 +83,49 @@ def test_macos_development_manifest_has_no_production_pins(tmp_path: Path) -> No
     manifest = load_manifest(tmp_path, macos_manifest(development=True))
     assert manifest.client_signer_sha256 == bytes(32)
     assert native_core_client._is_development_native_core_build_manifest(manifest)
+
+
+def test_macos_source_public_manifest_retains_production_security(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(tmp_path, macos_manifest(source_runtime=True))
+
+    assert manifest.source_runtime is True
+    assert manifest.macos_host_verification == "same-user-direct-parent"
+    assert native_core_client._is_source_public_native_core_build_manifest(manifest)
+
+
+def test_macos_runtime_profile_is_bound_to_frozen_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    component = tmp_path / "libwechatdb_client.dylib"
+    component.write_bytes(b"client")
+    manifest_path = component.with_name("wechatdb_native_build.json")
+    monkeypatch.setattr(native_core_client.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        native_core_lease,
+        "validate_native_core_authorization_policy",
+        lambda _manifest: None,
+    )
+
+    manifest_path.write_text(
+        json.dumps(macos_manifest(source_runtime=True)), encoding="utf-8"
+    )
+    monkeypatch.setattr(native_core_client.sys, "frozen", False, raising=False)
+    selected = native_core_client._required_native_core_build_manifest(component)
+    assert selected.source_runtime is True
+
+    monkeypatch.setattr(native_core_client.sys, "frozen", True, raising=False)
+    with pytest.raises(native_core_client.NativeCoreProtocolError, match="rejects the source-public"):
+        native_core_client._required_native_core_build_manifest(component)
+
+    manifest_path.write_text(json.dumps(macos_manifest()), encoding="utf-8")
+    monkeypatch.setattr(native_core_client.sys, "frozen", False, raising=False)
+    with pytest.raises(
+        native_core_client.NativeCoreProtocolError,
+        match="requires the exact restricted source-public",
+    ):
+        native_core_client._required_native_core_build_manifest(component)
 
 
 def test_native_manifest_platforms_cannot_cross_runtime_boundaries(tmp_path: Path) -> None:
