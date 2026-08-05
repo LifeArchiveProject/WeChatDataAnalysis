@@ -22,6 +22,32 @@ router = APIRouter(route_class=PathFixRoute)
 logger = get_logger(__name__)
 
 
+def _log_macos_db_key_failure(
+    error: BaseException,
+    *,
+    fallback_code: str,
+    fallback_retryable: bool,
+) -> tuple[str, bool]:
+    known_error = isinstance(error, MacosDbKeyError)
+    code = (
+        str(getattr(error, "code", fallback_code) or fallback_code)
+        if known_error
+        else fallback_code
+    )
+    retryable = (
+        bool(getattr(error, "retryable", fallback_retryable))
+        if known_error
+        else fallback_retryable
+    )
+    logger.warning(
+        "[keys] macOS db-key capture failed: error_code=%s retryable=%s classified=%s",
+        code,
+        retryable,
+        known_error,
+    )
+    return code, retryable
+
+
 class ImageKeyMemoryRequest(BaseModel):
     account: Optional[str] = Field(None, description="账号目录名")
     db_storage_path: Optional[str] = Field(None, description="账号的 db_storage 路径")
@@ -374,6 +400,11 @@ async def get_wechat_db_key(
     except TimeoutError as e:
         if is_macos():
             known_error = isinstance(e, MacosDbKeyError)
+            error_code, retryable = _log_macos_db_key_failure(
+                e,
+                fallback_code="TIMEOUT",
+                fallback_retryable=True,
+            )
             return {
                 "status": -1,
                 "errmsg": (
@@ -384,10 +415,8 @@ async def get_wechat_db_key(
                 "data": {
                     "platform": "macos",
                     "method": "macos_private_helper",
-                    "error_code": str(getattr(e, "code", "TIMEOUT") or "TIMEOUT")
-                    if known_error
-                    else "TIMEOUT",
-                    "retryable": bool(getattr(e, "retryable", True)) if known_error else True,
+                    "error_code": error_code,
+                    "retryable": retryable,
                     "manual_input_supported": True,
                 },
             }
@@ -410,6 +439,11 @@ async def get_wechat_db_key(
     except Exception as e:
         if is_macos():
             known_error = isinstance(e, MacosDbKeyError)
+            error_code, retryable = _log_macos_db_key_failure(
+                e,
+                fallback_code="INTERNAL_ERROR",
+                fallback_retryable=False,
+            )
             return {
                 "status": -1,
                 "errmsg": (
@@ -420,10 +454,8 @@ async def get_wechat_db_key(
                 "data": {
                     "platform": "macos",
                     "method": "macos_private_helper",
-                    "error_code": str(getattr(e, "code", "INTERNAL_ERROR") or "INTERNAL_ERROR")
-                    if known_error
-                    else "INTERNAL_ERROR",
-                    "retryable": bool(getattr(e, "retryable", False)) if known_error else False,
+                    "error_code": error_code,
+                    "retryable": retryable,
                     "manual_input_supported": True,
                 },
             }

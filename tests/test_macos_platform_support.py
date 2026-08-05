@@ -207,6 +207,31 @@ class TestMacosPlatformSupport(unittest.TestCase):
         self.assertEqual(result["data"]["error_code"], "TIMEOUT")
         self.assertNotIn(secret_detail, result["errmsg"])
 
+    def test_macos_database_key_endpoint_logs_only_safe_failure_classification(self) -> None:
+        class ConnectedRequest:
+            async def is_disconnected(self) -> bool:
+                return False
+
+        secret_detail = "device-secret=/Users/private/do-not-log"
+        failure = keys_router.MacosDbKeyError(
+            secret_detail,
+            code="AUTHORIZATION_UNAVAILABLE",
+            retryable=True,
+        )
+        with (
+            patch.object(keys_router, "is_macos", return_value=True),
+            patch.object(keys_router, "get_db_key_workflow", side_effect=failure),
+            self.assertLogs(keys_router.logger, level="WARNING") as captured,
+        ):
+            result = asyncio.run(keys_router.get_wechat_db_key(ConnectedRequest()))
+
+        combined = "\n".join(captured.output)
+        self.assertEqual(result["status"], -1)
+        self.assertEqual(result["data"]["error_code"], "AUTHORIZATION_UNAVAILABLE")
+        self.assertIn("error_code=AUTHORIZATION_UNAVAILABLE", combined)
+        self.assertIn("retryable=True", combined)
+        self.assertNotIn(secret_detail, combined)
+
     def test_database_key_service_uses_only_private_helper_on_macos(self) -> None:
         with (
             patch.object(key_service, "is_macos", return_value=True),
