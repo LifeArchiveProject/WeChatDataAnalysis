@@ -124,6 +124,16 @@ def test_macos_database_key_uses_the_bundled_authorized_helper_without_external_
     assert "查看 Mac 获取方式" not in source
 
 
+def test_macos_database_key_does_not_repeat_capture_when_a_valid_key_is_loaded():
+    source = read_decrypt_page()
+
+    guard = source.index("const existingDbKey = String(formData.key || '').trim().toLowerCase()")
+    request = source.index("const requestRevision = ++dbKeyRequestRevision", guard)
+    assert guard < request
+    assert "if (/^[0-9a-f]{64}$/.test(existingDbKey))" in source[guard:request]
+    assert "当前数据库密钥已就绪，无需重复获取" in source[guard:request]
+
+
 def test_db_key_persistence_failure_warns_without_blocking_image_key_step():
     source = read_decrypt_page()
 
