@@ -1380,9 +1380,14 @@ const handleGetDbKey = async () => {
       const key = String(res?.data?.db_key || '').trim().toLowerCase()
       if (res?.status === 0 && /^[0-9a-f]{64}$/.test(key)) {
         formData.key = key
-        warning.value = '数据库解密密钥已通过 macOS 本地受控组件获取成功！'
+        warning.value = res?.data?.method === 'saved_db_key'
+          ? '当前数据库密钥已就绪，无需重复获取。'
+          : '数据库解密密钥已通过 macOS 本地受控组件获取成功！'
         setTimeout(() => {
-          if (requestRevision === dbKeyRequestRevision && warning.value.includes('获取成功')) warning.value = ''
+          if (
+            requestRevision === dbKeyRequestRevision
+            && (warning.value.includes('获取成功') || warning.value.includes('无需重复获取'))
+          ) warning.value = ''
         }, 3000)
       } else {
         error.value = res?.errmsg || 'macOS 数据库密钥获取失败，请保持微信运行后重试。'
