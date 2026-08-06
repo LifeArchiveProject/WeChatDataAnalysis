@@ -23,6 +23,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+if (-not (Get-PSDrive -Name Cert -ErrorAction SilentlyContinue)) {
+    Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+    [void](Get-PSProvider -PSProvider Certificate -ErrorAction Stop)
+    New-PSDrive `
+        -Name Cert `
+        -PSProvider Certificate `
+        -Root '\' `
+        -Scope Script | Out-Null
+}
+if (-not (Test-Path -LiteralPath 'Cert:\CurrentUser\My')) {
+    throw 'The Windows certificate provider could not initialize the CurrentUser store.'
+}
+
 if (-not ('WdaPrivatePki.NativeMethods' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;

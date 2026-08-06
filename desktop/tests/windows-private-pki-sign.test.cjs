@@ -148,6 +148,9 @@ test("private-PKI policy completes the untrusted chain without installing trust"
   assert.match(source, /\[string\]\$SigningAssurance\s*=\s*'tpm'/);
   assert.match(source, /Microsoft Platform Crypto Provider/);
   assert.match(source, /Microsoft Software Key Storage Provider/);
+  assert.match(source, /Get-PSDrive -Name Cert/);
+  assert.match(source, /New-PSDrive\s+`\s*-Name Cert\s+`\s*-PSProvider Certificate/);
+  assert.match(source, /Cert:\\CurrentUser\\My/);
   assert.match(source, /keyAssurance\s*=\s*\$signingIdentity\.Assurance/);
   assert.match(source, /Cert:\\CurrentUser\\CA/);
   assert.ok(source.includes("issuerStore = 'CurrentUser\\CA'"));
