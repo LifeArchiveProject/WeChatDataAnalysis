@@ -5,9 +5,9 @@ WCDA 公开仓库只保留最小进程调用、完整性验证和打包逻辑，
 ## 运行链路
 
 1. WCDA 验证 Producer 的 manifest、trust、provenance、SHA-256、45 天有效期、Universal2 架构及 helper 代码签名。
-2. WCDA 只向 helper 传入目标微信 PID 和本次操作超时；stdin 关闭，不参与 helper 内部状态机。
+2. WCDA 只向 helper 传入目标微信 PID 和本次操作超时；stdin 关闭，不参与 helper 内部状态机。macOS 微信切换账号会结束主进程，因此 WCDA 会在同一次用户请求的总时限内等待新 PID，并为重启后的微信重新启动 helper。
 3. helper 在私有实现中自行完成调用方、目标进程和在线策略校验。公开 WCDA 不包含服务地址或内部通信细节。
-4. helper 最多执行一次密钥获取；成功时 stdout 只返回一行 64 位小写十六进制结果，失败时不返回密钥数据。断连、取消或超时会终止 helper。
+4. 每个 helper 进程最多针对一个固定 PID 执行一次密钥获取；成功时 stdout 只返回一行 64 位小写十六进制结果，失败时不返回密钥数据。旧微信 PID 退出会结束对应 helper，WCDA 随后等待新 PID；断连、取消或总超时会终止整个请求。
 
 实际内存读取仍在用户 Mac 本地执行；在线服务不接收微信进程内存、数据库或数据库密钥。私有实现细节不会进入公开 WCDA 源码和公开构建元数据。
 

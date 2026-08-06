@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full min-h-0 flex overflow-hidden bg-white">
+  <div class="biz-page theme-scope h-full min-h-0 flex overflow-hidden bg-white">
     <div class="flex-1 min-w-0">
       <BizMessages />
     </div>

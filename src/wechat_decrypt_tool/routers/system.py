@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from .. import cdn_image_service
 from ..img_helper import IMG_HELPER
 from ..platform_support import is_windows, runtime_capabilities
 from .wechat_detection import check_wechat_status
@@ -76,3 +77,32 @@ async def toggle_img_helper(req: ImgHelperToggleRequest):
         raise HTTPException(status_code=500, detail=f"开启失败: {err}")
 
     return {"status": "success", "supported": True, "enabled": True}
+
+
+@router.get("/api/system/cdn_image/status", summary="获取自动获取原图(CDN)开关状态")
+async def get_cdn_image_status(account: str | None = None):
+    remaining = None
+    if account:
+        try:
+            remaining = cdn_image_service.get_quota_remaining(str(account).strip())
+        except Exception:
+            remaining = None
+    return {
+        "enabled": cdn_image_service.is_cdn_download_enabled(),
+        "dailyLimit": cdn_image_service.DAILY_DOWNLOAD_LIMIT,
+        "remaining": remaining,
+    }
+
+
+class CdnImageToggleRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/api/system/cdn_image/toggle", summary="开启/关闭自动获取原图(CDN)")
+async def toggle_cdn_image(req: CdnImageToggleRequest):
+    cdn_image_service.set_cdn_download_enabled(bool(req.enabled))
+    return {
+        "status": "success",
+        "enabled": cdn_image_service.is_cdn_download_enabled(),
+        "dailyLimit": cdn_image_service.DAILY_DOWNLOAD_LIMIT,
+    }

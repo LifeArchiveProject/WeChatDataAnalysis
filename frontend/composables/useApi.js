@@ -773,11 +773,25 @@ export const useApi = () => {
     })
   }
 
+  const getCdnImageStatus = async (account = '') => {
+    const q = String(account || '').trim()
+    return await request('/system/cdn_image/status' + (q ? `?account=${encodeURIComponent(q)}` : ''))
+  }
+
+  const toggleCdnImage = async (enabled) => {
+    return await request('/system/cdn_image/toggle', {
+      method: 'POST',
+      body: { enabled: !!enabled }
+    })
+  }
+
 
   return {
     pickSystemDirectory,
     getImgHelperStatus,
     toggleImgHelper,
+    getCdnImageStatus,
+    toggleCdnImage,
     detectWechat,
     detectCurrentAccount,
     decryptDatabase,

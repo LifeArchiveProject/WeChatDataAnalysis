@@ -60,7 +60,7 @@
                         <i class="fa-regular fa-image" aria-hidden="true"></i>
                         <span>图片未缓存</span>
                       </div>
-                      <div v-else class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
+                      <div v-else class="px-3 py-1.5 text-[13px] max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                         :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
                         {{ message.content }}
                       </div>
@@ -115,7 +115,7 @@
                         <i class="fa-solid fa-video" aria-hidden="true"></i>
                         <span>视频未缓存</span>
                       </div>
-                      <div v-else class="px-3 py-2 text-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
+                      <div v-else class="px-3 py-1.5 text-[13px] relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                         :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
                         {{ message.content }}
                       </div>
@@ -206,14 +206,14 @@
                       <i class="fa-regular fa-face-smile" aria-hidden="true"></i>
                       <span>表情未缓存</span>
                     </div>
-                    <div v-else class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
+                    <div v-else class="px-3 py-1.5 text-[13px] max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                       :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
                       {{ message.content }}
                     </div>
                   </div>
                   <template v-else-if="message.renderType === 'quote'">
                     <div
-                      class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
+                      class="px-3 py-1.5 text-[13px] max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                       :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
                       <span v-for="(seg, idx) in parseMessageTextSegments(message)" :key="idx">
                         <span v-if="seg.type === 'text'">{{ seg.content }}</span>
@@ -388,7 +388,7 @@
                   </div>
                   <!-- 文本消息 -->
                   <div v-else-if="message.renderType === 'text'"
-                    class="px-3 py-2 text-sm max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
+                    class="px-3 py-1.5 text-[13px] max-w-sm relative msg-bubble whitespace-pre-wrap break-words leading-relaxed"
                     :class="message.isSent ? 'bg-[#95EC69] text-black bubble-tail-r' : 'bg-white text-gray-800 bubble-tail-l'">
                     <span v-for="(seg, idx) in parseMessageTextSegments(message)" :key="idx">
                       <span v-if="seg.type === 'text'">{{ seg.content }}</span>

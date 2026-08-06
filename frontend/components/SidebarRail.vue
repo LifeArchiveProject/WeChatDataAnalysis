@@ -9,10 +9,10 @@
     />
     <div class="flex-1 flex flex-col justify-start pt-0 gap-0">
       <!-- Avatar -->
-      <div class="w-full h-[60px] flex items-center justify-center">
+      <div class="w-full h-[52px] flex items-center justify-center">
         <button
           type="button"
-          class="group relative w-[40px] h-[40px] rounded-md overflow-hidden bg-gray-300 flex-shrink-0 ring-1 ring-transparent transition hover:ring-[#07b75b]/40"
+          class="group relative w-[34px] h-[34px] rounded-md overflow-hidden bg-gray-300 flex-shrink-0 ring-1 ring-transparent transition hover:ring-[#07b75b]/40"
           :title="avatarButtonTitle"
           @click="openAccountDialog"
         >
@@ -127,7 +127,7 @@
         @click="goMiniPrograms"
       >
         <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
-          <div class="sidebar-rail-icon sidebar-rail-icon-mini-program w-[20px] h-[20px]" :class="{ 'sidebar-rail-icon-active': isMiniProgramsRoute }">
+          <div class="sidebar-rail-icon sidebar-rail-icon-mini-program w-[18px] h-[18px]" :class="{ 'sidebar-rail-icon-active': isMiniProgramsRoute }">
             <svg class="w-full h-full" viewBox="0 0 1025 1024" fill="currentColor" aria-hidden="true">
               <path d="M740.672 37.504c156.352 0 283.52 115.584 283.52 258.496 0 44.416-13.056 87.872-36.608 127.04-35.648 57.216-92.672 99.584-161.664 119.744a161.408 161.408 0 0 1-45.184 7.36 52.8 52.8 0 0 1-53.76-52.928c0-29.76 23.68-52.864 53.76-52.864 2.112 0 6.528 0 11.904-2.048 46.336-12.8 82.944-39.168 103.424-74.24 13.952-22.144 20.48-46.72 20.48-72.064 0-83.84-78.72-152.512-174.72-152.512a197.76 197.76 0 0 0-94.72 24.32c-50.816 28.544-80.896 76.16-80.896 128.192v443.904c0 89.984-50.752 172.672-134.848 219.328-45.184 25.408-96 38.272-147.712 38.272-156.288 0-283.52-115.648-283.52-258.56 0-44.352 13.12-87.872 36.608-127.04 35.648-57.216 92.736-99.584 161.664-119.68 19.328-5.312 32.384-7.36 45.184-7.36 30.272 0 53.824 23.36 53.824 52.864a52.8 52.8 0 0 1-53.76 52.928c-2.176 0-6.592 0-11.904 2.048-46.4 13.76-82.944 40.32-103.424 74.176-14.016 22.208-20.48 46.72-20.48 72.128 0 83.84 78.72 152.448 175.616 152.448a197.76 197.76 0 0 0 94.784-24.256c50.752-28.608 80.832-76.224 80.832-128.192V296.192c0-89.984 50.752-172.608 134.848-219.328a283.52 283.52 0 0 1 146.752-39.36z" />
             </svg>
@@ -159,7 +159,7 @@
         @click="goPayments"
       >
         <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
-          <div class="sidebar-rail-icon w-[18px] h-[18px]" :class="{ 'sidebar-rail-icon-active': isPaymentsRoute }">
+          <div class="sidebar-rail-icon w-[16px] h-[16px]" :class="{ 'sidebar-rail-icon-active': isPaymentsRoute }">
             <svg class="w-full h-full" viewBox="0 0 1109 1024" fill="currentColor" aria-hidden="true">
               <path d="M391.183105 392.073178H42.628017a18.472141 18.472141 0 0 1-14.209339-30.976359l330.651321-355.233477a18.472141 18.472141 0 0 1 31.971013 12.646311v227.349426a18.472141 18.472141 0 0 0 18.472141 18.330047H1089.856308a18.614234 18.614234 0 0 1 18.472141 18.472141v90.93977a18.472141 18.472141 0 0 1-18.472141 18.472141H391.183105z m325.962239 239.853644H1065.700432a18.472141 18.472141 0 0 1 14.209339 30.976359l-330.367134 355.233477a18.472141 18.472141 0 0 1-31.971013-12.646311V778.851388a18.472141 18.472141 0 0 0-18.472141-18.472141H18.472141a18.472141 18.472141 0 0 1-18.472141-18.472141v-91.650237a18.472141 18.472141 0 0 1 18.472141-18.47214h698.673203z" />
             </svg>
@@ -219,34 +219,6 @@
               <path d="M4 19h16" />
             </svg>
           </div>
-        </div>
-      </div>
-
-      <!-- ImgHelper (Auto download large images) -->
-      <div
-        v-if="imgHelperSupported"
-        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center group"
-        :class="imgHelperBusy ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'"
-        :title="imgHelperTitle"
-        @click="toggleImgHelper"
-      >
-        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
-          <svg
-            class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]"
-            :class="{ 'sidebar-rail-icon-active': imgHelperEnabled }"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <polyline points="21 15 16 10 5 21" />
-            <path d="M12 9v5m-2-2l2 2 2-2" />
-          </svg>
         </div>
       </div>
 
@@ -483,10 +455,8 @@
 <script setup>
 import { storeToRefs } from 'pinia'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
-import { useImgHelperStore } from '~/stores/imgHelper'
 import { usePrivacyStore } from '~/stores/privacy'
 import { useThemeStore } from '~/stores/theme'
-import { withErrorLogGuidance } from '~/composables/useErrorNotice'
 
 const route = useRoute()
 
@@ -501,9 +471,6 @@ const { privacyMode } = storeToRefs(privacyStore)
 
 const themeStore = useThemeStore()
 themeStore.init()
-
-const imgHelperStore = useImgHelperStore()
-const { enabled: imgHelperEnabled, supported: imgHelperSupported, checking: imgHelperChecking, toggling: imgHelperToggling, error: imgHelperError } = storeToRefs(imgHelperStore)
 
 const { open: settingsDialogOpen, openDialog: openSettingsDialog } = useSettingsDialog()
 const { getChatAccountInfo, deleteChatAccount } = useApi()
@@ -804,24 +771,13 @@ const deleteCurrentAccountData = async () => {
   }
 }
 
-const imgHelperBusy = computed(() => !!imgHelperChecking.value || !!imgHelperToggling.value)
-
-const imgHelperTitle = computed(() => {
-  if (imgHelperEnabled.value) return '关闭自动下载大图'
-  return imgHelperError.value ? withErrorLogGuidance(imgHelperError.value) : '开启自动下载大图'
-})
-
-const toggleImgHelper = async () => {
-  if (imgHelperBusy.value) return
-  await imgHelperStore.toggle()
-}
 </script>
 
 <style scoped>
 .sidebar-rail {
-  width: 60px;
-  min-width: 60px;
-  max-width: 60px;
+  width: 52px;
+  min-width: 52px;
+  max-width: 52px;
   background-color: var(--sidebar-rail-bg);
   border-color: var(--sidebar-rail-border);
   overflow-y: auto;

@@ -8,48 +8,32 @@
       >
         <section
           ref="dialogPanel"
-          class="guide-dialog-panel"
+          class="guide-dialog-panel theme-scope"
           role="dialog"
           aria-modal="true"
           :aria-labelledby="titleId"
           :aria-describedby="descriptionId"
           tabindex="-1"
         >
-          <div class="guide-dialog-heading">
-            <div class="guide-dialog-icon" :data-tone="tone" aria-hidden="true">
-              <svg v-if="tone === 'warning'" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-              </svg>
-              <svg v-else-if="tone === 'info'" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <circle cx="12" cy="12" r="9" stroke-width="1.8" />
-                <path stroke-linecap="round" stroke-width="1.8" d="M12 10.5V17m0-10h.01" />
-              </svg>
-              <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8.5 11.5h7M8.5 15h4.5M6 4h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9l-5 3v-4.5A2 2 0 0 1 2 15.5V8a4 4 0 0 1 4-4Z" />
-              </svg>
-            </div>
+          <div class="guide-dialog-body">
+            <p v-if="eyebrow" class="guide-dialog-eyebrow" :data-tone="tone">{{ eyebrow }}</p>
+            <h2 :id="titleId" class="guide-dialog-title">{{ title }}</h2>
+            <p :id="descriptionId" class="guide-dialog-description">{{ description }}</p>
 
-            <div class="guide-dialog-copy">
-              <p v-if="eyebrow" class="guide-dialog-eyebrow">{{ eyebrow }}</p>
-              <h2 :id="titleId">{{ title }}</h2>
-              <p :id="descriptionId" class="guide-dialog-description">{{ description }}</p>
-            </div>
+            <!-- 要点用编号 + 发丝分隔，读起来像规格说明，不再是彩框里的绿勾清单 -->
+            <ol v-if="details.length" class="guide-dialog-details">
+              <li v-for="(detail, index) in details" :key="`${index}-${detail}`">
+                <span class="guide-dialog-index" aria-hidden="true">{{ String(index + 1).padStart(2, '0') }}</span>
+                <span>{{ detail }}</span>
+              </li>
+            </ol>
+
+            <p v-if="note" class="guide-dialog-note">{{ note }}</p>
+
+            <ErrorNotice v-if="errorMessage" :message="errorMessage" compact class="guide-dialog-error" />
           </div>
 
-          <ul v-if="details.length" class="guide-dialog-details">
-            <li v-for="(detail, index) in details" :key="`${index}-${detail}`">
-              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="m5 10 3 3 7-7" />
-              </svg>
-              <span>{{ detail }}</span>
-            </li>
-          </ul>
-
-          <p v-if="note" class="guide-dialog-note">{{ note }}</p>
-
-          <ErrorNotice v-if="errorMessage" :message="errorMessage" compact />
-
-          <footer class="guide-dialog-actions">
+          <footer class="guide-dialog-actions" :data-actions="secondaryLabel ? 'two' : 'one'">
             <button
               v-if="secondaryLabel"
               type="button"
@@ -167,171 +151,151 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
-  background: rgba(0, 0, 0, 0.42);
-  backdrop-filter: blur(4px);
-}
-
-.guide-dialog-panel {
-  width: min(520px, 100%);
-  max-height: min(720px, calc(100vh - 40px));
-  overflow-y: auto;
-  border: 1px solid var(--app-border, #e7e7e7);
-  border-radius: 8px;
-  background: var(--app-surface-bg, #ffffff);
-  color: var(--app-text-primary, #191919);
-  box-shadow: 0 20px 54px rgba(0, 0, 0, 0.2);
-  outline: none;
   padding: 24px;
+  background: rgba(14, 22, 18, 0.44);
 }
 
-.guide-dialog-heading {
+/* 一整块连续表面：不分头/身/脚色带，层级交给字号、留白和发丝线 */
+.guide-dialog-panel {
   display: flex;
-  align-items: flex-start;
-  gap: 14px;
+  width: min(460px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(16, 32, 24, 0.1);
+  border-radius: 14px;
+  background: #ffffff;
+  color: #16201a;
+  outline: none;
 }
 
-.guide-dialog-icon {
-  display: grid;
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
-  place-items: center;
-  border-radius: 8px;
-  color: #07a951;
-  background: rgba(7, 193, 96, 0.1);
+.guide-dialog-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 28px 28px 24px;
 }
 
-.guide-dialog-icon[data-tone='warning'] {
-  color: #b86d00;
-  background: rgba(250, 173, 20, 0.14);
-}
-
-.guide-dialog-icon[data-tone='info'] {
-  color: #1677a6;
-  background: rgba(16, 174, 239, 0.12);
-}
-
-.guide-dialog-icon svg {
-  width: 23px;
-  height: 23px;
-}
-
-.guide-dialog-copy {
-  min-width: 0;
-}
-
+/* 提示类别只靠一行小字的颜色区分，不做图标彩块 */
 .guide-dialog-eyebrow {
-  margin: 0 0 5px;
-  color: var(--app-accent, #07c160);
+  margin: 0 0 10px;
+  color: #79837c;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1.4;
 }
 
-.guide-dialog-copy h2 {
+.guide-dialog-eyebrow[data-tone='warning'] { color: #b07d22; }
+
+.guide-dialog-title {
   margin: 0;
-  color: var(--app-text-primary, #191919);
+  color: #16201a;
   font-size: 20px;
-  font-weight: 650;
-  line-height: 1.4;
-  letter-spacing: 0;
+  font-weight: 600;
+  letter-spacing: -0.022em;
+  line-height: 1.35;
 }
 
 .guide-dialog-description {
-  margin: 8px 0 0;
-  color: var(--app-text-secondary, #5f5f5f);
+  margin: 10px 0 0;
+  color: #6b756e;
   font-size: 14px;
   line-height: 1.75;
 }
 
+/* 要点：编号 + 行间发丝线，读起来像规格说明 */
 .guide-dialog-details {
-  margin: 20px 0 0;
+  margin: 22px 0 0;
   padding: 0;
   list-style: none;
+  counter-reset: none;
 }
 
 .guide-dialog-details li {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 0;
-  border-top: 1px solid var(--app-border-soft, #ececec);
-  color: var(--app-text-secondary, #5f5f5f);
-  font-size: 13px;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 12px;
+  padding: 11px 0;
+  border-top: 1px solid rgba(16, 32, 24, 0.07);
+  color: #3f4a44;
+  font-size: 13.5px;
   line-height: 1.65;
 }
 
-.guide-dialog-details svg {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
-  margin-top: 2px;
-  color: var(--app-accent, #07c160);
+.guide-dialog-details li:last-child {
+  border-bottom: 1px solid rgba(16, 32, 24, 0.07);
+}
+
+.guide-dialog-index {
+  color: #b3bab6;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.9;
+  letter-spacing: 0.02em;
 }
 
 .guide-dialog-note {
-  margin: 16px 0 0;
-  padding-left: 12px;
-  border-left: 3px solid rgba(250, 173, 20, 0.8);
-  color: var(--app-text-muted, #909090);
-  font-size: 12px;
-  line-height: 1.65;
+  margin: 18px 0 0;
+  color: #6f7a73;
+  font-size: 12.5px;
+  line-height: 1.7;
 }
 
+.guide-dialog-error { margin-top: 18px; }
+
 .guide-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid var(--app-border-soft, #ececec);
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 20px 28px 24px;
 }
+
+/* 单按钮铺满整行，双按钮等分并排：两种情况都不会出现「孤零零挂在右下角」 */
+.guide-dialog-actions[data-actions='one'] { grid-template-columns: minmax(0, 1fr); }
+.guide-dialog-actions[data-actions='two'] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 .guide-dialog-button {
   display: inline-flex;
-  min-height: 40px;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border-radius: 7px;
-  padding: 9px 16px;
+  min-height: 38px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 9px;
   font-size: 14px;
-  font-weight: 600;
-  line-height: 1.4;
-  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+  font-weight: 500;
+  line-height: 1;
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
 }
 
 .guide-dialog-button:focus-visible {
-  outline: 2px solid rgba(7, 193, 96, 0.32);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px rgba(7, 193, 96, 0.35);
 }
 
 .guide-dialog-button:disabled {
   cursor: wait;
-  opacity: 0.62;
+  opacity: 0.55;
 }
 
 .guide-dialog-button--secondary {
-  border: 1px solid var(--app-border, #e7e7e7);
-  color: var(--app-text-secondary, #5f5f5f);
-  background: var(--app-neutral-btn-bg, #ffffff);
+  border-color: rgba(16, 32, 24, 0.14);
+  color: #3d4541;
+  background: transparent;
 }
 
 .guide-dialog-button--secondary:hover:not(:disabled) {
-  background: var(--app-neutral-btn-hover, #f7f7f7);
+  background: rgba(16, 32, 24, 0.04);
 }
 
 .guide-dialog-button--primary {
-  border: 1px solid var(--app-accent, #07c160);
   color: #ffffff;
-  background: var(--app-accent, #07c160);
+  background: #07c160;
 }
 
-.guide-dialog-button--primary:hover:not(:disabled) {
-  border-color: var(--app-accent-hover, #06ad56);
-  background: var(--app-accent-hover, #06ad56);
-}
+.guide-dialog-button--primary:hover:not(:disabled) { background: #06ad56; }
+.guide-dialog-button--primary:active:not(:disabled) { background: #059b4d; }
 
 .guide-dialog-spinner {
   width: 16px;
@@ -340,28 +304,78 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
 }
 
 .guide-dialog-enter-active,
-.guide-dialog-leave-active {
-  transition: opacity 160ms ease;
-}
+.guide-dialog-leave-active { transition: opacity 180ms ease; }
 
 .guide-dialog-enter-active .guide-dialog-panel,
 .guide-dialog-leave-active .guide-dialog-panel {
-  transition: transform 180ms ease, opacity 160ms ease;
+  transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1), opacity 180ms ease;
 }
 
 .guide-dialog-enter-from,
-.guide-dialog-leave-to {
-  opacity: 0;
-}
+.guide-dialog-leave-to { opacity: 0; }
 
 .guide-dialog-enter-from .guide-dialog-panel,
 .guide-dialog-leave-to .guide-dialog-panel {
   opacity: 0;
-  transform: translateY(8px) scale(0.985);
+  transform: translateY(10px) scale(0.985);
 }
 
 @keyframes guide-dialog-spin {
   to { transform: rotate(360deg); }
+}
+
+/* 深色：整块表面同样不分色带，只把发丝线和文字层级换到深色一侧 */
+html[data-theme='dark'] .guide-dialog-overlay {
+  background: rgba(0, 0, 0, 0.58);
+}
+
+html[data-theme='dark'] .guide-dialog-panel {
+  border-color: var(--setup-border);
+  background: var(--app-surface-bg);
+  color: var(--app-text-primary);
+}
+
+html[data-theme='dark'] .guide-dialog-title {
+  color: var(--app-text-primary);
+}
+
+html[data-theme='dark'] .guide-dialog-eyebrow {
+  color: var(--setup-text-muted);
+}
+
+html[data-theme='dark'] .guide-dialog-eyebrow[data-tone='warning'] {
+  color: var(--setup-warn);
+}
+
+html[data-theme='dark'] .guide-dialog-description,
+html[data-theme='dark'] .guide-dialog-note {
+  color: var(--setup-text-secondary);
+}
+
+html[data-theme='dark'] .guide-dialog-details li {
+  border-top-color: rgba(255, 255, 255, 0.09);
+  color: var(--setup-text-secondary);
+}
+
+html[data-theme='dark'] .guide-dialog-details li:last-child {
+  border-bottom-color: rgba(255, 255, 255, 0.09);
+}
+
+html[data-theme='dark'] .guide-dialog-index {
+  color: var(--setup-text-muted);
+}
+
+html[data-theme='dark'] .guide-dialog-button:focus-visible {
+  box-shadow: 0 0 0 2px var(--app-surface-bg), 0 0 0 4px rgba(62, 181, 117, 0.45);
+}
+
+html[data-theme='dark'] .guide-dialog-button--secondary {
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--setup-text-secondary);
+}
+
+html[data-theme='dark'] .guide-dialog-button--secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 @media (max-width: 520px) {
@@ -370,26 +384,16 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
     padding: 12px;
   }
 
-  .guide-dialog-panel {
-    max-height: calc(100vh - 24px);
-    padding: 20px;
-  }
-
-  .guide-dialog-actions {
-    flex-direction: column-reverse;
-  }
-
-  .guide-dialog-button {
-    width: 100%;
-  }
+  .guide-dialog-panel { max-height: calc(100vh - 24px); }
+  .guide-dialog-body { padding: 22px 20px 18px; }
+  .guide-dialog-actions[data-actions='two'] { grid-template-columns: minmax(0, 1fr); }
+  .guide-dialog-actions { padding: 18px 20px 20px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .guide-dialog-enter-active,
   .guide-dialog-leave-active,
   .guide-dialog-enter-active .guide-dialog-panel,
-  .guide-dialog-leave-active .guide-dialog-panel {
-    transition: none;
-  }
+  .guide-dialog-leave-active .guide-dialog-panel { transition: none; }
 }
 </style>

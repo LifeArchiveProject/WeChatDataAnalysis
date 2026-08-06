@@ -133,11 +133,9 @@ class ErrorNoticeFrontendTest(unittest.TestCase):
 
     def test_hover_only_errors_include_the_shared_guidance(self):
         message_content = read_frontend("components/chat/MessageContent.vue")
-        sidebar = read_frontend("components/SidebarRail.vue")
 
         self.assertIn('v-if="message._imageLargeError"', message_content)
         self.assertIn(':message="message._imageLargeError"', message_content)
-        self.assertIn("withErrorLogGuidance(imgHelperError.value)", sidebar)
 
 
 if __name__ == "__main__":

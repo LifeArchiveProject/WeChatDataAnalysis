@@ -1,5 +1,5 @@
 ﻿<template>
-  <div class="h-screen flex overflow-hidden" style="background-color: var(--app-shell-bg)">
+  <div class="revokes-page theme-scope h-screen flex overflow-hidden" style="background-color: var(--app-shell-bg)">
     <div class="flex-1 min-h-0 overflow-auto p-4">
       <div class="mx-auto flex h-full min-h-0 max-w-7xl flex-col gap-4">
         <header class="rounded-lg border border-[#e5e7eb] bg-white px-5 py-4">

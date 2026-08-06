@@ -385,3 +385,75 @@ def test_capture_tries_next_pid_only_for_capture_failure(tmp_path: Path):
         "pid": 222,
         "build_id": BUILD_NAME,
     }
+
+
+def test_capture_follows_wechat_main_process_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    bundle = _validated_bundle(tmp_path)
+    pid_snapshots = iter(((111,), (), (222,)))
+    calls: list[int] = []
+
+    def pid_provider():
+        return next(pid_snapshots, (222,))
+
+    def runner(_bundle, *, pid, **_kwargs):
+        calls.append(pid)
+        if pid == 111:
+            raise helper.MacosDbKeyUnavailableError(
+                "old process exited", code="CAPTURE_FAILED", retryable=True
+            )
+        return "ef" * 32
+
+    monkeypatch.setattr(helper.time, "sleep", lambda _seconds: None)
+    result = helper.capture_macos_database_key(
+        bundle=bundle,
+        pid_provider=pid_provider,
+        helper_runner=runner,
+    )
+
+    assert calls == [111, 222]
+    assert result["db_key"] == "ef" * 32
+    assert result["pid"] == 222
+
+
+def test_capture_waits_for_wechat_to_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    bundle = _validated_bundle(tmp_path)
+    pid_snapshots = iter(((), (333,)))
+
+    monkeypatch.setattr(helper.time, "sleep", lambda _seconds: None)
+    result = helper.capture_macos_database_key(
+        bundle=bundle,
+        pid_provider=lambda: next(pid_snapshots, (333,)),
+        helper_runner=lambda _bundle, *, pid, **_kwargs: "12" * 32,
+    )
+
+    assert result["db_key"] == "12" * 32
+    assert result["pid"] == 333
+
+
+def test_capture_keeps_waiting_after_relogin_required_for_a_new_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    bundle = _validated_bundle(tmp_path)
+    pid_snapshots = iter(((111,), (222,)))
+    calls: list[int] = []
+
+    def runner(_bundle, *, pid, **_kwargs):
+        calls.append(pid)
+        if pid == 111:
+            raise helper.MacosDbKeyReloginRequiredError()
+        return "34" * 32
+
+    monkeypatch.setattr(helper.time, "sleep", lambda _seconds: None)
+    result = helper.capture_macos_database_key(
+        bundle=bundle,
+        pid_provider=lambda: next(pid_snapshots, (222,)),
+        helper_runner=runner,
+    )
+
+    assert calls == [111, 222]
+    assert result["db_key"] == "34" * 32
+    assert result["pid"] == 222

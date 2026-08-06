@@ -6,8 +6,8 @@ const SESSION_LIST_WIDTH_KEY = 'ui.chat.session_list_width_css_v2'
 const SESSION_LIST_WIDTH_KEY_CSS_V1 = 'ui.chat.session_list_width_css'
 const SESSION_LIST_WIDTH_KEY_PHYSICAL = 'ui.chat.session_list_width_physical'
 const SESSION_LIST_WIDTH_KEY_LEGACY = 'ui.chat.session_list_width'
-const SESSION_LIST_WIDTH_DEFAULT = 300
-const SESSION_LIST_WIDTH_MIN = 260
+const SESSION_LIST_WIDTH_DEFAULT = 264
+const SESSION_LIST_WIDTH_MIN = 220
 const SESSION_LIST_WIDTH_MAX = 520
 const DEFAULT_CHAT_SOURCE = 'auto'
 

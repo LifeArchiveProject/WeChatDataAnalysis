@@ -284,9 +284,9 @@ const showSidebar = computed(() => {
 :root {
   --dpr: 1;
   /* Left sidebar rail (chat/sns): icon size + spacing */
-  --sidebar-rail-step: 48px;
-  --sidebar-rail-btn: 32px;
-  --sidebar-rail-icon: 24px;
+  --sidebar-rail-step: 44px;
+  --sidebar-rail-btn: 30px;
+  --sidebar-rail-icon: 21px;
 }
 
 /* Electron 桌面端使用隐藏标题栏 + 原生窗口控制按钮 overlay。

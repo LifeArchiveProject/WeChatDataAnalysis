@@ -1,7 +1,7 @@
 <template>
   <div
     v-if="open"
-    class="settings-dialog fixed inset-0 z-[20000] flex items-center justify-center bg-black/40 px-4 py-4 backdrop-blur-md sm:py-8"
+    class="settings-dialog theme-scope fixed inset-0 z-[20000] flex items-center justify-center bg-black/40 px-4 py-4 backdrop-blur-md sm:py-8"
     @click.self="handleClose"
   >
     <div class="settings-dialog-panel flex h-[80vh] min-h-[380px] w-full max-w-[880px] overflow-hidden rounded-[10px] border border-[#e2e2e2] bg-white shadow-2xl">
@@ -374,6 +374,30 @@
             </div>
           </section>
 
+          <section ref="mediaSectionRef">
+            <div class="mb-2.5 text-[12px] font-bold text-[#999] tracking-widest">聊天与媒体</div>
+            <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
+              <div class="px-3.5 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">自动获取原图</div>
+                    <div class="mt-0.5 text-[11px] text-[#909090]">本地缺原图时自动联网拉取原图（每账号每天最多 {{ cdnImageDailyLimit }} 张）。关闭后仅显示本地已有图片。</div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    :aria-checked="cdnImageEnabled"
+                    class="settings-switch shrink-0"
+                    :class="switchTrackClass(cdnImageEnabled, cdnImageLoading)"
+                    @click="toggleCdnImage"
+                  >
+                    <span class="settings-switch-thumb" :class="cdnImageEnabled ? 'translate-x-[20px]' : 'translate-x-0'" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section ref="updatesSectionRef">
             <div class="mb-2.5 text-[12px] font-bold text-[#999] tracking-widest">更新</div>
             <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
@@ -459,6 +483,7 @@ const settingNavItems = [
   { key: 'desktop', label: '桌面行为', hint: '启动 / 关闭 / 端口' },
   { key: 'mcp', label: 'MCP 接入', hint: '手机 / Skill / 工具' },
   { key: 'startup', label: '启动偏好', hint: '默认页面' },
+  { key: 'media', label: '聊天与媒体', hint: '原图获取' },
   { key: 'updates', label: '更新', hint: '版本信息 / 检查更新' },
   { key: 'sns', label: '朋友圈', hint: '图片缓存策略' },
 ]
@@ -469,6 +494,7 @@ const desktopSectionRef = ref(null)
 const desktopLogFileRef = ref(null)
 const mcpSectionRef = ref(null)
 const startupSectionRef = ref(null)
+const mediaSectionRef = ref(null)
 const updatesSectionRef = ref(null)
 const snsSectionRef = ref(null)
 
@@ -482,6 +508,10 @@ const desktopVersionText = computed(() => {
 })
 
 const desktopDefaultToChatWhenData = ref(false)
+
+const cdnImageEnabled = ref(true)
+const cdnImageLoading = ref(false)
+const cdnImageDailyLimit = ref(10)
 const snsUseCache = ref(true)
 
 const desktopAutoLaunch = ref(false)
@@ -693,6 +723,7 @@ const sectionElements = computed(() => [
   { key: 'desktop', el: desktopSectionRef.value },
   { key: 'mcp', el: mcpSectionRef.value },
   { key: 'startup', el: startupSectionRef.value },
+  { key: 'media', el: mediaSectionRef.value },
   { key: 'updates', el: updatesSectionRef.value },
   { key: 'sns', el: snsSectionRef.value },
 ])
@@ -1275,6 +1306,32 @@ const toggleDesktopDefaultToChat = () => {
   writeLocalBoolSetting(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, next)
 }
 
+const loadCdnImageStatus = async () => {
+  try {
+    const res = await api.getCdnImageStatus()
+    cdnImageEnabled.value = res?.enabled !== false
+    const limit = Number(res?.dailyLimit)
+    if (Number.isFinite(limit) && limit > 0) cdnImageDailyLimit.value = limit
+  } catch {
+    // 读取失败保持默认开启
+  }
+}
+
+const toggleCdnImage = async () => {
+  if (cdnImageLoading.value) return
+  const next = !cdnImageEnabled.value
+  cdnImageLoading.value = true
+  cdnImageEnabled.value = next
+  try {
+    const res = await api.toggleCdnImage(next)
+    cdnImageEnabled.value = res?.enabled !== false
+  } catch {
+    cdnImageEnabled.value = !next
+  } finally {
+    cdnImageLoading.value = false
+  }
+}
+
 const toggleSnsUseCache = () => {
   const next = !snsUseCache.value
   snsUseCache.value = next
@@ -1338,6 +1395,7 @@ onMounted(async () => {
 
   desktopDefaultToChatWhenData.value = readLocalBoolSetting(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, false)
   snsUseCache.value = readLocalBoolSetting(SNS_SETTING_USE_CACHE_KEY, true)
+  void loadCdnImageStatus()
 
   if (props.open) await refreshSettingsDialogData()
 

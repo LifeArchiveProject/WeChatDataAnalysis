@@ -410,7 +410,7 @@ async def get_wechat_db_key(
                 "errmsg": (
                     str(e).strip()
                     if known_error
-                    else "macOS 数据库密钥获取超时，请保持微信运行后重试。"
+                    else "macOS 数据库密钥获取超时，请重新点击获取并按提示退出、重启微信。"
                 ),
                 "data": {
                     "platform": "macos",

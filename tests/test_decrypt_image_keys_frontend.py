@@ -118,7 +118,9 @@ def test_macos_database_key_uses_the_bundled_authorized_helper_without_external_
     assert "key_mode: 'macos_private_helper'" in source
     assert "platformCapabilities.value?.database_key_extraction !== true" in source
     assert "捕获已开始" in source
-    assert "60 秒内仅退出当前账号并重新登录" in source
+    assert "完整退出微信程序" in source
+    assert "自动挂接重启后的微信进程" in source
+    assert "仅退出当前账号" not in source
     assert "数据库解密密钥已通过 macOS 本地受控组件获取成功" in source
     assert "打开 WeFlow 项目页" not in source
     assert "https://github.com/hicccc77/WeFlow" not in source

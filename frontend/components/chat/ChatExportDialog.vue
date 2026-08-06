@@ -1670,7 +1670,12 @@ export default defineComponent({
   gap: 8px;
 }
 
-:global(html[data-theme='dark']) .chat-export-modal {
+/* 不能写成 `:global(html[data-theme='dark']) .chat-export-modal`：scoped 编译会把
+ * `:global()` 后面的 `.chat-export-modal` 整段吃掉，只留下 `html[data-theme='dark']`，
+ * 于是这些暗色令牌被挂到了 html 上 —— 而 .chat-export-modal 自己声明的浅色值
+ * 会盖掉从 html 继承来的值，结果就是选中的会话行和保存目录块在深色下仍然是浅色。
+ * 直接写 html[...] 前缀，scoped 会正确地补成 .chat-export-modal[data-v-xxx]。 */
+html[data-theme='dark'] .chat-export-modal {
   --export-accent-soft: rgba(62, 181, 117, 0.14);
   --export-accent-border: rgba(82, 201, 136, 0.34);
   --export-accent-text: #7bd8a2;
@@ -1683,7 +1688,7 @@ export default defineComponent({
   box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5);
 }
 
-:global(html[data-theme='dark']) .chat-export-modal :is(input, select) {
+html[data-theme='dark'] .chat-export-modal :is(input, select) {
   color-scheme: dark;
 }
 

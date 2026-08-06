@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <div v-if="open && info" class="fixed inset-0 z-[9999] flex items-center justify-center">
+    <div v-if="open && info" class="theme-scope fixed inset-0 z-[9999] flex items-center justify-center">
       <div class="absolute inset-0 bg-black/40" @click="onBackdropClick" />
 
       <div class="desktop-update-dialog-panel relative w-[min(520px,calc(100vw-32px))] rounded-lg bg-white shadow-xl border border-gray-200">

@@ -216,8 +216,8 @@ class TestMacosPlatformSupport(unittest.TestCase):
         self.assertEqual(result["status"], -1)
         self.assertEqual(result["data"]["error_code"], "WECHAT_RELOGIN_REQUIRED")
         self.assertTrue(result["data"]["retryable"])
-        self.assertIn("60 秒内", result["errmsg"])
-        self.assertIn("重新登录", result["errmsg"])
+        self.assertIn("完整退出微信程序", result["errmsg"])
+        self.assertIn("重新打开微信并登录", result["errmsg"])
 
     def test_macos_database_key_endpoint_redacts_unknown_internal_errors(self) -> None:
         class ConnectedRequest:

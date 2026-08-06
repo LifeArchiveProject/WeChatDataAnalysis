@@ -48,7 +48,7 @@
 
 /* Browser layout units are already device-independent CSS pixels. */
 .session-list-panel {
-  width: var(--session-list-width, 300px);
+  width: var(--session-list-width, 264px);
 }
 
 /* 会话列表拖动条（中间栏右侧） */

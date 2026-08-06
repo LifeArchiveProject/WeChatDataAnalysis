@@ -63,7 +63,16 @@ from ..media_helpers import (
     _try_find_decrypted_resource,
     _try_strip_media_prefix,
 )
-from ..chat_helpers import _extract_md5_from_packed_info, _load_contact_rows, _pick_avatar_url
+from .. import cdn_image_service
+from ..chat_helpers import (
+    _decode_message_content,
+    _extract_md5_from_packed_info,
+    _extract_xml_attr,
+    _extract_xml_tag_or_attr,
+    _extract_xml_tag_text,
+    _load_contact_rows,
+    _pick_avatar_url,
+)
 from ..path_fix import PathFixRoute
 from ..perf_trace import create_perf_trace
 from ..wcdb_realtime import WCDB_REALTIME, exec_query as _wcdb_exec_query, get_avatar_urls as _wcdb_get_avatar_urls
@@ -1786,6 +1795,139 @@ def _lookup_image_md5_by_server_id_from_realtime_messages(account_dir_str: str, 
     return ""
 
 
+def _extract_image_cdn_info_from_xml(xml_text: str) -> dict[str, str]:
+    """从图片消息 XML 中抽取 CDN 原图下载所需的 fileid(cdnbigimgurl) + aeskey。"""
+    xml_text = str(xml_text or "")
+    if not xml_text:
+        return {}
+    fileid = (
+        _extract_xml_attr(xml_text, "cdnbigimgurl")
+        or _extract_xml_attr(xml_text, "cdnmidimgurl")
+        or _extract_xml_tag_or_attr(xml_text, "cdnbigimgurl")
+        or _extract_xml_tag_or_attr(xml_text, "cdnmidimgurl")
+    ).strip()
+    if not fileid:
+        return {}
+    aeskey = (
+        _extract_xml_attr(xml_text, "aeskey")
+        or _extract_xml_tag_text(xml_text, "aeskey")
+    ).strip()
+    return {"fileid": fileid, "aeskey": aeskey}
+
+
+def _lookup_image_cdn_download_info(account_dir_str: str, server_id: int, username: str) -> dict[str, str]:
+    """按 server_id 从消息库取图片消息(local_type=3)的 XML，解析出 CDN 原图的 fileid + aeskey。
+
+    先查静态 ``message_*.db``（解密/导入的账号），再查实时 WCDB（在线消息）。
+    """
+    account_dir_str = str(account_dir_str or "").strip()
+    username = str(username or "").strip()
+    try:
+        sid = int(server_id or 0)
+    except Exception:
+        sid = 0
+    if not account_dir_str or not username or not sid:
+        return {}
+    try:
+        table_name = f"Msg_{hashlib.md5(username.encode()).hexdigest()}"
+    except Exception:
+        return {}
+    account_dir = Path(account_dir_str)
+
+    # 1) 静态 message_*.db
+    static_paths: list[Path] = []
+    try:
+        for p in account_dir.glob("message_*.db"):
+            if p.is_file():
+                static_paths.append(p)
+    except Exception:
+        static_paths = []
+    static_paths.sort(key=lambda p: p.name)
+    for db_path in static_paths:
+        try:
+            conn = sqlite3.connect(str(db_path))
+        except Exception:
+            continue
+        try:
+            row = conn.execute(
+                f"SELECT local_type, message_content, compress_content FROM {table_name} "
+                "WHERE server_id = ? ORDER BY create_time DESC LIMIT 1",
+                (sid,),
+            ).fetchone()
+        except Exception:
+            row = None
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        if not row:
+            continue
+        try:
+            if int(row[0] or 0) != 3:
+                continue
+        except Exception:
+            continue
+        info = _extract_image_cdn_info_from_xml(_decode_message_content(row[2], row[1]))
+        if info:
+            return info
+
+    # 2) 实时 WCDB
+    try:
+        rt_conn = WCDB_REALTIME.ensure_connected(account_dir, timeout=3.0)
+    except Exception:
+        rt_conn = None
+    if rt_conn is not None:
+        table_literal = _sql_quote(table_name)
+        table_sql = (
+            "SELECT name FROM sqlite_master "
+            f"WHERE type = 'table' AND lower(name) = lower({table_literal}) LIMIT 1"
+        )
+        sid_lit = str(int(sid))
+        for db_path in _iter_realtime_message_db_paths_for_lookup(account_dir, username):
+            try:
+                with rt_conn.lock:
+                    table_rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=table_sql) or []
+            except Exception:
+                continue
+            actual_table = ""
+            for item in table_rows:
+                if isinstance(item, dict):
+                    actual_table = str(_pick_row_value(item, "name") or "").strip()
+                    if actual_table:
+                        break
+            if not actual_table:
+                continue
+            quoted_table = _quote_sql_identifier(actual_table)
+            sql = (
+                "SELECT local_type, message_content, compress_content "
+                f"FROM {quoted_table} WHERE server_id = {sid_lit} "
+                "ORDER BY create_time DESC, local_id DESC LIMIT 1"
+            )
+            try:
+                with rt_conn.lock:
+                    rows = _wcdb_exec_query(rt_conn.handle, kind="message", path=str(db_path), sql=sql) or []
+            except Exception:
+                continue
+            if not rows or not isinstance(rows[0], dict):
+                continue
+            row = rows[0]
+            try:
+                if int(_pick_row_value(row, "local_type") or 0) != 3:
+                    continue
+            except Exception:
+                continue
+            info = _extract_image_cdn_info_from_xml(
+                _decode_message_content(
+                    _pick_row_value(row, "compress_content"),
+                    _pick_row_value(row, "message_content"),
+                )
+            )
+            if info:
+                return info
+    return {}
+
+
 def _is_safe_http_url(url: str) -> bool:
     u = str(url or "").strip()
     if not u:
@@ -2606,6 +2748,53 @@ async def get_chat_image(
         if cached_path:
             trace("response:ready", result="decrypted-cache-fallback", mediaType=cached_media_type, bytes=len(cached_data or b""))
             return _build_cached_media_response(request, cached_data, cached_media_type)
+
+        # 本地找不到原图 → 若用户未关闭「自动获取原图(CDN)」，用消息 XML 里的
+        # cdnbigimgurl(fileid) + aeskey 从 CDN 拉原图（每账号每天限 10 次）。
+        if server_id and cdn_image_service.is_cdn_download_enabled():
+            try:
+                cdn_info = await asyncio.to_thread(
+                    _lookup_image_cdn_download_info,
+                    str(account_dir),
+                    int(server_id),
+                    str(username or ""),
+                )
+            except Exception:
+                cdn_info = {}
+            cdn_fileid = str((cdn_info or {}).get("fileid") or "").strip()
+            cdn_aeskey = str((cdn_info or {}).get("aeskey") or "").strip()
+            if cdn_fileid:
+                try:
+                    cdn_started_at = time.perf_counter()
+                    cdn_data = await cdn_image_service.download_original_image(
+                        account_dir.name,
+                        cdn_fileid,
+                        aes_key_hex=cdn_aeskey,
+                        image_type="orig",
+                    )
+                    trace(
+                        "cdn:download",
+                        bytes=len(cdn_data or b""),
+                        elapsedMsLocal=round((time.perf_counter() - cdn_started_at) * 1000.0, 1),
+                    )
+                except cdn_image_service.CdnQuotaExceededError as quota_err:
+                    trace("cdn:quota-exceeded", detail=str(quota_err))
+                    raise HTTPException(status_code=429, detail=str(quota_err))
+                except Exception as cdn_err:  # noqa: BLE001
+                    trace("cdn:error", error=str(cdn_err)[:200])
+                    cdn_data = b""
+                if cdn_data:
+                    payload, cdn_media_type, _cdn_ext = _detect_media_type_and_ext(cdn_data)
+                    if not cdn_media_type.startswith("image/"):
+                        cdn_media_type = "image/jpeg"
+                    if md5 and _is_valid_md5(str(md5)):
+                        try:
+                            await asyncio.to_thread(_write_cached_chat_image, account_dir, str(md5), payload)
+                        except Exception:
+                            pass
+                    trace("response:ready", result="cdn-download", mediaType=cdn_media_type, bytes=len(payload))
+                    return _build_cached_media_response(request, payload, cdn_media_type)
+
         trace(
             "response:error",
             result="source-not-found",

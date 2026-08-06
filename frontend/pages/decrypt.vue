@@ -36,7 +36,7 @@
                       v-model="formData.key"
                       type="text"
                       placeholder="请输入64位十六进制密钥"
-                      class="w-full px-4 py-3 bg-white border border-[#EDEDED] rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
+                      class="w-full pl-4 pr-16 py-3 bg-white border border-[#EDEDED] rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
                       :class="{ 'border-red-500': formErrors.key }"
                       required
                   />
@@ -73,7 +73,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 {{ isMacos
-                  ? '点击后将调用本地受控组件并等待微信产生新的密钥派生；若微信已经完成启动，请在“获取中”的 60 秒内仅退出当前账号再重新登录。密钥不会上传。'
+                  ? '点击后将调用本地受控组件；显示“获取中”后，请完整退出微信程序，再立即重新打开并登录。WCDA 会自动跟随重启后的微信进程，密钥不会上传。'
                   : '点击按钮将优先使用 V4 内存扫描获取【数据库解密密钥】；失败时会询问您是否改用 Hook。您也可以手动输入已知的64位密钥。' }}
               </p>
               <p v-if="!isMacos" class="mt-2 text-xs text-[#7F7F7F] flex items-start">
@@ -292,39 +292,40 @@
           </div>
 
           <!-- 操作按钮 -->
-          <div class="flex flex-wrap gap-3 justify-center pt-4 border-t border-[#EDEDED]">
+          <div class="flex flex-wrap items-center gap-3 pt-5 border-t border-[#EDEDED]">
             <button
               type="button"
               data-testid="decrypt-step-back"
               @click="goBackFromCurrentStep"
-              class="inline-flex items-center px-6 py-3 bg-white text-[#000000e6] border border-[#EDEDED] rounded-lg font-medium hover:bg-gray-50 transition-all duration-200"
+              class="inline-flex items-center px-4 py-2.5 text-[#5B6B60] rounded-lg font-medium hover:bg-[#F0F5F1] hover:text-[#07C160] transition-colors duration-200"
             >
-              <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
               </svg>
               上一步
             </button>
+
+            <div class="flex-1"></div>
+
+            <button
+              type="button"
+              @click="skipToChat"
+              :disabled="isImageKeyAcquisitionPending"
+              class="inline-flex items-center px-4 py-2.5 text-[#7F7F7F] rounded-lg font-medium hover:bg-[#F0F5F1] hover:text-[#07C160] transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              跳过，直接查看聊天记录
+            </button>
+
             <button
               type="button"
               @click="goToMediaDecryptStep"
               :disabled="isImageKeyAcquisitionPending"
-              class="inline-flex items-center px-6 py-3 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56] transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60"
+              class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-lg font-medium shadow-sm shadow-[#07C160]/20 hover:bg-[#06AD56] transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60"
             >
               下一步
-              <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
               </svg>
-            </button>
-          </div>
-
-          <!-- 跳过按钮 -->
-          <div class="text-center mt-4">
-            <button
-              @click="skipToChat"
-              :disabled="isImageKeyAcquisitionPending"
-              class="text-sm text-[#7F7F7F] hover:text-[#07C160] transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              跳过后续媒体准备，直接查看聊天记录 →
             </button>
           </div>
         </div>
@@ -335,26 +336,44 @@
         <div class="p-8">
           <div class="flex items-center justify-between mb-6">
             <div class="flex items-center">
-              <div class="w-12 h-12 bg-[#91D300] rounded-lg flex items-center justify-center mr-4">
+              <div class="w-12 h-12 bg-[#07C160] rounded-lg flex items-center justify-center mr-4">
                 <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
                 </svg>
               </div>
               <div>
-                <h2 class="text-xl font-bold text-[#000000e6]">批量解密图片</h2>
-                <p class="text-sm text-[#7F7F7F]">仅解密加密图片文件(.dat)，完成后可继续进入表情下载步骤</p>
+                <div class="flex items-center gap-2">
+                  <h2 class="text-xl font-bold text-[#000000e6]">批量解密图片</h2>
+                  <span class="inline-flex items-center rounded-full bg-[#EAF4EE] px-2 py-0.5 text-xs font-medium text-[#07C160]">可选</span>
+                  <span class="relative inline-flex group">
+                    <button type="button" aria-label="为什么图片解密与表情下载是可选的" class="flex h-[18px] w-[18px] items-center justify-center rounded-full border border-[#C9E2D3] text-[11px] font-bold leading-none text-[#7F9585] transition-colors hover:border-[#07C160] hover:text-[#07C160] focus:outline-none">?</button>
+                    <span role="tooltip" class="pointer-events-none absolute left-0 top-full z-30 mt-2 w-72 rounded-lg bg-[#1F2A24] px-3 py-2 text-xs leading-relaxed text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+                      「图片解密」和「表情下载」为可选步骤，适用于一次性迁移数据、加快聊天图片加载与后续导出的加速。仅需查看聊天记录可直接跳过。
+                    </span>
+                  </span>
+                </div>
+                <p class="mt-1 text-sm text-[#7F7F7F]">解密加密图片文件(.dat)，加速迁移与后续导出；不需要可直接查看聊天记录</p>
               </div>
             </div>
             <!-- 进度计数 -->
             <div v-if="mediaDecrypting && decryptProgress.total > 0" class="text-right">
-              <div class="text-lg font-bold text-[#91D300]">{{ decryptProgress.current }} / {{ decryptProgress.total }}</div>
+              <div class="text-lg font-bold text-[#07C160]">{{ decryptProgress.current }} / {{ decryptProgress.total }}</div>
               <div class="text-xs text-[#7F7F7F]">已处理 / 总图片</div>
             </div>
           </div>
 
-          <div class="mb-6 bg-lime-50 border border-lime-100 rounded-lg p-4">
-            <label class="block text-sm font-medium text-[#000000e6] mb-2">解密并发线程数</label>
-            <div class="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div class="mb-6 flex items-center justify-between gap-4 rounded-xl border border-[#DCEBE2] bg-[#F4FAF6] px-5 py-4">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 text-sm font-medium text-[#000000e6]">
+                <svg class="w-4 h-4 text-[#07C160]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                解密并发线程数
+              </div>
+              <p class="mt-1 text-xs text-[#7F7F7F]">默认 10；图片解密主要吃本地磁盘和 CPU，机器较快可适度调高。</p>
+            </div>
+            <div class="flex flex-shrink-0 items-center overflow-hidden rounded-lg border border-[#C9E2D3] bg-white">
+              <button type="button" aria-label="减少线程数" @click="mediaDecryptConcurrency = Math.max(1, (Number(mediaDecryptConcurrency) || 10) - 1)" :disabled="mediaDecrypting" class="flex h-9 w-9 items-center justify-center text-lg leading-none text-[#07C160] transition-colors hover:bg-[#EAF4EE] disabled:opacity-40 disabled:hover:bg-transparent">−</button>
               <input
                 v-model.number="mediaDecryptConcurrency"
                 type="number"
@@ -362,11 +381,9 @@
                 max="64"
                 step="1"
                 :disabled="mediaDecrypting"
-                class="w-40 px-3 py-2 border border-[#EDEDED] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#91D300] disabled:bg-gray-100"
+                class="spin-none h-9 w-14 border-x border-[#C9E2D3] text-center text-sm font-semibold text-[#000000e6] focus:bg-[#F4FAF6] focus:outline-none disabled:bg-gray-50"
               />
-              <div class="text-xs text-[#7F7F7F]">
-                默认 10；图片解密主要吃本地磁盘和 CPU，机器较快可适度调高。
-              </div>
+              <button type="button" aria-label="增加线程数" @click="mediaDecryptConcurrency = Math.min(64, (Number(mediaDecryptConcurrency) || 10) + 1)" :disabled="mediaDecrypting" class="flex h-9 w-9 items-center justify-center text-lg leading-none text-[#07C160] transition-colors hover:bg-[#EAF4EE] disabled:opacity-40 disabled:hover:bg-transparent">+</button>
             </div>
           </div>
 
@@ -381,7 +398,7 @@
               <div class="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
                 <div 
                   class="h-2.5 rounded-full transition-all duration-300 ease-out"
-                  :class="decryptProgress.status === 'complete' ? 'bg-[#07C160]' : decryptProgress.status === 'cancelled' ? 'bg-[#FAAD14]' : 'bg-[#91D300]'"
+                  :class="decryptProgress.status === 'complete' ? 'bg-[#07C160]' : decryptProgress.status === 'cancelled' ? 'bg-[#FAAD14]' : 'bg-[#07C160]'"
                   :style="{ width: progressPercent + '%' }"
                 ></div>
               </div>
@@ -412,7 +429,7 @@
                 <div class="text-xs text-[#7F7F7F]">总图片</div>
               </div>
               <div>
-                <div class="text-xl font-bold text-[#91D300]">{{ decryptProgress.concurrency || getMediaDecryptConcurrency() }}</div>
+                <div class="text-xl font-bold text-[#07C160]">{{ decryptProgress.concurrency || getMediaDecryptConcurrency() }}</div>
                 <div class="text-xs text-[#7F7F7F]">并发线程</div>
               </div>
               <div>
@@ -470,29 +487,32 @@
           </div>
 
           <!-- 操作按钮 -->
-          <div class="flex flex-wrap gap-3 justify-center pt-4 border-t border-[#EDEDED]">
+          <div class="flex flex-wrap items-center gap-3 pt-5 border-t border-[#EDEDED]">
             <button
               type="button"
               data-testid="decrypt-step-back"
               @click="goBackFromCurrentStep"
-              class="inline-flex items-center px-6 py-3 bg-white text-[#000000e6] border border-[#EDEDED] rounded-lg font-medium hover:bg-gray-50 transition-all duration-200"
+              class="inline-flex items-center px-4 py-2.5 text-[#5B6B60] rounded-lg font-medium hover:bg-[#F0F5F1] hover:text-[#07C160] transition-colors duration-200"
             >
-              <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
               </svg>
               上一步
             </button>
+
+            <div class="flex-1"></div>
+
             <button
               type="button"
               @click="decryptAllImages"
               :disabled="mediaDecrypting"
-              class="inline-flex items-center px-6 py-3 bg-[#91D300] text-white rounded-lg font-medium hover:bg-[#82BD00] transition-all duration-200 disabled:opacity-50"
+              class="inline-flex items-center px-5 py-2.5 border border-[#C9E2D3] bg-transparent text-[#07C160] rounded-lg font-medium hover:bg-[#EAF4EE] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <svg v-if="mediaDecrypting" class="w-5 h-5 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
+              <svg v-if="mediaDecrypting" class="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
               </svg>
-              <svg v-else class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg v-else class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/>
               </svg>
               {{ mediaDecrypting ? '解密中...' : (mediaDecryptResult ? '重新解密' : '开始解密图片') }}
@@ -500,27 +520,27 @@
             <button
               v-if="mediaDecrypting"
               @click="cancelMediaDecrypt"
-              class="inline-flex items-center px-6 py-3 bg-[#FA5151] text-white rounded-lg font-medium hover:bg-[#E54D4D] transition-all duration-200"
+              class="inline-flex items-center px-5 py-2.5 bg-[#FA5151] text-white rounded-lg font-medium hover:bg-[#E54D4D] transition-all duration-200"
             >
               停止解密
             </button>
             <button
               @click="goToEmojiDownloadStep"
               :disabled="mediaDecrypting"
-              class="inline-flex items-center px-6 py-3 bg-[#FA8C16] text-white rounded-lg font-medium hover:bg-[#E67E11] transition-all duration-200 disabled:opacity-50"
+              class="inline-flex items-center px-5 py-2.5 border border-[#C9E2D3] bg-transparent text-[#07C160] rounded-lg font-medium hover:bg-[#EAF4EE] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               下一步：下载表情
-              <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
               </svg>
             </button>
             <button
               @click="skipToChat"
               :disabled="mediaDecrypting"
-              class="inline-flex items-center px-6 py-3 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56] transition-all duration-200 disabled:opacity-50"
+              class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-lg font-medium shadow-sm shadow-[#07C160]/20 hover:bg-[#06AD56] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               查看聊天记录
-              <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
               </svg>
             </button>
@@ -533,18 +553,27 @@
         <div class="p-8">
           <div class="flex items-center justify-between mb-6">
             <div class="flex items-center">
-              <div class="w-12 h-12 bg-[#FA8C16] rounded-lg flex items-center justify-center mr-4">
+              <div class="w-12 h-12 bg-[#07C160] rounded-lg flex items-center justify-center mr-4">
                 <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M12 21a9 9 0 100-18 9 9 0 000 18z"/>
                 </svg>
               </div>
               <div>
-                <h2 class="text-xl font-bold text-[#000000e6]">批量下载表情包</h2>
-                <p class="text-sm text-[#7F7F7F]">从 `emoticon.db` 和聊天消息 XML 收集可下载表情，下载过的会自动跳过</p>
+                <div class="flex items-center gap-2">
+                  <h2 class="text-xl font-bold text-[#000000e6]">批量下载表情包</h2>
+                  <span class="inline-flex items-center rounded-full bg-[#EAF4EE] px-2 py-0.5 text-xs font-medium text-[#07C160]">可选</span>
+                  <span class="relative inline-flex group">
+                    <button type="button" aria-label="为什么表情下载是可选的" class="flex h-[18px] w-[18px] items-center justify-center rounded-full border border-[#C9E2D3] text-[11px] font-bold leading-none text-[#7F9585] transition-colors hover:border-[#07C160] hover:text-[#07C160] focus:outline-none">?</button>
+                    <span role="tooltip" class="pointer-events-none absolute left-0 top-full z-30 mt-2 w-72 rounded-lg bg-[#1F2A24] px-3 py-2 text-xs leading-relaxed text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+                      「图片解密」和「表情下载」为可选步骤，适用于一次性迁移数据、加快聊天图片加载与后续导出的加速。仅需查看聊天记录可直接跳过。
+                    </span>
+                  </span>
+                </div>
+                <p class="mt-1 text-sm text-[#7F7F7F]">从 emoticon.db 与聊天 XML 收集可下载表情；已下载会自动跳过，不需要可直接跳过</p>
               </div>
             </div>
             <div v-if="emojiDownloading && emojiDownloadProgress.total > 0" class="text-right">
-              <div class="text-lg font-bold text-[#FA8C16]">{{ emojiDownloadProgress.current }} / {{ emojiDownloadProgress.total }}</div>
+              <div class="text-lg font-bold text-[#07C160]">{{ emojiDownloadProgress.current }} / {{ emojiDownloadProgress.total }}</div>
               <div class="text-xs text-[#7F7F7F]">已处理 / 总表情</div>
             </div>
           </div>
@@ -553,9 +582,18 @@
             表情会缓存到本地 `resource` 目录，后续聊天导出时可直接复用，不必再临时查找或下载。
           </p>
 
-          <div class="mb-4 bg-orange-50 border border-orange-100 rounded-lg p-4">
-            <label class="block text-sm font-medium text-[#000000e6] mb-2">下载并发线程数</label>
-            <div class="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div class="mb-4 flex items-center justify-between gap-4 rounded-xl border border-[#DCEBE2] bg-[#F4FAF6] px-5 py-4">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 text-sm font-medium text-[#000000e6]">
+                <svg class="w-4 h-4 text-[#07C160]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                下载并发线程数
+              </div>
+              <p class="mt-1 text-xs text-[#7F7F7F]">默认 20；网络带宽足够可调高，超时/失败变多时建议调低。</p>
+            </div>
+            <div class="flex flex-shrink-0 items-center overflow-hidden rounded-lg border border-[#C9E2D3] bg-white">
+              <button type="button" aria-label="减少线程数" @click="emojiDownloadConcurrency = Math.max(1, (Number(emojiDownloadConcurrency) || 20) - 1)" :disabled="emojiDownloading" class="flex h-9 w-9 items-center justify-center text-lg leading-none text-[#07C160] transition-colors hover:bg-[#EAF4EE] disabled:opacity-40 disabled:hover:bg-transparent">−</button>
               <input
                 v-model.number="emojiDownloadConcurrency"
                 type="number"
@@ -563,11 +601,9 @@
                 max="100"
                 step="1"
                 :disabled="emojiDownloading"
-                class="w-40 px-3 py-2 border border-[#EDEDED] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#FA8C16] disabled:bg-gray-100"
+                class="spin-none h-9 w-14 border-x border-[#C9E2D3] text-center text-sm font-semibold text-[#000000e6] focus:bg-[#F4FAF6] focus:outline-none disabled:bg-gray-50"
               />
-              <div class="text-xs text-[#7F7F7F]">
-                默认 20；网络带宽足够可调高，超时/失败变多时建议调低。
-              </div>
+              <button type="button" aria-label="增加线程数" @click="emojiDownloadConcurrency = Math.min(100, (Number(emojiDownloadConcurrency) || 20) + 1)" :disabled="emojiDownloading" class="flex h-9 w-9 items-center justify-center text-lg leading-none text-[#07C160] transition-colors hover:bg-[#EAF4EE] disabled:opacity-40 disabled:hover:bg-transparent">+</button>
             </div>
           </div>
 
@@ -580,7 +616,7 @@
               <div class="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
                 <div
                   class="h-2.5 rounded-full transition-all duration-300 ease-out"
-                  :class="emojiDownloadProgress.status === 'complete' ? 'bg-[#07C160]' : emojiDownloadProgress.status === 'cancelled' ? 'bg-[#FAAD14]' : 'bg-[#FA8C16]'"
+                  :class="emojiDownloadProgress.status === 'complete' ? 'bg-[#07C160]' : emojiDownloadProgress.status === 'cancelled' ? 'bg-[#FAAD14]' : 'bg-[#07C160]'"
                   :style="{ width: emojiProgressPercent + '%' }"
                 ></div>
               </div>
@@ -609,7 +645,7 @@
                 <div class="text-xs text-[#7F7F7F]">总表情</div>
               </div>
               <div>
-                <div class="text-xl font-bold text-[#FA8C16]">{{ emojiDownloadProgress.concurrency || getEmojiDownloadConcurrency() }}</div>
+                <div class="text-xl font-bold text-[#07C160]">{{ emojiDownloadProgress.concurrency || getEmojiDownloadConcurrency() }}</div>
                 <div class="text-xs text-[#7F7F7F]">并发线程</div>
               </div>
               <div>
@@ -662,28 +698,31 @@
             </details>
           </div>
 
-          <div class="flex flex-wrap gap-3 justify-center pt-4 border-t border-[#EDEDED]">
+          <div class="flex flex-wrap items-center gap-3 pt-5 border-t border-[#EDEDED]">
             <button
               type="button"
               data-testid="decrypt-step-back"
               @click="goBackFromCurrentStep"
-              class="inline-flex items-center px-6 py-3 bg-white text-[#000000e6] border border-[#EDEDED] rounded-lg font-medium hover:bg-gray-50 transition-all duration-200"
+              class="inline-flex items-center px-4 py-2.5 text-[#5B6B60] rounded-lg font-medium hover:bg-[#F0F5F1] hover:text-[#07C160] transition-colors duration-200"
             >
-              <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
               </svg>
               上一步
             </button>
+
+            <div class="flex-1"></div>
+
             <button
               @click="downloadAllEmojis"
               :disabled="emojiDownloading"
-              class="inline-flex items-center px-6 py-3 bg-[#FA8C16] text-white rounded-lg font-medium hover:bg-[#E67E11] transition-all duration-200 disabled:opacity-50"
+              class="inline-flex items-center px-5 py-2.5 border border-[#C9E2D3] bg-transparent text-[#07C160] rounded-lg font-medium hover:bg-[#EAF4EE] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <svg v-if="emojiDownloading" class="w-5 h-5 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
+              <svg v-if="emojiDownloading" class="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
               </svg>
-              <svg v-else class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg v-else class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M12 21a9 9 0 100-18 9 9 0 000 18z"/>
               </svg>
               {{ emojiDownloading ? '下载中...' : (emojiDownloadResult ? '重新检查表情' : '开始下载表情') }}
@@ -691,17 +730,17 @@
             <button
               v-if="emojiDownloading"
               @click="cancelEmojiDownload"
-              class="inline-flex items-center px-6 py-3 bg-[#FA5151] text-white rounded-lg font-medium hover:bg-[#E54D4D] transition-all duration-200"
+              class="inline-flex items-center px-5 py-2.5 bg-[#FA5151] text-white rounded-lg font-medium hover:bg-[#E54D4D] transition-all duration-200"
             >
               停止下载
             </button>
             <button
               @click="skipToChat"
               :disabled="emojiDownloading"
-              class="inline-flex items-center px-6 py-3 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56] transition-all duration-200 disabled:opacity-50"
+              class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-lg font-medium shadow-sm shadow-[#07C160]/20 hover:bg-[#06AD56] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               查看聊天记录
-              <svg class="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
               </svg>
             </button>
@@ -765,6 +804,16 @@
 
 .animate-shake {
   animation: shake 0.5s ease-in-out;
+}
+
+/* 隐藏 number 输入框原生上下箭头（改用自定义 −/+ 步进器） */
+.spin-none::-webkit-inner-spin-button,
+.spin-none::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.spin-none {
+  -moz-appearance: textfield;
 }
 </style>
 
@@ -1358,7 +1407,7 @@ const handleGetDbKey = async () => {
     dbKeyRequestController = requestController
     isGettingDbKey.value = true
     error.value = ''
-    warning.value = '捕获已开始。若微信已经登录，请在 60 秒内仅退出当前账号并重新登录；不要退出微信程序或关闭 WCDA。'
+    warning.value = '捕获已开始：现在请完整退出微信程序，再立即重新打开并登录；WCDA 会自动挂接重启后的微信进程，请勿关闭 WCDA 或当前页面。'
 
     try {
       const res = await getKeys({
@@ -1378,7 +1427,7 @@ const handleGetDbKey = async () => {
           ) warning.value = ''
         }, 3000)
       } else {
-        error.value = res?.errmsg || 'macOS 数据库密钥获取失败，请保持微信运行后重试。'
+        error.value = res?.errmsg || 'macOS 数据库密钥获取失败，请重新点击获取并按提示退出、重启微信。'
         warning.value = ''
       }
     } catch (e) {

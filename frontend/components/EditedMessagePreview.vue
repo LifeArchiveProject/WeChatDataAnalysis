@@ -9,8 +9,8 @@
       <!-- 头像（与聊天页完全一致） -->
       <div class="relative">
         <div
-          class="message-avatar h-[42px] w-[42px] flex-shrink-0 overflow-hidden rounded-md bg-gray-300"
-          :class="message.isSent ? 'ml-3' : 'mr-3'"
+          class="message-avatar h-[34px] w-[34px] flex-shrink-0 overflow-hidden rounded-md bg-gray-300"
+          :class="message.isSent ? 'ml-2.5' : 'mr-2.5'"
         >
           <div v-if="resolvedAvatar" class="w-full h-full">
             <img
