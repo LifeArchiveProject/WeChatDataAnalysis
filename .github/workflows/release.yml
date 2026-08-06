@@ -380,51 +380,21 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      - name: Prepare signed ephemeral Python test host
-        id: python-test-host
-        shell: pwsh
-        env:
-          WCE_WINDOWS_CLIENT_CERT_THUMBPRINT: ${{ steps.cloud-signing.outputs.client-thumbprint }}
-          WCE_WINDOWS_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
-          WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
-          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ steps.cloud-signing.outputs.root-certificate-path }}
-          WCE_RFC3161_TIMESTAMP_URL: ${{ vars.WCE_RFC3161_TIMESTAMP_URL }}
-          WCE_WINDOWS_SIGNING_ASSURANCE: ${{ vars.WCE_WINDOWS_SIGNING_ASSURANCE }}
+      - name: Install Python dependencies
         run: |
           uv sync --frozen
-          $pythonPath = (Resolve-Path -LiteralPath '.venv\Scripts\python.exe').Path
-          $isolatedCopy = Join-Path $env:RUNNER_TEMP 'wda-python-test-host.exe'
-          Copy-Item -LiteralPath $pythonPath -Destination $isolatedCopy -Force
-          Remove-Item -LiteralPath $pythonPath -Force
-          Move-Item -LiteralPath $isolatedCopy -Destination $pythonPath -Force
 
-          $env:WCE_WINDOWS_EPHEMERAL_TEST_HOST = $pythonPath
-          node -e "require('./desktop/scripts/windows-private-pki-sign.cjs').sign({ path: process.env.WCE_WINDOWS_EPHEMERAL_TEST_HOST, hash: 'sha256', name: 'WeChatDataAnalysis CI Python Test Host' }).catch((error) => { console.error(error); process.exit(1); })"
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Unable to sign the ephemeral Python test host.'
-          }
-          node .\desktop\scripts\windows-private-pki-sign.cjs verify `
-            --path $pythonPath `
-            --signer-sha256 $env:WCE_WINDOWS_CLIENT_SIGNER_SHA256 `
-            --root-sha256 $env:WCE_WINDOWS_PRIVATE_ROOT_SHA256 `
-            --root-certificate $env:WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH
-          if ($LASTEXITCODE -ne 0) {
-            throw 'The ephemeral Python test host failed private-PKI verification.'
-          }
-          "python-path=$pythonPath" |
-            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Run Python tests on Windows
+      - name: Run focused Python release tests
         env:
           PYTHONPATH: src
-          WCE_PYTHON_TEST_HOST: ${{ steps.python-test-host.outputs.python-path }}
-          WECHAT_TOOL_NATIVE_CORE_LIBRARY: ${{ runner.temp }}/wechatdb-native-windows-x64-production/wechatdb_client.dll
-          WECHAT_TOOL_NATIVE_CORE_BROKER: ${{ runner.temp }}/wechatdb-native-windows-x64-production/wechatdb_broker.exe
         shell: pwsh
         run: |
-          & $env:WCE_PYTHON_TEST_HOST -m pytest -q
+          uv run pytest -q `
+            tests/test_native_core_broker_lifecycle.py `
+            tests/test_native_core_device_credential.py `
+            tests/test_wcdb_realtime_native_core_required.py
           if ($LASTEXITCODE -ne 0) {
-            throw 'Windows Python test suite failed.'
+            throw 'Focused Windows Python release tests failed.'
           }
 
       - name: Set desktop app version

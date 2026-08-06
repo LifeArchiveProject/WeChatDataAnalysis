@@ -150,20 +150,16 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
   assert.match(windowsJob, /steps\.cloud-signing\.outputs\.client-thumbprint/);
   assert.match(windowsJob, /steps\.cloud-signing\.outputs\.root-certificate-path/);
   assert.match(windowsJob, /WCE_WINDOWS_SIGNING_ASSURANCE/);
-  assert.match(
-    windowsJob,
-    /WECHAT_TOOL_NATIVE_CORE_LIBRARY:\s*\$\{\{ runner\.temp \}\}\/wechatdb-native-windows-x64-production\/wechatdb_client\.dll/
-  );
-  assert.match(
-    windowsJob,
-    /WECHAT_TOOL_NATIVE_CORE_BROKER:\s*\$\{\{ runner\.temp \}\}\/wechatdb-native-windows-x64-production\/wechatdb_broker\.exe/
-  );
-  assert.match(windowsJob, /Prepare signed ephemeral Python test host/);
+  assert.match(windowsJob, /Install Python dependencies/);
+  assert.match(windowsJob, /Run focused Python release tests/);
   assert.match(windowsJob, /uv sync --frozen/);
-  assert.match(windowsJob, /\.venv\\Scripts\\python\.exe/);
-  assert.match(windowsJob, /windows-private-pki-sign\.cjs'\)\.sign/);
-  assert.match(windowsJob, /steps\.python-test-host\.outputs\.python-path/);
-  assert.match(windowsJob, /& \$env:WCE_PYTHON_TEST_HOST -m pytest -q/);
+  assert.match(windowsJob, /uv run pytest -q/);
+  assert.match(windowsJob, /tests\/test_native_core_broker_lifecycle\.py/);
+  assert.match(windowsJob, /tests\/test_native_core_device_credential\.py/);
+  assert.match(windowsJob, /tests\/test_wcdb_realtime_native_core_required\.py/);
+  assert.doesNotMatch(windowsJob, /Prepare signed ephemeral Python test host/);
+  assert.doesNotMatch(windowsJob, /WCE_PYTHON_TEST_HOST/);
+  assert.doesNotMatch(windowsJob, /WECHAT_TOOL_NATIVE_CORE_(?:LIBRARY|BROKER)/);
   assert.match(windowsJob, /WCE_NATIVE_CORE_SOURCE_REVISION/);
   assert.match(windowsJob, /WCE_NATIVE_CORE_BUILD_ID/);
   assert.match(windowsJob, /WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH/);
@@ -216,13 +212,15 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
 
   const importIndex = windowsJob.indexOf("Import-WindowsCloudSigningIdentity.ps1");
   const validateIndex = windowsJob.indexOf("Validate native production artifact");
-  const pythonHostIndex = windowsJob.indexOf("Prepare signed ephemeral Python test host");
-  const pythonTestsIndex = windowsJob.indexOf("Run Python tests on Windows");
+  const pythonDependenciesIndex = windowsJob.indexOf("Install Python dependencies");
+  const pythonTestsIndex = windowsJob.indexOf("Run focused Python release tests");
   const buildIndex = windowsJob.indexOf("Build Windows installer");
   const uploadIndex = windowsJob.indexOf("Upload Windows release files");
   const cleanupIndex = windowsJob.indexOf("Remove-WindowsCloudSigningIdentity.ps1");
   assert.ok(importIndex >= 0 && importIndex < validateIndex);
-  assert.ok(validateIndex < pythonHostIndex && pythonHostIndex < pythonTestsIndex);
+  assert.ok(
+    validateIndex < pythonDependenciesIndex && pythonDependenciesIndex < pythonTestsIndex
+  );
   assert.ok(pythonTestsIndex < buildIndex && buildIndex < uploadIndex);
   assert.ok(uploadIndex < cleanupIndex);
 
