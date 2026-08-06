@@ -94,7 +94,7 @@ def _consume_quota(wxid: str) -> None:
             logger.warning("[cdn_image] 写入下载配额失败: %s", exc)
 
 
-# ---- 设置：自动获取原图(CDN)开关，默认开启，用户可关闭 ----
+# ---- 设置：自动获取原图(CDN)开关，默认关闭，用户可主动开启 ----
 _SETTINGS_FILE_NAME = "cdn_image_settings.json"
 
 
@@ -103,12 +103,12 @@ def _settings_path() -> Path:
 
 
 def is_cdn_download_enabled() -> bool:
-    """是否启用「本地缺原图时自动从 CDN 获取」。默认开启。"""
+    """是否启用「本地缺原图时自动从 CDN 获取」。默认关闭。"""
     try:
         raw = json.loads(_settings_path().read_text(encoding="utf-8"))
-        return bool((raw or {}).get("enabled", True))
+        return bool((raw or {}).get("enabled", False))
     except Exception:
-        return True
+        return False
 
 
 def set_cdn_download_enabled(enabled: bool) -> None:
