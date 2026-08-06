@@ -509,7 +509,7 @@ const desktopVersionText = computed(() => {
 
 const desktopDefaultToChatWhenData = ref(false)
 
-const cdnImageEnabled = ref(true)
+const cdnImageEnabled = ref(false)
 const cdnImageLoading = ref(false)
 const cdnImageDailyLimit = ref(10)
 const snsUseCache = ref(true)
@@ -1309,11 +1309,11 @@ const toggleDesktopDefaultToChat = () => {
 const loadCdnImageStatus = async () => {
   try {
     const res = await api.getCdnImageStatus()
-    cdnImageEnabled.value = res?.enabled !== false
+    cdnImageEnabled.value = res?.enabled === true
     const limit = Number(res?.dailyLimit)
     if (Number.isFinite(limit) && limit > 0) cdnImageDailyLimit.value = limit
   } catch {
-    // 读取失败保持默认开启
+    // 读取失败保持默认关闭
   }
 }
 
@@ -1324,7 +1324,7 @@ const toggleCdnImage = async () => {
   cdnImageEnabled.value = next
   try {
     const res = await api.toggleCdnImage(next)
-    cdnImageEnabled.value = res?.enabled !== false
+    cdnImageEnabled.value = res?.enabled === true
   } catch {
     cdnImageEnabled.value = !next
   } finally {
