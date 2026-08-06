@@ -87,16 +87,21 @@ test("self-signed private workflow imports a persistent identity and never notar
   assert.match(afterSign, /verifyDesignatedRequirement/);
   assert.match(afterSign, /normalized !== expected/);
   assert.match(afterSign, /`-R=identifier/);
+  assert.match(workflow, /workflow_call/);
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
-  assert.match(workflow, /test "\$WORKFLOW_REF" = "refs\/heads\/main"/);
+  assert.match(workflow, /refs\/heads\/main\)/);
+  assert.match(workflow, /refs\/tags\/v\*\)/);
+  assert.match(workflow, /git merge-base --is-ancestor "\$WORKFLOW_REF" origin\/main/);
   assert.doesNotMatch(workflow, /git fetch --no-tags origin main/);
-  assert.match(workflow, /PACKAGE_VERSION: \$\{\{ inputs\.version \}\}/);
-  assert.deepEqual(
-    workflow.split(/\r?\n/).filter((line) => line.includes("${{ inputs.version }}")).map((line) => line.trim()),
-    ["PACKAGE_VERSION: ${{ inputs.version }}", "name: WeChatDataAnalysis-macos-arm64-${{ inputs.version }}"]
-  );
+  assert.match(workflow, /PACKAGE_VERSION_INPUT: \$\{\{ inputs\.version \}\}/);
+  assert.match(workflow, /tag_version="\$\{tag#v\}"/);
+  assert.match(workflow, /printf 'PACKAGE_VERSION=%s\\n'/);
   assert.match(workflow, /npm version "\$PACKAGE_VERSION"/);
+  assert.match(workflow, /name: release-macos-arm64/);
+  assert.match(workflow, /desktop\/dist\/\*\.dmg/);
+  assert.match(workflow, /desktop\/dist\/\*\.zip/);
+  assert.match(workflow, /desktop\/dist\/latest-mac\.yml/);
   assert.match(workflow, /environment: macos-private-pki-production/);
   assert.match(workflow, /WCE_MACOS_WCDA_HOST_P12_BASE64/);
   assert.match(workflow, /WCE_MACOS_SELF_SIGNED_ROOT_CERT_BASE64/);

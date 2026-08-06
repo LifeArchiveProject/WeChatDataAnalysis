@@ -122,7 +122,9 @@ test("Windows release requires TPM private-PKI signing and installer smoke", () 
   const workflow = fs
     .readFileSync(path.join(repoRoot, ".github", "workflows", "release.yml"), "utf8")
     .replace(/\r\n/g, "\n");
-  const windowsJob = workflow.match(/\n  build-windows:\n([\s\S]*?)(?=\n  publish-release:\n)/)?.[1] || "";
+  const windowsJob = workflow.match(
+    /\n  build-windows:\n([\s\S]*?)(?=\n  [A-Za-z0-9_-]+:\n|$)/
+  )?.[1] || "";
   assert.match(windowsJob, /runs-on:\s*\[self-hosted, Windows, X64, wce-production-signing\]/);
   assert.match(windowsJob, /environment:\s*windows-private-pki-production/);
   assert.match(windowsJob, /fetch-depth:\s*0/);
@@ -200,9 +202,9 @@ test("release workflow pins every remote action to an approved commit", () => {
     ["dtolnay/rust-toolchain", "4cda84d5c5c54efe2404f9d843567869ab1699d4"],
     ["softprops/action-gh-release", "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65"],
   ]);
-  const remoteUses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)].map(
-    (match) => match[1]
-  );
+  const remoteUses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)]
+    .map((match) => match[1])
+    .filter((use) => !use.startsWith("./"));
 
   assert.ok(remoteUses.length > 0);
   for (const use of remoteUses) {
@@ -514,17 +516,22 @@ test("macOS DMG cleanup preserves both detach failures", () => {
   );
 });
 
-test("release workflow stays Windows-only while private native source is excluded", () => {
+test("tag release reuses the protected macOS build and publishes both platforms", () => {
   const workflow = fs
     .readFileSync(path.join(repoRoot, ".github", "workflows", "release.yml"), "utf8")
     .replace(/\r\n/g, "\n");
   const publishJob = workflow.split("\n  publish-release:\n", 2)[1] || "";
 
-  assert.doesNotMatch(workflow, /\n  build-macos-arm64:\n/);
+  assert.match(workflow, /^name: Release \(Windows and macOS ARM64\)$/m);
+  assert.match(
+    workflow,
+    /\n  build-macos-arm64:\n\s+uses: \.\/\.github\/workflows\/macos-private-build\.yml\n\s+secrets: inherit/
+  );
   assert.doesNotMatch(workflow, /native\/wce_integrity/);
   assert.doesNotMatch(workflow, /npm run dist:mac|npm run smoke:mac/);
   assert.match(publishJob, /needs:\s*\n\s*- build-windows/);
-  assert.doesNotMatch(publishJob, /build-macos/);
+  assert.match(publishJob, /needs:[\s\S]*- build-macos-arm64/);
+  assert.match(publishJob, /merge-multiple: true/);
 });
 
 test("Windows packages are built only by the tag-triggered release workflow", () => {
@@ -536,7 +543,7 @@ test("Windows packages are built only by the tag-triggered release workflow", ()
   // Desktop packaging is expensive; keep it off pull requests and main pushes.
   assert.match(workflow, /^on:\n  push:\n    tags:\n      - "v\*"\n/m);
   assert.match(workflow, /\n  build-windows:\n/);
-  assert.doesNotMatch(workflow, /\n  build-macos-arm64:\n/);
+  assert.match(workflow, /\n  build-macos-arm64:\n/);
 
   for (const entry of fs.readdirSync(workflowsDir)) {
     const source = fs.readFileSync(path.join(workflowsDir, entry), "utf8");

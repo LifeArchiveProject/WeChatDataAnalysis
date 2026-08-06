@@ -32,6 +32,6 @@ WCDA 公开仓库只保留最小进程调用、完整性验证和打包逻辑，
 
 上述 `WCE_MACOS_WCDA_HOST_*`、`WCE_MACOS_KEY_HELPER_SIGNER_SHA256` 名称是 Producer 与 WCDA 的固定交付契约，不使用省略 `WCDA` 或改写 `KEY_HELPER` 的别名。
 
-workflow 只允许从 `main` 的精确 `github.sha` 手动运行。它会先验证 P12 中只有 host leaf 与同一个公开 root，校验 CA/leaf 约束、唯一 code-signing EKU、Organization 和 host leaf pin，再把 P12 和 root 导入临时 keychain。构建保留 Producer helper 的独立签名，验证 app/backend 的 identifier、叶证书和精确 designated requirement，然后仅上传私有 Actions artifact；不会创建 GitHub Release。任务结束后临时 keychain、P12 和 root 文件都会清理。
+workflow 允许从 `main` 的精确 `github.sha` 手动运行，也允许标签发布流程以可复用 workflow 的方式从位于 `main` 上的精确 `v*` 标签调用。Environment 的 deployment branches and tags 需要同时配置 `main` branch 与 `v*` tag；两者分别服务于手动构建和标签发布。workflow 会先验证 P12 中只有 host leaf 与同一个公开 root，校验 CA/leaf 约束、唯一 code-signing EKU、Organization 和 host leaf pin，再把 P12 和 root 导入临时 keychain。构建保留 Producer helper 的独立签名，验证 app/backend 的 identifier、叶证书和精确 designated requirement。手动运行只上传 Actions artifact；标签发布会将 DMG、ZIP 和更新元数据合并到对应 GitHub Release。任务结束后临时 keychain、P12 和 root 文件都会清理。
 
 免费自签模式不会公证或 stapling，用户首次启动可能看到 Gatekeeper 警告。正式发布前仍必须在真实 Apple Silicon Mac、已登录微信和真实在线授权服务上完成一次端到端获取；Windows CI 不能替代这项验收。

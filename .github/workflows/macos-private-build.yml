@@ -1,6 +1,17 @@
 name: macOS Private Build
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: Package version; omitted callers derive it from a v* tag
+        required: false
+        type: string
+      run_image_scan_diagnostic:
+        description: Run the non-blocking synthetic cross-process image-key scan
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       version:
@@ -19,7 +30,7 @@ permissions:
 
 jobs:
   build-macos-arm64:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-14
     environment: macos-private-pki-production
     timeout-minutes: 120
@@ -58,13 +69,13 @@ jobs:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       CSC_NAME: ${{ vars.WCE_MACOS_WCDA_HOST_SIGNING_IDENTITY }}
       CI: "true"
-      PACKAGE_VERSION: ${{ inputs.version }}
+      PACKAGE_VERSION_INPUT: ${{ inputs.version }}
     steps:
-      - name: Checkout exact main revision
+      - name: Checkout exact release revision
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Verify immutable source and protected pins
@@ -74,11 +85,36 @@ jobs:
           WORKFLOW_REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
-          test "$WORKFLOW_REF" = "refs/heads/main"
           [[ "$WORKFLOW_REVISION" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$WORKFLOW_REVISION"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]
+
+          requested_version="${PACKAGE_VERSION_INPUT#v}"
+          case "$WORKFLOW_REF" in
+            refs/heads/main)
+              test "$(git rev-parse origin/main)" = "$WORKFLOW_REVISION"
+              package_version="$requested_version"
+              ;;
+            refs/tags/v*)
+              tag="${WORKFLOW_REF#refs/tags/}"
+              tag_version="${tag#v}"
+              test "$tag" = "$GITHUB_REF_NAME"
+              test "$(git rev-parse --verify "${WORKFLOW_REF}^{commit}")" = "$WORKFLOW_REVISION"
+              git rev-parse --verify origin/main
+              git merge-base --is-ancestor "$WORKFLOW_REF" origin/main
+              if [[ -n "$requested_version" ]]; then
+                test "$requested_version" = "$tag_version"
+              fi
+              package_version="$tag_version"
+              ;;
+            *)
+              echo "macOS packages may only be built from main or a v* release tag" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]
+          printf 'PACKAGE_VERSION=%s\n' "$package_version" >> "$GITHUB_ENV"
+
           [[ "$WCE_MACOS_XKEY_ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
           [[ "$WCE_MACOS_XKEY_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$WCE_MACOS_XKEY_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
@@ -368,15 +404,17 @@ jobs:
         shell: bash
         run: npm run smoke:mac:image-scan
 
-      - name: Upload private macOS package
+      - name: Upload macOS release files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: WeChatDataAnalysis-macos-arm64-${{ inputs.version }}
+          name: release-macos-arm64
           if-no-files-found: error
           retention-days: 14
           path: |
             desktop/dist/*.dmg
             desktop/dist/*.zip
+            desktop/dist/*.zip.blockmap
+            desktop/dist/latest-mac.yml
             desktop/dist/SHA256SUMS-macos.txt
 
       - name: Remove temporary signing keychain

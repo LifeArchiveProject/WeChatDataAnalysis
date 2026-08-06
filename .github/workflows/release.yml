@@ -1,4 +1,4 @@
-name: Release (Windows)
+name: Release (Windows and macOS ARM64)
 
 on:
   push:
@@ -619,9 +619,14 @@ jobs:
             desktop/dist/SHA256SUMS.txt
             desktop/dist/release-provenance.json
 
+  build-macos-arm64:
+    uses: ./.github/workflows/macos-private-build.yml
+    secrets: inherit
+
   publish-release:
     needs:
       - build-windows
+      - build-macos-arm64
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release history
