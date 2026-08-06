@@ -1,10 +1,37 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from wechat_decrypt_tool import native_core_broker
+
+
+def test_macos_broker_first_start_has_a_longer_default_budget() -> None:
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch.object(native_core_broker.sys, "platform", "darwin"),
+    ):
+        assert native_core_broker._startup_timeout_seconds() == 60.0
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch.object(native_core_broker.sys, "platform", "win32"),
+    ):
+        assert native_core_broker._startup_timeout_seconds() == 5.0
+
+
+def test_broker_startup_timeout_environment_still_overrides_platform_default() -> None:
+    with (
+        patch.dict(
+            os.environ,
+            {native_core_broker.ENV_NATIVE_CORE_STARTUP_TIMEOUT_MS: "7000"},
+            clear=True,
+        ),
+        patch.object(native_core_broker.sys, "platform", "darwin"),
+    ):
+        assert native_core_broker._startup_timeout_seconds() == 7.0
 
 
 def test_broker_validates_controlled_distribution_against_client_artifact(
