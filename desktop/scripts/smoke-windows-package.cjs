@@ -488,10 +488,11 @@ async function smokeInstaller(installerPath, tempRoot, env = process.env) {
   if (
     String(env.WCE_WINDOWS_INSTALLER_SMOKE_ALLOWED || "") !== "1" ||
     String(env.GITHUB_ACTIONS || "").toLowerCase() !== "true" ||
-    String(env.RUNNER_ENVIRONMENT || "").toLowerCase() !== "self-hosted"
+    String(env.RUNNER_OS || "").toLowerCase() !== "windows" ||
+    String(env.RUNNER_ENVIRONMENT || "").toLowerCase() !== "github-hosted"
   ) {
     throw new Error(
-      "Installer smoke requires the dedicated self-hosted Actions runner and " +
+      "Installer smoke requires a GitHub-hosted Windows Actions runner and " +
         "WCE_WINDOWS_INSTALLER_SMOKE_ALLOWED=1."
     );
   }

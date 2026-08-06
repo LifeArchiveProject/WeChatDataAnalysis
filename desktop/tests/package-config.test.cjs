@@ -102,7 +102,7 @@ test("Windows package uses private-PKI signing while preserving producer signatu
   );
 });
 
-test("Windows release requires TPM private-PKI signing and installer smoke", () => {
+test("Windows release uses protected cloud private-PKI signing and installer smoke", () => {
   const smokeScript = path.join(desktopRoot, "scripts", "smoke-windows-package.cjs");
   assert.equal(packageJson.scripts["smoke:win"], "node scripts/smoke-windows-package.cjs");
   assert.equal(
@@ -125,13 +125,45 @@ test("Windows release requires TPM private-PKI signing and installer smoke", () 
   const windowsJob = workflow.match(
     /\n  build-windows:\n([\s\S]*?)(?=\n  [A-Za-z0-9_-]+:\n|$)/
   )?.[1] || "";
-  assert.match(windowsJob, /runs-on:\s*\[self-hosted, Windows, X64, wce-production-signing\]/);
+  assert.match(windowsJob, /runs-on:\s*windows-2022/);
   assert.match(windowsJob, /environment:\s*windows-private-pki-production/);
   assert.match(windowsJob, /fetch-depth:\s*0/);
   assert.match(windowsJob, /persist-credentials:\s*false/);
   assert.match(windowsJob, /\$tagCommit\s+-cne\s+\$head/);
   assert.match(windowsJob, /git merge-base --is-ancestor \$tagRef origin\/main/);
   assert.match(windowsJob, /WCE_WINDOWS_CLIENT_CERT_THUMBPRINT/);
+  assert.match(
+    windowsJob,
+    /WCE_WINDOWS_CLIENT_SIGNING_PFX_BASE64:\s*\$\{\{ secrets\.WCE_WINDOWS_CLIENT_SIGNING_PFX_BASE64 \}\}/
+  );
+  assert.match(
+    windowsJob,
+    /WCE_WINDOWS_CLIENT_SIGNING_PFX_PASSWORD:\s*\$\{\{ secrets\.WCE_WINDOWS_CLIENT_SIGNING_PFX_PASSWORD \}\}/
+  );
+  assert.match(
+    windowsJob,
+    /WCE_WINDOWS_PRIVATE_ROOT_CERT_BASE64:\s*\$\{\{ secrets\.WCE_WINDOWS_PRIVATE_ROOT_CERT_BASE64 \}\}/
+  );
+  assert.match(windowsJob, /Import-WindowsCloudSigningIdentity\.ps1/);
+  assert.match(windowsJob, /Remove-WindowsCloudSigningIdentity\.ps1/);
+  assert.match(windowsJob, /if:\s*always\(\)/);
+  assert.match(windowsJob, /steps\.cloud-signing\.outputs\.client-thumbprint/);
+  assert.match(windowsJob, /steps\.cloud-signing\.outputs\.root-certificate-path/);
+  assert.match(windowsJob, /WCE_WINDOWS_SIGNING_ASSURANCE/);
+  assert.match(
+    windowsJob,
+    /WECHAT_TOOL_NATIVE_CORE_LIBRARY:\s*\$\{\{ runner\.temp \}\}\/wechatdb-native-windows-x64-production\/wechatdb_client\.dll/
+  );
+  assert.match(
+    windowsJob,
+    /WECHAT_TOOL_NATIVE_CORE_BROKER:\s*\$\{\{ runner\.temp \}\}\/wechatdb-native-windows-x64-production\/wechatdb_broker\.exe/
+  );
+  assert.match(windowsJob, /Prepare signed ephemeral Python test host/);
+  assert.match(windowsJob, /uv sync --frozen/);
+  assert.match(windowsJob, /\.venv\\Scripts\\python\.exe/);
+  assert.match(windowsJob, /windows-private-pki-sign\.cjs'\)\.sign/);
+  assert.match(windowsJob, /steps\.python-test-host\.outputs\.python-path/);
+  assert.match(windowsJob, /& \$env:WCE_PYTHON_TEST_HOST -m pytest -q/);
   assert.match(windowsJob, /WCE_NATIVE_CORE_SOURCE_REVISION/);
   assert.match(windowsJob, /WCE_NATIVE_CORE_BUILD_ID/);
   assert.match(windowsJob, /WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH/);
@@ -158,7 +190,10 @@ test("Windows release requires TPM private-PKI signing and installer smoke", () 
   assert.match(windowsJob, /WCE_NATIVE_CORE_SECURITY_NOTICE_SHA256/);
   assert.match(windowsJob, /WCE_NATIVE_CORE_SECURITY_CHECKPOINT_SET_SHA256/);
   assert.match(windowsJob, /windowsPrivatePkiLeafRevocation = 'build-and-lease-only'/);
-  assert.doesNotMatch(windowsJob, /WCE_WINDOWS_CLIENT_CSC_LINK|WIN_CSC_KEY_PASSWORD/);
+  assert.doesNotMatch(
+    windowsJob,
+    /WCE_WINDOWS_CLIENT_CSC_LINK|WIN_CSC_KEY_PASSWORD|runs-on:\s*\[self-hosted|wce-production-signing|WCE_SIGNTOOL_PATH|[A-Z]:\\abc\\/i
+  );
   assert.match(windowsJob, /Verify signed unpacked Windows runtime/);
   assert.match(windowsJob, /WCE_WINDOWS_INSTALLER_SMOKE_ALLOWED:\s*"1"/);
   assert.match(windowsJob, /run:\s*npm run smoke:win/);
@@ -178,6 +213,32 @@ test("Windows release requires TPM private-PKI signing and installer smoke", () 
   assert.match(windowsJob, /WINDOWS_PRIVATE_ROOT_SHA256:/);
   assert.match(windowsJob, /WORKFLOW_RUN_ID:\s*\$\{\{ github\.run_id \}\}/);
   assert.match(windowsJob, /WORKFLOW_RUN_ATTEMPT:\s*\$\{\{ github\.run_attempt \}\}/);
+
+  const importIndex = windowsJob.indexOf("Import-WindowsCloudSigningIdentity.ps1");
+  const validateIndex = windowsJob.indexOf("Validate native production artifact");
+  const pythonHostIndex = windowsJob.indexOf("Prepare signed ephemeral Python test host");
+  const pythonTestsIndex = windowsJob.indexOf("Run Python tests on Windows");
+  const buildIndex = windowsJob.indexOf("Build Windows installer");
+  const uploadIndex = windowsJob.indexOf("Upload Windows release files");
+  const cleanupIndex = windowsJob.indexOf("Remove-WindowsCloudSigningIdentity.ps1");
+  assert.ok(importIndex >= 0 && importIndex < validateIndex);
+  assert.ok(validateIndex < pythonHostIndex && pythonHostIndex < pythonTestsIndex);
+  assert.ok(pythonTestsIndex < buildIndex && buildIndex < uploadIndex);
+  assert.ok(uploadIndex < cleanupIndex);
+
+  const importScript = fs.readFileSync(
+    path.join(desktopRoot, "scripts", "Import-WindowsCloudSigningIdentity.ps1"),
+    "utf8"
+  );
+  const cleanupScript = fs.readFileSync(
+    path.join(desktopRoot, "scripts", "Remove-WindowsCloudSigningIdentity.ps1"),
+    "utf8"
+  );
+  assert.match(importScript, /Microsoft Software Key Storage Provider/);
+  assert.match(importScript, /AllowExport\|AllowPlaintextExport/);
+  assert.match(importScript, /Import-PfxCertificate/);
+  assert.match(importScript, /\[IO\.File\]::Delete\(\$pfxPath\)/);
+  assert.match(cleanupScript, /Remove-Item -LiteralPath \$certificatePath -DeleteKey -Force/);
 
   const upload = windowsJob.match(/- name: Upload Windows release files\n([\s\S]*?)$/)?.[1] || "";
   assert.match(upload, /desktop\/dist\/\*Setup\*\.exe/);

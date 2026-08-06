@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-windows:
-    runs-on: [self-hosted, Windows, X64, wce-production-signing]
+    runs-on: windows-2022
     environment: windows-private-pki-production
     timeout-minutes: 120
     steps:
@@ -189,6 +189,22 @@ jobs:
           run-id: ${{ steps.native-artifact-source.outputs.run-id }}
           github-token: ${{ secrets.WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN || github.token }}
 
+      - name: Import protected cloud signing identity
+        id: cloud-signing
+        shell: powershell
+        env:
+          WCE_WINDOWS_CLIENT_SIGNING_PFX_BASE64: ${{ secrets.WCE_WINDOWS_CLIENT_SIGNING_PFX_BASE64 }}
+          WCE_WINDOWS_CLIENT_SIGNING_PFX_PASSWORD: ${{ secrets.WCE_WINDOWS_CLIENT_SIGNING_PFX_PASSWORD }}
+          WCE_WINDOWS_PRIVATE_ROOT_CERT_BASE64: ${{ secrets.WCE_WINDOWS_PRIVATE_ROOT_CERT_BASE64 }}
+          WCE_WINDOWS_CLIENT_CERT_THUMBPRINT: ${{ vars.WCE_WINDOWS_CLIENT_CERT_THUMBPRINT }}
+          WCE_WINDOWS_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
+        run: |
+          .\desktop\scripts\Import-WindowsCloudSigningIdentity.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'windows-cloud-signing') `
+            -Mode Client `
+            -GitHubOutputPath $env:GITHUB_OUTPUT
+
       - name: Validate native production artifact
         working-directory: desktop
         shell: pwsh
@@ -199,7 +215,7 @@ jobs:
           WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
           WCE_NATIVE_CORE_BROKER_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.broker-signer-sha256 }}
           WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
-          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ vars.WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH }}
+          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ steps.cloud-signing.outputs.root-certificate-path }}
           WCE_NATIVE_CORE_ARTIFACT_REPOSITORY: ${{ steps.native-artifact-source.outputs.repository }}
           WCE_NATIVE_CORE_ARTIFACT_RUN_ID: ${{ steps.native-artifact-source.outputs.run-id }}
           WCE_NATIVE_CORE_SOURCE_REVISION: ${{ steps.native-artifact-source.outputs.source-revision }}
@@ -364,37 +380,79 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: Prepare signed ephemeral Python test host
+        id: python-test-host
+        shell: pwsh
+        env:
+          WCE_WINDOWS_CLIENT_CERT_THUMBPRINT: ${{ steps.cloud-signing.outputs.client-thumbprint }}
+          WCE_WINDOWS_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
+          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ steps.cloud-signing.outputs.root-certificate-path }}
+          WCE_RFC3161_TIMESTAMP_URL: ${{ vars.WCE_RFC3161_TIMESTAMP_URL }}
+          WCE_WINDOWS_SIGNING_ASSURANCE: ${{ vars.WCE_WINDOWS_SIGNING_ASSURANCE }}
+        run: |
+          uv sync --frozen
+          $pythonPath = (Resolve-Path -LiteralPath '.venv\Scripts\python.exe').Path
+          $isolatedCopy = Join-Path $env:RUNNER_TEMP 'wda-python-test-host.exe'
+          Copy-Item -LiteralPath $pythonPath -Destination $isolatedCopy -Force
+          Remove-Item -LiteralPath $pythonPath -Force
+          Move-Item -LiteralPath $isolatedCopy -Destination $pythonPath -Force
+
+          $env:WCE_WINDOWS_EPHEMERAL_TEST_HOST = $pythonPath
+          node -e "require('./desktop/scripts/windows-private-pki-sign.cjs').sign({ path: process.env.WCE_WINDOWS_EPHEMERAL_TEST_HOST, hash: 'sha256', name: 'WeChatDataAnalysis CI Python Test Host' }).catch((error) => { console.error(error); process.exit(1); })"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to sign the ephemeral Python test host.'
+          }
+          node .\desktop\scripts\windows-private-pki-sign.cjs verify `
+            --path $pythonPath `
+            --signer-sha256 $env:WCE_WINDOWS_CLIENT_SIGNER_SHA256 `
+            --root-sha256 $env:WCE_WINDOWS_PRIVATE_ROOT_SHA256 `
+            --root-certificate $env:WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The ephemeral Python test host failed private-PKI verification.'
+          }
+          "python-path=$pythonPath" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Run Python tests on Windows
         env:
           PYTHONPATH: src
-        run: uv run pytest -q
+          WCE_PYTHON_TEST_HOST: ${{ steps.python-test-host.outputs.python-path }}
+          WECHAT_TOOL_NATIVE_CORE_LIBRARY: ${{ runner.temp }}/wechatdb-native-windows-x64-production/wechatdb_client.dll
+          WECHAT_TOOL_NATIVE_CORE_BROKER: ${{ runner.temp }}/wechatdb-native-windows-x64-production/wechatdb_broker.exe
+        shell: pwsh
+        run: |
+          & $env:WCE_PYTHON_TEST_HOST -m pytest -q
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Windows Python test suite failed.'
+          }
 
       - name: Set desktop app version
         working-directory: desktop
         run: npm version $env:VERSION --no-git-tag-version --allow-same-version
 
-      - name: Validate TPM-backed Windows client signing identity
+      - name: Validate cloud Windows client signing identity
         working-directory: desktop
         shell: pwsh
         env:
-          WCE_WINDOWS_CLIENT_CERT_THUMBPRINT: ${{ vars.WCE_WINDOWS_CLIENT_CERT_THUMBPRINT }}
+          WCE_WINDOWS_CLIENT_CERT_THUMBPRINT: ${{ steps.cloud-signing.outputs.client-thumbprint }}
           WCE_WINDOWS_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
           WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
-          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ vars.WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH }}
+          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ steps.cloud-signing.outputs.root-certificate-path }}
           WCE_RFC3161_TIMESTAMP_URL: ${{ vars.WCE_RFC3161_TIMESTAMP_URL }}
-          WCE_SIGNTOOL_PATH: ${{ vars.WCE_SIGNTOOL_PATH }}
+          WCE_WINDOWS_SIGNING_ASSURANCE: ${{ vars.WCE_WINDOWS_SIGNING_ASSURANCE }}
         run: |
           node .\scripts\windows-private-pki-sign.cjs preflight
 
       - name: Build Windows installer
         working-directory: desktop
         env:
-          WCE_WINDOWS_CLIENT_CERT_THUMBPRINT: ${{ vars.WCE_WINDOWS_CLIENT_CERT_THUMBPRINT }}
+          WCE_WINDOWS_CLIENT_CERT_THUMBPRINT: ${{ steps.cloud-signing.outputs.client-thumbprint }}
           WCE_WINDOWS_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
           WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
-          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ vars.WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH }}
+          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ steps.cloud-signing.outputs.root-certificate-path }}
           WCE_RFC3161_TIMESTAMP_URL: ${{ vars.WCE_RFC3161_TIMESTAMP_URL }}
-          WCE_SIGNTOOL_PATH: ${{ vars.WCE_SIGNTOOL_PATH }}
+          WCE_WINDOWS_SIGNING_ASSURANCE: ${{ vars.WCE_WINDOWS_SIGNING_ASSURANCE }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run dist:win
 
@@ -405,7 +463,7 @@ jobs:
           WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
           WCE_NATIVE_CORE_BROKER_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.broker-signer-sha256 }}
           WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}
-          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ vars.WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH }}
+          WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH: ${{ steps.cloud-signing.outputs.root-certificate-path }}
         run: |
           function Assert-Authenticode {
             param(
@@ -618,6 +676,13 @@ jobs:
             desktop/dist/latest.yml
             desktop/dist/SHA256SUMS.txt
             desktop/dist/release-provenance.json
+
+      - name: Remove temporary cloud signing identity
+        if: always()
+        shell: powershell
+        run: |
+          .\desktop\scripts\Remove-WindowsCloudSigningIdentity.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'windows-cloud-signing')
 
   build-macos-arm64:
     uses: ./.github/workflows/macos-private-build.yml
