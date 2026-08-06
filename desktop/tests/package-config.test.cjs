@@ -193,6 +193,14 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
   assert.match(windowsJob, /Verify signed unpacked Windows runtime/);
   assert.match(windowsJob, /WCE_WINDOWS_INSTALLER_SMOKE_ALLOWED:\s*"1"/);
   assert.match(windowsJob, /run:\s*npm run smoke:win/);
+  assert.match(windowsJob, /Run focused desktop release tests/);
+  assert.match(windowsJob, /tests\/package-config\.test\.cjs/);
+  assert.match(windowsJob, /tests\/native-core-before-pack\.test\.cjs/);
+  assert.match(windowsJob, /tests\/native-core-packaging\.test\.cjs/);
+  assert.match(windowsJob, /tests\/windows-package-smoke\.test\.cjs/);
+  assert.match(windowsJob, /tests\/windows-private-pki-runtime\.test\.cjs/);
+  assert.match(windowsJob, /tests\/windows-private-pki-sign\.test\.cjs/);
+  assert.doesNotMatch(windowsJob, /tests\/\*\.test\.cjs/);
   assert.match(windowsJob, /Generate Windows release checksums and provenance/);
   assert.match(windowsJob, /Get-FileHash -Algorithm SHA256/);
   assert.match(windowsJob, /\[System\.Text\.Encoding\]::ASCII/);

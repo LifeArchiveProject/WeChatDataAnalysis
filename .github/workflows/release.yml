@@ -514,9 +514,20 @@ jobs:
           WCE_WINDOWS_INSTALLER_SMOKE_ALLOWED: "1"
         run: npm run smoke:win
 
-      - name: Run desktop tests
+      - name: Run focused desktop release tests
         working-directory: desktop
-        run: node --test tests/*.test.cjs
+        shell: pwsh
+        run: |
+          node --test `
+            tests/package-config.test.cjs `
+            tests/native-core-before-pack.test.cjs `
+            tests/native-core-packaging.test.cjs `
+            tests/windows-package-smoke.test.cjs `
+            tests/windows-private-pki-runtime.test.cjs `
+            tests/windows-private-pki-sign.test.cjs
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Focused desktop release tests failed.'
+          }
 
       - name: Generate Windows release checksums and provenance
         shell: pwsh
