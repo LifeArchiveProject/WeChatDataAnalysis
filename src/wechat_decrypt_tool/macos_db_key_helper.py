@@ -430,7 +430,7 @@ def validate_macos_db_key_bundle(
         _exact_keys(manifest, base_manifest_keys, label="构建清单")
         expected_artifact_name = ARTIFACT_NAME
     if (
-        manifest.get("schemaVersion") != 1
+        manifest.get("schemaVersion") != 2
         or manifest.get("artifactType") != "wda-xkey-macos-key-capture"
         or manifest.get("artifactName") != expected_artifact_name
         or manifest.get("distributionMode") != "public"
@@ -438,8 +438,8 @@ def validate_macos_db_key_bundle(
         or manifest.get("architecture") != "universal2"
         or manifest.get("architectures") != ["arm64", "x86_64"]
         or manifest.get("appId") != APP_ID
-        or manifest.get("authorizationMode") != "embedded-private"
-        or manifest.get("onlineRequired") is not True
+        or manifest.get("authorizationMode") != "local-process-policy"
+        or manifest.get("onlineRequired") is not False
     ):
         raise MacosDbKeyIntegrityError(
             "macOS 数据库密钥组件的构建清单与当前应用不匹配。", code="MANIFEST_MISMATCH"
@@ -811,12 +811,6 @@ def _run_capture_helper(
         if return_code == 21:
             raise MacosDbKeyIntegrityError(
                 "macOS 数据库密钥组件调用参数无效。", code="HELPER_ARGUMENT_ERROR"
-            )
-        if return_code == 22:
-            raise MacosDbKeyAuthorizationError(
-                "macOS 数据库密钥在线安全校验未完成，请检查网络或联系开发者。",
-                code="AUTHORIZATION_UNAVAILABLE",
-                retryable=True,
             )
         if return_code == 23:
             raise MacosDbKeyUnavailableError(

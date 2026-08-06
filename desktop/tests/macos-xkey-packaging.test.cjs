@@ -37,7 +37,7 @@ function makeFixture(root, manifestPatch = {}) {
   fs.writeFileSync(noticePath, "Frida test license\n");
   const metadata = (filePath) => ({ sha256: sha256(filePath), size: fs.statSync(filePath).size });
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     artifactType: "wda-xkey-macos-key-capture",
     artifactName: contract.artifactName,
     distributionMode: "public",
@@ -53,8 +53,8 @@ function makeFixture(root, manifestPatch = {}) {
       validitySeconds: BUILD_LIFETIME_SECONDS,
       development: false,
     },
-    authorizationMode: "embedded-private",
-    onlineRequired: true,
+    authorizationMode: "local-process-policy",
+    onlineRequired: false,
     signing: {
       mode: "self-signed",
       helperLeafCertificateSha256: HELPER_SIGNER,
@@ -145,8 +145,8 @@ test("manifest exposes only the exact minimal public metadata", () => {
   try {
     const { manifest } = makeFixture(root);
     assert.deepEqual(macosXkeyManifestErrors(manifest, { nowUnix: ISSUED_AT + 1 }), []);
-    assert.equal(manifest.authorizationMode, "embedded-private");
-    assert.equal(manifest.onlineRequired, true);
+    assert.equal(manifest.authorizationMode, "local-process-policy");
+    assert.equal(manifest.onlineRequired, false);
     assert.ok(macosXkeyManifestErrors({ ...manifest, unexpectedDetails: {} }).length > 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

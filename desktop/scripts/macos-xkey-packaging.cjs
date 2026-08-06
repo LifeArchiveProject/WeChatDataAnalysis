@@ -74,8 +74,8 @@ function macosXkeyManifestErrors(manifest, { nowUnix = Math.floor(Date.now() / 1
     "schemaVersion", "artifactType", "artifactName", "distributionMode", "platform",
     "architecture", "architectures", "appId", "sourceRevision", "build",
     "authorizationMode", "onlineRequired", "signing", "files",
-  ])) errors.push("manifest fields must match schema v1 exactly");
-  if (manifest?.schemaVersion !== 1) errors.push("schemaVersion must equal 1");
+  ])) errors.push("manifest fields must match schema v2 exactly");
+  if (manifest?.schemaVersion !== 2) errors.push("schemaVersion must equal 2");
   if (manifest?.artifactType !== "wda-xkey-macos-key-capture") {
     errors.push("artifactType must equal wda-xkey-macos-key-capture");
   }
@@ -90,14 +90,14 @@ function macosXkeyManifestErrors(manifest, { nowUnix = Math.floor(Date.now() / 1
   if (!REVISION_PATTERN.test(String(manifest?.sourceRevision || ""))) {
     errors.push("sourceRevision must be a lowercase 40-hex revision");
   }
-  if (manifest?.authorizationMode !== "embedded-private") {
-    errors.push("authorizationMode must equal embedded-private");
+  if (manifest?.authorizationMode !== "local-process-policy") {
+    errors.push("authorizationMode must equal local-process-policy");
   }
-  if (manifest?.onlineRequired !== true) errors.push("onlineRequired must equal true");
+  if (manifest?.onlineRequired !== false) errors.push("onlineRequired must equal false");
 
   const build = manifest?.build;
   if (!exactKeys(build, ["id", "issuedAtUnix", "expiresAtUnix", "validitySeconds", "development"])) {
-    errors.push("build fields must match schema v1 exactly");
+    errors.push("build fields must match schema v2 exactly");
   }
   if (!BUILD_ID_PATTERN.test(String(build?.id || ""))) errors.push("build.id is invalid");
   if (

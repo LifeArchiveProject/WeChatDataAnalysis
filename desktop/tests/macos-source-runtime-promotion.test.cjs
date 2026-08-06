@@ -65,13 +65,13 @@ function fixture() {
 
   write(path.join(xkeyDir, "wda_xkey_helper"), "helper", 0o755);
   write(path.join(xkeyDir, "wda_xkey_build.json"), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     artifactName: "wda-xkey-macos-universal-source-public",
     sourceRuntime: true,
     hostVerification: "same-user-direct-parent",
     sourceRevision: REVISION,
-    authorizationMode: "embedded-private",
-    onlineRequired: true,
+    authorizationMode: "local-process-policy",
+    onlineRequired: false,
     build: {
       id: "wda-xkey-20260804-aaaaaaaa",
       issuedAtUnix: ISSUED,
@@ -161,23 +161,23 @@ test("promotion workflow never exposes a private token in a public asset", () =>
   assert.doesNotMatch(workflow, /ghp_[A-Za-z0-9]+/);
 });
 
-test("promotion authorizes and probes the exact XKey before publishing", () => {
+test("promotion verifies the offline XKey without contacting a license service", () => {
   const workflow = fs.readFileSync(
     path.join(__dirname, "..", "..", ".github", "workflows", "macos-source-runtime-promotion.yml"),
     "utf8"
   );
-  const authorize = workflow.indexOf("Authorize verified source-public XKey");
-  const probe = workflow.indexOf("Verify XKey enrollment gate before publication");
+  const verify = workflow.indexOf("Verify source-public XKey producer artifact");
   const publish = workflow.indexOf("Publish public Release assets");
-  assert.ok(authorize > 0);
-  assert.ok(probe > authorize);
-  assert.ok(publish > probe);
-  assert.match(workflow, /secrets\.WCE_MACOS_XKEY_PROMOTION_SSH_KEY/);
-  assert.match(workflow, /StrictHostKeyChecking=yes/);
-  assert.match(workflow, /signerRouteVerified/);
-  assert.match(workflow, /servicesHealthy/);
-  assert.match(workflow, /XKey promotion postconditions are invalid/);
-  assert.match(workflow, /requestedFeatures\": 16/);
-  assert.match(workflow, /WeChatDataAnalysis-KeyBridge\/1/);
-  assert.doesNotMatch(workflow, /root@\$\{?WCE_MACOS_XKEY_PROMOTION_HOST/);
+  assert.ok(verify > 0);
+  assert.ok(publish > verify);
+  for (const retired of [
+    "WCE_MACOS_XKEY_PROMOTION",
+    "WCE_MACOS_XKEY_LICENSE_SERVICE_HOST",
+    "Authorize verified source-public XKey",
+    "Verify XKey enrollment gate before publication",
+    "WeChatDataAnalysis-KeyBridge/1",
+    "/v1/challenges",
+  ]) {
+    assert.equal(workflow.includes(retired), false, `retired online gate remains: ${retired}`);
+  }
 });

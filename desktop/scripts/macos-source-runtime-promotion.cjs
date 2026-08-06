@@ -139,13 +139,13 @@ function validateComponentProfiles({ coreDir, xkeyDir, integrityDir, nowUnix }) 
   const xkeyManifest = readJson(path.join(xkeyDir, "wda_xkey_build.json"), "source-public XKey manifest");
   const xkeyProvenance = readJson(path.join(xkeyDir, "provenance.json"), "XKey provenance");
   if (
-    xkeyManifest.schemaVersion !== 1 ||
+    xkeyManifest.schemaVersion !== 2 ||
     xkeyManifest.artifactName !== "wda-xkey-macos-universal-source-public" ||
     xkeyManifest.sourceRuntime !== true ||
     xkeyManifest.hostVerification !== "same-user-direct-parent" ||
     xkeyManifest.build?.development !== false ||
-    xkeyManifest.authorizationMode !== "embedded-private" ||
-    xkeyManifest.onlineRequired !== true ||
+    xkeyManifest.authorizationMode !== "local-process-policy" ||
+    xkeyManifest.onlineRequired !== false ||
     xkeyProvenance.artifactName !== xkeyManifest.artifactName
   ) {
     throw new Error("XKey artifact is not the exact restricted source-public profile.");

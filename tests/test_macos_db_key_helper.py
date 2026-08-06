@@ -44,7 +44,7 @@ def _write_bundle(
         helper.SOURCE_PUBLIC_ARTIFACT_NAME if source_runtime else helper.ARTIFACT_NAME
     )
     manifest: dict[str, object] = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "artifactType": "wda-xkey-macos-key-capture",
         "artifactName": artifact_name,
         "distributionMode": "public",
@@ -60,8 +60,8 @@ def _write_bundle(
             "validitySeconds": helper.BUILD_LIFETIME_SECONDS,
             "development": False,
         },
-        "authorizationMode": "embedded-private",
-        "onlineRequired": True,
+        "authorizationMode": "local-process-policy",
+        "onlineRequired": False,
         "signing": {
             "mode": "self-signed",
             "helperLeafCertificateSha256": HELPER_SIGNER,
@@ -330,7 +330,7 @@ def test_helper_invocation_exposes_only_pid_timeout_and_one_key_line(tmp_path: P
     [
         (20, helper.MacosDbKeyIntegrityError, "HELPER_INTEGRITY_FAILURE"),
         (21, helper.MacosDbKeyIntegrityError, "HELPER_ARGUMENT_ERROR"),
-        (22, helper.MacosDbKeyAuthorizationError, "AUTHORIZATION_UNAVAILABLE"),
+        (22, helper.MacosDbKeyUnavailableError, "HELPER_EXITED"),
         (23, helper.MacosDbKeyUnavailableError, "CAPTURE_FAILED"),
         (24, helper.MacosDbKeyTimeoutError, "TIMEOUT"),
         (25, helper.MacosDbKeyReloginRequiredError, "WECHAT_RELOGIN_REQUIRED"),

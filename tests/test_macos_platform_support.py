@@ -267,7 +267,7 @@ class TestMacosPlatformSupport(unittest.TestCase):
         secret_detail = "device-secret=/Users/private/do-not-log"
         failure = keys_router.MacosDbKeyError(
             secret_detail,
-            code="AUTHORIZATION_UNAVAILABLE",
+            code="PROCESS_ACCESS_DENIED",
             retryable=True,
         )
         with (
@@ -279,8 +279,8 @@ class TestMacosPlatformSupport(unittest.TestCase):
 
         combined = "\n".join(captured.output)
         self.assertEqual(result["status"], -1)
-        self.assertEqual(result["data"]["error_code"], "AUTHORIZATION_UNAVAILABLE")
-        self.assertIn("error_code=AUTHORIZATION_UNAVAILABLE", combined)
+        self.assertEqual(result["data"]["error_code"], "PROCESS_ACCESS_DENIED")
+        self.assertIn("error_code=PROCESS_ACCESS_DENIED", combined)
         self.assertIn("retryable=True", combined)
         self.assertNotIn(secret_detail, combined)
 
