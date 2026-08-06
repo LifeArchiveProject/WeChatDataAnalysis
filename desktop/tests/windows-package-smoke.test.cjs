@@ -171,9 +171,29 @@ test("Windows installer discovery requires one exact setup executable", (t) => {
   assert.throws(() => resolveInstallerPath("", root), /Expected one Windows installer/);
 });
 
-test("Windows installer smoke is disabled outside a dedicated runner", async () => {
+test("Windows installer smoke is disabled outside a GitHub-hosted Windows runner", async () => {
   await assert.rejects(
     () => smokeInstaller("missing.exe", path.join(os.tmpdir(), "wda-disabled-smoke"), {}),
     /WCE_WINDOWS_INSTALLER_SMOKE_ALLOWED=1/
+  );
+  await assert.rejects(
+    () =>
+      smokeInstaller("missing.exe", path.join(os.tmpdir(), "wda-self-hosted-smoke"), {
+        WCE_WINDOWS_INSTALLER_SMOKE_ALLOWED: "1",
+        GITHUB_ACTIONS: "true",
+        RUNNER_OS: "Windows",
+        RUNNER_ENVIRONMENT: "self-hosted",
+      }),
+    /GitHub-hosted Windows Actions runner/
+  );
+  await assert.rejects(
+    () =>
+      smokeInstaller("missing.exe", path.join(os.tmpdir(), "wda-linux-smoke"), {
+        WCE_WINDOWS_INSTALLER_SMOKE_ALLOWED: "1",
+        GITHUB_ACTIONS: "true",
+        RUNNER_OS: "Linux",
+        RUNNER_ENVIRONMENT: "github-hosted",
+      }),
+    /GitHub-hosted Windows Actions runner/
   );
 });
