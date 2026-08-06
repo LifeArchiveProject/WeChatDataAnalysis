@@ -55,6 +55,7 @@ const {
   configurePrivatePkiUpdateVerification,
   ensurePrivatePkiIssuerCached,
 } = require("./windows-private-pki-runtime.cjs");
+const { ensureMacosPrivatePkiTrust } = require("./macos-private-pki-runtime.cjs");
 
 const DEFAULT_BACKEND_HOST = "127.0.0.1";
 const LAN_BACKEND_HOST = "0.0.0.0";
@@ -2978,6 +2979,15 @@ async function main() {
     });
     logMain(
       `[private-pki] issuer=${evidence.issuerStore} root=${evidence.rootSha256.slice(0, 12)} newlyAdded=${evidence.newlyAdded === true}`
+    );
+  }
+  if (app.isPackaged && process.platform === "darwin") {
+    const evidence = ensureMacosPrivatePkiTrust({
+      executablePath: process.execPath,
+      resourcesPath: process.resourcesPath,
+    });
+    logMain(
+      `[private-pki] macos userTrust=${evidence.alreadyTrusted ? "cached" : "installed"} root=${evidence.rootSha256.slice(0, 12)} verifiedTargets=${evidence.verifiedTargetCount}`
     );
   }
   await refreshRendererCacheForPackagedUi();

@@ -147,6 +147,11 @@ test("macOS private workflow keeps the canonical Producer and WCDA certificate v
   assert.match(workflow, /wechatdb-native-macos-arm64-production/);
   assert.match(workflow, /macos-native-core-packaging\.cjs/);
   assert.match(workflow, /WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256/);
+  assert.match(workflow, /WCE_MACOS_PRIVATE_ROOT_CERT_PATH/);
+  assert.match(workflow, /macos-private-pki-root\.cer/);
+  assert.match(workflow, /consumer-smoke-macos-arm64/);
+  assert.match(workflow, /needs: build-macos-arm64/);
+  assert.match(workflow, /macos-private-pki-runtime\.test\.cjs/);
 });
 
 test("macOS private workflow retries transient Producer artifact downloads from a clean directory", () => {

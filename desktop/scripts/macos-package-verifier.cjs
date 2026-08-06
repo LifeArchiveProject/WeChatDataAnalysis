@@ -147,6 +147,7 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   const xkeyTrustPath = path.join(xkeyRoot, macosXkeyContract.trustFileName);
   const integrity = path.join(nativeRoot, "libwce_integrity.dylib");
   const ffmpeg = path.join(resources, "ffmpeg", "ffmpeg");
+  const privatePkiRoot = path.join(resources, "signing", "macos-private-pki-root.cer");
 
   for (const filePath of [
     electronExecutable,
@@ -170,6 +171,7 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
     path.join(nativeRoot, "macos", "source", "image_scan_entitlements.plist"),
     path.join(resources, "ffmpeg", "LICENSE"),
     path.join(resources, "ffmpeg", "ffmpeg.LICENSE"),
+    privatePkiRoot,
     xkeyManifestPath,
     xkeyTrustPath,
     path.join(xkeyRoot, macosXkeyContract.checksumsFileName),
@@ -191,6 +193,11 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   const packagedMinimum = run("plutil", ["-extract", "LSMinimumSystemVersion", "raw", "-o", "-", path.join(contents, "Info.plist")]).trim();
   assert.equal(packagedVersion, version, `${source} contains app version ${packagedVersion}, expected ${version}`);
   assert.equal(packagedMinimum, packageMinimumMacos, `${source} has unexpected LSMinimumSystemVersion`);
+  assert.equal(
+    crypto.createHash("sha256").update(fs.readFileSync(privatePkiRoot)).digest("hex"),
+    String(packagedNative.manifest.macosPrivateRootSha256 || "").toLowerCase(),
+    "Packaged macOS private-PKI root differs from the native manifest pin"
+  );
 
   requireArchitectures(electronExecutable, ["arm64"]);
   requireArchitectures(backend, ["arm64"]);

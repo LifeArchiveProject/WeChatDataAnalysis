@@ -18,7 +18,13 @@ const LEGACY_WCDB_PATHS = [
 ];
 const PRIVATE_PKI_ROOT_NAME = "windows-private-pki-root.cer";
 const PRIVATE_PKI_POLICY_NAME = "windows-private-pki.ps1";
+const MACOS_PRIVATE_PKI_ROOT_NAME = "macos-private-pki-root.cer";
 const privatePkiPolicySource = path.join(__dirname, PRIVATE_PKI_POLICY_NAME);
+const SIGNING_RESOURCE_NAMES = new Set([
+  PRIVATE_PKI_ROOT_NAME,
+  PRIVATE_PKI_POLICY_NAME,
+  MACOS_PRIVATE_PKI_ROOT_NAME,
+]);
 
 function requireRegularFile(filePath, label) {
   try {
@@ -55,6 +61,18 @@ function requireSha256(value, name) {
   return normalized;
 }
 
+function resetSigningEvidenceDirectory(signingDir) {
+  fs.mkdirSync(signingDir, { recursive: true });
+  for (const entry of fs.readdirSync(signingDir, { withFileTypes: true })) {
+    if (entry.isFile() && SIGNING_RESOURCE_NAMES.has(entry.name)) {
+      fs.rmSync(path.join(signingDir, entry.name), { force: true });
+      continue;
+    }
+    if (entry.isFile() && entry.name === ".gitkeep") continue;
+    throw new Error(`Unexpected file in private-PKI signing resources: ${entry.name}`);
+  }
+}
+
 function stageWindowsPrivatePkiEvidence({
   env = process.env,
   manifest,
@@ -84,17 +102,49 @@ function stageWindowsPrivatePkiEvidence({
   }
   requireRegularFile(privatePkiPolicySource, "private-PKI verification policy");
 
-  fs.mkdirSync(signingDir, { recursive: true });
-  for (const entry of fs.readdirSync(signingDir, { withFileTypes: true })) {
-    if (entry.isFile() && new Set([PRIVATE_PKI_ROOT_NAME, PRIVATE_PKI_POLICY_NAME]).has(entry.name)) {
-      fs.rmSync(path.join(signingDir, entry.name), { force: true });
-      continue;
-    }
-    if (entry.isFile() && entry.name === ".gitkeep") continue;
-    throw new Error(`Unexpected file in private-PKI signing resources: ${entry.name}`);
-  }
+  resetSigningEvidenceDirectory(signingDir);
   fs.copyFileSync(source, path.join(signingDir, PRIVATE_PKI_ROOT_NAME));
   fs.copyFileSync(privatePkiPolicySource, path.join(signingDir, PRIVATE_PKI_POLICY_NAME));
+  return { rootSha256: actualRoot, signingDir };
+}
+
+function stageMacosPrivatePkiEvidence({
+  env = process.env,
+  manifest,
+  signingDir = path.join(desktopRoot, "resources", "signing"),
+} = {}) {
+  if (
+    manifest?.macosSigningMode !== "self-signed" ||
+    manifest?.macosSignerTrustMode !== "private-pki"
+  ) {
+    throw new Error("macOS production packaging requires self-signed private-pki signer trust.");
+  }
+  const manifestRoot = requireSha256(
+    manifest.macosPrivateRootSha256,
+    "manifest macosPrivateRootSha256"
+  );
+  const expectedRoot = requireSha256(
+    env.WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256,
+    "WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256"
+  );
+  if (manifestRoot !== expectedRoot) {
+    throw new Error("Protected macOS private-PKI root pin does not match the native manifest.");
+  }
+  const sourceValue = String(env.WCE_MACOS_PRIVATE_ROOT_CERT_PATH || "").trim();
+  if (!sourceValue) throw new Error("WCE_MACOS_PRIVATE_ROOT_CERT_PATH is required.");
+  const source = path.resolve(sourceValue);
+  requireRegularFile(source, "macOS private-PKI root certificate");
+  const actualRoot = crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(source))
+    .digest("hex")
+    .toUpperCase();
+  if (actualRoot !== expectedRoot) {
+    throw new Error("macOS private-PKI root certificate file does not match the protected root pin.");
+  }
+
+  resetSigningEvidenceDirectory(signingDir);
+  fs.copyFileSync(source, path.join(signingDir, MACOS_PRIVATE_PKI_ROOT_NAME));
   return { rootSha256: actualRoot, signingDir };
 }
 
@@ -138,9 +188,12 @@ async function beforePack(context) {
   const validated = validatePackagedBackend({ platform });
   if (platform === "win32") {
     stageWindowsPrivatePkiEvidence({ manifest: validated.manifest });
+  } else if (platform === "darwin") {
+    stageMacosPrivatePkiEvidence({ manifest: validated.manifest });
   }
 }
 
 exports.default = beforePack;
+exports.stageMacosPrivatePkiEvidence = stageMacosPrivatePkiEvidence;
 exports.stageWindowsPrivatePkiEvidence = stageWindowsPrivatePkiEvidence;
 exports.validatePackagedBackend = validatePackagedBackend;

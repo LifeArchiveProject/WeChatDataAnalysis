@@ -174,7 +174,10 @@ def _new_endpoint() -> str:
 
 
 def _startup_timeout_seconds() -> float:
-    raw = str(os.environ.get(ENV_NATIVE_CORE_STARTUP_TIMEOUT_MS, "5000") or "").strip()
+    default_timeout_ms = "60000" if sys.platform == "darwin" else "5000"
+    raw = str(
+        os.environ.get(ENV_NATIVE_CORE_STARTUP_TIMEOUT_MS, default_timeout_ms) or ""
+    ).strip()
     try:
         milliseconds = int(raw)
     except ValueError as exc:

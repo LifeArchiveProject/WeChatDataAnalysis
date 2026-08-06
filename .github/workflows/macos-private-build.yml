@@ -297,6 +297,7 @@ jobs:
           openssl x509 -inform DER -in "$root_cert" -out "$root_pem"
           actual_root_sha256="$(shasum -a 256 "$root_cert" | awk '{print tolower($1)}')"
           test "$actual_root_sha256" = "$WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256"
+          echo "WCE_MACOS_PRIVATE_ROOT_CERT_PATH=$root_cert" >> "$GITHUB_ENV"
           openssl x509 -in "$p12_chain" -outform DER -out "$RUNNER_TEMP/wda-host-chain.cer"
           cmp "$RUNNER_TEMP/wda-host-chain.cer" "$root_cert"
           openssl verify -CAfile "$root_pem" "$p12_leaf"
@@ -370,6 +371,7 @@ jobs:
           node --test \
             desktop/tests/macos-xkey-packaging.test.cjs \
             desktop/tests/macos-xkey-signing.test.cjs \
+            desktop/tests/macos-private-pki-runtime.test.cjs \
             desktop/tests/macos-native-core-packaging.test.cjs \
             desktop/tests/integrity-native-packaging.test.cjs \
             desktop/tests/native-core-packaging.test.cjs \
@@ -387,13 +389,12 @@ jobs:
           npm version "$PACKAGE_VERSION" --no-git-tag-version --allow-same-version
           npm run dist:mac:arm64:release
 
-      - name: Verify and smoke-test packaged app
+      - name: Verify packaged app and prepare checksums
         working-directory: desktop
         shell: bash
         run: |
           set -euo pipefail
           npm run verify:mac:distribution
-          npm run smoke:mac
           cd dist
           shasum -a 256 -- *.dmg *.zip | LC_ALL=C sort > SHA256SUMS-macos.txt
 
@@ -430,3 +431,64 @@ jobs:
           rm -f "$RUNNER_TEMP/wda-self-signed-root.pem"
           rm -f "$RUNNER_TEMP/wda-host-leaf.pem" "$RUNNER_TEMP/wda-host-leaf.cer"
           rm -f "$RUNNER_TEMP/wda-host-chain.pem" "$RUNNER_TEMP/wda-host-chain.cer"
+
+  consumer-smoke-macos-arm64:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    needs: build-macos-arm64
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact consumer revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download signed macOS package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-macos-arm64
+          path: desktop/dist
+
+      - name: Verify fresh-machine private-PKI bootstrap contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip_path="$(find desktop/dist -maxdepth 1 -type f -name '*.zip' -print -quit)"
+          test -n "$zip_path"
+          extract_root="$RUNNER_TEMP/wda-consumer"
+          rm -rf "$extract_root"
+          mkdir -p "$extract_root"
+          ditto -x -k "$zip_path" "$extract_root"
+          app_path="$(find "$extract_root" -maxdepth 2 -type d -name '*.app' -print -quit)"
+          test -n "$app_path"
+          root_cert="$app_path/Contents/Resources/signing/macos-private-pki-root.cer"
+          manifest="$app_path/Contents/Resources/backend/native/wechatdb_native_build.json"
+          test -f "$root_cert"
+          test -f "$manifest"
+          ROOT_CERT="$root_cert" NATIVE_MANIFEST="$manifest" python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path(os.environ["ROOT_CERT"]).read_bytes()
+          manifest = json.loads(pathlib.Path(os.environ["NATIVE_MANIFEST"]).read_text("utf-8"))
+          assert hashlib.sha256(root).hexdigest() == manifest["macosPrivateRootSha256"].lower()
+          assert manifest["macosSignerTrustMode"] == "private-pki"
+          assert manifest["macosSigningMode"] == "self-signed"
+          PY
+
+          set +e
+          codesign --verify --deep --strict --verbose=2 "$app_path" >"$RUNNER_TEMP/wda-before-trust.log" 2>&1
+          before_status=$?
+          set -e
+          if [[ "$before_status" -ne 0 ]]; then
+            grep -Eiq 'CSSMERR_TP_NOT_TRUSTED|not trusted|unable to build.*chain' \
+              "$RUNNER_TEMP/wda-before-trust.log"
+          fi
+          sudo -n security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$root_cert"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          printf 'WCE_CONSUMER_APP_PATH=%s\n' "$app_path" >> "$GITHUB_ENV"
+
+      - name: Smoke-test package on the fresh consumer runner
+        shell: bash
+        run: node desktop/scripts/smoke-macos-package.cjs "$WCE_CONSUMER_APP_PATH"

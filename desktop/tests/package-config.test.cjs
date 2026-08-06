@@ -72,6 +72,7 @@ test("Windows package uses private-PKI signing while preserving producer signatu
   );
   assert.ok(signingResource);
   assert.deepEqual([...signingResource.filter].sort(), [
+    "macos-private-pki-root.cer",
     "windows-private-pki-root.cer",
     "windows-private-pki.ps1",
   ]);
@@ -334,6 +335,20 @@ test("macOS release exposes a reusable packaged smoke test", () => {
   assert.doesNotMatch(smokeSource, /sidecarProc|sidecarPort|sidecarToken/);
 });
 
+test("packaged macOS startup establishes pinned user trust before launching the backend", () => {
+  const mainSource = fs.readFileSync(path.join(desktopRoot, "src", "main.cjs"), "utf8");
+  const mainStart = mainSource.indexOf("async function main()");
+  const trustCall = mainSource.indexOf(
+    "const evidence = ensureMacosPrivatePkiTrust",
+    mainStart
+  );
+  const backendLaunch = mainSource.indexOf("await ensureMainWindowReady()", mainStart);
+
+  assert.ok(mainStart >= 0);
+  assert.ok(trustCall > mainStart, "macOS private-PKI trust bootstrap is not wired into main startup");
+  assert.ok(backendLaunch > trustCall, "backend can launch before macOS private-PKI trust is ready");
+});
+
 test("macOS native resources expose reproducible build and architecture verification", () => {
   const buildScript = fs.readFileSync(
     path.join(desktopRoot, "scripts", "build-macos-image-helper.cjs"),
@@ -493,6 +508,9 @@ test("macOS archive verification checks ZIP, mounted DMG, signing, and distribut
   assert.match(verifier, /macosXkeyContract\.checksumsFileName/);
   assert.match(verifier, /macosXkeyContract\.provenanceFileName/);
   assert.match(verifier, /macosXkeyContract\.thirdPartyNoticeFileName/);
+  assert.match(verifier, /macos-private-pki-root\.cer/);
+  assert.match(verifier, /macosPrivateRootSha256/);
+  assert.match(smoke, /resolveMacosPrivatePkiRuntime/);
   assert.match(
     verifier,
     /validatePackagedBackend\(\{ backendDir: backendRoot, platform: "darwin" \}\)/

@@ -78,6 +78,7 @@
         "from": "resources/signing",
         "to": "signing",
         "filter": [
+          "macos-private-pki-root.cer",
           "windows-private-pki-root.cer",
           "windows-private-pki.ps1"
         ]

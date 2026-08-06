@@ -7,6 +7,7 @@ const path = require("path");
 
 const { nativeCoreArtifactNames } = require("../scripts/build-backend.cjs");
 const {
+  stageMacosPrivatePkiEvidence,
   stageWindowsPrivatePkiEvidence,
   validatePackagedBackend,
 } = require("../scripts/native-core-before-pack.cjs");
@@ -199,6 +200,62 @@ test("beforePack stages only the pinned public root and verifier", () => {
       "windows-private-pki-root.cer",
       "windows-private-pki.ps1",
     ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("beforePack stages only the pinned macOS public root", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wda-macos-signing-evidence-"));
+  const rootCertificate = path.join(root, "root.cer");
+  const signingDir = path.join(root, "staged");
+  fs.writeFileSync(rootCertificate, "DER macOS public root fixture");
+  const rootPin = crypto.createHash("sha256").update(fs.readFileSync(rootCertificate)).digest("hex");
+  try {
+    const result = stageMacosPrivatePkiEvidence({
+      env: {
+        WCE_MACOS_PRIVATE_ROOT_CERT_PATH: rootCertificate,
+        WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256: rootPin,
+      },
+      manifest: {
+        ...PRODUCTION_MANIFEST,
+        macosSigningMode: "self-signed",
+        macosSignerTrustMode: "private-pki",
+        macosPrivateRootSha256: rootPin,
+      },
+      signingDir,
+    });
+    assert.equal(result.rootSha256, rootPin.toUpperCase());
+    assert.deepEqual(fs.readdirSync(signingDir), ["macos-private-pki-root.cer"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("beforePack removes stale cross-platform signing evidence", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wda-macos-signing-clean-"));
+  const rootCertificate = path.join(root, "root.cer");
+  const signingDir = path.join(root, "staged");
+  fs.mkdirSync(signingDir, { recursive: true });
+  fs.writeFileSync(rootCertificate, "DER macOS public root fixture");
+  fs.writeFileSync(path.join(signingDir, "windows-private-pki-root.cer"), "stale");
+  fs.writeFileSync(path.join(signingDir, "windows-private-pki.ps1"), "stale");
+  const rootPin = crypto.createHash("sha256").update(fs.readFileSync(rootCertificate)).digest("hex");
+  try {
+    stageMacosPrivatePkiEvidence({
+      env: {
+        WCE_MACOS_PRIVATE_ROOT_CERT_PATH: rootCertificate,
+        WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256: rootPin,
+      },
+      manifest: {
+        ...PRODUCTION_MANIFEST,
+        macosSigningMode: "self-signed",
+        macosSignerTrustMode: "private-pki",
+        macosPrivateRootSha256: rootPin,
+      },
+      signingDir,
+    });
+    assert.deepEqual(fs.readdirSync(signingDir), ["macos-private-pki-root.cer"]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
