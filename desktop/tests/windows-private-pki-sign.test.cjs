@@ -148,11 +148,11 @@ test("private-PKI policy completes the untrusted chain without installing trust"
   assert.match(source, /\[string\]\$SigningAssurance\s*=\s*'tpm'/);
   assert.match(source, /Microsoft Platform Crypto Provider/);
   assert.match(source, /Microsoft Software Key Storage Provider/);
-  assert.match(source, /Get-PSDrive -Name Cert/);
-  assert.match(source, /New-PSDrive\s+`\s*-Name Cert\s+`\s*-PSProvider Certificate/);
-  assert.match(source, /Cert:\\CurrentUser\\My/);
+  assert.match(source, /X509Store/);
+  assert.match(source, /StoreName\]::My/);
+  assert.match(source, /StoreName\]::CertificateAuthority/);
+  assert.doesNotMatch(source, /Get-PSProvider|New-PSDrive|Cert:\\/);
   assert.match(source, /keyAssurance\s*=\s*\$signingIdentity\.Assurance/);
-  assert.match(source, /Cert:\\CurrentUser\\CA/);
   assert.ok(source.includes("issuerStore = 'CurrentUser\\CA'"));
   assert.ok(!source.includes("issuerStore = 'CurrentUser\\\\CA'"));
   assert.match(source, /Add-PrivatePkiIssuerCertificate/);
@@ -168,7 +168,7 @@ test("private-PKI policy completes the untrusted chain without installing trust"
   assert.match(source, /\[string\[\]\]\$Arguments\.Clone\(\)/);
   assert.match(source, /copyAttempt\s*=\s*1;\s*\$copyAttempt\s*-le\s*20/);
   assert.match(source, /MaximumAttempts\s*=\s*5/);
-  assert.match(source, /Cert:\\CurrentUser\\Root/);
-  assert.match(source, /Cert:\\CurrentUser\\TrustedPublisher/);
-  assert.doesNotMatch(source, /Import-Certificate[\s\S]{0,160}Cert:\\CurrentUser\\Root/);
+  assert.match(source, /StoreName\]::Root/);
+  assert.match(source, /StoreName\]::TrustedPublisher/);
+  assert.doesNotMatch(source, /Import-Certificate/);
 });

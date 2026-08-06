@@ -23,18 +23,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-if (-not (Get-PSDrive -Name Cert -ErrorAction SilentlyContinue)) {
-    [void](Get-PSProvider -PSProvider Certificate -ErrorAction Stop)
-    New-PSDrive `
-        -Name Cert `
-        -PSProvider Certificate `
-        -Root '\' `
-        -Scope Script | Out-Null
-}
-if (-not (Test-Path -LiteralPath 'Cert:\CurrentUser\My')) {
-    throw 'The Windows certificate provider could not initialize the CurrentUser store.'
-}
-
 if (-not ('WdaPrivatePki.NativeMethods' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -124,6 +112,39 @@ function Get-CertificateSha256 {
     }
 }
 
+function New-CertificateStore {
+    param(
+        [Parameter(Mandatory = $true)]
+        [Security.Cryptography.X509Certificates.StoreName]$Name,
+        [Parameter(Mandatory = $true)]
+        [Security.Cryptography.X509Certificates.StoreLocation]$Location,
+        [Parameter(Mandatory = $true)]
+        [Security.Cryptography.X509Certificates.OpenFlags]$OpenFlags
+    )
+
+    $store = [Security.Cryptography.X509Certificates.X509Store]::new($Name, $Location)
+    try {
+        $store.Open($OpenFlags)
+        return $store
+    } catch {
+        $store.Dispose()
+        throw
+    }
+}
+
+function Find-CertificateByThumbprint {
+    param(
+        [Parameter(Mandatory = $true)]$Store,
+        [Parameter(Mandatory = $true)][string]$Thumbprint
+    )
+
+    return @($Store.Certificates.Find(
+        [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+        $Thumbprint,
+        $false
+    ))
+}
+
 function Format-HResult {
     param([Parameter(Mandatory = $true)][int]$Value)
     $unsigned = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int32]$Value), 0)
@@ -180,17 +201,40 @@ function Get-RootCertificate {
             throw "Private-PKI root certificate lacks keyCertSign usage: $resolved"
         }
     }
-    foreach ($storeLocation in @(
-        'Cert:\CurrentUser\Root',
-        'Cert:\LocalMachine\Root',
-        'Cert:\CurrentUser\TrustedPublisher',
-        'Cert:\LocalMachine\TrustedPublisher'
+    foreach ($storeSpec in @(
+        @{
+            Name = [Security.Cryptography.X509Certificates.StoreName]::Root
+            Location = [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+            Label = 'CurrentUser\Root'
+        },
+        @{
+            Name = [Security.Cryptography.X509Certificates.StoreName]::Root
+            Location = [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
+            Label = 'LocalMachine\Root'
+        },
+        @{
+            Name = [Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher
+            Location = [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+            Label = 'CurrentUser\TrustedPublisher'
+        },
+        @{
+            Name = [Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher
+            Location = [Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
+            Label = 'LocalMachine\TrustedPublisher'
+        }
     )) {
-        $trusted = Get-ChildItem -LiteralPath $storeLocation -ErrorAction SilentlyContinue |
-            Where-Object { (Get-CertificateSha256 $_.RawData) -ceq $actualRootSha256 } |
-            Select-Object -First 1
-        if ($null -ne $trusted) {
-            throw "Private-PKI root must not be installed in a Windows trust store: $storeLocation"
+        $store = New-CertificateStore `
+            $storeSpec.Name $storeSpec.Location `
+            ([Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+        try {
+            $trusted = $store.Certificates | Where-Object {
+                (Get-CertificateSha256 $_.RawData) -ceq $actualRootSha256
+            } | Select-Object -First 1
+            if ($null -ne $trusted) {
+                throw "Private-PKI root must not be installed in a Windows trust store: $($storeSpec.Label)"
+            }
+        } finally {
+            $store.Dispose()
         }
     }
     return [ordered]@{ Certificate = $root; Path = $resolved; Sha256 = $actualRootSha256 }
@@ -199,38 +243,53 @@ function Get-RootCertificate {
 function Add-PrivatePkiIssuerCertificate {
     param([Parameter(Mandatory = $true)]$Root)
 
-    $storePath = "Cert:\CurrentUser\CA\$($Root.Certificate.Thumbprint)"
-    if (Test-Path -LiteralPath $storePath) {
-        $existing = Get-Item -LiteralPath $storePath
-        if ((Get-CertificateSha256 $existing.RawData) -cne $Root.Sha256 -or
-            $existing.HasPrivateKey) {
-            throw 'CurrentUser issuer cache contains a conflicting private-PKI root.'
+    $store = New-CertificateStore `
+        ([Security.Cryptography.X509Certificates.StoreName]::CertificateAuthority) `
+        ([Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser) `
+        ([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    try {
+        $matches = @(Find-CertificateByThumbprint $store $Root.Certificate.Thumbprint)
+        if ($matches.Count -gt 0) {
+            foreach ($existing in $matches) {
+                if ((Get-CertificateSha256 $existing.RawData) -cne $Root.Sha256 -or
+                    $existing.HasPrivateKey) {
+                    throw 'CurrentUser issuer cache contains a conflicting private-PKI root.'
+                }
+            }
+            return $false
         }
-        return $false
+
+        $store.Add($Root.Certificate)
+        $imported = @(Find-CertificateByThumbprint $store $Root.Certificate.Thumbprint)
+        if ($imported.Count -ne 1 -or
+            $imported[0].HasPrivateKey -or
+            (Get-CertificateSha256 $imported[0].RawData) -cne $Root.Sha256) {
+            throw 'Unable to cache the exact public private-PKI issuer certificate.'
+        }
+        return $true
+    } finally {
+        $store.Dispose()
     }
-    $imported = Import-Certificate `
-        -FilePath $Root.Path `
-        -CertStoreLocation 'Cert:\CurrentUser\CA'
-    if ($null -eq $imported -or
-        $imported.Thumbprint -cne $Root.Certificate.Thumbprint -or
-        $imported.HasPrivateKey -or
-        (Get-CertificateSha256 $imported.RawData) -cne $Root.Sha256) {
-        throw 'Unable to cache the exact public private-PKI issuer certificate.'
-    }
-    return $true
 }
 
 function Remove-PrivatePkiIssuerCertificate {
     param([Parameter(Mandatory = $true)]$Root)
 
-    $storePath = "Cert:\CurrentUser\CA\$($Root.Certificate.Thumbprint)"
-    if (Test-Path -LiteralPath $storePath) {
-        $existing = Get-Item -LiteralPath $storePath
-        if ((Get-CertificateSha256 $existing.RawData) -cne $Root.Sha256 -or
-            $existing.HasPrivateKey) {
-            throw 'Refusing to remove a conflicting CurrentUser issuer certificate.'
+    $store = New-CertificateStore `
+        ([Security.Cryptography.X509Certificates.StoreName]::CertificateAuthority) `
+        ([Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser) `
+        ([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    try {
+        $matches = @(Find-CertificateByThumbprint $store $Root.Certificate.Thumbprint)
+        foreach ($existing in $matches) {
+            if ((Get-CertificateSha256 $existing.RawData) -cne $Root.Sha256 -or
+                $existing.HasPrivateKey) {
+                throw 'Refusing to remove a conflicting CurrentUser issuer certificate.'
+            }
+            $store.Remove($existing)
         }
-        Remove-Item -LiteralPath $storePath -Force
+    } finally {
+        $store.Dispose()
     }
 }
 
@@ -281,18 +340,26 @@ function Get-CurrentUserSigningCertificate {
     if ($normalizedThumbprint -notmatch '^[0-9A-F]{40}$') {
         throw 'WCE_WINDOWS_CLIENT_CERT_THUMBPRINT must contain exactly 40 hexadecimal characters.'
     }
-    $certificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$normalizedThumbprint" -ErrorAction Stop
-    if (-not $certificate.HasPrivateKey) {
-        throw 'The CurrentUser code-signing certificate does not have a private key.'
-    }
-    [void](Assert-CodeSigningLeaf $certificate $Root)
-    $now = Get-Date
-    if ($now -lt $certificate.NotBefore -or $now -gt $certificate.NotAfter) {
-        throw 'The CurrentUser code-signing certificate is not currently valid.'
-    }
-
+    $store = New-CertificateStore `
+        ([Security.Cryptography.X509Certificates.StoreName]::My) `
+        ([Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser) `
+        ([Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
     $privateKey = $null
     try {
+        $matches = @(Find-CertificateByThumbprint $store $normalizedThumbprint)
+        if ($matches.Count -ne 1) {
+            throw "Expected exactly one CurrentUser code-signing certificate; found $($matches.Count)."
+        }
+        $certificate = $matches[0]
+        if (-not $certificate.HasPrivateKey) {
+            throw 'The CurrentUser code-signing certificate does not have a private key.'
+        }
+        [void](Assert-CodeSigningLeaf $certificate $Root)
+        $now = Get-Date
+        if ($now -lt $certificate.NotBefore -or $now -gt $certificate.NotAfter) {
+            throw 'The CurrentUser code-signing certificate is not currently valid.'
+        }
+
         $privateKey = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
         if ($null -eq $privateKey) {
             $privateKey = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($certificate)
@@ -322,6 +389,7 @@ function Get-CurrentUserSigningCertificate {
         }
     } finally {
         if ($null -ne $privateKey) { $privateKey.Dispose() }
+        $store.Dispose()
     }
 }
 
