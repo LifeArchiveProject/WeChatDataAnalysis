@@ -335,7 +335,6 @@ async function runPackagedRuntimeSmoke(appPath) {
       executable: [electronExecutable, backend, nativeBroker, imageHelper, xkeyHelper, ffmpeg].includes(filePath),
     });
   }
-  requirePath(path.join(resources, "backend", "THIRD_PARTY_NOTICES.md"));
   requirePath(path.join(nativeRoot, "macos", "WEFLOW_LICENSE.txt"));
   requirePath(path.join(resources, "ffmpeg", "LICENSE"));
   requirePath(path.join(resources, "ffmpeg", "ffmpeg.LICENSE"));

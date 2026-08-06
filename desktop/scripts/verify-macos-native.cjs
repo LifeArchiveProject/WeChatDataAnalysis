@@ -160,7 +160,6 @@ function main() {
     path.join(nativeRoot, "WEFLOW_LICENSE.txt"),
     path.join(nativeRoot, "source", "image_scan_helper.c"),
     path.join(nativeRoot, "source", "image_scan_entitlements.plist"),
-    path.join(repoRoot, "THIRD_PARTY_NOTICES.md"),
     path.join(ffmpegRoot, "LICENSE"),
     path.join(ffmpegRoot, "ffmpeg.LICENSE"),
     path.join(ffmpegRoot, "ffmpeg.README"),

@@ -66,16 +66,6 @@ test("macOS package keeps image scanning resources, removes retired WCDB, and st
   assert.match(buildBackend, /darwin:\s*\["libwechatdb_client\.dylib", "wechatdb_broker", NATIVE_CORE_MANIFEST\]/);
 });
 
-test("macOS image resources retain WeFlow attribution without retired WCDB notices", () => {
-  const notices = fs.readFileSync(path.join(repoRoot, "THIRD_PARTY_NOTICES.md"), "utf8");
-  assert.match(notices, /WeFlow macOS native resources/);
-  assert.match(notices, /native\/macos\/WEFLOW_LICENSE\.txt/);
-  assert.match(notices, /native\/macos\/universal\/libwx_key\.dylib/);
-  assert.match(notices, /native\/macos\/universal\/image_scan_helper/);
-  assert.doesNotMatch(notices, /libwcdb_api\.dylib/);
-  assert.doesNotMatch(notices, /libWCDB\.dylib/);
-});
-
 test("Windows package uses private-PKI signing while preserving producer signatures", () => {
   const signingResource = packageJson.build.extraResources.find(
     (item) => item && item.from === "resources/signing"

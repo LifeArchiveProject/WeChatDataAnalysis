@@ -23,7 +23,6 @@ const nativeDir = path.join(repoRoot, "src", "wechat_decrypt_tool", "native");
 const runtimeNativeDir = path.join(repoRoot, "desktop", "build", "native-runtime");
 const skillDir = path.join(repoRoot, "skills", "wechat-mcp-copilot");
 const projectToml = path.join(repoRoot, "pyproject.toml");
-const thirdPartyNotices = path.join(repoRoot, "THIRD_PARTY_NOTICES.md");
 const macosXkeyContractPath = path.join(
   repoRoot,
   "src",
@@ -572,11 +571,6 @@ function main() {
   if (fs.existsSync(projectToml)) {
     try {
       fs.copyFileSync(projectToml, path.join(distDir, "pyproject.toml"));
-    } catch {}
-  }
-  if (fs.existsSync(thirdPartyNotices)) {
-    try {
-      fs.copyFileSync(thirdPartyNotices, path.join(distDir, "THIRD_PARTY_NOTICES.md"));
     } catch {}
   }
 }

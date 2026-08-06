@@ -165,7 +165,6 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
     });
   }
   for (const filePath of [
-    path.join(resources, "backend", "THIRD_PARTY_NOTICES.md"),
     path.join(nativeRoot, "macos", "WEFLOW_LICENSE.txt"),
     path.join(nativeRoot, "macos", "source", "image_scan_helper.c"),
     path.join(nativeRoot, "macos", "source", "image_scan_entitlements.plist"),

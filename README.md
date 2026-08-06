@@ -241,17 +241,20 @@ npm run dist
 
 输出位置：`desktop/dist/WeChatDataAnalysis Setup <version>.exe`
 
-## macOS 桌面端
+## 打包为 DMG / ZIP（macOS 桌面端）
 
-公开 WCDA 仓库不包含 native-core、数据库密钥组件或导出完整性模块的私有源码和签名私钥。维护者在受保护的生产构建链中生成正式制品，再将仅供公开源码运行所需的受限二进制、公开校验元数据和第三方许可晋升到固定的 WCDA Release。
+本项目提供基于 Electron 的 macOS ARM64 桌面端安装包。
 
-推送 `v*` 标签时，Release workflow 会并行调用受保护的 macOS ARM64 构建，完成签名、分发校验和 smoke test，并把 `.dmg`、`.zip` 及自动更新元数据与 Windows 安装包一并发布。`macos-private-pki-production` Environment 的 deployment branches and tags 必须同时保留 `main` branch 并放行 `v*` tag。维护者也可以手动运行 `.github/workflows/macos-private-build.yml`，只生成 Actions artifact。
+```bash
+# 1) 安装桌面端依赖
+cd desktop
+npm ci
 
-普通用户只需克隆本公开仓库并执行 `cd desktop && npm run dev`。启动器会在产生任何前端、后端或 Electron 子进程前，使用 macOS 内置的 `/usr/bin/curl` 和 `/usr/bin/tar` 下载并验证固定公共运行时；不会调用 `gh`，也不会读取 GitHub 认证信息。源码运行时与打包运行时使用相同的数据库 ABI、查询和导出能力，但宿主边界不同：源码运行时校验同用户直接父进程，打包运行时校验受信任应用签名，二者不能互换以避免打包版安全降级。
+# 2) 打包（会自动：nuxt generate -> 拷贝静态资源 -> PyInstaller 打包后端 -> electron-builder 生成安装包）
+npm run dist:mac
+```
 
-本项目使用自签名私有 PKI 而非 Apple Developer ID，因此首次运行相关组件时可能出现 macOS 来源或权限提示。请确认仓库和 Release 地址均为 `LifeArchiveProject/WeChatDataAnalysis`，再在“系统设置 → 隐私与安全性”中允许；数据库密钥获取仍需要联网，并可能需要为终端或应用授予辅助功能权限。
-
-内置 Mac 原生资源的来源、哈希、修改内容和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+输出位置：`desktop/dist/WeChatDataAnalysis-<version>-mac-arm64.dmg` 和 `desktop/dist/WeChatDataAnalysis-<version>-mac-arm64.zip`
 
 ## 安全说明
 
