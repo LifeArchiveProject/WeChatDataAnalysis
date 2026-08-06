@@ -15,7 +15,7 @@
       <!-- 聊天列表 -->
       <div class="h-full flex flex-col min-h-0">
         <!-- 搜索栏 -->
-        <div class="session-list-search p-3 border-b">
+        <div class="session-list-search p-2.5 border-b">
           <div class="flex items-center gap-2">
             <div ref="searchInputWrapperRef" class="contact-search-wrapper flex-1">
               <svg class="contact-search-icon" fill="none" stroke="currentColor" viewBox="0 0 16 16">
@@ -58,8 +58,8 @@
         <!-- 联系人列表 -->
         <div class="session-list-scroll flex-1 overflow-y-auto min-h-0">
           <div v-if="isLoadingContacts" class="px-3 py-4 h-full overflow-hidden">
-            <div v-for="i in 15" :key="i" class="flex h-[68px] items-center gap-3">
-              <div class="h-11 w-11 shrink-0 rounded-md bg-gray-200 skeleton-pulse"></div>
+            <div v-for="i in 15" :key="i" class="flex h-[56px] items-center gap-2.5">
+              <div class="h-9 w-9 shrink-0 rounded-md bg-gray-200 skeleton-pulse"></div>
               <div class="flex-1 space-y-2">
                 <div class="h-3.5 bg-gray-200 rounded skeleton-pulse" :style="{ width: (60 + (i % 4) * 15) + 'px' }"></div>
                 <div class="h-3 bg-gray-200 rounded skeleton-pulse" :style="{ width: (80 + (i % 3) * 20) + 'px' }"></div>
@@ -72,16 +72,16 @@
           </div>
           <div v-else class="pb-4">
             <div v-for="contact in filteredContacts" :key="contact.id"
-              class="session-list-item flex h-[68px] cursor-pointer items-center px-3 transition-colors duration-150"
+              class="session-list-item flex h-[56px] cursor-pointer items-center px-3 transition-colors duration-150"
               :class="{
                 'session-list-item--top': contact.isTop,
                 'session-list-item--selected': selectedContact?.id === contact.id
               }"
               @click="selectContact(contact)">
-              <div class="flex w-full min-w-0 items-center gap-3">
+              <div class="flex w-full min-w-0 items-center gap-2.5">
                 <!-- 联系人头像 -->
                 <div class="relative flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
-                  <div class="session-list-avatar h-11 w-11 overflow-hidden rounded-md bg-gray-300">
+                  <div class="session-list-avatar h-9 w-9 overflow-hidden rounded-md bg-gray-300">
                     <div v-if="contact.avatar" class="w-full h-full">
                       <img :src="contact.avatar" :alt="contact.name" class="w-full h-full object-cover" loading="lazy" referrerpolicy="no-referrer" @error="onAvatarError($event, contact)">
                     </div>
@@ -99,13 +99,13 @@
                 <!-- 联系人信息 -->
                 <div class="flex-1 min-w-0">
                   <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-                    <h3 class="session-list-item-name min-w-0 truncate text-[15px] leading-5" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</h3>
+                    <h3 class="session-list-item-name min-w-0 truncate text-[14px] leading-5" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</h3>
                     <span
                       class="session-list-item-time max-w-[92px] truncate whitespace-nowrap text-[11px]"
                       :title="contact.lastMessageTime"
                     >{{ formatSessionListTime(contact.lastMessageTime) }}</span>
                   </div>
-                  <p class="session-list-item-preview mt-0.5 truncate text-[13px] leading-5" :class="{ 'privacy-blur': privacyMode }">
+                  <p class="session-list-item-preview mt-0.5 truncate text-[12px] leading-5" :class="{ 'privacy-blur': privacyMode }">
                     <span
                       v-for="(seg, idx) in parseTextWithEmoji(
                         (contact.unreadCount > 0 ? `[${contact.unreadCount > 99 ? '99+' : contact.unreadCount}条] ` : '') +

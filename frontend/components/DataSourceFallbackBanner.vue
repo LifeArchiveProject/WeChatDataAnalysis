@@ -67,13 +67,13 @@ const displayMessage = computed(() => {
   box-shadow: 0 0 0 3px rgba(200, 121, 18, 0.14);
 }
 
-:global(html[data-theme='dark']) .data-source-fallback-banner {
+html[data-theme='dark'] .data-source-fallback-banner {
   border-bottom-color: #654d2e;
   background: #33291d;
   color: #f2d29f;
 }
 
-:global(html[data-theme='dark']) .data-source-fallback-banner__indicator {
+html[data-theme='dark'] .data-source-fallback-banner__indicator {
   background: #e0a24a;
   box-shadow: 0 0 0 3px rgba(224, 162, 74, 0.16);
 }

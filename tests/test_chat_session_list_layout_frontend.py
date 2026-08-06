@@ -12,12 +12,12 @@ def test_session_list_uses_css_pixels_instead_of_dividing_by_dpr():
     panel = read_frontend("components/chat/SessionListPanel.vue")
     styles = read_frontend("assets/css/chat.css")
 
-    assert "width: var(--session-list-width, 300px)" in styles
+    assert "width: var(--session-list-width, 264px)" in styles
     assert "session-list-width, 295px) / var(--dpr)" not in styles
     assert "calc(80px/var(--dpr))" not in panel
     assert "calc(45px/var(--dpr))" not in panel
-    assert 'class="session-list-avatar h-11 w-11' in panel
-    assert 'class="session-list-item flex h-[68px]' in panel
+    assert 'class="session-list-avatar h-9 w-9' in panel
+    assert 'class="session-list-item flex h-[56px]' in panel
 
 
 def test_session_list_width_migrates_to_css_pixels_and_resizes_without_dpr_multiplier():
@@ -28,8 +28,8 @@ def test_session_list_width_migrates_to_css_pixels_and_resizes_without_dpr_multi
     assert "ui.chat.session_list_width_physical" in source
     assert "physicalValue / dpr" in source
     assert "cssV1Value === 320 ? SESSION_LIST_WIDTH_DEFAULT" in source
-    assert "SESSION_LIST_WIDTH_DEFAULT = 300" in source
-    assert "SESSION_LIST_WIDTH_MIN = 260" in source
+    assert "SESSION_LIST_WIDTH_DEFAULT = 264" in source
+    assert "SESSION_LIST_WIDTH_MIN = 220" in source
     assert "(clientX - sessionListResizeStartX) *" not in source
 
 
@@ -50,5 +50,5 @@ def test_chat_message_avatars_use_css_pixels_on_retina_displays():
     edited_preview = read_frontend("components/EditedMessagePreview.vue")
 
     for source in (message_item, edited_preview):
-        assert "message-avatar h-[42px] w-[42px]" in source
-        assert "42px/var(--dpr" not in source
+        assert "message-avatar h-[34px] w-[34px]" in source
+        assert "34px/var(--dpr" not in source

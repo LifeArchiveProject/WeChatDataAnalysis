@@ -625,7 +625,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.favorites-chat { background: var(--chat-main-bg, #ededed); }
+/* --chat-main-bg 从来没有定义过，一直在吃 #ededed 兜底，深色下就是一块死白。
+ * 实际的令牌是 --chat-page-bg（浅色 #ededed / 深色 #191919）。 */
+.favorites-chat { background: var(--chat-page-bg, #ededed); }
 
 .favorites-toolbar {
   position: sticky;

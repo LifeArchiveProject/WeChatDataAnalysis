@@ -1,6 +1,6 @@
 <template>
   <div
-    class="mb-6"
+    class="mb-4"
     :class="[
       (highlightServerIdStr && message.serverIdStr && highlightServerIdStr === message.serverIdStr) ? 'message-locate-highlight' : '',
       (highlightMessageId === message.id) ? 'bg-emerald-100/50 rounded-md px-2 py-1 -mx-2' : ''
@@ -9,14 +9,14 @@
     :data-msg-id="message.id"
     :data-create-time="message.createTime"
   >
-    <div v-if="message.showTimeDivider" class="flex justify-center mb-4">
-      <div class="message-time-divider px-3 py-1 text-xs">
+    <div v-if="message.showTimeDivider" class="flex justify-center mb-3">
+      <div class="message-time-divider px-2.5 py-0.5 text-xs">
         {{ message.timeDivider }}
       </div>
     </div>
 
     <div v-if="message.renderType === 'system'" class="flex justify-center">
-      <div class="message-time-divider px-3 py-1 text-xs">
+      <div class="message-time-divider px-2.5 py-0.5 text-xs">
         {{ message.content }}
       </div>
     </div>
@@ -28,7 +28,7 @@
           @mouseenter="onMessageAvatarMouseEnter(message)"
           @mouseleave="onMessageAvatarMouseLeave"
         >
-          <div class="message-avatar h-[42px] w-[42px] flex-shrink-0 overflow-hidden rounded-md bg-gray-300" :class="[message.isSent ? 'ml-3' : 'mr-3', { 'privacy-blur': privacyMode }]">
+          <div class="message-avatar h-[34px] w-[34px] flex-shrink-0 overflow-hidden rounded-md bg-gray-300" :class="[message.isSent ? 'ml-2.5' : 'mr-2.5', { 'privacy-blur': privacyMode }]">
             <div v-if="message.avatar" class="w-full h-full">
               <img
                 v-chat-lazy-src="message.avatar"
