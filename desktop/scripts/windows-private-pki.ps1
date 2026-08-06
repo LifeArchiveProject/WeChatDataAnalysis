@@ -24,7 +24,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if (-not (Get-PSDrive -Name Cert -ErrorAction SilentlyContinue)) {
-    Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
     [void](Get-PSProvider -PSProvider Certificate -ErrorAction Stop)
     New-PSDrive `
         -Name Cert `

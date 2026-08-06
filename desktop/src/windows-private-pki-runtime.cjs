@@ -5,7 +5,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const POLICY_SHA256 = "FA5C87CC24BF7298D4A2EF41ADCB7BA4540F77AACA9FDBEDC761AE4C05F6686D";
+const POLICY_SHA256 = "926CB9EF5E93352635B12705ECB3EBD910066B6AB07BC9B4DC316C6FB76BB738";
 const SHA256_PATTERN = /^[0-9A-Fa-f]{64}$/;
 
 function sha256File(filePath) {
