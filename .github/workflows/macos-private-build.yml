@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Package version (for example 2.0.1)
+        description: Package version (for example 2.0.2)
         required: true
         type: string
       run_image_scan_diagnostic:
