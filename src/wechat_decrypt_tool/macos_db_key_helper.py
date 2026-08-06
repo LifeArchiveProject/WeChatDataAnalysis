@@ -820,7 +820,7 @@ def _run_capture_helper(
             )
         if return_code == 23:
             raise MacosDbKeyUnavailableError(
-                "当前微信进程已结束，等待重启后的微信进程继续获取。",
+                "macOS 数据库密钥组件未能开始捕获，请更新到最新正式版本后重试。",
                 code="CAPTURE_FAILED",
                 retryable=True,
             )
@@ -828,6 +828,43 @@ def _run_capture_helper(
             raise MacosDbKeyTimeoutError()
         if return_code == 25:
             raise MacosDbKeyReloginRequiredError()
+        if return_code == 26:
+            raise MacosDbKeyUnavailableError(
+                "当前微信进程已结束，等待重启后的微信进程继续获取。",
+                code="PROCESS_EXITED",
+                retryable=True,
+            )
+        if return_code == 27:
+            raise MacosDbKeyAuthorizationError(
+                (
+                    "macOS 已拒绝 WCDA 读取微信进程。请打开“系统设置 → 隐私与安全性 → "
+                    "开发者工具”，允许 WeChatDataAnalysis；随后完全退出并重新打开 WCDA，"
+                    "再点击获取。"
+                ),
+                code="PROCESS_ACCESS_DENIED",
+                retryable=True,
+            )
+        if return_code == 28:
+            raise MacosDbKeyUnavailableError(
+                "当前微信版本暂不支持自动获取数据库密钥，请更新 WCDA；仍失败请联系开发者并附上日志。",
+                code="UNSUPPORTED_WECHAT",
+                retryable=False,
+            )
+        if return_code == 29:
+            raise MacosDbKeyUnavailableError(
+                "macOS 密钥捕获运行时未能启动，请完全退出 WCDA 后重试；仍失败请更新或重新安装。",
+                code="CAPTURE_RUNTIME_UNAVAILABLE",
+                retryable=True,
+            )
+        if return_code == 30:
+            raise MacosDbKeyUnavailableError(
+                (
+                    "macOS 中断了与微信进程的密钥捕获会话。请确认“开发者工具”已允许 "
+                    "WeChatDataAnalysis，完全退出微信和 WCDA 后重试。"
+                ),
+                code="CAPTURE_SESSION_DETACHED",
+                retryable=True,
+            )
         raise MacosDbKeyUnavailableError(
             "macOS 数据库密钥组件意外退出。", code="HELPER_EXITED", retryable=True
         )
@@ -947,13 +984,14 @@ def capture_macos_database_key(
                     exc.code,
                 )
             except MacosDbKeyUnavailableError as exc:
-                if exc.code != "CAPTURE_FAILED":
+                if exc.code != "PROCESS_EXITED":
                     raise
-                # 旧 PID 在切换账号时退出属于正常过渡，不应立即结束 API 请求。
+                # helper 已确认目标 PID 不再存活；切换账号时继续等待新主进程。
                 last_capture_error = exc
                 logger.info(
-                    "[macos-db-key] previous WeChat process exited; waiting for replacement: pid=%s",
+                    "[macos-db-key] confirmed WeChat process exit; waiting for replacement: pid=%s code=%s",
                     pid,
+                    exc.code,
                 )
 
 

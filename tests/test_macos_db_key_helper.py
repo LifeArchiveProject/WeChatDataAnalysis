@@ -334,6 +334,11 @@ def test_helper_invocation_exposes_only_pid_timeout_and_one_key_line(tmp_path: P
         (23, helper.MacosDbKeyUnavailableError, "CAPTURE_FAILED"),
         (24, helper.MacosDbKeyTimeoutError, "TIMEOUT"),
         (25, helper.MacosDbKeyReloginRequiredError, "WECHAT_RELOGIN_REQUIRED"),
+        (26, helper.MacosDbKeyUnavailableError, "PROCESS_EXITED"),
+        (27, helper.MacosDbKeyAuthorizationError, "PROCESS_ACCESS_DENIED"),
+        (28, helper.MacosDbKeyUnavailableError, "UNSUPPORTED_WECHAT"),
+        (29, helper.MacosDbKeyUnavailableError, "CAPTURE_RUNTIME_UNAVAILABLE"),
+        (30, helper.MacosDbKeyUnavailableError, "CAPTURE_SESSION_DETACHED"),
     ],
 )
 def test_helper_exit_codes_are_coarse_and_failure_stdout_must_be_empty(
@@ -360,7 +365,7 @@ def test_helper_rejects_extra_stdout_and_secret_on_stderr(tmp_path: Path):
     assert stderr.value.code == "SECRET_OUTPUT_VIOLATION"
 
 
-def test_capture_tries_next_pid_only_for_capture_failure(tmp_path: Path):
+def test_capture_tries_next_pid_only_after_confirmed_process_exit(tmp_path: Path):
     bundle = _validated_bundle(tmp_path)
     calls: list[int] = []
 
@@ -368,7 +373,7 @@ def test_capture_tries_next_pid_only_for_capture_failure(tmp_path: Path):
         calls.append(pid)
         if pid == 111:
             raise helper.MacosDbKeyUnavailableError(
-                "not this process", code="CAPTURE_FAILED", retryable=True
+                "old process exited", code="PROCESS_EXITED", retryable=True
             )
         return "cd" * 32
 
@@ -401,7 +406,7 @@ def test_capture_follows_wechat_main_process_restart(
         calls.append(pid)
         if pid == 111:
             raise helper.MacosDbKeyUnavailableError(
-                "old process exited", code="CAPTURE_FAILED", retryable=True
+                "old process exited", code="PROCESS_EXITED", retryable=True
             )
         return "ef" * 32
 
@@ -415,6 +420,27 @@ def test_capture_follows_wechat_main_process_restart(
     assert calls == [111, 222]
     assert result["db_key"] == "ef" * 32
     assert result["pid"] == 222
+
+
+def test_capture_does_not_relabel_generic_failure_when_pid_remains(tmp_path: Path):
+    bundle = _validated_bundle(tmp_path)
+    calls: list[int] = []
+
+    def runner(_bundle, *, pid, **_kwargs):
+        calls.append(pid)
+        raise helper.MacosDbKeyUnavailableError(
+            "capture failed", code="CAPTURE_FAILED", retryable=True
+        )
+
+    with pytest.raises(helper.MacosDbKeyUnavailableError) as caught:
+        helper.capture_macos_database_key(
+            bundle=bundle,
+            pid_provider=lambda: (66262,),
+            helper_runner=runner,
+        )
+
+    assert caught.value.code == "CAPTURE_FAILED"
+    assert calls == [66262]
 
 
 def test_capture_waits_for_wechat_to_start(
