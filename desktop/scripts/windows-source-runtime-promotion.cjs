@@ -46,7 +46,8 @@ function readJson(file, label, maximum = 128 * 1024) {
   if (stat.isSymbolicLink() || !stat.isFile() || stat.size <= 0 || stat.size > maximum) {
     throw new Error(`${label} is unsafe, empty, or oversized.`);
   }
-  const value = JSON.parse(fs.readFileSync(file, "utf8"));
+  const raw = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+  const value = JSON.parse(raw);
   if (!value || Array.isArray(value) || typeof value !== "object") {
     throw new Error(`${label} must be a JSON object.`);
   }

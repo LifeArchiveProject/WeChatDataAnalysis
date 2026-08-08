@@ -51,7 +51,7 @@ function fixture() {
     securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
     securityCheckpointCount: 7,
   });
-  write(path.join(coreDir, "provenance.json"), {
+  const provenance = {
     schemaVersion: 1,
     artifactName: "wechatdb-native-windows-x64-source-public",
     source: { repository: "2977094657/WCDB", revision: REVISION },
@@ -63,7 +63,11 @@ function fixture() {
       sourceRuntime: true,
       windowsHostVerification: "same-user-direct-parent",
     },
-  });
+  };
+  write(
+    path.join(coreDir, "provenance.json"),
+    `\uFEFF${JSON.stringify(provenance, null, 2)}\n`
+  );
   return { root, coreDir };
 }
 
