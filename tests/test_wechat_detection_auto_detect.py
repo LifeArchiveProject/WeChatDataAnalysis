@@ -1,3 +1,5 @@
+import asyncio
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -10,6 +12,48 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 class TestWechatDetectionAutoDetect(unittest.TestCase):
+    def test_detection_route_succeeds_when_backend_stdout_uses_cp950(self):
+        from wechat_decrypt_tool import wechat_detection as wd
+        from wechat_decrypt_tool.routers import wechat_detection as detection_router
+
+        with TemporaryDirectory() as td:
+            data_root = Path(td) / "xwechat_files"
+            login_dir = data_root / "all_users" / "login" / "wxid_demo"
+            login_dir.mkdir(parents=True)
+            (login_dir / "key_info.db").write_bytes(b"demo")
+            account_dir = data_root / "wxid_demo_suffix"
+            db_storage = account_dir / "db_storage"
+            db_storage.mkdir(parents=True)
+            (db_storage / "contact.db").write_bytes(b"demo")
+
+            cp950_stdout = io.TextIOWrapper(io.BytesIO(), encoding="cp950", errors="strict")
+            with (
+                patch.object(sys, "stdout", cp950_stdout),
+                patch.object(wd, "get_process_list", return_value=[]),
+            ):
+                result = asyncio.run(detection_router.detect_wechat_detailed(str(data_root)))
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["statistics"]["total_user_accounts"], 1)
+        self.assertEqual(result["data"]["current_account"]["current_account"], "wxid_demo")
+
+    def test_current_account_detection_does_not_write_chinese_debug_text_to_cp950_stdout(self):
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            cp950_stdout = io.TextIOWrapper(io.BytesIO(), encoding="cp950", errors="strict")
+            with (
+                patch.object(sys, "stdout", cp950_stdout),
+                patch.object(
+                    wd,
+                    "parse_global_config",
+                    return_value={"wxid": "wxid_demo", "nickname": "demo", "avatar": None},
+                ),
+            ):
+                result = wd.detect_current_logged_in_account(td)
+
+        self.assertEqual(result["current_account"], "wxid_demo")
+
     def test_macos_process_probe_accepts_wechat_process_name(self):
         from wechat_decrypt_tool import wechat_detection as wd
 
