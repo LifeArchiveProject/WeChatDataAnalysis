@@ -310,6 +310,15 @@ main { position: relative; z-index: 1; }
 }
 .hero__gh i { font-style: normal; color: var(--neon); }
 .hero__gh:hover { color: var(--neon); border-color: var(--neon); }
+.hero__plat {
+  display: flex; align-items: center; gap: 9px; white-space: nowrap;
+  font-size: 10px; letter-spacing: 0.22em; color: var(--ink-faint);
+}
+.hero__plat .hp-ic { width: 11px; height: 11px; flex: none; color: var(--ink-dim); }
+.hero__plat .hp-ic--apple { width: 10px; height: 12px; margin-top: -2px; }
+.hero__plat b { font-weight: 400; color: var(--ink-dim); }
+.hero__plat > i { font-style: normal; color: var(--neon); opacity: 0.55; }
+.hero__plat em { font-style: normal; color: var(--neon); opacity: 0.85; margin-left: 3px; }
 .hero__ticker {
   position: absolute; z-index: 2; left: 0; right: 0; bottom: 0;
   border-top: 1px solid var(--line); padding: 15px 0;
@@ -767,8 +776,9 @@ main { position: relative; z-index: 1; }
 .mac__guards span { display: block; margin-top: 9px; font-size: clamp(11px, 1vw, 12.5px); line-height: 1.65; color: var(--ink-dim); }
 
 .mac__foot { display: flex; align-items: baseline; justify-content: space-between; gap: 30px; flex-wrap: wrap; padding-top: clamp(14px, 2.4vh, 24px); border-top: 1px solid var(--line); }
+.mac__specs { display: flex; flex-direction: column; gap: 7px; }
 .mac__stack { font-size: 11px; letter-spacing: 0.08em; color: var(--ink-dim); display: flex; align-items: baseline; gap: 14px; }
-.mac__stack span { color: var(--neon); letter-spacing: 0.24em; font-size: 9.5px; }
+.mac__stack span { color: var(--neon); letter-spacing: 0.24em; font-size: 9.5px; min-width: 64px; }
 .mac__legal { font-size: 11px; letter-spacing: 0.16em; color: var(--ink-faint); }
 .mac__escapee {
   position: absolute; left: 6%; top: 20%; width: 8px; height: 8px; border-radius: 50%;
@@ -969,6 +979,7 @@ main { position: relative; z-index: 1; }
   .ht-line--2 { text-align: left; font-size: clamp(3rem, 15vw, 6rem); }
   .hero__sub { bottom: 26vh; }
   .hero__cta { left: 20px; right: auto; bottom: 9vh; flex-direction: row; align-items: center; gap: 26px; }
+  .hero__plat { display: none; }
   .deck { grid-template-columns: 1fr; gap: clamp(18px, 3vh, 30px); align-content: center; }
   .deck__num { font-size: clamp(3rem, 12vw, 4.4rem); margin: 12px 0; }
   .deck__desc { display: none; }
