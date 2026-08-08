@@ -116,8 +116,8 @@ function spawnLogged(command, args, options, prefix) {
 }
 
 async function main() {
-  // Resolve the pinned public macOS source runtime before starting any child
-  // process. Packaged apps use their sealed resources and never enter here.
+  // Resolve the pinned public source runtime before starting any child process.
+  // Packaged apps use their sealed resources and never enter here.
   const sourceNativeCore = ensureSourceNativeCore({ env: process.env });
   const frontendHost = String(process.env.NUXT_HOST || "127.0.0.1").trim() || "127.0.0.1";
   const requestedFrontendPort = parsePort(process.env.NUXT_PORT);

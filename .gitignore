@@ -65,6 +65,8 @@ pnpm-lock.yaml
 /desktop/resources/icon.ico
 
 # Native-core developer artifacts are supplied by the producer workflow.
+# Source mode downloads and verifies these native-core files into the per-user
+# runtime cache. Keep them out of the public source tree and local commits.
 /src/wechat_decrypt_tool/native/wechatdb_client.dll
 /src/wechat_decrypt_tool/native/wechatdb_broker.exe
 /src/wechat_decrypt_tool/native/libwechatdb_client.dylib

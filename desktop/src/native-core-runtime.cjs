@@ -169,7 +169,8 @@ function isProductionNativeCoreManifestBase(manifest, options = {}) {
 function hasSourceRuntimeFields(manifest) {
   return (
     Object.prototype.hasOwnProperty.call(manifest || {}, "sourceRuntime") ||
-    Object.prototype.hasOwnProperty.call(manifest || {}, "macosHostVerification")
+    Object.prototype.hasOwnProperty.call(manifest || {}, "macosHostVerification") ||
+    Object.prototype.hasOwnProperty.call(manifest || {}, "windowsHostVerification")
   );
 }
 
@@ -181,11 +182,18 @@ function isProductionNativeCoreManifest(manifest, options = {}) {
 }
 
 function isSourcePublicNativeCoreManifest(manifest, options = {}) {
+  if (
+    !isProductionNativeCoreManifestBase(manifest, options) ||
+    manifest.sourceRuntime !== true
+  ) {
+    return false;
+  }
+  if (manifest.schemaVersion === 3) {
+    return manifest.macosHostVerification === "same-user-direct-parent";
+  }
   return (
-    manifest?.schemaVersion === 3 &&
-    isProductionNativeCoreManifestBase(manifest, options) &&
-    manifest.sourceRuntime === true &&
-    manifest.macosHostVerification === "same-user-direct-parent"
+    manifest.schemaVersion === 2 &&
+    manifest.windowsHostVerification === "same-user-direct-parent"
   );
 }
 
@@ -279,21 +287,23 @@ function resolveNativeCoreRuntimePolicy({
       "Source WeChatDataAnalysis on macOS requires the exact restricted source-public wechatdb native core"
     );
   }
-  if (!isPackaged && platform !== "darwin" && !development) {
-    throw new Error("Source WeChatDataAnalysis requires the exact dev-local wechatdb native core");
+  if (!isPackaged && platform !== "darwin" && !sourcePublic && !development) {
+    throw new Error(
+      "Source WeChatDataAnalysis on Windows requires the exact restricted source-public or dev-local wechatdb native core"
+    );
   }
 
-  const enableDevelopmentOverride = !isPackaged && platform !== "darwin";
+  const enableDevelopmentOverride = !isPackaged && development;
   const reason = isPackaged
     ? "production-artifacts"
-    : platform === "darwin"
+    : sourcePublic
       ? "source-public-artifacts"
       : "source-development-artifacts";
 
   return {
     artifactState: isPackaged
       ? "production"
-      : platform === "darwin"
+      : sourcePublic
         ? "source-public"
         : "development",
     enableDevelopmentOverride,
