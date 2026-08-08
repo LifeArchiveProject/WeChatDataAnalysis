@@ -55,7 +55,7 @@ async def detect_wechat_detailed(data_root_path: Optional[str] = None):
             'statistics': stats,
         }
     except Exception as e:
-        logger.error(f"微信检测失败: {str(e)}")
+        logger.exception("微信检测失败")
         return {
             'status': 'error',
             'error': str(e),
@@ -80,7 +80,7 @@ async def detect_current_account(data_root_path: Optional[str] = None):
             'data': result,
         }
     except Exception as e:
-        logger.error(f"当前账号检测失败: {str(e)}")
+        logger.exception("当前账号检测失败")
         return {
             'status': 'error',
             'error': str(e),
