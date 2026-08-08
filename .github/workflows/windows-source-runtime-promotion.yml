@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   promote:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == format('refs/tags/{0}', inputs.release_tag)
     runs-on: windows-2022
     environment: windows-private-pki-production
     timeout-minutes: 30
@@ -59,7 +59,10 @@ jobs:
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
-          if ($env:WORKFLOW_REF -cne 'refs/heads/main') { throw 'Promotion must run from main.' }
+          $expectedRef = "refs/tags/$env:WCE_SOURCE_RUNTIME_RELEASE_TAG"
+          if ($env:WORKFLOW_REF -cne $expectedRef) {
+            throw 'Promotion must run from its exact immutable source-runtime tag.'
+          }
           if ((git rev-parse HEAD).Trim() -cne $env:WORKFLOW_REVISION) { throw 'Checkout revision mismatch.' }
           if (git status --porcelain=v1 --untracked-files=all) { throw 'Checkout is dirty.' }
           if ($env:WCE_SOURCE_RUNTIME_RELEASE_TAG -cnotmatch '^windows-source-runtime-[A-Za-z0-9._-]{8,96}$') {
@@ -151,7 +154,7 @@ jobs:
             "$(Join-Path $output 'wechatdataanalysis-windows-source-runtime-x64-v1.manifest.json')#Source runtime manifest" `
             "$(Join-Path $output 'SHA256SUMS-windows-source-runtime.txt')#SHA-256 checksums" `
             --repo $env:GITHUB_REPOSITORY `
-            --target $env:GITHUB_SHA `
+            --verify-tag `
             --title "Windows public source runtime $env:WCE_SOURCE_RUNTIME_RELEASE_TAG" `
             --notes 'Restricted compiled runtime for public WCDA source checkouts. Fixed 45-day validity; not a packaged application.' `
             --latest=false

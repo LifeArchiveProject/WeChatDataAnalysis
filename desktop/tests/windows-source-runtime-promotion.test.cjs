@@ -122,5 +122,7 @@ test("Windows promotion workflow verifies Producer output before public no-auth 
   assert.ok(publish > verify);
   assert.ok(publicDownload > publish);
   assert.match(workflow, /WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN/);
+  assert.match(workflow, /refs\/tags\/\$env:WCE_SOURCE_RUNTIME_RELEASE_TAG/);
+  assert.match(workflow, /--verify-tag/);
   assert.doesNotMatch(workflow, /ghp_[A-Za-z0-9]+/);
 });
