@@ -362,10 +362,11 @@ function buildHero() {
   gsap.set(".hero__coord", { opacity: 0, y: -14 });
   gsap.set(".hero__orb", { scale: 0.4, opacity: 0 });
   gsap.set(".hero__gh", { opacity: 0, y: 14 });
+  gsap.set(".hero__plat", { opacity: 0, y: 14 });
   gsap.set(".hero__ticker", { yPercent: 110 });
 
   if (REDUCED) {
-    gsap.set([".nav", ".rail", ".hero__sub", ".hero .ht-mask", ".hero__vert", ".hero__coord", ".hero__orb", ".hero__gh", ".hero__ticker"], { clearProps: "all" });
+    gsap.set([".nav", ".rail", ".hero__sub", ".hero .ht-mask", ".hero__vert", ".hero__coord", ".hero__orb", ".hero__gh", ".hero__plat", ".hero__ticker"], { clearProps: "all" });
     return;
   }
 
@@ -424,6 +425,7 @@ function heroIntro() {
     }, 1.0)
     .to(".hero__orb", { scale: 1, opacity: 1, duration: 1.1, ease: "back.out(1.7)" }, 1.05)
     .to(".hero__gh", { opacity: 1, y: 0, duration: 0.7 }, 1.25)
+    .to(".hero__plat", { opacity: 1, y: 0, duration: 0.7 }, 1.38)
     .to(".hero__ticker", { yPercent: 0, duration: 0.9, ease: "cine" }, 1.15)
 
     // ── 解密序列：密文抖动 → 光刃横扫逐字定格 → 粒子自散乱聚拢
@@ -736,7 +738,7 @@ function buildDecrypt() {
   gsap.set(dbs, { opacity: 0, y: 12 });
 
   const STEPS = [
-    { t: "获取密钥", s: "内存扫描自动定位 64 位数据库密钥", n: "STEP 01 / 03", f: "key_pattern @ WeChat.exe" },
+    { t: "获取密钥", s: "内存扫描自动定位 64 位数据库密钥", n: "STEP 01 / 03", f: "key_pattern @ WeChat.exe / WeChat.app" },
     { t: "解密数据库", s: "SQLCipher 兼容算法逐页解密，生成永久可读的副本", n: "STEP 02 / 03", f: "sqlcipher · page 4096 · aes-256-cbc" },
     { t: "离线浏览", s: "高仿微信界面，无需登录、永久可读。微信可以卸载，记忆不会", n: "STEP 03 / 03", f: "message_0.db — readonly · forever" },
   ];
