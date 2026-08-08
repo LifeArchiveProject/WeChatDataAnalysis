@@ -285,11 +285,13 @@ class TestWCDBRealtimeNativeCoreRequired(unittest.TestCase):
                 patch.object(native_core_broker, "ensure_native_core_broker") as ensure,
                 patch.object(native_core_broker, "stop_native_core_broker") as stop,
             ):
-                selected = native_core_client.configure_native_core_entrypoint()
-
-            self.assertEqual(selected.build_id, "release-2026.07.27")
-            ensure.assert_called_once_with(export_only=True)
-            stop.assert_called_once_with(_force=True)
+                with self.assertRaisesRegex(
+                    NativeCoreProtocolError,
+                    "requires the exact restricted source-public",
+                ):
+                    native_core_client.configure_native_core_entrypoint()
+                ensure.assert_not_called()
+                stop.assert_not_called()
 
     def test_entrypoint_authorization_policy_fails_before_broker_start(self) -> None:
         cases = ((False, {}, "explicit .*ALLOW_DEVELOPMENT_BUILD=1"),)
