@@ -208,6 +208,22 @@ test("Windows source bootstrap rejects an expired pin before network access", ()
     );
   }));
 
+test("tracked Windows source pin selects the exact immutable public Release asset", () => {
+  const trackedPin = JSON.parse(fs.readFileSync(
+    path.join(__dirname, "..", "resources", "native-core-source-windows.json"),
+    "utf8"
+  ));
+  assert.equal(
+    publicReleaseUrl(trackedPin),
+    "https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/download/" +
+      "windows-source-runtime-20260808-988cc791-01b8b62a/" +
+      "wechatdataanalysis-windows-source-runtime-x64-v1.tar.gz"
+  );
+  assert.equal(trackedPin.assetSha256, "d367488969f9ca7c40fdf7e915cc215bccfd90fdd8869c5ecf3cb258e83fe1a9");
+  assert.equal(trackedPin.runtimeManifestSha256, "a409660e6c9b9c5ec5fb72404f06c3591f516cb633544c31e46b9535fe4c5867");
+  assert.equal(trackedPin.expiresAtUnix, 1790051079);
+});
+
 test("generic source bootstrap wires the verified Windows directory without macOS-only variables", () =>
   withTempRoot((root) => {
     const tools = fixtureTools();
