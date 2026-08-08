@@ -199,6 +199,32 @@
     --app-accent: #3eb575;
     --app-accent-hover: #35a86b;
 
+    /* 引导链路等薄荷面板的暗色对应：保留绿调，不塌成中性灰 */
+    --setup-panel: #212722;
+    --setup-panel-hover: #262d28;
+    --setup-inset: #263029;
+    --setup-inset-hover: #2b382f;
+    --setup-neutral: #2b2b2b;
+    --setup-neutral-hover: #333333;
+    --setup-border: #333c36;
+    --setup-border-strong: #3c483f;
+    --setup-text-secondary: #b6bfb9;
+    --setup-text-muted: #8b938d;
+    --setup-accent-text: #4fbf86;
+    --setup-link: #8fa8dc;
+    --setup-danger: #e98b8b;
+    --setup-danger-soft: #c89393;
+    --setup-danger-bg: #37282a;
+    --setup-danger-border: #573c3d;
+    --setup-warn: #d8b675;
+    --setup-warn-bg: #33291d;
+    --setup-warn-border: #4a3c28;
+    --setup-info: #93b4f0;
+    --setup-info-bg: #212a38;
+    --setup-info-border: #33415a;
+    --setup-disabled-bg: #2a2d2b;
+    --setup-disabled-text: #6f7772;
+
     --session-list-bg: #191919;
     --session-list-search-bg: #191919;
     --session-list-border: #2d2d2d;
@@ -1977,784 +2003,154 @@
     color: var(--message-list-status);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) {
+  html[data-theme='dark'] .theme-scope {
     color: var(--app-text-primary);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page
-  ) {
+  html[data-theme='dark'] .theme-page {
     background-color: var(--app-shell-bg);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) .bg-white {
+  html[data-theme='dark'] .theme-scope .bg-white {
     background-color: var(--app-surface-bg);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="bg-white/"] {
+  /* .theme-scope X 是后代选择器选不中自己；根节点自己带 bg-white 时（biz 页）要靠这条 */
+  html[data-theme='dark'] .theme-scope.bg-white {
+    background-color: var(--app-surface-bg);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="bg-white/"] {
     background-color: var(--app-surface-overlay);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) .bg-gray-50,
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="bg-[#f9f9f9]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="bg-[#fafafa]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="bg-[#fcfcfc]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="bg-[#F7F7F7]"] {
+  html[data-theme='dark'] .theme-scope .bg-gray-50,
+  html[data-theme='dark'] .theme-scope [class*="bg-[#f9f9f9]"],
+  html[data-theme='dark'] .theme-scope [class*="bg-[#fafafa]"],
+  html[data-theme='dark'] .theme-scope [class*="bg-[#fcfcfc]"],
+  html[data-theme='dark'] .theme-scope [class*="bg-[#F7F7F7]"] {
     background-color: var(--app-surface-soft);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) .bg-gray-100,
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="bg-[#EDEDED]"] {
+  html[data-theme='dark'] .theme-scope .bg-gray-100,
+  html[data-theme='dark'] .theme-scope [class*="bg-[#EDEDED]"] {
     background-color: var(--app-surface-muted);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) .bg-gray-200 {
+  html[data-theme='dark'] .theme-scope .bg-gray-200 {
     background-color: var(--app-border-soft);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) .bg-gray-300 {
+  html[data-theme='dark'] .theme-scope .bg-gray-300 {
     background-color: #4a4a4a;
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(.border-gray-100, .border-gray-200, .border-gray-300) {
+  html[data-theme='dark'] .theme-scope :is(.border-gray-100, .border-gray-200, .border-gray-300) {
     border-color: var(--app-border);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="border-[#EDEDED]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="border-[#e2e2e2]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="border-[#e7e7e7]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="border-[#eeeeee]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="border-[#ededed]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="border-[#efefef]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="border-[#ececec]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="border-[#F3F3F3]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="border-[#eee]"] {
+  html[data-theme='dark'] .theme-scope [class*="border-[#EDEDED]"],
+  html[data-theme='dark'] .theme-scope [class*="border-[#e2e2e2]"],
+  html[data-theme='dark'] .theme-scope [class*="border-[#e7e7e7]"],
+  html[data-theme='dark'] .theme-scope [class*="border-[#eeeeee]"],
+  html[data-theme='dark'] .theme-scope [class*="border-[#ededed]"],
+  html[data-theme='dark'] .theme-scope [class*="border-[#efefef]"],
+  html[data-theme='dark'] .theme-scope [class*="border-[#ececec]"],
+  html[data-theme='dark'] .theme-scope [class*="border-[#F3F3F3]"],
+  html[data-theme='dark'] .theme-scope [class*="border-[#eee]"] {
     border-color: var(--app-border);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) .divide-y > :not([hidden]) ~ :not([hidden]) {
+  html[data-theme='dark'] .theme-scope .divide-y > :not([hidden]) ~ :not([hidden]) {
     border-color: var(--app-border-soft);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(.text-gray-900, .text-gray-800, .text-gray-700) {
+  html[data-theme='dark'] .theme-scope :is(.text-gray-900, .text-gray-800, .text-gray-700) {
     color: var(--app-text-primary);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(.text-gray-600, .text-gray-500) {
+  html[data-theme='dark'] .theme-scope :is(.text-gray-600, .text-gray-500) {
     color: var(--app-text-secondary);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(.text-gray-400, .text-gray-300) {
+  html[data-theme='dark'] .theme-scope :is(.text-gray-400, .text-gray-300) {
     color: var(--app-text-muted);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#000000e6]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#1f1f1f]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#222]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#111]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#333]"] {
+  html[data-theme='dark'] .theme-scope [class*="text-[#000000e6]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#1f1f1f]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#222]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#111]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#333]"] {
     color: var(--app-text-primary);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#444]"] {
+  html[data-theme='dark'] .theme-scope [class*="text-[#444]"] {
     color: var(--app-text-secondary);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#7F7F7F]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#666]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#777]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#5f5f5f]"] {
+  html[data-theme='dark'] .theme-scope [class*="text-[#7F7F7F]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#666]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#777]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#5f5f5f]"] {
     color: var(--app-text-secondary);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#909090]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#999]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#888]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#8a8a8a]"],
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="text-[#9e9e9e]"] {
+  html[data-theme='dark'] .theme-scope [class*="text-[#909090]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#999]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#888]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#8a8a8a]"],
+  html[data-theme='dark'] .theme-scope [class*="text-[#9e9e9e]"] {
     color: var(--app-text-muted);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(input:not([type='checkbox']):not([type='radio']), textarea, select) {
+  html[data-theme='dark'] .theme-scope :is(input:not([type='checkbox']):not([type='radio']), textarea, select) {
     background-color: var(--app-input-bg);
     border-color: var(--app-input-border);
     color: var(--app-text-primary);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(input:not([type='checkbox']):not([type='radio']), textarea, select)::placeholder {
+  html[data-theme='dark'] .theme-scope :is(input:not([type='checkbox']):not([type='radio']), textarea, select)::placeholder {
     color: var(--app-text-muted);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(code, pre) {
+  html[data-theme='dark'] .theme-scope :is(code, pre) {
     background-color: var(--app-surface-muted);
     color: var(--app-text-primary);
     border-color: var(--app-border);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="hover:bg-gray-50"]:hover,
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="hover:bg-gray-100"]:hover,
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="hover:bg-[#f0f0f0]"]:hover,
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="hover:bg-[#f2f2f2]"]:hover,
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="hover:bg-[#f7f7f7]"]:hover,
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="hover:bg-[#F7F7F7]"]:hover,
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) [class*="hover:bg-[#EFEFEF]"]:hover {
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-gray-50"]:hover,
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-gray-100"]:hover,
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-[#f0f0f0]"]:hover,
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-[#f2f2f2]"]:hover,
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-[#f7f7f7]"]:hover,
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-[#F7F7F7]"]:hover,
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-[#EFEFEF]"]:hover {
     background-color: var(--app-neutral-btn-hover);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) .bg-amber-50 {
+  html[data-theme='dark'] .theme-scope .bg-amber-50 {
     background-color: rgba(242, 170, 0, 0.14);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(.border-amber-200, .border-amber-300) {
+  html[data-theme='dark'] .theme-scope :is(.border-amber-200, .border-amber-300) {
     border-color: rgba(242, 170, 0, 0.28);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(.text-amber-900, .text-amber-800, .text-amber-700) {
+  html[data-theme='dark'] .theme-scope :is(.text-amber-900, .text-amber-800, .text-amber-700) {
     color: #f7d27a;
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) .bg-red-50 {
+  html[data-theme='dark'] .theme-scope .bg-red-50 {
     background-color: rgba(250, 81, 81, 0.14);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(.border-red-100, .border-red-200, .border-red-300) {
+  html[data-theme='dark'] .theme-scope :is(.border-red-100, .border-red-200, .border-red-300) {
     border-color: rgba(250, 81, 81, 0.28);
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) :is(.text-red-700, .text-red-600, .text-red-500) {
+  html[data-theme='dark'] .theme-scope :is(.text-red-700, .text-red-600, .text-red-500) {
     color: #ff8a8a;
   }
 
@@ -2768,18 +2164,7 @@
     color: #ff9b9b;
   }
 
-  html[data-theme='dark'] :is(
-    .landing-page,
-    .decrypt-page,
-    .decrypt-result-page,
-    .detection-result-page,
-    .contacts-page,
-    .sns-page,
-    .edits-page,
-    .settings-dialog-panel,
-    .desktop-update-dialog-panel,
-    .account-info-dialog-panel
-  ) .text-green-600 {
+  html[data-theme='dark'] .theme-scope .text-green-600 {
     color: #7cd8a3;
   }
 
@@ -2981,6 +2366,408 @@
 
   html[data-theme='dark'] .edits-dialog-btn:active {
     background: var(--app-neutral-btn-hover);
+  }
+
+  /* ============================================================
+   * 薄荷面板语言的深色重映射
+   *
+   * 引导链路把颜色写成了字面量 Tailwind 类（bg-[#F7FCF8] 之类），
+   * 这里按语义把它们映射到 --setup-* 深色令牌，模板不用动。
+   *
+   * 两条约定：
+   * 1. 用 [class*="..."] 子串匹配，是为了同时命中 `bg-[#F7FCF8]/86`
+   *    这种带无效透明度后缀的写法（Tailwind 只认 5 的倍数，`/86`
+   *    一条 CSS 都不生成，浅色下这些面板其实是全透明的）。
+   * 2. 基础态一律加 :not([class*=":bg-..."])，把 hover:/focus: 变体
+   *    排除掉，否则只写了 hover 色的元素会一直显示成悬停态。
+   * ============================================================ */
+
+  /* 面板层：淡绿卡片 */
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="bg-[#F7FCF8]"]:not([class*=":bg-[#F7FCF8]"]),
+    [class*="bg-[#F4FAF6]"]:not([class*=":bg-[#F4FAF6]"]),
+    [class*="bg-[#F4FBF6]"]:not([class*=":bg-[#F4FBF6]"]),
+    [class*="bg-[#F7FDF9]"]:not([class*=":bg-[#F7FDF9]"]),
+    [class*="bg-[#F3FFF8]"]:not([class*=":bg-[#F3FFF8]"]),
+    [class*="bg-[#FAFBFA]"]:not([class*=":bg-[#FAFBFA]"]),
+    [class*="bg-[#F7F8F7]"]:not([class*=":bg-[#F7F8F7]"]),
+    [class*="bg-[#f9fafb]"]:not([class*=":bg-[#f9fafb]"])
+  ) {
+    background-color: var(--setup-panel);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="hover:bg-[#F7FDF9]"],
+    [class*="hover:bg-[#F4FBF6]"],
+    [class*="hover:bg-[#F7FCF8]"],
+    [class*="hover:bg-[#fbfdff]"],
+    [class*="hover:bg-[#f3f4f6]"]
+  ):hover {
+    background-color: var(--setup-panel-hover);
+  }
+
+  /* 内嵌层：面板里再嵌一块的深一档绿 */
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="bg-[#EAF8EF]"]:not([class*=":bg-[#EAF8EF]"]),
+    [class*="bg-[#F1FAF4]"]:not([class*=":bg-[#F1FAF4]"]),
+    [class*="bg-[#EFFAF3]"]:not([class*=":bg-[#EFFAF3]"]),
+    [class*="bg-[#E4F3E9]"]:not([class*=":bg-[#E4F3E9]"]),
+    [class*="bg-[#DDF4E7]"]:not([class*=":bg-[#DDF4E7]"]),
+    [class*="bg-[#f0fdf4]"]:not([class*=":bg-[#f0fdf4]"]),
+    [class*="bg-[#f4fbf7]"]:not([class*=":bg-[#f4fbf7]"]),
+    [class*="bg-[#eefbf4]"]:not([class*=":bg-[#eefbf4]"]),
+    [class*="bg-[#ecfff5]"]:not([class*=":bg-[#ecfff5]"]),
+    [class*="bg-[#dceee3]"]:not([class*=":bg-[#dceee3]"])
+  ) {
+    background-color: var(--setup-inset);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="hover:bg-[#EFFAF3]"],
+    [class*="hover:bg-[#F1FAF4]"],
+    [class*="hover:bg-[#EAF8EF]"],
+    [class*="hover:bg-[#f0fdf4]"]
+  ):hover {
+    background-color: var(--setup-inset-hover);
+  }
+
+  /* 中性块：输入框、图标底、代码片段 */
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="bg-[#F5F6F5]"]:not([class*=":bg-[#F5F6F5]"]),
+    [class*="bg-[rgba(17,24,20,0.09)]"]:not([class*=":bg-[rgba(17,24,20,0.09)]"]),
+    [class*="bg-[rgba(17,24,20,0.12)]"]:not([class*=":bg-[rgba(17,24,20,0.12)]"]),
+    [class*="bg-[#C9D2CB]"]:not([class*=":bg-[#C9D2CB]"]),
+    [class*="bg-[#e5e7eb]"]:not([class*=":bg-[#e5e7eb]"]),
+    [class*="bg-[#eef1f6]"]:not([class*=":bg-[#eef1f6]"]),
+    [class*="bg-[#f3f4f6]"]:not([class*=":bg-[#f3f4f6]"])
+  ) {
+    background-color: var(--setup-neutral);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-[#F5F6F5]"]:hover {
+    background-color: var(--setup-neutral-hover);
+  }
+
+  /* 输入框聚焦时浅色下会翻白，深色下翻到输入底色 */
+  html[data-theme='dark'] .theme-scope [class*="focus:bg-white"]:focus {
+    background-color: var(--app-input-bg);
+  }
+
+  /* 描边：常规 */
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="border-[#DDEBE0]"]:not([class*=":border-[#DDEBE0]"]),
+    [class*="border-[#E1EFE5]"]:not([class*=":border-[#E1EFE5]"]),
+    [class*="border-[#DDF4E7]"]:not([class*=":border-[#DDF4E7]"]),
+    [class*="border-[#e5e7eb]"]:not([class*=":border-[#e5e7eb]"]),
+    [class*="border-[rgba(17,24,20,0.07)]"],
+    [class*="border-[rgba(17,24,20,0.08)]"],
+    [class*="border-[rgba(17,24,20,0.09)]"],
+    [class*="border-[rgba(17,24,20,0.11)]"],
+    [class*="border-[rgba(17,24,20,0.12)]"],
+    [class*="border-[rgba(17,24,20,0.14)]"],
+    [class*="border-[rgba(17,24,20,0.18)]"],
+    [class*="border-[#eef2f7]"]:not([class*=":border-[#eef2f7]"]),
+    [class*="hover:border-[#e4e4e4]"]:hover,
+    [class*="divide-[rgba(17,24,20,0.07)]"] > *
+  ) {
+    border-color: var(--setup-border);
+  }
+
+  /* 描边：强调（选中卡片、当前步骤） */
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="border-[#CFEEDB]"]:not([class*=":border-[#CFEEDB]"]),
+    [class*="border-[#AEE6C4]"]:not([class*=":border-[#AEE6C4]"]),
+    [class*="border-[#BFE3CE]"]:not([class*=":border-[#BFE3CE]"]),
+    [class*="border-[#C3E7D2]"]:not([class*=":border-[#C3E7D2]"]),
+    [class*="border-[#BFE6CF]"]:not([class*=":border-[#BFE6CF]"]),
+    [class*="border-[#d8efe2]"]:not([class*=":border-[#d8efe2]"])
+  ) {
+    border-color: var(--setup-border-strong);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="hover:border-[#CFEEDB]"],
+    [class*="hover:border-[#AEE6C4]"],
+    [class*="hover:border-[#86efac]"],
+    [class*="hover:border-[#bbf7d0]"]
+  ):hover {
+    border-color: var(--setup-border-strong);
+  }
+
+  /* 正文 */
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="text-[#000000d9]"],
+    [class*="text-[#111827]"],
+    [class*="text-[#101613]"]
+  ) {
+    color: var(--app-text-primary);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="text-[#5A625D]"],
+    [class*="text-[#3D4541]"],
+    [class*="text-[#5F6F66]"],
+    [class*="text-[#4A4A4A]"],
+    [class*="text-[#6E756F]"],
+    [class*="text-[#6B7280]"],
+    [class*="text-[#6b7280]"],
+    [class*="text-[#4b5563]"],
+    [class*="text-[#5d7a68]"]
+  ) {
+    color: var(--setup-text-secondary);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="text-[#AEB4B0]"],
+    [class*="text-[#9ca3af]"],
+    [class*="text-[#A1A1AA]"],
+    [class*="text-[#00000066]"],
+    [class*="text-[#00000055]"],
+    [class*="text-[#8A918C]"],
+    [class*="text-[#7a7a7a]"]
+  ) {
+    color: var(--setup-text-muted);
+  }
+
+  /* 绿色文字在深色底上要提亮，深绿会糊掉 */
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="text-[#2F6F4A]"],
+    [class*="text-[#0A7A45]"],
+    [class*="text-[#07A34F]"],
+    [class*="text-[#1b6b43]"],
+    [class*="text-[#047857]"],
+    [class*="text-[#07964c]"]
+  ) {
+    color: var(--setup-accent-text);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="text-[#576b95]"] {
+    color: var(--setup-link);
+  }
+
+  /* 危险态 */
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="text-[#D64A4A]"],
+    [class*="text-[#FA5151]"]
+  ) {
+    color: var(--setup-danger);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="text-[#9C5F5F]"],
+    [class*="text-[#B26B6B]"],
+    [class*="text-[#7A4B4B]"]
+  ) {
+    color: var(--setup-danger-soft);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="bg-[#FFF7F7]"]:not([class*=":bg-[#FFF7F7]"]),
+    [class*="bg-[#FDF1F1]"]:not([class*=":bg-[#FDF1F1]"])
+  ) {
+    background-color: var(--setup-danger-bg);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="border-[#F0D7D7]"]:not([class*=":border-[#F0D7D7]"]),
+    [class*="border-[#F4D6D6]"]:not([class*=":border-[#F4D6D6]"]),
+    [class*="border-[#D64A4A]"]:not([class*=":border-[#D64A4A]"]),
+    [class*="border-[#F1E3E3]"]:not([class*=":border-[#F1E3E3]"])
+  ) {
+    border-color: var(--setup-danger-border);
+  }
+
+  /* 警告态 */
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="text-[#8A6A2F]"],
+    [class*="text-[#D9A63C]"]
+  ) {
+    color: var(--setup-warn);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="bg-[#FDF8EC]"]:not([class*=":bg-[#FDF8EC]"]) {
+    background-color: var(--setup-warn-bg);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="border-[#F3E2C0]"]:not([class*=":border-[#F3E2C0]"]) {
+    border-color: var(--setup-warn-border);
+  }
+
+  /* 信息态（少数几处蓝色提示块） */
+  html[data-theme='dark'] .theme-scope [class*="text-[#1d4ed8]"] {
+    color: var(--setup-info);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="bg-[#eff6ff]"]:not([class*=":bg-[#eff6ff]"]) {
+    background-color: var(--setup-info-bg);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="hover:border-[#dbeafe]"]:hover {
+    border-color: var(--setup-info-border);
+  }
+
+  /* 失效态：浅色下是浅灰底 + 浅灰字，深色下不能直接翻白 */
+  html[data-theme='dark'] .theme-scope [class*="disabled:bg-[#F2F3F2]"]:disabled,
+  html[data-theme='dark'] .theme-scope [class*="disabled:bg-[#8FD9AE]"]:disabled {
+    background-color: var(--setup-disabled-bg);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="disabled:text-[#8A918C]"]:disabled {
+    color: var(--setup-disabled-text);
+  }
+
+  /* 正文里的下划线链接 */
+  html[data-theme='dark'] .theme-scope [class*="decoration-[#5F7A69]"] {
+    text-decoration-color: var(--setup-border-strong);
+  }
+
+  /* 服务号列表/正文用到的几组灰阶与彩色标签。
+   * 这些原本是靠 JS 的 isDark 三元切换类名的，但 Vue 不会修正 hydration
+   * 的 class 不一致（服务端不知道 localStorage 里的主题），深色下永远停在
+   * 浅色分支。改成模板只写浅色类、深色由 CSS 兜。 */
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="bg-[#F5F5F5]"]:not([class*=":bg-[#F5F5F5]"]),
+    [class*="bg-[#F2F2F2]"]:not([class*=":bg-[#F2F2F2]"])
+  ) {
+    background-color: var(--app-shell-bg);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="bg-[#E5E5E5]"]:not([class*=":bg-[#E5E5E5]"]) {
+    background-color: var(--app-list-active);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="hover:bg-[#EAEAEA]"],
+    [class*="hover:bg-[#e9f8ef]"]
+  ):hover {
+    background-color: var(--app-list-hover);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="hover:text-[#058f48]"]:hover {
+    color: var(--setup-accent-text);
+  }
+
+  html[data-theme='dark'] .theme-scope .border-gray-50 {
+    border-color: var(--app-border-subtle);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="bg-gray-200/"] {
+    background-color: var(--app-surface-soft);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="bg-[#03C160]/10"] {
+    background-color: rgba(62, 181, 117, 0.18);
+  }
+
+  html[data-theme='dark'] .theme-scope .bg-blue-50 {
+    background-color: rgba(96, 133, 200, 0.2);
+  }
+
+  html[data-theme='dark'] .theme-scope .text-blue-500 {
+    color: #8fa8dc;
+  }
+
+  html[data-theme='dark'] .theme-scope .bg-orange-50 {
+    background-color: rgba(197, 132, 70, 0.2);
+  }
+
+  html[data-theme='dark'] .theme-scope .text-orange-500 {
+    color: #d5a06a;
+  }
+
+  /* 会话列表里的「搜索相关记录」浮层是 Teleport 到 body 的，
+   * 逃出了 .chat-page-shell，所以自己挂 .theme-scope；
+   * 但根节点上 bg-white 和 theme-scope 同级，后代选择器选不中自己，
+   * 面板底色和描边只能在这里单独给。 */
+  html[data-theme='dark'] .general-search-panel {
+    background-color: var(--app-surface-bg);
+    border-color: var(--app-border);
+    box-shadow: 0 18px 45px rgba(0, 0, 0, 0.5);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-white"]:hover {
+    background-color: var(--app-surface-soft);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="bg-[#f1f5f9]"]:not([class*=":bg-[#f1f5f9]"]),
+    [class*="bg-[#e1e1e1]"]:not([class*=":bg-[#e1e1e1]"])
+  ) {
+    background-color: var(--app-surface-soft);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-[#fcfffd]"]:hover {
+    background-color: var(--setup-panel-hover);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="text-[#64748b]"] {
+    color: var(--setup-text-muted);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="text-[#b91c1c]"] {
+    color: var(--setup-danger);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="border-[#f0f2f5]"]:not([class*=":border-[#f0f2f5]"]) {
+    border-color: var(--app-border-subtle);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="ring-[#d9fbe6]"] {
+    --tw-ring-color: var(--setup-border-strong);
+  }
+
+  /* 恢复 theme-scope 层之后，现网模板新增或改写过大小写的色值补遗。
+   * 属性选择器区分大小写，text-[#9CA3AF] 和 text-[#9ca3af] 要各写一条。 */
+  html[data-theme='dark'] .theme-scope [class*="bg-[#EAF4EE]"]:not([class*=":bg-[#EAF4EE]"]) {
+    background-color: var(--setup-inset);
+  }
+
+  html[data-theme='dark'] .theme-scope :is(
+    [class*="hover:bg-[#EAF4EE]"],
+    [class*="hover:bg-[#F0F5F1]"]
+  ):hover {
+    background-color: var(--setup-inset-hover);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="border-[#DCEBE2]"]:not([class*=":border-[#DCEBE2]"]) {
+    border-color: var(--setup-border);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="border-[#C9E2D3]"]:not([class*=":border-[#C9E2D3]"]) {
+    border-color: var(--setup-border-strong);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="text-[#5B6B60]"] {
+    color: var(--setup-text-secondary);
+  }
+
+  html[data-theme='dark'] .theme-scope :is([class*="text-[#7F9585]"], [class*="text-[#9CA3AF]"]) {
+    color: var(--setup-text-muted);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="text-[#078A45]"] {
+    color: var(--setup-accent-text);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="text-[#C83C3C]"] {
+    color: var(--setup-danger);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-[#FFF7F7]"]:hover {
+    background-color: var(--setup-danger-bg);
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="text-[#576B95]"] {
+    color: var(--setup-link);
+  }
+
+  /* decrypt 页的青蓝信息组跟 #10AEEF 强调色同族，比 --setup-info 的蓝更青 */
+  html[data-theme='dark'] .theme-scope [class*="text-[#087FAE]"] {
+    color: #54c1ea;
+  }
+
+  html[data-theme='dark'] .theme-scope [class*="hover:bg-[#EAF8FE]"]:hover {
+    background-color: rgba(16, 174, 239, 0.14);
   }
 }
 

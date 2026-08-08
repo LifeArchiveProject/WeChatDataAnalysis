@@ -130,7 +130,7 @@
     <Teleport to="body">
       <div
         v-if="generalSearchPanelOpen"
-        class="general-search-panel fixed z-[140] overflow-hidden rounded-xl border border-[#e5e7eb] bg-white shadow-[0_18px_45px_rgba(15,23,42,0.16)]"
+        class="general-search-panel theme-scope fixed z-[140] overflow-hidden rounded-xl border border-[#e5e7eb] bg-white shadow-[0_18px_45px_rgba(15,23,42,0.16)]"
         :style="generalSearchPanelStyle"
         @mousedown.prevent
       >

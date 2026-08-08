@@ -1,5 +1,5 @@
 <template>
-  <div class="contacts-page h-screen flex overflow-hidden" style="background-color: var(--app-shell-bg)">
+  <div class="contacts-page theme-scope theme-page h-screen flex overflow-hidden" style="background-color: var(--app-shell-bg)">
     <div class="flex-1 flex flex-col min-h-0" style="background-color: var(--app-shell-bg)">
       <div class="flex-1 min-h-0 overflow-hidden p-4">
         <div class="h-full grid grid-cols-1 lg:grid-cols-[460px_minmax(0,1fr)] gap-4">
@@ -1236,5 +1236,22 @@ onMounted(async () => {
   border-color: #22c55e;
   background: #f0fdf4;
   color: #047857;
+}
+
+/* 深色：选中态保持绿调，但底色要压到面板层，不能留浅绿块 */
+html[data-theme='dark'] .contact-type-filter-card {
+  border-color: var(--app-border);
+}
+
+html[data-theme='dark'] .contact-type-filter-card:hover {
+  border-color: var(--app-border-soft);
+  background: var(--app-list-hover);
+}
+
+html[data-theme='dark'] .contact-type-filter-card.is-active,
+html[data-theme='dark'] .contact-type-filter-card.is-active:hover {
+  border-color: var(--app-accent);
+  background: var(--setup-inset);
+  color: var(--setup-accent-text);
 }
 </style>

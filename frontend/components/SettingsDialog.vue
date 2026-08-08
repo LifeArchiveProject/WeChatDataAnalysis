@@ -257,8 +257,8 @@
               <div class="px-3.5 py-3">
                 <div class="flex items-center justify-between gap-3">
                   <div class="min-w-0 flex-1">
-                    <div class="text-[13px] font-medium text-[#222]">允许手机局域网接入 MCP</div>
-                    <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">开启后后端监听 0.0.0.0，手机可通过接入提示词中的地址接入。</div>
+                    <div class="text-[13px] font-medium text-[#222]">允许局域网接入 MCP</div>
+                    <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">开启后后端监听 0.0.0.0，同一局域网内的其他设备可通过接入提示词中的地址接入。</div>
                     <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090] break-all">当前地址：{{ mcpEndpoint }}</div>
                     <div v-if="mcpLanAccessMessage" class="mt-1 text-[11px] leading-relaxed text-[#1b6b43]">{{ mcpLanAccessMessage }}</div>
                     <ErrorNotice v-if="mcpLanAccessError" :message="mcpLanAccessError" compact manual class="mt-1 text-[11px] leading-relaxed text-red-600" />
@@ -282,7 +282,7 @@
                   <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div class="min-w-0 flex-1">
                       <div class="text-[13px] font-medium text-[#222]">MCP Token</div>
-                      <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">手机端请求 MCP 时使用 Bearer token。</div>
+                      <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">客户端请求 MCP 时使用 Bearer token。</div>
                       <ErrorNotice v-if="mcpTokenError" :message="mcpTokenError" compact manual class="mt-1 text-[11px] leading-relaxed text-red-600" />
                     </div>
                     <div class="flex shrink-0 gap-1.5">
@@ -313,7 +313,7 @@
                   <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div class="min-w-0 flex-1">
                       <div class="text-[13px] font-medium text-[#222]">AI 接入提示词</div>
-                      <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">复制到手机端 AI 的系统提示词或连接说明里。</div>
+                      <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">复制到 AI 客户端的系统提示词或连接说明里。</div>
                     </div>
                     <button
                       type="button"
@@ -332,7 +332,7 @@
                   <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div class="min-w-0 flex-1">
                       <div class="text-[13px] font-medium text-[#222]">Skill Markdown</div>
-                      <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">单独复制到手机端 AI 的 skill 或知识配置。</div>
+                      <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">单独复制到 AI 客户端的 skill 或知识配置。</div>
                       <ErrorNotice v-if="mcpSkillBundleError" :message="mcpSkillBundleError" compact manual class="mt-1 text-[11px] leading-relaxed text-red-600" />
                     </div>
                     <button
@@ -346,6 +346,66 @@
                   </div>
                   <pre class="max-h-[420px] overflow-auto rounded-[6px] bg-[#f7f7f7] px-2.5 py-2 text-[11px] leading-relaxed text-[#333] scrollbar-custom whitespace-pre-wrap">{{ mcpSkillText }}</pre>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <section ref="keysSectionRef">
+            <div class="mb-2.5 flex items-center justify-between gap-3">
+              <div class="text-[12px] font-bold text-[#999] tracking-widest">数据库与密钥</div>
+              <div class="flex items-center gap-1.5">
+                <select
+                  v-if="keyAccountOptions.length > 1"
+                  class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#333] outline-none transition focus:border-[#07b75b] focus:ring-1 focus:ring-[#07b75b]/30"
+                  :value="keysAccount"
+                  :disabled="keysLoading"
+                  @change="onKeysAccountChange"
+                >
+                  <option v-for="acc in keyAccountOptions" :key="acc" :value="acc">{{ acc }}</option>
+                </select>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
+                  :disabled="keysLoading"
+                  @click="refreshSavedKeys"
+                >
+                  {{ keysLoading ? '读取中...' : '刷新' }}
+                </button>
+              </div>
+            </div>
+            <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
+              <div class="px-3.5 py-2.5 text-[11px] leading-relaxed text-[#909090]">
+                这些密钥由本机自动获取，仅保存在本地，用于解密数据库和图片。请妥善保管，不要分享给他人。
+              </div>
+
+              <div v-for="item in keyRows" :key="item.key" class="px-3.5 py-3">
+                <div class="flex flex-col gap-2">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-1.5">
+                        <span class="text-[13px] font-medium text-[#222]">{{ item.label }}</span>
+                        <span
+                          v-if="item.verified"
+                          class="inline-flex items-center rounded-full bg-[#EAF8EF] px-1.5 py-0.5 text-[10px] font-medium text-[#078A45]"
+                        >已校验</span>
+                      </div>
+                      <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">{{ item.hint }}</div>
+                    </div>
+                    <button
+                      type="button"
+                      class="shrink-0 rounded-[6px] border border-[#e2e2e2] bg-white px-2 py-1 text-[12px] text-[#222] transition hover:bg-[#f9f9f9] disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="!item.value"
+                      @click="copyMcpText(item.key, item.value)"
+                    >
+                      {{ mcpCopiedKey === item.key ? '已复制' : '复制' }}
+                    </button>
+                  </div>
+                  <pre class="max-h-[80px] overflow-auto rounded-[6px] bg-[#f7f7f7] px-2.5 py-2 text-[11px] leading-relaxed text-[#333] scrollbar-custom whitespace-pre-wrap break-all">{{ item.value || (keysLoaded ? '未获取到' : '—') }}</pre>
+                </div>
+              </div>
+
+              <div v-if="keysError" class="px-3.5 py-3">
+                <ErrorNotice :message="keysError" compact manual class="text-[11px] text-red-600" />
               </div>
             </div>
           </section>
@@ -460,10 +520,12 @@
 </template>
 
 <script setup>
+import { storeToRefs } from 'pinia'
 import { DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting, writeLocalBoolSetting } from '~/lib/desktop-settings'
 import { readApiBaseOverride, writeApiBaseOverride } from '~/lib/api-settings'
 import { invalidateApiBaseCache } from '~/composables/useApiBase'
 import { reportServerErrorFromError } from '~/lib/server-error-logging'
+import { useChatAccountsStore } from '~/stores/chatAccounts'
 
 const props = defineProps({
   open: {
@@ -481,7 +543,8 @@ const api = useApi()
 
 const settingNavItems = [
   { key: 'desktop', label: '桌面行为', hint: '启动 / 关闭 / 端口' },
-  { key: 'mcp', label: 'MCP 接入', hint: '手机 / Skill / 工具' },
+  { key: 'mcp', label: 'MCP 接入', hint: '局域网 / Skill / 工具' },
+  { key: 'keys', label: '数据库与密钥', hint: '密钥查看 / 复制' },
   { key: 'startup', label: '启动偏好', hint: '默认页面' },
   { key: 'media', label: '聊天与媒体', hint: '原图获取' },
   { key: 'updates', label: '更新', hint: '版本信息 / 检查更新' },
@@ -493,6 +556,7 @@ const contentScrollRef = ref(null)
 const desktopSectionRef = ref(null)
 const desktopLogFileRef = ref(null)
 const mcpSectionRef = ref(null)
+const keysSectionRef = ref(null)
 const startupSectionRef = ref(null)
 const mediaSectionRef = ref(null)
 const updatesSectionRef = ref(null)
@@ -610,6 +674,47 @@ const desktopLogFileText = computed(() => {
   return v || '—'
 })
 
+// 数据库与图片密钥（展示 + 复制）
+const chatAccountsStore = useChatAccountsStore()
+const { accounts: keyAccounts, selectedAccount: keySelectedAccount } = storeToRefs(chatAccountsStore)
+const keysAccount = ref('')
+const keysLoading = ref(false)
+const keysError = ref('')
+const keysLoaded = ref(false)
+const dbKey = ref('')
+const imageXorKey = ref('')
+const imageAesKey = ref('')
+const imageKeyVerified = ref(false)
+
+const keyAccountOptions = computed(() => {
+  const list = Array.isArray(keyAccounts.value) ? keyAccounts.value : []
+  return list.map((v) => String(v || '').trim()).filter(Boolean)
+})
+
+const keyRows = computed(() => [
+  {
+    key: 'db-key',
+    label: '数据库密钥',
+    hint: '解密微信数据库（SQLCipher）用的密钥。',
+    value: dbKey.value,
+    verified: false,
+  },
+  {
+    key: 'image-xor-key',
+    label: '图片 XOR 密钥',
+    hint: '解密 .dat 图片第一层的单字节异或值。',
+    value: imageXorKey.value,
+    verified: false,
+  },
+  {
+    key: 'image-aes-key',
+    label: '图片 AES 密钥',
+    hint: '解密 .dat 图片第二层的 AES 密钥。',
+    value: imageAesKey.value,
+    verified: imageKeyVerified.value && !!imageAesKey.value,
+  },
+])
+
 const mcpLanAccessEnabled = ref(false)
 const mcpLanAccessLoading = ref(false)
 const mcpLanAccessError = ref('')
@@ -722,6 +827,7 @@ const refreshDesktopOutputDirProgress = async () => {
 const sectionElements = computed(() => [
   { key: 'desktop', el: desktopSectionRef.value },
   { key: 'mcp', el: mcpSectionRef.value },
+  { key: 'keys', el: keysSectionRef.value },
   { key: 'startup', el: startupSectionRef.value },
   { key: 'media', el: mediaSectionRef.value },
   { key: 'updates', el: updatesSectionRef.value },
@@ -844,6 +950,35 @@ const copyMcpText = async (key, text) => {
       if (mcpCopiedKey.value === key) mcpCopiedKey.value = ''
     }, 1600)
   } catch {}
+}
+
+const refreshSavedKeys = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  keysLoading.value = true
+  keysError.value = ''
+  try {
+    try {
+      await chatAccountsStore.ensureLoaded?.()
+    } catch {}
+    const account = String(keysAccount.value || keySelectedAccount.value || '').trim()
+    keysAccount.value = account
+    const resp = await api.getSavedKeys(account ? { account } : {})
+    const keys = (resp && resp.keys) || {}
+    dbKey.value = String(keys.db_key || '').trim()
+    imageXorKey.value = String(keys.image_xor_key || '').trim()
+    imageAesKey.value = String(keys.image_aes_key || '').trim()
+    imageKeyVerified.value = keys.image_key_verified === true
+    keysLoaded.value = true
+  } catch (e) {
+    keysError.value = e?.message || '读取密钥失败'
+  } finally {
+    keysLoading.value = false
+  }
+}
+
+const onKeysAccountChange = async (event) => {
+  keysAccount.value = String(event?.target?.value || '').trim()
+  await refreshSavedKeys()
 }
 
 const refreshMcpLanAccess = async () => {
@@ -1350,6 +1485,7 @@ const refreshSettingsDialogData = async () => {
     refreshMcpLanAccess(),
     refreshMcpToken(),
     refreshBackendLogFileInfo(),
+    refreshSavedKeys(),
   ]
 
 

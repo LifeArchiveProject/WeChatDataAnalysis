@@ -1,5 +1,5 @@
 <template>
-  <div class="landing-page relative h-full min-h-0 overflow-auto px-4 py-6 text-[#000000e6] sm:px-6 sm:py-8">
+  <div class="landing-page theme-scope theme-page relative h-full min-h-0 overflow-auto px-4 py-6 text-[#000000e6] sm:px-6 sm:py-8">
     <div class="pointer-events-none absolute inset-0 bg-grid-pattern opacity-5"></div>
     <div class="pointer-events-none absolute left-20 top-20 h-72 w-72 rounded-full bg-[#07C160] opacity-5 blur-3xl"></div>
     <div class="pointer-events-none absolute right-20 top-40 h-96 w-96 rounded-full bg-[#10AEEF] opacity-5 blur-3xl"></div>

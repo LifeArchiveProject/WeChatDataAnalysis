@@ -720,4 +720,14 @@ export default defineComponent({
 .image-group-collapse:disabled {
   cursor: default;
 }
+
+/* 深色：占位块不能是浅灰，否则未加载的图片/视频比正文还亮 */
+html[data-theme='dark'] .wechat-media-placeholder {
+  color: var(--app-text-muted);
+  background: var(--app-surface-soft);
+}
+
+html[data-theme='dark'] .wechat-media-placeholder--emoji {
+  background: rgba(255, 255, 255, 0.08);
+}
 </style>

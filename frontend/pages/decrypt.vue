@@ -1,5 +1,5 @@
 <template>
-  <div class="decrypt-page min-h-screen flex items-center justify-center py-8">
+  <div class="decrypt-page theme-scope theme-page min-h-screen flex items-center justify-center py-8">
     
     <div class="max-w-4xl mx-auto px-6 w-full">
       <!-- 步骤指示器 -->

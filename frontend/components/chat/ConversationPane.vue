@@ -67,15 +67,15 @@
         </div>
       </div>
 
-      <div v-if="searchContext.active" class="px-6 py-2 border-b border-emerald-200 bg-emerald-50 flex items-center gap-3">
-        <div class="text-sm text-emerald-900">
+      <div v-if="searchContext.active" class="chat-context-banner px-6 py-2 border-b border-emerald-200 bg-emerald-50 flex items-center gap-3">
+        <div class="chat-context-banner-title text-sm text-emerald-900">
           {{ searchContextBannerText }}
         </div>
         <div class="ml-auto flex items-center gap-2">
-          <button type="button" class="text-xs px-3 py-1 rounded-md bg-white border border-emerald-200 hover:bg-emerald-100" @click="exitSearchContext">
+          <button type="button" class="chat-context-banner-btn text-xs px-3 py-1 rounded-md bg-white border border-emerald-200 hover:bg-emerald-100" @click="exitSearchContext">
             退出定位
           </button>
-          <button type="button" class="text-xs px-3 py-1 rounded-md bg-white border border-gray-200 hover:bg-gray-50" @click="refreshSelectedMessages">
+          <button type="button" class="chat-context-banner-btn2 text-xs px-3 py-1 rounded-md bg-white border border-gray-200 hover:bg-gray-50" @click="refreshSelectedMessages">
             返回最新
           </button>
         </div>

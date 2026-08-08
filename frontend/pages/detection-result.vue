@@ -1,5 +1,5 @@
 <template>
-  <div class="detection-result-page relative min-h-screen overflow-hidden px-3 py-4 text-[#000000e6] sm:px-5 sm:py-5">
+  <div class="detection-result-page theme-scope theme-page relative min-h-screen overflow-hidden px-3 py-4 text-[#000000e6] sm:px-5 sm:py-5">
     <div class="pointer-events-none absolute inset-0 bg-grid-pattern opacity-5"></div>
     <div class="pointer-events-none absolute left-20 top-20 h-72 w-72 rounded-full bg-[#07C160] opacity-5 blur-3xl"></div>
     <div class="pointer-events-none absolute right-20 top-40 h-96 w-96 rounded-full bg-[#10AEEF] opacity-5 blur-3xl"></div>
@@ -19,7 +19,7 @@
 
         <NuxtLink
           to="/"
-          class="inline-flex shrink-0 items-center rounded-lg border border-[#CFEEDB] bg-[#F7FDF9]/82 px-2.5 py-1.5 text-xs font-medium text-[#07C160] transition hover:border-[#CFEEDB] hover:bg-[#F7FDF9] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20"
+          class="inline-flex shrink-0 items-center rounded-lg border border-[#CFEEDB] bg-[#F7FDF9]/82 px-2.5 py-1.5 text-xs font-medium text-[#07C160] transition hover:bg-[#F7FDF9] focus:outline-none focus:ring-2 focus:ring-[#07C160]/20"
         >
           <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />

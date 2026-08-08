@@ -1,5 +1,5 @@
 <template>
-  <div class="sns-page h-screen flex overflow-hidden" style="background-color: var(--app-shell-bg)">
+  <div class="sns-page theme-scope theme-page h-screen flex overflow-hidden" style="background-color: var(--app-shell-bg)">
     <!-- 左侧朋友圈联系人 -->
     <div class="w-[280px] flex flex-col min-h-0 border-r border-gray-200 bg-[#EDEDED]" style="background-color: var(--app-shell-bg)">
       <div class="p-3">

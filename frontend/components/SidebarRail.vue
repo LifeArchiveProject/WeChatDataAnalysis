@@ -1,6 +1,6 @@
 <template>
   <div
-    class="sidebar-rail border-r flex flex-col"
+    class="sidebar-rail theme-scope border-r flex flex-col"
   >
     <div
       v-if="isMacosDesktop"
@@ -240,7 +240,7 @@
       <!-- Theme -->
       <div
         class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
-        :title="themeStore.isDark ? '切换浅色模式' : '切换深色模式'"
+        :title="themeToggleTitle"
         @click="themeStore.toggle"
       >
         <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
@@ -313,7 +313,7 @@
 
   <div
     v-if="accountDialogOpen"
-    class="account-info-dialog fixed inset-0 z-[130] flex items-center justify-center bg-black/35 px-4"
+    class="account-info-dialog theme-scope fixed inset-0 z-[130] flex items-center justify-center bg-black/35 px-4"
     @click.self="closeAccountDialog"
   >
     <div class="account-info-dialog-panel w-full max-w-[520px] overflow-hidden rounded-[12px] border border-[#e7e7e7] bg-white shadow-2xl">
@@ -471,6 +471,16 @@ const { privacyMode } = storeToRefs(privacyStore)
 
 const themeStore = useThemeStore()
 themeStore.init()
+
+// 主题存在 localStorage 里，服务端渲染时无从得知，而 Vue 不会修正 hydration
+// 的属性不一致 —— 直接绑 isDark 的话，深色下这里会一直挂着「切换深色模式」。
+// 挂载后再给标题，避免服务端先写死一个反的值。
+const themeMounted = ref(false)
+onMounted(() => { themeMounted.value = true })
+const themeToggleTitle = computed(() => {
+  if (!themeMounted.value) return '切换深色/浅色模式'
+  return themeStore.isDark ? '切换浅色模式' : '切换深色模式'
+})
 
 const { open: settingsDialogOpen, openDialog: openSettingsDialog } = useSettingsDialog()
 const { getChatAccountInfo, deleteChatAccount } = useApi()
