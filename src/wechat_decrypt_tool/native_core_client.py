@@ -401,6 +401,7 @@ class NativeCoreBuildManifest:
     macos_broker_signing_identifier: str = ""
     macos_host_signing_identifier: str = ""
     source_runtime: bool = False
+    windows_host_verification: str = ""
     macos_host_verification: str = ""
 
     @property
@@ -828,29 +829,57 @@ def _load_native_core_build_manifest(
         raise NativeCoreProtocolError(
             "wechatdb native schemaVersion 2 must not declare a platform."
         )
-    source_runtime_fields = {
+    source_runtime = False
+    windows_host_verification = ""
+    macos_host_verification = ""
+    windows_source_runtime_fields = {
+        name for name in ("sourceRuntime", "windowsHostVerification") if name in payload
+    }
+    macos_source_runtime_fields = {
         name for name in ("sourceRuntime", "macosHostVerification") if name in payload
     }
-    source_runtime = False
-    macos_host_verification = ""
-    if schema_version == 2 and source_runtime_fields:
-        raise NativeCoreProtocolError(
-            "Windows wechatdb native manifests must not declare macOS source-runtime fields."
-        )
-    if schema_version == 3 and source_runtime_fields:
-        if source_runtime_fields != {"sourceRuntime", "macosHostVerification"}:
+    if schema_version == 2:
+        if "macosHostVerification" in payload:
             raise NativeCoreProtocolError(
-                "macOS source-runtime fields must be declared together."
+                "Windows wechatdb native manifests must not declare macOS source-runtime fields."
             )
-        if (
-            payload.get("sourceRuntime") is not True
-            or payload.get("macosHostVerification") != "same-user-direct-parent"
-        ):
+        if windows_source_runtime_fields:
+            if windows_source_runtime_fields != {
+                "sourceRuntime",
+                "windowsHostVerification",
+            }:
+                raise NativeCoreProtocolError(
+                    "Windows source-runtime fields must be declared together."
+                )
+            if (
+                payload.get("sourceRuntime") is not True
+                or payload.get("windowsHostVerification")
+                != "same-user-direct-parent"
+            ):
+                raise NativeCoreProtocolError(
+                    "Windows source-runtime host verification policy is invalid."
+                )
+            source_runtime = True
+            windows_host_verification = "same-user-direct-parent"
+    if schema_version == 3:
+        if "windowsHostVerification" in payload:
             raise NativeCoreProtocolError(
-                "macOS source-runtime host verification policy is invalid."
+                "macOS wechatdb native manifests must not declare Windows source-runtime fields."
             )
-        source_runtime = True
-        macos_host_verification = "same-user-direct-parent"
+        if macos_source_runtime_fields:
+            if macos_source_runtime_fields != {"sourceRuntime", "macosHostVerification"}:
+                raise NativeCoreProtocolError(
+                    "macOS source-runtime fields must be declared together."
+                )
+            if (
+                payload.get("sourceRuntime") is not True
+                or payload.get("macosHostVerification") != "same-user-direct-parent"
+            ):
+                raise NativeCoreProtocolError(
+                    "macOS source-runtime host verification policy is invalid."
+                )
+            source_runtime = True
+            macos_host_verification = "same-user-direct-parent"
     if (
         not isinstance(build_id, str)
         or not _NATIVE_CORE_BUILD_ID_PATTERN.fullmatch(build_id)
@@ -879,7 +908,7 @@ def _load_native_core_build_manifest(
         or staging_pinned_signer_trust
     ):
         raise NativeCoreProtocolError(
-            "macOS source-runtime manifests must retain the production security profile."
+            "Source-runtime manifests must retain the production security profile."
         )
     macos_client_signer_digest = bytes(32)
     macos_broker_signer_digest = bytes(32)
@@ -1098,6 +1127,7 @@ def _load_native_core_build_manifest(
         macos_broker_signing_identifier=macos_broker_identifier,
         macos_host_signing_identifier=macos_host_identifier,
         source_runtime=source_runtime,
+        windows_host_verification=windows_host_verification,
         macos_host_verification=macos_host_verification,
     )
 
@@ -1144,11 +1174,25 @@ def _required_native_core_build_manifest(
         raise NativeCoreProtocolError(
             "Frozen WeChatDataAnalysis requires a production wechatdb native core."
         )
-    if _is_production_native_core_build_manifest(manifest):
+    if frozen and _is_production_native_core_build_manifest(manifest):
         from .native_core_lease import validate_native_core_authorization_policy
 
         validate_native_core_authorization_policy(manifest)
         return manifest
+    if not frozen and _is_source_public_native_core_build_manifest(manifest):
+        from .native_core_lease import validate_native_core_authorization_policy
+
+        validate_native_core_authorization_policy(manifest)
+        return manifest
+    if frozen and manifest.source_runtime:
+        raise NativeCoreProtocolError(
+            "Frozen WeChatDataAnalysis rejects the source-public Windows native core."
+        )
+    if not frozen and _is_production_native_core_build_manifest(manifest):
+        raise NativeCoreProtocolError(
+            "Source WeChatDataAnalysis on Windows requires the exact restricted "
+            "source-public native core."
+        )
     staging_enabled = (
         not getattr(sys, "frozen", False)
         and str(os.environ.get(ENV_NATIVE_CORE_ALLOW_STAGING_BUILD, "") or "").strip()
@@ -1179,7 +1223,9 @@ def _required_native_core_build_manifest(
     )
 
 
-def _is_production_native_core_build_manifest(manifest: NativeCoreBuildManifest) -> bool:
+def _is_production_native_core_build_manifest_base(
+    manifest: NativeCoreBuildManifest,
+) -> bool:
     return (
         not manifest.development_build
         and manifest.code_signature_enforced
@@ -1195,6 +1241,13 @@ def _is_production_native_core_build_manifest(manifest: NativeCoreBuildManifest)
         == _NATIVE_CORE_OFFLINE_BOOTSTRAP_FEATURES
         and manifest.offline_export_seal_format == "WES2"
         and not _NATIVE_CORE_NON_PRODUCTION_BUILD_ID_PATTERN.search(manifest.build_id)
+    )
+
+
+def _is_production_native_core_build_manifest(manifest: NativeCoreBuildManifest) -> bool:
+    return (
+        _is_production_native_core_build_manifest_base(manifest)
+        and not manifest.source_runtime
     )
 
 
@@ -1231,11 +1284,15 @@ def _is_staging_native_core_build_manifest(manifest: NativeCoreBuildManifest) ->
 def _is_source_public_native_core_build_manifest(
     manifest: NativeCoreBuildManifest,
 ) -> bool:
+    if not manifest.source_runtime or not _is_production_native_core_build_manifest_base(
+        manifest
+    ):
+        return False
+    if manifest.platform == "macos":
+        return manifest.macos_host_verification == "same-user-direct-parent"
     return (
-        manifest.platform == "macos"
-        and manifest.source_runtime
-        and manifest.macos_host_verification == "same-user-direct-parent"
-        and _is_production_native_core_build_manifest(manifest)
+        manifest.platform == "windows"
+        and manifest.windows_host_verification == "same-user-direct-parent"
     )
 
 
@@ -1342,14 +1399,14 @@ def _native_core_broker_name() -> str:
 def _native_core_entrypoint_directory() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent / "native"
-    if sys.platform == "darwin":
+    if sys.platform in {"darwin", "win32"}:
         configured = str(os.environ.get(ENV_SOURCE_NATIVE_CORE_DIR, "") or "").strip()
         if configured:
             try:
                 return Path(configured).expanduser().resolve(strict=False)
             except (OSError, RuntimeError, ValueError) as exc:
                 raise NativeCoreComponentMissingError(
-                    f"Configured macOS source native-core directory is invalid: {configured}"
+                    f"Configured source native-core directory is invalid: {configured}"
                 ) from exc
     return Path(__file__).resolve().parent / "native"
 

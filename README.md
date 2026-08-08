@@ -192,16 +192,18 @@ npm ci
 
 #### 2.5 启动服务
 
-Apple Silicon macOS 建议直接启动完整桌面开发模式：
+Windows x64 与 Apple Silicon macOS 都应直接启动完整桌面开发模式：
 
 ```bash
 cd desktop
 npm run dev
 ```
 
-首次启动会通过公开 HTTPS 从本仓库固定 Release 下载约 42 MiB 的受限 macOS 运行时，并在校验归档 SHA-256、内部文件清单、签名配置和 45 天有效期后缓存到 `~/Library/Caches/WeChatDataAnalysis/source-native-core`。这一过程不需要 GitHub CLI、GitHub 账号、Token 或私有 Producer 仓库权限。固定运行时过期后执行 `git pull` 获取新的公开固定版本；程序不会接受过期、被修改或类型不匹配的缓存。
+首次启动会通过公开 HTTPS 从本仓库固定 Release 下载对应平台的受限原生运行时，并在校验归档 SHA-256、内部文件清单、签名配置和 45 天有效期后缓存。macOS 缓存位于 `~/Library/Caches/WeChatDataAnalysis/source-native-core`，Windows 缓存位于 `%LOCALAPPDATA%\WeChatDataAnalysis\source-native-core`。这一过程不需要 GitHub CLI、GitHub 账号、Token 或私有 Producer 仓库权限。固定运行时过期后执行 `git pull` 获取新的公开固定版本；程序不会接受过期、被修改或平台不匹配的缓存。
 
-Windows 或仅启动 Web 开发环境时，也可以分别启动后端和前端：
+`src/wechat_decrypt_tool/native/` 下的 DLL、Broker 和 manifest 被 `.gitignore` 排除是预期设计：源码启动器会把经过固定摘要验证的制品放入用户缓存并通过受控环境变量交给后端，不会把私有 native-core 源码或可误提交的二进制直接放进 Git 工作树。
+
+仅开发不依赖实时数据库的 Web 界面时，也可以分别启动后端和前端。该方式不会执行桌面端原生运行时预检，不应用于验证实时聊天读取：
 
 #### 启动后端API服务
 ```bash

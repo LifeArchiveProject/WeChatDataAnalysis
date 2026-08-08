@@ -433,6 +433,7 @@ def test_controlled_client_revalidation_does_not_rehash_the_loaded_artifact() ->
                 "_sha256_file",
                 side_effect=AssertionError("artifact was rehashed"),
             ),
+            patch.object(native_core_client.sys, "frozen", True, create=True),
         ):
             client._validate_required_build()
 

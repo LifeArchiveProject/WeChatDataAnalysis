@@ -1955,11 +1955,19 @@ function getNativeCoreRuntimeDir(env = process.env) {
   // fallback for direct `electron .` and dev:static source launches.
   if (
     !app.isPackaged &&
-    process.platform === "darwin" &&
     (
-      !String(env[ENV_SOURCE_NATIVE_CORE_DIR] || "").trim() ||
-      !String(env[ENV_MACOS_DB_KEY_BUNDLE] || "").trim() ||
-      !String(env[ENV_INTEGRITY_NATIVE_PATH] || "").trim()
+      (
+        process.platform === "darwin" &&
+        (
+          !String(env[ENV_SOURCE_NATIVE_CORE_DIR] || "").trim() ||
+          !String(env[ENV_MACOS_DB_KEY_BUNDLE] || "").trim() ||
+          !String(env[ENV_INTEGRITY_NATIVE_PATH] || "").trim()
+        )
+      ) ||
+      (
+        process.platform === "win32" &&
+        !String(env[ENV_SOURCE_NATIVE_CORE_DIR] || "").trim()
+      )
     )
   ) {
     const sourceNativeCore = ensureSourceNativeCore({ env });

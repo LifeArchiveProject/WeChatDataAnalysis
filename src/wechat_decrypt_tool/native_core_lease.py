@@ -27,6 +27,7 @@ from .native_core_client import (
     NativeCoreUnavailableError,
     _is_development_native_core_build_manifest,
     _is_production_native_core_build_manifest,
+    _is_source_public_native_core_build_manifest,
     _is_staging_native_core_build_manifest,
 )
 from .native_core_device_credential import (
@@ -407,7 +408,9 @@ def _production_license_configuration() -> tuple[str, str | None]:
 def validate_native_core_authorization_policy(
     manifest: NativeCoreBuildManifest,
 ) -> str:
-    if _is_production_native_core_build_manifest(manifest):
+    if _is_production_native_core_build_manifest(
+        manifest
+    ) or _is_source_public_native_core_build_manifest(manifest):
         if int(time.time()) >= manifest.build_expires_at_unix:
             raise NativeCorePolicyError(
                 "This native core build has reached its fixed expiration time."
