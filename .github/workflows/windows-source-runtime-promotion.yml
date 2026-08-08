@@ -146,8 +146,12 @@ jobs:
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
-          gh release view $env:WCE_SOURCE_RUNTIME_RELEASE_TAG --repo $env:GITHUB_REPOSITORY 2>$null
-          if ($LASTEXITCODE -eq 0) { throw "Release tag already exists: $env:WCE_SOURCE_RUNTIME_RELEASE_TAG" }
+          $ErrorActionPreference = 'SilentlyContinue'
+          gh release view $env:WCE_SOURCE_RUNTIME_RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+          $ErrorActionPreference = 'Stop'
+          if ($releaseExists) { throw "Release tag already exists: $env:WCE_SOURCE_RUNTIME_RELEASE_TAG" }
           $output = $env:WCE_SOURCE_RUNTIME_OUTPUT_DIR
           gh release create $env:WCE_SOURCE_RUNTIME_RELEASE_TAG `
             "$(Join-Path $output 'wechatdataanalysis-windows-source-runtime-x64-v1.tar.gz')#Windows x64 source runtime" `
