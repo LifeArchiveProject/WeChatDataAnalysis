@@ -533,6 +533,12 @@ onBeforeUnmount(() => {
 .ledger-transfer-status--expired { color: #6b7280; background: #f3f4f6; }
 .ledger-transfer-status--pending { color: #576b95; background: #eef1f6; }
 
+/* 深色：状态标签保留色相，但底色压到暗色，字色提亮 */
+html[data-theme='dark'] .ledger-transfer-status--received { color: #6fc79a; background: #22352b; }
+html[data-theme='dark'] .ledger-transfer-status--returned { color: #d3a578; background: #35291f; }
+html[data-theme='dark'] .ledger-transfer-status--expired { color: #9aa1a8; background: #2c2f33; }
+html[data-theme='dark'] .ledger-transfer-status--pending { color: #9db0d6; background: #262c38; }
+
 .payments-status-filter {
   position: relative;
   display: flex;

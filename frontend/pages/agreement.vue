@@ -1,5 +1,5 @@
 <template>
-  <main class="first-use-page">
+  <main class="first-use-page theme-scope theme-page">
     <section class="first-use-panel" aria-labelledby="first-use-title">
       <header class="first-use-header">
         <div class="first-use-brand">
