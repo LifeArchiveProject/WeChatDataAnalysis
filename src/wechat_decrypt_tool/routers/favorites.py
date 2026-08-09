@@ -12,6 +12,7 @@ from fastapi.responses import Response
 
 from ..chat_accounts import resolve_chat_account_context
 from ..chat_helpers import _resolve_msg_table_name_by_map
+from ..chat_realtime_reader import _account_username_candidates, _sql_literal
 from ..wcdb_realtime import WCDB_REALTIME
 from ..wcdb_realtime import exec_query as _wcdb_exec_query
 from .chat import _append_full_messages_from_rows, _postprocess_full_messages
@@ -447,6 +448,19 @@ def _attach_original_messages(
     except Exception:
         return
 
+    candidates = _account_username_candidates(realtime, ctx.account_dir)
+    my_rowid_select = "NULL AS __my_rowid"
+    if candidates:
+        values = ", ".join(_sql_literal(value) for value in candidates)
+        order = " ".join(
+            f"WHEN user_name = {_sql_literal(value)} THEN {index}" for index, value in enumerate(candidates)
+        )
+        my_rowid_select = (
+            "(SELECT rowid FROM Name2Id "
+            f"WHERE user_name IN ({values}) "
+            f"ORDER BY CASE {order} ELSE {len(candidates)} END LIMIT 1) AS __my_rowid"
+        )
+
     pending = {
         (conversation, server_id)
         for conversation, rows in targets_by_conversation.items()
@@ -482,28 +496,37 @@ def _attach_original_messages(
             table_name = _resolve_msg_table_name_by_map(table_map, conversation)
             if not table_name:
                 continue
-            sql = (
-                f"SELECT * FROM {_quote_identifier(table_name)} WHERE server_id IN ("
-                + ",".join(str(server_id) for server_id in wanted)
-                + ")"
+            id_list = ",".join(str(server_id) for server_id in wanted)
+            table_sql = _quote_identifier(table_name)
+            # Same row shape as the realtime reader: resolve the sender via Name2Id
+            # and carry __my_rowid so the shared converter can tell sent from received.
+            joined_sql = (
+                f"SELECT m.*, n.user_name AS sender_username, {my_rowid_select} "
+                f"FROM {table_sql} m LEFT JOIN Name2Id n ON m.real_sender_id = n.rowid "
+                f"WHERE m.server_id IN ({id_list})"
             )
-            try:
-                with realtime.lock:
-                    rows = _wcdb_exec_query(
-                        realtime.handle,
-                        kind="message",
-                        path=str(db_path),
-                        sql=sql,
-                    )
-            except Exception:
-                continue
+            plain_sql = f"SELECT * FROM {table_sql} WHERE server_id IN ({id_list})"
+            rows = None
+            for candidate_sql in (joined_sql, plain_sql):
+                try:
+                    with realtime.lock:
+                        rows = _wcdb_exec_query(
+                            realtime.handle,
+                            kind="message",
+                            path=str(db_path),
+                            sql=candidate_sql,
+                        )
+                    break
+                except Exception:
+                    rows = None
             if not rows:
                 continue
             normalized_rows = []
             for row in rows:
                 normalized = dict(row)
+                # Only backfill sender_username; injecting a computed_is_send default
+                # would be treated as an authoritative direction by the converter.
                 normalized.setdefault("sender_username", "")
-                normalized.setdefault("computed_is_send", 0)
                 normalized_rows.append(normalized)
 
             merged: list[dict[str, Any]] = []
