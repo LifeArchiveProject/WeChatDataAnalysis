@@ -3,9 +3,9 @@
   "platform": "win32",
   "architecture": "x64",
   "publisherRepository": "LifeArchiveProject/WeChatDataAnalysis",
-  "releaseTag": "windows-source-runtime-20260808-988cc791-01b8b62a",
+  "releaseTag": "windows-source-runtime-20260809-8e355001-71122b5b",
   "assetName": "wechatdataanalysis-windows-source-runtime-x64-v1.tar.gz",
-  "assetSha256": "d367488969f9ca7c40fdf7e915cc215bccfd90fdd8869c5ecf3cb258e83fe1a9",
-  "runtimeManifestSha256": "a409660e6c9b9c5ec5fb72404f06c3591f516cb633544c31e46b9535fe4c5867",
-  "expiresAtUnix": 1790051079
+  "assetSha256": "aa041a31015ab243179c56343e67c4250011193663d9b2a5497c07771140e315",
+  "runtimeManifestSha256": "50e35244f9ffb75f03e2dbff69c77bd1f85886b7a9ddb24c3539020646461137",
+  "expiresAtUnix": 1790145553
 }

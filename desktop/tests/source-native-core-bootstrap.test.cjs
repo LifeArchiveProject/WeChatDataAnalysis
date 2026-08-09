@@ -28,11 +28,11 @@ const TRACKED_PIN = Object.freeze({
   platform: "darwin",
   architecture: "arm64",
   publisherRepository: "LifeArchiveProject/WeChatDataAnalysis",
-  releaseTag: "macos-source-runtime-20260806-85320d56-d5c9a29d",
+  releaseTag: "macos-source-runtime-20260809-71122b5b-8e355001",
   assetName: "wechatdataanalysis-macos-source-runtime-arm64-v1.tar.gz",
-  assetSha256: "335c50bd82340a0f526f5e0456555ebe73bf33980c6ff94a9a34a7f2f42cc096",
-  runtimeManifestSha256: "dcc7ef896783d910a58a1722da88899625b986819e8c384d8e11b941cb7b5cd6",
-  expiresAtUnix: 1789726924,
+  assetSha256: "6b3f55102cee5e3a3337ae45e4d51f4b7445df3a55258a314b7f727d0e582484",
+  runtimeManifestSha256: "8d183314db3253b5e4d317bfc61657cb0bb06b28630661619e3beda86e0abbd2",
+  expiresAtUnix: 1790059708,
 });
 
 const SOURCE_PUBLIC_CORE_MANIFEST = Object.freeze({
@@ -245,7 +245,7 @@ test("tracked macOS source pin selects the exact public WCDA Release asset", () 
   assert.equal(
     publicReleaseUrl(tracked),
     "https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/download/" +
-      "macos-source-runtime-20260806-85320d56-d5c9a29d/" +
+      "macos-source-runtime-20260809-71122b5b-8e355001/" +
       "wechatdataanalysis-macos-source-runtime-arm64-v1.tar.gz"
   );
 });
