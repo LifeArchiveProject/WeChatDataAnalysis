@@ -581,7 +581,7 @@ test("real-database smoke updates cleanup evidence without leaving a temporary f
   assert.deepEqual(fs.readdirSync(root), ["cleanup.json"]);
 });
 
-test("Windows privacy helper accepts redacted metadata and a WES1 sidecar", {
+test("Windows privacy helper accepts an integrity manifest larger than the legacy limit", {
   skip: process.platform !== "win32",
 }, (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wda-privacy-helper-"));
@@ -598,7 +598,14 @@ test("Windows privacy helper accepts redacted metadata and a WES1 sidecar", {
     })
   );
   fs.writeFileSync(path.join(content, "report.json"), JSON.stringify({ account: "hidden" }));
-  fs.writeFileSync(path.join(integrity, "manifest.json"), "{}\n");
+  fs.writeFileSync(
+    path.join(integrity, "manifest.json"),
+    Buffer.concat([
+      Buffer.from('{"padding":"', "utf8"),
+      Buffer.alloc(8 * 1024 * 1024, "x"),
+      Buffer.from('"}\n', "utf8"),
+    ])
+  );
   fs.writeFileSync(path.join(integrity, "signature.wes"), Buffer.from("WES1fixture", "ascii"));
   const probePath = path.join(root, "sensitive-values.json");
   fs.writeFileSync(

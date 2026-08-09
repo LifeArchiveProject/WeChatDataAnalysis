@@ -2202,8 +2202,8 @@ class NativeCoreClient:
         expected_size = int(expected_manifest_size)
         if not encoded_id or len(encoded_id) > 128 or b"\0" in encoded_id:
             raise ValueError("export_id must be 1 to 128 UTF-8 bytes without NUL bytes")
-        if not 1 <= expected_size <= 8 * 1024 * 1024:
-            raise ValueError("expected_manifest_size must be between 1 and 8388608")
+        if expected_size < 1:
+            raise ValueError("expected_manifest_size must be positive")
         options = _WceExportBeginOptions(
             struct_size=ctypes.sizeof(_WceExportBeginOptions),
             manifest_format=1,
@@ -2259,8 +2259,8 @@ class NativeCoreClient:
             raise NativeCoreProtocolError(
                 "wechatdb export envelope has an invalid size."
             )
-        if not canonical_manifest or len(canonical_manifest) > 8 * 1024 * 1024:
-            raise ValueError("export manifest must contain between 1 and 8388608 bytes")
+        if not canonical_manifest:
+            raise ValueError("export manifest must not be empty")
         envelope_buffer = (ctypes.c_uint8 * len(encoded_envelope)).from_buffer_copy(
             encoded_envelope
         )

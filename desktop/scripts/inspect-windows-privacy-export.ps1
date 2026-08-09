@@ -100,7 +100,7 @@ try {
 
     $manifest = Read-JsonEntry 'manifest.json'
     $report = Read-JsonEntry 'report.json'
-    $nativeManifest = Read-EntryBytes '_integrity/manifest.json' (8 * 1024 * 1024)
+    $nativeManifest = Read-EntryBytes '_integrity/manifest.json' 32MB
     $nativeSignature = Read-EntryBytes '_integrity/signature.wes' 4096
     $accounts = @($manifest.accountsAvailable)
 

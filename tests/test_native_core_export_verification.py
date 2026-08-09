@@ -77,6 +77,28 @@ def test_dev_local_wes1_verifier_refuses_to_accept_a_runtime_root() -> None:
     assert caught.value.status == int(NativeCoreStatus.UNSUPPORTED)
 
 
+def test_dev_local_export_seal_accepts_manifest_larger_than_legacy_limit() -> None:
+    manifest = (
+        b'{"exportId":"large-manifest","padding":"'
+        + (b"x" * (8 * 1024 * 1024))
+        + b'"}'
+    )
+
+    with managed_native_core_operation(export_only=True):
+        client = get_native_core_client()
+        sealed = seal_export_manifest("large-manifest", manifest)
+        with pytest.raises(NativeCoreError) as caught:
+            client.verify_export_seal(
+                sealed.envelope,
+                manifest,
+                expected_export_id="large-manifest",
+            )
+
+    assert sealed.envelope.startswith(b"WES1")
+    assert sealed.manifest_size == len(manifest)
+    assert caught.value.status == int(NativeCoreStatus.UNSUPPORTED)
+
+
 def test_root_compiled_build_verifies_before_returning_a_new_seal() -> None:
     manifest = b'{"exportId":"formal-verifier"}'
     with managed_native_core_operation(export_only=True):
