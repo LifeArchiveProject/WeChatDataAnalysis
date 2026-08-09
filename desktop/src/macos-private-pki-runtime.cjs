@@ -172,6 +172,18 @@ function summarizeFailure(failure) {
   return `${failure?.label || "target"}${detail ? `: ${detail.slice(0, 600)}` : ""}`;
 }
 
+function extractSealViolationFiles(failure) {
+  const files = [];
+  const pattern = /file (?:added|missing|modified):\s*([^\n]+)/g;
+  const output = String(failure?.output || "");
+  let match;
+  while ((match = pattern.exec(output)) && files.length < 5) {
+    const filePath = match[1].trim();
+    if (filePath && !files.includes(filePath)) files.push(filePath);
+  }
+  return files;
+}
+
 function resolveUserDefaultKeychain({ spawn = spawnSync, homeDirectory = os.homedir() } = {}) {
   const result = commandResult(spawn, "/usr/bin/security", ["default-keychain", "-d", "user"]);
   if (result.status === 0) {
@@ -205,7 +217,13 @@ function ensureMacosPrivatePkiTrust({
   }
   const nonTrustFailure = initialFailures.find((failure) => !isUntrustedChainFailure(failure));
   if (nonTrustFailure) {
-    throw new Error(`macOS signature verification failed before trust bootstrap (${summarizeFailure(nonTrustFailure)}).`);
+    const violations = extractSealViolationFiles(nonTrustFailure);
+    const hint = violations.length
+      ? ` 应用包内容与签名清单不一致：${violations.join("、")}。若这是残留的多余文件，删除后重新打开应用即可恢复；否则请重新安装应用。`
+      : "";
+    throw new Error(
+      `macOS signature verification failed before trust bootstrap (${summarizeFailure(nonTrustFailure)}).${hint}`
+    );
   }
 
   const keychain = resolveUserDefaultKeychain({ homeDirectory, spawn });

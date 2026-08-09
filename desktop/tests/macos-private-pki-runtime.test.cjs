@@ -141,6 +141,32 @@ test("packaged macOS runtime rejects a modified root before invoking Keychain", 
   );
 });
 
+test("packaged macOS runtime names bundle files that break the code seal", (t) => {
+  const fixture = makeRuntime(t);
+  const envPath = path.join(fixture.resourcesPath, "backend", ".env");
+  let securityCalled = false;
+  assert.throws(
+    () => ensureMacosPrivatePkiTrust({
+      executablePath: fixture.executablePath,
+      platform: "darwin",
+      resourcesPath: fixture.resourcesPath,
+      spawn(command) {
+        if (command === "/usr/bin/security") securityCalled = true;
+        return fakeResult(1, "", `a sealed resource is missing or invalid\nfile added: ${envPath}`);
+      },
+    }),
+    (error) => {
+      const message = String(error?.message || "");
+      return (
+        /signature verification failed/i.test(message) &&
+        message.includes(envPath) &&
+        message.includes("删除后重新打开应用即可恢复")
+      );
+    }
+  );
+  assert.equal(securityCalled, false);
+});
+
 test("packaged macOS runtime never treats a damaged signature as a trust bootstrap", (t) => {
   const fixture = makeRuntime(t);
   let securityCalled = false;

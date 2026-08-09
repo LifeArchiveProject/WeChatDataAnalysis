@@ -22,7 +22,6 @@ const specDir = path.join(repoRoot, "desktop", "build", "pyinstaller-spec");
 const nativeDir = path.join(repoRoot, "src", "wechat_decrypt_tool", "native");
 const runtimeNativeDir = path.join(repoRoot, "desktop", "build", "native-runtime");
 const skillDir = path.join(repoRoot, "skills", "wechat-mcp-copilot");
-const projectToml = path.join(repoRoot, "pyproject.toml");
 const macosXkeyContractPath = path.join(
   repoRoot,
   "src",
@@ -568,11 +567,10 @@ function main() {
     fs.copyFileSync(integrityNativeBinary, path.join(packagedNativeDir, path.basename(integrityNativeBinary)));
   }
 
-  if (fs.existsSync(projectToml)) {
-    try {
-      fs.copyFileSync(projectToml, path.join(distDir, "pyproject.toml"));
-    } catch {}
-  }
+  // Historical builds shipped pyproject.toml as a "project root" marker, which let
+  // the packaged backend write `.env` into the signed .app bundle and break macOS
+  // codesign verification on relaunch. Drop stale copies from incremental dists.
+  fs.rmSync(path.join(distDir, "pyproject.toml"), { force: true });
 }
 
 module.exports = {

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import sys
 from pathlib import Path
 
 
@@ -237,6 +238,12 @@ def get_env_file_path() -> Path | None:
             return Path(v)
         except Exception:
             return None
+
+    # Frozen builds never load `.env`, and their cwd sits inside the install
+    # payload (on macOS the signed .app bundle, where any new file breaks
+    # codesign verification and the app refuses to start).
+    if getattr(sys, "frozen", False):
+        return None
 
     cwd = Path.cwd()
     # Heuristic: only write `.env` in a project root (avoid polluting random dirs).
