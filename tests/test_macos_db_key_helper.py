@@ -339,6 +339,8 @@ def test_helper_invocation_exposes_only_pid_timeout_and_one_key_line(tmp_path: P
         (28, helper.MacosDbKeyUnavailableError, "UNSUPPORTED_WECHAT"),
         (29, helper.MacosDbKeyUnavailableError, "CAPTURE_RUNTIME_UNAVAILABLE"),
         (30, helper.MacosDbKeyUnavailableError, "CAPTURE_SESSION_DETACHED"),
+        (31, helper.MacosDbKeyUnavailableError, "CAPTURE_ATTACH_NOT_SUPPORTED"),
+        (32, helper.MacosDbKeyUnavailableError, "CAPTURE_ATTACH_RUNTIME_ERROR"),
     ],
 )
 def test_helper_exit_codes_are_coarse_and_failure_stdout_must_be_empty(
@@ -352,6 +354,22 @@ def test_helper_exit_codes_are_coarse_and_failure_stdout_must_be_empty(
     with pytest.raises(helper.MacosDbKeyIntegrityError) as leaked:
         _run_fake(bundle, stdout=b"ab" * 32 + b"\n", returncode=returncode)
     assert leaked.value.code == "PROTOCOL_ERROR"
+
+
+def test_helper_attach_failures_do_not_repeat_inapplicable_permission_guidance(
+    tmp_path: Path,
+):
+    bundle = _validated_bundle(tmp_path)
+
+    with pytest.raises(helper.MacosDbKeyAuthorizationError) as denied:
+        _run_fake(bundle, stdout=b"", returncode=27)
+    assert "若已开启后仍重复出现" in str(denied.value)
+    assert "无需反复切换该设置" in str(denied.value)
+
+    with pytest.raises(helper.MacosDbKeyUnavailableError) as unsupported:
+        _run_fake(bundle, stdout=b"", returncode=31)
+    assert unsupported.value.code == "CAPTURE_ATTACH_NOT_SUPPORTED"
+    assert "不是“开发者工具”开关未开启" in str(unsupported.value)
 
 
 def test_helper_rejects_extra_stdout_and_secret_on_stderr(tmp_path: Path):

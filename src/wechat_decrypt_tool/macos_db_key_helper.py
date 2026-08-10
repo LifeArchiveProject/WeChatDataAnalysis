@@ -831,9 +831,10 @@ def _run_capture_helper(
         if return_code == 27:
             raise MacosDbKeyAuthorizationError(
                 (
-                    "macOS 已拒绝 WCDA 读取微信进程。请打开“系统设置 → 隐私与安全性 → "
-                    "开发者工具”，允许 WeChatDataAnalysis；随后完全退出并重新打开 WCDA，"
-                    "再点击获取。"
+                    "macOS 或微信进程已拒绝 WCDA 的读取请求。请确认“系统设置 → 隐私与安全性 → "
+                    "开发者工具”已允许 WeChatDataAnalysis，随后完全退出微信和 WCDA 再重试。"
+                    "若已开启后仍重复出现，当前微信进程可能受到额外保护；无需反复切换该设置，"
+                    "请联系开发者并附上日志。"
                 ),
                 code="PROCESS_ACCESS_DENIED",
                 retryable=True,
@@ -857,6 +858,25 @@ def _run_capture_helper(
                     "WeChatDataAnalysis，完全退出微信和 WCDA 后重试。"
                 ),
                 code="CAPTURE_SESSION_DETACHED",
+                retryable=True,
+            )
+        if return_code == 31:
+            raise MacosDbKeyUnavailableError(
+                (
+                    "当前 macOS 或微信安全策略不支持 WCDA 附加到微信进程；"
+                    "这不是“开发者工具”开关未开启。请更新 WCDA；"
+                    "仍失败请联系开发者并附上日志。"
+                ),
+                code="CAPTURE_ATTACH_NOT_SUPPORTED",
+                retryable=False,
+            )
+        if return_code == 32:
+            raise MacosDbKeyUnavailableError(
+                (
+                    "macOS 密钥捕获运行时在连接微信进程时失败。请完全退出微信和 WCDA 后重试一次；"
+                    "仍失败请联系开发者并附上日志。"
+                ),
+                code="CAPTURE_ATTACH_RUNTIME_ERROR",
                 retryable=True,
             )
         raise MacosDbKeyUnavailableError(
