@@ -719,3 +719,68 @@ jobs:
           body_path: release-notes.md
           fail_on_unmatched_files: true
           files: release-assets/*
+
+  # ========================== QQ 群通知 ==========================
+  # 等 Release 发布完成后，发送 QQ 群通知。
+  # 消息内容取最后一次 commit 正文（用户约定在此写本次更新说明）。
+  # Windows exe 通过分块上传直传 QQ（GitHub CDN 在大陆不可访问）。
+  qq-notify:
+    needs: [publish-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare release info & download artifacts
+        id: prep
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VER="${VERSION#v}"
+          EXE="WeChatDataAnalysis-${VER}-Setup.exe"
+          DMG="WeChatDataAnalysis-${VER}-mac-arm64.dmg"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}"
+          EXE_URL="${BASE_URL}/${EXE}"
+          MAC_ARM64_URL="${BASE_URL}/${DMG}"
+
+          gh release download "${VERSION}" --pattern "${EXE}" --pattern "${DMG}" --dir /tmp/release
+
+          BODY=$(git log -1 --pretty=format:%b)
+          [ -z "$BODY" ] && BODY=$(git log -1 --pretty=format:%s)
+
+          echo "version=${VERSION}"             >> $GITHUB_OUTPUT
+          echo "exe=${EXE}"                     >> $GITHUB_OUTPUT
+          echo "dmg=${DMG}"                     >> $GITHUB_OUTPUT
+          echo "exe_url=${EXE_URL}"             >> $GITHUB_OUTPUT
+          echo "mac_arm64_url=${MAC_ARM64_URL}" >> $GITHUB_OUTPUT
+          { echo "body<<BODY_EOF"; echo "$BODY"; echo "BODY_EOF"; } >> $GITHUB_OUTPUT
+
+      - name: Send QQ notification
+        uses: H3CoF6/qq-notify-action@main
+        with:
+          appid: ${{ secrets.QQ_APPID }}
+          secret: ${{ secrets.QQ_SECRET }}
+          group_openid: ${{ secrets.QQ_GROUP_OPENID }}
+          message: |
+            ## WeChatDataAnalysis 新版本 ${{ steps.prep.outputs.version }} 发布
+
+            ==详细更改如下：==
+            ${{ steps.prep.outputs.body }}
+
+            ---
+
+            - Windows 安装包 [下载链接](${{ steps.prep.outputs.exe_url }})
+            - macOS arm64 [下载链接](${{ steps.prep.outputs.mac_arm64_url }})
+
+            欢迎大家使用和测试~
+          file_path: |
+            /tmp/release/${{ steps.prep.outputs.exe }}
+            /tmp/release/${{ steps.prep.outputs.dmg }}
+          file_type: file
+          file_name: |
+            ${{ steps.prep.outputs.exe }}
+            ${{ steps.prep.outputs.dmg }}
