@@ -85,10 +85,10 @@
                         type="button"
                         class="whitespace-nowrap rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 opacity-0 shadow-sm transition-opacity hover:bg-gray-50 focus:opacity-100 group-hover:opacity-100 disabled:cursor-wait disabled:opacity-60"
                         :disabled="!!message._imageLargeLoading"
-                        title="手动从微信本地目录重新查找更高清图片；如果微信后来已缓存大图，会替换当前缩略图。"
+                        title="先从微信本地目录查找大图；本地没有时通过原图接口获取。"
                         @click.stop.prevent="onTryLoadLargeImageClick(message)"
                       >
-                        {{ message._imageLargeLoading ? '查找中...' : '尝试加载大图' }}
+                        {{ message._imageLargeLoading ? '获取中...' : '尝试加载大图' }}
                       </button>
                       <ErrorNotice
                         v-if="message._imageLargeError"

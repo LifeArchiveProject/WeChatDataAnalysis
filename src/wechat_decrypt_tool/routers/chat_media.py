@@ -360,6 +360,17 @@ def _image_candidate_variant_rank(path: Path) -> int:
     return 2
 
 
+def _is_probable_large_image_source(path: Path) -> bool:
+    """Return whether a local image candidate can satisfy an explicit large-image request."""
+    stem = str(path.stem or "").lower()
+    path_parts = {str(part or "").lower() for part in path.parts}
+    if path_parts & {"thumb", "thumbnail", "thumbnails"}:
+        return False
+    if stem.endswith(("_thumb", ".thumb", "_thumbnail", ".thumbnail")):
+        return False
+    return _image_candidate_variant_rank(path) <= 2
+
+
 def _image_candidate_stat(path: Optional[Path]) -> tuple[int, float]:
     if not path:
         return 0, 0.0
@@ -2458,6 +2469,7 @@ async def get_chat_image(
     record_attach: Optional[str] = None,
     deep_scan: bool = False,
     prefer_live: bool = False,
+    fetch_remote: bool = False,
 ):
     if (not md5) and (not file_id) and (not server_id):
         raise HTTPException(status_code=400, detail="Missing md5/file_id/server_id.")
@@ -2482,13 +2494,14 @@ async def get_chat_image(
         recordAttach=str(record_attach or ""),
         deepScan=bool(deep_scan),
         preferLive=bool(prefer_live),
+        fetchRemote=bool(fetch_remote),
     )
     trace("request:start")
 
     # Prefer the original image message's packed md5 when resolving a quote by server_id.
     # For realtime/live messages the decrypted output DB can lag behind db_storage, so also
     # query the live message shard before falling back to message_resource.db.
-    if server_id:
+    if server_id and not (fetch_remote and (md5 or file_id)):
         md5_from_msg = ""
         md5_from_realtime = ""
         if username:
@@ -2561,7 +2574,7 @@ async def get_chat_image(
         cachedMediaType=cached_media_type,
     )
 
-    if cached_path and (not prefer_live):
+    if cached_path and (not prefer_live) and (not fetch_remote):
         trace(
             "response:ready",
             result="decrypted-cache-hit",
@@ -2599,6 +2612,56 @@ async def get_chat_image(
             status_code=404,
             detail="wxid_dir/db_storage_path not found. Please decrypt with db_storage_path to enable media lookup.",
         )
+
+    async def fetch_cdn_original() -> tuple[bytes, str] | None:
+        if not server_id:
+            return None
+        if not fetch_remote and not cdn_image_service.is_cdn_download_enabled():
+            return None
+        try:
+            cdn_info = await asyncio.to_thread(
+                _lookup_image_cdn_download_info,
+                str(account_dir),
+                int(server_id),
+                str(username or ""),
+            )
+        except Exception:
+            cdn_info = {}
+        cdn_fileid = str((cdn_info or {}).get("fileid") or "").strip()
+        cdn_aeskey = str((cdn_info or {}).get("aeskey") or "").strip()
+        if not cdn_fileid:
+            return None
+        try:
+            cdn_started_at = time.perf_counter()
+            cdn_data = await cdn_image_service.download_original_image(
+                account_dir.name,
+                cdn_fileid,
+                aes_key_hex=cdn_aeskey,
+                image_type="orig",
+            )
+            trace(
+                "cdn:download",
+                bytes=len(cdn_data or b""),
+                explicit=bool(fetch_remote),
+                elapsedMsLocal=round((time.perf_counter() - cdn_started_at) * 1000.0, 1),
+            )
+        except cdn_image_service.CdnQuotaExceededError as quota_err:
+            trace("cdn:quota-exceeded", detail=str(quota_err))
+            raise HTTPException(status_code=429, detail=str(quota_err))
+        except Exception as cdn_err:  # noqa: BLE001
+            trace("cdn:error", error=str(cdn_err)[:200], explicit=bool(fetch_remote))
+            return None
+        if not cdn_data:
+            return None
+        payload, cdn_media_type, _cdn_ext = _detect_media_type_and_ext(cdn_data)
+        if not cdn_media_type.startswith("image/"):
+            cdn_media_type = "image/jpeg"
+        if md5 and _is_valid_md5(str(md5)):
+            try:
+                await asyncio.to_thread(_write_cached_chat_image, account_dir, str(md5), payload)
+            except Exception:
+                pass
+        return payload, cdn_media_type
 
     p: Optional[Path] = None
     candidates: list[Path] = []
@@ -2745,55 +2808,18 @@ async def get_chat_image(
         )
 
     if not p:
-        if cached_path:
+        if cached_path and not fetch_remote:
             trace("response:ready", result="decrypted-cache-fallback", mediaType=cached_media_type, bytes=len(cached_data or b""))
             return _build_cached_media_response(request, cached_data, cached_media_type)
 
-        # 本地找不到原图 → 若用户未关闭「自动获取原图(CDN)」，用消息 XML 里的
-        # cdnbigimgurl(fileid) + aeskey 从 CDN 拉原图（每账号每天限 10 次）。
-        if server_id and cdn_image_service.is_cdn_download_enabled():
-            try:
-                cdn_info = await asyncio.to_thread(
-                    _lookup_image_cdn_download_info,
-                    str(account_dir),
-                    int(server_id),
-                    str(username or ""),
-                )
-            except Exception:
-                cdn_info = {}
-            cdn_fileid = str((cdn_info or {}).get("fileid") or "").strip()
-            cdn_aeskey = str((cdn_info or {}).get("aeskey") or "").strip()
-            if cdn_fileid:
-                try:
-                    cdn_started_at = time.perf_counter()
-                    cdn_data = await cdn_image_service.download_original_image(
-                        account_dir.name,
-                        cdn_fileid,
-                        aes_key_hex=cdn_aeskey,
-                        image_type="orig",
-                    )
-                    trace(
-                        "cdn:download",
-                        bytes=len(cdn_data or b""),
-                        elapsedMsLocal=round((time.perf_counter() - cdn_started_at) * 1000.0, 1),
-                    )
-                except cdn_image_service.CdnQuotaExceededError as quota_err:
-                    trace("cdn:quota-exceeded", detail=str(quota_err))
-                    raise HTTPException(status_code=429, detail=str(quota_err))
-                except Exception as cdn_err:  # noqa: BLE001
-                    trace("cdn:error", error=str(cdn_err)[:200])
-                    cdn_data = b""
-                if cdn_data:
-                    payload, cdn_media_type, _cdn_ext = _detect_media_type_and_ext(cdn_data)
-                    if not cdn_media_type.startswith("image/"):
-                        cdn_media_type = "image/jpeg"
-                    if md5 and _is_valid_md5(str(md5)):
-                        try:
-                            await asyncio.to_thread(_write_cached_chat_image, account_dir, str(md5), payload)
-                        except Exception:
-                            pass
-                    trace("response:ready", result="cdn-download", mediaType=cdn_media_type, bytes=len(payload))
-                    return _build_cached_media_response(request, payload, cdn_media_type)
+        # 本地找不到原图 → 自动下载已开启或用户明确点击加载时，用消息 XML 里的
+        # cdnbigimgurl(fileid) + aeskey 从 CDN 拉原图（每账号每天限 10 次）。显式点击
+        # “尝试加载大图”时即使关闭了自动下载开关，也允许本次用户发起的请求回源。
+        cdn_result = await fetch_cdn_original()
+        if cdn_result is not None:
+            payload, cdn_media_type = cdn_result
+            trace("response:ready", result="cdn-download", mediaType=cdn_media_type, bytes=len(payload))
+            return _build_cached_media_response(request, payload, cdn_media_type)
 
         trace(
             "response:error",
@@ -2850,6 +2876,13 @@ async def get_chat_image(
     best_data = b""
     best_media_type = "application/octet-stream"
     best_chosen: Optional[Path] = None
+    local_large_found = False
+    cached_candidate_key = ""
+    if cached_path is not None:
+        try:
+            cached_candidate_key = str(cached_path.resolve())
+        except Exception:
+            cached_candidate_key = str(cached_path)
     trace("decode:start", candidateCount=len(candidates))
     slow_decode_logged = 0
     for src_path in candidates:
@@ -2890,7 +2923,13 @@ async def get_chat_image(
             continue
 
         if media_type != "application/octet-stream":
-            if prefer_live:
+            try:
+                source_key = str(src_path.resolve())
+            except Exception:
+                source_key = str(src_path)
+            if source_key != cached_candidate_key and _is_probable_large_image_source(src_path):
+                local_large_found = True
+            if prefer_live or fetch_remote:
                 score = _image_payload_score(data, media_type)
                 if best_score is None or score > best_score:
                     best_score = score
@@ -2901,10 +2940,19 @@ async def get_chat_image(
             chosen = src_path
             break
 
-    if prefer_live and best_chosen is not None:
+    if (prefer_live or fetch_remote) and best_chosen is not None:
         chosen = best_chosen
         data = best_data
         media_type = best_media_type
+
+    if fetch_remote and not local_large_found:
+        cdn_result = await fetch_cdn_original()
+        if cdn_result is not None:
+            payload, cdn_media_type = cdn_result
+            trace("response:ready", result="cdn-download", mediaType=cdn_media_type, bytes=len(payload))
+            return _build_cached_media_response(request, payload, cdn_media_type)
+        trace("response:error", result="large-image-not-found")
+        raise HTTPException(status_code=404, detail="Large image not found locally or via CDN.")
 
     if not chosen:
         trace("response:error", result="decode-failed", decodeAttempts=decode_attempts)
