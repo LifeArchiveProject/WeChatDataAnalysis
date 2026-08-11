@@ -747,7 +747,7 @@ def _extract_codesign_access_metadata(
     xml_start = output.find(b"<?xml")
     xml_end = output.find(b"</plist>", xml_start)
     if xml_start < 0 or xml_end < 0:
-        return hardened_runtime, {}
+        return hardened_runtime, None
     try:
         entitlements = plistlib.loads(output[xml_start : xml_end + len(b"</plist>")])
     except (plistlib.InvalidFileException, ValueError, TypeError):
@@ -766,7 +766,7 @@ def _codesign_access_metadata(
             "-d",
             "--verbose=4",
             "--entitlements",
-            "-",
+            ":-",
             str(path),
         ]
     )

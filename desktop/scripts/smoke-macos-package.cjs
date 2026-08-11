@@ -445,10 +445,12 @@ async function runPackagedRuntimeSmoke(appPath) {
   run("codesign", ["--verify", "--strict", "--verbose=2", integrity]);
   run("codesign", ["--verify", "--strict", "--verbose=2", xkeyHelper]);
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
-  const entitlements = run("codesign", ["-d", "--entitlements", "-", electronExecutable], { capture: true });
+  const entitlements = run("codesign", ["-d", "--entitlements", ":-", electronExecutable], { capture: true });
   assert.match(entitlements, /com\.apple\.security\.cs\.allow-jit/);
-  const helperEntitlements = run("codesign", ["-d", "--entitlements", "-", imageHelper], { capture: true });
+  const helperEntitlements = run("codesign", ["-d", "--entitlements", ":-", imageHelper], { capture: true });
   assert.match(helperEntitlements, /com\.apple\.security\.cs\.debugger/);
+  const xkeyEntitlements = run("codesign", ["-d", "--entitlements", ":-", xkeyHelper], { capture: true });
+  assert.match(xkeyEntitlements, /com\.apple\.security\.cs\.debugger/);
 
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wda-macos-smoke-"));
   let backendProc = null;

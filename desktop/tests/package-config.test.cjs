@@ -477,7 +477,7 @@ test("unsigned macOS CI packages are ad-hoc sealed before DMG creation", () => {
   assert.match(afterPack, /MACOS_DISTRIBUTION_BUILD/);
 });
 
-test("macOS signing keeps debugger entitlement on the image helper only", () => {
+test("macOS signing keeps debugger entitlement off the app and on capture helpers", () => {
   const appEntitlements = fs.readFileSync(path.join(desktopRoot, "entitlements.mac.plist"), "utf8");
   const helperEntitlements = fs.readFileSync(
     path.join(repoRoot, "src", "wechat_decrypt_tool", "native", "macos", "source", "image_scan_entitlements.plist"),
@@ -511,6 +511,9 @@ test("macOS archive verification checks ZIP, mounted DMG, signing, and distribut
   assert.match(verifier, /macosXkeyContract\.thirdPartyNoticeFileName/);
   assert.match(verifier, /macos-private-pki-root\.cer/);
   assert.match(verifier, /macosPrivateRootSha256/);
+  assert.match(verifier, /\["-d", "--entitlements", ":-", xkeyHelper\]/);
+  assert.match(verifier, /assert\.match\(xkeyEntitlements, \/com\\\.apple\\\.security\\\.cs\\\.debugger\//);
+  assert.match(smoke, /\["-d", "--entitlements", ":-", xkeyHelper\]/);
   assert.match(smoke, /resolveMacosPrivatePkiRuntime/);
   assert.match(
     verifier,

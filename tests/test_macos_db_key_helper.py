@@ -462,6 +462,55 @@ def test_codesign_access_metadata_extracts_runtime_and_entitlements():
     assert parsed == {"com.apple.security.cs.debugger": True}
 
 
+def test_codesign_access_metadata_requests_xml_entitlements(monkeypatch, tmp_path: Path):
+    helper_path = tmp_path / "wda-xkey-helper"
+    observed: list[list[str]] = []
+    entitlements = b"""<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>com.apple.security.cs.debugger</key><true/>
+</dict></plist>"""
+
+    def run_diagnostic(argv: list[str]):
+        observed.append(argv)
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=b"",
+            stderr=b"CodeDirectory flags=0x10000(runtime)\n" + entitlements,
+        )
+
+    monkeypatch.setattr(helper, "_run_diagnostic_command", run_diagnostic)
+
+    hardened_runtime, parsed = helper._codesign_access_metadata(helper_path)
+
+    assert observed == [
+        [
+            "/usr/bin/codesign",
+            "-d",
+            "--verbose=4",
+            "--entitlements",
+            ":-",
+            str(helper_path),
+        ]
+    ]
+    assert hardened_runtime is True
+    assert parsed == {"com.apple.security.cs.debugger": True}
+
+
+def test_codesign_access_metadata_preserves_unknown_entitlements_without_plist():
+    result = subprocess.CompletedProcess(
+        ["codesign"],
+        0,
+        stdout=b"",
+        stderr=b"CodeDirectory flags=0x10000(runtime)\n",
+    )
+
+    hardened_runtime, parsed = helper._extract_codesign_access_metadata(result)
+
+    assert hardened_runtime is True
+    assert parsed is None
+
+
 def test_helper_rejects_extra_stdout_and_secret_on_stderr(tmp_path: Path):
     bundle = _validated_bundle(tmp_path)
     with pytest.raises(helper.MacosDbKeyIntegrityError) as extra:

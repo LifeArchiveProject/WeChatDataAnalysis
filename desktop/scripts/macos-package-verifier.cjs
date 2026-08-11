@@ -297,10 +297,12 @@ function verifyAppBundle(appPath, { distribution = false, source = "package" } =
   assert.equal(xkeyIdentity.leafSha256, xkeyTrust.helperLeafCertificateSha256);
   assert.equal(backendIdentity.identifier, macosXkeyContract.hostSigningIdentifier);
   assert.equal(backendIdentity.leafSha256, xkeyTrust.hostLeafCertificateSha256);
-  const mainEntitlements = run("codesign", ["-d", "--entitlements", "-", electronExecutable]);
-  const helperEntitlements = run("codesign", ["-d", "--entitlements", "-", imageHelper]);
+  const mainEntitlements = run("codesign", ["-d", "--entitlements", ":-", electronExecutable]);
+  const helperEntitlements = run("codesign", ["-d", "--entitlements", ":-", imageHelper]);
+  const xkeyEntitlements = run("codesign", ["-d", "--entitlements", ":-", xkeyHelper]);
   assert.match(mainEntitlements, /com\.apple\.security\.cs\.allow-jit/);
   assert.match(helperEntitlements, /com\.apple\.security\.cs\.debugger/);
+  assert.match(xkeyEntitlements, /com\.apple\.security\.cs\.debugger/);
 
   if (distribution) {
     assert.doesNotMatch(codeSignDetails(appPath), /^Signature=adhoc$/m, `${appPath} is ad-hoc signed`);
