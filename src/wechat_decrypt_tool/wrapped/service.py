@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..chat_helpers import _decode_sqlite_text, _iter_message_db_paths, _quote_ident, _resolve_account_dir
-from ..chat_search_index import get_chat_search_index_db_path, get_chat_search_index_status
+from ..chat_search_index import (
+    discard_stale_chat_search_index,
+    get_chat_search_index_db_path,
+    get_chat_search_index_status,
+)
 from ..logging_config import get_logger
 from .storage import wrapped_cache_dir, wrapped_cache_path
 from .cards.card_00_global_overview import build_card_00_global_overview
@@ -28,7 +32,7 @@ logger = get_logger(__name__)
 # an older partial cache.
 _IMPLEMENTED_UPTO_ID = 7
 # Bump this when we change card payloads/ordering while keeping the same implemented_upto.
-_CACHE_VERSION = 36
+_CACHE_VERSION = 37
 
 
 # "Manifest" is used by the frontend to render the deck quickly, then lazily fetch each card.
@@ -108,6 +112,44 @@ def _get_lock(key: str) -> threading.Lock:
         return lock
 
 
+def _prepare_wrapped_derived_data(account_dir: Path) -> None:
+    """Drop annual-report artifacts that predate their decrypted/index inputs."""
+
+    lock = _get_lock(f"wrapped-derived:{account_dir.resolve()}")
+    with lock:
+        status = get_chat_search_index_status(account_dir, source="auto")
+        index = dict(status.get("index") or {})
+        stale_index = bool(index.get("staleForSourceData"))
+        if stale_index:
+            discard_stale_chat_search_index(account_dir)
+
+        dependency_mtime_ns = int(index.get("sourceLatestMtimeNs") or 0)
+        if bool(index.get("ready")):
+            dependency_mtime_ns = max(
+                dependency_mtime_ns,
+                int(index.get("indexMtimeNs") or 0),
+            )
+
+        cache_dir = wrapped_cache_dir(account_dir)
+        removed = 0
+        for cache_path in cache_dir.glob("*.json"):
+            try:
+                cache_is_old = cache_path.stat().st_mtime_ns < dependency_mtime_ns
+                if stale_index or cache_is_old:
+                    cache_path.unlink()
+                    removed += 1
+            except (FileNotFoundError, OSError):
+                continue
+
+        if stale_index or removed:
+            logger.info(
+                "Invalidated Wrapped derived data: account=%s stale_index=%s cache_files=%s",
+                account_dir.name,
+                stale_index,
+                removed,
+            )
+
+
 def _default_year() -> int:
     return datetime.now().year
 
@@ -137,12 +179,18 @@ def list_wrapped_available_years(*, account_dir: Path) -> list[int]:
     shard databases (slower, but works without the index).
     """
 
+    _prepare_wrapped_derived_data(account_dir)
+
+    index_status = get_chat_search_index_status(account_dir, source="auto")
+    index_info = dict(index_status.get("index") or {})
+    index_ready = bool(index_info.get("ready"))
+
     # Try a tiny cache first (years don't change often, but scanning can be expensive).
     cache_path = wrapped_cache_dir(account_dir) / "available_years.json"
     max_mtime = 0
     try:
         index_path = get_chat_search_index_db_path(account_dir)
-        if index_path.exists():
+        if index_ready and index_path.exists():
             max_mtime = max(max_mtime, int(index_path.stat().st_mtime))
     except Exception:
         pass
@@ -190,7 +238,7 @@ def list_wrapped_available_years(*, account_dir: Path) -> list[int]:
 
     # Fast path: use our unified search index when available.
     index_path = get_chat_search_index_db_path(account_dir)
-    if index_path.exists():
+    if index_ready and index_path.exists():
         conn = sqlite3.connect(str(index_path))
         try:
             has_fts = (
