@@ -141,6 +141,14 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "wda-xkey-package-test-"));
 }
 
+test("binary inspector requests XML entitlements from codesign stdout", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "scripts", "macos-xkey-packaging.cjs"),
+    "utf8"
+  );
+  assert.match(source, /\["-d", "--entitlements", ":-", helperPath\]/);
+});
+
 test("manifest exposes only the exact minimal public metadata", () => {
   const root = tempDir();
   try {

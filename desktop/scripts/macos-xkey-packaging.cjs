@@ -187,7 +187,7 @@ function defaultBinaryInspector(helperPath) {
   if ((lipo.status ?? 1) !== 0) throw new Error("helper architecture inspection failed");
   const entitlements = spawnSync(
     "/usr/bin/codesign",
-    ["-d", "--entitlements", "-", helperPath],
+    ["-d", "--entitlements", ":-", helperPath],
     { encoding: "utf8" }
   );
   const entitlementText = `${entitlements.stdout || ""}\n${entitlements.stderr || ""}`;
