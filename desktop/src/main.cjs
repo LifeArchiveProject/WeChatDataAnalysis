@@ -2064,7 +2064,10 @@ function startBackend() {
     });
     attachBackendStdio(backendProc, getBackendStdioLogPath(env.WECHAT_TOOL_DATA_DIR));
   } else {
-    backendProc = spawn("uv", ["run", "main.py"], {
+    // The desktop backend only needs runtime dependencies. Letting `uv run`
+    // include the default dev group can block Electron startup on an unrelated
+    // pytest/Pygments download before Python is even launched.
+    backendProc = spawn("uv", ["run", "--no-dev", "main.py"], {
       cwd: repoRoot(),
       env,
       stdio: "inherit",
