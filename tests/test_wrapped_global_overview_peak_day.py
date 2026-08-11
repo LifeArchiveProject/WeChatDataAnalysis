@@ -134,6 +134,9 @@ class TestWrappedGlobalOverviewPeakDay(unittest.TestCase):
             add(friend, account, self._ts(2025, 1, 10, 12, 0), "普通日消息")
             add(friend, account, self._ts(2025, 2, 1, 12, 0), "普通日消息")
 
+            # 只有收到消息的日期也应出现在年度聊天活跃热力图中。
+            add(friend, friend, self._ts(2025, 1, 30, 21, 39), "一月收到的消息")
+
             # 峰值日 2025-03-05（周三，doy0=63）：本人发 6 条。
             long_first = "好" * 80
             add(group, account, self._ts(2025, 3, 5, 8, 15), long_first)
@@ -163,12 +166,16 @@ class TestWrappedGlobalOverviewPeakDay(unittest.TestCase):
             self.assertIsNotNone(peak)
             self.assertEqual(peak["date"], "2025-03-05")
             self.assertEqual(peak["weekdayName"], "周三")
-            self.assertEqual(peak["count"], 6)
+            self.assertEqual(peak["count"], 10)
 
-            # multiple = count / messagesPerDay（保留 1 位小数）。
-            mpd = float(data["messagesPerDay"])
-            self.assertGreater(mpd, 0)
-            self.assertAlmostEqual(peak["multiple"], round(6 / mpd, 1))
+            # 日历热力图统计双向聊天，且排除公众号会话。
+            daily_counts = data["annualHeatmap"]["dailyCounts"]
+            jan_30_doy = datetime(2025, 1, 30).timetuple().tm_yday - 1
+            self.assertEqual(daily_counts[jan_30_doy], 1)
+            activity_days = sum(1 for count in daily_counts if int(count) > 0)
+            activity_daily_average = sum(daily_counts) / activity_days
+            self.assertEqual(data["activeDays"], activity_days)
+            self.assertAlmostEqual(peak["multiple"], round(10 / activity_daily_average, 1))
 
             top = peak["topContact"]
             self.assertIsNotNone(top)
@@ -190,8 +197,8 @@ class TestWrappedGlobalOverviewPeakDay(unittest.TestCase):
             h = highlights[0]
             self.assertEqual(h["key"], "sent_messages_max")
             self.assertEqual(h["doy"], 63)
-            self.assertTrue(str(h["label"]).strip())
-            self.assertIn("6", str(h["valueLabel"]))
+            self.assertIn("聊天", str(h["label"]))
+            self.assertIn("10", str(h["valueLabel"]))
 
     def test_peak_day_null_when_no_messages(self):
         from wechat_decrypt_tool.wrapped.cards.card_00_global_overview import (

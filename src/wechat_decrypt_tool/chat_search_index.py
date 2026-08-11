@@ -186,6 +186,32 @@ def _index_meta_source(meta: dict[str, str]) -> str:
     return "decrypted"
 
 
+def _latest_decrypted_source_mtime(account_dir: Path) -> tuple[int, str]:
+    """Return the newest mtime among SQLite files consumed by the index."""
+
+    paths = [account_dir / "session.db", account_dir / "contact.db"]
+    try:
+        paths.extend(_iter_message_db_paths(account_dir))
+    except Exception:
+        pass
+
+    latest_mtime_ns = 0
+    latest_path = ""
+    for path in paths:
+        # SQLite can keep committed changes in a WAL without updating the main
+        # database file. The SHM file is intentionally excluded because reads
+        # can update it and would make a valid index look stale.
+        for candidate in (path, Path(f"{path}-wal")):
+            try:
+                mtime_ns = int(candidate.stat().st_mtime_ns)
+            except (FileNotFoundError, OSError):
+                continue
+            if mtime_ns > latest_mtime_ns:
+                latest_mtime_ns = mtime_ns
+                latest_path = str(candidate)
+    return latest_mtime_ns, latest_path
+
+
 def get_chat_search_index_status(account_dir: Path, *, source: Optional[str] = None) -> dict[str, Any]:
     desired_source = _normalize_index_source(source, default="decrypted")
     key = _account_key(account_dir)
@@ -193,7 +219,22 @@ def get_chat_search_index_status(account_dir: Path, *, source: Optional[str] = N
     inspect = _inspect_index(index_path)
     meta = _read_meta(index_path)
     actual_source = _index_meta_source(meta)
-    ready = bool(inspect.get("ready")) and actual_source == desired_source
+    try:
+        index_mtime_ns = int(index_path.stat().st_mtime_ns)
+    except (FileNotFoundError, OSError):
+        index_mtime_ns = 0
+    source_latest_mtime_ns, source_latest_path = _latest_decrypted_source_mtime(account_dir)
+    stale_for_source_data = bool(
+        inspect.get("ready")
+        and actual_source == "decrypted"
+        and index_mtime_ns > 0
+        and source_latest_mtime_ns > index_mtime_ns
+    )
+    ready = (
+        bool(inspect.get("ready"))
+        and actual_source == desired_source
+        and not stale_for_source_data
+    )
     with _BUILD_LOCK:
         state = dict(_BUILD_STATE.get(key) or {})
     return {
@@ -206,6 +247,10 @@ def get_chat_search_index_status(account_dir: Path, *, source: Optional[str] = N
             "source": actual_source,
             "desiredSource": desired_source,
             "staleForSource": bool(inspect.get("ready")) and actual_source != desired_source,
+            "staleForSourceData": stale_for_source_data,
+            "indexMtimeNs": index_mtime_ns,
+            "sourceLatestMtimeNs": source_latest_mtime_ns,
+            "sourceLatestPath": source_latest_path,
             "hasFtsTable": bool(inspect.get("hasFtsTable")),
             "hasMetaTable": bool(inspect.get("hasMetaTable")),
             "schemaVersion": inspect.get("schemaVersion"),
@@ -213,6 +258,32 @@ def get_chat_search_index_status(account_dir: Path, *, source: Optional[str] = N
             "build": state,
         },
     }
+
+
+def discard_stale_chat_search_index(account_dir: Path) -> bool:
+    """Remove a derived index only when decrypted source databases are newer."""
+
+    status = get_chat_search_index_status(account_dir, source="decrypted")
+    index = dict(status.get("index") or {})
+    if not bool(index.get("staleForSourceData")):
+        return False
+
+    index_path = Path(str(index.get("path") or ""))
+    try:
+        index_path.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            Path(f"{index_path}{suffix}").unlink(missing_ok=True)
+    except OSError:
+        logger.exception("Failed to discard stale chat search index: %s", index_path)
+        return False
+
+    logger.info(
+        "Discarded stale chat search index: account=%s index=%s source_latest=%s",
+        account_dir.name,
+        index_path,
+        str(index.get("sourceLatestPath") or ""),
+    )
+    return True
 
 
 def start_chat_search_index_build(account_dir: Path, *, rebuild: bool = False, source: Optional[str] = None) -> dict[str, Any]:
