@@ -13,6 +13,9 @@ from .key_store import get_account_keys_from_store, load_account_keys_store, nor
 from .sqlite_diagnostics import is_usable_sqlite_db
 
 
+_WXID_SOURCE_SUFFIX_RE = re.compile(r"^(wxid_[^_\s]+)_[0-9a-f]{4}$", re.IGNORECASE)
+
+
 @dataclass(frozen=True)
 class ChatAccountContext:
     name: str
@@ -197,6 +200,42 @@ def _context_for_name(account: str) -> Optional[ChatAccountContext]:
     )
 
 
+def _context_source_roots(ctx: ChatAccountContext) -> set[str]:
+    roots: set[str] = set()
+    for value in (ctx.db_storage_path, ctx.wxid_dir):
+        normalized = normalize_key_store_path(value)
+        if normalized:
+            roots.add(normalized)
+    return roots
+
+
+def _contexts_share_source(left: ChatAccountContext, right: ChatAccountContext) -> bool:
+    return bool(_context_source_roots(left) & _context_source_roots(right))
+
+
+def _dedupe_source_alias_contexts(
+    contexts: list[ChatAccountContext],
+) -> list[ChatAccountContext]:
+    by_name = {ctx.name.lower(): ctx for ctx in contexts}
+    output: list[ChatAccountContext] = []
+    for ctx in contexts:
+        match = _WXID_SOURCE_SUFFIX_RE.fullmatch(ctx.name)
+        if match is None:
+            output.append(ctx)
+            continue
+
+        base = by_name.get(match.group(1).lower())
+        if base is None:
+            output.append(ctx)
+            continue
+
+        base_has_canonical_data = base.has_decrypted_dbs or not ctx.has_decrypted_dbs
+        if _contexts_share_source(base, ctx) and base_has_canonical_data:
+            continue
+        output.append(ctx)
+    return output
+
+
 def list_chat_account_contexts() -> list[ChatAccountContext]:
     names: set[str] = set()
     output_databases_dir = get_output_databases_dir()
@@ -230,6 +269,7 @@ def list_chat_account_contexts() -> list[ChatAccountContext]:
         ctx = _context_for_name(name)
         if ctx is not None:
             contexts.append(ctx)
+    contexts = _dedupe_source_alias_contexts(contexts)
     contexts.sort(key=lambda c: (0 if c.mode == "direct" else 1, c.name.lower()))
     return contexts
 
@@ -249,6 +289,12 @@ def resolve_chat_account_context(account: Optional[str]) -> ChatAccountContext:
     selected = _safe_account_name(account) or contexts[0].name
     by_name = {ctx.name: ctx for ctx in contexts}
     ctx = by_name.get(selected)
+    if ctx is None:
+        alias_match = _WXID_SOURCE_SUFFIX_RE.fullmatch(selected)
+        alias_ctx = _context_for_name(selected) if alias_match is not None else None
+        base_ctx = by_name.get(alias_match.group(1)) if alias_match is not None else None
+        if alias_ctx is not None and base_ctx is not None and _contexts_share_source(alias_ctx, base_ctx):
+            ctx = base_ctx
     if ctx is None:
         raise HTTPException(status_code=404, detail="Account not found.")
 

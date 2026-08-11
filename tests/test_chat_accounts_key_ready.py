@@ -92,6 +92,51 @@ class TestChatAccountsKeyReady(unittest.TestCase):
                 else:
                     os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data_dir
 
+    def test_source_aliases_are_listed_once_under_the_base_wxid(self) -> None:
+        with self._with_temp_data_dir() as td:
+            root = Path(td)
+            prev_data_dir = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+
+                import wechat_decrypt_tool.app_paths as app_paths
+                import wechat_decrypt_tool.key_store as key_store
+                import wechat_decrypt_tool.chat_accounts as chat_accounts
+
+                importlib.reload(app_paths)
+                importlib.reload(key_store)
+                importlib.reload(chat_accounts)
+
+                base_account = "wxid_v4mbduwqtzpt22"
+                source_account = f"{base_account}_1e7a"
+                wxid_dir = root / "xwechat_files" / source_account
+                db_storage = wxid_dir / "db_storage"
+                db_storage.mkdir(parents=True)
+
+                key_store.upsert_account_keys_in_store(
+                    base_account,
+                    aliases=[source_account],
+                    db_key="D" * 64,
+                    image_xor_key="0x8A",
+                    image_aes_key="1234567890abcdef",
+                    db_key_source_wxid_dir=str(wxid_dir),
+                    db_key_source_db_storage_path=str(db_storage),
+                )
+
+                contexts = chat_accounts.list_chat_account_contexts()
+
+                self.assertEqual([ctx.name for ctx in contexts], [base_account])
+                self.assertEqual(contexts[0].db_storage_path, str(db_storage.resolve()))
+                self.assertTrue(contexts[0].keys_ready)
+                resolved_alias = chat_accounts.resolve_chat_account_context(source_account)
+                self.assertEqual(resolved_alias.name, base_account)
+                self.assertEqual(resolved_alias.db_storage_path, str(db_storage.resolve()))
+            finally:
+                if prev_data_dir is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data_dir
+
 
 if __name__ == "__main__":
     unittest.main()
