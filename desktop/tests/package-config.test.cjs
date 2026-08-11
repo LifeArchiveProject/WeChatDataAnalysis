@@ -259,6 +259,7 @@ test("release workflow pins every remote action to an approved commit", () => {
     ["actions/upload-artifact", "ea165f8d65b6e75b540449e92b4886f43607fa02"],
     ["dtolnay/rust-toolchain", "4cda84d5c5c54efe2404f9d843567869ab1699d4"],
     ["softprops/action-gh-release", "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65"],
+    ["H3CoF6/qq-notify-action", "50d180981e7c7b8552a3331b981e3f8cfcf40c44"],
   ]);
   const remoteUses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)]
     .map((match) => match[1])
