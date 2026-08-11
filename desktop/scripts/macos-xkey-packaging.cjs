@@ -185,10 +185,20 @@ function defaultBinaryInspector(helperPath) {
   const leafSha256 = certificate.fingerprint256.replaceAll(":", "").toLowerCase();
   const lipo = spawnSync("/usr/bin/lipo", ["-archs", helperPath], { encoding: "utf8" });
   if ((lipo.status ?? 1) !== 0) throw new Error("helper architecture inspection failed");
+  const entitlements = spawnSync(
+    "/usr/bin/codesign",
+    ["-d", "--entitlements", "-", helperPath],
+    { encoding: "utf8" }
+  );
+  const entitlementText = `${entitlements.stdout || ""}\n${entitlements.stderr || ""}`;
+  if ((entitlements.status ?? 1) !== 0) throw new Error("helper entitlement inspection failed");
   return {
     identifier,
     leafSha256,
     architectures: new Set(String(lipo.stdout || "").trim().split(/\s+/).filter(Boolean)),
+    debuggerEntitlement: /<key>\s*com\.apple\.security\.cs\.debugger\s*<\/key>\s*<true\s*\/>/.test(
+      entitlementText
+    ),
   };
 }
 
@@ -303,6 +313,9 @@ function resolveMacosXkeyArtifacts({
   if (inspection.identifier !== contract.bundleId || inspection.leafSha256 !== helperSigner ||
       !contract.requiredArchitectures.every((arch) => architectures.has(arch))) {
     throw new Error("macOS Xkey helper signature or Universal2 architecture does not match pins");
+  }
+  if (inspection.debuggerEntitlement !== true) {
+    throw new Error("macOS Xkey helper is missing com.apple.security.cs.debugger entitlement");
   }
   return {
     artifactDir, allowDevelopment, manifest, manifestPath, trust, repository, runId,

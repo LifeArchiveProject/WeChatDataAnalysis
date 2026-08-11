@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
+import plistlib
 import re
 import signal
 import subprocess
@@ -36,6 +38,8 @@ _BUILD_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,127}")
 _DNS_REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _KEY_LINE_RE = re.compile(rb"[0-9a-f]{64}\n")
 _SECRET_HEX_RE = re.compile(rb"(?<![0-9A-Fa-f])[0-9A-Fa-f]{64}(?![0-9A-Fa-f])")
+_SAFE_DIAGNOSTIC_TEXT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+ -]{0,127}")
+_MAX_DIAGNOSTIC_OUTPUT_BYTES = 64 * 1024
 
 
 class MacosDbKeyError(RuntimeError):
@@ -252,6 +256,19 @@ class MacosDbKeyBundleStatus:
             "build_expires_at_unix": self.build_expires_at_unix,
             "error_code": self.error_code,
         }
+
+
+@dataclass(frozen=True)
+class MacosProcessAccessDiagnostics:
+    macos_version: str = ""
+    macos_build: str = ""
+    target_bundle_id: str = ""
+    target_version: str = ""
+    target_build: str = ""
+    target_hardened_runtime: bool | None = None
+    target_get_task_allow: bool | None = None
+    helper_hardened_runtime: bool | None = None
+    helper_debugger_entitlement: bool | None = None
 
 
 def _sha256_file(path: Path) -> tuple[str, int]:
@@ -681,6 +698,199 @@ def _sanitized_helper_environment() -> dict[str, str]:
     return environment
 
 
+def _safe_diagnostic_text(value: object) -> str:
+    text = str(value or "").strip()
+    if _SAFE_DIAGNOSTIC_TEXT_RE.fullmatch(text) is None:
+        return ""
+    return text
+
+
+def _run_diagnostic_command(argv: list[str]) -> subprocess.CompletedProcess[bytes] | None:
+    try:
+        return subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=_sanitized_helper_environment(),
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _diagnostic_output(result: subprocess.CompletedProcess[bytes]) -> bytes:
+    stdout = bytes(result.stdout or b"")[:_MAX_DIAGNOSTIC_OUTPUT_BYTES]
+    stderr = bytes(result.stderr or b"")[:_MAX_DIAGNOSTIC_OUTPUT_BYTES]
+    return stdout + b"\n" + stderr
+
+
+def _extract_codesign_access_metadata(
+    result: subprocess.CompletedProcess[bytes] | None,
+) -> tuple[bool | None, Mapping[str, object] | None]:
+    if result is None or result.returncode != 0:
+        return None, None
+
+    output = _diagnostic_output(result)
+    text = output.decode("utf-8", errors="replace")
+    flags = re.search(r"\bflags=0x[0-9a-f]+\(([^)]*)\)", text, re.IGNORECASE)
+    if flags is not None:
+        hardened_runtime: bool | None = "runtime" in {
+            item.strip().lower() for item in flags.group(1).split(",")
+        }
+    elif re.search(r"^Runtime Version=", text, re.MULTILINE) is not None:
+        hardened_runtime = True
+    else:
+        hardened_runtime = None
+
+    xml_start = output.find(b"<?xml")
+    xml_end = output.find(b"</plist>", xml_start)
+    if xml_start < 0 or xml_end < 0:
+        return hardened_runtime, {}
+    try:
+        entitlements = plistlib.loads(output[xml_start : xml_end + len(b"</plist>")])
+    except (plistlib.InvalidFileException, ValueError, TypeError):
+        return hardened_runtime, None
+    if not isinstance(entitlements, dict):
+        return hardened_runtime, None
+    return hardened_runtime, entitlements
+
+
+def _codesign_access_metadata(
+    path: Path,
+) -> tuple[bool | None, Mapping[str, object] | None]:
+    result = _run_diagnostic_command(
+        [
+            "/usr/bin/codesign",
+            "-d",
+            "--verbose=4",
+            "--entitlements",
+            "-",
+            str(path),
+        ]
+    )
+    return _extract_codesign_access_metadata(result)
+
+
+def _wechat_app_bundle(pid: int) -> Path | None:
+    result = _run_diagnostic_command(["/bin/ps", "-ww", "-p", str(pid), "-o", "comm="])
+    if result is None or result.returncode != 0:
+        return None
+    executable_text = bytes(result.stdout or b"").decode("utf-8", errors="strict").strip()
+    if not executable_text or "\x00" in executable_text or "\n" in executable_text:
+        return None
+    executable = Path(executable_text)
+    if not executable.is_absolute():
+        return None
+    for candidate in executable.parents:
+        if candidate.suffix.lower() == ".app":
+            return candidate
+    return None
+
+
+def _read_app_identity(app_bundle: Path | None) -> tuple[str, str, str]:
+    if app_bundle is None:
+        return "", "", ""
+    info_path = app_bundle / "Contents" / "Info.plist"
+    try:
+        raw = info_path.read_bytes()
+        if len(raw) > _MAX_DIAGNOSTIC_OUTPUT_BYTES:
+            return "", "", ""
+        info = plistlib.loads(raw)
+    except (OSError, plistlib.InvalidFileException, ValueError, TypeError):
+        return "", "", ""
+    if not isinstance(info, dict):
+        return "", "", ""
+    return (
+        _safe_diagnostic_text(info.get("CFBundleIdentifier")),
+        _safe_diagnostic_text(info.get("CFBundleShortVersionString")),
+        _safe_diagnostic_text(info.get("CFBundleVersion")),
+    )
+
+
+def _collect_process_access_diagnostics(
+    pid: int, helper_path: Path
+) -> MacosProcessAccessDiagnostics:
+    if sys.platform != "darwin":
+        return MacosProcessAccessDiagnostics()
+
+    macos_version = _safe_diagnostic_text(platform.mac_ver()[0])
+    build_result = _run_diagnostic_command(["/usr/bin/sw_vers", "-buildVersion"])
+    macos_build = ""
+    if build_result is not None and build_result.returncode == 0:
+        macos_build = _safe_diagnostic_text(
+            bytes(build_result.stdout or b"").decode("utf-8", errors="replace")
+        )
+
+    app_bundle = _wechat_app_bundle(pid)
+    bundle_id, target_version, target_build = _read_app_identity(app_bundle)
+    target_hardened_runtime: bool | None = None
+    target_get_task_allow: bool | None = None
+    if app_bundle is not None:
+        target_hardened_runtime, target_entitlements = _codesign_access_metadata(app_bundle)
+        if target_entitlements is not None:
+            target_get_task_allow = (
+                target_entitlements.get("com.apple.security.get-task-allow") is True
+            )
+
+    helper_hardened_runtime, helper_entitlements = _codesign_access_metadata(helper_path)
+    helper_debugger_entitlement: bool | None = None
+    if helper_entitlements is not None:
+        helper_debugger_entitlement = (
+            helper_entitlements.get("com.apple.security.cs.debugger") is True
+        )
+
+    return MacosProcessAccessDiagnostics(
+        macos_version=macos_version,
+        macos_build=macos_build,
+        target_bundle_id=bundle_id,
+        target_version=target_version,
+        target_build=target_build,
+        target_hardened_runtime=target_hardened_runtime,
+        target_get_task_allow=target_get_task_allow,
+        helper_hardened_runtime=helper_hardened_runtime,
+        helper_debugger_entitlement=helper_debugger_entitlement,
+    )
+
+
+def _process_access_denied_error(
+    diagnostics: MacosProcessAccessDiagnostics,
+) -> MacosDbKeyError:
+    if diagnostics.helper_debugger_entitlement is False:
+        return MacosDbKeyIntegrityError(
+            (
+                "已安装的 macOS 数据库密钥组件缺少读取其他进程所需的签名权限。"
+                "请更新或重新安装 WCDA 正式版本。"
+            ),
+            code="HELPER_DEBUGGER_ENTITLEMENT_MISSING",
+            retryable=False,
+        )
+    if (
+        diagnostics.target_hardened_runtime is True
+        and diagnostics.target_get_task_allow is False
+    ):
+        return MacosDbKeyAuthorizationError(
+            (
+                "当前微信为受保护的正式签名构建，macOS 已拒绝现有捕获组件附加到该进程。"
+                "这不是“开发者工具”开关未开启，无需反复切换该设置；"
+                "请更新 WCDA/密钥捕获组件，仍失败请联系开发者并附上日志。"
+            ),
+            code="TARGET_PROCESS_PROTECTED",
+            retryable=False,
+        )
+    return MacosDbKeyAuthorizationError(
+        (
+            "macOS 或微信进程已拒绝 WCDA 的读取请求。请确认“系统设置 → 隐私与安全性 → "
+            "开发者工具”已允许 WeChatDataAnalysis，随后完全退出微信和 WCDA 再重试。"
+            "若已开启后仍重复出现，当前微信进程可能受到额外保护；无需反复切换该设置，"
+            "请联系开发者并附上日志。"
+        ),
+        code="PROCESS_ACCESS_DENIED",
+        retryable=True,
+    )
+
+
 @dataclass
 class _BoundedPipe:
     limit: int
@@ -740,6 +950,9 @@ def _run_capture_helper(
     cancel_event: threading.Event | None,
     deadline_monotonic: float,
     popen_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
+    access_diagnostics_provider: (
+        Callable[[int, Path], MacosProcessAccessDiagnostics] | None
+    ) = None,
 ) -> str:
     argv = [
         str(bundle.helper_path),
@@ -829,16 +1042,36 @@ def _run_capture_helper(
                 retryable=True,
             )
         if return_code == 27:
-            raise MacosDbKeyAuthorizationError(
+            provider = access_diagnostics_provider or _collect_process_access_diagnostics
+            try:
+                diagnostics = provider(pid, bundle.helper_path)
+                if not isinstance(diagnostics, MacosProcessAccessDiagnostics):
+                    raise TypeError("invalid process access diagnostics")
+            except Exception as exc:
+                logger.warning(
+                    "[macos-db-key] access diagnostics unavailable: error_type=%s",
+                    type(exc).__name__,
+                )
+                diagnostics = MacosProcessAccessDiagnostics()
+            logger.warning(
                 (
-                    "macOS 或微信进程已拒绝 WCDA 的读取请求。请确认“系统设置 → 隐私与安全性 → "
-                    "开发者工具”已允许 WeChatDataAnalysis，随后完全退出微信和 WCDA 再重试。"
-                    "若已开启后仍重复出现，当前微信进程可能受到额外保护；无需反复切换该设置，"
-                    "请联系开发者并附上日志。"
+                    "[macos-db-key] access diagnostics: pid=%s macos_version=%s "
+                    "macos_build=%s target_bundle_id=%s target_version=%s target_build=%s "
+                    "target_hardened_runtime=%s target_get_task_allow=%s "
+                    "helper_hardened_runtime=%s helper_debugger_entitlement=%s"
                 ),
-                code="PROCESS_ACCESS_DENIED",
-                retryable=True,
+                pid,
+                diagnostics.macos_version or "unknown",
+                diagnostics.macos_build or "unknown",
+                diagnostics.target_bundle_id or "unknown",
+                diagnostics.target_version or "unknown",
+                diagnostics.target_build or "unknown",
+                diagnostics.target_hardened_runtime,
+                diagnostics.target_get_task_allow,
+                diagnostics.helper_hardened_runtime,
+                diagnostics.helper_debugger_entitlement,
             )
+            raise _process_access_denied_error(diagnostics)
         if return_code == 28:
             raise MacosDbKeyUnavailableError(
                 "当前微信版本暂不支持自动获取数据库密钥，请更新 WCDA；仍失败请联系开发者并附上日志。",
@@ -931,6 +1164,8 @@ def capture_macos_database_key(
         remaining_ms = min(MAXIMUM_TIMEOUT_MS, int(remaining_seconds * 1000))
         if remaining_ms < MINIMUM_TIMEOUT_MS:
             if last_capture_error is not None:
+                if isinstance(last_capture_error, MacosDbKeyAuthorizationError):
+                    raise last_capture_error
                 raise MacosDbKeyReloginRequiredError() from last_capture_error
             if not saw_wechat_process:
                 raise MacosDbKeyUnavailableError(
@@ -997,6 +1232,19 @@ def capture_macos_database_key(
                     pid,
                     exc.code,
                 )
+            except MacosDbKeyAuthorizationError as exc:
+                if not exc.retryable:
+                    raise
+                # The UI tells the user to quit and reopen WeChat after capture
+                # starts. Keep this request alive when the already-running
+                # process still has the old Developer Tools authorization state.
+                last_capture_error = exc
+                logger.info(
+                    "[macos-db-key] current WeChat process access denied; "
+                    "waiting for replacement: pid=%s code=%s",
+                    pid,
+                    exc.code,
+                )
             except MacosDbKeyUnavailableError as exc:
                 if exc.code != "PROCESS_EXITED":
                     raise
@@ -1022,6 +1270,7 @@ __all__ = [
     "MacosDbKeyCancelledError",
     "MacosDbKeyError",
     "MacosDbKeyIntegrityError",
+    "MacosProcessAccessDiagnostics",
     "MacosDbKeyReloginRequiredError",
     "MacosDbKeyTimeoutError",
     "MacosDbKeyUnavailableError",

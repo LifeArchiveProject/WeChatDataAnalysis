@@ -133,6 +133,7 @@ function inspectValid() {
     identifier: contract.bundleId,
     leafSha256: HELPER_SIGNER,
     architectures: new Set(["arm64", "x86_64"]),
+    debuggerEntitlement: true,
   };
 }
 
@@ -226,6 +227,29 @@ test("staging rejects tampering, expiry, signer drift, and missing x86_64", () =
         }),
       }),
       /signature or Universal2 architecture/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staging rejects a database-key helper without debugger entitlement", () => {
+  const root = tempDir();
+  try {
+    makeFixture(root);
+    assert.throws(
+      () => resolveMacosXkeyArtifacts({
+        env: envFor(root),
+        platform: "darwin",
+        nowUnix: ISSUED_AT + 1,
+        binaryInspector: () => ({
+          identifier: contract.bundleId,
+          leafSha256: HELPER_SIGNER,
+          architectures: new Set(["arm64", "x86_64"]),
+          debuggerEntitlement: false,
+        }),
+      }),
+      /com\.apple\.security\.cs\.debugger/
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

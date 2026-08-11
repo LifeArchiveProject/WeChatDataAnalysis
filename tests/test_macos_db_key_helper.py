@@ -294,6 +294,7 @@ def _run_fake(
     stdout: bytes,
     stderr: bytes = b"",
     returncode: int = 0,
+    access_diagnostics_provider=None,
 ) -> tuple[str, list[str], dict[str, object]]:
     observed: dict[str, object] = {}
 
@@ -302,6 +303,10 @@ def _run_fake(
         observed["kwargs"] = kwargs
         return _FakeProcess(stdout, stderr, returncode)
 
+    options = {}
+    if access_diagnostics_provider is not None:
+        options["access_diagnostics_provider"] = access_diagnostics_provider
+
     result = helper._run_capture_helper(
         bundle,
         pid=4321,
@@ -309,6 +314,7 @@ def _run_fake(
         cancel_event=None,
         deadline_monotonic=time.monotonic() + 2,
         popen_factory=factory,
+        **options,
     )
     return result, observed["argv"], observed["kwargs"]
 
@@ -370,6 +376,90 @@ def test_helper_attach_failures_do_not_repeat_inapplicable_permission_guidance(
         _run_fake(bundle, stdout=b"", returncode=31)
     assert unsupported.value.code == "CAPTURE_ATTACH_NOT_SUPPORTED"
     assert "不是“开发者工具”开关未开启" in str(unsupported.value)
+
+
+def test_process_access_denial_identifies_protected_wechat_build(tmp_path: Path):
+    bundle = _validated_bundle(tmp_path)
+    diagnostics = helper.MacosProcessAccessDiagnostics(
+        macos_version="15.6",
+        macos_build="24G84",
+        target_bundle_id="com.tencent.xinWeChat",
+        target_version="4.0.6",
+        target_build="30080",
+        target_hardened_runtime=True,
+        target_get_task_allow=False,
+        helper_hardened_runtime=True,
+        helper_debugger_entitlement=True,
+    )
+
+    with pytest.raises(helper.MacosDbKeyAuthorizationError) as protected:
+        _run_fake(
+            bundle,
+            stdout=b"",
+            returncode=27,
+            access_diagnostics_provider=lambda _pid, _helper_path: diagnostics,
+        )
+
+    assert protected.value.code == "TARGET_PROCESS_PROTECTED"
+    assert protected.value.retryable is False
+    assert "开发者工具" in str(protected.value)
+    assert "无需反复切换" in str(protected.value)
+
+
+def test_process_access_denial_identifies_missing_helper_entitlement(tmp_path: Path):
+    bundle = _validated_bundle(tmp_path)
+    diagnostics = helper.MacosProcessAccessDiagnostics(
+        helper_hardened_runtime=True,
+        helper_debugger_entitlement=False,
+    )
+
+    with pytest.raises(helper.MacosDbKeyIntegrityError) as invalid_helper:
+        _run_fake(
+            bundle,
+            stdout=b"",
+            returncode=27,
+            access_diagnostics_provider=lambda _pid, _helper_path: diagnostics,
+        )
+
+    assert invalid_helper.value.code == "HELPER_DEBUGGER_ENTITLEMENT_MISSING"
+    assert invalid_helper.value.retryable is False
+    assert "重新安装" in str(invalid_helper.value)
+
+
+def test_process_access_diagnostics_failure_preserves_coarse_error(tmp_path: Path):
+    bundle = _validated_bundle(tmp_path)
+
+    def fail_diagnostics(_pid: int, _helper_path: Path):
+        raise OSError("diagnostic unavailable")
+
+    with pytest.raises(helper.MacosDbKeyAuthorizationError) as denied:
+        _run_fake(
+            bundle,
+            stdout=b"",
+            returncode=27,
+            access_diagnostics_provider=fail_diagnostics,
+        )
+
+    assert denied.value.code == "PROCESS_ACCESS_DENIED"
+    assert denied.value.retryable is True
+
+
+def test_codesign_access_metadata_extracts_runtime_and_entitlements():
+    entitlements = b"""<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>com.apple.security.cs.debugger</key><true/>
+</dict></plist>"""
+    result = subprocess.CompletedProcess(
+        ["codesign"],
+        0,
+        stdout=b"",
+        stderr=b"CodeDirectory flags=0x10000(runtime)\n" + entitlements,
+    )
+
+    hardened_runtime, parsed = helper._extract_codesign_access_metadata(result)
+
+    assert hardened_runtime is True
+    assert parsed == {"com.apple.security.cs.debugger": True}
 
 
 def test_helper_rejects_extra_stdout_and_secret_on_stderr(tmp_path: Path):
@@ -501,3 +591,55 @@ def test_capture_keeps_waiting_after_relogin_required_for_a_new_pid(
     assert calls == [111, 222]
     assert result["db_key"] == "34" * 32
     assert result["pid"] == 222
+
+
+def test_capture_keeps_waiting_after_retryable_access_denial_for_a_new_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    bundle = _validated_bundle(tmp_path)
+    pid_snapshots = iter(((111,), (), (222,)))
+    calls: list[int] = []
+
+    def runner(_bundle, *, pid, **_kwargs):
+        calls.append(pid)
+        if pid == 111:
+            raise helper.MacosDbKeyAuthorizationError(
+                "restart required",
+                code="PROCESS_ACCESS_DENIED",
+                retryable=True,
+            )
+        return "56" * 32
+
+    monkeypatch.setattr(helper.time, "sleep", lambda _seconds: None)
+    result = helper.capture_macos_database_key(
+        bundle=bundle,
+        pid_provider=lambda: next(pid_snapshots, (222,)),
+        helper_runner=runner,
+    )
+
+    assert calls == [111, 222]
+    assert result["db_key"] == "56" * 32
+    assert result["pid"] == 222
+
+
+def test_capture_does_not_retry_protected_target_on_another_pid(tmp_path: Path):
+    bundle = _validated_bundle(tmp_path)
+    calls: list[int] = []
+
+    def runner(_bundle, *, pid, **_kwargs):
+        calls.append(pid)
+        raise helper.MacosDbKeyAuthorizationError(
+            "protected target",
+            code="TARGET_PROCESS_PROTECTED",
+            retryable=False,
+        )
+
+    with pytest.raises(helper.MacosDbKeyAuthorizationError) as protected:
+        helper.capture_macos_database_key(
+            bundle=bundle,
+            pid_provider=lambda: (111, 222),
+            helper_runner=runner,
+        )
+
+    assert protected.value.code == "TARGET_PROCESS_PROTECTED"
+    assert calls == [111]
