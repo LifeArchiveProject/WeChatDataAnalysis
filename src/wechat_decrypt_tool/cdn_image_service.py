@@ -9,7 +9,7 @@
 2. ``GET  https://wxcdn.c3o.re/download?fileid=<id>&type=orig[&key=<aes_hex>]``，
    头部带 ``Authorization: Bearer <token>``，返回（必要时已 AES-ECB 解密的）原图字节。
 
-仅在本地找不到原图、且用户未关闭「自动获取原图(CDN)」时才会被调用。
+仅在本地找不到原图，且用户开启了自动获取或明确点击“尝试加载大图”时调用。
 """
 
 from __future__ import annotations
