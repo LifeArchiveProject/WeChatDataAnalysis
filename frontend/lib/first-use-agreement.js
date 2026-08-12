@@ -1,4 +1,4 @@
-export const FIRST_USE_AGREEMENT_VERSION = '2026-07-26.2'
+export const FIRST_USE_AGREEMENT_VERSION = '2026-08-12.3'
 export const FIRST_USE_AGREEMENT_STORAGE_KEY = 'ui.first_use_agreement'
 
 let acceptedForCurrentSession = false
