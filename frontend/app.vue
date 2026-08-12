@@ -59,7 +59,10 @@
       aria-label="正在准备首次使用说明"
     >
       <img src="/logo.png" alt="" aria-hidden="true" />
-      <span>正在准备使用须知…</span>
+      <div class="first-use-route-guard-copy">
+        <span>正在准备使用须知…</span>
+        <a :href="firstUseAgreementHref" @click="openFirstUseAgreement">直接打开使用须知</a>
+      </div>
     </div>
   </div>
 </template>
@@ -83,9 +86,22 @@ const privacyStore = usePrivacyStore()
 const chatAccounts = useChatAccountsStore()
 const { selectedAccount, selectedDataSourceStatus } = storeToRefs(chatAccounts)
 const noAccountGuideOpen = ref(false)
-const firstUseRouteResolved = ref(false)
+const isAgreementRoute = (path = route.path) => {
+  const normalized = String(path || '').replace(/\/+$/, '') || '/'
+  return normalized === '/agreement'
+}
+const firstUseRouteResolved = ref(isAgreementRoute())
+const firstUseAgreementHref = computed(() => (
+  `/agreement?redirect=${encodeURIComponent(String(route.fullPath || '/'))}`
+))
 let firstUseGuardReady = false
 let firstUseNavigationPending = false
+
+const openFirstUseAgreement = (event) => {
+  if (!process.client || typeof window === 'undefined') return
+  event?.preventDefault?.()
+  window.location.replace(firstUseAgreementHref.value)
+}
 
 const accountDataRoutePrefixes = [
   '/chat',
@@ -181,7 +197,7 @@ const updateDprVar = () => {
 
 const enforceFirstUseRoute = async () => {
   if (!process.client || !firstUseGuardReady) return
-  if (route.path === '/agreement' || isFirstUseAgreementAccepted()) {
+  if (isAgreementRoute() || isFirstUseAgreementAccepted()) {
     firstUseRouteResolved.value = true
     return
   }
@@ -189,14 +205,22 @@ const enforceFirstUseRoute = async () => {
   firstUseRouteResolved.value = false
   if (firstUseNavigationPending) return
   firstUseNavigationPending = true
+  const hardNavigationTimer = window.setTimeout(() => {
+    if (!isAgreementRoute() && !isFirstUseAgreementAccepted()) {
+      window.location.replace(firstUseAgreementHref.value)
+    }
+  }, 1500)
   try {
     await navigateTo({
       path: '/agreement',
       query: { redirect: route.fullPath || '/' }
     }, { replace: true })
+  } catch {
+    window.location.replace(firstUseAgreementHref.value)
   } finally {
+    window.clearTimeout(hardNavigationTimer)
     firstUseNavigationPending = false
-    firstUseRouteResolved.value = route.path === '/agreement' || isFirstUseAgreementAccepted()
+    firstUseRouteResolved.value = isAgreementRoute() || isFirstUseAgreementAccepted()
   }
 }
 
@@ -275,7 +299,7 @@ const showSidebar = computed(() => {
   if (path === '/' || path === '/import') return false
   if (path === '/decrypt' || path === '/detection-result' || path === '/decrypt-result') return false
   if (path === '/landing' || path === '/site') return false
-  if (path === '/agreement') return false
+  if (isAgreementRoute(path)) return false
   return !(path === '/wrapped' || path.startsWith('/wrapped/'))
 })
 </script>
@@ -339,6 +363,26 @@ html[data-theme='dark'] .theme-app-shell-wrapped {
   background: var(--app-surface-bg, #ffffff);
   color: var(--app-text-secondary, #5f5f5f);
   font-size: 14px;
+}
+
+html[data-first-use-route='agreement'] .first-use-route-guard,
+html[data-first-use-accepted='true'] .first-use-route-guard {
+  display: none;
+}
+
+.first-use-route-guard-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.first-use-route-guard-copy a {
+  color: var(--app-accent, #07c160);
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .first-use-route-guard img {
