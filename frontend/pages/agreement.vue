@@ -376,12 +376,15 @@ const confirmAgreement = async () => {
   if (!canConfirm.value) return
 
   persistFirstUseAgreementAcceptance()
+  document.documentElement.removeAttribute('data-first-use-route')
+  document.documentElement.setAttribute('data-first-use-accepted', 'true')
   await navigateTo(normalizeFirstUseRedirect(route.query.redirect), { replace: true })
 }
 
 useHead({ title: '使用须知与免责声明 - 微信数据分析工具' })
 
 onMounted(() => {
+  pageRef.value?.setAttribute('data-first-use-mounted', 'true')
   document.addEventListener('visibilitychange', handleVisibilityChange)
   startCountdown()
   titleRef.value?.focus?.()
@@ -389,6 +392,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  pageRef.value?.removeAttribute('data-first-use-mounted')
   annotationsDisposed = true
   removeRoughAnnotations()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
