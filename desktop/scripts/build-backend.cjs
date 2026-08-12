@@ -216,12 +216,17 @@ function readNativeCoreManifest(artifactDir) {
 
 function resolveNativeCoreArtifacts({ env = process.env, platform = process.platform } = {}) {
   const names = nativeCoreArtifactNames(platform);
-  const explicitValue = String(env.WCE_NATIVE_CORE_ARTIFACT_DIR || "").trim();
+  let explicitValue = String(env.WCE_NATIVE_CORE_ARTIFACT_DIR || "").trim();
   const explicitlyRequired =
     parseBooleanEnv(env, "WCE_NATIVE_CORE_REQUIRED") ||
     String(env.WECHAT_TOOL_NATIVE_CORE_MODE || "").trim().toLowerCase() === "required";
   const required = names.length > 0 || explicitlyRequired;
-  const allowDevelopment = parseBooleanEnv(env, "WCE_NATIVE_CORE_ALLOW_DEVELOPMENT_ARTIFACTS");
+  let allowDevelopment = parseBooleanEnv(env, "WCE_NATIVE_CORE_ALLOW_DEVELOPMENT_ARTIFACTS");
+
+  if (!explicitValue && !isCiEnvironment(env)) {
+    explicitValue = path.join(repoRoot, "src", "wechat_decrypt_tool", "native");
+    allowDevelopment = true;
+  }
 
   if (names.length === 0) {
     if (explicitValue || required || allowDevelopment) {

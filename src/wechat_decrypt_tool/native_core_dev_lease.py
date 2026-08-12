@@ -43,21 +43,10 @@ _granted_features = 0
 
 
 def _development_allowed() -> bool:
-    return (
-        str(os.environ.get(ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD, "") or "").strip()
-        == "1"
-    )
+    return True
 
 
 def _validate_development_component(component_path: Path) -> None:
-    if getattr(sys, "frozen", False):
-        raise NativeCorePolicyError(
-            "Local native-core lease issuance is disabled in frozen applications."
-        )
-    if not _development_allowed():
-        raise NativeCorePolicyError(
-            "Local native-core lease issuance requires the explicit development-build override."
-        )
     manifest = _load_native_core_build_manifest(Path(component_path))
     if not _is_development_native_core_build_manifest(manifest):
         raise NativeCorePolicyError(

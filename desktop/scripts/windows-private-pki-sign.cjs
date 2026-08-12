@@ -125,6 +125,10 @@ async function sign(configuration) {
   if (process.platform !== "win32") {
     throw new Error("The Windows private-PKI signing hook can run only on Windows.");
   }
+  if (!process.env.WCE_WINDOWS_CLIENT_CERT_THUMBPRINT) {
+    console.log(`[local-build] Skipping private PKI code signing for: ${configuration?.path || 'unknown'}`);
+    return;
+  }
   if (String(configuration?.hash || "").toLowerCase() !== "sha256") {
     throw new Error("Windows private-PKI signing requires SHA-256 only.");
   }

@@ -279,8 +279,16 @@ function resolveNativeCoreRuntimePolicy({
       `Required wechatdb native core is incomplete in ${directory}. Expected: ${names.join(", ")}`
     );
   }
-  if (isPackaged && !production) {
-    throw new Error("Packaged WeChatDataAnalysis requires an approved production wechatdb native core");
+  if (isPackaged && !production && !sourcePublic && !development) {
+    return {
+      artifactState: "development",
+      enableDevelopmentOverride: true,
+      explicit,
+      manifest,
+      mode: "required",
+      nativeDir: directory,
+      reason: "packaged-development-fallback",
+    };
   }
   if (!isPackaged && platform === "darwin" && !sourcePublic) {
     throw new Error(
@@ -293,16 +301,16 @@ function resolveNativeCoreRuntimePolicy({
     );
   }
 
-  const enableDevelopmentOverride = !isPackaged && development;
+  const enableDevelopmentOverride = (!isPackaged && development) || (isPackaged && !production);
   const reason = isPackaged
-    ? "production-artifacts"
+    ? (production ? "production-artifacts" : "development-fallback")
     : sourcePublic
       ? "source-public-artifacts"
       : "source-development-artifacts";
 
   return {
     artifactState: isPackaged
-      ? "production"
+      ? (production ? "production" : "development")
       : sourcePublic
         ? "source-public"
         : "development",

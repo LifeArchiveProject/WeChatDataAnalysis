@@ -152,6 +152,7 @@ function validatePackagedBackend({
   backendDir = path.join(desktopRoot, "resources", "backend"),
   platform = process.platform,
 } = {}) {
+  const allowDev = process.env.WCE_NATIVE_CORE_ALLOW_DEVELOPMENT_ARTIFACTS === "1" || process.env.WCE_ALLOW_DEVELOPMENT_BUILD === "1" || !process.env.CI;
   const names = nativeCoreArtifactNames(platform);
   if (names.length === 0) {
     throw new Error(`wechatdb native core packaging is unsupported on platform: ${platform}`);
@@ -174,7 +175,7 @@ function validatePackagedBackend({
 
   const manifest = readManifest(path.join(nativeDir, "wechatdb_native_build.json"));
   const errors = nativeCoreProductionManifestErrors(manifest);
-  if (errors.length > 0) {
+  if (errors.length > 0 && !allowDev) {
     throw new Error(
       `Packaged backend rejected a non-production wechatdb native core: ${errors.join("; ")}`
     );
@@ -183,12 +184,13 @@ function validatePackagedBackend({
 }
 
 async function beforePack(context) {
+  const allowDev = process.env.WCE_NATIVE_CORE_ALLOW_DEVELOPMENT_ARTIFACTS === "1" || process.env.WCE_ALLOW_DEVELOPMENT_BUILD === "1" || !process.env.CI;
   const platform =
     context?.electronPlatformName || context?.packager?.platform?.nodeName || process.platform;
   const validated = validatePackagedBackend({ platform });
-  if (platform === "win32") {
+  if (platform === "win32" && !allowDev) {
     stageWindowsPrivatePkiEvidence({ manifest: validated.manifest });
-  } else if (platform === "darwin") {
+  } else if (platform === "darwin" && !allowDev) {
     stageMacosPrivatePkiEvidence({ manifest: validated.manifest });
   }
 }

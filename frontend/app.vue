@@ -52,7 +52,7 @@
     </ClientOnly>
 
     <div
-      v-if="!firstUseRouteResolved"
+      v-if="!firstUseRouteResolved && route.path !== '/agreement'"
       class="first-use-route-guard"
       role="status"
       aria-live="polite"
@@ -83,8 +83,12 @@ const privacyStore = usePrivacyStore()
 const chatAccounts = useChatAccountsStore()
 const { selectedAccount, selectedDataSourceStatus } = storeToRefs(chatAccounts)
 const noAccountGuideOpen = ref(false)
-const firstUseRouteResolved = ref(false)
-let firstUseGuardReady = false
+const firstUseRouteResolved = ref(
+  typeof window !== 'undefined'
+    ? (route.path === '/agreement' || isFirstUseAgreementAccepted())
+    : false
+)
+let firstUseGuardReady = true
 let firstUseNavigationPending = false
 
 const accountDataRoutePrefixes = [
@@ -187,13 +191,20 @@ const enforceFirstUseRoute = async () => {
   }
 
   firstUseRouteResolved.value = false
-  if (firstUseNavigationPending) return
+  if (firstUseNavigationPending) {
+    if (route.path === '/agreement') {
+      firstUseRouteResolved.value = true
+    }
+    return
+  }
   firstUseNavigationPending = true
   try {
     await navigateTo({
       path: '/agreement',
       query: { redirect: route.fullPath || '/' }
     }, { replace: true })
+  } catch (err) {
+    console.error('[first-use-guard] navigation error:', err)
   } finally {
     firstUseNavigationPending = false
     firstUseRouteResolved.value = route.path === '/agreement' || isFirstUseAgreementAccepted()

@@ -1,4 +1,4 @@
-﻿"""微信解密工具的FastAPI Web服务器"""
+"""微信解密工具的FastAPI Web服务器"""
 
 import os
 from pathlib import Path
@@ -143,6 +143,15 @@ app.include_router(_record_export_router)
 app.include_router(_system_router)
 
 
+import mimetypes
+
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/json", ".json")
+mimetypes.add_type("image/svg+xml", ".svg")
+
+
 class _SPAStaticFiles(StaticFiles):
     """StaticFiles with a SPA fallback (Nuxt generate output)."""
 
@@ -180,6 +189,10 @@ class _SPAStaticFiles(StaticFiles):
         normalized = self._normalize_path(path)
         try:
             response = await super().get_response(path, scope)
+            if normalized.endswith(".js") or normalized.endswith(".mjs"):
+                response.headers["content-type"] = "text/javascript; charset=utf-8"
+            elif normalized.endswith(".css"):
+                response.headers["content-type"] = "text/css; charset=utf-8"
             return self._apply_cache_headers(normalized, response)
         except StarletteHTTPException as exc:
             if exc.status_code != 404:

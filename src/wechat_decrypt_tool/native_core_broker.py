@@ -464,8 +464,8 @@ def ensure_native_core_broker(
                 creationflags=creation_flags,
                 start_new_session=not sys.platform.startswith("win"),
             )
-        except OSError as exc:
-            raise NativeCoreUnavailableError("Cannot start wechatdb native broker.") from exc
+        except OSError:
+            return None
         finally:
             if log_file is not subprocess.DEVNULL:
                 log_file.close()

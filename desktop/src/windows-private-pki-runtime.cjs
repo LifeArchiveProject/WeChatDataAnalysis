@@ -170,6 +170,12 @@ function configurePrivatePkiUpdateVerification(
   } = {}
 ) {
   if (!updater || platform !== "win32" || !isPackaged) return false;
+  try {
+    const certPath = path.join(resourcesPath, "signing", "windows-private-pki-root.cer");
+    if (!fs.existsSync(certPath)) return false;
+  } catch {
+    return false;
+  }
   updater.verifyUpdateCodeSignature = async (_publisherNames, installerPath) => {
     try {
       verifier(installerPath, { resourcesPath });

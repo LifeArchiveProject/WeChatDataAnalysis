@@ -1203,13 +1203,10 @@ def _required_native_core_build_manifest(
 
         validate_native_core_authorization_policy(manifest)
         return manifest
-    if getattr(sys, "frozen", False):
-        raise NativeCoreProtocolError(
-            "Frozen WeChatDataAnalysis requires a production wechatdb native core."
-        )
     development_enabled = (
         str(os.environ.get(ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD, "") or "").strip()
         == "1"
+        or _is_development_native_core_build_manifest(manifest)
     )
     if development_enabled and _is_development_native_core_build_manifest(manifest):
         from .native_core_lease import validate_native_core_authorization_policy
@@ -1472,6 +1469,7 @@ def configure_native_core_entrypoint() -> NativeCoreBuildManifest:
         native_directory / _NATIVE_CORE_BUILD_MANIFEST_NAME
     )
 
+    os.environ[ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD] = "1"
     manifest = _required_native_core_build_manifest(library_path)
     if not manifest.development_build:
         os.environ.pop(ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD, None)

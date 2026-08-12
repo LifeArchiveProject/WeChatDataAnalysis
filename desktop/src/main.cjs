@@ -102,15 +102,47 @@ function setWindowTitleBarTheme(win, theme) {
   }
 }
 
+function debugLogDirect(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  try {
+    const dir = path.join(os.homedir(), "AppData", "Roaming", "wechat-data-analysis-desktop");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, "direct_startup.log"), line, "utf8");
+  } catch {}
+  console.log(msg);
+}
+
+debugLogDirect("[main] Desktop main.cjs entry script loaded.");
+
+process.on("uncaughtException", (err) => {
+  debugLogDirect(`[FATAL uncaughtException] ${err?.stack || err}`);
+  try {
+    dialog.showErrorBox("WeChatDataAnalysis 启动异常", `应用遇到未处理错误：\n${err?.message || err}\n\n详细堆栈：\n${err?.stack || ""}`);
+  } catch {}
+});
+
+process.on("unhandledRejection", (reason) => {
+  debugLogDirect(`[FATAL unhandledRejection] ${reason?.stack || reason}`);
+});
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
-  // If we allow a second instance to boot it will try to spawn another backend on the same port.
-  // Quit early to avoid leaving orphan backend processes around.
+  debugLogDirect("[main] Second instance detected. Single instance lock active. Bringing existing window to front & quitting second process.");
+  try {
+    dialog.showMessageBoxSync({
+      type: "info",
+      title: "WeChatDataAnalysis 提醒",
+      message: "程序已在后台或任务栏右下角运行中！\n无需重复双击启动，正在为你唤醒界面...",
+      buttons: ["确定"],
+    });
+  } catch {}
   try {
     app.quit();
   } catch {}
 } else {
+  debugLogDirect("[main] Acquired single instance lock successfully.");
   app.on("second-instance", () => {
+    debugLogDirect("[main] Event 'second-instance' received. Requesting main window display.");
     try {
       if (app.isReady()) requestMainWindow("second-instance");
       else app.whenReady().then(() => requestMainWindow("second-instance"));
@@ -1982,15 +2014,21 @@ function getNativeCoreRuntimeDir(env = process.env) {
 }
 
 function configureNativeCoreRuntime(env) {
-  const policy = applyNativeCoreRuntimePolicy(env, {
-    isPackaged: app.isPackaged,
-    nativeDir: getNativeCoreRuntimeDir(env),
-    platform: process.platform,
-  });
-  logMain(
-    `[native-core] mode=${policy.mode} source=${policy.reason} artifacts=${policy.artifactState} packaged=${app.isPackaged}`
-  );
-  return policy;
+  try {
+    const policy = applyNativeCoreRuntimePolicy(env, {
+      isPackaged: app.isPackaged,
+      nativeDir: getNativeCoreRuntimeDir(env),
+      platform: process.platform,
+    });
+    logMain(
+      `[native-core] mode=${policy.mode} source=${policy.reason} artifacts=${policy.artifactState} packaged=${app.isPackaged}`
+    );
+    return policy;
+  } catch (err) {
+    logMain(`[native-core] policy fallback due to: ${err?.message || err}`);
+    env.WECHAT_TOOL_NATIVE_CORE_MODE = "required";
+    return { mode: "required", reason: "error-fallback" };
+  }
 }
 
 function clearLegacyWcdbEnvironment(targetEnv = process.env) {
@@ -2966,6 +3004,7 @@ async function ensureMainWindowReady() {
     const startUrl = getDesktopUiUrl();
     logMain(`[main] debugEnabled=${debugEnabled()} startUrl=${startUrl}`);
     await loadWithRetry(win, startUrl);
+    showMainWindow();
 
     if (debugEnabled()) {
       try {
@@ -2986,21 +3025,29 @@ async function ensureMainWindowReady() {
 async function main() {
   await app.whenReady();
   if (app.isPackaged && process.platform === "win32") {
-    const evidence = ensurePrivatePkiIssuerCached({
-      resourcesPath: process.resourcesPath,
-    });
-    logMain(
-      `[private-pki] issuer=${evidence.issuerStore} root=${evidence.rootSha256.slice(0, 12)} newlyAdded=${evidence.newlyAdded === true}`
-    );
+    try {
+      const evidence = ensurePrivatePkiIssuerCached({
+        resourcesPath: process.resourcesPath,
+      });
+      logMain(
+        `[private-pki] issuer=${evidence.issuerStore} root=${evidence.rootSha256.slice(0, 12)} newlyAdded=${evidence.newlyAdded === true}`
+      );
+    } catch (err) {
+      logMain(`[private-pki] optional private PKI issuer check skipped: ${err?.message || err}`);
+    }
   }
   if (app.isPackaged && process.platform === "darwin") {
-    const evidence = ensureMacosPrivatePkiTrust({
-      executablePath: process.execPath,
-      resourcesPath: process.resourcesPath,
-    });
-    logMain(
-      `[private-pki] macos userTrust=${evidence.alreadyTrusted ? "cached" : "installed"} root=${evidence.rootSha256.slice(0, 12)} verifiedTargets=${evidence.verifiedTargetCount}`
-    );
+    try {
+      const evidence = ensureMacosPrivatePkiTrust({
+        executablePath: process.execPath,
+        resourcesPath: process.resourcesPath,
+      });
+      logMain(
+        `[private-pki] macos userTrust=${evidence.alreadyTrusted ? "cached" : "installed"} root=${evidence.rootSha256.slice(0, 12)} verifiedTargets=${evidence.verifiedTargetCount}`
+      );
+    } catch (err) {
+      logMain(`[private-pki] optional macos private PKI trust check skipped: ${err?.message || err}`);
+    }
   }
   await refreshRendererCacheForPackagedUi();
   Menu.setApplicationMenu(null);
