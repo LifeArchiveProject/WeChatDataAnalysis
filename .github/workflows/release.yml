@@ -743,21 +743,42 @@ jobs:
           VER="${VERSION#v}"
           EXE="WeChatDataAnalysis-${VER}-Setup.exe"
           DMG="WeChatDataAnalysis-${VER}-mac-arm64.dmg"
+          EXE_7Z="${EXE}.7z"
+          DMG_7Z="${DMG}.7z"
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}"
           EXE_URL="${BASE_URL}/${EXE}"
           MAC_ARM64_URL="${BASE_URL}/${DMG}"
 
           gh release download "${VERSION}" --pattern "${EXE}" --pattern "${DMG}" --dir /tmp/release
 
+          7z a /tmp/release/${EXE_7Z} /tmp/release/${EXE}
+          7z a /tmp/release/${DMG_7Z} /tmp/release/${DMG}
+
           BODY=$(git log -1 --pretty=format:%b)
           [ -z "$BODY" ] && BODY=$(git log -1 --pretty=format:%s)
 
           echo "version=${VERSION}"             >> $GITHUB_OUTPUT
-          echo "exe=${EXE}"                     >> $GITHUB_OUTPUT
-          echo "dmg=${DMG}"                     >> $GITHUB_OUTPUT
           echo "exe_url=${EXE_URL}"             >> $GITHUB_OUTPUT
           echo "mac_arm64_url=${MAC_ARM64_URL}" >> $GITHUB_OUTPUT
           { echo "body<<BODY_EOF"; echo "$BODY"; echo "BODY_EOF"; } >> $GITHUB_OUTPUT
+
+          MAX_BYTES=209715200
+          EXE_7Z_SIZE=$(stat -c%s /tmp/release/${EXE_7Z})
+          DMG_7Z_SIZE=$(stat -c%s /tmp/release/${DMG_7Z})
+
+          {
+            echo "file_path_list<<FP_EOF"
+            [ "${EXE_7Z_SIZE}" -le "${MAX_BYTES}" ] && echo "/tmp/release/${EXE_7Z}"
+            [ "${DMG_7Z_SIZE}" -le "${MAX_BYTES}" ] && echo "/tmp/release/${DMG_7Z}"
+            echo "FP_EOF"
+          } >> $GITHUB_OUTPUT
+
+          {
+            echo "file_name_list<<FN_EOF"
+            [ "${EXE_7Z_SIZE}" -le "${MAX_BYTES}" ] && echo "${EXE_7Z}"
+            [ "${DMG_7Z_SIZE}" -le "${MAX_BYTES}" ] && echo "${DMG_7Z}"
+            echo "FN_EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Send QQ notification
         uses: H3CoF6/qq-notify-action@50d180981e7c7b8552a3331b981e3f8cfcf40c44
@@ -777,10 +798,6 @@ jobs:
             - macOS arm64 [下载链接](${{ steps.prep.outputs.mac_arm64_url }})
 
             欢迎大家使用和测试~
-          file_path: |
-            /tmp/release/${{ steps.prep.outputs.exe }}
-            /tmp/release/${{ steps.prep.outputs.dmg }}
+          file_path: ${{ steps.prep.outputs.file_path_list }}
           file_type: file
-          file_name: |
-            ${{ steps.prep.outputs.exe }}
-            ${{ steps.prep.outputs.dmg }}
+          file_name: ${{ steps.prep.outputs.file_name_list }}
