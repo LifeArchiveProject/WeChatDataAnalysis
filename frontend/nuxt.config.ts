@@ -42,6 +42,7 @@ export default defineNuxtConfig({
   
   // 应用配置
   css: [
+    '@fortawesome/fontawesome-free/css/all.min.css',
     '~/assets/css/chat.css',
     '~/assets/css/record-pages.css',
     '~/assets/css/export-panels.css'
@@ -57,8 +58,7 @@ export default defineNuxtConfig({
         { name: 'description', content: '微信4.x版本数据库解密工具' }
       ],
       link: [
-        { rel: 'icon', type: 'image/png', href: '/logo.png' },
-        { rel: 'stylesheet', href: 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css' }
+        { rel: 'icon', type: 'image/png', href: '/logo.png' }
       ]
     }
   },
