@@ -134,15 +134,33 @@ def test_notice_covers_version_login_and_hook_risks():
         assert text in source
 
 
-def test_app_uses_a_hydration_safe_initial_route_guard():
+def test_app_uses_a_route_aware_guard_with_a_hard_navigation_fallback():
     source = read_frontend("app.vue")
     index = read_frontend("pages/index.vue")
 
-    assert "const firstUseRouteResolved = ref(false)" in source
+    assert "const firstUseRouteResolved = ref(isAgreementRoute())" in source
     assert "await nextTick()" in source
     assert "await enforceFirstUseRoute()" in source
     assert "正在准备使用须知" in source
+    assert "直接打开使用须知" in source
+    assert '<a :href="firstUseAgreementHref"' in source
+    assert "window.location.replace(firstUseAgreementHref.value)" in source
     assert "if (!isFirstUseAgreementAccepted()) return" in index
+
+
+def test_inline_bootstrap_can_reach_and_accept_the_notice_without_nuxt_mounting():
+    config = read_frontend("nuxt.config.ts")
+    bootstrap = read_frontend("lib/first-use-bootstrap-script.js")
+    agreement = read_frontend("pages/agreement.vue")
+
+    assert "createFirstUseBootstrapScript" in config
+    assert "innerHTML: firstUseBootstrapScript" in config
+    assert "tagPosition: 'head'" in config
+    assert "window.location.replace(agreementUrl)" in bootstrap
+    assert "data-first-use-mounted" in bootstrap
+    assert "window.localStorage.setItem(storageKey" in bootstrap
+    assert "button.disabled = false" in bootstrap
+    assert "pageRef.value?.setAttribute('data-first-use-mounted', 'true')" in agreement
 
 
 def test_first_use_route_guard_does_not_wait_on_remote_stylesheets():
