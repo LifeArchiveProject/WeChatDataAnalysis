@@ -80,3 +80,6 @@ pnpm-lock.yaml
 
 # Local scratch file accidentally generated during development
 /bento-summary.html
+
+# Scratch/intermediate working directory
+/tmp/
