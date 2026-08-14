@@ -213,8 +213,18 @@
 /* 语音消息样式 - 微信风格 */
 .wechat-voice-wrapper {
   display: flex;
+  flex-direction: column;
   width: 100%;
   position: relative;
+  gap: 6px;
+}
+
+.wechat-voice-wrapper--received {
+  align-items: flex-start;
+}
+
+.wechat-voice-wrapper--sent {
+  align-items: flex-end;
 }
 
 .wechat-voice-bubble {
@@ -265,6 +275,68 @@
   height: 10px;
   background: var(--chat-bubble-received);
   border-radius: 2px;
+}
+
+/* 语音转文字气泡 - 微信风格：语音下方独立气泡，无尖角，随内容收缩 */
+.wechat-voice-transcript {
+  width: fit-content;
+  max-width: min(404px, 100%);
+  padding: 8px 12px;
+  border-radius: var(--message-radius);
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.wechat-voice-transcript--received {
+  background: var(--chat-bubble-received);
+  color: var(--chat-bubble-received-text);
+}
+
+.wechat-voice-transcript--sent {
+  background: var(--chat-bubble-sent);
+  color: var(--chat-bubble-sent-text);
+}
+
+.wechat-voice-transcript__action,
+.wechat-voice-transcript__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.wechat-voice-transcript__action:hover,
+.wechat-voice-transcript__retry:hover {
+  opacity: 1;
+}
+
+.wechat-voice-transcript__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.75;
+}
+
+.wechat-voice-transcript__text {
+  margin: 0;
+}
+
+.wechat-voice-transcript--error .wechat-voice-transcript__error {
+  opacity: 0.85;
+}
+
+.wechat-voice-transcript__retry {
+  margin-left: 8px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .wechat-voice-content {

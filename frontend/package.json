@@ -6,8 +6,8 @@
     "build": "nuxt build",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
+    "test": "node --test tests/*.test.mjs && vitest run",
     "preview": "nuxt preview",
-    "test": "node --test tests/*.test.mjs",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
@@ -25,6 +25,10 @@
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
-    "tailwindcss": "3.4.17"
+    "@vitejs/plugin-vue": "^6.0.4",
+    "@vue/test-utils": "^2.4.11",
+    "happy-dom": "^18.0.1",
+    "tailwindcss": "3.4.17",
+    "vitest": "^3.2.7"
   }
 }

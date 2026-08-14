@@ -206,6 +206,33 @@
                 <span>{{ opt.label }}</span>
               </label>
             </div>
+
+            <label
+              class="chat-export-transcription-option"
+              :class="{
+                'chat-export-transcription-option--selected': exportTranscribeVoice && !privacyMode && exportMessageTypes.includes('voice'),
+                'chat-export-transcription-option--disabled': privacyMode || !exportMessageTypes.includes('voice')
+              }"
+            >
+              <input
+                v-model="exportTranscribeVoice"
+                type="checkbox"
+                class="sr-only"
+                :disabled="privacyMode || !exportMessageTypes.includes('voice')"
+              />
+              <span class="chat-export-checkbox" :class="{ 'chat-export-checkbox--checked': exportTranscribeVoice && !privacyMode && exportMessageTypes.includes('voice') }" aria-hidden="true">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m4 10 4 4 8-8" />
+                </svg>
+              </span>
+              <span class="chat-export-transcription-option__icon" aria-hidden="true">
+                <i class="fa-solid fa-language"></i>
+              </span>
+              <span class="chat-export-transcription-option__copy">
+                <strong>语音转文字</strong>
+                <small>本地 Whisper</small>
+              </span>
+            </label>
           </section>
 
           <section
@@ -1285,6 +1312,47 @@ export default defineComponent({
   background: var(--export-accent-soft);
   color: var(--export-accent-text);
 }
+
+.chat-export-transcription-option {
+  display: grid;
+  grid-template-columns: 18px 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-surface-bg);
+  color: var(--app-text-secondary);
+  cursor: pointer;
+}
+
+.chat-export-transcription-option--selected {
+  border-color: var(--export-accent-border);
+  background: var(--export-accent-soft);
+}
+
+.chat-export-transcription-option--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.chat-export-transcription-option__icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  color: var(--export-accent-text);
+}
+
+.chat-export-transcription-option__copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.chat-export-transcription-option__copy strong { color: var(--app-text-primary); font-size: 12px; }
+.chat-export-transcription-option__copy small { color: var(--app-text-muted); font-size: 11px; line-height: 1.4; }
 
 .chat-export-output-section {
   padding: 8px 0;

@@ -89,7 +89,7 @@
 </template>
 
 <script>
-import { defineComponent } from 'vue'
+import { defineComponent, toRef } from 'vue'
 import ContactProfileCard from '~/components/chat/ContactProfileCard.vue'
 import MessageContent from '~/components/chat/MessageContent.vue'
 
@@ -102,7 +102,8 @@ export default defineComponent({
   },
   setup(props) {
     return {
-      ...props.state
+      ...props.state,
+      message: toRef(props, 'message')
     }
   }
 })

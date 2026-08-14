@@ -11,6 +11,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const exportFormat = ref('html')
   const exportDownloadRemoteMedia = ref(true)
   const exportHtmlPageSize = ref(1000)
+  const exportTranscribeVoice = ref(false)
   const exportMessageTypeOptions = [
     { value: 'text', label: '文本' },
     { value: 'image', label: '图片' },
@@ -570,6 +571,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportFormat.value = 'html'
     exportDownloadRemoteMedia.value = true
     exportHtmlPageSize.value = 1000
+    exportTranscribeVoice.value = false
     const defaultListTab = selectedContact.value?.username ? 'current' : 'all'
     exportScope.value = 'selected'
     exportListTab.value = defaultListTab
@@ -694,10 +696,21 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
 
     const mediaKinds = Array.from(mediaKindSet)
     const includeMedia = !privacyMode.value && mediaKinds.length > 0
+    const transcribeVoice = (
+      !privacyMode.value
+      && selectedTypeSet.has('voice')
+      && !!exportTranscribeVoice.value
+    )
 
     isExportCreating.value = true
     exportAutoSavedFor.value = ''
     try {
+      if (transcribeVoice) {
+        const status = await api.getVoiceTranscriptionStatus()
+        if (!status?.available) {
+          throw new Error(String(status?.reason || '本地 Whisper 当前不可用，请检查模型配置。'))
+        }
+      }
       const response = await api.createChatExport({
         account: selectedAccount.value,
         source: 'auto',
@@ -715,7 +728,8 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
         html_page_size: Math.max(0, Math.floor(Number(exportHtmlPageSize.value || 1000))),
         output_dir: isDesktopExportRuntime() ? String(exportFolder.value || '').trim() : null,
         privacy_mode: !!privacyMode.value,
-        file_name: exportFileName.value || null
+        file_name: exportFileName.value || null,
+        transcribe_voice: transcribeVoice
       })
 
       exportJob.value = response?.job || null
@@ -753,6 +767,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportFormat,
     exportDownloadRemoteMedia,
     exportHtmlPageSize,
+    exportTranscribeVoice,
     exportMessageTypeOptions,
     exportMessageTypes,
     areAllExportMessageTypesSelected,

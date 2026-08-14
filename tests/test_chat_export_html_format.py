@@ -1,4 +1,5 @@
 import os
+import io
 import json
 import hashlib
 import logging
@@ -268,13 +269,21 @@ class TestChatExportHtmlFormat(unittest.TestCase):
         finally:
             conn.close()
 
-    def _create_job(self, manager, *, account: str, username: str):
+    def _create_job(
+        self,
+        manager,
+        *,
+        account: str,
+        username: str,
+        transcribe_voice: bool = False,
+        export_format: str = "html",
+    ):
         job = manager.create_job(
             account=account,
             source="decrypted",
             scope="selected",
             usernames=[username],
-            export_format="html",
+            export_format=export_format,
             start_time=None,
             end_time=None,
             include_hidden=False,
@@ -287,6 +296,7 @@ class TestChatExportHtmlFormat(unittest.TestCase):
             download_remote_media=False,
             privacy_mode=False,
             file_name=None,
+            transcribe_voice=transcribe_voice,
         )
 
         for _ in range(200):
@@ -451,6 +461,144 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     self.assertTrue(html_path)
                     html_text = zf.read(html_path).decode("utf-8")
                     self.assertIn(f"../../{voice_path}", html_text)
+            finally:
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_html_export_keeps_voice_audio_and_adds_whisper_transcript(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            self._prepare_account(root, account=account, username=username)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+                original_converter = svc._convert_silk_to_browser_audio
+                original_service_getter = svc.get_voice_transcription_service
+                svc._convert_silk_to_browser_audio = (
+                    lambda data, preferred_format="mp3": (b"ID3FAKE_MP3_DATA", "mp3", "audio/mpeg")
+                )
+
+                class FakeTranscriptionService:
+                    @staticmethod
+                    def transcribe_voice(**_kwargs):
+                        return {
+                            "status": "success",
+                            "text": "下午三点把资料准备好",
+                            "language": "zh",
+                            "model": "small",
+                            "duration": 3.0,
+                            "cached": False,
+                        }
+
+                svc.get_voice_transcription_service = lambda: FakeTranscriptionService()
+                try:
+                    job = self._create_job(
+                        svc.CHAT_EXPORT_MANAGER,
+                        account=account,
+                        username=username,
+                        transcribe_voice=True,
+                    )
+                finally:
+                    svc._convert_silk_to_browser_audio = original_converter
+                    svc.get_voice_transcription_service = original_service_getter
+
+                self.assertEqual(job.status, "done", msg=job.error)
+                with zipfile.ZipFile(job.zip_path, "r") as zf:
+                    names = set(zf.namelist())
+                    voice_path = f"media/voices/voice_{self._VOICE_SERVER_ID}.mp3"
+                    self.assertIn(voice_path, names)
+                    html_path = next((n for n in names if n.endswith("/messages.html")), "")
+                    html_text = zf.read(html_path).decode("utf-8")
+                    self.assertIn("下午三点把资料准备好", html_text)
+                    self.assertIn(f"../../{voice_path}", html_text)
+                    voice_wrapper_start = html_text.index('class="wechat-voice-wrapper')
+                    voice_bubble_start = html_text.index('class="wechat-voice-bubble', voice_wrapper_start)
+                    transcript_start = html_text.index('class="wechat-voice-transcript', voice_bubble_start)
+                    self.assertLess(voice_wrapper_start, voice_bubble_start)
+                    self.assertLess(voice_bubble_start, transcript_start)
+                    css_path = next((n for n in names if n.startswith("assets/_wce/c-") and n.endswith(".css")), "")
+                    self.assertTrue(css_path)
+                    css_text = zf.read(css_path).decode("utf-8")
+                    self.assertIn(".wechat-voice-transcript", css_text)
+                    self.assertIn(
+                        ".wechat-voice-wrapper{display:flex;flex-direction:column",
+                        "".join(css_text.split()),
+                    )
+                    manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                    self.assertTrue(manifest["options"]["transcribeVoice"])
+                    report = json.loads(zf.read("report.json").decode("utf-8"))
+                    self.assertEqual(report["voiceTranscription"]["success"], 1)
+            finally:
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_voice_transcript_is_shared_by_json_txt_and_excel_exports(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            self._prepare_account(root, account=account, username=username)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+                original_service_getter = svc.get_voice_transcription_service
+
+                class FakeTranscriptionService:
+                    @staticmethod
+                    def transcribe_voice(**_kwargs):
+                        return {
+                            "status": "success",
+                            "text": "后台服务已经启动",
+                            "language": "zh",
+                            "model": "small",
+                            "duration": 3.0,
+                            "cached": False,
+                        }
+
+                svc.get_voice_transcription_service = lambda: FakeTranscriptionService()
+                try:
+                    for export_format in ("json", "txt", "excel"):
+                        with self.subTest(export_format=export_format):
+                            job = self._create_job(
+                                svc.CHAT_EXPORT_MANAGER,
+                                account=account,
+                                username=username,
+                                transcribe_voice=True,
+                                export_format=export_format,
+                            )
+                            self.assertEqual(job.status, "done", msg=job.error)
+                            with zipfile.ZipFile(job.zip_path, "r") as archive:
+                                message_path = next(
+                                    name
+                                    for name in archive.namelist()
+                                    if name.endswith(f"/messages.{export_format if export_format != 'excel' else 'xlsx'}")
+                                )
+                                payload = archive.read(message_path)
+                                if export_format == "json":
+                                    messages = json.loads(payload.decode("utf-8"))["messages"]
+                                    voice = next(item for item in messages if item.get("renderType") == "voice")
+                                    rendered = str(voice.get("voiceTranscript") or "")
+                                elif export_format == "txt":
+                                    rendered = payload.decode("utf-8-sig")
+                                else:
+                                    with zipfile.ZipFile(io.BytesIO(payload), "r") as workbook:
+                                        rendered = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                                self.assertIn("后台服务已经启动", rendered)
+                                self.assertNotIn("後臺服務已經啟動", rendered)
+                finally:
+                    svc.get_voice_transcription_service = original_service_getter
             finally:
                 logging.shutdown()
                 if prev_data is None:
