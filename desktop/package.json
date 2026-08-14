@@ -7,7 +7,7 @@
     "dev": "node scripts/dev.cjs",
     "dev:static": "npm --prefix ../frontend run generate && cross-env ELECTRON_START_URL=http://127.0.0.1:10392 electron .",
     "build:ui": "npm --prefix ../frontend run generate && node scripts/copy-ui.cjs",
-    "build:backend": "uv sync --extra build && node scripts/build-backend.cjs",
+    "build:backend": "uv sync --no-editable --extra build --extra voice-transcription && node scripts/build-backend.cjs",
     "build:icon": "node scripts/build-icon.cjs",
     "build:mac:image-helper": "node scripts/build-macos-image-helper.cjs",
     "verify:mac:native": "node scripts/verify-macos-native.cjs --arch arm64 --require-host-arch",

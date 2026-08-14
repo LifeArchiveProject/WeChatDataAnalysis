@@ -76,6 +76,12 @@ from ..chat_helpers import (
 from ..path_fix import PathFixRoute
 from ..perf_trace import create_perf_trace
 from ..wcdb_realtime import WCDB_REALTIME, exec_query as _wcdb_exec_query, get_avatar_urls as _wcdb_get_avatar_urls
+from ..voice_transcription import (
+    VoiceTranscriptionError,
+    get_voice_transcription_service,
+    load_voice_data,
+    set_voice_transcription_device,
+)
 
 logger = get_logger(__name__)
 
@@ -87,6 +93,21 @@ CHAT_MEDIA_BROWSER_CACHE_SECONDS = 24 * 60 * 60
 VIDEO_DIR_INDEX_TTL_SECONDS = 90.0
 _VIDEO_DIR_INDEX_CACHE: dict[str, tuple[float, dict[str, dict[str, str]]]] = {}
 _VIDEO_DIR_INDEX_MAX_ENTRIES = 32
+
+
+class VoiceTranscriptionRequest(BaseModel):
+    server_id: int = Field(..., description="语音消息服务端 ID")
+    account: Optional[str] = Field(None, description="账号目录名")
+    force: bool = Field(False, description="忽略缓存并重新识别")
+
+
+class VoiceTranscriptionCacheLookupRequest(BaseModel):
+    server_ids: list[str] = Field(default_factory=list, description="语音消息服务端 ID 列表（精确字符串，避免 JS Number 精度丢失）")
+    account: Optional[str] = Field(None, description="账号目录名")
+
+
+class VoiceTranscriptionSettingsRequest(BaseModel):
+    device: str = Field(..., description="推理设备：cpu 或 cuda")
 
 
 def _avatar_trace_enabled() -> bool:
@@ -3576,28 +3597,9 @@ async def get_chat_voice(server_id: int, account: Optional[str] = None):
     if not server_id:
         raise HTTPException(status_code=400, detail="Missing server_id.")
     account_dir = _resolve_account_dir(account)
-    media_db_path = account_dir / "media_0.db"
-    if not media_db_path.exists():
-        raise HTTPException(status_code=404, detail="media_0.db not found.")
-
-    conn = sqlite3.connect(str(media_db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            "SELECT voice_data FROM VoiceInfo WHERE svr_id = ? ORDER BY create_time DESC LIMIT 1",
-            (int(server_id),),
-        ).fetchone()
-    except Exception:
-        row = None
-    finally:
-        conn.close()
-
-    if not row or row[0] is None:
+    data = await asyncio.to_thread(load_voice_data, account_dir, int(server_id))
+    if not data:
         raise HTTPException(status_code=404, detail="Voice not found.")
-
-    data = bytes(row[0]) if isinstance(row[0], (memoryview, bytearray)) else row[0]
-    if not isinstance(data, (bytes, bytearray)):
-        data = bytes(data)
 
     payload, ext, media_type = _convert_silk_to_browser_audio(data, preferred_format="mp3")
     if payload and ext != "silk":
@@ -3613,6 +3615,77 @@ async def get_chat_voice(server_id: int, account: Optional[str] = None):
         media_type="audio/silk",
         headers={"Content-Disposition": f"attachment; filename=voice_{int(server_id)}.silk"},
     )
+
+
+@router.get("/api/chat/media/voice/transcription/status", summary="检查本地 Whisper 语音转文字能力")
+async def get_chat_voice_transcription_status():
+    return await asyncio.to_thread(get_voice_transcription_service().status)
+
+
+@router.put("/api/chat/media/voice/transcription/settings", summary="设置本地 Whisper 推理设备")
+async def set_chat_voice_transcription_settings(req: VoiceTranscriptionSettingsRequest):
+    try:
+        configuration = await asyncio.to_thread(set_voice_transcription_device, req.device)
+    except VoiceTranscriptionError as exc:
+        status_code = 409 if exc.code == "device_locked" else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": exc.user_message},
+        ) from exc
+    return {"status": "success", "configuration": configuration}
+
+
+@router.post("/api/chat/media/voice/transcription", summary="将语音消息转成中文文字")
+async def transcribe_chat_voice(req: VoiceTranscriptionRequest):
+    if int(req.server_id or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Missing server_id.")
+    service = get_voice_transcription_service()
+
+    def run_transcription():
+        service.ensure_available()
+        account_dir = _resolve_account_dir(req.account)
+        return service.transcribe_voice(
+            account_dir=account_dir,
+            server_id=int(req.server_id),
+            force=bool(req.force),
+        )
+
+    try:
+        return await asyncio.to_thread(run_transcription)
+    except VoiceTranscriptionError as exc:
+        status_code = {
+            "invalid_server_id": 400,
+            "voice_not_found": 404,
+            "voice_decode_failed": 422,
+            "disabled": 503,
+            "model_not_configured": 503,
+            "model_not_ready": 503,
+            "dependency_missing": 503,
+            "model_load_failed": 503,
+        }.get(exc.code, 500)
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": exc.user_message},
+        ) from exc
+
+
+@router.post("/api/chat/media/voice/transcription/cache_lookup", summary="批量读取语音转写缓存（不触发识别）")
+async def lookup_chat_voice_transcription_cache(req: VoiceTranscriptionCacheLookupRequest):
+    account_dir = _resolve_account_dir(req.account)
+    parsed_ids: list[int] = []
+    for raw in (req.server_ids or [])[:512]:
+        try:
+            sid = int(str(raw or "").strip())
+        except Exception:
+            continue
+        if sid > 0:
+            parsed_ids.append(sid)
+    service = get_voice_transcription_service()
+    items = await asyncio.to_thread(service.lookup_cached_transcripts, account_dir, parsed_ids)
+    return {
+        "status": "success",
+        "items": {str(sid): value for sid, value in items.items()},
+    }
 
 
 @router.post("/api/chat/media/open_folder", summary="在资源管理器中打开媒体文件所在位置")

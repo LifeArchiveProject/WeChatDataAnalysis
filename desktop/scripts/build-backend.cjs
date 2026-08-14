@@ -408,6 +408,40 @@ function runIntegrityPreflight(env = process.env, integrityNativeBinary = null) 
   }
 }
 
+function runPackagedOpenccSmoke(packagedBackend, env = process.env) {
+  const smokeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wda-opencc-smoke-"));
+  try {
+    const smokeEnv = { ...env, PYTHONPATH: "" };
+    delete smokeEnv.PYTHONHOME;
+    const smoke = spawnSync(packagedBackend, ["--smoke-opencc"], {
+      cwd: smokeDir,
+      env: smokeEnv,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    if ((smoke.status ?? 1) !== 0) {
+      throw new Error(smoke.stderr || smoke.stdout || "Packaged OpenCC smoke test failed.");
+    }
+    const outputLines = String(smoke.stdout || "").trim().split(/\r?\n/).filter(Boolean);
+    let payload;
+    try {
+      payload = JSON.parse(outputLines.at(-1) || "");
+    } catch {
+      throw new Error(`Packaged OpenCC smoke test returned invalid JSON: ${smoke.stdout || "<empty>"}`);
+    }
+    const expected = {
+      "繁體中文": "繁体中文",
+      "軟體與資料庫": "软体与资料库",
+    };
+    if (!payload.frozen || JSON.stringify(payload.results) !== JSON.stringify(expected)) {
+      throw new Error(`Packaged OpenCC smoke test returned an unexpected result: ${JSON.stringify(payload)}`);
+    }
+    console.log(`Packaged OpenCC smoke test passed: ${JSON.stringify(payload)}`);
+  } finally {
+    fs.rmSync(smokeDir, { recursive: true, force: true });
+  }
+}
+
 function stageNativeCoreArtifacts({
   env = process.env,
   platform = process.platform,
@@ -529,6 +563,14 @@ function main() {
     pyInstallerAddData(skillDir, "skills/wechat-mcp-copilot"),
     "--add-data",
     pyInstallerAddData(macosXkeyContractPath, "wechat_decrypt_tool/resources"),
+    "--collect-all",
+    "faster_whisper",
+    "--collect-all",
+    "ctranslate2",
+    "--collect-all",
+    "av",
+    "--collect-all",
+    "opencc",
     entry,
   ];
 
@@ -558,6 +600,12 @@ function main() {
     process.exit(result.status ?? 1);
   }
 
+  const packagedBackend = path.join(
+    distDir,
+    process.platform === "win32" ? "wechat-backend.exe" : "wechat-backend"
+  );
+  runPackagedOpenccSmoke(packagedBackend);
+
   // Keep native dependencies outside the onefile extraction directory so the
   // broker and client library have stable paths at runtime.
   const packagedNativeDir = path.join(distDir, "native");
@@ -580,6 +628,7 @@ module.exports = {
   buildIntegrityNativeBinary,
   prepareRuntimeNativeDir,
   resolveNativeCoreArtifacts,
+  runPackagedOpenccSmoke,
   stageNativeCoreArtifacts,
 };
 

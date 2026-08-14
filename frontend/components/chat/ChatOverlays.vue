@@ -957,6 +957,16 @@
         定位引用消息
       </button>
       <button
+        v-if="contextMenu.message?.renderType === 'voice' && !privacyMode && voiceTranscriptionAvailable && typeof transcribeVoice === 'function'"
+        class="chat-context-menu__item block w-full text-left px-3 py-2"
+        type="button"
+        :disabled="contextMenu.message?.voiceTranscriptStatus === 'loading'"
+        :class="contextMenu.message?.voiceTranscriptStatus === 'loading' ? 'opacity-50 cursor-not-allowed' : ''"
+        @click="onTranscribeVoiceClick"
+      >
+        {{ ['success', 'error'].includes(contextMenu.message?.voiceTranscriptStatus) ? '重新转文字' : '转文字' }}
+      </button>
+      <button
         class="chat-context-menu__item block w-full text-left px-3 py-2"
         type="button"
         :disabled="contextMenu.disabled"
@@ -1069,6 +1079,19 @@ export default defineComponent({
 
     const previewImageScaleText = computed(() => `${Math.round(previewImageScale.value * 100)}%`)
 
+    const onTranscribeVoiceClick = () => {
+      const menuRef = props.state?.contextMenu
+      const menu = menuRef && typeof menuRef === 'object' && 'value' in menuRef ? menuRef.value : menuRef
+      const message = menu?.message
+      const transcribe = props.state?.transcribeVoice
+      if (!message || typeof transcribe !== 'function') return
+      const status = String(message?.voiceTranscriptStatus || '')
+      if (status === 'loading') return
+      const hasResult = status === 'success' || status === 'error'
+      if (typeof props.state?.closeContextMenu === 'function') props.state.closeContextMenu()
+      void transcribe(message, { force: hasResult })
+    }
+
     watch(
       () => readMaybeRef(props.state.previewImageUrl),
       () => {
@@ -1088,6 +1111,7 @@ export default defineComponent({
       onPreviewImageWheel,
       rotatePreviewImageLeft,
       rotatePreviewImageRight,
+      onTranscribeVoiceClick,
     }
   }
 })

@@ -113,6 +113,35 @@ export const useChatMessages = ({
   const voiceRefs = new Map()
   const currentPlayingVoice = ref(null)
   const playingVoiceId = ref(null)
+  const voiceTranscriptionStatus = ref(null)
+  const voiceTranscriptionStatusLoading = ref(false)
+  let voiceTranscriptionStatusPromise = null
+  const voiceTranscriptionStatusKnown = computed(() => !!voiceTranscriptionStatus.value)
+  const voiceTranscriptionAvailable = computed(() => voiceTranscriptionStatus.value?.available === true)
+  const voiceTranscriptionUnavailableReason = computed(() => String(
+    voiceTranscriptionStatus.value?.reason || '本地 Whisper 模型尚未准备好。'
+  ).trim())
+
+  const refreshVoiceTranscriptionStatus = async ({ force = false } = {}) => {
+    if (!force && voiceTranscriptionStatus.value) return voiceTranscriptionStatus.value
+    if (voiceTranscriptionStatusPromise) return await voiceTranscriptionStatusPromise
+    voiceTranscriptionStatusLoading.value = true
+    voiceTranscriptionStatusPromise = (async () => {
+      try {
+        voiceTranscriptionStatus.value = await api.getVoiceTranscriptionStatus()
+      } catch (error) {
+        voiceTranscriptionStatus.value = {
+          available: false,
+          reason: String(error?.message || '无法读取本地语音转文字状态').trim()
+        }
+      } finally {
+        voiceTranscriptionStatusLoading.value = false
+        voiceTranscriptionStatusPromise = null
+      }
+      return voiceTranscriptionStatus.value
+    })()
+    return await voiceTranscriptionStatusPromise
+  }
 
   const highlightServerIdStr = ref('')
   const highlightMessageId = ref('')
@@ -1091,6 +1120,84 @@ export const useChatMessages = ({
     await playVoiceById(message?.id)
   }
 
+  // 批量读取当前会话语音消息的转写缓存并合并进消息列表（仅恢复展示，不触发识别）。
+  // serverIdStr 为精确字符串，禁止转 Number（19 位 svr_id 超出 JS Number 安全范围）。
+  const restoreVoiceTranscripts = async (username) => {
+    const key = String(username || '').trim()
+    if (!key || privacyMode?.value) return
+    void refreshVoiceTranscriptionStatus()
+    const list = allMessages.value[key]
+    if (!Array.isArray(list) || !list.length) return
+
+    const pending = list.filter((m) => {
+      if (String(m?.renderType || '') !== 'voice') return false
+      if (!String(m?.serverIdStr || '').trim()) return false
+      const status = String(m?.voiceTranscriptStatus || 'idle')
+      return !status || status === 'idle'
+    })
+    if (!pending.length) return
+    if (typeof api?.lookupChatVoiceTranscriptionCache !== 'function') return
+
+    try {
+      const resp = await api.lookupChatVoiceTranscriptionCache({
+        account: selectedAccount.value,
+        server_ids: pending.map((m) => String(m.serverIdStr).trim())
+      })
+      const items = resp?.items
+      if (!items || typeof items !== 'object') return
+
+      const current = allMessages.value[key]
+      if (!Array.isArray(current) || !current.length) return
+      for (const m of current) {
+        const sid = String(m?.serverIdStr || '').trim()
+        if (!sid) continue
+        const status = String(m?.voiceTranscriptStatus || 'idle')
+        if (status && status !== 'idle') continue
+        const hit = items[sid]
+        if (!hit) continue
+        m.voiceTranscript = String(hit.text || '').trim()
+        m.voiceTranscriptLanguage = String(hit.language || '').trim()
+        m.voiceTranscriptModel = String(hit.model || '').trim()
+        m.voiceTranscriptStatus = 'success'
+      }
+    } catch {}
+  }
+
+  const transcribeVoice = async (message, { force = false } = {}) => {
+    // 语音消息的 svr_id 是 19 位大整数，超出 JS Number 安全范围（2^53），
+    // 必须使用精确字符串 serverIdStr，否则后端会查不到语音数据。
+    const serverId = String(message?.serverIdStr || message?.serverId || '').trim()
+    if (!message || !serverId || serverId === '0' || message.voiceTranscriptStatus === 'loading') return
+
+    // 模板渲染的是 renderMessages 的浅拷贝（非响应式），直接改拷贝不会驱动 UI 更新，
+    // 且 computed 重算时拷贝会被替换导致状态丢失。必须修改 allMessages 中的原对象。
+    const key = String(selectedContact.value?.username || '').trim()
+    const list = key ? allMessages.value[key] : null
+    const target =
+      (Array.isArray(list) ? list.find((item) => item?.id === message.id) : null) || message
+
+    const capability = await refreshVoiceTranscriptionStatus({ force: true })
+    if (!capability?.available) return
+
+    target.voiceTranscriptStatus = 'loading'
+    target.voiceTranscriptError = ''
+    try {
+      const result = await api.transcribeChatVoice({
+        account: selectedAccount.value,
+        server_id: serverId,
+        force
+      })
+      target.voiceTranscript = String(result?.text || '').trim()
+      target.voiceTranscriptLanguage = String(result?.language || '').trim()
+      target.voiceTranscriptModel = String(result?.model || '').trim()
+      target.voiceTranscriptStatus = 'success'
+    } catch (error) {
+      const detail = error?.data?.detail || error?.detail
+      target.voiceTranscriptError = String(detail?.message || error?.message || '语音识别失败').trim()
+      target.voiceTranscriptStatus = 'error'
+    }
+  }
+
   const getQuoteVoiceId = (message) => `quote-${String(message?.quoteServerId || message?.id || '')}`
 
   const playQuoteVoice = async (message) => {
@@ -1548,6 +1655,8 @@ export const useChatMessages = ({
       trace.log('loadMessages:state-commit:end', {
         storedCount: (allMessages.value[username] || []).length
       })
+
+      void restoreVoiceTranscripts(username)
 
       messagesMeta.value = {
         ...messagesMeta.value,
@@ -2454,6 +2563,12 @@ export const useChatMessages = ({
     voiceRefs,
     currentPlayingVoice,
     playingVoiceId,
+    voiceTranscriptionStatus,
+    voiceTranscriptionStatusLoading,
+    voiceTranscriptionStatusKnown,
+    voiceTranscriptionAvailable,
+    voiceTranscriptionUnavailableReason,
+    refreshVoiceTranscriptionStatus,
     highlightServerIdStr,
     highlightMessageId,
     expandedImageGroupKeys,
@@ -2513,6 +2628,7 @@ export const useChatMessages = ({
     openResourcePreview,
     setVoiceRef,
     playVoice,
+    transcribeVoice,
     playQuoteVoice,
     getQuoteVoiceId,
     getVoiceDurationInSeconds,

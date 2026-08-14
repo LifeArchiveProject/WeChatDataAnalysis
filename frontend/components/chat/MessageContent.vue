@@ -138,6 +138,7 @@
                   </div>
                   <div v-else-if="message.renderType === 'voice'"
                     class="wechat-voice-wrapper"
+                    :class="message.isSent ? 'wechat-voice-wrapper--sent' : 'wechat-voice-wrapper--received'"
                     @contextmenu="openMediaContextMenu($event, message, 'voice')">
                     <div
                       class="wechat-voice-bubble msg-radius"
@@ -162,6 +163,48 @@
                       preload="none"
                       class="hidden"
                     ></audio>
+                    <div
+                      v-if="!privacyMode && typeof transcribeVoice === 'function'"
+                      class="wechat-voice-transcript"
+                      :class="[
+                        message.isSent ? 'wechat-voice-transcript--sent' : 'wechat-voice-transcript--received',
+                        message.voiceTranscriptStatus === 'error' ? 'wechat-voice-transcript--error' : ''
+                      ]"
+                    >
+                      <button
+                        v-if="(!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle') && voiceTranscriptionAvailable"
+                        type="button"
+                        class="wechat-voice-transcript__action"
+                        title="将语音识别为中文"
+                        @click.stop="transcribeVoice(message)"
+                      >
+                        <i class="fa-solid fa-language" aria-hidden="true"></i>
+                        <span>转文字</span>
+                      </button>
+                      <span
+                        v-else-if="(!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle') && (!voiceTranscriptionStatusKnown || voiceTranscriptionStatusLoading)"
+                        class="wechat-voice-transcript__status"
+                        role="status"
+                      >正在检查本地模型…</span>
+                      <span
+                        v-else-if="!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle'"
+                        class="wechat-voice-transcript__error"
+                      >{{ voiceTranscriptionUnavailableReason }}</span>
+                      <span v-else-if="message.voiceTranscriptStatus === 'loading'" class="wechat-voice-transcript__status" role="status">
+                        <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
+                        正在转文字…
+                      </span>
+                      <p v-else-if="message.voiceTranscriptStatus === 'success'" class="wechat-voice-transcript__text">{{ message.voiceTranscript || '未识别到文字' }}</p>
+                      <template v-else>
+                        <span class="wechat-voice-transcript__error">{{ message.voiceTranscriptError || '语音识别失败' }}</span>
+                        <button
+                          type="button"
+                          class="wechat-voice-transcript__retry"
+                          title="重新识别"
+                          @click.stop="transcribeVoice(message, { force: true })"
+                        >重试</button>
+                      </template>
+                    </div>
                   </div>
                   <div v-else-if="message.renderType === 'voip'"
                     class="wechat-voip-bubble msg-radius"
@@ -419,7 +462,7 @@
 </template>
 
 <script>
-import { defineComponent } from 'vue'
+import { defineComponent, toRef } from 'vue'
 import wechatPcLogoUrl from '~/assets/images/wechat/WeChat-Icon-Logo.wine.svg'
 import ChatLocationCard from '~/components/ChatLocationCard.vue'
 import FileTypeIcon from '~/components/chat/FileTypeIcon.vue'
@@ -633,7 +676,8 @@ export default defineComponent({
 
     return {
       ...props.state,
-      hideTypeFooter: props.hideTypeFooter,
+      message: toRef(props, 'message'),
+      hideTypeFooter: toRef(props, 'hideTypeFooter'),
       parseMessageTextSegments,
       openMessageUrl,
       handleMentionMouseEnter,

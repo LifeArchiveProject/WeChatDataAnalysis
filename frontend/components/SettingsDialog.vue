@@ -251,6 +251,69 @@
             </div>
           </section>
 
+          <section ref="voiceSectionRef">
+            <div class="mb-2.5 text-[12px] font-bold text-[#999] tracking-widest">语音转文字</div>
+            <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
+              <div class="px-3.5 py-3">
+                <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[13px] font-medium text-[#222]">推理设备</div>
+                    <div class="mt-0.5 text-[11px] leading-relaxed text-[#909090]">CPU 兼容所有设备；NVIDIA GPU 使用 CUDA 加速，初始化失败会自动回退 CPU。</div>
+                  </div>
+                  <div class="inline-flex shrink-0 overflow-hidden rounded-[6px] border border-[#e2e2e2] bg-white" role="radiogroup" aria-label="语音转文字推理设备">
+                    <button
+                      type="button"
+                      role="radio"
+                      :aria-checked="voiceDevicePreference === 'cpu'"
+                      class="px-2.5 py-1.5 text-[12px] transition disabled:cursor-not-allowed disabled:opacity-50"
+                      :class="voiceDevicePreference === 'cpu' ? 'bg-[#e7f5ee] text-[#087f43]' : 'text-[#555] hover:bg-[#f7f7f7]'"
+                      :disabled="voiceDeviceBusy || voiceDeviceLocked"
+                      @click="setVoiceDevice('cpu')"
+                    >
+                      CPU
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      :aria-checked="voiceDevicePreference === 'cuda'"
+                      class="border-l border-[#e2e2e2] px-2.5 py-1.5 text-[12px] transition disabled:cursor-not-allowed disabled:opacity-50"
+                      :class="voiceDevicePreference === 'cuda' ? 'bg-[#e7f5ee] text-[#087f43]' : 'text-[#555] hover:bg-[#f7f7f7]'"
+                      :disabled="voiceDeviceBusy || voiceDeviceLocked || !voiceCudaAvailable"
+                      :title="voiceCudaAvailable ? '使用 NVIDIA CUDA 加速' : (voiceCudaReason || '未检测到可用的 NVIDIA CUDA 设备')"
+                      @click="setVoiceDevice('cuda')"
+                    >
+                      NVIDIA GPU
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="voiceStatusLoading" class="mt-2 text-[11px] text-[#909090]">正在检测本地 Whisper 与 CUDA 状态...</div>
+                <template v-else>
+                  <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#707070]">
+                    <span>模型：{{ voiceModelText }}</span>
+                    <span :class="voiceModelReady ? 'text-[#1b6b43]' : 'text-amber-700'">模型状态：{{ voiceModelStatusText }}</span>
+                    <span>已选：{{ voiceDeviceLabel }}</span>
+                    <span>实际：{{ voiceActiveDeviceLabel }}</span>
+                  </div>
+                  <div v-if="voiceStatusReason" class="mt-1 text-[11px] leading-relaxed text-amber-700">
+                    {{ voiceStatusReason }}
+                  </div>
+                  <div class="mt-1 text-[11px] leading-relaxed" :class="voiceCudaAvailable ? 'text-[#1b6b43]' : 'text-amber-700'">
+                    {{ voiceCudaStatusText }}
+                  </div>
+                  <div v-if="voiceFallbackReason" class="mt-1 text-[11px] leading-relaxed text-amber-700">
+                    {{ voiceFallbackReason }}
+                  </div>
+                  <div v-if="voiceDeviceLocked" class="mt-1 text-[11px] leading-relaxed text-amber-700">
+                    推理设备由启动环境变量固定，界面中的选项不可修改。
+                  </div>
+                </template>
+                <div v-if="voiceDeviceMessage" class="mt-2 text-[11px] text-[#1b6b43]">{{ voiceDeviceMessage }}</div>
+                <ErrorNotice v-if="voiceDeviceError" :message="voiceDeviceError" compact manual class="mt-1.5 text-[11px] text-red-600" />
+              </div>
+            </div>
+          </section>
+
           <section ref="mcpSectionRef">
             <div class="mb-2.5 text-[12px] font-bold text-[#999] tracking-widest">MCP 接入</div>
             <div class="overflow-hidden rounded-[10px] border border-[#e7e7e7] bg-white divide-y divide-[#ececec]">
@@ -543,6 +606,7 @@ const api = useApi()
 
 const settingNavItems = [
   { key: 'desktop', label: '桌面行为', hint: '启动 / 关闭 / 端口' },
+  { key: 'voice', label: '语音转文字', hint: 'CPU / NVIDIA GPU' },
   { key: 'mcp', label: 'MCP 接入', hint: '局域网 / Skill / 工具' },
   { key: 'keys', label: '数据库与密钥', hint: '密钥查看 / 复制' },
   { key: 'startup', label: '启动偏好', hint: '默认页面' },
@@ -555,6 +619,7 @@ const activeSection = ref(settingNavItems[0].key)
 const contentScrollRef = ref(null)
 const desktopSectionRef = ref(null)
 const desktopLogFileRef = ref(null)
+const voiceSectionRef = ref(null)
 const mcpSectionRef = ref(null)
 const keysSectionRef = ref(null)
 const startupSectionRef = ref(null)
@@ -715,6 +780,43 @@ const keyRows = computed(() => [
   },
 ])
 
+const voiceStatusLoading = ref(false)
+const voiceDeviceBusy = ref(false)
+const voiceDeviceError = ref('')
+const voiceDeviceMessage = ref('')
+const voiceDevicePreference = ref('cpu')
+const voiceDeviceSource = ref('default')
+const voiceActiveDevice = ref('')
+const voiceModel = ref('medium')
+const voiceModelReady = ref(false)
+const voiceModelDownloadRequired = ref(false)
+const voiceStatusReason = ref('')
+const voiceCuda = ref(null)
+const voiceFallbackReason = ref('')
+const voiceDeviceLocked = computed(() => voiceDeviceSource.value === 'env')
+const voiceCudaAvailable = computed(() => !!voiceCuda.value?.available)
+const voiceCudaReason = computed(() => String(voiceCuda.value?.reason || '').trim())
+const voiceModelText = computed(() => String(voiceModel.value || 'medium').trim() || 'medium')
+const voiceModelStatusText = computed(() => {
+  if (voiceModelReady.value) return '已就绪'
+  if (voiceModelDownloadRequired.value) return '未缓存，首次使用时下载'
+  return '未准备好'
+})
+const voiceDeviceLabel = computed(() => voiceDevicePreference.value === 'cuda' ? 'NVIDIA GPU' : 'CPU')
+const voiceActiveDeviceLabel = computed(() => {
+  if (voiceActiveDevice.value === 'cuda') return 'NVIDIA GPU'
+  if (voiceActiveDevice.value === 'cpu') return 'CPU'
+  return '尚未加载'
+})
+const voiceCudaStatusText = computed(() => {
+  const devices = Array.isArray(voiceCuda.value?.devices) ? voiceCuda.value.devices : []
+  const labels = devices.map((item) => String(item?.name || '').trim()).filter(Boolean)
+  if (voiceCudaAvailable.value) {
+    return labels.length ? `已检测到 NVIDIA GPU：${labels.join('、')}` : '已检测到可用的 NVIDIA CUDA 设备。'
+  }
+  return voiceCudaReason.value || '未检测到可用的 NVIDIA CUDA 设备。'
+})
+
 const mcpLanAccessEnabled = ref(false)
 const mcpLanAccessLoading = ref(false)
 const mcpLanAccessError = ref('')
@@ -826,6 +928,7 @@ const refreshDesktopOutputDirProgress = async () => {
 
 const sectionElements = computed(() => [
   { key: 'desktop', el: desktopSectionRef.value },
+  { key: 'voice', el: voiceSectionRef.value },
   { key: 'mcp', el: mcpSectionRef.value },
   { key: 'keys', el: keysSectionRef.value },
   { key: 'startup', el: startupSectionRef.value },
@@ -923,6 +1026,55 @@ const waitForBackendHealth = async (timeoutMs = 30_000) => {
     } catch {}
     if (Date.now() - startedAt > timeoutMs) throw new Error(`后端启动超时：${healthUrl}`)
     await new Promise((resolve) => setTimeout(resolve, 400))
+  }
+}
+
+const applyVoiceTranscriptionStatus = (status) => {
+  if (!status || typeof status !== 'object') return
+  const requestedDevice = String(status.requestedDevice || status.device || 'cpu').trim().toLowerCase()
+  voiceDevicePreference.value = requestedDevice === 'cuda' ? 'cuda' : 'cpu'
+  voiceDeviceSource.value = String(status.deviceSource || 'default').trim() || 'default'
+  voiceActiveDevice.value = String(status.activeDevice || '').trim().toLowerCase()
+  voiceModel.value = String(status.model || 'medium').trim() || 'medium'
+  voiceModelReady.value = status.modelReady === true
+  voiceModelDownloadRequired.value = status.modelDownloadRequired === true
+  voiceStatusReason.value = String(status.reason || '').trim()
+  voiceCuda.value = status.cuda && typeof status.cuda === 'object' ? status.cuda : null
+  voiceFallbackReason.value = String(status.fallbackReason || '').trim()
+}
+
+const refreshVoiceTranscriptionStatus = async () => {
+  if (!process.client || typeof window === 'undefined') return
+  voiceStatusLoading.value = true
+  voiceDeviceError.value = ''
+  try {
+    applyVoiceTranscriptionStatus(await api.getVoiceTranscriptionStatus())
+  } catch (e) {
+    voiceDeviceError.value = e?.message || '读取语音转文字运行状态失败'
+  } finally {
+    voiceStatusLoading.value = false
+  }
+}
+
+const setVoiceDevice = async (device) => {
+  const next = String(device || '').trim().toLowerCase()
+  if (!['cpu', 'cuda'].includes(next) || voiceDeviceBusy.value || voiceDeviceLocked.value) return
+  if (next === 'cuda' && !voiceCudaAvailable.value) return
+
+  voiceDeviceBusy.value = true
+  voiceDeviceError.value = ''
+  voiceDeviceMessage.value = ''
+  try {
+    const resp = await api.setVoiceTranscriptionDevice(next)
+    applyVoiceTranscriptionStatus(resp?.configuration || resp)
+    voiceDeviceMessage.value = next === 'cuda'
+      ? '已选择 NVIDIA GPU；下一次语音识别会尝试 CUDA，失败时自动回退 CPU。'
+      : '已切换为 CPU；下一次语音识别会使用 CPU int8。'
+  } catch (e) {
+    voiceDeviceError.value = e?.message || '设置语音转文字推理设备失败'
+    await refreshVoiceTranscriptionStatus()
+  } finally {
+    voiceDeviceBusy.value = false
   }
 }
 
@@ -1482,6 +1634,7 @@ const refreshSettingsDialogData = async () => {
 
   const tasks = [
     refreshDesktopBackendPort(),
+    refreshVoiceTranscriptionStatus(),
     refreshMcpLanAccess(),
     refreshMcpToken(),
     refreshBackendLogFileInfo(),
