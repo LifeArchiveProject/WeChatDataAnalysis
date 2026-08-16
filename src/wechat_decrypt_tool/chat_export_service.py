@@ -333,9 +333,269 @@ _VOICE_TRANSCRIPT_EXPORT_CSS = """
 """.strip()
 
 
+_MOBILE_EXPORT_CSS = """
+/* 离线导出页的移动端布局：桌面端保留三栏结构，窄屏切换为微信式聊天界面。 */
+.wce-mobile-back,
+.wce-mobile-tools-button { display: none; }
+.wce-chat-heading { display: flex; align-items: center; min-width: 0; }
+
+@supports(height: 100dvh) {
+  .wce-root { height: 100dvh; }
+}
+
+@media(max-width: 767px) {
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body { background: #ededed; overscroll-behavior: none; }
+  .wce-root {
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .wce-rail,
+  .wce-session-panel { display: none !important; }
+  .wce-chat-area,
+  .wce-chat-main,
+  .wce-chat-col { width: 100%; min-width: 0; }
+  .wce-chat-header {
+    position: relative;
+    z-index: 30;
+    flex: 0 0 auto;
+    justify-content: center;
+    box-sizing: content-box;
+    height: 48px;
+    min-height: 48px;
+    padding: env(safe-area-inset-top, 0px) 52px 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    background: #ededed;
+  }
+  .wce-chat-heading { width: 100%; justify-content: center; }
+  .wce-chat-title {
+    max-width: 100%;
+    overflow: hidden;
+    color: #191919;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wce-mobile-back,
+  .wce-mobile-tools-button {
+    position: absolute;
+    bottom: 0;
+    display: flex;
+    width: 48px;
+    height: 48px;
+    align-items: center;
+    justify-content: center;
+    color: #181818;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wce-mobile-back { left: max(0px, env(safe-area-inset-left, 0px)); }
+  .wce-mobile-tools-button {
+    right: max(0px, env(safe-area-inset-right, 0px));
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  .wce-mobile-back:active,
+  .wce-mobile-tools-button:active { opacity: 0.45; }
+  .wce-mobile-back:focus,
+  .wce-mobile-tools-button:focus { outline: none; }
+  .wce-mobile-back:focus-visible,
+  .wce-mobile-tools-button:focus-visible {
+    border-radius: 6px;
+    outline: 2px solid rgba(7, 193, 96, 0.75);
+    outline-offset: -5px;
+  }
+  .wce-chat-tools {
+    position: absolute;
+    top: 100%;
+    margin-top: 6px;
+    right: max(8px, env(safe-area-inset-right, 0px));
+    left: max(8px, env(safe-area-inset-left, 0px));
+    z-index: 40;
+    display: none;
+    max-height: calc(100dvh - 72px - env(safe-area-inset-top, 0px));
+    overflow-y: auto;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  }
+  .wce-chat-tools[data-mobile-open="1"] { display: flex; }
+  .wce-tool-group { display: flex; width: 100%; gap: 6px; }
+  .wce-tool-input,
+  .wce-tool-btn,
+  .message-filter-select { min-height: 36px; font-size: 13px; }
+  .wce-tool-input { min-width: 0; flex: 1 1 auto; background: #f7f7f7; }
+  .wce-tool-search,
+  .wce-tool-date { width: auto; max-width: none; }
+  .wce-tool-status { max-width: 72px; flex: 0 1 auto; }
+  .message-filter-select {
+    width: 100%;
+    padding: 0 10px;
+    border: 1px solid #d1d5db;
+    background: #f7f7f7;
+  }
+  #messageContainer {
+    padding: 14px 10px max(34px, env(safe-area-inset-bottom, 0px));
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .wce-pager { padding: 2px 0 16px; }
+  .wce-msg-row { margin-bottom: 18px; }
+  .wce-msg { max-width: 100%; min-width: 0; }
+  .wce-avatar { width: 40px; height: 40px; border-radius: 5px; }
+  .wce-avatar-sent { margin-left: 8px; }
+  .wce-avatar-received { margin-right: 8px; }
+  .wce-msg-content {
+    min-width: 0;
+    max-width: calc(100vw - 68px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+  }
+  .msg-bubble,
+  .wce-bubble {
+    max-width: min(72vw, 320px);
+    padding: 9px 12px;
+    font-size: 16px;
+    line-height: 1.45;
+  }
+  .wechat-special-card,
+  .wechat-voice-wrapper,
+  .wechat-voice-transcript,
+  .wce-file,
+  .wce-audio,
+  .wce-media-img,
+  .wce-video-wrap,
+  .wce-video-thumb { max-width: 100%; }
+  .wce-msg-content > .absolute { display: none; }
+  .wce-system { margin: 12px 0; }
+  .wce-brand-attribution {
+    right: max(6px, env(safe-area-inset-right, 0px));
+    bottom: max(5px, env(safe-area-inset-bottom, 0px));
+    max-width: calc(100vw - 12px);
+    padding: 4px 8px;
+    font-size: 9px;
+  }
+
+  .wce-index { height: 100vh; height: 100dvh; overflow-y: auto; background: #f7f7f7; }
+  .wce-index-container { max-width: none; padding: 0 0 max(34px, env(safe-area-inset-bottom, 0px)); }
+  .wce-index-heading {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    box-sizing: content-box;
+    height: 48px;
+    align-items: center;
+    justify-content: center;
+    padding: env(safe-area-inset-top, 0px) 16px 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    background: #ededed;
+  }
+  .wce-index-title {
+    max-width: 100%;
+    margin: 0;
+    overflow: hidden;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wce-index-heading .wce-index-sub { display: none; }
+  .wce-index-card { border: 0; border-radius: 0; background: #fff; }
+  .wce-index-item {
+    min-height: 68px;
+    gap: 12px;
+    padding: 9px 12px;
+    border-bottom-color: #ededed;
+  }
+  .wce-session-avatar { width: 48px; height: 48px; border-radius: 5px; }
+  .wce-session-name { font-size: 16px; font-weight: 500; }
+  .wce-session-sub { margin-top: 3px; font-size: 13px; color: #999; }
+  .wce-index-container > .wce-index-sub { margin: 14px 16px 0 !important; line-height: 1.55; }
+}
+
+@media(max-width: 374px) {
+  .wce-tool-status { display: none; }
+  .msg-bubble,
+  .wce-bubble { max-width: 70vw; }
+  .wce-brand-attribution span:first-of-type,
+  .wce-brand-dot { display: none; }
+}
+
+@media(prefers-reduced-motion: reduce) {
+  .wce-mobile-back,
+  .wce-mobile-tools-button { transition: none; }
+}
+""".strip()
+
+
+_MOBILE_EXPORT_JS = r"""
+(() => {
+  const setupMobileTools = () => {
+    const button = document.getElementById("wceMobileToolsButton");
+    const tools = document.getElementById("wceChatTools");
+    if (!button || !tools || button.dataset.mobileToolsReady === "1") return;
+    button.dataset.mobileToolsReady = "1";
+
+    const setOpen = (open) => {
+      if (open) tools.setAttribute("data-mobile-open", "1");
+      else tools.removeAttribute("data-mobile-open");
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+    };
+
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setOpen(tools.getAttribute("data-mobile-open") !== "1");
+    });
+    document.addEventListener("click", (event) => {
+      if (!tools.contains(event.target)) setOpen(false);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || tools.getAttribute("data-mobile-open") !== "1") return;
+      setOpen(false);
+      button.focus();
+    });
+
+    const mobileQuery = window.matchMedia("(max-width: 767px)");
+    const closeOnDesktop = (event) => {
+      if (!event.matches) setOpen(false);
+    };
+    if (typeof mobileQuery.addEventListener === "function") {
+      mobileQuery.addEventListener("change", closeOnDesktop);
+    } else if (typeof mobileQuery.addListener === "function") {
+      mobileQuery.addListener(closeOnDesktop);
+    }
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", setupMobileTools, { once: true });
+  } else {
+    setupMobileTools();
+  }
+})();
+""".strip()
+
+
 def _load_ui_css_bundle(*, ui_public_dir: Optional[Path], report: dict[str, Any]) -> str:
     del ui_public_dir, report
-    return f'{_native_export_css("chat").rstrip()}\n{_VOICE_TRANSCRIPT_EXPORT_CSS}\n'
+    return (
+        f'{_native_export_css("chat").rstrip()}\n'
+        f'{_VOICE_TRANSCRIPT_EXPORT_CSS}\n'
+        f'{_MOBILE_EXPORT_CSS}\n'
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -650,7 +910,7 @@ def _native_json_list(
 
 
 def _html_export_runtime_js(native_integrity: Any) -> str:
-    return _native_text(native_integrity, "runtime_js")
+    return f'{_native_text(native_integrity, "runtime_js").rstrip()}\n{_MOBILE_EXPORT_JS}\n'
 
 
 def _html_export_asset_paths(export_id: str) -> tuple[str, str, str]:
@@ -2069,7 +2329,7 @@ class ChatExportManager:
                     parts.append('<html lang="zh-CN">\n')
                     parts.append("<head>\n")
                     parts.append('  <meta charset="utf-8" />\n')
-                    parts.append('  <meta name="viewport" content="width=device-width, initial-scale=1" />\n')
+                    parts.append('  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />\n')
                     parts.append(f"  <title>{esc_text(archive_title)}导出</title>\n")
                     html_assets = dict(job.options.get("_htmlAssets") or {})
                     css_asset_path = str(html_assets.get("cssPath") or _html_export_asset_paths(job.export_id)[0])
@@ -2092,10 +2352,12 @@ class ChatExportManager:
                     )
                     parts.append('<div class="wce-index">\n')
                     parts.append('  <div class="wce-index-container">\n')
-                    parts.append(f'    <h1 class="wce-index-title">{esc_text(archive_title)}导出（HTML）</h1>\n')
+                    parts.append('    <div class="wce-index-heading">\n')
+                    parts.append(f'      <h1 class="wce-index-title">{esc_text(archive_title)}导出（HTML）</h1>\n')
                     parts.append(
-                        f'    <p class="wce-index-sub">账号: {esc_text("hidden" if privacy_mode else account_dir.name)} · 会话数: {len(html_index_items)} · 导出时间: {esc_text(_now_iso())}</p>\n'
+                        f'      <p class="wce-index-sub">账号: {esc_text("hidden" if privacy_mode else account_dir.name)} · 会话数: {len(html_index_items)} · 导出时间: {esc_text(_now_iso())}</p>\n'
                     )
+                    parts.append("    </div>\n")
                     parts.append('    <div class="wce-index-card">\n')
 
                     for item in html_index_items:
@@ -4697,7 +4959,7 @@ def _write_conversation_html(
             tw.write('<html lang="zh-CN">\n')
             tw.write("<head>\n")
             tw.write('  <meta charset="utf-8" />\n')
-            tw.write('  <meta name="viewport" content="width=device-width, initial-scale=1" />\n')
+            tw.write('  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />\n')
             tw.write(f"  <title>{esc_text(page_title)}</title>\n")
             tw.write(_html_export_gate_style())
             # Do not use native `integrity=` for offline file:// exports; Chrome blocks
@@ -4863,11 +5125,24 @@ def _write_conversation_html(
             tw.write('    <div class="wce-chat-col flex-1 flex flex-col min-h-0 min-w-0">\n')
             tw.write('      <div class="flex-1 flex flex-col min-h-0 relative">\n')
 
-            tw.write('        <div class="chat-header">\n')
-            tw.write('          <div class="flex items-center gap-3 min-w-0">\n')
-            tw.write(f'            <h2 class="text-base font-medium text-gray-900">{esc_text(chat_title)}</h2>\n')
+            tw.write('        <div class="chat-header wce-chat-header">\n')
+            tw.write(
+                f'          <a class="wce-mobile-back" href="{esc_attr(rel_root + "index.html")}" '
+                'aria-label="返回会话列表" title="返回会话列表">\n'
+            )
+            tw.write('            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">\n')
+            tw.write('              <path d="M15 5L8 12L15 19" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />\n')
+            tw.write("            </svg>\n")
+            tw.write("          </a>\n")
+            tw.write('          <div class="wce-chat-heading">\n')
+            tw.write(f'            <h2 class="wce-chat-title text-base font-medium text-gray-900">{esc_text(chat_title)}</h2>\n')
             tw.write("          </div>\n")
-            tw.write('          <div class="ml-auto wce-chat-tools">\n')
+            tw.write('          <button id="wceMobileToolsButton" class="wce-mobile-tools-button" type="button" aria-controls="wceChatTools" aria-expanded="false" aria-label="聊天工具" title="聊天工具">\n')
+            tw.write('            <svg width="25" height="25" viewBox="0 0 25 25" fill="currentColor" aria-hidden="true">\n')
+            tw.write('              <circle cx="5" cy="12.5" r="1.8" /><circle cx="12.5" cy="12.5" r="1.8" /><circle cx="20" cy="12.5" r="1.8" />\n')
+            tw.write("            </svg>\n")
+            tw.write("          </button>\n")
+            tw.write('          <div id="wceChatTools" class="ml-auto wce-chat-tools">\n')
             tw.write('            <div class="wce-tool-group" title="搜索当前聊天记录；分页导出会在首次搜索时加载全部分页">\n')
             tw.write('              <input id="wceMessageSearchInput" class="wce-tool-input wce-tool-search" type="search" placeholder="搜索聊天记录" autocomplete="off" />\n')
             tw.write('              <button id="wceMessageSearchBtn" class="wce-tool-btn" type="button">搜索</button>\n')
@@ -5116,7 +5391,7 @@ def _write_conversation_html(
                 tw.write("                " + build_avatar_html(src=avatar_src, fallback_text=fallback_char, extra_class=avatar_extra) + "\n")
 
                 align_cls = "items-end" if is_sent else "items-start"
-                tw.write(f'                <div class="flex flex-col relative group {esc_attr(align_cls)}" style="min-width:0">\n')
+                tw.write(f'                <div class="wce-msg-content flex flex-col relative group {esc_attr(align_cls)}" style="min-width:0">\n')
                 if conv_is_group and (not is_sent) and display_name:
                     tw.write(f'                  <div class="text-[11px] text-gray-500 mb-1 text-left">{esc_text(display_name)}</div>\n')
 
