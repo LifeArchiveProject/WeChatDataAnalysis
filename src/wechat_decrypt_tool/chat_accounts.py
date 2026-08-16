@@ -8,6 +8,8 @@ from typing import Any, Optional
 
 from fastapi import HTTPException
 
+from .account_identity import canonical_account_name, is_internal_account_directory_name
+from .account_source_policy import source_metadata_prefers_decrypted_snapshot
 from .app_paths import get_output_databases_dir
 from .key_store import get_account_keys_from_store, load_account_keys_store, normalize_key_store_path
 from .sqlite_diagnostics import is_usable_sqlite_db
@@ -38,9 +40,18 @@ class ChatAccountContext:
 
     @property
     def mode(self) -> str:
+        if self.prefers_decrypted_snapshot:
+            return "decrypted"
         if self.db_storage_path or self.wxid_dir:
             return "direct"
         return "decrypted" if self.has_decrypted_dbs else "unknown"
+
+    @property
+    def prefers_decrypted_snapshot(self) -> bool:
+        return bool(
+            self.has_decrypted_dbs
+            and source_metadata_prefers_decrypted_snapshot(self.source_info)
+        )
 
     @property
     def keys_ready(self) -> bool:
@@ -56,6 +67,8 @@ def _safe_account_name(value: Any) -> str:
     if any(ch in name for ch in ("/", "\\", ":", "\x00")):
         return ""
     if name in {".", ".."}:
+        return ""
+    if is_internal_account_directory_name(name):
         return ""
     return name
 
@@ -183,7 +196,13 @@ def _context_for_name(account: str) -> Optional[ChatAccountContext]:
     source_from_keys, key_present = _source_info_from_key_store(account_name)
     key_state = _key_state_from_key_store(account_name)
     media_key_state = _key_state_from_media_keys_file(account_dir)
-    source_info = _merge_source_info(source_from_dir, source_from_keys)
+    # A manually imported archive is an immutable decrypted snapshot. Do not
+    # silently graft a key-store path from this computer onto it; that would
+    # make `source=auto` show the host WeChat database instead of the archive.
+    if has_dbs and source_metadata_prefers_decrypted_snapshot(source_from_dir):
+        source_info = dict(source_from_dir)
+    else:
+        source_info = _merge_source_info(source_from_dir, source_from_keys)
     if not has_dbs and not source_info and not key_present:
         return None
 
@@ -230,6 +249,8 @@ def _dedupe_source_alias_contexts(
             continue
 
         base_has_canonical_data = base.has_decrypted_dbs or not ctx.has_decrypted_dbs
+        if base.prefers_decrypted_snapshot and base.has_decrypted_dbs:
+            continue
         if _contexts_share_source(base, ctx) and base_has_canonical_data:
             continue
         output.append(ctx)
@@ -286,14 +307,33 @@ def resolve_chat_account_context(account: Optional[str]) -> ChatAccountContext:
             detail="No chat accounts found. Please save a db key/db_storage path or decrypt first.",
         )
 
-    selected = _safe_account_name(account) or contexts[0].name
+    raw_selected = str(account or "").strip()
+    selected = _safe_account_name(raw_selected)
+    if raw_selected and not selected:
+        # Older imports exposed rollback directories as accounts. Preserve a
+        # persisted selection such as `wxid_x.backup-*` by resolving it to the
+        # canonical snapshot instead of silently selecting an unrelated first
+        # account.
+        canonical_selected = canonical_account_name(raw_selected)
+        if canonical_selected != raw_selected:
+            selected = _safe_account_name(canonical_selected)
+        if not selected:
+            raise HTTPException(status_code=400, detail="Invalid account.")
+    selected = selected or contexts[0].name
     by_name = {ctx.name: ctx for ctx in contexts}
     ctx = by_name.get(selected)
     if ctx is None:
         alias_match = _WXID_SOURCE_SUFFIX_RE.fullmatch(selected)
         alias_ctx = _context_for_name(selected) if alias_match is not None else None
         base_ctx = by_name.get(alias_match.group(1)) if alias_match is not None else None
-        if alias_ctx is not None and base_ctx is not None and _contexts_share_source(alias_ctx, base_ctx):
+        if (
+            alias_ctx is not None
+            and base_ctx is not None
+            and (
+                base_ctx.prefers_decrypted_snapshot
+                or _contexts_share_source(alias_ctx, base_ctx)
+            )
+        ):
             ctx = base_ctx
     if ctx is None:
         raise HTTPException(status_code=404, detail="Account not found.")

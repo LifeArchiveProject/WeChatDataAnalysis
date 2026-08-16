@@ -25,6 +25,8 @@ from urllib.parse import urlencode, urljoin, urlparse
 
 import requests
 
+from .account_identity import resolve_account_self_rowid, resolve_account_self_username
+from .account_source_policy import account_prefers_decrypted_snapshot
 from .chat_helpers import (
     _decode_message_content,
     _decode_sqlite_text,
@@ -1061,7 +1063,9 @@ class ChatExportManager:
         source_norm = source_requested
         fallback_reason = ""
         retry_after_seconds = 0
-        if source_requested in {"auto", "realtime"}:
+        if source_requested == "auto" and account_prefers_decrypted_snapshot(account_dir):
+            source_norm = "decrypted"
+        elif source_requested in {"auto", "realtime"}:
             try:
                 WCDB_REALTIME.ensure_connected(account_dir)
                 source_norm = "realtime"
@@ -1253,7 +1257,11 @@ class ChatExportManager:
         }
         has_prepared_conversations = bool(prepared_by_username)
         source_requested = _normalize_chat_source(opts.get("source"), default="auto")
-        source_norm = "realtime" if source_requested in {"auto", "realtime"} else "decrypted"
+        source_norm = (
+            "decrypted"
+            if source_requested == "auto" and account_prefers_decrypted_snapshot(account_dir)
+            else ("realtime" if source_requested in {"auto", "realtime"} else "decrypted")
+        )
         rt_conn = None
         if source_norm == "realtime" and not has_prepared_conversations:
             try:
@@ -2623,7 +2631,9 @@ def build_chat_export_targets_preview(
     source_norm = source_requested
     fallback_reason = ""
     retry_after_seconds = 0
-    if source_requested in {"auto", "realtime"}:
+    if source_requested == "auto" and account_prefers_decrypted_snapshot(account_dir):
+        source_norm = "decrypted"
+    elif source_requested in {"auto", "realtime"}:
         source_norm = "realtime"
         if rt_conn is None:
             try:
@@ -2750,6 +2760,7 @@ def _conversation_dir_name(
 
 
 def _normalize_realtime_message_item_for_export(item: dict[str, Any], *, account_dir: Path, conv_username: str) -> _Row:
+    self_username = resolve_account_self_username(account_dir)
     message_content = _pick_case_insensitive_value(item, "message_content", "messageContent", "MessageContent")
     compress_content = _pick_case_insensitive_value(item, "compress_content", "compressContent", "CompressContent")
     raw_text = _decode_message_content(compress_content, message_content).strip()
@@ -2766,14 +2777,14 @@ def _normalize_realtime_message_item_for_export(item: dict[str, Any], *, account
             is_sent = bool(sent_value)
     if not is_sent:
         try:
-            if sender_username and sender_username.lower() == account_dir.name.lower():
+            if sender_username and sender_username.lower() == self_username.lower():
                 is_sent = True
         except Exception:
             pass
 
     is_group = bool(str(conv_username or "").endswith("@chatroom"))
     if is_sent:
-        sender_username = account_dir.name
+        sender_username = self_username
     elif (not is_group) and (not sender_username):
         sender_username = conv_username
 
@@ -2955,7 +2966,7 @@ def _iter_rows_for_conversation(
     if not db_paths:
         return []
 
-    account_wxid = account_dir.name
+    account_wxid = resolve_account_self_username(account_dir)
 
     def iter_db(db_path: Path) -> Iterable[_Row]:
         conn = sqlite3.connect(str(db_path))
@@ -2969,16 +2980,10 @@ def _iter_rows_for_conversation(
             # compress_content reliably (and avoid losing binary payloads).
             conn.text_factory = bytes
 
-            my_rowid = None
-            try:
-                r = conn.execute(
-                    "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
-                    (account_wxid,),
-                ).fetchone()
-                if r is not None:
-                    my_rowid = int(r[0])
-            except Exception:
-                my_rowid = None
+            my_rowid, _matched_self_username = resolve_account_self_rowid(
+                conn,
+                account_dir,
+            )
 
             quoted = _quote_ident(table_name)
             has_packed_info_data = False

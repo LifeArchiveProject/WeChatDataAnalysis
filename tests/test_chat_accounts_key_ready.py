@@ -1,5 +1,7 @@
 import importlib
+import json
 import os
+import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -131,6 +133,81 @@ class TestChatAccountsKeyReady(unittest.TestCase):
                 resolved_alias = chat_accounts.resolve_chat_account_context(source_account)
                 self.assertEqual(resolved_alias.name, base_account)
                 self.assertEqual(resolved_alias.db_storage_path, str(db_storage.resolve()))
+            finally:
+                if prev_data_dir is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data_dir
+
+    def test_imported_snapshot_hides_host_aliases_and_legacy_backup_directories(self) -> None:
+        with self._with_temp_data_dir() as td:
+            root = Path(td)
+            prev_data_dir = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+
+                import wechat_decrypt_tool.app_paths as app_paths
+                import wechat_decrypt_tool.key_store as key_store
+                import wechat_decrypt_tool.chat_accounts as chat_accounts
+
+                importlib.reload(app_paths)
+                importlib.reload(key_store)
+                importlib.reload(chat_accounts)
+
+                base_account = "wxid_imported"
+                source_account = f"{base_account}_1e7a"
+                databases_dir = root / "output" / "databases"
+                account_dir = databases_dir / base_account
+                legacy_backup = databases_dir / f"{base_account}.backup-20260812-200746"
+                staging_dir = databases_dir / f".{base_account}.import-fixture"
+
+                for target in (account_dir, legacy_backup, staging_dir):
+                    target.mkdir(parents=True, exist_ok=True)
+                    for db_name in ("session.db", "contact.db"):
+                        connection = sqlite3.connect(str(target / db_name))
+                        connection.execute("CREATE TABLE fixture (value TEXT)")
+                        connection.commit()
+                        connection.close()
+
+                (account_dir / "_source.json").write_text(
+                    json.dumps(
+                        {
+                            "import_mode": "manual_import",
+                            "import_source_path": "/HOST/windows-export.zip",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (account_dir / "account.json").write_text(
+                    json.dumps({"username": base_account}),
+                    encoding="utf-8",
+                )
+
+                wxid_dir = root / "xwechat_files" / source_account
+                db_storage = wxid_dir / "db_storage"
+                db_storage.mkdir(parents=True)
+                key_store.upsert_account_keys_in_store(
+                    base_account,
+                    aliases=[source_account],
+                    db_key="D" * 64,
+                    image_xor_key="0x8A",
+                    image_aes_key="1234567890abcdef",
+                    db_key_source_wxid_dir=str(wxid_dir),
+                    db_key_source_db_storage_path=str(db_storage),
+                )
+
+                contexts = chat_accounts.list_chat_account_contexts()
+
+                self.assertEqual([ctx.name for ctx in contexts], [base_account])
+                self.assertEqual(contexts[0].mode, "decrypted")
+                self.assertTrue(contexts[0].prefers_decrypted_snapshot)
+                self.assertEqual(contexts[0].db_storage_path, "")
+                resolved_alias = chat_accounts.resolve_chat_account_context(source_account)
+                self.assertEqual(resolved_alias.name, base_account)
+                self.assertEqual(resolved_alias.mode, "decrypted")
+                resolved_backup = chat_accounts.resolve_chat_account_context(legacy_backup.name)
+                self.assertEqual(resolved_backup.name, base_account)
+                self.assertEqual(resolved_backup.mode, "decrypted")
             finally:
                 if prev_data_dir is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)

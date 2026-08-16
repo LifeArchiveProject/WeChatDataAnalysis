@@ -88,16 +88,25 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
 
   const publishRealtimeDataSourceStatus = ({ account, available: isAvailable, info, error: reason }) => {
     if (!account) return
+    const snapshotPreferred = !!info?.snapshot_preferred
+    const defaultDataSourceStatus = {
+      preferredSource: 'realtime',
+      activeSource: isAvailable ? 'realtime' : 'decrypted',
+      fallbackActive: !isAvailable,
+      reason: isAvailable ? '' : reason,
+      message: '',
+      retryAfterSeconds: isAvailable ? 0 : Number(info?.retry_after_seconds || 0),
+    }
     chatAccounts.applySourceResponse({
       account,
-      dataSourceStatus: {
-        preferredSource: 'realtime',
-        activeSource: isAvailable ? 'realtime' : 'decrypted',
-        fallbackActive: !isAvailable,
-        reason: isAvailable ? '' : reason,
-        message: '',
-        retryAfterSeconds: isAvailable ? 0 : Number(info?.retry_after_seconds || 0),
-      },
+      dataSourceStatus: snapshotPreferred
+        ? {
+            ...defaultDataSourceStatus,
+            preferredSource: 'decrypted',
+            fallbackActive: false,
+            reason: '',
+          }
+        : defaultDataSourceStatus,
     })
   }
 
@@ -125,7 +134,11 @@ export const useChatRealtimeStore = defineStore('chatRealtime', () => {
       const resp = await api.getChatRealtimeStatus({ account })
       const nextAvailable = !!resp?.available
       const nextInfo = resp?.realtime || null
-      const nextError = nextAvailable ? '' : realtimeUnavailableReason(nextInfo)
+      const nextError = nextAvailable
+        ? ''
+        : (nextInfo?.snapshot_preferred
+            ? '当前账号为导入的数据快照；默认不连接本机微信实时数据库。'
+            : realtimeUnavailableReason(nextInfo))
       const result = {
         account,
         available: nextAvailable,

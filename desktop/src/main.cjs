@@ -478,6 +478,20 @@ function sanitizeAccountName(account) {
   return name;
 }
 
+function canonicalAccountKeyName(account) {
+  let name = String(account || "").trim();
+  const backupMatch = /^(.+)\.backup-\d{8}-\d{6}(?:-\d+)?$/i.exec(name);
+  if (backupMatch) name = backupMatch[1];
+  const sourceMatch = /^(wxid_[^_\s]+)_[0-9a-f]{4}$/i.exec(name);
+  return sourceMatch ? sourceMatch[1] : name;
+}
+
+function isInternalAccountDataDirectory(name) {
+  const value = String(name || "").trim();
+  if (!value || value.startsWith(".")) return true;
+  return /\.backup-\d{8}-\d{6}(?:-\d+)?$/i.test(value);
+}
+
 function listDecryptedAccountsOnDisk(databasesDir) {
   try {
     if (!fs.existsSync(databasesDir)) return [];
@@ -496,6 +510,7 @@ function listDecryptedAccountsOnDisk(databasesDir) {
   for (const entry of entries) {
     try {
       if (!entry || !entry.isDirectory()) continue;
+      if (isInternalAccountDataDirectory(entry.name)) continue;
       const accountDir = path.join(databasesDir, entry.name);
       const hasSession = fs.existsSync(path.join(accountDir, "session.db"));
       const hasContact = fs.existsSync(path.join(accountDir, "contact.db"));
@@ -513,9 +528,15 @@ function resolveAccountDirInOutput(account) {
   const outputDir = resolveOutputDir();
   if (!outputDir) throw new Error("无法定位 output 目录");
   const databasesDir = path.join(outputDir, "databases");
-  const accountName = sanitizeAccountName(account);
+  const requestedAccountName = sanitizeAccountName(account);
+  const canonicalAccountName = sanitizeAccountName(canonicalAccountKeyName(requestedAccountName));
 
   const base = path.resolve(databasesDir);
+  const canonicalDir = path.resolve(path.join(databasesDir, canonicalAccountName));
+  const accountName = (
+    canonicalAccountName !== requestedAccountName
+    && fs.existsSync(canonicalDir)
+  ) ? canonicalAccountName : requestedAccountName;
   const accountDir = path.resolve(path.join(databasesDir, accountName));
   if (accountDir !== base && !accountDir.startsWith(base + path.sep)) {
     throw new Error("账号路径非法");
@@ -528,6 +549,14 @@ function resolveAccountDirInOutput(account) {
     accountName,
     accountDir,
   };
+}
+
+function accountKeySourceRoot(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+  const direct = String(item.db_key_source_db_storage_path || "").trim();
+  const wxidDir = String(item.db_key_source_wxid_dir || "").trim();
+  const value = direct || (wxidDir ? path.join(wxidDir, "db_storage") : "");
+  return value ? path.resolve(value) : "";
 }
 
 function getAccountInfoFromDisk(account) {
@@ -561,15 +590,39 @@ function getAccountInfoFromDisk(account) {
   };
 }
 
-function removeAccountFromKeyStore(outputDir, accountName) {
+function removeAccountFamilyFromKeyStore(outputDir, accountName) {
   const keyStorePath = path.join(outputDir, "account_keys.json");
   try {
     if (!fs.existsSync(keyStorePath)) return false;
     const raw = fs.readFileSync(keyStorePath, { encoding: "utf8" });
     const parsed = JSON.parse(raw || "{}");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
-    if (!Object.prototype.hasOwnProperty.call(parsed, accountName)) return false;
-    delete parsed[accountName];
+    const canonical = canonicalAccountKeyName(accountName);
+    const namesToRemove = [];
+    const sourceRoots = new Set();
+    for (const [name, item] of Object.entries(parsed)) {
+      const identities = new Set([canonicalAccountKeyName(name)]);
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        identities.add(canonicalAccountKeyName(item.image_key_derived_wxid));
+        for (const key of ["db_key_source_wxid_dir", "image_key_source_wxid_dir"]) {
+          const sourcePath = String(item[key] || "").trim();
+          if (sourcePath) identities.add(canonicalAccountKeyName(path.basename(sourcePath)));
+        }
+      }
+      if (!identities.has(canonical)) continue;
+      namesToRemove.push(name);
+      const sourceRoot = accountKeySourceRoot(item);
+      if (sourceRoot) sourceRoots.add(sourceRoot);
+    }
+    if (sourceRoots.size) {
+      for (const [name, item] of Object.entries(parsed)) {
+        if (namesToRemove.includes(name)) continue;
+        const sourceRoot = accountKeySourceRoot(item);
+        if (sourceRoot && sourceRoots.has(sourceRoot)) namesToRemove.push(name);
+      }
+    }
+    if (!namesToRemove.length) return false;
+    for (const name of namesToRemove) delete parsed[name];
     fs.writeFileSync(keyStorePath, JSON.stringify(parsed, null, 2), { encoding: "utf8" });
     return true;
   } catch {
@@ -596,6 +649,25 @@ async function deleteAccountDataFromDisk(account) {
     throw new Error("账号数据不存在");
   }
 
+  const canonicalCleanupName = canonicalAccountKeyName(accountName);
+  const cleanupAccountNames = new Set([accountName]);
+  const requestedAccountName = sanitizeAccountName(account);
+  if (canonicalAccountKeyName(requestedAccountName) === canonicalCleanupName) {
+    cleanupAccountNames.add(requestedAccountName);
+  }
+  const accountDirsToRemove = new Set([accountDir]);
+  try {
+    for (const entry of fs.readdirSync(databasesDir, { withFileTypes: true })) {
+      if (
+        (!entry?.isDirectory() && !entry?.isSymbolicLink())
+        || isInternalAccountDataDirectory(entry.name)
+        || canonicalAccountKeyName(entry.name) !== canonicalCleanupName
+      ) continue;
+      cleanupAccountNames.add(entry.name);
+      accountDirsToRemove.add(path.join(databasesDir, entry.name));
+    }
+  } catch {}
+
   const wasBackendRunning = !!backendProc;
   let restartError = null;
   let result = null;
@@ -608,13 +680,29 @@ async function deleteAccountDataFromDisk(account) {
   }
 
   try {
-    const exportsDir = path.join(outputDir, "exports", accountName);
+    for (const cleanupName of cleanupAccountNames) {
+      try {
+        fs.rmSync(path.join(outputDir, "exports", cleanupName), { recursive: true, force: true });
+      } catch {}
+      try {
+        fs.rmSync(path.join(outputDir, "account_backups", cleanupName), { recursive: true, force: true });
+      } catch {}
+    }
     try {
-      fs.rmSync(exportsDir, { recursive: true, force: true });
+      for (const entry of fs.readdirSync(databasesDir, { withFileTypes: true })) {
+        if (
+          (!entry?.isDirectory() && !entry?.isSymbolicLink())
+          || !isInternalAccountDataDirectory(entry.name)
+          || canonicalAccountKeyName(entry.name) !== canonicalCleanupName
+        ) continue;
+        fs.rmSync(path.join(databasesDir, entry.name), { recursive: true, force: true });
+      }
     } catch {}
 
-    fs.rmSync(accountDir, { recursive: true, force: true });
-    const removedKeyCache = removeAccountFromKeyStore(outputDir, accountName);
+    for (const familyAccountDir of accountDirsToRemove) {
+      fs.rmSync(familyAccountDir, { recursive: true, force: true });
+    }
+    const removedKeyCache = removeAccountFamilyFromKeyStore(outputDir, accountName);
     const removedNativeCoreCache = clearNativeCoreRawKeyCache();
     const accounts = listDecryptedAccountsOnDisk(databasesDir);
     result = {

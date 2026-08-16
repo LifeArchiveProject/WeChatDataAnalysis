@@ -189,7 +189,7 @@
                 <button
                   type="button"
                   class="inline-flex items-center justify-center rounded-lg bg-[#07C160] px-4 py-3 text-sm font-medium text-white transition hover:bg-[#06AD56] focus:outline-none focus:ring-2 focus:ring-[#07C160]/25"
-                  @click="navigateTo('/chat')"
+                  @click="enterImportedChat"
                 >
                   进入聊天页面
                 </button>
@@ -308,6 +308,7 @@ import { onUnmounted, ref } from 'vue'
 import { useApi } from '~/composables/useApi'
 import { useApiBase } from '~/composables/useApiBase'
 import { showErrorAlert, withErrorLogGuidance } from '~/composables/useErrorNotice'
+import { useChatAccountsStore } from '~/stores/chatAccounts'
 
 const importing = ref(false)
 const importProgress = ref(0)
@@ -350,6 +351,19 @@ const resetImport = () => {
 
 const { importDecryptedPreview, pickSystemDirectory } = useApi()
 const apiBase = useApiBase()
+const chatAccounts = useChatAccountsStore()
+
+const selectImportedAccount = async (account) => {
+  const importedAccount = String(account || '').trim()
+  await chatAccounts.ensureLoaded({ force: true })
+  if (importedAccount) chatAccounts.setSelectedAccount(importedAccount)
+}
+
+const enterImportedChat = async () => {
+  await selectImportedAccount(importComplete.value?.account)
+  await navigateTo('/chat')
+}
+
 const previewImportPath = async (path) => {
   if (!path) return
   const isArchive = String(path).toLowerCase().endsWith('.zip')
@@ -495,6 +509,7 @@ const confirmImport = async () => {
         importing.value = false
         closeEventSource()
         importJobId.value = ''
+        await selectImportedAccount(data.account)
       } else if (data.type === 'error') {
         importError.value = data.message || '导入失败'
         importComplete.value = null

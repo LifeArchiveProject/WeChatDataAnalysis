@@ -203,6 +203,8 @@ def _open_db_source(
 ) -> _SQLiteSource | _WCDBDatabaseSource:
     source_norm = _source_requested(source)
     realtime_capable = _account_has_realtime_source(ctx)
+    if source_norm == "auto" and bool(getattr(ctx, "prefers_decrypted_snapshot", False)):
+        realtime_capable = False
     fallback_reason = ""
     retry_after_seconds = 0
     if source_norm in {"auto", "realtime"} and realtime_capable:

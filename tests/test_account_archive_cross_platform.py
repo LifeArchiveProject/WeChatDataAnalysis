@@ -210,6 +210,16 @@ class TestAccountArchiveCrossPlatform(unittest.TestCase):
 
             backup_dir = Path(events[-1]["backup_dir"])
             self.assertEqual((backup_dir / "old-data.txt").read_text(encoding="utf-8"), "old")
+            self.assertEqual(
+                backup_dir.parent,
+                root / "mac-data" / "account_backups" / "wxid_cross_platform",
+            )
+            self.assertNotEqual(backup_dir.parent, output_dir)
+            self.assertFalse(list(output_dir.glob("wxid_cross_platform.backup-*")))
+            source_info = json.loads((imported_dir / "_source.json").read_text(encoding="utf-8"))
+            self.assertEqual(source_info.get("import_mode"), "manual_import")
+            self.assertEqual(source_info.get("import_source_path"), str(archive_path))
+            self.assertNotIn("db_storage_path", source_info)
             self.assertFalse(list(output_dir.glob(".wxid_cross_platform.import-*")))
             self.assertFalse(list((root / "mac-data" / "import-tmp").glob("account-archive-*")))
 

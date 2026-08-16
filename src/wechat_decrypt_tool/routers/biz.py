@@ -8,6 +8,7 @@ import urllib
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
+from ..account_source_policy import account_prefers_decrypted_snapshot
 from ..chat_helpers import _quote_ident, _resolve_account_dir
 from ..media_helpers import _resolve_account_db_storage_dir
 from ..path_fix import PathFixRoute
@@ -78,6 +79,8 @@ def _is_biz_realtime_available(account_dir: Path) -> bool:
 
 
 def _resolve_biz_source_for_account(source_norm: str, account_dir: Path) -> str:
+    if source_norm == "auto" and account_prefers_decrypted_snapshot(account_dir):
+        return "decrypted"
     if source_norm == "auto":
         return "realtime" if _is_biz_realtime_available(account_dir) else "decrypted"
     return source_norm

@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from .account_identity import resolve_account_self_rowid
 from .chat_helpers import (
     _decode_sqlite_text,
     _quote_ident,
@@ -780,16 +781,10 @@ def _build_worker(account_dir: Path, rebuild: bool, source: str = "decrypted") -
                     except Exception:
                         lower_to_actual = {}
 
-                    my_rowid = None
-                    try:
-                        r2 = msg_conn.execute(
-                            "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
-                            (account_dir.name,),
-                        ).fetchone()
-                        if r2 is not None and r2[0] is not None:
-                            my_rowid = int(r2[0])
-                    except Exception:
-                        my_rowid = None
+                    my_rowid, _matched_self_username = resolve_account_self_rowid(
+                        msg_conn,
+                        account_dir,
+                    )
 
                     for conv_username, sess_info in sessions.items():
                         _update_build_state(key, currentConversation=str(conv_username))

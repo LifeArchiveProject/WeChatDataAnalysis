@@ -300,6 +300,54 @@ class TestNativeCoreRawKeyCache(unittest.TestCase):
                 )
                 self.assertFalse(cache_file.exists())
 
+    def test_family_removal_deletes_canonical_source_and_same_root_aliases(self) -> None:
+        with TemporaryDirectory() as td:
+            wxid_dir = Path(td) / "xwechat_files" / "wxid_demo_1e7a"
+            root = wxid_dir / "db_storage"
+            database = root / "session" / "session.db"
+            database.parent.mkdir(parents=True)
+            database.write_bytes(b"database")
+            cache_dir = Path(td) / "cache"
+            key_store_path = Path(td) / "account_keys.json"
+            database_key = b"k" * 32
+
+            with (
+                patch.object(key_store, "_KEY_STORE_PATH", key_store_path),
+                patch.object(
+                    native_core_raw_key_cache,
+                    "_cache_directory",
+                    return_value=cache_dir,
+                ),
+            ):
+                key_store.upsert_account_keys_in_store(
+                    "wxid_demo",
+                    aliases=["wxid_demo_1e7a"],
+                    db_key=database_key.hex(),
+                    db_key_source_wxid_dir=str(wxid_dir),
+                )
+                key_store.upsert_account_keys_in_store(
+                    "display-name-alias",
+                    db_key=database_key.hex(),
+                    db_key_source_db_storage_path=str(root),
+                )
+                native_core_raw_key_cache.merge_cached_raw_keys(
+                    root,
+                    database_key,
+                    {database: (b"s" * 16, b"r" * 32)},
+                )
+                cache_file = next(cache_dir.glob("*.bin"))
+
+                removed = key_store.remove_account_family_keys_from_store(
+                    "wxid_demo.backup-20260812-200746"
+                )
+
+                self.assertEqual(
+                    set(removed),
+                    {"wxid_demo", "wxid_demo_1e7a", "display-name-alias"},
+                )
+                self.assertEqual(key_store.load_account_keys_store(), {})
+                self.assertFalse(cache_file.exists())
+
     def test_db_source_root_change_deletes_the_old_cache(self) -> None:
         with TemporaryDirectory() as td:
             old_root = Path(td) / "old" / "db_storage"

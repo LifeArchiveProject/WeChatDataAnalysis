@@ -14,6 +14,13 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from ..account_identity import (
+    canonical_account_name,
+    is_internal_account_directory_name,
+    resolve_account_self_rowid,
+    resolve_account_self_username,
+)
+from ..account_source_policy import account_prefers_decrypted_snapshot
 from ..logging_config import get_logger
 from ..chat_search_index import (
     get_chat_search_index_db_path,
@@ -78,7 +85,7 @@ from ..chat_realtime_reader import (
     fetch_rows_via_exec as _shared_fetch_realtime_rows_via_exec,
 )
 from ..database_filters import list_countable_database_names
-from ..key_store import remove_account_keys_from_store
+from ..key_store import remove_account_family_keys_from_store
 from ..path_fix import PathFixRoute
 from ..perf_trace import create_perf_trace
 from ..session_last_message import (
@@ -414,6 +421,8 @@ def _load_group_nickname_map_from_wcdb(
     chatroom = str(chatroom_id or "").strip()
     if not chatroom.endswith("@chatroom"):
         return {}
+    if account_prefers_decrypted_snapshot(account_dir):
+        return {}
 
     targets = list(dict.fromkeys([str(x or "").strip() for x in sender_usernames if str(x or "").strip()]))
     if not targets:
@@ -693,6 +702,8 @@ def _resolve_chat_source_for_account(source_norm: str, account_dir: Path) -> str
     showing stale output/databases snapshots when direct mode is misconfigured.
     """
 
+    if source_norm == "auto" and account_prefers_decrypted_snapshot(account_dir):
+        return "decrypted"
     if source_norm == "auto":
         return "realtime"
     return source_norm
@@ -832,6 +843,21 @@ def _scan_db_storage_mtime_ns(db_storage_dir: Path, *, scope: str = "all") -> in
 async def get_chat_realtime_status(account: Optional[str] = None):
     """检查实时模式前置条件，并实际打开 WCDB 账号连接。"""
     account_dir = _resolve_account_dir(account)
+    if account_prefers_decrypted_snapshot(account_dir):
+        return {
+            "status": "success",
+            "account": account_dir.name,
+            "available": False,
+            "realtime": {
+                "account": account_dir.name,
+                "snapshot_preferred": True,
+                "connected": False,
+                "probe_attempted": False,
+                "probe_succeeded": False,
+                "probe_error": "",
+                "error": "",
+            },
+        }
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _REALTIME_STATUS_PROBE_WAIT_SECONDS
 
@@ -3058,6 +3084,7 @@ def _append_full_messages_from_rows(
     resource_conn: Optional[sqlite3.Connection],
     resource_chat_id: Optional[int],
 ) -> None:
+    self_username = resolve_account_self_username(account_dir)
     contact_conn: Optional[sqlite3.Connection] = None
     alias_cache: dict[str, str] = {}
     if is_group:
@@ -3142,7 +3169,7 @@ def _append_full_messages_from_rows(
             if not is_sent:
                 try:
                     su = str(sender_username or "").strip().lower()
-                    me = str(account_dir.name or "").strip().lower()
+                    me = str(self_username or "").strip().lower()
                     if su and me and su == me:
                         is_sent = True
                 except Exception:
@@ -3176,7 +3203,7 @@ def _append_full_messages_from_rows(
                 sender_username = xml_sender
 
         if is_sent:
-            sender_username = account_dir.name
+            sender_username = self_username
         elif (not is_group) and (not sender_username):
             sender_username = username
 
@@ -3889,7 +3916,7 @@ def _postprocess_full_messages(
 
         need_display = list(dict.fromkeys(need_display))
         need_avatar = list(dict.fromkeys(need_avatar))
-        if need_display or need_avatar:
+        if (need_display or need_avatar) and not account_prefers_decrypted_snapshot(account_dir):
             wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
             with wcdb_conn.lock:
                 if need_display:
@@ -4154,14 +4181,19 @@ async def list_chat_accounts():
 def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
     account_dir = Path(ctx.account_dir)
     db_files = list_countable_database_names(account_dir)
+    snapshot_preferred = bool(
+        getattr(ctx, "prefers_decrypted_snapshot", False)
+        or account_prefers_decrypted_snapshot(account_dir)
+    )
     realtime_status: dict[str, Any] = {}
-    try:
-        realtime_status = WCDB_REALTIME.get_status(account_dir)
-    except Exception as e:
-        realtime_status = {"error": str(e)}
+    if not snapshot_preferred:
+        try:
+            realtime_status = WCDB_REALTIME.get_status(account_dir)
+        except Exception as e:
+            realtime_status = {"error": str(e)}
 
-    db_storage_path = str(getattr(ctx, "db_storage_path", "") or "").strip()
-    wxid_dir = str(getattr(ctx, "wxid_dir", "") or "").strip()
+    db_storage_path = "" if snapshot_preferred else str(getattr(ctx, "db_storage_path", "") or "").strip()
+    wxid_dir = "" if snapshot_preferred else str(getattr(ctx, "wxid_dir", "") or "").strip()
     realtime_db_storage = str(realtime_status.get("db_storage_dir") or "").strip()
     realtime_session_db = str(realtime_status.get("session_db_path") or "").strip()
     data_source_path = realtime_db_storage or db_storage_path or wxid_dir or str(account_dir)
@@ -4278,43 +4310,120 @@ def get_chat_account_info(account: Optional[str] = None):
 
 @router.delete("/api/chat/account", summary="删除当前账号在本项目中的数据")
 def delete_chat_account(account: str):
-    account_name = str(account or "").strip()
-    if not account_name:
+    requested_account_name = str(account or "").strip()
+    if not requested_account_name:
         raise HTTPException(status_code=400, detail="Missing account.")
 
-    account_dir = _resolve_account_dir(account_name)
+    account_dir = _resolve_account_dir(requested_account_name)
+    # Account resolution can map a historical source-suffix alias to the
+    # canonical imported snapshot. Cleanup must consistently target the
+    # resolved account, not the stale value persisted by an older frontend.
+    account_name = account_dir.name
+    canonical_cleanup_name = canonical_account_name(account_name) or account_name
+    cleanup_account_names = list(
+        dict.fromkeys(
+            name
+            for name in (
+                account_name,
+                requested_account_name,
+                canonical_cleanup_name,
+            )
+            if name and canonical_account_name(name) == canonical_cleanup_name
+        )
+    )
 
-    # Best-effort: close realtime connections first, otherwise Windows may keep db files locked.
+    databases_dir = account_dir.parent
+    account_dirs_to_remove: list[Path] = [account_dir]
     try:
-        WCDB_REALTIME.disconnect(account_name)
+        for candidate in databases_dir.iterdir():
+            if is_internal_account_directory_name(candidate.name):
+                continue
+            if canonical_account_name(candidate.name) != canonical_cleanup_name:
+                continue
+            if candidate.is_dir() or candidate.is_symlink():
+                account_dirs_to_remove.append(candidate)
+                if candidate.name not in cleanup_account_names:
+                    cleanup_account_names.append(candidate.name)
     except Exception:
         pass
+    account_dirs_to_remove = list(dict.fromkeys(account_dirs_to_remove))
+
+    # Best-effort: close realtime connections first, otherwise Windows may keep db files locked.
+    for cleanup_name in cleanup_account_names:
+        try:
+            WCDB_REALTIME.disconnect(cleanup_name)
+        except Exception:
+            pass
 
     with _REALTIME_SYNC_MU:
-        _REALTIME_SYNC_ALL_LOCKS.pop(account_name, None)
-        stale_lock_keys = [k for k in _REALTIME_SYNC_LOCKS.keys() if k and k[0] == account_name]
+        for cleanup_name in cleanup_account_names:
+            _REALTIME_SYNC_ALL_LOCKS.pop(cleanup_name, None)
+        stale_lock_keys = [
+            k
+            for k in _REALTIME_SYNC_LOCKS.keys()
+            if k and k[0] in cleanup_account_names
+        ]
         for k in stale_lock_keys:
             _REALTIME_SYNC_LOCKS.pop(k, None)
 
-    removed_key_cache = False
-    try:
-        removed_key_cache = bool(remove_account_keys_from_store(account_name))
-    except Exception:
-        removed_key_cache = False
-
     output_dir = get_output_dir()
-    exports_dir = output_dir / "exports" / account_name
-    if exports_dir.exists():
+    for cleanup_name in cleanup_account_names:
+        exports_dir = output_dir / "exports" / cleanup_name
+        if exports_dir.exists():
+            try:
+                shutil.rmtree(exports_dir)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"删除账号导出缓存失败：{e}")
+
+    removed_backups: list[str] = []
+    for cleanup_name in cleanup_account_names:
+        backup_root = output_dir / "account_backups" / cleanup_name
+        if backup_root.exists():
+            try:
+                shutil.rmtree(backup_root)
+                removed_backups.append(str(backup_root))
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"删除账号导入备份失败：{e}")
+
+    # Clean up rollback directories created by older releases. New imports keep
+    # backups outside databases so they cannot become selectable accounts.
+    try:
+        legacy_backups = [
+            path
+            for path in databases_dir.iterdir()
+            if (
+                is_internal_account_directory_name(path.name)
+                and canonical_account_name(path.name) == canonical_cleanup_name
+            )
+        ]
+    except Exception:
+        legacy_backups = []
+    for legacy_backup in legacy_backups:
         try:
-            shutil.rmtree(exports_dir)
-        except Exception:
-            # Ignore export cleanup failure; account dir removal is the core operation.
-            pass
+            if legacy_backup.is_symlink():
+                legacy_backup.unlink()
+                removed_backups.append(str(legacy_backup))
+            elif legacy_backup.is_dir():
+                shutil.rmtree(legacy_backup)
+                removed_backups.append(str(legacy_backup))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"删除旧版账号导入备份失败：{e}")
+
+    for family_account_dir in account_dirs_to_remove:
+        if not (family_account_dir.exists() or family_account_dir.is_symlink()):
+            continue
+        try:
+            if family_account_dir.is_symlink() or family_account_dir.is_file():
+                family_account_dir.unlink()
+            else:
+                shutil.rmtree(family_account_dir)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"删除账号数据失败：{e}")
 
     try:
-        shutil.rmtree(account_dir)
+        removed_key_accounts = remove_account_family_keys_from_store(account_name)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除账号数据失败：{e}")
+        raise HTTPException(status_code=500, detail=f"清理账号密钥缓存失败：{e}")
 
     accounts = _list_decrypted_accounts()
     return {
@@ -4322,7 +4431,9 @@ def delete_chat_account(account: str):
         "deleted_account": account_name,
         "accounts": accounts,
         "default_account": accounts[0] if accounts else None,
-        "removed_key_cache": removed_key_cache,
+        "removed_key_cache": bool(removed_key_accounts),
+        "removed_key_accounts": removed_key_accounts,
+        "removed_backups": removed_backups,
     }
 
 
@@ -4594,7 +4705,7 @@ def list_chat_sessions(
                 need_display.append(u)
 
         need_display = list(dict.fromkeys(need_display))
-        if need_display:
+        if need_display and not account_prefers_decrypted_snapshot(account_dir):
             wcdb_conn = rt_conn
             if wcdb_conn is None:
                 status = WCDB_REALTIME.get_status(account_dir)
@@ -4690,7 +4801,7 @@ def list_chat_sessions(
         if sender_username and sender_username not in group_sender_display_names:
             unresolved.append(sender_username)
     unresolved = list(dict.fromkeys(unresolved))
-    if unresolved:
+    if unresolved and not account_prefers_decrypted_snapshot(account_dir):
         try:
             wcdb_conn = rt_conn or WCDB_REALTIME.ensure_connected(account_dir)
             with wcdb_conn.lock:
@@ -4873,6 +4984,7 @@ def _collect_chat_messages(
     want_types: Optional[set[str]],
 ) -> tuple[list[dict[str, Any]], bool, list[str], list[str], set[str]]:
     is_group = bool(username.endswith("@chatroom"))
+    self_username = resolve_account_self_username(account_dir)
     take = int(take)
     if take < 0:
         take = 0
@@ -4903,17 +5015,10 @@ def _collect_chat_messages(
             if not table_name:
                 continue
 
-            my_wxid = account_dir.name
-            my_rowid = None
-            try:
-                r = conn.execute(
-                    "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
-                    (my_wxid,),
-                ).fetchone()
-                if r is not None:
-                    my_rowid = int(r[0])
-            except Exception:
-                my_rowid = None
+            my_rowid, _matched_self_username = resolve_account_self_rowid(
+                conn,
+                account_dir,
+            )
 
             quoted_table = _quote_ident(table_name)
             has_packed_info_data = False
@@ -5009,7 +5114,7 @@ def _collect_chat_messages(
                         sender_username = xml_sender
 
                 if is_sent:
-                    sender_username = account_dir.name
+                    sender_username = self_username
                 elif (not is_group) and (not sender_username):
                     sender_username = username
 
@@ -6264,6 +6369,7 @@ def list_chat_messages(
         and (source is None or not str(source).strip())
         and (not merged)
         and int(offset) == 0
+        and not account_prefers_decrypted_snapshot(account_dir)
     ):
         missing_table = False
         try:
@@ -6968,7 +7074,7 @@ def list_chat_messages(
                 need_display.append(u)
 
         need_display = list(dict.fromkeys(need_display))
-        if need_display:
+        if need_display and not account_prefers_decrypted_snapshot(account_dir):
             wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
             with wcdb_conn.lock:
                 wcdb_display_names = _wcdb_get_display_names(wcdb_conn.handle, need_display)
@@ -7580,16 +7686,10 @@ async def _search_chat_messages_via_fts(
         msg_conn.row_factory = sqlite3.Row
         msg_conn.text_factory = bytes
         try:
-            my_rowid = None
-            try:
-                r2 = msg_conn.execute(
-                    "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
-                    (account_dir.name,),
-                ).fetchone()
-                if r2 is not None and r2[0] is not None:
-                    my_rowid = int(r2[0])
-            except Exception:
-                my_rowid = None
+            my_rowid, _matched_self_username = resolve_account_self_rowid(
+                msg_conn,
+                account_dir,
+            )
 
             placeholders = ",".join(["?"] * len(uniq_local_ids))
             quoted_table = _quote_ident(table_name)
@@ -7693,7 +7793,7 @@ async def _search_chat_messages_via_fts(
 
             need_display = list(dict.fromkeys(need_display))
             need_avatar = list(dict.fromkeys(need_avatar))
-            if need_display or need_avatar:
+            if (need_display or need_avatar) and not account_prefers_decrypted_snapshot(account_dir):
                 wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
                 with wcdb_conn.lock:
                     if need_display:
@@ -7777,7 +7877,7 @@ async def _search_chat_messages_via_fts(
 
             need_display = list(dict.fromkeys(need_display))
             need_avatar = list(dict.fromkeys(need_avatar))
-            if need_display or need_avatar:
+            if (need_display or need_avatar) and not account_prefers_decrypted_snapshot(account_dir):
                 wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
                 with wcdb_conn.lock:
                     if need_display:
@@ -8285,17 +8385,10 @@ async def get_chat_messages_around(
             if not table_name:
                 continue
 
-            my_wxid = account_dir.name
-            my_rowid = None
-            try:
-                r2 = conn.execute(
-                    "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
-                    (my_wxid,),
-                ).fetchone()
-                if r2 is not None:
-                    my_rowid = int(r2[0])
-            except Exception:
-                my_rowid = None
+            my_rowid, _matched_self_username = resolve_account_self_rowid(
+                conn,
+                account_dir,
+            )
 
             quoted_table = _quote_ident(table_name)
             has_packed_info_data = False

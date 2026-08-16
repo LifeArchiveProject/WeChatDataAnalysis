@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
+from ..account_source_policy import account_prefers_decrypted_snapshot
 from ..avatar_cache import (
     AVATAR_CACHE_TTL_SECONDS,
     avatar_cache_entry_file_exists,
@@ -1188,6 +1189,8 @@ async def get_chat_avatar(username: str, account: Optional[str] = None, source: 
     requested_source = normalize_data_source(source, "auto")
     if requested_source not in {"auto", "realtime", "decrypted"}:
         raise HTTPException(status_code=400, detail="Invalid source. Use auto, realtime, or decrypted.")
+    if requested_source == "auto" and account_prefers_decrypted_snapshot(account_dir):
+        requested_source = "decrypted"
     if _avatar_trace_enabled():
         _trace_id, trace = create_perf_trace(
             logger,
