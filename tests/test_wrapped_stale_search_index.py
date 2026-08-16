@@ -106,3 +106,43 @@ def test_wrapped_discards_index_older_than_decrypted_message_shards() -> None:
         )
         jan_30_index = datetime(2026, 1, 30).timetuple().tm_yday - 1
         assert daily_counts[jan_30_index] == 1
+
+
+def test_wal_sidecar_touch_does_not_mark_index_stale() -> None:
+    """读库会刷新 -wal 的 mtime，不能因此判定索引过期。
+
+    2026-08-14 线上事故：用户构建完索引后，实时同步/搜索读了一次分片库，
+    message_1.db-wal 的 mtime 因 checkpoint 被刷新到索引之后，于是
+    discard_stale_chat_search_index 把一个 1.3 GB、118 万条消息的完整索引
+    直接删掉，年度总结随即显示「尚未构建搜索索引」。
+    """
+
+    import wechat_decrypt_tool.chat_search_index as search_index
+
+    with TemporaryDirectory() as td:
+        account_dir = Path(td) / "wxid_fixture"
+        account_dir.mkdir(parents=True)
+        message_db = account_dir / "message_0.db"
+        index_db = account_dir / "chat_search_index.db"
+        _seed_message_db(message_db)
+        _seed_stale_index(index_db)
+
+        now_ns = time.time_ns()
+        # 主库比索引旧（索引是拿它建的），但 -wal 被读操作刷新到索引之后
+        os.utime(message_db, ns=(now_ns - 4_000_000_000, now_ns - 4_000_000_000))
+        os.utime(index_db, ns=(now_ns - 2_000_000_000, now_ns - 2_000_000_000))
+        wal = Path(f"{message_db}-wal")
+        wal.write_bytes(b"")
+        os.utime(wal, ns=(now_ns, now_ns))
+
+        status = search_index.get_chat_search_index_status(account_dir, source="auto")
+        assert status["index"]["staleForSourceData"] is False, (
+            "-wal 被读操作碰过不代表源数据更新了；判过期会导致有效索引被删除"
+        )
+        assert status["index"]["ready"] is True
+
+        # 真正的「源数据换了」仍然要能抓到：主库本身比索引新
+        os.utime(message_db, ns=(now_ns, now_ns))
+        status = search_index.get_chat_search_index_status(account_dir, source="auto")
+        assert status["index"]["staleForSourceData"] is True
+        assert status["index"]["ready"] is False
