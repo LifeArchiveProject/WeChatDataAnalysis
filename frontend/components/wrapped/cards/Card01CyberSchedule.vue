@@ -24,6 +24,7 @@
         'sk--in': entered,
         'sk--still': !isActive,
         'sk--reduced': reducedMotion,
+        'sk--flat': flatMotion,
         'sk--panel': variant !== 'slide',
         'sk--day': dayness > 0.55
       }"
@@ -71,13 +72,13 @@
         <!-- ================= 消息地形（24 小时山脊） ================= -->
         <svg
           class="sk-terrain"
-          :viewBox="`0 0 1000 ${TER_TOTAL}`"
+          :viewBox="`0 0 1000 ${terTotal}`"
           preserveAspectRatio="none"
           aria-hidden="true"
         >
           <defs>
             <!-- userSpaceOnUse：山脊高低变化时渐变停点不漂移；山体一直填到卡底，大地与仪表带同为一块 -->
-            <linearGradient id="skTerFill" x1="0" y1="0" x2="0" :y2="TER_TOTAL" gradientUnits="userSpaceOnUse">
+            <linearGradient id="skTerFill" x1="0" y1="0" x2="0" :y2="terTotal" gradientUnits="userSpaceOnUse">
               <stop offset="0" stop-color="rgba(13, 20, 41, 0.5)" />
               <stop offset="0.4" stop-color="rgba(8, 13, 29, 0.84)" />
               <stop offset="0.56" stop-color="rgba(4, 7, 16, 0.97)" />
@@ -162,66 +163,71 @@
           </div>
         </Transition>
 
-        <!-- ================= 页头（slide 自绘，与光线同呼吸） ================= -->
-        <header v-if="variant === 'slide'" class="sk-head">
-          <h2 class="sk-title wrapped-title">{{ card.title }}</h2>
-          <p class="sk-nar wrapped-body">
-            <template v-if="personality === 'early_bird'">清晨 <b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00，当城市还在沉睡，你已经开始了新一天的问候。</template>
-            <template v-else-if="personality === 'office_worker'">忙碌的上午 <b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00，是你最常敲击键盘的时刻。</template>
-            <template v-else-if="personality === 'afternoon'">午后的阳光里，<b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00 是你最爱分享的时刻。</template>
-            <template v-else-if="personality === 'night_owl'">夜幕降临，<b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00 是你最常出没的时刻。</template>
-            <template v-else-if="personality === 'late_night'">当世界沉睡，凌晨 <b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00 的你依然在线。</template>
-            <template v-else>你在 <b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00 最活跃。</template>
-            <template v-if="mostActiveWeekdayName"><b class="sk-em">{{ mostActiveWeekdayName }}</b>最活跃，</template>这一年你用 <b class="sk-em">{{ formatInt(totalMessages) }}</b> 条消息，把这些时刻都留在了对话里。
-          </p>
-        </header>
+        <!-- 文字层容器。16:9 / 4:3 / 1:1 下 display:contents（不生成盒，页头/判词/读数照旧各自
+             absolute 定位，逐像素零回归）；竖幅下才变成真正的纵向流容器，把「左判词 / 右读数」
+             的左右分栏折成 判词 → 读数 的一列。 -->
+        <div class="sk-column">
+          <!-- ================= 页头（slide 自绘，与光线同呼吸） ================= -->
+          <header v-if="variant === 'slide'" class="sk-head">
+            <h2 class="sk-title wrapped-title">{{ card.title }}</h2>
+            <p class="sk-nar wrapped-body">
+              <template v-if="personality === 'early_bird'">清晨 <b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00，当城市还在沉睡，你已经开始了新一天的问候。</template>
+              <template v-else-if="personality === 'office_worker'">忙碌的上午 <b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00，是你最常敲击键盘的时刻。</template>
+              <template v-else-if="personality === 'afternoon'">午后的阳光里，<b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00 是你最爱分享的时刻。</template>
+              <template v-else-if="personality === 'night_owl'">夜幕降临，<b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00 是你最常出没的时刻。</template>
+              <template v-else-if="personality === 'late_night'">当世界沉睡，凌晨 <b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00 的你依然在线。</template>
+              <template v-else>你在 <b class="sk-em">{{ pad2(mostActiveHour) }}</b>:00 最活跃。</template>
+              <template v-if="mostActiveWeekdayName"><b class="sk-em">{{ mostActiveWeekdayName }}</b>最活跃，</template>这一年你用 <b class="sk-em">{{ formatInt(totalMessages) }}</b> 条消息，把这些时刻都留在了对话里。
+            </p>
+          </header>
 
-        <!-- ================= 判词（左） ================= -->
-        <div class="sk-verdict">
-          <div class="sk-kicker wrapped-label">时段人格 · 这一年的答案</div>
-          <div class="sk-word wrapped-title">{{ personaTitle }}</div>
-          <p class="sk-word-sub wrapped-body">
-            {{ personaLine }}
-            <template v-if="mostActiveHour !== null && mostActiveWeekdayName">
-              最常亮起在<span class="sk-token wrapped-number">{{ mostActiveWeekdayName }}</span>的
-              <span class="sk-token wrapped-number">{{ pad2(mostActiveHour) }}:00</span>。
+          <!-- ================= 判词（横幅在左 / 竖幅在上） ================= -->
+          <div class="sk-verdict">
+            <div class="sk-kicker wrapped-label">时段人格 · 这一年的答案</div>
+            <div class="sk-word wrapped-title">{{ personaTitle }}</div>
+            <p class="sk-word-sub wrapped-body">
+              {{ personaLine }}
+              <template v-if="mostActiveHour !== null && mostActiveWeekdayName">
+                最常亮起在<span class="sk-token wrapped-number">{{ mostActiveWeekdayName }}</span>的
+                <span class="sk-token wrapped-number">{{ pad2(mostActiveHour) }}:00</span>。
+              </template>
+            </p>
+            <template v-if="earliestSent && latestSent">
+              <p v-if="earliestSent.displayName === latestSent.displayName" class="sk-word-echo wrapped-body">
+                最先想起的是「<span class="sk-token wrapped-privacy-name">{{ earliestSent.displayName }}</span>」，最后放不下的也还是同一个人。
+              </p>
+              <p v-else class="sk-word-echo wrapped-body">
+                一天里最早的一条发给了「<span class="sk-token wrapped-privacy-name">{{ earliestSent.displayName }}</span>」，最晚的一条发给了「<span class="sk-token wrapped-privacy-name">{{ latestSent.displayName }}</span>」。
+              </p>
             </template>
-          </p>
-          <template v-if="earliestSent && latestSent">
-            <p v-if="earliestSent.displayName === latestSent.displayName" class="sk-word-echo wrapped-body">
-              最先想起的是「<span class="sk-token wrapped-privacy-name">{{ earliestSent.displayName }}</span>」，最后放不下的也还是同一个人。
-            </p>
-            <p v-else class="sk-word-echo wrapped-body">
-              一天里最早的一条发给了「<span class="sk-token wrapped-privacy-name">{{ earliestSent.displayName }}</span>」，最晚的一条发给了「<span class="sk-token wrapped-privacy-name">{{ latestSent.displayName }}</span>」。
-            </p>
-          </template>
-        </div>
+          </div>
 
-        <!-- ================= 时刻仪表（右） ================= -->
-        <div class="sk-readout" aria-live="off">
-          <div class="sk-ro-scope wrapped-label">{{ readoutScopeLabel }} · {{ twilightWord }}</div>
-          <div class="sk-ro-hour wrapped-number">{{ pad2(targetHour) }}<i>:</i>00</div>
-          <div class="sk-ro-count wrapped-number">{{ readoutCountDisplay }} <i>条</i><em>{{ readoutShareText }}</em></div>
-          <p class="sk-ro-care wrapped-body">{{ careLine }}</p>
+          <!-- ================= 时刻仪表（横幅在右 / 竖幅贴着地平线） ================= -->
+          <div class="sk-readout" aria-live="off">
+            <div class="sk-ro-scope wrapped-label">{{ readoutScopeLabel }} · {{ twilightWord }}</div>
+            <div class="sk-ro-hour wrapped-number">{{ pad2(targetHour) }}<i>:</i>00</div>
+            <div class="sk-ro-count wrapped-number">{{ readoutCountDisplay }} <i>条</i><em>{{ readoutShareText }}</em></div>
+            <p class="sk-ro-care wrapped-body">{{ careLine }}</p>
 
-          <!-- 星期拨片：跟着读数走，切换整片山脊 -->
-          <div class="sk-chips" role="group" aria-label="按星期查看">
-            <button
-              type="button"
-              class="sk-chip wrapped-label"
-              :class="{ 'sk-chip--on': weekdaySel < 0 }"
-              :style="{ '--chip-d': '1450ms' }"
-              @click="setWeekday(-1)"
-            >全年</button>
-            <button
-              v-for="(w, wi) in weekdayShort"
-              :key="`wd-${wi}`"
-              type="button"
-              class="sk-chip wrapped-label"
-              :class="{ 'sk-chip--on': weekdaySel === wi }"
-              :style="{ '--chip-d': `${1500 + wi * 45}ms` }"
-              @click="setWeekday(wi)"
-            >{{ w }}</button>
+            <!-- 星期拨片：跟着读数走，切换整片山脊 -->
+            <div class="sk-chips" role="group" aria-label="按星期查看">
+              <button
+                type="button"
+                class="sk-chip wrapped-label"
+                :class="{ 'sk-chip--on': weekdaySel < 0 }"
+                :style="{ '--chip-d': '1450ms' }"
+                @click="setWeekday(-1)"
+              >全年</button>
+              <button
+                v-for="(w, wi) in weekdayShort"
+                :key="`wd-${wi}`"
+                type="button"
+                class="sk-chip wrapped-label"
+                :class="{ 'sk-chip--on': weekdaySel === wi }"
+                :style="{ '--chip-d': `${1500 + wi * 45}ms` }"
+                @click="setWeekday(wi)"
+              >{{ w }}</button>
+            </div>
           </div>
         </div>
 
@@ -379,16 +385,22 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import { useReducedMotion } from '~/composables/useReducedMotion'
 import { useCountUp } from '~/composables/useCountUp'
+import { useWrappedStage } from '~/composables/useWrappedStage'
 
 const props = defineProps({
   card: { type: Object, required: true },
   variant: { type: String, default: 'panel' }, // 'panel' | 'slide'
   isActive: { type: Boolean, default: true } // deck 当前展示页时为 true
 })
+
+const stage = useWrappedStage()
+
+// 竖幅（3:4 / 4:5 / 9:16）走纵向四段流：判词 → 读数 → 日月地平线 → 仪表带
+const isTallish = computed(() => stage.tier.value === 'portrait' || stage.tier.value === 'tall')
 
 const _DEFAULT_WEEKDAYS_ZH = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
@@ -569,9 +581,24 @@ const setWeekday = (w) => {
 // 纵轴：地平线 = 大地仪表带上缘；日月沿一条大弧线运行，山脊立在地平线上。
 
 const X_PAD = 3 // 横向留白（%）
-const TER_H = 190 // 山脊起伏区高度（px，与渲染高度 1:1）
-const GROUND_H = 148 // 大地仪表带高度（px）
-const TER_TOTAL = TER_H + GROUND_H // 山体画布总高：从山脊一直填到卡底，与仪表带融为一块大地
+const TER_H = 190 // 山脊起伏区高度（px，与渲染高度 1:1）。构件尺寸：各画幅恒定，不随画幅缩放
+
+// 大地仪表带高度（px）。**这里是唯一真源**——CSS 通过 skyVars 下发的
+// --ter-h / --ground-h / --ter-total 消费，样式表里不得再写第二份数字：
+// 早先 CSS 的 .sk--panel{--ground-h:132px} 与 JS 的 148 脱钩，星钉与发丝线整体偏了 16px。
+// 竖幅下四组仪表要折成 2×2，仪表带随之长高。
+const groundH = computed(() => {
+  if (props.variant !== 'slide') return 132
+  // 竖幅下四组仪表折成 2×2 且排印整体放大（见文末「竖幅放大」），仪表带随之长高。
+  // 9:16 最窄，注解换行最多，留得比 3:4 / 4:5 更足。
+  // tall（9:16）下仪表带的排印又放大了一档（见文末「9:16 读数放大」），
+  // 注解普遍折成两行，仪表带要再长一截才装得下。
+  if (stage.tier.value === 'tall') return 362
+  return isTallish.value ? 282 : 148
+})
+
+// 山体画布总高：从山脊一直填到卡底，与仪表带融为一块大地
+const terTotal = computed(() => TER_H + groundH.value)
 
 const xPctOf = (hFloat) => X_PAD + (Math.max(0, Math.min(24, hFloat)) / 24) * (100 - X_PAD * 2)
 const hourCenterPct = (h) => xPctOf(h + 0.5)
@@ -663,7 +690,7 @@ const terrainPts = computed(() => {
 })
 
 const terrainRimPath = computed(() => _catmullPath(terrainPts.value))
-const terrainClosedPath = computed(() => `${terrainRimPath.value} L 1000 ${TER_TOTAL} L 0 ${TER_TOTAL} Z`)
+const terrainClosedPath = computed(() => `${terrainRimPath.value} L 1000 ${terTotal.value} L 0 ${terTotal.value} Z`)
 
 // ---------- 选中小时 + 相位（连续小时数，驱动光线与读数） ----------
 
@@ -953,7 +980,11 @@ const skyVars = computed(() => {
     '--ink-3': _css(ink, 0.45),
     '--rim': _css(rim),
     '--rim-soft': _css(rim, 0.55),
-    '--scrub-x': `${xPctOf(targetHourF.value).toFixed(2)}%`
+    '--scrub-x': `${xPctOf(targetHourF.value).toFixed(2)}%`,
+    // 场景几何的唯一真源：CSS 只消费，不再自己写一份数字（见 groundH 注释）
+    '--ter-h': `${TER_H}px`,
+    '--ground-h': `${groundH.value}px`,
+    '--ter-total': `${terTotal.value}px`
   }
 })
 
@@ -967,8 +998,9 @@ const scrubCursor = computed(() => {
   return {
     cx: (hourCenterPct(h) * 10).toFixed(1),
     cy: y.toFixed(1),
-    // 发丝线垂到山脊表面为止（stage 底部起算的像素）
-    bottomPx: Math.round(GROUND_H + (TER_H - y)) + 2
+    // 发丝线垂到山脊表面为止。SVG 高度 = --ter-total，1 个 viewBox 单位恒等于 1px，
+    // 所以「距卡底像素」= terTotal - y（+2 是压住描边的构件余量，不随画幅变）
+    bottomPx: Math.round(terTotal.value - y) + 2
   }
 })
 
@@ -1053,6 +1085,14 @@ const latestSent = computed(() => {
 
 const pinHover = ref(null)
 
+// 星钉弹层贴边留白（%）。弹层 max-width 270px + translateX(-50%)，窄画幅下
+// 12% 的老留白不足以兜住半个弹层（900px 宽时 12% 只有 108px < 135px），会切掉半句话。
+// 取「半个弹层 + 16px 余量」换算成百分比，与 12% 取大者：1600px 设计宽下恒等于 12。
+const tipEdgePct = computed(() => {
+  const w = Math.max(1, Number(stage.design.value?.w) || 1600)
+  return Math.max(12, Math.min(40, ((270 / 2 + 16) / w) * 100))
+})
+
 const pins = computed(() => {
   void terrainVer.value
   const list = []
@@ -1071,15 +1111,17 @@ const pins = computed(() => {
     list[1].hf = Math.min(23.95, list[1].hf + 0.4)
   }
 
+  const pad = tipEdgePct.value
   return list.map((p) => {
     const xPct = xPctOf(p.hf)
     const hi = Math.max(0, Math.min(23, Math.floor(p.hf)))
-    const bottomPx = GROUND_H + (TER_H - terYOf(shownHeights[hi])) + 10
+    // 与 scrubCursor 同一把尺：terTotal 是 JS/CSS 共用的唯一真源
+    const bottomPx = terTotal.value - terYOf(shownHeights[hi]) + 10
     return {
       ...p,
       xPct: +xPct.toFixed(2),
       bottomPx: Math.round(bottomPx),
-      tipLeftPct: +Math.max(12, Math.min(88, xPct)).toFixed(2)
+      tipLeftPct: +Math.max(pad, Math.min(100 - pad, xPct)).toFixed(2)
     }
   })
 })
@@ -1177,6 +1219,15 @@ const popStars = computed(() => {
 
 const reducedMotion = useReducedMotion()
 
+/* 导出模式（页面级 provide）。为真期间这一页必须**立刻**是终态：
+   光线已经扫到峰值、山脊已经长齐、读数已经落定，而不是还停在入场那 4 秒的夜色里。
+   为假时行为与导出功能存在之前一字不差。
+   flatMotion 比 exportMode 多包一帧「还原中」：退出导出把这一页收回夜色时，
+   同样不该看见那串 0.7~3.2s 的 CSS 过渡倒着放一遍。 */
+const exportMode = inject('wrappedExportMode', ref(false))
+const exportRestoring = ref(false)
+const flatMotion = computed(() => exportMode.value || exportRestoring.value)
+
 const nightStars = computed(() => {
   const total = nightTotal.value || allHoursTotal.value
   let count = 26
@@ -1249,7 +1300,23 @@ const playEntry = () => {
   morphHeightsTo(targetHeights.value, { duration: 1.05, stagger: 0.05, ease: 'power3.out' })
 }
 
+// 收回夜色：入场前的那一帧（原本只在翻走 750ms 后跑，导出还原也走同一条）
+const resetToNight = () => {
+  entered.value = false
+  nightOpen.value = false
+  pinHover.value = null
+  selHourF.value = null
+  weekdaySel.value = -1
+  killPhaseTween()
+  killHeightTweens()
+  // 复位到峰值前 20 小时的夜色，下次翻入重播整段昼夜
+  phase.value = dialPeakHour.value + 0.5 - 20
+  setHeightsNow(Array.from({ length: 24 }, () => 0))
+}
+
 const settleInstant = () => {
+  // 入场长扫可能正在飞（导出是从半截里接手的）：不掐掉它，phase 会被 onUpdate 一路改回去
+  killPhaseTween()
   entered.value = true
   phase.value = targetHourF.value
   setHeightsNow(targetHeights.value)
@@ -1269,20 +1336,12 @@ watch(
     if (!active) {
       resetTimer = window.setTimeout(() => {
         resetTimer = 0
-        entered.value = false
-        nightOpen.value = false
-        pinHover.value = null
-        selHourF.value = null
-        weekdaySel.value = -1
-        killPhaseTween()
-        killHeightTweens()
-        // 复位到峰值前 20 小时的夜色，下次翻入重播整段昼夜
-        phase.value = dialPeakHour.value + 0.5 - 20
-        setHeightsNow(Array.from({ length: 24 }, () => 0))
+        resetToNight()
       }, 750)
       return
     }
-    if (reducedMotion.value) {
+    // 导出模式与 reduced 走同一条：翻到本页立刻是终态，不等那 450ms + 4s 长扫
+    if (reducedMotion.value || exportMode.value) {
       settleInstant()
       return
     }
@@ -1294,6 +1353,50 @@ watch(
   },
   { immediate: true }
 )
+
+/* 导出模式：进去立刻把整段昼夜走完，出来还原成进入导出前的样子。
+   —— 还原必须真的还原：这一页的主体验就是「光从夜里扫过来、山脊跟着长出来」，
+      用户导出一次再回来看见的若是已经落定的白昼，这段就被剧透了。
+   放在 isActive 那条 watch 之后，immediate 才能在「导出已经打开时才挂载」的情况下
+   直接落到终态。
+   种子值不能等 watch 回调来填：isActive 那条 watch 的 immediate 先跑，
+   它会在导出已开时直接把 entered 置真，晚一步再拍快照就把「没入场过」记成了「入场过」。 */
+let exportSnapshot = exportMode.value ? { entered: false } : null
+
+watch(exportMode, (on) => {
+  if (typeof window === 'undefined') return
+
+  if (on) {
+    if (exportSnapshot) return
+    exportSnapshot = { entered: entered.value }
+    if (startTimer) { window.clearTimeout(startTimer); startTimer = 0 }
+    if (resetTimer) { window.clearTimeout(resetTimer); resetTimer = 0 }
+    if (props.isActive) settleInstant()
+    return
+  }
+
+  const snap = exportSnapshot
+  exportSnapshot = null
+  if (!snap) return
+  // 导出前本来就入场过了：保持终态，别把用户的进度抹回夜色
+  if (snap.entered) return
+
+  // 还原同样不播动画：这一帧把那串 0.7~3.2s 的过渡关掉，直接跳回夜色
+  exportRestoring.value = true
+  if (startTimer) { window.clearTimeout(startTimer); startTimer = 0 }
+  if (resetTimer) { window.clearTimeout(resetTimer); resetTimer = 0 }
+  resetToNight()
+  // 用户正停在本页：按没进过导出时的路子重新播一遍整段昼夜
+  if (props.isActive && !reducedMotion.value) {
+    startTimer = window.setTimeout(() => {
+      startTimer = 0
+      playEntry()
+    }, 450)
+  } else if (props.isActive) {
+    settleInstant()
+  }
+  nextTick(() => { exportRestoring.value = false })
+}, { immediate: true })
 
 onMounted(() => {
   if (typeof document !== 'undefined') document.addEventListener('pointerdown', onDocPointerDown)
@@ -1328,11 +1431,12 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
 /* ================= 舞台 ================= */
 
 /* slide：absolute inset-0 直接铺满 slide（bleed 模式无 FitScale，可用高度怎么变都无缝） */
+/* ⚠️ --ter-h / --ground-h / --ter-total 由 script 的 skyVars 下发到外壳根节点，往下继承进来。
+   这里**不要**再写一份数字：CSS 与 JS 各写一份正是星钉/发丝线偏 16px 的老病根。 */
 .sk-stage {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  --ground-h: 148px;
 }
 
 .sk-stage.sk--panel {
@@ -1403,8 +1507,8 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
   position: absolute;
   left: var(--az-x, 50%);
   bottom: calc(var(--ground-h) - 30px);
-  width: 96vw;
-  height: 52vh;
+  width: calc(var(--svw) * 96);
+  height: calc(var(--svh) * 52);
   transform: translateX(-50%);
   background: radial-gradient(
     52% 100% at 50% 100%,
@@ -1534,7 +1638,9 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
   right: 0;
   bottom: 0;
   width: 100%;
-  height: 338px; /* TER_H + GROUND_H：山体连大地一体成型 */
+  /* = JS 的 terTotal（TER_H + groundH）。高度与 viewBox 恒等，1 个 viewBox 单位 = 1px，
+     星钉 / 发丝线的 bottomPx 才能和山脊表面严丝合缝 */
+  height: var(--ter-total, 338px);
   display: block;
   pointer-events: none;
 }
@@ -1638,19 +1744,27 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
   pointer-events: none;
 }
 
+/* ================= 文字层容器 ================= */
+
+/* 默认不生成盒：页头/判词/读数照旧各自 absolute 贴边定位，与舞台化之前逐像素一致。
+   只有竖幅分支才把它变成真正的纵向流容器（见文末「竖幅重排」）。 */
+.sk-column {
+  display: contents;
+}
+
 /* ================= 页头 ================= */
 
 .sk-head {
   position: absolute;
   z-index: 10;
-  left: clamp(24px, 4.5vw, 72px);
-  right: clamp(24px, 4.5vw, 72px);
-  top: clamp(40px, 6.5vh, 64px);
+  left: clamp(24px, calc(var(--svw) * 4.5), 72px);
+  right: clamp(24px, calc(var(--svw) * 4.5), 72px);
+  top: clamp(40px, calc(var(--svh) * 6.5), 64px);
   pointer-events: none;
 }
 
 .sk-title {
-  font-size: clamp(1.35rem, 2vw, 1.8rem);
+  font-size: clamp(1.35rem, calc(var(--svw) * 2), 1.8rem);
   color: var(--ink, #f3f6ff);
   transition: color 0.2s linear;
 }
@@ -1679,9 +1793,9 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
 .sk-verdict {
   position: absolute;
   z-index: 10;
-  left: clamp(24px, 4.5vw, 72px);
-  top: clamp(158px, 24vh, 218px);
-  max-width: min(46vw, 560px);
+  left: clamp(24px, calc(var(--svw) * 4.5), 72px);
+  top: clamp(158px, calc(var(--svh) * 24), 218px);
+  max-width: min(calc(var(--svw) * 46), 560px);
   pointer-events: none;
 }
 
@@ -1697,7 +1811,7 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
 
 .sk-word {
   margin-top: 10px;
-  font-size: clamp(2.6rem, 5.2vw, 4.1rem);
+  font-size: clamp(2.6rem, calc(var(--svw) * 5.2), 4.1rem);
   line-height: 1.08;
   font-weight: 800;
   letter-spacing: 0.14em;
@@ -1754,8 +1868,8 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
   position: absolute;
   /* 高于掠时层（z20）：文字 pointer-events none 不挡掠动，星期拨片才收得到点击 */
   z-index: 22;
-  right: clamp(24px, 4.5vw, 72px);
-  top: clamp(150px, 22vh, 206px);
+  right: clamp(24px, calc(var(--svw) * 4.5), 72px);
+  top: clamp(150px, calc(var(--svh) * 22), 206px);
   text-align: right;
   pointer-events: none;
   max-width: 300px;
@@ -1770,7 +1884,7 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
 
 .sk-ro-hour {
   margin-top: 2px;
-  font-size: clamp(3rem, 5.4vw, 4.4rem);
+  font-size: clamp(3rem, calc(var(--svw) * 5.4), 4.4rem);
   font-weight: 200;
   line-height: 1.05;
   letter-spacing: 0.02em;
@@ -1895,8 +2009,8 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: clamp(14px, 2vw, 30px);
-  padding: 0 clamp(24px, 4.5vw, 72px);
+  gap: clamp(14px, calc(var(--svw) * 2), 30px);
+  padding: 0 clamp(24px, calc(var(--svw) * 4.5), 72px);
 }
 
 .sk-cluster-wrap {
@@ -2008,7 +2122,7 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
   display: flex;
   align-items: center;
   gap: 8px;
-  width: clamp(150px, 13vw, 210px);
+  width: clamp(150px, calc(var(--svw) * 13), 210px);
 }
 
 .sk-sp-glyph {
@@ -2051,7 +2165,7 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
   align-items: center;
   gap: 3px;
   height: 3px;
-  width: clamp(130px, 11vw, 190px);
+  width: clamp(130px, calc(var(--svw) * 11), 190px);
 }
 
 .sk-meter i {
@@ -2111,7 +2225,7 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 0 clamp(24px, 4.5vw, 72px);
+  padding: 0 clamp(24px, calc(var(--svw) * 4.5), 72px);
   opacity: 0;
   transition: opacity 0.7s ease 2.1s;
 }
@@ -2290,14 +2404,660 @@ const yearLastDateLabel = computed(() => _formatDateLabel(yearLastSent.value?.da
   clip-path: inset(0 0 50% 0);
 }
 
+/* ================================================================
+   画幅重排（tier=wide 即 16:9 / 跟随窗口不受任何影响：以下全部带 tier 前缀）
+   面积恒定 ⇒ 构件尺寸一律保持 16:9 下的设计常量，只换排布。
+   ================================================================ */
+
+/* ---- 构件尺寸去掉宽度轴，改成 16:9 下的计算值（否则窄画幅会掉到 clamp 下限） ---- */
+
+/* clamp(1.35rem, 2svw, 1.8rem) 在 1600px 宽下 = 1.8rem = 28.8px */
+[data-frame-tier="landscape"] .sk-title,
+[data-frame-tier="square"] .sk-title,
+[data-frame-tier="portrait"] .sk-title,
+[data-frame-tier="tall"] .sk-title {
+  font-size: 28.8px;
+}
+
+/* clamp(2.6rem, 5.2svw, 4.1rem) → 4.1rem = 65.6px */
+[data-frame-tier="landscape"] .sk-word,
+[data-frame-tier="square"] .sk-word,
+[data-frame-tier="portrait"] .sk-word,
+[data-frame-tier="tall"] .sk-word {
+  font-size: 65.6px;
+}
+
+/* clamp(3rem, 5.4svw, 4.4rem) → 4.4rem = 70.4px */
+[data-frame-tier="landscape"] .sk-ro-hour,
+[data-frame-tier="square"] .sk-ro-hour,
+[data-frame-tier="portrait"] .sk-ro-hour,
+[data-frame-tier="tall"] .sk-ro-hour {
+  font-size: 70.4px;
+}
+
+/* 两条量条也是构件：clamp(150px, 13svw, 210px) → 208px；clamp(130px, 11svw, 190px) → 176px */
+[data-frame-tier="landscape"] .sk-spectrum,
+[data-frame-tier="square"] .sk-spectrum,
+[data-frame-tier="portrait"] .sk-spectrum,
+[data-frame-tier="tall"] .sk-spectrum {
+  width: 208px;
+}
+
+[data-frame-tier="landscape"] .sk-meter,
+[data-frame-tier="square"] .sk-meter,
+[data-frame-tier="portrait"] .sk-meter,
+[data-frame-tier="tall"] .sk-meter {
+  width: 176px;
+}
+
+/* ---- 竖幅：左判词 / 右读数 → 纵向四段流 ----
+   判词（上）→ 读数（贴着地平线）→ 日月山脊 → 仪表带（下）。
+   .sk-column 从 display:contents 变成真容器；三块文字改回普通流。 */
+
+[data-frame-tier="portrait"] .sk-column,
+[data-frame-tier="tall"] .sk-column {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  /* 底边停在山脊画布上沿之上 10px：读数贴着地平线，不压山峰 */
+  bottom: calc(var(--ter-total, 338px) + 10px);
+  /* 原本挂在 .sk-readout 上的 z22（要高于掠时层 z20，星期拨片才收得到点击）
+     现在由容器承担——容器一旦成盒就会建层叠上下文，子级的 z22 会被关进来 */
+  z-index: 22;
+  gap: 22px;
+  padding-top: clamp(40px, calc(var(--svh) * 6.5), 64px);
+  padding-left: clamp(24px, calc(var(--svw) * 4.5), 72px);
+  padding-right: clamp(24px, calc(var(--svw) * 4.5), 72px);
+  pointer-events: none;
+}
+
+[data-frame-tier="portrait"] .sk-head,
+[data-frame-tier="tall"] .sk-head,
+[data-frame-tier="portrait"] .sk-verdict,
+[data-frame-tier="tall"] .sk-verdict,
+[data-frame-tier="portrait"] .sk-readout,
+[data-frame-tier="tall"] .sk-readout {
+  position: static;
+  left: auto;
+  right: auto;
+  top: auto;
+  z-index: auto;
+  /* 判词不再是贴左的窄栏、读数不再是贴右的窄栏：整列通栏 */
+  max-width: none;
+}
+
+/* 竖幅多出来的那截高度，先分一点给「页头 → 判词」的呼吸，而不是全甩给底下的空天。
+   16:9 下这段间距实测 84px；竖幅按画面高度等比放开，封顶 130px。 */
+[data-frame-tier="portrait"] .sk-verdict,
+[data-frame-tier="tall"] .sk-verdict {
+  margin-top: clamp(0px, calc(var(--svh) * 7 - 22px), 130px);
+}
+
+/* 读数被推到列底 —— 判词与页头抱团在上，中间留给日月弧线 */
+[data-frame-tier="portrait"] .sk-readout,
+[data-frame-tier="tall"] .sk-readout {
+  margin-top: auto;
+  text-align: left;
+  /* 竖长的「时刻 / 条数 / 人话 / 拨片」四行折成仪表盘式两列，省下一半高度 */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "scope scope"
+    "hour  count"
+    "hour  care"
+    "chips chips";
+  column-gap: 20px;
+  align-items: start;
+}
+
+[data-frame-tier="portrait"] .sk-ro-scope,
+[data-frame-tier="tall"] .sk-ro-scope { grid-area: scope; }
+
+[data-frame-tier="portrait"] .sk-ro-hour,
+[data-frame-tier="tall"] .sk-ro-hour { grid-area: hour; align-self: center; }
+
+[data-frame-tier="portrait"] .sk-ro-count,
+[data-frame-tier="tall"] .sk-ro-count { grid-area: count; align-self: end; }
+
+[data-frame-tier="portrait"] .sk-ro-care,
+[data-frame-tier="tall"] .sk-ro-care { grid-area: care; align-self: start; }
+
+[data-frame-tier="portrait"] .sk-chips,
+[data-frame-tier="tall"] .sk-chips {
+  grid-area: chips;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+/* ---- 竖幅：四组仪表横排 780–900px 装不下 900/1040 的窗口，折成 2×2 ---- */
+
+/* 仪表带定高 + 舞台 overflow:hidden = 长名字/多行注解会被切掉。
+   竖幅下改成「不低于设计高度、需要时向上长」，一个字都不丢。 */
+[data-frame-tier="portrait"] .sk-ground,
+[data-frame-tier="tall"] .sk-ground {
+  height: auto;
+  min-height: var(--ground-h);
+  padding-bottom: 12px;
+}
+
+[data-frame-tier="portrait"] .sk-inst,
+[data-frame-tier="tall"] .sk-inst {
+  display: grid;
+  /* 中列留给竖发丝线，两侧各一组仪表 */
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  height: auto;
+  align-items: center;
+  column-gap: clamp(14px, calc(var(--svw) * 2), 30px);
+  row-gap: 13px;
+  padding-top: 16px;
+}
+
+[data-frame-tier="portrait"] .sk-inst-rule,
+[data-frame-tier="tall"] .sk-inst-rule {
+  margin: 2px 0;
+}
+
+/* 分隔线一根不丢，只是换朝向：第 4 个孩子正是两行之间那根，转成通栏横线，
+   同时把后两组仪表挤到第 3 行，天然形成 2×2 + 十字发丝线 */
+[data-frame-tier="portrait"] .sk-inst-rule:nth-child(4),
+[data-frame-tier="tall"] .sk-inst-rule:nth-child(4) {
+  grid-column: 1 / -1;
+  width: auto;
+  height: 1px;
+  align-self: center;
+  margin: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1) 30%, rgba(255, 255, 255, 0.1) 70%, transparent);
+}
+
+/* 栏一变窄就必须放开截断：nowrap / ellipsis 全部改成换行 */
+[data-frame-tier="portrait"] .sk-cl-label,
+[data-frame-tier="tall"] .sk-cl-label {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+[data-frame-tier="portrait"] .sk-cl-note,
+[data-frame-tier="tall"] .sk-cl-note {
+  white-space: normal;
+}
+
+[data-frame-tier="portrait"] .sk-cl-note--row,
+[data-frame-tier="tall"] .sk-cl-note--row {
+  align-items: flex-start;
+}
+
+[data-frame-tier="portrait"] .sk-cl-ellip,
+[data-frame-tier="tall"] .sk-cl-ellip {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+[data-frame-tier="portrait"] .sk-chevron,
+[data-frame-tier="tall"] .sk-chevron {
+  margin-top: 3px;
+}
+
+/* 年度地平线跟在 2×2 之后（仪表带已改 height:auto） */
+[data-frame-tier="portrait"] .sk-yearline,
+[data-frame-tier="tall"] .sk-yearline {
+  margin-top: 12px;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+/* 守夜人弹层挂在右列，靠右开会顶出画外——改成向左展开 */
+[data-frame-tier="portrait"] .sk-night-pop,
+[data-frame-tier="tall"] .sk-night-pop {
+  left: auto;
+  right: 0;
+  max-width: min(340px, calc(var(--svw) * 76));
+}
+
+/* ================================================================
+   竖幅放大（tier=portrait / tall，即 3:4 / 4:5 / 9:16）
+   —— 竖幅少了一半横向宽度，却多出一截高度：上面的重排已把「左判词 / 右读数」
+   折成一列、把四组仪表折成 2×2，腾出的高度在这里换成排印密度。
+   16:9（wide）与 landscape / square 不受任何影响：以下全部带 portrait / tall 前缀。
+   字号一律写绝对 px：竖幅舞台变高时不能让字跟着高度轴涨。
+   ================================================================ */
+
+/* ---- 页头 ---- */
+[data-frame-tier="portrait"] .sk-title,
+[data-frame-tier="tall"] .sk-title {
+  font-size: 46px;
+  line-height: 1.24;
+}
+
+[data-frame-tier="portrait"] .sk-nar,
+[data-frame-tier="tall"] .sk-nar {
+  margin-top: 14px;
+  font-size: 22px;
+  line-height: 1.7;
+  max-width: none;
+}
+
+/* ---- 判词 ---- */
+[data-frame-tier="portrait"] .sk-kicker,
+[data-frame-tier="tall"] .sk-kicker {
+  font-size: 17px;
+  letter-spacing: 0.18em;
+}
+
+[data-frame-tier="portrait"] .sk-word,
+[data-frame-tier="tall"] .sk-word {
+  margin-top: 14px;
+  font-size: 92px;
+}
+
+[data-frame-tier="portrait"] .sk-word-sub,
+[data-frame-tier="tall"] .sk-word-sub {
+  margin-top: 18px;
+  font-size: 24px;
+  line-height: 1.72;
+}
+
+[data-frame-tier="portrait"] .sk-word-echo,
+[data-frame-tier="tall"] .sk-word-echo {
+  margin-top: 10px;
+  font-size: 21px;
+  line-height: 1.72;
+}
+
+/* ---- 时刻仪表 ---- */
+[data-frame-tier="portrait"] .sk-ro-scope,
+[data-frame-tier="tall"] .sk-ro-scope {
+  font-size: 17px;
+  letter-spacing: 0.16em;
+}
+
+[data-frame-tier="portrait"] .sk-ro-hour,
+[data-frame-tier="tall"] .sk-ro-hour {
+  font-size: 104px;
+  font-weight: 250;
+}
+
+[data-frame-tier="portrait"] .sk-ro-count,
+[data-frame-tier="tall"] .sk-ro-count {
+  margin-top: 4px;
+  font-size: 28px;
+}
+
+[data-frame-tier="portrait"] .sk-ro-count i,
+[data-frame-tier="tall"] .sk-ro-count i,
+[data-frame-tier="portrait"] .sk-ro-count em,
+[data-frame-tier="tall"] .sk-ro-count em {
+  font-size: 20px;
+}
+
+[data-frame-tier="portrait"] .sk-ro-care,
+[data-frame-tier="tall"] .sk-ro-care {
+  margin-top: 12px;
+  font-size: 21px;
+  line-height: 1.62;
+}
+
+[data-frame-tier="portrait"] .sk-readout,
+[data-frame-tier="tall"] .sk-readout {
+  column-gap: 26px;
+}
+
+/* ---- 星期拨片 ---- */
+[data-frame-tier="portrait"] .sk-chips,
+[data-frame-tier="tall"] .sk-chips {
+  margin-top: 22px;
+  gap: 8px;
+}
+
+[data-frame-tier="portrait"] .sk-chip,
+[data-frame-tier="tall"] .sk-chip {
+  min-width: 46px;
+  padding: 6px 14px;
+  font-size: 16px;
+}
+
+/* ---- 仪表带上的四组读数 ---- */
+[data-frame-tier="portrait"] .sk-inst,
+[data-frame-tier="tall"] .sk-inst {
+  row-gap: 18px;
+  padding-top: 18px;
+}
+
+/* 排印放大后年度地平线离卡底只剩 12px，社交画幅里太贴边——留出一口气 */
+[data-frame-tier="portrait"] .sk-ground,
+[data-frame-tier="tall"] .sk-ground {
+  padding-bottom: 22px;
+}
+
+[data-frame-tier="portrait"] .sk-cluster,
+[data-frame-tier="tall"] .sk-cluster {
+  gap: 8px;
+}
+
+[data-frame-tier="portrait"] .sk-cl-main,
+[data-frame-tier="tall"] .sk-cl-main {
+  gap: 8px;
+}
+
+[data-frame-tier="portrait"] .sk-cl-label,
+[data-frame-tier="tall"] .sk-cl-label {
+  font-size: 20px;
+  letter-spacing: 0.1em;
+  gap: 12px;
+}
+
+[data-frame-tier="portrait"] .sk-cl-value,
+[data-frame-tier="tall"] .sk-cl-value {
+  font-size: 30px;
+}
+
+[data-frame-tier="portrait"] .sk-cl-note,
+[data-frame-tier="tall"] .sk-cl-note {
+  font-size: 17px;
+  line-height: 1.45;
+}
+
+[data-frame-tier="portrait"] .sk-chevron,
+[data-frame-tier="tall"] .sk-chevron {
+  width: 15px;
+  height: 15px;
+  margin-top: 5px;
+}
+
+/* 构件跟着排印一起长大：量条、光谱、守夜人头像 */
+[data-frame-tier="portrait"] .sk-spectrum,
+[data-frame-tier="tall"] .sk-spectrum {
+  width: 292px;
+  gap: 11px;
+}
+
+[data-frame-tier="portrait"] .sk-sp-glyph,
+[data-frame-tier="tall"] .sk-sp-glyph {
+  width: 16px;
+  height: 16px;
+}
+
+[data-frame-tier="portrait"] .sk-sp-bar,
+[data-frame-tier="tall"] .sk-sp-bar {
+  height: 5px;
+}
+
+[data-frame-tier="portrait"] .sk-sp-marker,
+[data-frame-tier="tall"] .sk-sp-marker {
+  width: 16px;
+  height: 16px;
+  border-width: 3.5px;
+}
+
+[data-frame-tier="portrait"] .sk-meter,
+[data-frame-tier="tall"] .sk-meter {
+  width: 252px;
+  height: 5px;
+  gap: 4px;
+}
+
+[data-frame-tier="portrait"] .sk-night-avatar,
+[data-frame-tier="tall"] .sk-night-avatar {
+  width: 66px;
+  height: 66px;
+  border-width: 2px;
+}
+
+[data-frame-tier="portrait"] .sk-night-avatar-fb,
+[data-frame-tier="tall"] .sk-night-avatar-fb {
+  font-size: 28px;
+}
+
+[data-frame-tier="portrait"] .sk-cluster--night,
+[data-frame-tier="tall"] .sk-cluster--night {
+  gap: 16px;
+}
+
+/* ---- 年度地平线 ---- */
+[data-frame-tier="portrait"] .sk-yearline,
+[data-frame-tier="tall"] .sk-yearline {
+  margin-top: 16px;
+  gap: 20px;
+}
+
+[data-frame-tier="portrait"] .sk-yl-cap,
+[data-frame-tier="tall"] .sk-yl-cap {
+  font-size: 17px;
+  letter-spacing: 0.06em;
+}
+
+[data-frame-tier="portrait"] .sk-yl-val,
+[data-frame-tier="tall"] .sk-yl-val {
+  font-size: 20px;
+}
+
+[data-frame-tier="portrait"] .sk-yl-line::before,
+[data-frame-tier="tall"] .sk-yl-line::before,
+[data-frame-tier="portrait"] .sk-yl-line::after,
+[data-frame-tier="tall"] .sk-yl-line::after {
+  width: 7px;
+  height: 7px;
+}
+
+/* ---- 山脊上的时刻星钉：竖幅下同步放大，不然缩在山脊上看不见 ---- */
+[data-frame-tier="portrait"] .sk-pin,
+[data-frame-tier="tall"] .sk-pin {
+  width: 34px;
+  height: 34px;
+  margin-left: -17px;
+}
+
+[data-frame-tier="portrait"] .sk-pin svg,
+[data-frame-tier="tall"] .sk-pin svg {
+  width: 20px;
+  height: 20px;
+  margin: 7px;
+}
+
+/* ================================================================
+   9:16（tier=tall）读数放大
+   —— 9:16 是信息密度最难看清的一档：判词以下（时刻仪表 / 星期拨片 / 四组仪表 /
+   年度地平线）原本全是 16–20px 的小字，恰恰是这一页信息量最大的部分。
+   这里给它们单独定一档更大的尺度，并让构件（拨片、量条、光谱、头像、星钉）
+   跟着字一起长大；仪表带高度由 groundH() 的 352 承接。
+   只挂 tall：16:9 / landscape / square / portrait(3:4·4:5) 一律不受影响。
+   ================================================================ */
+
+/* 页头与判词之间那口气略收，省下的高度还给日月弧线所在的空天 */
+[data-frame-tier="tall"] .sk-verdict {
+  margin-top: clamp(0px, calc(var(--svh) * 4.6 - 14px), 96px);
+}
+
+[data-frame-tier="tall"] .sk-kicker {
+  font-size: 24px;
+  letter-spacing: 0.16em;
+}
+
+[data-frame-tier="tall"] .sk-word-sub {
+  font-size: 27px;
+  line-height: 1.66;
+}
+
+[data-frame-tier="tall"] .sk-word-echo {
+  font-size: 24px;
+  line-height: 1.66;
+}
+
+/* ---- 时刻仪表 ---- */
+[data-frame-tier="tall"] .sk-ro-scope {
+  font-size: 24px;
+  letter-spacing: 0.14em;
+}
+
+[data-frame-tier="tall"] .sk-ro-count {
+  margin-top: 6px;
+  font-size: 36px;
+}
+
+[data-frame-tier="tall"] .sk-ro-count i,
+[data-frame-tier="tall"] .sk-ro-count em {
+  font-size: 25px;
+}
+
+[data-frame-tier="tall"] .sk-ro-count i {
+  margin-right: 10px;
+}
+
+[data-frame-tier="tall"] .sk-ro-care {
+  margin-top: 14px;
+  font-size: 27px;
+  line-height: 1.55;
+}
+
+/* ---- 星期拨片：手指大小的按钮，字也读得清 ---- */
+[data-frame-tier="tall"] .sk-chips {
+  margin-top: 26px;
+  gap: 10px;
+}
+
+[data-frame-tier="tall"] .sk-chip {
+  min-width: 60px;
+  padding: 8px 17px;
+  font-size: 24px;
+  letter-spacing: 0.06em;
+}
+
+/* ---- 大地仪表带上的四组读数 ---- */
+[data-frame-tier="tall"] .sk-inst {
+  row-gap: 18px;
+  padding-top: 14px;
+}
+
+[data-frame-tier="tall"] .sk-ground { padding-bottom: 18px; }
+
+[data-frame-tier="tall"] .sk-cluster,
+[data-frame-tier="tall"] .sk-cl-main {
+  gap: 10px;
+}
+
+[data-frame-tier="tall"] .sk-cl-label {
+  font-size: 27px;
+  letter-spacing: 0.06em;
+  gap: 14px;
+}
+
+/* 40px 的大数如果吃默认行高，一行标签就撑到 60px，两排仪表白白多占 28px；
+   收紧行高，让高度回到标签本身的尺度 */
+[data-frame-tier="tall"] .sk-cl-value {
+  font-size: 40px;
+  line-height: 1.1;
+}
+
+[data-frame-tier="tall"] .sk-cl-note {
+  font-size: 24px;
+  line-height: 1.42;
+}
+
+[data-frame-tier="tall"] .sk-chevron {
+  width: 19px;
+  height: 19px;
+  margin-top: 7px;
+}
+
+/* 构件跟着排印一起长大 */
+[data-frame-tier="tall"] .sk-spectrum {
+  width: 320px;
+  gap: 13px;
+}
+
+[data-frame-tier="tall"] .sk-sp-glyph {
+  width: 19px;
+  height: 19px;
+}
+
+[data-frame-tier="tall"] .sk-sp-bar { height: 6px; }
+
+[data-frame-tier="tall"] .sk-sp-marker {
+  width: 19px;
+  height: 19px;
+  border-width: 4px;
+}
+
+[data-frame-tier="tall"] .sk-meter {
+  width: 280px;
+  height: 6px;
+  gap: 5px;
+}
+
+[data-frame-tier="tall"] .sk-night-avatar {
+  width: 78px;
+  height: 78px;
+  border-width: 2.5px;
+}
+
+[data-frame-tier="tall"] .sk-night-avatar-fb { font-size: 33px; }
+
+[data-frame-tier="tall"] .sk-cluster--night { gap: 18px; }
+
+/* ---- 年度地平线 ---- */
+[data-frame-tier="tall"] .sk-yearline {
+  margin-top: 14px;
+  gap: 22px;
+}
+
+[data-frame-tier="tall"] .sk-yl-cap {
+  font-size: 24px;
+  letter-spacing: 0.04em;
+}
+
+[data-frame-tier="tall"] .sk-yl-val { font-size: 27px; }
+
+[data-frame-tier="tall"] .sk-yl-line::before,
+[data-frame-tier="tall"] .sk-yl-line::after {
+  width: 9px;
+  height: 9px;
+}
+
+/* ---- 山脊星钉 ---- */
+[data-frame-tier="tall"] .sk-pin {
+  width: 40px;
+  height: 40px;
+  margin-left: -20px;
+}
+
+[data-frame-tier="tall"] .sk-pin svg {
+  width: 24px;
+  height: 24px;
+  margin: 8px;
+}
+
 /* ================= panel 变体微调 ================= */
 
 .sk--panel .sk-head { display: none; }
 .sk--panel .sk-verdict { top: 36px; }
 .sk--panel .sk-readout { top: 32px; }
-.sk--panel .sk-word { font-size: clamp(2rem, 3.6vw, 2.8rem); }
-.sk--panel .sk-ro-hour { font-size: clamp(2.2rem, 3.8vw, 3.2rem); }
-.sk--panel { --ground-h: 132px; }
+.sk--panel .sk-word { font-size: clamp(2rem, calc(var(--svw) * 3.6), 2.8rem); }
+.sk--panel .sk-ro-hour { font-size: clamp(2.2rem, calc(var(--svw) * 3.8), 3.2rem); }
+/* panel 的 --ground-h（132px）已回到 script 的 groundH()，CSS 不再复写第二份 */
+
+/* ================= 导出 / 还原：无过渡 =================
+   页头、判词、读数、芯片、星钉这些的入场是纯 CSS 过渡（最晚一条 delay 3.2s），
+   JS 那边的 settleInstant() 管不到它们。导出模式下把这一组过渡整个关掉，
+   终态由 .sk--in 直接给出（还原那一帧同理，直接跳回未入场的初值）。
+   只关 transition，不动 animation：星光/星芒是环境动效，与入场无关。 */
+.sk--flat .sk-head,
+.sk--flat .sk-kicker,
+.sk--flat .sk-word,
+.sk--flat .sk-word-sub,
+.sk--flat .sk-word-echo,
+.sk--flat .sk-readout,
+.sk--flat .sk-chip,
+.sk--flat .sk-cluster,
+.sk--flat .sk-yearline,
+.sk--flat .sk-pillar,
+.sk--flat .sk-pin,
+.sk--flat .sk-sp-marker,
+.sk--flat .sk-meter i {
+  transition: none !important;
+}
 
 /* ================= reduced motion ================= */
 

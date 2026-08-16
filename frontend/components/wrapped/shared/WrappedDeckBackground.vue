@@ -1,5 +1,8 @@
 <template>
-  <!-- Shared backdrop for modern "Wrapped" slides (keeps cover + cards visually consistent). -->
+  <!-- Shared backdrop for modern "Wrapped" slides (keeps cover + cards visually consistent).
+       注意：`fixed inset-0` 在画幅舞台里指的是**舞台设计盒**而不是浏览器视口
+       （.wr-stage 带 transform，是其 fixed 后代的包含块）。这是刻意的：
+       光斑/网格/噪点跟着画面一起被信箱边裁掉、一起缩放、一起入分享图。别把它「修」回视口。 -->
   <div class="fixed inset-0 pointer-events-none select-none z-0" aria-hidden="true">
     <!-- Soft color blobs (brand + warm highlights) -->
     <div class="absolute -top-24 -left-24 w-80 h-80 bg-[#07C160] opacity-[0.08] rounded-full blur-3xl"></div>

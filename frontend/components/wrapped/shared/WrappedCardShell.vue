@@ -23,34 +23,35 @@
     <!-- 影院底：铺满整张 slide，标题和内容都在同一片暗场里 -->
     <div v-if="dark" class="wrapped-stage-dark" :class="`wrapped-stage-dark--${tone}`" aria-hidden="true" />
     <WrappedCinemaOverlay v-if="dark" :grain="0.05" />
-    <div
-      class="relative h-full flex flex-col"
-      :class="hideChrome ? '' : (wide
-        ? 'px-10 pt-20 pb-12 sm:px-14 sm:pt-24 sm:pb-14 lg:px-20 xl:px-20 2xl:px-40'
-        : 'max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12')"
-    >
+    <!-- ⚠️ 这里以前用的是 Tailwind 的 sm:/lg:/2xl: 断点，判的是**浏览器窗口宽度**。
+         画幅框定之后那是错的对象：9:16 舞台可以在 2560px 宽的窗口里，于是 2xl:px-40
+         从两侧各吃掉 160px（900px 宽的舞台被吃掉 36%），而窗口被拖窄时又会突然掉档。
+         现在一律按**画幅档位**给常量内边距——同一个画幅，无论窗口多大，版心恒定。 -->
+    <div class="wr-shell relative h-full flex flex-col" :class="shellClass">
         <div v-if="!hideChrome" class="flex items-start justify-between gap-4">
           <div>
-            <h2
-              class="wrapped-title"
-              :class="[compact ? 'text-lg sm:text-xl' : 'text-2xl sm:text-3xl', dark ? 'text-[#F3F8F4]' : 'text-[#000000e6]']"
-            >{{ title }}</h2>
-            <slot name="narrative">
-              <p
-                v-if="narrative"
-                class="mt-3 wrapped-body text-sm sm:text-base max-w-2xl whitespace-pre-wrap"
-                :class="dark ? 'text-[#FFFFFF73]' : 'text-[#7F7F7F]'"
-              >
-                {{ narrative }}
-              </p>
-            </slot>
+            <h2 class="wr-shell-title wrapped-title" :class="dark ? 'text-[#F3F8F4]' : 'text-[#000000e6]'">{{ title }}</h2>
+            <!-- 卡片大多会覆盖这个插槽，里面用的是 Tailwind 的 text-sm/text-base（rem 基准），
+                 CSS 变量管不到。用 zoom 缩放整棵子树：它参与布局（不像 transform 那样只做视觉变换），
+                 rem 字号也一起放大；--wf-text 为 1 时是空操作，16:9 逐像素零回归。 -->
+            <div class="wr-shell-narrative-slot">
+              <slot name="narrative">
+                <p
+                  v-if="narrative"
+                  class="wr-shell-narrative mt-3 wrapped-body max-w-2xl whitespace-pre-wrap"
+                  :class="dark ? 'text-[#FFFFFF73]' : 'text-[#7F7F7F]'"
+                >
+                  {{ narrative }}
+                </p>
+              </slot>
+            </div>
           </div>
           <slot name="badge" />
         </div>
 
         <!-- min-h-0 让 flex 子项可收缩，FitScale 在可用高度内等比缩放，保证一屏放下。
              bleed 模式跳过 FitScale：内容自行 absolute inset-0 铺满，可用高度变化（如顶部横幅）时不缩放不留缝 -->
-        <div class="flex-1 min-h-0 relative" :class="hideChrome ? '' : (compact ? 'mt-2 sm:mt-3' : 'mt-4 sm:mt-6')">
+        <div class="wr-shell-body flex-1 min-h-0 relative" :class="hideChrome ? '' : (compact ? 'is-compact' : '')">
           <slot v-if="bleed" />
           <WrappedFitScale v-else class="relative">
             <slot />
@@ -61,7 +62,7 @@
 </template>
 
 <script setup>
-import { inject, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import WrappedFitScale from '~/components/wrapped/shared/WrappedFitScale.vue'
 import WrappedCinemaOverlay from '~/components/wrapped/shared/WrappedCinemaOverlay.vue'
 
@@ -87,6 +88,11 @@ const props = defineProps({
   compact: { type: Boolean, default: false }
 })
 
+const shellClass = computed(() => {
+  if (props.hideChrome) return ''
+  return [props.wide ? 'wr-shell--wide' : 'wr-shell--narrow', props.compact ? 'is-compact' : '']
+})
+
 // 影院卡翻到台前时，把 deck 顶栏与底色一起压暗；翻走再交还
 const deckDark = inject('deckDark', ref(false))
 let claimed = false
@@ -106,6 +112,49 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* ── 版心：按画幅档位给常量，不再随浏览器窗口跳档 ──
+   wide 的取值等于旧代码在 ≥1536px 窗口（2xl，桌面绝大多数情况）下的计算值，
+   所以 16:9 / 跟随窗口的观感与改造前一致。 */
+.wr-shell--wide {
+  padding: 96px 160px 56px;   /* = pt-24 / 2xl:px-40 / pb-14 */
+}
+
+.wr-shell--narrow {
+  max-width: 64rem;           /* = max-w-5xl，与改造前一致 */
+  margin-inline: auto;
+  padding: 48px 32px;         /* = sm:px-8 sm:py-12 */
+}
+
+/* 字号乘 --wf-text：让文字占画幅宽度的比例在各画幅恒定。
+   16:9 下 --wf-text = 1，取值与旧的 sm:text-3xl / sm:text-base 逐像素相同。 */
+.wr-shell-title { font-size: calc(30px * var(--wf-title, 1)); line-height: 1.25; }
+.wr-shell.is-compact .wr-shell-title { font-size: calc(20px * var(--wf-title, 1)); }
+.wr-shell-narrative { font-size: 16px; line-height: 1.8; }
+/* 整棵叙事子树按画幅放大（含卡片自己用 Tailwind rem 字号写的段落） */
+.wr-shell-narrative-slot { zoom: var(--wf-text, 1); }
+
+/* ⚠️ 这两条必须挂在 .wr-shell-- 后代上：hideChrome 时 shellClass 为空，
+   页头整块不存在，内容区的上边距原本就是 0。写成无条件的 `.wr-shell-body{margin-top:24px}`
+   会给 hide-chrome 的卡（C2 打字 / C6 口头禅）凭空加 24px，
+   既让 16:9 的画面整体下移 12px，又把框定画幅里的 FitScale 从 1 压到 0.986——那就是「靠缩小适配」。 */
+.wr-shell--wide > .wr-shell-body,
+.wr-shell--narrow > .wr-shell-body { margin-top: 24px; }        /* = sm:mt-6 */
+.wr-shell--wide > .wr-shell-body.is-compact,
+.wr-shell--narrow > .wr-shell-body.is-compact { margin-top: 12px; }  /* = sm:mt-3 */
+
+/* 竖幅/方幅：舞台窄了，版心跟着收，把宽度还给内容（字号一律不动）。
+   数值按各档设计宽的 ~7% 取，与 wide 的 160/1600=10% 同一套比例语言但更省。 */
+/* 窄画幅把左右留白压到最小：画面就那么宽，边距吃掉的每一像素都是内容的。
+   顶部留白按 --wf-text 一起长，页头字变大了才不会顶到画幅上沿。 */
+[data-frame-tier="landscape"] .wr-shell--wide { padding: calc(72px * var(--wf-text, 1)) 72px 44px; }
+[data-frame-tier="square"] .wr-shell--wide { padding: calc(66px * var(--wf-text, 1)) 44px 38px; }
+[data-frame-tier="portrait"] .wr-shell--wide { padding: calc(60px * var(--wf-text, 1)) 32px 32px; }
+[data-frame-tier="tall"] .wr-shell--wide { padding: calc(54px * var(--wf-text, 1)) 24px 28px; }
+
+[data-frame-tier="square"] .wr-shell--narrow,
+[data-frame-tier="portrait"] .wr-shell--narrow,
+[data-frame-tier="tall"] .wr-shell--narrow { max-width: none; padding: 44px 32px; }
+
 /* 暗场底：铺满整张 slide */
 .wrapped-stage-dark {
   position: absolute;

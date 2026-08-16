@@ -93,6 +93,48 @@ contextBridge.exposeInMainWorld("wechatDesktop", {
   getOutputDirChangeProgress: () => ipcRenderer.invoke("app:getOutputDirChangeProgress"),
   setOutputDir: (dir) => ipcRenderer.invoke("app:setOutputDir", String(dir ?? "")),
   openOutputDir: () => ipcRenderer.invoke("app:openOutputDir"),
+
+  // 年度总结分享出图：按屏幕矩形 + 目标倍率截取当前画面，存进 output/年度总结/
+  captureRegion: (options = {}) =>
+    ipcRenderer.invoke("app:captureRegion", {
+      x: Number(options?.x) || 0,
+      y: Number(options?.y) || 0,
+      width: Number(options?.width) || 0,
+      height: Number(options?.height) || 0,
+      scale: Number(options?.scale) || 1,
+      outWidth: Number(options?.outWidth) || 0,
+      outHeight: Number(options?.outHeight) || 0,
+      name: String(options?.name ?? ""),
+    }),
+  // 年度总结批量导出：begin 建临时目录 → 逐页 capture 进去 → finish 打成 zip 存到
+  // output/年度总结/。中途报错或用户取消要调 abort 把临时目录清掉。
+  wrappedBatchBegin: (options = {}) =>
+    ipcRenderer.invoke("app:wrappedBatchBegin", {
+      label: String(options?.label ?? ""),
+    }),
+  wrappedBatchCapture: (options = {}) =>
+    ipcRenderer.invoke("app:wrappedBatchCapture", {
+      batchId: String(options?.batchId ?? ""),
+      index: Number(options?.index) || 0,
+      name: String(options?.name ?? ""),
+      x: Number(options?.x) || 0,
+      y: Number(options?.y) || 0,
+      width: Number(options?.width) || 0,
+      height: Number(options?.height) || 0,
+      scale: Number(options?.scale) || 1,
+      outWidth: Number(options?.outWidth) || 0,
+      outHeight: Number(options?.outHeight) || 0,
+    }),
+  wrappedBatchFinish: (options = {}) =>
+    ipcRenderer.invoke("app:wrappedBatchFinish", {
+      batchId: String(options?.batchId ?? ""),
+      zipName: String(options?.zipName ?? ""),
+    }),
+  wrappedBatchAbort: (options = {}) =>
+    ipcRenderer.invoke("app:wrappedBatchAbort", {
+      batchId: String(options?.batchId ?? ""),
+    }),
+
   openExternalUrl: (url) => ipcRenderer.invoke("app:openExternalUrl", String(url ?? "")),
   getAccountInfo: (account) => ipcRenderer.invoke("app:getAccountInfo", String(account || "")),
   deleteAccountData: (account) => ipcRenderer.invoke("app:deleteAccountData", String(account || "")),

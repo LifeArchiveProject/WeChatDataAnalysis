@@ -1,6 +1,8 @@
 <template>
+  <!-- slide 走 bleed：长廊是 WebGL，落进 FitScale 的 transform:scale 子树里会被整层重采样，
+       12 张海报上的片名/演职员表首当其冲。bleed 之后画布直接吃 shell 的 flex 槽位。 -->
   <WrappedCardShell :card-id="card.id" :title="card.title" :narrative="''" :variant="variant" :wide="true" :dark="variant === 'slide'"
-    :active="isActive">
+    :bleed="variant === 'slide'" :active="isActive">
     <template #narrative>
       <div
         class="mt-3 wrapped-body text-sm sm:text-base leading-relaxed"
@@ -23,8 +25,13 @@
       </div>
     </template>
 
-    <div class="w-full">
-      <div class="relative w-full h-[68vh] min-h-[430px] max-h-[780px]">
+    <!-- slide：高度还给 shell 的 flex 槽位（定高盒在竖幅下要么被 max-h 卡死、要么撑爆）；
+         panel 仍是文档流里的一块，保留原来的定高 -->
+    <div class="w-full" :class="variant === 'slide' ? 'absolute inset-0 flex flex-col' : ''">
+      <div
+        class="relative w-full"
+        :class="variant === 'slide' ? 'flex-1 min-h-0' : 'h-[calc(var(--svh)*68)] min-h-[430px] max-h-[780px]'"
+      >
         <MonthlyCompanionPosters
           :months="card.data?.months || []"
           :summary="card.data?.summary || null"

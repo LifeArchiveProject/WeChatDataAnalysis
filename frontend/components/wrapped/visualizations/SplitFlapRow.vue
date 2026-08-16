@@ -190,25 +190,30 @@ onBeforeUnmount(clearAllTimers)
 </script>
 
 <style scoped>
+/* 机械翻牌板的几何只有一个自由度：格宽 --sf-u。
+   高/字号/圆角/格距全部由它按固定比例推出，换尺寸只改一个数。
+   比例取自 16:9 现状（42 / 56 / 26 / 7 / 6），lg 档逐像素不变。
+   外部（如 Card03 的窄柜台）仍可直接覆写 --sf-w/--sf-h/--sf-fs/--sf-r/gap。 */
 .sf-row {
-  --sf-w: 42px;
-  --sf-h: 56px;
-  --sf-fs: 26px;
-  --sf-r: 7px;
+  --sf-u: 42px;
+  --sf-w: var(--sf-u);
+  --sf-h: calc(var(--sf-u) * 4 / 3);
+  --sf-fs: calc(var(--sf-u) * 13 / 21);
+  --sf-r: calc(var(--sf-u) / 6);
   display: inline-flex;
-  gap: 6px;
+  flex-wrap: nowrap;
+  gap: calc(var(--sf-u) / 7);
 }
 
 .sf-row--md {
-  --sf-w: 30px;
-  --sf-h: 40px;
-  --sf-fs: 19px;
-  --sf-r: 5px;
-  gap: 4px;
+  --sf-u: 30px;
 }
 
 .sf-cell {
   position: relative;
+  /* 格子是实体翻板，永远不参与弹性分配：格数变多时机匣变宽，而不是每格被挤扁。
+     （挤扁会让字被 overflow:hidden 的半格切掉，等于丢字。） */
+  flex: 0 0 auto;
   width: var(--sf-w);
   height: var(--sf-h);
   border-radius: var(--sf-r);

@@ -218,6 +218,7 @@
 
 <script setup>
 import GlobalOverviewChart from '~/components/wrapped/visualizations/GlobalOverviewChart.vue'
+import { inject } from 'vue'
 import { useCountUp } from '~/composables/useCountUp'
 import { useReducedMotion } from '~/composables/useReducedMotion'
 
@@ -403,6 +404,32 @@ watch(() => props.isActive, (active) => {
   }, ENTRANCE_START_DELAY_MS)
 }, { immediate: true })
 
+/* ── 导出模式：立刻落终值 ──
+   这一页的版式用户说过不用动，这里也确实没动版式——只把入场的里程表滚动直接推到终点。
+
+   ⚠️ 为什么必须做：导出截图若发生在里程表滚动途中，图上印的是**中间值**。
+   实测在切页后 0.7s 截到的是「14,062 条 / 184 天 / 10 位新朋友 / 图片视频 0 条」，
+   真值是「19,580 / 364 / 44 / 785」。动画没播完只是不好看，数字印错是把错误信息发出去，
+   性质完全不同——分享图上的数字必须是真值。
+
+   还原：退出导出模式时若这一页不在场就复位，翻回来照常重播入场（不剧透、观感不变）。 */
+const exportMode = inject('wrappedExportMode', ref(false))
+
+watch(exportMode, (on) => {
+  if (typeof window === 'undefined') return
+  clearEntranceTimers()
+  if (on) {
+    entered.value = true
+    finishAll()
+    return
+  }
+  if (!props.isActive) {
+    entered.value = false
+    return
+  }
+  // 仍停在本页：保持终值，不要在用户眼前把数字倒回去重滚
+}, { immediate: true })
+
 onBeforeUnmount(clearEntranceTimers)
 
 // 卡片数据晚于入场到达时，直接定格到最新终值
@@ -552,11 +579,13 @@ onBeforeUnmount(() => {
   padding: 4px 0 10px;
 }
 
-@media (min-width: 1024px) {
-  .ai-grid {
-    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-    padding: 8px 0 16px;
-  }
+/* 横幅（16:9 / 4:3）才走左右分栏。原来这里写的是 @media (min-width: 1024px)——
+   那是按**浏览器窗口**判断的，舞台化之后竖幅舞台在宽窗口里照样会命中，
+   于是 900px 宽的画幅里硬塞 5fr/7fr。改成按画幅档位判断。 */
+[data-frame-tier="wide"] .ai-grid,
+[data-frame-tier="landscape"] .ai-grid {
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  padding: 8px 0 16px;
 }
 
 /* 左：巨型数字块 */
@@ -566,11 +595,10 @@ onBeforeUnmount(() => {
   padding: 26px 0 10px;
 }
 
-@media (min-width: 1024px) {
-  .ai-hero {
-    text-align: left;
-    padding: 30px 0 14px 6px;
-  }
+[data-frame-tier="wide"] .ai-hero,
+[data-frame-tier="landscape"] .ai-hero {
+  text-align: left;
+  padding: 30px 0 14px 6px;
 }
 
 /* 衬底描边年份：纯排印的层次，不用任何光效 */
@@ -579,7 +607,7 @@ onBeforeUnmount(() => {
   top: -6px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: clamp(4.4rem, 9vw, 7rem);
+  font-size: clamp(calc(4.4rem * var(--wf-text, 1)), calc(calc(var(--svw) * 9) * var(--wf-text, 1)), calc(7rem * var(--wf-text, 1)));
   line-height: 1;
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -589,11 +617,10 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-@media (min-width: 1024px) {
-  .ai-hero-year {
-    left: 0;
-    transform: none;
-  }
+[data-frame-tier="wide"] .ai-hero-year,
+[data-frame-tier="landscape"] .ai-hero-year {
+  left: 0;
+  transform: none;
 }
 
 .ai-hero-body {
@@ -601,7 +628,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-hero-num {
-  font-size: clamp(2.9rem, 6vw, 4.4rem);
+  font-size: clamp(calc(2.9rem * var(--wf-text, 1)), calc(calc(var(--svw) * 6) * var(--wf-text, 1)), calc(4.4rem * var(--wf-text, 1)));
   line-height: 1.02;
   font-weight: 700;
   letter-spacing: 0.005em;
@@ -611,7 +638,7 @@ onBeforeUnmount(() => {
 
 .ai-hero-sub {
   margin-top: 8px;
-  font-size: 14px;
+  font-size: calc(14px * var(--wf-text, 1));
   color: #00000066;
 }
 
@@ -633,7 +660,7 @@ onBeforeUnmount(() => {
 
 .ai-row__label {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--wf-text, 1));
   color: #00000066;
   letter-spacing: 0.02em;
 }
@@ -684,13 +711,13 @@ onBeforeUnmount(() => {
 }
 
 .ai-row__text {
-  font-size: 14px;
+  font-size: calc(14px * var(--wf-text, 1));
   font-weight: 500;
   color: #000000e6;
 }
 
 .ai-row__num {
-  font-size: 14px;
+  font-size: calc(14px * var(--wf-text, 1));
   font-weight: 650;
   color: #07c160;
   font-variant-numeric: tabular-nums;
@@ -698,7 +725,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-row__unit {
-  font-size: 11px;
+  font-size: calc(11px * var(--wf-text, 1));
   color: #00000055;
   flex-shrink: 0;
 }
@@ -753,7 +780,7 @@ onBeforeUnmount(() => {
 }
 
 .ai-row__peak-mult {
-  font-size: 11px;
+  font-size: calc(11px * var(--wf-text, 1));
   color: #b45309;
   flex-shrink: 0;
 }
@@ -835,7 +862,7 @@ onBeforeUnmount(() => {
   top: calc(100% + 8px);
   right: 0;
   z-index: 40;
-  width: min(360px, calc(100vw - 48px));
+  width: min(360px, calc(calc(var(--svw) * 100) - 48px));
   background: #ffffff;
   border: 1px solid #ededed;
   border-radius: 14px;
@@ -861,7 +888,7 @@ onBeforeUnmount(() => {
 }
 
 .peak-msg__meta {
-  font-size: 10px;
+  font-size: calc(10px * var(--wf-text, 1));
   color: #00000055;
 }
 
@@ -872,7 +899,7 @@ onBeforeUnmount(() => {
   border-radius: 12px;
   border-top-right-radius: 4px;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--wf-text, 1));
   line-height: 1.5;
   word-break: break-word;
 }
@@ -922,7 +949,7 @@ onBeforeUnmount(() => {
 .ai-ghost--phrase {
   top: -3%;
   right: 1%;
-  font-size: clamp(3rem, 5.2vw, 4.4rem);
+  font-size: clamp(calc(3rem * var(--wf-text, 1)), calc(calc(var(--svw) * 5.2) * var(--wf-text, 1)), calc(4.4rem * var(--wf-text, 1)));
   letter-spacing: 0.02em;
   transform: rotate(-3deg);
   -webkit-text-stroke: 1.5px rgba(7, 193, 96, 0.16);
@@ -932,7 +959,7 @@ onBeforeUnmount(() => {
 .ai-ghost--count {
   top: 13%;
   right: 3%;
-  font-size: 1.6rem;
+  font-size: calc(1.6rem * var(--wf-text, 1));
   transform: rotate(-3deg);
   -webkit-text-stroke: 1.2px rgba(7, 193, 96, 0.2);
 }
@@ -941,7 +968,7 @@ onBeforeUnmount(() => {
 .ai-ghost--peak {
   top: 33%;
   right: -0.5%;
-  font-size: clamp(2.4rem, 4vw, 3.4rem);
+  font-size: clamp(calc(2.4rem * var(--wf-text, 1)), calc(calc(var(--svw) * 4) * var(--wf-text, 1)), calc(3.4rem * var(--wf-text, 1)));
   transform: rotate(2.5deg);
   -webkit-text-stroke: 1.5px rgba(245, 158, 11, 0.2);
 }
@@ -950,25 +977,14 @@ onBeforeUnmount(() => {
 .ai-ghost--friends {
   top: 37%;
   left: 45%;
-  font-size: 2rem;
+  font-size: calc(2rem * var(--wf-text, 1));
   transform: rotate(-2deg);
   -webkit-text-stroke: 1.2px rgba(0, 0, 0, 0.07);
 }
 
-/* 窄屏（单列堆叠）时只保留口头禅一枚小幽灵字，避免压在文字底下 */
-@media (max-width: 1023px) {
-  .ai-ghost--count,
-  .ai-ghost--peak,
-  .ai-ghost--friends {
-    display: none;
-  }
-
-  .ai-ghost--phrase {
-    top: 0;
-    right: 0;
-    font-size: 2.2rem;
-  }
-}
+/* 竖幅/方幅的幽灵字重新布点见文件末尾「单列纵向流」段。
+   这里原本有一段 @media (max-width: 1023px) 把三枚幽灵字 display:none 掉，
+   既是按窗口判断（舞台化后失灵），也违反「一个元素都不能丢」，已删除。 */
 
 /* ---------------- 右栏编辑面板（层级差异化） ---------------- */
 
@@ -981,14 +997,14 @@ onBeforeUnmount(() => {
 
 .aip-label {
   display: block;
-  font-size: 11px;
+  font-size: calc(11px * var(--wf-text, 1));
   color: #00000059;
   letter-spacing: 0.06em;
 }
 
 .aip-unit {
   font-style: normal;
-  font-size: 11px;
+  font-size: calc(11px * var(--wf-text, 1));
   font-weight: 400;
   color: #00000055;
   margin-left: 2px;
@@ -1033,7 +1049,7 @@ onBeforeUnmount(() => {
 }
 
 .aip-featured-name {
-  font-size: 17px;
+  font-size: calc(17px * var(--wf-text, 1));
   font-weight: 600;
   color: #000000e6;
   min-width: 0;
@@ -1044,7 +1060,7 @@ onBeforeUnmount(() => {
 
 .aip-featured-num {
   margin-left: auto;
-  font-size: 22px;
+  font-size: calc(22px * var(--wf-text, 1));
   font-weight: 700;
   color: #07c160;
   font-variant-numeric: tabular-nums;
@@ -1078,14 +1094,14 @@ onBeforeUnmount(() => {
 }
 
 .aip-duo-text {
-  font-size: 14px;
+  font-size: calc(14px * var(--wf-text, 1));
   font-weight: 500;
   color: #000000e6;
   min-width: 0;
 }
 
 .aip-num {
-  font-size: 14px;
+  font-size: calc(14px * var(--wf-text, 1));
   font-weight: 650;
   color: #07c160;
   font-variant-numeric: tabular-nums;
@@ -1093,7 +1109,7 @@ onBeforeUnmount(() => {
 }
 
 .aip-quote {
-  font-size: 15px;
+  font-size: calc(15px * var(--wf-text, 1));
   font-weight: 600;
   color: #000000e6;
   min-width: 0;
@@ -1101,7 +1117,7 @@ onBeforeUnmount(() => {
 
 /* ③ 题注 */
 .aip-when {
-  font-size: 13px;
+  font-size: calc(13px * var(--wf-text, 1));
   color: #00000066;
 }
 
@@ -1135,7 +1151,7 @@ onBeforeUnmount(() => {
 }
 
 .aip-stat-num {
-  font-size: 16px;
+  font-size: calc(16px * var(--wf-text, 1));
   font-weight: 650;
   color: #000000e6;
   font-variant-numeric: tabular-nums;
@@ -1143,7 +1159,7 @@ onBeforeUnmount(() => {
 }
 
 .aip-stat-label {
-  font-size: 10px;
+  font-size: calc(10px * var(--wf-text, 1));
   color: #00000059;
   white-space: nowrap;
 }
@@ -1167,6 +1183,219 @@ onBeforeUnmount(() => {
 
 .ai--still .aip-block {
   animation-play-state: paused;
+}
+
+/* ================================================================
+   方幅 / 竖幅（1:1 · 3:4 · 4:5 · 9:16）：单列纵向流
+   顺序：英雄大数 → 元数据行（数据带 + 出现时刻）→ 最常联系/群/口头禅 → 峰值日 → 年历。
+   只改排布：网格转单列、横向等分条改网格、并排改上下、放开截断。
+   构件尺寸（字号/头像/格子）一律保持 16:9 的设计常量，不靠缩小适配。
+   ================================================================ */
+
+/* --- 网格：base 已是单列，这里只放开行距（横幅走上面的 5fr/7fr 分栏） --- */
+[data-frame-tier="square"] .ai-grid,
+[data-frame-tier="portrait"] .ai-grid {
+  gap: 22px 0;
+  padding: 4px 0 12px;
+}
+
+[data-frame-tier="tall"] .ai-grid {
+  gap: 24px 0;
+  padding: 8px 0 14px;
+}
+
+/* --- 英雄大数：把两处「挂在宽度轴上的 clamp 字号」钉成 16:9 下的取值，
+       否则画幅一窄字就跟着缩水（= 变相靠缩小适配）。 --- */
+[data-frame-tier="square"] .ai-hero-num,
+[data-frame-tier="portrait"] .ai-hero-num,
+[data-frame-tier="tall"] .ai-hero-num {
+  font-size: calc(4.4rem * var(--wf-text, 1)); /* 16:9 下 clamp(2.9rem, --svw*6, 4.4rem) 命中上限 = 4.4rem */
+}
+
+[data-frame-tier="square"] .ai-hero-year,
+[data-frame-tier="portrait"] .ai-hero-year,
+[data-frame-tier="tall"] .ai-hero-year {
+  font-size: calc(7rem * var(--wf-text, 1)); /* 16:9 下 clamp(4.4rem, --svw*9, 7rem) 命中上限 = 7rem */
+}
+
+[data-frame-tier="tall"] .ai-hero {
+  padding: 30px 0 12px;
+}
+
+/* --- 面板：元数据行提到最前，与「英雄大数 → 元数据 → 人/群/口头禅」的阅读顺序一致 --- */
+[data-frame-tier="square"] .aip-strip,
+[data-frame-tier="portrait"] .aip-strip,
+[data-frame-tier="tall"] .aip-strip {
+  order: 1;
+  /* 横向 5 等分条 → 三列网格，窄栏里不再互相挤压 */
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 0;
+  padding: 12px 0;
+}
+
+[data-frame-tier="square"] .aip-when,
+[data-frame-tier="portrait"] .aip-when,
+[data-frame-tier="tall"] .aip-when {
+  order: 2;
+}
+
+[data-frame-tier="square"] .aip-featured,
+[data-frame-tier="portrait"] .aip-featured,
+[data-frame-tier="tall"] .aip-featured {
+  order: 3;
+}
+
+[data-frame-tier="square"] .aip-duo,
+[data-frame-tier="portrait"] .aip-duo,
+[data-frame-tier="tall"] .aip-duo {
+  order: 4;
+}
+
+[data-frame-tier="square"] .ai-row--peak,
+[data-frame-tier="portrait"] .ai-row--peak,
+[data-frame-tier="tall"] .ai-row--peak {
+  order: 5;
+}
+
+/* 入场级联跟着新顺序走（inline 的 --row-delay 用 animation-delay 长写法盖掉） */
+[data-frame-tier="square"] .ai--in .aip-strip,
+[data-frame-tier="portrait"] .ai--in .aip-strip,
+[data-frame-tier="tall"] .ai--in .aip-strip {
+  animation-delay: 260ms;
+}
+
+[data-frame-tier="square"] .ai--in .aip-when,
+[data-frame-tier="portrait"] .ai--in .aip-when,
+[data-frame-tier="tall"] .ai--in .aip-when {
+  animation-delay: 350ms;
+}
+
+[data-frame-tier="square"] .ai--in .aip-featured,
+[data-frame-tier="portrait"] .ai--in .aip-featured,
+[data-frame-tier="tall"] .ai--in .aip-featured {
+  animation-delay: 440ms;
+}
+
+[data-frame-tier="square"] .ai--in .aip-duo,
+[data-frame-tier="portrait"] .ai--in .aip-duo,
+[data-frame-tier="tall"] .ai--in .aip-duo {
+  animation-delay: 520ms;
+}
+
+[data-frame-tier="tall"] .ai-panel {
+  gap: 16px;
+}
+
+/* 数据带的竖分隔线跟着换行走：每行第一格不画左边线 */
+[data-frame-tier="square"] .aip-stat + .aip-stat,
+[data-frame-tier="portrait"] .aip-stat + .aip-stat,
+[data-frame-tier="tall"] .aip-stat + .aip-stat {
+  border-left: none;
+}
+
+[data-frame-tier="square"] .aip-stat:not(:nth-child(3n + 1)),
+[data-frame-tier="portrait"] .aip-stat:not(:nth-child(3n + 1)),
+[data-frame-tier="tall"] .aip-stat:not(:nth-child(3n + 1)) {
+  border-left: 1px solid #00000010;
+}
+
+/* 放开 nowrap：窄栏里宁可换行也不越界 */
+[data-frame-tier="square"] .aip-stat-num,
+[data-frame-tier="portrait"] .aip-stat-num,
+[data-frame-tier="tall"] .aip-stat-num,
+[data-frame-tier="square"] .aip-stat-label,
+[data-frame-tier="portrait"] .aip-stat-label,
+[data-frame-tier="tall"] .aip-stat-label {
+  white-space: normal;
+}
+
+/* --- 头条 / 双栏：放开 truncate 与 ellipsis（截断 = 丢内容） --- */
+[data-frame-tier="square"] .aip-featured-name,
+[data-frame-tier="portrait"] .aip-featured-name,
+[data-frame-tier="tall"] .aip-featured-name,
+[data-frame-tier="square"] .aip-duo-text,
+[data-frame-tier="portrait"] .aip-duo-text,
+[data-frame-tier="tall"] .aip-duo-text,
+[data-frame-tier="square"] .aip-quote,
+[data-frame-tier="portrait"] .aip-quote,
+[data-frame-tier="tall"] .aip-quote {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+}
+
+/* 双栏在方幅/3:4/4:5 仍是两列（不再依赖 @media 640px 的窗口判断） */
+[data-frame-tier="square"] .aip-duo,
+[data-frame-tier="portrait"] .aip-duo {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px 18px;
+}
+
+[data-frame-tier="square"] .aip-duo-item + .aip-duo-item,
+[data-frame-tier="portrait"] .aip-duo-item + .aip-duo-item {
+  border-left: 1px solid #00000010;
+  padding-left: 18px;
+}
+
+/* 9:16 最窄：并排改上下，分隔线由竖改横，给长名字/长口头禅整行宽度 */
+[data-frame-tier="tall"] .aip-duo {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+[data-frame-tier="tall"] .aip-duo-item + .aip-duo-item {
+  border-left: none;
+  padding-left: 0;
+  border-top: 1px solid #00000010;
+  padding-top: 12px;
+}
+
+/* --- 年历：与面板之间留出呼吸 --- */
+[data-frame-tier="square"] .ai-heatmap,
+[data-frame-tier="portrait"] .ai-heatmap {
+  margin-top: 18px;
+}
+
+[data-frame-tier="tall"] .ai-heatmap {
+  margin-top: 22px;
+}
+
+/* --- 背景幽灵字：单列流下沿「左上 / 右上 / 右中缝」重新布点，全部留在画幅内。
+       两处 clamp 字号同样钉成 16:9 的取值。 --- */
+[data-frame-tier="square"] .ai-ghost--friends,
+[data-frame-tier="portrait"] .ai-ghost--friends,
+[data-frame-tier="tall"] .ai-ghost--friends {
+  top: 22px;
+  left: 0;
+  right: auto;
+}
+
+[data-frame-tier="square"] .ai-ghost--phrase,
+[data-frame-tier="portrait"] .ai-ghost--phrase,
+[data-frame-tier="tall"] .ai-ghost--phrase {
+  top: 140px;
+  right: 0;
+  left: auto;
+  font-size: calc(4.4rem * var(--wf-text, 1)); /* 16:9 下 clamp(3rem, --svw*5.2, 4.4rem) 命中上限 */
+}
+
+[data-frame-tier="square"] .ai-ghost--count,
+[data-frame-tier="portrait"] .ai-ghost--count,
+[data-frame-tier="tall"] .ai-ghost--count {
+  top: 214px;
+  right: 14px;
+  left: auto;
+}
+
+[data-frame-tier="square"] .ai-ghost--peak,
+[data-frame-tier="portrait"] .ai-ghost--peak,
+[data-frame-tier="tall"] .ai-ghost--peak {
+  top: 50%;
+  right: 0;
+  left: auto;
+  font-size: calc(3.4rem * var(--wf-text, 1)); /* 16:9 下 clamp(2.4rem, --svw*4, 3.4rem) 命中上限 */
 }
 
 @media (prefers-reduced-motion: reduce) {

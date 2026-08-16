@@ -1760,6 +1760,14 @@ const introRunning = ref(false)
 let introTl = null
 let enterTimer = null
 let leaveTimer = null
+// 入场已经演完（用于导出还原时判断「这一次揭晓用户到底看没看过」）
+let introSettled = false
+
+/* 导出模式（页面级 provide）。为真期间这一页必须**立刻**是终态：
+   所有格子显形、量条拉满、读数落定、日历/时钟热区铺满，
+   而不是还在那条 700ms 延迟 + 1.3s 编排 + 1.4s 读数的入场里。
+   为假时行为与导出功能存在之前一字不差。 */
+const exportMode = inject('wrappedExportMode', ref(false))
 
 // 骨架块：与成品同名同位，直接复用最终版面的 grid-area
 const SKELETON_BLOCKS = [
@@ -1809,10 +1817,18 @@ const applyPointer = () => {
   if (!blk) return
   const r = blk.getBoundingClientRect()
   if (!r.width || !r.height) return
-  const x = ev.clientX - r.left
-  const y = ev.clientY - r.top
-  const nx = Math.max(-0.5, Math.min(0.5, x / r.width - 0.5))
-  const ny = Math.max(-0.5, Math.min(0.5, y / r.height - 0.5))
+  // getBoundingClientRect() 量的是**视觉像素**（舞台整体 transform:scale 之后），
+  // 而 --mx/--my 会被 CSS 当成块内**未缩放**坐标用。舞台 scale≠1 时直接写视觉像素，
+  // 反光圆心就会往块左上角跑（缩小）或飞出块外（放大）。除回「视觉/布局」比例还原。
+  const kx = blk.offsetWidth > 0 ? r.width / blk.offsetWidth : 1
+  const ky = blk.offsetHeight > 0 ? r.height / blk.offsetHeight : 1
+  const vx = ev.clientX - r.left
+  const vy = ev.clientY - r.top
+  const x = vx / (kx || 1)
+  const y = vy / (ky || 1)
+  // 归一化偏移是比值，与缩放无关，仍按视觉像素算
+  const nx = Math.max(-0.5, Math.min(0.5, vx / r.width - 0.5))
+  const ny = Math.max(-0.5, Math.min(0.5, vy / r.height - 0.5))
   blk.style.setProperty('--mx', `${x.toFixed(1)}px`)
   blk.style.setProperty('--my', `${y.toFixed(1)}px`)
   blk.style.setProperty('--rx', `${(ny * -2.4).toFixed(2)}deg`)
@@ -1829,6 +1845,7 @@ const onSheetMove = (ev) => {
 function primeInitialState () {
   if (!sheetEl.value) return
   introRunning.value = true
+  introSettled = false
   clearLit()
   if (reduced.value) {
     gsap.set(blockEls(), { clearProps: 'opacity,filter,transform' })
@@ -1851,7 +1868,7 @@ function playIntro () {
 
   if (reduced.value) {
     countUps.forEach((c) => c.finish())
-    introTl = gsap.timeline({ onComplete: () => { introRunning.value = false } })
+    introTl = gsap.timeline({ onComplete: () => { introRunning.value = false; introSettled = true } })
     introTl.fromTo(sheetEl.value, { opacity: 0 }, { opacity: 1, duration: 0.18, ease: 'power1.out' })
     return
   }
@@ -1865,6 +1882,7 @@ function playIntro () {
       gsap.set(q(FX_SEL), { clearProps: 'opacity,transform' })
       gsap.set(q(BAR_SEL), { clearProps: 'transform' })
       introRunning.value = false
+      introSettled = true
     }
   })
   introTl = tl
@@ -1937,9 +1955,29 @@ function playIntro () {
 /* ───────────────────────────────────────────
    生命周期
    ─────────────────────────────────────────── */
+/* 导出：入场直接落到终帧。
+   先按正常路子把时间线整条建出来，再 progress(1) 推到末尾——比逐个手改样式可靠，
+   而且 onComplete 里那组 clearProps 照旧执行，不会留下压死悬停倾斜的内联 transform。
+   progress(1) 会顺路触发 0.42s 那个 restart() 回调（读数从 0 起跳 1.4s），
+   所以收尾必须再 finish() 一次，把七个读数按死在终值上。 */
+function settleIntroInstant () {
+  clearTimeout(enterTimer)
+  clearTimeout(leaveTimer)
+  primeInitialState()
+  playIntro()
+  introTl?.progress(1)
+  countUps.forEach((c) => c.finish())
+  introRunning.value = false
+  introSettled = true
+}
+
 function start () {
   clearTimeout(enterTimer)
   clearTimeout(leaveTimer)
+  if (exportMode.value) {
+    settleIntroInstant()
+    return
+  }
   // deck 翻页是 700ms 的 CSS transform 过渡，且 isActive 在过渡「开始」那一刻就变 true
   enterTimer = setTimeout(() => {
     primeInitialState()
@@ -2011,6 +2049,36 @@ watch(() => props.isActive, (v) => {
     leaveTimer = setTimeout(() => { stopAll(); primeInitialState() }, 750)
   }
 })
+
+/* 导出模式：进去立刻定格终帧，出来还原成进入导出前的样子。
+   —— 还原必须真的还原：这一页的收尾就是「格子逐块显形 → 量条拉满 → 七个读数滚上去」，
+      导出一次回来若整版已经落定，最后这记收束就被剧透了。
+   种子值在 setup 期就定：isActive 那条 watch / initStage 会在导出已开时直接把
+   introSettled 置真，等 watch 回调再拍快照就把「没看过」记成了「看过」。 */
+let exportSnapshot = exportMode.value ? { introSettled: false } : null
+
+watch(exportMode, (on) => {
+  if (!import.meta.client) return
+
+  if (on) {
+    if (exportSnapshot) return
+    exportSnapshot = { introSettled }
+    if (props.isActive && stageInited) settleIntroInstant()
+    return
+  }
+
+  const snap = exportSnapshot
+  exportSnapshot = null
+  if (!snap) return
+  // 导出前用户已经看完这段收束了：保持终态
+  if (snap.introSettled) return
+  if (!stageInited) return
+
+  stopAll()
+  primeInitialState()
+  // 用户正停在本页：按没进过导出时的路子重演一遍（也走那 700ms 落定延迟）
+  if (props.isActive) start()
+}, { immediate: true })
 </script>
 
 <style scoped>
@@ -2094,6 +2162,63 @@ watch(() => props.isActive, (v) => {
   --fs-body: max(11px, 1.5cqh);
   --fs-label: max(9px, 1.25cqh);
 
+  /* ── 5.5 构件与间距令牌 ──
+     原本这些 max(px, Ncqh/Ncqw) 是直接写在各条规则里的。抽成令牌**不改变**
+     16:9 / 跟随窗口下的求值（逐像素等价），但换来一个开关：竖幅 / 方幅下
+     舞台变高会让 cqh 系尺寸整体变大，同时栏变窄 —— 双重挤压正是 C7 丢元素的主因。
+     于是各 tier 只需把这一组令牌钉成「16:9 下的计算值」（1600×900，cqh=9px、cqw=16px），
+     构件尺寸就成了设计常量，重排只改排布。改这里前先核对注释里的 16:9 计算值。 */
+  --u-s2: max(2px, 0.25cqh);      /* 2.25 */
+  --u-s25: max(2px, 0.28cqh);     /* 2.52 */
+  --u-s3: max(3px, 0.35cqh);      /* 3.15 */
+  --u-s3b: max(3px, 0.32cqh);     /* 3 */
+  --u-s3c: max(3px, 0.3cqh);      /* 3 */
+  --u-s4: max(4px, 0.5cqh);       /* 4.5 */
+  --u-s5: max(5px, 0.6cqh);       /* 5.4 */
+  --u-sh: max(3px, 0.4cqh);       /* 3.6 */
+  --u-sy: max(2px, 0.3cqh);       /* 2.7 */
+  --u-w2: max(2px, 0.2cqw);       /* 3.2 */
+  --u-w3: max(3px, 0.25cqw);      /* 4 */
+  --u-w4: max(4px, 0.3cqw);       /* 4.8 */
+  --u-w4b: max(4px, 0.32cqw);     /* 5.12 */
+  --u-w4c: max(4px, 0.35cqw);     /* 5.6 */
+  --u-w4d: max(4px, 0.4cqw);      /* 6.4 */
+  --u-w5: max(5px, 0.4cqw);       /* 6.4 */
+  --u-w5b: max(5px, 0.45cqw);     /* 7.2 */
+  --u-w6: max(6px, 0.5cqw);       /* 8 */
+  --u-w6b: max(6px, 0.6cqw);      /* 9.6 */
+  --u-w8: max(8px, 0.6cqw);       /* 9.6 */
+  --u-w9: max(9px, 0.7cqw);       /* 11.2 */
+  --u-w11: max(11px, 0.8cqw);     /* 12.8 */
+  --u-w13: max(13px, 1cqw);       /* 16 */
+  --u-wfoot: max(10px, 1.1cqw);   /* 17.6 */
+
+  --u-av22: max(16px, 2.0cqh);    /* 18 */
+  --u-av24: max(20px, 2.5cqh);    /* 22.5 */
+  --u-av26: max(21px, 2.6cqh);    /* 23.4 */
+  --u-av28: max(24px, 2.9cqh);    /* 26.1 */
+  --u-av36: max(28px, 3.6cqh);    /* 32.4 */
+  --u-av48: max(30px, 4.0cqh);    /* 36 */
+  --u-av-night: max(40px, 5.2cqh);/* 46.8 */
+  --u-cellrow: max(7px, 1.15cqh); /* 10.35 */
+  --u-lgc: max(7px, 0.55cqh);     /* 7 */
+  --u-yrweek: max(10px, 0.8cqw);  /* 12.8 */
+  --u-hhweek: max(20px, 1.7cqw);  /* 27.2 */
+  --u-pic: max(38px, 5.0cqh);     /* 45 */
+  --u-thumbs: max(28px, 4.6cqh);  /* 41.4 */
+  --u-emo: max(13px, 1.75cqh);    /* 15.75 */
+  --u-keycap: max(14px, 1.9cqh);  /* 17.1 */
+  --u-badge: max(13px, 1.7cqh);   /* 15.3 */
+  --u-moon: max(26px, 3.4cqh);    /* 30.6 */
+  --u-people-h: max(36px, 4.8cqh);/* 43.2 */
+  --u-slim-py: max(5px, 0.6cqh);  /* 5.4 */
+  --u-sheet-pt: max(12px, 1.6cqh);/* 14.4 */
+  --u-sheet-px: max(16px, 1.2cqw);/* 19.2 */
+  --u-sheet-pb: max(9px, 1.2cqh); /* 10.8 */
+  --u-fs-micro: max(9px, 1.1cqh); /* 9.9 */
+  --u-fs-mini: max(9px, 1.05cqh); /* 9.45 */
+  --u-fs-thumb: max(9px, 1.02cqh);/* 9.18 */
+
   --serif: 'Songti SC', 'STSong', 'SimSun', 'Source Han Serif SC', 'Noto Serif SC', serif;
   --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
     'Helvetica Neue', Helvetica, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
@@ -2134,7 +2259,7 @@ watch(() => props.isActive, (v) => {
   height: 100%;
   box-sizing: border-box;
   /* deck 顶栏在本页是隐藏的，上 padding 不必让位 */
-  padding: max(12px, 1.6cqh) max(16px, 1.2cqw) max(9px, 1.2cqh);
+  padding: var(--u-sheet-pt) var(--u-sheet-px) var(--u-sheet-pb);
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-template-rows:
@@ -2189,7 +2314,7 @@ watch(() => props.isActive, (v) => {
 .blk--time { --glint: rgba(91, 111, 184, 0.48); background: linear-gradient(180deg, var(--time-tint-2), transparent 58%), var(--surface-card); }
 .blk--ppl { --glint: rgba(242, 170, 0, 0.42); background: linear-gradient(180deg, var(--ppl-tint-2), transparent 58%), var(--surface-card); }
 /* 窄块保护：圆角降一级 */
-.blk--slim { border-radius: var(--r-group); padding: max(5px, 0.6cqh) max(11px, 0.8cqw); }
+.blk--slim { border-radius: var(--r-group); padding: var(--u-slim-py) var(--u-w11); }
 
 /* ── 分层：点缀在 0，正文在 1，玻璃前表面的反光在 3 ——
    反光必须压在墨上面才像玻璃，压在墨下面就成了底纹 ── */
@@ -2263,7 +2388,7 @@ watch(() => props.isActive, (v) => {
   color: var(--ink-2);
   line-height: var(--lh-tight);
   flex: none;
-  margin-bottom: max(3px, 0.4cqh);
+  margin-bottom: var(--u-sh);
 }
 .kicker--r { font-weight: 500; text-align: right; margin-bottom: 0; }
 .head-line {
@@ -2272,7 +2397,7 @@ watch(() => props.isActive, (v) => {
   justify-content: space-between;
   gap: 8px;
   flex: none;
-  margin-bottom: max(3px, 0.4cqh);
+  margin-bottom: var(--u-sh);
   min-width: 0;
 }
 .head-line .kicker { margin-bottom: 0; min-width: 0; }
@@ -2314,7 +2439,7 @@ watch(() => props.isActive, (v) => {
 }
 .foot-note {
   margin-top: auto;
-  padding-top: max(2px, 0.25cqh);
+  padding-top: var(--u-s2);
   font-size: var(--fs-label);
   color: var(--ink-2);
   line-height: var(--lh-tight);
@@ -2411,23 +2536,23 @@ watch(() => props.isActive, (v) => {
   line-height: 1;
 }
 .av--ring { box-shadow: 0 0 0 2px var(--ppl-cream), 0 0 0 3px rgba(242, 170, 0, 0.28); }
-.av22 { width: max(16px, 2.0cqh); height: max(16px, 2.0cqh); }
-.av24 { width: max(20px, 2.5cqh); height: max(20px, 2.5cqh); }
-.av26 { width: max(21px, 2.6cqh); height: max(21px, 2.6cqh); }
-.av28 { width: max(24px, 2.9cqh); height: max(24px, 2.9cqh); }
-.av36 { width: max(28px, 3.6cqh); height: max(28px, 3.6cqh); }
-.av48 { width: max(30px, 4.0cqh); height: max(30px, 4.0cqh); }
+.av22 { width: var(--u-av22); height: var(--u-av22); }
+.av24 { width: var(--u-av24); height: var(--u-av24); }
+.av26 { width: var(--u-av26); height: var(--u-av26); }
+.av28 { width: var(--u-av28); height: var(--u-av28); }
+.av36 { width: var(--u-av36); height: var(--u-av36); }
+.av48 { width: var(--u-av48); height: var(--u-av48); }
 
-.who-row { display: flex; align-items: center; gap: max(5px, 0.45cqw); min-width: 0; flex: none; }
+.who-row { display: flex; align-items: center; gap: var(--u-w5b); min-width: 0; flex: none; }
 .who-row .nm { flex: 0 1 auto; }
 .who-row .dd { flex: none; }
 
 .mgrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: max(3px, 0.3cqh) max(4px, 0.32cqw);
+  gap: var(--u-s3c) var(--u-w4b);
   flex: none;
-  margin-top: max(3px, 0.35cqh);
+  margin-top: var(--u-s3);
 }
 .mgrid--push { margin-top: auto; }
 .mgrid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -2460,23 +2585,23 @@ watch(() => props.isActive, (v) => {
   color: var(--ink-2);
   line-height: 1.25;
   flex: none;
-  padding-left: max(13px, 1cqw);
+  padding-left: var(--u-w13);
 }
 .yr-body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
-  gap: max(3px, 0.25cqw);
+  gap: var(--u-w3);
   align-items: stretch;
-  padding: max(2px, 0.3cqh) 0;
+  padding: var(--u-sy) 0;
 }
 .yr-week {
   flex: none;
   align-self: center;
-  width: max(10px, 0.8cqw);
+  width: var(--u-yrweek);
   display: grid;
-  grid-template-rows: repeat(7, max(7px, 1.15cqh));
-  font-size: max(9px, 1.1cqh);
+  grid-template-rows: repeat(7, var(--u-cellrow));
+  font-size: var(--u-fs-micro);
   color: var(--ink-2);
   line-height: 1;
   align-items: center;
@@ -2487,7 +2612,7 @@ watch(() => props.isActive, (v) => {
   align-self: center;
   display: grid;
   grid-template-columns: repeat(53, minmax(0, 1fr));
-  grid-template-rows: repeat(7, max(7px, 1.15cqh));
+  grid-template-rows: repeat(7, var(--u-cellrow));
   grid-auto-flow: column;
   gap: 2px;
 }
@@ -2521,15 +2646,15 @@ watch(() => props.isActive, (v) => {
   align-items: center;
   gap: 3px;
   flex: none;
-  padding-top: max(2px, 0.3cqh);
+  padding-top: var(--u-sy);
 }
 .lg { font-size: var(--fs-label); color: var(--ink-2); line-height: 1.3; }
 .lg-read { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lgc { width: max(7px, 0.55cqh); height: max(7px, 0.55cqh); border-radius: var(--r-cell); display: block; }
+.lgc { width: var(--u-lgc); height: var(--u-lgc); border-radius: var(--r-cell); display: block; }
 
 /* ══════════ A3 · 最疯的一天 ══════════ */
 /* 24 小时跨度尺：整条轨是一整天，填色段是「第一句 → 最后一句」 */
-.a3-span { flex: none; margin-top: max(4px, 0.5cqh); min-width: 0; }
+.a3-span { flex: none; margin-top: var(--u-s4); min-width: 0; }
 .span-track {
   position: relative;
   display: block;
@@ -2549,7 +2674,7 @@ watch(() => props.isActive, (v) => {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: max(4px, 0.35cqw);
+  gap: var(--u-w4c);
   padding-top: 2px;
   min-width: 0;
 }
@@ -2559,7 +2684,7 @@ watch(() => props.isActive, (v) => {
 .quote-2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: max(5px, 0.4cqw);
+  gap: var(--u-w5);
   margin-top: auto;
   flex: none;
   min-width: 0;
@@ -2568,13 +2693,13 @@ watch(() => props.isActive, (v) => {
 .qt { font-size: var(--fs-body); color: var(--ink-0); line-height: var(--lh-tight); }
 
 /* ══════════ B1 · 年度搭子 ══════════ */
-.buddy-top { margin-bottom: max(2px, 0.25cqh); }
+.buddy-top { margin-bottom: var(--u-s2); }
 .duo-bar {
   display: block;
   height: 6px;
   border-radius: var(--r-bar);
   flex: none;
-  margin-top: max(3px, 0.35cqh);
+  margin-top: var(--u-s3);
   background: linear-gradient(90deg, var(--qty) 0 var(--out), var(--time-soft) var(--out) 100%);
 }
 .duo-legend {
@@ -2595,18 +2720,18 @@ watch(() => props.isActive, (v) => {
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: max(4px, 0.4cqw);
+  gap: var(--u-w4d);
   align-content: center;
 }
 .mo {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: max(3px, 0.32cqh);
+  gap: var(--u-s3b);
   min-width: 0;
 }
 .mo-m { font-size: var(--fs-label); color: var(--ink-2); line-height: 1.2; }
-.mo-av { width: max(30px, 4.0cqh); height: max(30px, 4.0cqh); }
+.mo-av { width: var(--u-av48); height: var(--u-av48); }
 .mo-nm { max-width: 100%; text-align: center; }
 /* 月度量条：绿=量，最热的那个月满色，其余压淡 */
 .mo-bar {
@@ -2627,10 +2752,10 @@ watch(() => props.isActive, (v) => {
 .champ {
   display: flex;
   align-items: center;
-  gap: max(5px, 0.45cqw);
+  gap: var(--u-w5b);
   border-radius: var(--r-group);
   flex: none;
-  margin-top: max(4px, 0.5cqh);
+  margin-top: var(--u-s4);
   min-width: 0;
 }
 .champ-t {
@@ -2651,7 +2776,7 @@ watch(() => props.isActive, (v) => {
 
 /* ══════════ B3 · 深夜 ══════════ */
 .night-when {
-  margin-top: max(5px, 0.6cqh);
+  margin-top: var(--u-s5);
   flex: none;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2659,7 +2784,7 @@ watch(() => props.isActive, (v) => {
 }
 /* 全版唯一一次 --qty-soft：deck 的招牌语汇 */
 .bubble {
-  margin-top: max(3px, 0.35cqh);
+  margin-top: var(--u-s3);
   flex: none;
   /* 随内容收窄，不撑满整行；对方说的靠左、自己说的靠右，与微信气泡方向一致 */
   align-self: flex-start;
@@ -2668,7 +2793,7 @@ watch(() => props.isActive, (v) => {
   background: var(--qty-soft);
   color: var(--ink-on-bubble);
   border-radius: 5px 5px 5px 2px;
-  padding: max(4px, 0.5cqh) max(8px, 0.6cqw);
+  padding: var(--u-s4) var(--u-w8);
   font-size: var(--fs-body);
   line-height: var(--lh-tight);
   transform-origin: 0 100%;
@@ -2681,7 +2806,7 @@ watch(() => props.isActive, (v) => {
 /* 自己说的那条，署名行也跟着靠右，读起来是一句完整的「谁在什么时候说了什么」 */
 .night-when--mine { align-self: flex-end; }
 /* 深夜块头像放大：这一块内容少，让人像撑起高度 */
-.b-b3 .av36 { width: max(40px, 5.2cqh); height: max(40px, 5.2cqh); }
+.b-b3 .av36 { width: var(--u-av-night); height: var(--u-av-night); }
 
 /* ══════════ 夜空底（视觉语言取自 Card01「赛博作息」的夜空，保持 deck 内一致） ══════════
    整块转暗，所以块内的墨色令牌必须整套反过来，否则深色底上还是深色字＝全瞎。 */
@@ -2737,8 +2862,8 @@ watch(() => props.isActive, (v) => {
   position: absolute;
   top: 13%;
   right: 8%;
-  width: max(26px, 3.4cqh);
-  height: max(26px, 3.4cqh);
+  width: var(--u-moon);
+  height: var(--u-moon);
 }
 .moon-halo { fill: rgba(255, 233, 163, 0.09); }
 .moon-body {
@@ -2778,16 +2903,16 @@ watch(() => props.isActive, (v) => {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
-  gap: max(4px, 0.3cqw);
+  gap: var(--u-w4);
   align-items: stretch;
 }
 .hh-week {
   flex: none;
-  width: max(20px, 1.7cqw);
+  width: var(--u-hhweek);
   display: grid;
   grid-template-rows: repeat(7, minmax(0, 1fr));
   align-items: center;
-  font-size: max(9px, 1.1cqh);
+  font-size: var(--u-fs-micro);
   color: var(--ink-2);
   line-height: 1;
 }
@@ -2797,7 +2922,7 @@ watch(() => props.isActive, (v) => {
   display: grid;
   grid-template-columns: repeat(24, minmax(0, 1fr));
   grid-template-rows: repeat(7, minmax(0, 1fr));
-  gap: max(2px, 0.2cqw);
+  gap: var(--u-w2);
 }
 .hh-cell { border-radius: var(--r-cell); display: block; transition: transform 0.12s var(--ease-out); }
 .hh-cell:hover {
@@ -2819,14 +2944,15 @@ watch(() => props.isActive, (v) => {
   line-height: 1.3;
   flex: none;
   padding-top: 1px;
-  padding-left: calc(max(20px, 1.7cqw) + max(4px, 0.3cqw));
+  /* 反算左侧周标栏的宽度，让 8 个钟点刻度对准 24 列格子的起点 */
+  padding-left: calc(var(--u-hhweek) + var(--u-w4));
 }
 .rhythm-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: max(2px, 0.25cqh) max(5px, 0.45cqw);
+  gap: var(--u-s2) var(--u-w5b);
   flex: none;
-  margin-top: max(3px, 0.4cqh);
+  margin-top: var(--u-sh);
 }
 .rhythm-metrics > div {
   display: flex;
@@ -2843,13 +2969,13 @@ watch(() => props.isActive, (v) => {
 
 /* ══════════ C2 · 你说的话 ══════════ */
 /* 两行脚注共用一个「贴底」容器：单独给每行 margin-top:auto 会把它们拆散 */
-.c2-foot { margin-top: auto; padding-top: max(2px, 0.25cqh); flex: none; min-width: 0; }
+.c2-foot { margin-top: auto; padding-top: var(--u-s2); flex: none; min-width: 0; }
 /* 左右两段脚注同处一行，中间由 space-between 撑开，不会挨在一起 */
 .foot-split {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: max(10px, 1.1cqw);
+  gap: var(--u-wfoot);
   min-width: 0;
 }
 .foot-split > .foot-note { margin-top: 0; padding-top: 0; min-width: 0; }
@@ -2895,7 +3021,7 @@ watch(() => props.isActive, (v) => {
   overflow: hidden;
   background: var(--surface-inset-2);
   flex: none;
-  margin-top: max(4px, 0.5cqh);
+  margin-top: var(--u-s4);
 }
 .kw-seg {
   display: block;
@@ -2920,7 +3046,7 @@ watch(() => props.isActive, (v) => {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: max(4px, 0.5cqh);
+  margin-top: var(--u-s4);
   overflow: hidden;
   align-content: center;
   flex: 1 1 auto;
@@ -2948,7 +3074,7 @@ watch(() => props.isActive, (v) => {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
-  margin-top: max(4px, 0.5cqh);
+  margin-top: var(--u-s4);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -2975,7 +3101,7 @@ watch(() => props.isActive, (v) => {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: max(4px, 0.35cqw);
+  gap: var(--u-w4c);
   padding-top: 2px;
   min-width: 0;
 }
@@ -2985,10 +3111,10 @@ watch(() => props.isActive, (v) => {
 /* 极值格贴底，中间只留一条发丝线 */
 .d1-ext {
   margin-top: auto;
-  padding-top: max(4px, 0.5cqh);
+  padding-top: var(--u-s4);
   display: flex;
   flex-direction: column;
-  gap: max(3px, 0.35cqh);
+  gap: var(--u-s3);
   flex: none;
   min-width: 0;
 }
@@ -3002,16 +3128,16 @@ watch(() => props.isActive, (v) => {
   height: 8px;
   border-radius: var(--r-bar);
   flex: none;
-  margin-top: max(5px, 0.6cqh);
+  margin-top: var(--u-s5);
   background: linear-gradient(90deg, var(--qty) 0 var(--p), var(--surface-inset-2) var(--p) 100%);
 }
 /* 两列头像：左边是你追出去的，右边是找上门的 */
 .init-duo {
   margin-top: auto;
-  padding-top: max(4px, 0.5cqh);
+  padding-top: var(--u-s4);
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: max(3px, 0.3cqh) max(5px, 0.4cqw);
+  gap: var(--u-s3c) var(--u-w5);
   flex: none;
   min-width: 0;
 }
@@ -3019,7 +3145,7 @@ watch(() => props.isActive, (v) => {
 .init-col {
   display: flex;
   flex-direction: column;
-  gap: max(2px, 0.28cqh);
+  gap: var(--u-s25);
   min-width: 0;
   border-radius: var(--r-inner);
 }
@@ -3030,14 +3156,14 @@ watch(() => props.isActive, (v) => {
   flex: none;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: max(6px, 0.5cqw);
+  gap: var(--u-w6);
   align-items: stretch;
 }
 /* 左列与右侧 2×2 等高并顶对齐：原来两边各自居中，「158 次」和网格行对不上 */
 .d3-l { display: flex; flex-direction: column; align-items: center; gap: 2px; justify-content: center; }
 .pic-frame {
-  width: max(38px, 5.0cqh);
-  height: max(38px, 5.0cqh);
+  width: var(--u-pic);
+  height: var(--u-pic);
   border-radius: var(--r-group);
   background: var(--surface-inset);
   display: grid;
@@ -3050,7 +3176,7 @@ watch(() => props.isActive, (v) => {
 .d3-m {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: max(2px, 0.25cqh) max(4px, 0.32cqw);
+  gap: var(--u-s2) var(--u-w4b);
   align-content: center;
   min-width: 0;
 }
@@ -3069,13 +3195,13 @@ watch(() => props.isActive, (v) => {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   /* 给一个确定高度而不是 flex-grow：拉伸 + aspect-ratio 会互相推算出比容器更高的方盒 */
   flex: none;
-  height: max(28px, 4.6cqh);
+  height: var(--u-thumbs);
   /* 容器高度确定后才能 stretch：align-items:center 时行高按内容算，
      子元素的 height:100% 变成循环引用，会退回图片的固有尺寸把行撑破。 */
   align-items: stretch;
   grid-auto-rows: 100%;
-  gap: max(4px, 0.4cqw);
-  margin-top: max(3px, 0.35cqh);
+  gap: var(--u-w4d);
+  margin-top: var(--u-s3);
   min-width: 0;
   min-height: 0;
 }
@@ -3090,7 +3216,7 @@ watch(() => props.isActive, (v) => {
 .thumb-pair .dt {
   white-space: nowrap;
   flex: none;
-  font-size: max(9px, 1.02cqh);
+  font-size: var(--u-fs-thumb);
   letter-spacing: -0.01em;
 }
 /* 图随行高长大：宽度跟着高度走（而不是反过来），否则 aspect-ratio 会算出比格子更高的盒子 */
@@ -3108,23 +3234,23 @@ watch(() => props.isActive, (v) => {
   flex: none;
 }
 .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
-.d3-foot { margin-top: auto; padding-top: max(2px, 0.25cqh); flex: none; min-width: 0; }
+.d3-foot { margin-top: auto; padding-top: var(--u-s2); flex: none; min-width: 0; }
 .d3-foot .foot-note { margin-top: 0; padding-top: 0; }
 .d3-tail {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: max(5px, 0.4cqw);
+  gap: var(--u-w5);
   min-width: 0;
   padding-top: 1px;
 }
 .d3-tail .dt { min-width: 0; }
-.emo-pair { display: flex; align-items: baseline; gap: max(6px, 0.5cqw); flex: none; }
+.emo-pair { display: flex; align-items: baseline; gap: var(--u-w6); flex: none; }
 .emo-row { display: flex; align-items: baseline; gap: 3px; flex: none; }
-.emo { font-size: max(13px, 1.75cqh); line-height: 1.1; }
+.emo { font-size: var(--u-emo); line-height: 1.1; }
 .emo--img {
-  width: max(13px, 1.75cqh);
-  height: max(13px, 1.75cqh);
+  width: var(--u-emo);
+  height: var(--u-emo);
   object-fit: contain;
   display: block;
   align-self: center;
@@ -3154,7 +3280,7 @@ watch(() => props.isActive, (v) => {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: max(4px, 0.5cqh);
+  gap: var(--u-s4);
 }
 /* 悬停反馈：整行铺一层底色。只改 background，不加 padding/margin ——
    往外撑会让 .rank-list 的 scrollWidth 超出 clientWidth，被裁切检测当成溢出。 */
@@ -3180,7 +3306,7 @@ watch(() => props.isActive, (v) => {
 .duo-bar--thin { height: 4px; margin-top: 0; width: var(--w, 100%); }
 
 /* ══════════ E1 · 人物带 ══════════ */
-.b-people { flex-direction: row; align-items: center; gap: max(9px, 0.7cqw); min-height: max(36px, 4.8cqh); }
+.b-people { flex-direction: row; align-items: center; gap: var(--u-w9); min-height: var(--u-people-h); }
 .ppl-kicker { margin-bottom: 0; flex: none; }
 .ppl-row {
   flex: 1 1 auto;
@@ -3189,13 +3315,13 @@ watch(() => props.isActive, (v) => {
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
   justify-content: space-between;
-  gap: max(6px, 0.6cqw);
+  gap: var(--u-w6b);
 }
 .ppl-row.is-sparse { justify-content: space-around; }
-.ppl-chip { display: flex; align-items: center; gap: max(5px, 0.4cqw); min-width: 0; }
+.ppl-chip { display: flex; align-items: center; gap: var(--u-w5); min-width: 0; }
 
 /* ══════════ 页脚 · 年度地平线 ══════════ */
-.b-foot { flex-direction: row; align-items: center; gap: max(6px, 0.5cqw); }
+.b-foot { flex-direction: row; align-items: center; gap: var(--u-w6); }
 .foot-end { display: flex; align-items: center; gap: 5px; flex: none; min-width: 0; }
 .foot-end--r { justify-content: flex-end; }
 .foot-end .dt { white-space: nowrap; }
@@ -3267,7 +3393,7 @@ watch(() => props.isActive, (v) => {
   position: absolute;
   top: max(-8px, -1cqh);
   left: -7px;
-  width: max(13px, 1.7cqh);
+  width: var(--u-badge);
   height: auto;
   transform: rotate(-24deg);
   filter: drop-shadow(0 1px 1px rgba(150, 89, 10, 0.35));
@@ -3279,8 +3405,8 @@ watch(() => props.isActive, (v) => {
 .keycap {
   display: inline-grid;
   place-items: center;
-  min-width: max(14px, 1.9cqh);
-  height: max(14px, 1.9cqh);
+  min-width: var(--u-keycap);
+  height: var(--u-keycap);
   padding: 0 3px;
   border-radius: 3px;
   background: linear-gradient(180deg, #ffffff, #f0f4f1);
@@ -3288,7 +3414,7 @@ watch(() => props.isActive, (v) => {
   box-shadow: 0 1.5px 0 rgba(31, 66, 50, 0.2), inset 0 1px 0 #ffffff;
   font-family: var(--sans);
   /* 9px 是全版小字硬底线，键帽也不例外 */
-  font-size: max(9px, 1.05cqh);
+  font-size: var(--u-fs-mini);
   font-weight: 600;
   color: var(--ink-1);
   line-height: 1;
@@ -3301,8 +3427,8 @@ watch(() => props.isActive, (v) => {
 
 /* D4 榜首奖牌：13px 金箔小圆章，其余名次保持素字 */
 .rank-item:first-child .rk {
-  width: max(13px, 1.7cqh);
-  height: max(13px, 1.7cqh);
+  width: var(--u-badge);
+  height: var(--u-badge);
   border-radius: 999px;
   background: radial-gradient(120% 120% at 30% 22%, #ffe9a3 0%, #f2aa00 48%, #c88a06 100%);
   color: #ffffff;
@@ -3312,7 +3438,7 @@ watch(() => props.isActive, (v) => {
     inset 0 1px 0 rgba(255, 255, 255, 0.7),
     inset 0 -1px 1px rgba(150, 89, 10, 0.5),
     0 1px 2px rgba(150, 89, 10, 0.3);
-  font-size: max(9px, 1.05cqh);
+  font-size: var(--u-fs-mini);
   line-height: 1;
   text-shadow: 0 0.5px 0 rgba(150, 89, 10, 0.6);
 }
@@ -3467,9 +3593,15 @@ watch(() => props.isActive, (v) => {
   .sheet-final { padding: 9px max(14px, 1.1cqw) 7px; }
 }
 
-/* 980 宽 —— 桌面窗口被拖窄的兜底态，明确放弃「一屏」承诺 */
+/* 980 宽 —— 桌面窗口被拖窄的兜底态，明确放弃「一屏」承诺。
+   ⚠️ 只对 tier=wide 生效（＝真的横屏窗口被拖窄）。
+   舞台化之后「容器宽度」不再等于「窗口宽度」：面积恒定 ⇒ 越竖的画幅画布越窄
+   （9:16 = 900、9:20 = 804、手机跟随窗口 ≈ 815），这些都是**已经有专门重排**
+   的竖幅档，再让这套按窗口宽度写的旧兜底插一脚，等于把重排好的版面
+   又推回单列/8 列。9:20 塌成单列（每块 grid-area: auto/1/auto/5 !important）
+   的根因就是这里。 */
 @container stage (max-width: 1080px) {
-  .sheet-final {
+  [data-frame-tier="wide"] .sheet-final {
     grid-template-columns: repeat(8, minmax(0, 1fr));
     grid-template-rows: repeat(7, minmax(150px, auto)) minmax(0, auto) auto;
     height: auto;
@@ -3477,36 +3609,871 @@ watch(() => props.isActive, (v) => {
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  .b-a1 { grid-area: 1 / 1 / 2 / 5; }
-  .b-a2 { grid-area: 1 / 5 / 2 / 9; }
-  .b-a3 { grid-area: 2 / 1 / 3 / 5; }
-  .b-b1 { grid-area: 2 / 5 / 3 / 9; }
-  .b-b2 { grid-area: 3 / 1 / 4 / 9; }
-  .b-b3 { grid-area: 4 / 1 / 5 / 5; }
-  .b-c3 { grid-area: 4 / 5 / 5 / 9; }
-  .b-c1 { grid-area: 5 / 1 / 6 / 5; }
-  .b-c2 { grid-area: 5 / 5 / 6 / 9; }
-  .b-d1 { grid-area: 6 / 1 / 7 / 5; }
-  .b-d2 { grid-area: 6 / 5 / 7 / 9; }
-  .b-rank { grid-area: 7 / 1 / 8 / 5; }
-  .b-d3 { grid-area: 7 / 5 / 8 / 9; }
-  .b-people { grid-area: 8 / 1 / 9 / 9; }
-  .b-foot { grid-area: 9 / 1 / 10 / 9; }
+  [data-frame-tier="wide"] .b-a1 { grid-area: 1 / 1 / 2 / 5; }
+  [data-frame-tier="wide"] .b-a2 { grid-area: 1 / 5 / 2 / 9; }
+  [data-frame-tier="wide"] .b-a3 { grid-area: 2 / 1 / 3 / 5; }
+  [data-frame-tier="wide"] .b-b1 { grid-area: 2 / 5 / 3 / 9; }
+  [data-frame-tier="wide"] .b-b2 { grid-area: 3 / 1 / 4 / 9; }
+  [data-frame-tier="wide"] .b-b3 { grid-area: 4 / 1 / 5 / 5; }
+  [data-frame-tier="wide"] .b-c3 { grid-area: 4 / 5 / 5 / 9; }
+  [data-frame-tier="wide"] .b-c1 { grid-area: 5 / 1 / 6 / 5; }
+  [data-frame-tier="wide"] .b-c2 { grid-area: 5 / 5 / 6 / 9; }
+  [data-frame-tier="wide"] .b-d1 { grid-area: 6 / 1 / 7 / 5; }
+  [data-frame-tier="wide"] .b-d2 { grid-area: 6 / 5 / 7 / 9; }
+  [data-frame-tier="wide"] .b-rank { grid-area: 7 / 1 / 8 / 5; }
+  [data-frame-tier="wide"] .b-d3 { grid-area: 7 / 5 / 8 / 9; }
+  [data-frame-tier="wide"] .b-people { grid-area: 8 / 1 / 9 / 9; }
+  [data-frame-tier="wide"] .b-foot { grid-area: 9 / 1 / 10 / 9; }
   /* 窄栏里一行塞不下四个读数，退回两列 */
-  .b-c1 .rhythm-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  [data-frame-tier="wide"] .b-c1 .rhythm-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* 820 宽 —— 纵向单列 */
+/* 820 宽 —— 纵向单列。同样只给 tier=wide（理由见上一段） */
 @container stage (max-width: 880px) {
-  .sheet-final {
+  [data-frame-tier="wide"] .sheet-final {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     grid-template-rows: auto;
     grid-auto-rows: minmax(140px, auto);
   }
-  .sheet-final > * { grid-area: auto / 1 / auto / 5 !important; }
-  .b-a2 .yr-grid { grid-template-columns: repeat(27, minmax(0, 1fr)); grid-template-rows: repeat(14, minmax(0, 1fr)); }
-  .ppl-row { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  [data-frame-tier="wide"] .sheet-final > * { grid-area: auto / 1 / auto / 5 !important; }
+  [data-frame-tier="wide"] .b-a2 .yr-grid { grid-template-columns: repeat(27, minmax(0, 1fr)); grid-template-rows: repeat(14, minmax(0, 1fr)); }
+  [data-frame-tier="wide"] .ppl-row { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   画幅分档（舞台契约 · WrappedStage）
+   ══════════════════════════════════════════════════════════════════════════
+   舞台是**设计像素恒定**的盒子，`.wr-stage[data-frame-tier]` 是本卡的祖先。
+   scoped 只给最后一个复合选择器加 data-v，祖先属性选择器照常生效。
+
+   ⚠️ 16:9 与「跟随窗口」都是 tier=wide —— 下面**没有一条**规则会匹配它们，
+      上面所有无 tier 前缀的声明也一条没删没改（只把重复的 max(px, Ncqh)
+      抽成了求值等价的令牌），所以横屏逐像素零回归。
+
+   三条重排原则：
+     ① 构件尺寸（字号 / 头像 / 格子 / 键帽 / 缩略图）在各画幅下是**设计常量**，
+        钉成它们在 1600×900 下的计算值，只改排布，绝不靠缩小适配；
+     ② 面积恒定 ⇒ 同样的内容换个列数就装得下：wide 12 列 / landscape 10 /
+        square 8 / portrait 6 / tall 6；
+     ③ 一个元素都不能丢：不 display:none、不横滚、不省略号、不裁切。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 构件尺寸钉成 16:9 的计算值（cqh=9px、cqw=16px） ──
+   不钉的话：竖幅舞台变高 → cqh 系尺寸整体变大，同时栏变窄 = 双重挤压，
+   这正是 9:16 下 225→139 条可见文本的主因。 */
+[data-frame-tier="landscape"] .wrap-final,
+[data-frame-tier="square"] .wrap-final,
+[data-frame-tier="portrait"] .wrap-final,
+[data-frame-tier="tall"] .wrap-final {
+  --gap: 6.48px;
+  --pad-card: 7.02px 11.2px;
+  --pad-inner: 3.78px 7.2px;
+
+  --fs-mega: calc(29.7px * var(--wf-text, 1));
+  --fs-big: calc(20.25px * var(--wf-text, 1));
+  --fs-mid: calc(16.65px * var(--wf-text, 1));
+  --fs-quote: calc(17.55px * var(--wf-text, 1));
+  --fs-num: calc(14.4px * var(--wf-text, 1));
+  --fs-name: calc(13.5px * var(--wf-text, 1));
+  --fs-body: calc(13.5px * var(--wf-text, 1));
+  --fs-label: calc(11.25px * var(--wf-text, 1));
+
+  --u-s2: 2.25px;
+  --u-s25: 2.52px;
+  --u-s3: 3.15px;
+  --u-s3b: 3px;
+  --u-s3c: 3px;
+  --u-s4: 4.5px;
+  --u-s5: 5.4px;
+  --u-sh: 3.6px;
+  --u-sy: 2.7px;
+  --u-w2: 3.2px;
+  --u-w3: 4px;
+  --u-w4: 4.8px;
+  --u-w4b: 5.12px;
+  --u-w4c: 5.6px;
+  --u-w4d: 6.4px;
+  --u-w5: 6.4px;
+  --u-w5b: 7.2px;
+  --u-w6: 8px;
+  --u-w6b: 9.6px;
+  --u-w8: 9.6px;
+  --u-w9: 11.2px;
+  --u-w11: 12.8px;
+  --u-w13: 16px;
+  --u-wfoot: 17.6px;
+
+  --u-av22: 18px;
+  --u-av24: 22.5px;
+  --u-av26: 23.4px;
+  --u-av28: 26.1px;
+  --u-av36: 32.4px;
+  --u-av48: 36px;
+  --u-av-night: 46.8px;
+  --u-cellrow: 10.35px;
+  --u-lgc: 7px;
+  --u-yrweek: 12.8px;
+  --u-hhweek: 27.2px;
+  --u-pic: 45px;
+  --u-thumbs: 41.4px;
+  --u-emo: 15.75px;
+  --u-keycap: 17.1px;
+  --u-badge: 15.3px;
+  --u-moon: 30.6px;
+  --u-people-h: 43.2px;
+  --u-slim-py: 5.4px;
+  --u-sheet-pt: 14.4px;
+  --u-sheet-px: 19.2px;
+  --u-sheet-pb: 10.8px;
+  --u-fs-micro: 9.9px;
+  --u-fs-mini: 9.45px;
+  --u-fs-thumb: 9.18px;
+}
+
+/* ── ② 换画幅后块的高宽比全变了：定高 + overflow:hidden 只会把内容剪掉。
+   固定画幅是一张要发出去的图，不能滚动 —— 宁可让个别块溢出到 6.5px 的
+   gap 里，也绝不许把元素剪没。`:not([data-frame-tier="wide"])` 一次覆盖
+   四个重排档位，且永远碰不到 16:9 / 跟随窗口。 ── */
+[data-frame-tier]:not([data-frame-tier="wide"]) .blk:not(.sk) { overflow: visible; }
+
+/* C3：七枚口头禅原本被 .chips 的 overflow:hidden **整枚**吞掉（连省略号都没有） */
+[data-frame-tier]:not([data-frame-tier="wide"]) .chips {
+  overflow: visible;
+  flex: 0 0 auto;
+  align-content: flex-start;
+}
+
+/* 全卡 20+ 处在用的两个截断工具类：改成换行 / 放宽到三行。
+   内容装得下时 white-space:normal 不改变任何布局，只有真的挤不下时才多占一行 ——
+   这正是「宁可长高也不许把字截没」。 */
+[data-frame-tier]:not([data-frame-tier="wide"]) .one {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+[data-frame-tier]:not([data-frame-tier="wide"]) .two,
+[data-frame-tier]:not([data-frame-tier="wide"]) .nm-2 { -webkit-line-clamp: 3; }
+/* 各块里单独写死的 nowrap 同样放开（截图里「最高一天 6,01…」「接话 4,89…」
+   「语音发出 4 条 · 4…」「接通 / 未接 50 · …」都出在这几条上） */
+[data-frame-tier]:not([data-frame-tier="wide"]) .head-line .kicker--r,
+[data-frame-tier]:not([data-frame-tier="wide"]) .mcell .dd,
+[data-frame-tier]:not([data-frame-tier="wide"]) .rhythm-metrics .dd,
+[data-frame-tier]:not([data-frame-tier="wide"]) .streak-range,
+[data-frame-tier]:not([data-frame-tier="wide"]) .night-when,
+[data-frame-tier]:not([data-frame-tier="wide"]) .champ-t,
+[data-frame-tier]:not([data-frame-tier="wide"]) .lg-read,
+[data-frame-tier]:not([data-frame-tier="wide"]) .foot-end .dt {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+/* 读数位放开换行后不能再靠 max-width 挤字 */
+[data-frame-tier]:not([data-frame-tier="wide"]) .champ-r { max-width: none; }
+/* 作息矩阵的行高原来是纯 1fr：块一矮，7 行会**静默缩到几像素**（等于偷偷缩内容）。
+   给一条地板，宁可让块顶出去也不把格子压没。 */
+[data-frame-tier]:not([data-frame-tier="wide"]) .hh-grid {
+  grid-template-rows: repeat(7, minmax(9px, 1fr));
+}
+/* 作息矩阵左侧「周一…周日」是七个**连排**的标签：行距 9px 装不下 11.6px 的字，
+   七个标签会上下叠在一起糊成一条竖带（年历那边只印 一/三/五，隔一行印一个，
+   所以不受影响）。地板抬到 12px —— 字站得开了，矩阵格子跟着一起长。
+   ⚠️ 选择器要写到 .b-c1 那一层：上面那条 :not(wide) 的特指度是 (0,3,0)，
+      只写 [data-frame-tier="tall"] .hh-grid 是 (0,2,0)，会被它压掉（踩过）。 */
+[data-frame-tier="portrait"] .b-c1 .hh-grid,
+[data-frame-tier="tall"] .b-c1 .hh-grid {
+  grid-template-rows: repeat(7, minmax(12px, 1fr));
+}
+
+/* D1 的两端极值：16:9 里块只有 385px 宽，所以上下叠着放（两格 ≈ 89px 高）。
+   重排后半幅块反而更宽（399–581px），改并排一行省下 44px —— 这是本卡最大的
+   一块「高度赤字」，不改的话 D1 在每个非 16:9 画幅里都要顶出去 10–45px。 */
+[data-frame-tier]:not([data-frame-tier="wide"]) .d1-ext {
+  flex-direction: row;
+  gap: var(--u-w5);
+}
+[data-frame-tier]:not([data-frame-tier="wide"]) .d1-ex { flex: 1 1 0; min-width: 0; }
+
+/* B3 深夜是全卡最高的一块（47px 头像 + 三格读数 + 署名行 + 两行气泡）。
+   16:9 里块只有 385px，三格读数得排成 2×2（第一格占满上行）；重排后块宽到
+   430–580px，三格并成一行，省掉一整行。 */
+[data-frame-tier]:not([data-frame-tier="wide"]) .b-b3 .mgrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+[data-frame-tier]:not([data-frame-tier="wide"]) .b-b3 .mcell--wide { grid-column: span 1; }
+/* D4 五行排行同样是高块：行距收到与其它块一致的 3.15px（构件本身一点没缩） */
+[data-frame-tier]:not([data-frame-tier="wide"]) .rank-list { gap: var(--u-s3); }
+
+/* ══════ landscape · 4:3（1386×1040）→ 10 列 5 带 ══════
+   3 列块 ≈ 399×181，与 16:9 的 385×193 几乎同尺寸；十二个月的主演升为整幅带。 */
+[data-frame-tier="landscape"] .sheet-final {
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  grid-template-rows:
+    minmax(0, 1.05fr)     /* 1  A1 | A2 | A3 */
+    minmax(0, 1.12fr)     /* 2  B1 | B3 | C3 */
+    minmax(0, 0.84fr)     /* 3  B2（整幅） */
+    minmax(0, 0.92fr)     /* 4  C1 | C2 | D1 */
+    minmax(0, 1.06fr)     /* 5  D2 | D4 | D3 */
+    minmax(0, auto)       /* 6  人物带 */
+    auto;                 /* 7  页脚 */
+}
+[data-frame-tier="landscape"] .b-a1 { grid-area: 1 / 1 / 2 / 4; }
+[data-frame-tier="landscape"] .b-a2 { grid-area: 1 / 4 / 2 / 8; }
+[data-frame-tier="landscape"] .b-a3 { grid-area: 1 / 8 / 2 / 11; }
+[data-frame-tier="landscape"] .b-b1 { grid-area: 2 / 1 / 3 / 4; }
+[data-frame-tier="landscape"] .b-b3 { grid-area: 2 / 4 / 3 / 7; }
+[data-frame-tier="landscape"] .b-c3 { grid-area: 2 / 7 / 3 / 11; }
+[data-frame-tier="landscape"] .b-b2 { grid-area: 3 / 1 / 4 / 11; }
+/* C1↔C2 换宽（2026-08-13，与 portrait/tall 同一个理由）：C2「你说的话」
+   六格读数 + 两条脚注是全卡最挤的一块，399px 宽时要顶出去 90px；
+   C1 作息是矩阵块，24 列在 399px 里仍有 16px 一格，收得起。 */
+[data-frame-tier="landscape"] .b-c1 { grid-area: 4 / 1 / 5 / 4; }
+[data-frame-tier="landscape"] .b-c2 { grid-area: 4 / 4 / 5 / 8; }
+[data-frame-tier="landscape"] .b-c1 .rhythm-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+[data-frame-tier="landscape"] .b-d1 { grid-area: 4 / 8 / 5 / 11; }
+[data-frame-tier="landscape"] .b-d2 { grid-area: 5 / 1 / 6 / 4; }
+[data-frame-tier="landscape"] .b-rank { grid-area: 5 / 4 / 6 / 7; }
+[data-frame-tier="landscape"] .b-d3 { grid-area: 5 / 7 / 6 / 11; }
+[data-frame-tier="landscape"] .b-people { grid-area: 6 / 1 / 7 / 11; }
+[data-frame-tier="landscape"] .b-foot { grid-area: 7 / 1 / 8 / 11; }
+
+/* ══════ square · 1:1（1200×1200）→ 8 列 7 带 ══════
+   行高按各带真实所需配权重而不是一律 1fr：第 1 带装年历（53×7 格子是设计常量），
+   第 4 带装深夜（头像 47px + 三格读数 + 署名 + 两行气泡），第 7 带装五行排行
+   与缩略图行 —— 这三带最高，其余可以让。 */
+[data-frame-tier="square"] .sheet-final {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-rows:
+    minmax(0, 1.04fr)     /* 1  A1 | A2 */
+    minmax(0, 1.02fr)     /* 2  A3 | B1 */
+    minmax(0, 0.85fr)     /* 3  B2（整幅） */
+    minmax(0, 1.10fr)     /* 4  B3 | C1 */
+    minmax(0, 0.98fr)     /* 5  C2 | C3 */
+    minmax(0, 0.96fr)     /* 6  D1 | D2 */
+    minmax(0, 1.08fr)     /* 7  D4 | D3 */
+    minmax(0, auto)       /* 8  人物带 */
+    auto;                 /* 9  页脚 */
+}
+[data-frame-tier="square"] .b-a1 { grid-area: 1 / 1 / 2 / 4; }
+[data-frame-tier="square"] .b-a2 { grid-area: 1 / 4 / 2 / 9; }
+[data-frame-tier="square"] .b-a3 { grid-area: 2 / 1 / 3 / 5; }
+[data-frame-tier="square"] .b-b1 { grid-area: 2 / 5 / 3 / 9; }
+[data-frame-tier="square"] .b-b2 { grid-area: 3 / 1 / 4 / 9; }
+[data-frame-tier="square"] .b-b3 { grid-area: 4 / 1 / 5 / 4; }
+[data-frame-tier="square"] .b-c1 { grid-area: 4 / 4 / 5 / 9; }
+[data-frame-tier="square"] .b-c2 { grid-area: 5 / 1 / 6 / 5; }
+[data-frame-tier="square"] .b-c3 { grid-area: 5 / 5 / 6 / 9; }
+[data-frame-tier="square"] .b-d1 { grid-area: 6 / 1 / 7 / 5; }
+[data-frame-tier="square"] .b-d2 { grid-area: 6 / 5 / 7 / 9; }
+[data-frame-tier="square"] .b-rank { grid-area: 7 / 1 / 8 / 5; }
+[data-frame-tier="square"] .b-d3 { grid-area: 7 / 5 / 8 / 9; }
+[data-frame-tier="square"] .b-people { grid-area: 8 / 1 / 9 / 9; }
+[data-frame-tier="square"] .b-foot { grid-area: 9 / 1 / 10 / 9; }
+
+/* ══════ portrait · 3:4 / 4:5 与 tall · 9:16 → 同一套 6 列 8 带 ══════
+   两两成对的带里，半幅块 ≈ 430–500px 宽，比 16:9 的 385px 还宽一点；
+   年历 / 十二个月 两块升为整幅带（53 列格子保得住尺寸，**不需要**转置 ——
+   转置反而要把 53 行压到 5px，属于「靠缩小适配」）；
+   第三条整幅带 2026-08-13 从 C1 作息换成了 C2「你说的话」，理由见下面
+   「C1↔C2 换宽」那一段。
+   行高按各带真实所需配权重，而不是一律 1fr —— B1|B3（深夜气泡）与 D4|D3
+   （五行排行 + 缩略图行）是全卡最高的两带。 */
+[data-frame-tier="portrait"] .sheet-final,
+[data-frame-tier="tall"] .sheet-final {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  /* 行权重＝2026-08-13 实测各带真实所需高度（单位 px，只取相对值）：
+     一律 1fr 会让「表情宇宙 + 排行」这种最高的带压字，而年历/作息这种
+     能自己收的矩阵带反而空着。
+     2026-08-14：权重改由变量承载 —— 下面的「缺数据带收窄」用 :has() 只改
+     一个变量就能把整条带的高度还给别人，不必为每种缺数据组合重写整张表。 */
+  --r1: 1.80fr;   /* 1  A1 | A3 */
+  --r2: 1.68fr;   /* 2  A2 年历（整幅，53×7 格子是死高度，收不动） */
+  --r3: 1.79fr;   /* 3  B1 | B3 —— 深夜块是全卡最高的一块 */
+  --r4: 1.45fr;   /* 4  B2 十二个月（整幅） */
+  --r5: 1.87fr;   /* 5  C1 作息 | C3 口头禅（周一…周日 七个标签要站得开） */
+  --r6: 1.35fr;   /* 6  C2 你说的话（整幅） */
+  --r7: 1.69fr;   /* 7  D1 | D2 */
+  --r8: 2.08fr;   /* 8  D4 | D3 —— 缩略图行 + 两条脚注，全卡最高 */
+  grid-template-rows:
+    minmax(0, var(--r1))
+    minmax(0, var(--r2))
+    minmax(0, var(--r3))
+    minmax(0, var(--r4))
+    minmax(0, var(--r5))
+    minmax(0, var(--r6))
+    minmax(0, var(--r7))
+    minmax(0, var(--r8))
+    minmax(0, auto)       /* 9  人物带 */
+    auto;                 /* 10 页脚 */
+  /* 覆盖 @container(max-width:1080px) 的 height:auto + overflow-y:auto ——
+     固定画幅里「滚动才能看见」＝丢元素 */
+  height: 100%;
+  min-height: 0;
+  overflow-y: visible;
+}
+[data-frame-tier="portrait"] .b-a1,
+[data-frame-tier="tall"] .b-a1 { grid-area: 1 / 1 / 2 / 4; }
+[data-frame-tier="portrait"] .b-a3,
+[data-frame-tier="tall"] .b-a3 { grid-area: 1 / 4 / 2 / 7; }
+[data-frame-tier="portrait"] .b-a2,
+[data-frame-tier="tall"] .b-a2 { grid-area: 2 / 1 / 3 / 7; }
+[data-frame-tier="portrait"] .b-b1,
+[data-frame-tier="tall"] .b-b1 { grid-area: 3 / 1 / 4 / 4; }
+[data-frame-tier="portrait"] .b-b3,
+[data-frame-tier="tall"] .b-b3 { grid-area: 3 / 4 / 4 / 7; }
+[data-frame-tier="portrait"] .b-b2,
+[data-frame-tier="tall"] .b-b2 { grid-area: 4 / 1 / 5 / 7; }
+/* C1 与 C2 对调半幅／整幅（2026-08-13）：
+   C1 作息是矩阵块，24 列在半幅 380px 里仍有 15.8px 一格（比 16:9 的 26px/1600
+   还相对更大），高度又能顺着 minmax(9px,1fr) 自己收；
+   C2「你说的话」才是全卡最挤的一块 —— 半幅时大数行折两行、六格读数排三行、
+   两条脚注各折两行，一块就顶出去 139px。给它整幅：大数行一行装下，
+   六格读数三列两行，脚注一行 —— 同样的内容、同样的字号，少占 160px。 */
+[data-frame-tier="portrait"] .b-c1,
+[data-frame-tier="tall"] .b-c1 { grid-area: 5 / 1 / 6 / 4; }
+[data-frame-tier="portrait"] .b-c3,
+[data-frame-tier="tall"] .b-c3 { grid-area: 5 / 4 / 6 / 7; }
+[data-frame-tier="portrait"] .b-c2,
+[data-frame-tier="tall"] .b-c2 { grid-area: 6 / 1 / 7 / 7; }
+[data-frame-tier="portrait"] .b-d1,
+[data-frame-tier="tall"] .b-d1 { grid-area: 7 / 1 / 8 / 4; }
+[data-frame-tier="portrait"] .b-d2,
+[data-frame-tier="tall"] .b-d2 { grid-area: 7 / 4 / 8 / 7; }
+[data-frame-tier="portrait"] .b-rank,
+[data-frame-tier="tall"] .b-rank { grid-area: 8 / 1 / 9 / 4; }
+[data-frame-tier="portrait"] .b-d3,
+[data-frame-tier="tall"] .b-d3 { grid-area: 8 / 4 / 9 / 7; }
+[data-frame-tier="portrait"] .b-people,
+[data-frame-tier="tall"] .b-people { grid-area: 9 / 1 / 10 / 7; }
+[data-frame-tier="portrait"] .b-foot,
+[data-frame-tier="tall"] .b-foot { grid-area: 10 / 1 / 11 / 7; }
+
+/* C1 改回半幅后，四个读数排两列两行（四列时「工作日 : 周末 1.18 : 1」会折字） */
+[data-frame-tier="portrait"] .b-c1 .rhythm-metrics,
+[data-frame-tier="tall"] .b-c1 .rhythm-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* E1 人物带：竖幅下整排 7 个人每人只剩 110–140px，名字与读数必被挤断，
+   所以改成两行的矩阵。
+   2026-08-14 修错位：原来固定 4 列，6 个人就排成 4+2 —— 右侧空掉两格，
+   而且第二行的卡比第一行矮 19px（第一行有名字折了两行的卡，两行各自
+   按内容定高）。两处都是用户说的「错位」。现在：
+     · 列数跟着人数走，3 / 6 人排 3 列，2 / 4 人排 2 列，末行不留豁口；
+     · 5 人 / 7 人时最后一张卡横跨两格，把那一格豁口填平；
+     · grid-auto-rows: 1fr —— 容器高度不定时 1fr 行会全部等于最高的一行，
+       两行从此严格等高（这是「等高」唯一不靠写死像素的写法）。 */
+[data-frame-tier="portrait"] .ppl-row,
+[data-frame-tier="tall"] .ppl-row {
+  grid-auto-flow: row;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  align-items: stretch;
+  row-gap: var(--u-s4);
+}
+/* 2 人 / 4 人 → 2 列（3 列时会各留一个豁口） */
+[data-frame-tier="portrait"] .ppl-row:has(> .ppl-chip:nth-child(2):last-child),
+[data-frame-tier="tall"] .ppl-row:has(> .ppl-chip:nth-child(2):last-child),
+[data-frame-tier="portrait"] .ppl-row:has(> .ppl-chip:nth-child(4):last-child),
+[data-frame-tier="tall"] .ppl-row:has(> .ppl-chip:nth-child(4):last-child) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+/* 7 人 → 4 列 */
+[data-frame-tier="portrait"] .ppl-row:has(> .ppl-chip:nth-child(7)),
+[data-frame-tier="tall"] .ppl-row:has(> .ppl-chip:nth-child(7)) {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+/* 5 人（3 列）与 7 人（4 列）末行差一格：最后一张横跨两格填平 */
+[data-frame-tier="portrait"] .ppl-row:has(> .ppl-chip:nth-child(5):last-child) > .ppl-chip:last-child,
+[data-frame-tier="tall"] .ppl-row:has(> .ppl-chip:nth-child(5):last-child) > .ppl-chip:last-child,
+[data-frame-tier="portrait"] .ppl-row:has(> .ppl-chip:nth-child(7):last-child) > .ppl-chip:last-child,
+[data-frame-tier="tall"] .ppl-row:has(> .ppl-chip:nth-child(7):last-child) > .ppl-chip:last-child {
+  grid-column: span 2;
+}
+/* 卡内仍然纵向居中：格子等高之后，头像与两行字要落在各自格子的中线上 */
+[data-frame-tier="portrait"] .ppl-chip,
+[data-frame-tier="tall"] .ppl-chip { align-items: center; }
+/* 人物带的读数行（「最常说给 TA 听 281 条」）在 232px 的卡里要折两行，
+   grid-auto-rows:1fr 一折就是六张卡一起 +24px —— 而这一带是全页每像素信息量
+   最低的一条。读数降到 15.5px 后一行装得下，整条带省下 52px 全部换给
+   口头禅 / 你说的话 那几块的正文字号。标签本身一个字没删。 */
+[data-frame-tier="tall"] .ppl-chip .dt { font-size: 14px; }
+
+/* 人物卡的名字回到「单行省略」的原设计：这一带每张卡固定两行（名字 / 读数），
+   名字一旦折行，grid-auto-rows:1fr 会把六张卡一起抬高 24px，
+   而这一带是全页每像素信息量最低的一条。读数行仍然可以折行，数字不许被吃掉。 */
+[data-frame-tier="portrait"] .ppl-chip .nm,
+[data-frame-tier="tall"] .ppl-chip .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   非 16:9 全档排印重制（tall 9:16 / portrait 3:4·4:5 / square 1:1 /
+   landscape 4:3；16:9 与「跟随窗口」= wide，下面一条也匹配不到）
+   ══════════════════════════════════════════════════════════════════════════
+   诊断（2026-08-13 实测 9:16）：上面 ① 把构件钉成 16:9 的计算值之后，字号
+   还要再乘 WrappedStage 给的 --wf-text（900 宽时 = 1.678）—— 字涨了 68%，
+   块高一点没涨。结果 15 块里有 10 块顶出块外，合计 1252px，块与块互相压字
+   （「回复速度」上压着 C2 的 833,924，「年度搭子」上压着 A1 的三格读数）。
+   **这才是「文字看不清」的真正原因**，不是字小。
+
+   面积是守恒的（各画幅恒定 1600×900 = 1.44M），把同样的内容按 1.678 倍
+   排字要 2.5 倍面积，物理上塞不回来。所以这里做的不是整体缩小，而是
+   **压缩字阶 —— 抬底、压顶**：
+     · 标签层（.dt / .kicker / .foot-note / .tag / 单位字，占全卡一半以上的
+       文字节点，也正是探针量到的中位数）抬到 16.4px；
+     · 展示层（mega / big / quote / mid）从 1.678 倍压回 1.05–1.4 倍 ——
+       19,580 这种数字本来就大到把整块顶出去，省下的高度全部还给标签层；
+     · 三个**没有**乘 --wf-text 的死令牌（micro / mini / thumb，9.18–9.9px）
+       才是全卡最小的字（探针 19.4，就是表情包缩略图下的 ×141），抬到 11.6px。
+   ══════════════════════════════════════════════════════════════════════════ */
+/* 下面这组像素值是按 tall（900×1600）定的，portrait 要再乘 --c7-p。
+   为什么 portrait 反而要**调小**：本卡是 10 条横带，带高 = 画幅高 ÷ 10。
+   9:16 每带 160px，3:4 只有 139px、4:5 只有 134px —— 而头像 / 年历格 /
+   缩略图 / 表情大图这些构件是**绝对尺寸**，不会跟着画幅变矮，于是它们在
+   portrait 里吃掉的纵向份额比 tall 多 15–20%，留给文字的行数就少了。
+   这是画幅比例决定的，不是排布能补回来的（实测 a2/b2/c1 三条矩阵带在
+   portrait 下已经贴着自己的高度地板，一点余量都匀不出来）。
+
+   ⚠️ 这一组令牌挂在 .sheet-final 而不是 .wrap-final：`.wrap-final` 自己就是
+   那个名为 stage 的容器，容器查询选不中容器本身，挂在它身上 4:5 的分档
+   永远不生效。 */
+[data-frame-tier="portrait"] .sheet-final { --c7-p: 0.92; }
+/* 4:5（1074×1342）比 3:4 还矮 44px，再降一档才不顶字 */
+@container stage (max-height: 1360px) {
+  [data-frame-tier="portrait"] .sheet-final { --c7-p: 0.86; }
+}
+
+/* 1:1 与 4:3 同理，而且更极端：1:1 每带只有 120px、4:3 只有 130px，
+   构件却还是那么大 —— 实测这两档的 --c7-p 只能到 0.79 / 0.92，
+   再往上「你说的话」与「口头禅」就会顶到下一块。 */
+[data-frame-tier="landscape"] .sheet-final { --c7-p: 0.92; }
+[data-frame-tier="square"] .sheet-final { --c7-p: 0.79; }
+
+[data-frame-tier="landscape"] .sheet-final,
+[data-frame-tier="square"] .sheet-final,
+[data-frame-tier="portrait"] .sheet-final,
+[data-frame-tier="tall"] .sheet-final {
+  --fs-mega: calc(30px * var(--c7-p, 1));
+  --fs-big: calc(21px * var(--c7-p, 1));
+  --fs-mid: calc(18px * var(--c7-p, 1));
+  --fs-quote: calc(18.5px * var(--c7-p, 1));
+  --fs-num: calc(16.4px * var(--c7-p, 1));
+  --fs-name: calc(16.4px * var(--c7-p, 1));
+  --fs-body: calc(16.4px * var(--c7-p, 1));
+  --fs-label: calc(16.4px * var(--c7-p, 1));
+  --u-fs-micro: calc(11.6px * var(--c7-p, 1));
+  --u-fs-mini: calc(11.6px * var(--c7-p, 1));
+  --u-fs-thumb: calc(11.6px * var(--c7-p, 1));
+
+  /* 行距：字大了 68% 还沿用 1.25/1.4 的行距，等于把行距也放大 68%。
+     竖幅里绝大多数标签是**单行**，行距只决定盒高、不决定可读性，收紧到
+     1.16/1.3 —— 省下来的高度全给字号，这是「抬底」的另一半资金来源。 */
+  --lh-tight: 1.16;
+  --lh-body: 1.3;
+
+  /* 块内外留白：16:9 的 7.02/11.2 是按 900 高算的，竖幅 15 块 × 上下留白
+     一共吃掉 200px 以上，收到 5.4/10 —— 收的是空白，不是内容。 */
+  --gap: 5.4px;
+  --pad-card: 5.6px 10px;
+  --pad-inner: 3px 6.4px;
+
+  /* 纵向的行间距令牌（报头下沿 / 读数格上沿 / 脚注上沿）：15 块 × 3–4 处，
+     16:9 的值在竖幅里合计吃掉 50px 以上。横向的 --u-w* 一个没动。 */
+  --u-s2: 1.8px;
+  --u-s25: 2px;
+  --u-s3: 2.4px;
+  --u-s3b: 2.4px;
+  --u-s3c: 2.4px;
+  --u-s4: 3.4px;
+  --u-s5: 4px;
+  --u-sh: 2.4px;
+  --u-sy: 2px;
+
+  /* D3 的三件死尺寸构件：表情大图 45→40、缩略图行 41.4→31、表情字 15.75→13.5。
+     相对画幅宽度仍比 16:9 大（40/900 > 45/1600），不是缩内容。 */
+  --u-pic: 40px;
+  --u-thumbs: 31px;
+  --u-emo: 13.5px;
+
+  /* 年历格行高 10.35→9：yr-grid 的七行是**死高度**（不是 1fr），
+     10.35 时整块 84px 高，竖幅里 A2 给不出这么多，格子就会往上下溢出去
+     压住月份标签和图例。9px 一格在 900 宽画幅里的相对尺寸仍大于
+     16:9 的 10.35/1600。 */
+  --u-cellrow: 9px;
+}
+
+/* ══════ tall · 9:16 的字号档位（2026-08-14 第二轮 · 满数据重定） ══════
+   上一轮把标签层定到 20.2px 时，本机后端还在建索引，年历 / 深夜 / 作息 /
+   排行四块拿不到数据、只印一行兜底文案，被下面 :has(> .void-line) 的规则
+   收成窄块，等于凭空多出两百多 px。索引跑完后那四块全部满载，20.2 立刻
+   把九个格子顶穿（表情宇宙 下 38、最疯的一天 下 25 右 37 …）。
+
+   这一轮的定值方式改成可复算的：把每条带的**最小所需高度**逐块量出来
+   （bento-need 探针：行高放成 auto + align-items:start，此时 margin-top:auto
+   归零，量到的就是内容真正要的高度），再和 1600 减去人物带 / 页脚 / 留白
+   之后剩下的可用高度对账。满数据下这笔账的结论是：
+     · 20.2px → 八条带合计 1608px，可用 1364px，缺口 244px，物理上装不下；
+     · 18.2px → 合计 1352px，可用 1364px，还剩 12px 余量。
+   所以 18.2 是满数据下能零溢出的最大档位，不是保守取值。上一轮那个 20.2
+   只在「四块缺数据」的那份快照里成立。 */
+[data-frame-tier="tall"] .sheet-final {
+  --fs-mega: 28.8px;
+  --fs-big: 21.6px;
+  --fs-mid: 18.9px;
+  --fs-quote: 19.4px;
+  --fs-num: 18.2px;
+  --fs-name: 18.2px;
+  --fs-body: 18.2px;
+  --fs-label: 18.2px;
+  --u-fs-micro: 14px;
+  --u-fs-mini: 14px;
+  --u-fs-thumb: 14px;
+  /* 表情读数「×141」用的是 --u-emo（既是图标尺寸也是字号），
+     13.5px 时它就是全卡最小的字，抬到 15px 一起过 14px 的地板 */
+  --u-emo: 15px;
+
+  /* 块内留白与带间距再各收：字号涨了 23%，这点空白换成字更值。
+     横向留白一点没动（--pad-card 的左右仍是 10px），收的全是纵向。 */
+  --gap: 4.4px;
+  --pad-card: 4.4px 10px;
+  --u-sheet-pt: 11px;
+  --u-sheet-pb: 8.5px;
+  /* 年历格行高 9→8：53×7 的格子在 862px 宽里本来就是扁的，
+     少 1px 换来整条带 -7px */
+  --u-cellrow: 8px;
+  /* 深夜块的大头像 46.8→42：它是全卡最高一块里最高的一件构件 */
+  --u-av-night: 42px;
+  --lh-tight: 1.15;
+  --lh-body: 1.28;
+
+  /* 行权重＝**满数据下逐带实测的最小所需高度 ÷ 100**（2026-08-14 第二轮）。
+     权重之间的比例就是各带真实需要的比例，所以 fr 分配下来每条带拿到的
+     正好是它要的那么多，不会出现「年历那种收得动的带空着、表情宇宙压字」。
+     数字要改的话别拍脑袋：跑 bento-need 探针重量一遍再抄进来。
+     单位 fr 数 ≈ 该带所需 px / 100（1-8 带合计 1380px，可用 1395px，
+     余量 15px 按权重摊回各带 —— 每块比它最小所需再多 1.1%）。 */
+  --r1: 1.94fr;   /* A1 全年发出 | A3 最疯的一天（A1 的 2×2 读数 + 两行小注最高） */
+  --r2: 1.54fr;   /* A2 年历（整幅）：53×7 格子是死高度 */
+  --r3: 1.82fr;   /* B1 年度搭子 | B3 深夜（深夜的三格读数排两行，是这一带的高点） */
+  --r4: 1.52fr;   /* B2 十二个月（整幅） */
+  --r5: 1.97fr;   /* C1 作息 | C3 口头禅（作息的 7 行矩阵 + 轴 + 四格读数最高） */
+  --r6: 1.43fr;   /* C2 你说的话（整幅，六格读数三列两行） */
+  --r7: 1.72fr;   /* D1 回复速度 | D2 谁先开口 */
+  --r8: 1.85fr;   /* D4 排行 | D3 表情宇宙 */
+}
+
+/* ══════ tall · 9:20（804×1788「手机满屏」）的行权重重定 ══════
+   9:20 和 9:16 同属 tall，上面整套重排（6 列 8 带、构件尺寸、字阶 18.2）
+   原样吃到，**只有行权重要重算**：它比 9:16 窄 96px、高 188px，
+   半幅块从 429 掉到 381（-11%），带里几处一行差几像素的地方翻成两行，
+   于是「各带真实所需」的**比例**变了 —— 9:16 那组权重照抄过来，
+   A3「最疯的一天」和 C2「你说的话」就正好各差 2px / 6px 顶出去。
+
+   下面这组同样是跑 bento-need 探针（行高放成 auto + align-items:start）
+   在 9:20 满数据下逐带实测出来的最小所需高度 ÷ 100，别拍脑袋改：
+     实测所需 r1=228 r2=155 r3=198 r4=152 r5=222 r6=172 r7=192 r8=206
+     合计 1525px；可用 = 1788 - 上下留白 19.5 - 9 条缝 39.6
+                        - 人物带 141 - 页脚 37 = 1550.9px
+     余量 25.9px（1.7%）按权重摊回各带，所以每块都比它的最小所需再宽裕一点。
+   字号一档没降（仍是 tall 的 18.2 / 28.8），改的只是这 8 个数怎么分高度。 */
+[data-frame="9:20"] .sheet-final {
+  --r1: 2.28fr;   /* A1 全年发出 | A3 最疯的一天（381px 宽时 A3 的引文与跨度尺最高） */
+  --r2: 1.55fr;   /* A2 年历（整幅） */
+  --r3: 1.98fr;   /* B1 年度搭子 | B3 深夜 */
+  --r4: 1.52fr;   /* B2 十二个月（整幅） */
+  --r5: 2.22fr;   /* C1 作息 | C3 口头禅 */
+  --r6: 1.72fr;   /* C2 你说的话（整幅，766px 宽时脚注与六格读数要多一行） */
+  --r7: 1.92fr;   /* D1 回复速度 | D2 谁先开口 */
+  --r8: 2.06fr;   /* D4 排行 | D3 表情宇宙 */
+}
+
+/* ── 页脚「年度地平线」在 804px 里的横向账（9:20 专属） ──
+   页脚是一整行三段**定宽**内容：第一条 200 + 人格章一句 293 + 最后一条 243
+   = 736px，中间两条地平线是 `flex: 1 1 auto` 的伸缩件。
+   9:16 里可用 836px，两条线各分到 33px；9:20 只有 738px —— 736 的内容
+   加上 4 条 8px 的缝就已经 768，线先被压成 0，再把「最后一条 · 12月31日 23:21」
+   整段顶到块外（实测右端到 x=801，离画布边只剩 3px）。
+   这一处**探针量不到**：bento-spill 只看块的 scrollWidth，而竖幅下
+   `.blk` 是 overflow:visible，顶出去的字不计进 scrollWidth。
+   收的全是留白（块内左右 12.8→6、段间 8→2、段内 5→3 / 6→4），
+   字号、字数、三段的顺序一个没动，收完两条地平线各还剩 7px。
+   `flex-wrap` + 线的 6px 地板是安全网：别人的数据若更长，
+   宁可让最后一段整段落到第二行，也不许再顶到块外。 */
+[data-frame="9:20"] .b-foot {
+  padding-left: 6px;
+  padding-right: 6px;
+  gap: 2px;
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+[data-frame="9:20"] .b-foot .foot-line { min-width: 6px; }
+[data-frame="9:20"] .foot-end { gap: 3px; }
+[data-frame="9:20"] .foot-mid { gap: 4px; }
+
+/* ── C3 口头禅的词条胶囊：七枚在 407px 的块里按 flex 的贪心排法要占三行
+   （143+81+81 一行、114+133+155 一行、74 单独一行 = 88px）。
+   胶囊里的**次数**降到 16px（词本身 —— 也就是隐私节点 —— 仍是 --fs-label），
+   左右留白 6→3px、间距 4→2px，七枚缩到两行（52px），一块省 36px。
+   这是「让次要读数与留白让位给正文」，不是把内容缩小。 ── */
+[data-frame-tier="tall"] .chips { gap: 2px; }
+[data-frame-tier="tall"] .chip {
+  font-size: 16px;
+  line-height: 1.25;
+  padding: 1px 3px;
+}
+[data-frame-tier="tall"] .chip b { font-size: var(--fs-label); }
+
+/* ── C2 / D3 的并排脚注：右段挂着 flex:0 1 auto，竖幅里被左段挤到 78px 宽，
+   「最长一条语音 …」直接摞成 7 行（149px，比整块还高 —— 单块 218px 溢出里
+   这一处占 110px）。允许换行：挤不下就整段落到下一行，占满整幅宽度。 ── */
+[data-frame-tier]:not([data-frame-tier="wide"]) .foot-split {
+  flex-wrap: wrap;
+  row-gap: var(--u-s2);
+}
+[data-frame-tier]:not([data-frame-tier="wide"]) .foot-split > .foot-r {
+  flex: 0 1 auto;
+  text-align: left;
+}
+
+/* ── 行盒里那几处不跟 --lh-tight 走的固定行距（标签胶囊 1.5、引号 1.5）：
+   字大了之后它们比正文行高出 8–10px，A3 一块就多占 16px。 ── */
+[data-frame-tier="portrait"] .tag,
+[data-frame-tier="tall"] .tag { line-height: 1.24; }
+[data-frame-tier="portrait"] .qm,
+[data-frame-tier="tall"] .qm { line-height: 1.24; }
+
+/* ── A2 报头右侧的幽灵年份用 --fs-big，比同排的 kicker 高出 13px，
+   把整条报头撑成两倍高。竖幅里降到 --fs-num（它是装饰，不是读数）。 ── */
+[data-frame-tier="portrait"] .ghost-year,
+[data-frame-tier="tall"] .ghost-year { font-size: var(--fs-num); }
+
+/* ── C2 六格读数在两列里排成三行，其中「语音发出 4 条 · 4 分 12 秒」还要
+   折成两行 —— 三列一行摊平，六格正好两行齐平。 ── */
+[data-frame-tier]:not([data-frame-tier="wide"]) .b-c2 .mgrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* ── B2 十二个月：一排 12 个 36px 头像把整块顶出去 11px。头像降到 31px
+   仍比 16:9 的相对尺寸大（31/900 > 36/1600），一点不算缩内容。 ── */
+[data-frame-tier="portrait"] .sheet-final,
+[data-frame-tier="tall"] .sheet-final { --u-av48: 31px; }
+
+/* ── D3 尾行：「最密集 …」与五枚表情读数挤在同一行里，左段被压到折三行。
+   允许换行 —— 挤不下就整段落下一行，各自占满整幅宽度。 ── */
+[data-frame-tier]:not([data-frame-tier="wide"]) .d3-tail {
+  flex-wrap: wrap;
+  row-gap: var(--u-s2);
+}
+
+/* ── A3 那天的第一句 / 最后一句：`.two` 本来就是「两行截断」的原设计，
+   上面 :not(wide) 把全卡的 .two 放宽到三行，A3 一块因此多占 21px。
+   这两格回到原设计的两行（B3 的气泡与 B1 的长名字仍保留三行）。 ── */
+[data-frame-tier="portrait"] .b-a3 .qt,
+[data-frame-tier="tall"] .b-a3 .qt { -webkit-line-clamp: 2; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   竖幅 · 满数据下的「差几像素就折行」清单（2026-08-14 第二轮）
+   ══════════════════════════════════════════════════════════════════════════
+   逐块量下来，本页顶出去的高度里有一大半不是字太大，是**一行差几个像素**：
+   一折行就整块多 21–30px，十几处加起来两百多 px。下面每一条都是把那几个
+   像素从留白 / 列距 / 刻度字里抠回来，内容一个字没删、字号一档没降。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── C1 左侧的「周一…周日」：栏宽 27.2px，而「周一」在 micro 档要 28px ——
+   七个标签**各自折成两行**（28px 高）挤在 12px 的行距里，上下互相压掉 16px，
+   屏幕上就是一条糊掉的竖带。这一处探针量不到（没顶出块外），但它同时让
+   hh-body 的「自然高」虚报到 196px，把整条带的预算也算歪了。
+   栏宽拓到 30px 一行装下；hh-axis 的 padding-left 本来就跟着这个令牌走，
+   八个钟点刻度不会错位。 ── */
+[data-frame-tier="portrait"] .sheet-final,
+[data-frame-tier="tall"] .sheet-final { --u-hhweek: 30px; }
+[data-frame-tier="portrait"] .hh-week span,
+[data-frame-tier="tall"] .hh-week span { white-space: nowrap; }
+
+/* ── A3 两格引文的标题行：「那天的最后一句 18:51」比格宽多出 4px 就折两行，
+   一折 quote-2 整块多 30px。收格内左右留白与列距，把这 4px 还回来。 ── */
+[data-frame-tier="tall"] .b-a3 .quote-2 { gap: 3px; }
+[data-frame-tier="tall"] .b-a3 .quo { padding: 3px 2.5px; }
+
+/* ── A2 报头右侧的幽灵年份：上一轮已经把字号降到 --fs-num，但它还带着
+   装饰用的 1.5 行距，比同排的 kicker 高出 6.4px，整条报头跟着变高。
+   行距跟正文走即可（字号一点没动）。 ── */
+[data-frame-tier="tall"] .ghost-year { line-height: var(--lh-tight); }
+
+/* ── A3 的 24 小时跨度尺 / D1 的回复刻度尺：中段读数挂着
+   `.span-cap > .dt { flex: none }`（特指度 0,2,0 压过 `.span-cap-m` 的
+   `flex: 0 1 auto`），所以它永远不收缩，字一大就把右端的「24:00」整个
+   顶出块外 —— 实测「最疯的一天 右 37」「回复速度 右 2」就是这条。
+   两件事一起做：① 中段允许收缩（安全网：真挤不下就折行，绝不再顶出去）；
+   ② 两端的 00:00 / 24:00 是**坐标刻度**不是读数，降到 micro 档，
+   省出来的横向空间让中段一行装得下，于是安全网平时并不触发。 ── */
+[data-frame-tier="portrait"] .span-cap,
+[data-frame-tier="tall"] .span-cap { gap: 2px; }
+[data-frame-tier="portrait"] .span-cap > .dt,
+[data-frame-tier="tall"] .span-cap > .dt { font-size: var(--u-fs-micro); }
+[data-frame-tier="portrait"] .span-cap > .dt.span-cap-m,
+[data-frame-tier="tall"] .span-cap > .dt.span-cap-m {
+  flex: 0 1 auto;
+  font-size: var(--fs-label);
+}
+[data-frame-tier="portrait"] .rs-marks > .dt.rs-mark-m,
+[data-frame-tier="tall"] .rs-marks > .dt.rs-mark-m { flex: 0 1 auto; }
+
+/* ── B1 / B3 的三格读数：格宽 132px，而「接话 4,899 次」要 136px、
+   「0–6 点共 3,205 条」要 153px —— 差几像素就整排折成两行（+26px）。
+   收格内留白与列距；B3 第一格的标签比另外两格长，按内容分列宽
+   （三格总宽不变，只是分得不再一样宽）。 ── */
+[data-frame-tier="tall"] .b-b1 .mgrid,
+[data-frame-tier="tall"] .b-b3 .mgrid { column-gap: 2.4px; }
+[data-frame-tier="tall"] .b-b1 .mcell,
+[data-frame-tier="tall"] .b-b3 .mcell { padding: 3px 3px; }
+[data-frame-tier="tall"] .b-b1 .mgrid--inline .mcell,
+[data-frame-tier="tall"] .b-b3 .mgrid--inline .mcell { gap: 0.24em; }
+/* ⚠️ 上面那条 `:not(wide) .b-b3 .mgrid` 是 (0,4,0)，写到 .mgrid 这一层压不过它 */
+[data-frame-tier="tall"] .b-b3 .mgrid.mgrid--inline { grid-template-columns: 1.1fr 0.85fr 1.05fr; }
+/* B3 三格里最长的一条要 151px、格子只有 148px —— 单行条无论怎么收都差几像素，
+   只能占两行。既然注定两行，就别让它断在「3,205 / 条」之间：改回标签在上、
+   读数在下的两行格，高度与折行时一模一样（41.8+6），但数字与单位不再被拆开。 */
+[data-frame-tier="tall"] .b-b3 .mgrid--inline .mcell {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+
+/* ── C1 的 168 格矩阵：格间距 3.2px×6 行 = 19px，全花在缝上。收到 2px，
+   格子本身（12px 地板）一点没缩，整块省 7px。 ── */
+[data-frame-tier="tall"] .b-c1 .hh-grid { gap: 2px; }
+
+/* ── E1 人物卡：原来是「头像 | 名字＋读数」两列，名字与读数共用右边 140px，
+   于是「最常连线 354 通 · 3.2 小时」必折两行；而 .ppl-row 是
+   grid-auto-rows:1fr 的等高矩阵，一张卡折行就是六张卡一起长高 —— 这一带
+   因此白占 28px，偏偏它是全页每像素信息量最低的一条。
+   改成「头像＋名字」一行、读数**横跨整张卡**一行：读数拿到 164px，一行装下。
+   等高矩阵（constraint：3 列 × 2 行同宽同高）原封不动。 ── */
+[data-frame-tier="tall"] .ppl-chip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 4px;
+  row-gap: 0;
+  align-items: center;
+  padding: 2px 3px;
+}
+[data-frame-tier="tall"] .ppl-chip > .col { display: contents; }
+[data-frame-tier="tall"] .ppl-chip .nm { grid-column: 2; }
+[data-frame-tier="tall"] .ppl-chip .dt { grid-column: 1 / -1; letter-spacing: 0; }
+
+/* ── 人物带的横向留白：报头与卡阵之间 12.8px、四张卡之间各 9.6px，
+   合计 41px 全花在缝上，而每张卡的读数正好差 1–4px 才够一行 ——
+   缝收一收，四张卡各宽 4.6px，读数一行装下（上面那条规则才真的生效）。 ── */
+[data-frame-tier="tall"] .b-people { gap: 8px; }
+[data-frame-tier="tall"] .ppl-row { column-gap: 5px; }
+
+/* ── C2 两条脚注同处一行，中间的 space-between 缝是 17.6px：
+   两条合计 826px，缝一收就正好落在 840px 的整幅宽度里，不必折成两行。 ── */
+[data-frame-tier="tall"] .b-c2 .foot-split { gap: 8px; }
+
+/* ── A1 的耳语（衬线批注）：0.95em 时它和前半句正好卡在两行的边界上，
+   字号再动 0.4px 就翻成三行。批注本来就该比正文小一档，降到 0.86em，
+   两行稳稳装下，一个字没删。 ── */
+[data-frame-tier="tall"] .whisper { font-size: 0.86em; }
+
+/* ── C1 的八个钟点刻度（00 03 06 … 21）与 A3 的 00:00 / 24:00 同属坐标轴，
+   不是读数：留在标签档时它比 hh-body 自己还高一截。降到 micro，
+   矩阵格子跟着多拿 9px。 ── */
+[data-frame-tier="tall"] .hh-axis { font-size: var(--u-fs-micro); }
+
+/* ── D3 的四段脚注：「新入库…」「有 7 张沉睡后…」「最密集…」「表情 ×N」
+   两两成对、各自 space-between，四段合计 1076px 在 407px 的块里排成
+   2+2 共四行（86px，比这一块的报头＋大图＋缩略图加起来还占地方）。
+   竖幅里改成**连排一段**：四段按顺序流下来，挤不下的在词间断行，
+   三行装完 —— 少一整行，四段文字一个字没删，只是不再各占各的行。 ── */
+[data-frame-tier="tall"] .b-d3 .d3-foot { display: block; line-height: var(--lh-tight); }
+[data-frame-tier="tall"] .b-d3 .foot-split,
+[data-frame-tier="tall"] .b-d3 .d3-tail,
+[data-frame-tier="tall"] .b-d3 .d3-foot .foot-note,
+[data-frame-tier="tall"] .b-d3 .d3-tail > .dt { display: inline; }
+[data-frame-tier="tall"] .b-d3 .emo-pair { display: inline-flex; }
+[data-frame-tier="tall"] .b-d3 .foot-r::before,
+[data-frame-tier="tall"] .b-d3 .d3-tail::before { content: "· "; }
+
+/* ── D3 的两件死尺寸构件再各收一档：表情大图 40→34（它和右边 2×2 读数
+   并排，读数只要 56px，图却顶到 63px，多出来的全是这一块的），
+   缩略图行 31→27。相对画幅宽度仍大于 16:9（34/900 > 45/1600）。 ── */
+[data-frame-tier="tall"] .sheet-final {
+  --u-pic: 34px;
+  --u-thumbs: 27px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   竖幅 · 缺数据的块不再占一整格（2026-08-14）
+   ══════════════════════════════════════════════════════════════════════════
+   这一轮用户的原话是「布局太紧凑了」。实测 9:16 后发现紧凑的不是版面总量，
+   是分配：这份数据里「年度搭子」428×174 只印 26 字、「回复速度」428×164 印
+   20 字、「谁先开口」428×164 印 13 字、「年度聊天排行」428×202 印 23 字 ——
+   428×700 的面积承载 82 个字；而同一屏里「你说的话」219 字只分到 862×131。
+   兜底文案一个字都不删（缺数据的说明必须留），但它不该和有数据的块平分版面。
+
+   两条规则，全部由 :has(> .void-line) 触发 —— 数据齐全时一条也匹配不到，
+   版面与改动前逐像素一致；wide（16:9 / 跟随窗口）永远匹配不到。
+     ① 成对带里只有一块缺数据 → 缺的那块收成 1/3 幅，有数据的那块占 2/3；
+     ② 成对带 / 整幅带全缺数据 → 该带行权重降到 0.64fr（≈64px，报头加一行字
+        块内留白足够），省下的高度按权重自动分给其它带。
+   ⚠️ ② 的选择器多挂一个 :has()，特指度 (0,7,0) > ① 的 (0,5,0)，
+      两块都缺时不会被 ① 拆成一宽一窄。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 一块缺数据：让位给同带有内容的那块 ── */
+/* 带 1：A1 全年总量（永远有数据） | A3 最疯的一天 */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-a3 > .void-line) .b-a1 { grid-area: 1 / 1 / 2 / 5; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-a3 > .void-line) .b-a3 { grid-area: 1 / 5 / 2 / 7; }
+/* 带 3：B1 年度搭子 | B3 深夜 */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-b1 > .void-line) .b-b1 { grid-area: 3 / 1 / 4 / 3; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-b1 > .void-line) .b-b3 { grid-area: 3 / 3 / 4 / 7; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-b3 > .void-line) .b-b1 { grid-area: 3 / 1 / 4 / 5; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-b3 > .void-line) .b-b3 { grid-area: 3 / 5 / 4 / 7; }
+/* 带 5：C1 作息切片 | C3 年度口头禅 */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-c1 > .void-line) .b-c1 { grid-area: 5 / 1 / 6 / 3; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-c1 > .void-line) .b-c3 { grid-area: 5 / 3 / 6 / 7; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-c3 > .void-line) .b-c1 { grid-area: 5 / 1 / 6 / 5; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-c3 > .void-line) .b-c3 { grid-area: 5 / 5 / 6 / 7; }
+/* 带 7：D1 回复速度 | D2 谁先开口 */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-d1 > .void-line) .b-d1 { grid-area: 7 / 1 / 8 / 3; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-d1 > .void-line) .b-d2 { grid-area: 7 / 3 / 8 / 7; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-d2 > .void-line) .b-d1 { grid-area: 7 / 1 / 8 / 5; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-d2 > .void-line) .b-d2 { grid-area: 7 / 5 / 8 / 7; }
+/* 带 8：D4 年度聊天排行 | D3 表情宇宙 */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-rank > .void-line) .b-rank { grid-area: 8 / 1 / 9 / 3; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-rank > .void-line) .b-d3 { grid-area: 8 / 3 / 9 / 7; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-d3 > .void-line) .b-rank { grid-area: 8 / 1 / 9 / 5; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-d3 > .void-line) .b-d3 { grid-area: 8 / 5 / 9 / 7; }
+
+/* ── ② 整条带都没数据：收成一条窄带，高度还给别人 ── */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-a2 > .void-line) { --r2: 0.62fr; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-b1 > .void-line):has(.b-b3 > .void-line) {
+  --r3: 0.62fr;
+}
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-b1 > .void-line):has(.b-b3 > .void-line) .b-b1 { grid-area: 3 / 1 / 4 / 4; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-b1 > .void-line):has(.b-b3 > .void-line) .b-b3 { grid-area: 3 / 4 / 4 / 7; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-c1 > .void-line):has(.b-c3 > .void-line) {
+  --r5: 0.62fr;
+}
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-c1 > .void-line):has(.b-c3 > .void-line) .b-c1 { grid-area: 5 / 1 / 6 / 4; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-c1 > .void-line):has(.b-c3 > .void-line) .b-c3 { grid-area: 5 / 4 / 6 / 7; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-d1 > .void-line):has(.b-d2 > .void-line) {
+  --r7: 0.64fr;
+}
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-d1 > .void-line):has(.b-d2 > .void-line) .b-d1 { grid-area: 7 / 1 / 8 / 4; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-d1 > .void-line):has(.b-d2 > .void-line) .b-d2 { grid-area: 7 / 4 / 8 / 7; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-rank > .void-line):has(.b-d3 > .void-line) {
+  --r8: 0.62fr;
+}
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-rank > .void-line):has(.b-d3 > .void-line) .b-rank { grid-area: 8 / 1 / 9 / 4; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .sheet-final:has(.b-rank > .void-line):has(.b-d3 > .void-line) .b-d3 { grid-area: 8 / 4 / 9 / 7; }
+
+/* 收窄成 1/3 幅的兜底块：一句话居中排，不要顶在最上面 */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .blk:has(> .void-line) .kicker { margin-bottom: var(--u-s2); }
 
 @media (prefers-reduced-motion: reduce) {
   .star { animation: none; }
