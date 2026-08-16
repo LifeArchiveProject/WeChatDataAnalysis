@@ -336,6 +336,7 @@ _VOICE_TRANSCRIPT_EXPORT_CSS = """
 _MOBILE_EXPORT_CSS = """
 /* 离线导出页的移动端布局：桌面端保留三栏结构，窄屏切换为微信式聊天界面。 */
 .wce-mobile-back,
+.wce-mobile-tools-toggle,
 .wce-mobile-tools-button { display: none; }
 .wce-chat-heading { display: flex; align-items: center; min-width: 0; }
 
@@ -395,6 +396,20 @@ _MOBILE_EXPORT_CSS = """
     -webkit-tap-highlight-color: transparent;
   }
   .wce-mobile-back { left: max(0px, env(safe-area-inset-left, 0px)); }
+  .wce-mobile-tools-toggle {
+    position: absolute;
+    right: max(0px, env(safe-area-inset-right, 0px));
+    bottom: 0;
+    z-index: 2;
+    display: block;
+    width: 48px;
+    height: 48px;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+  }
   .wce-mobile-tools-button {
     right: max(0px, env(safe-area-inset-right, 0px));
     padding: 0;
@@ -403,11 +418,10 @@ _MOBILE_EXPORT_CSS = """
     cursor: pointer;
   }
   .wce-mobile-back:active,
-  .wce-mobile-tools-button:active { opacity: 0.45; }
-  .wce-mobile-back:focus,
-  .wce-mobile-tools-button:focus { outline: none; }
+  .wce-mobile-tools-toggle:active + .wce-mobile-tools-button { opacity: 0.45; }
+  .wce-mobile-back:focus { outline: none; }
   .wce-mobile-back:focus-visible,
-  .wce-mobile-tools-button:focus-visible {
+  .wce-mobile-tools-toggle:focus-visible + .wce-mobile-tools-button {
     border-radius: 6px;
     outline: 2px solid rgba(7, 193, 96, 0.75);
     outline-offset: -5px;
@@ -431,7 +445,7 @@ _MOBILE_EXPORT_CSS = """
     background: rgba(255, 255, 255, 0.98);
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
   }
-  .wce-chat-tools[data-mobile-open="1"] { display: flex; }
+  .wce-mobile-tools-toggle:checked ~ .wce-chat-tools { display: flex; }
   .wce-tool-group { display: flex; width: 100%; gap: 6px; }
   .wce-tool-input,
   .wce-tool-btn,
@@ -537,55 +551,8 @@ _MOBILE_EXPORT_CSS = """
 
 @media(prefers-reduced-motion: reduce) {
   .wce-mobile-back,
-  .wce-mobile-tools-button { transition: none; }
+  .wce-mobile-tools-toggle + .wce-mobile-tools-button { transition: none; }
 }
-""".strip()
-
-
-_MOBILE_EXPORT_JS = r"""
-(() => {
-  const setupMobileTools = () => {
-    const button = document.getElementById("wceMobileToolsButton");
-    const tools = document.getElementById("wceChatTools");
-    if (!button || !tools || button.dataset.mobileToolsReady === "1") return;
-    button.dataset.mobileToolsReady = "1";
-
-    const setOpen = (open) => {
-      if (open) tools.setAttribute("data-mobile-open", "1");
-      else tools.removeAttribute("data-mobile-open");
-      button.setAttribute("aria-expanded", open ? "true" : "false");
-    };
-
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      setOpen(tools.getAttribute("data-mobile-open") !== "1");
-    });
-    document.addEventListener("click", (event) => {
-      if (!tools.contains(event.target)) setOpen(false);
-    });
-    document.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape" || tools.getAttribute("data-mobile-open") !== "1") return;
-      setOpen(false);
-      button.focus();
-    });
-
-    const mobileQuery = window.matchMedia("(max-width: 767px)");
-    const closeOnDesktop = (event) => {
-      if (!event.matches) setOpen(false);
-    };
-    if (typeof mobileQuery.addEventListener === "function") {
-      mobileQuery.addEventListener("change", closeOnDesktop);
-    } else if (typeof mobileQuery.addListener === "function") {
-      mobileQuery.addListener(closeOnDesktop);
-    }
-  };
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", setupMobileTools, { once: true });
-  } else {
-    setupMobileTools();
-  }
-})();
 """.strip()
 
 
@@ -910,7 +877,8 @@ def _native_json_list(
 
 
 def _html_export_runtime_js(native_integrity: Any) -> str:
-    return f'{_native_text(native_integrity, "runtime_js").rstrip()}\n{_MOBILE_EXPORT_JS}\n'
+    # 原生运行时会参与导出页的自校验，必须逐字节保持原样。
+    return _native_text(native_integrity, "runtime_js")
 
 
 def _html_export_asset_paths(export_id: str) -> tuple[str, str, str]:
@@ -5137,11 +5105,12 @@ def _write_conversation_html(
             tw.write('          <div class="wce-chat-heading">\n')
             tw.write(f'            <h2 class="wce-chat-title text-base font-medium text-gray-900">{esc_text(chat_title)}</h2>\n')
             tw.write("          </div>\n")
-            tw.write('          <button id="wceMobileToolsButton" class="wce-mobile-tools-button" type="button" aria-controls="wceChatTools" aria-expanded="false" aria-label="聊天工具" title="聊天工具">\n')
+            tw.write('          <input id="wceMobileToolsToggle" class="wce-mobile-tools-toggle" type="checkbox" aria-controls="wceChatTools" aria-label="聊天工具" title="聊天工具" autocomplete="off" />\n')
+            tw.write('          <label class="wce-mobile-tools-button" for="wceMobileToolsToggle" aria-hidden="true">\n')
             tw.write('            <svg width="25" height="25" viewBox="0 0 25 25" fill="currentColor" aria-hidden="true">\n')
             tw.write('              <circle cx="5" cy="12.5" r="1.8" /><circle cx="12.5" cy="12.5" r="1.8" /><circle cx="20" cy="12.5" r="1.8" />\n')
             tw.write("            </svg>\n")
-            tw.write("          </button>\n")
+            tw.write("          </label>\n")
             tw.write('          <div id="wceChatTools" class="ml-auto wce-chat-tools">\n')
             tw.write('            <div class="wce-tool-group" title="搜索当前聊天记录；分页导出会在首次搜索时加载全部分页">\n')
             tw.write('              <input id="wceMessageSearchInput" class="wce-tool-input wce-tool-search" type="search" placeholder="搜索聊天记录" autocomplete="off" />\n')

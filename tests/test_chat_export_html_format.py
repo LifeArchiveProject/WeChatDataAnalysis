@@ -39,13 +39,20 @@ class TestChatExportHtmlFormat(unittest.TestCase):
 
         self.assertIn("@media(max-width:767px)", css_text)
         self.assertIn(".wce-rail,.wce-session-panel{display:none !important}", css_text)
-        self.assertIn(".wce-chat-tools[data-mobile-open=\"1\"]", css_text)
+        self.assertIn(".wce-mobile-tools-toggle:checked~.wce-chat-tools", css_text)
         self.assertIn("height:48px", css_text)
         self.assertIn("height:100dvh", css_text)
         self.assertIn("env(safe-area-inset-bottom,0px)", css_text)
         self.assertNotIn("calc(48px+env", css_text)
-        self.assertIn("wceMobileToolsButton", svc._MOBILE_EXPORT_JS)
-        self.assertIn('event.key !== "Escape"', svc._MOBILE_EXPORT_JS)
+
+    def test_html_export_runtime_keeps_native_integrity_payload_unchanged(self):
+        svc = self._reload_export_modules()
+        native_integrity = svc._load_wce_integrity_native()
+
+        self.assertEqual(
+            svc._html_export_runtime_js(native_integrity),
+            svc._native_text(native_integrity, "runtime_js"),
+        )
 
     def _seed_contact_db(self, path: Path, *, account: str, username: str) -> None:
         conn = sqlite3.connect(str(path))
@@ -369,7 +376,8 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     self.assertIn('class="wce-index-heading"', index_text)
                     self.assertIn("viewport-fit=cover", html_text)
                     self.assertIn('class="wce-mobile-back"', html_text)
-                    self.assertIn('id="wceMobileToolsButton"', html_text)
+                    self.assertIn('id="wceMobileToolsToggle"', html_text)
+                    self.assertIn('for="wceMobileToolsToggle"', html_text)
                     self.assertIn('id="wceChatTools"', html_text)
                     self.assertIn("wce-msg-content", html_text)
                     self.assertIn('data-wce-rail-avatar="1"', html_text)
@@ -418,7 +426,7 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     self.assertIn(".wechat-voip-icon--mirrored", css_text)
                     self.assertNotIn("wechat-transfer-card[data-v-", css_text)
                     self.assertIn("@media(max-width:767px)", css_text)
-                    self.assertIn('.wce-chat-tools[data-mobile-open="1"]', css_text)
+                    self.assertIn('.wce-mobile-tools-toggle:checked~.wce-chat-tools', css_text)
                     self.assertIn("env(safe-area-inset-bottom,0px)", css_text)
                     self.assertIn("height:100dvh", css_text)
 
@@ -429,7 +437,7 @@ class TestChatExportHtmlFormat(unittest.TestCase):
                     js_text = zf.read(js_asset).decode("utf-8", errors="ignore")
                     self.assertIn("Function", js_text)
                     self.assertIn("atob", js_text)
-                    self.assertIn("wceMobileToolsButton", js_text)
+                    self.assertNotIn("wceMobileToolsToggle", js_text)
                     self.assertNotIn("wechat-voice-bubble", js_text)
                     self.assertNotIn("voice-playing", js_text)
                     self.assertNotIn("data-wce-quote-voice-btn", js_text)
