@@ -6,6 +6,9 @@ const {
   nativeCoreArtifactNames,
   nativeCoreProductionManifestErrors,
 } = require("./build-backend.cjs");
+const {
+  assertWindowsNativeAsrCapability,
+} = require("../src/windows-native-asr-capability.cjs");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const LEGACY_WCDB_PATHS = [
@@ -178,6 +181,9 @@ function validatePackagedBackend({
     throw new Error(
       `Packaged backend rejected a non-production wechatdb native core: ${errors.join("; ")}`
     );
+  }
+  if (platform === "win32") {
+    assertWindowsNativeAsrCapability({ nativeDir, manifest });
   }
   return { backendDir, manifest, nativeDir, platform };
 }

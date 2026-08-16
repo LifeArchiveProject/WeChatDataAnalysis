@@ -317,17 +317,24 @@ export default defineComponent({
       try { await navigator.clipboard.writeText(String(url || '')) } catch {}
     }
 
-    const voiceRecordMessage = (win, record, index) => ({
-      ...record,
-      id: String(record?.id || `${win?.id || 'chat-history'}-voice-${index}`),
-      isSent: false,
-      voiceRead: true,
-      content: String(record?.content || '[语音]')
-    })
+    const voiceRecordMessage = (win, record, index) => {
+      const transcript = String(record?.voiceTranscript || '').trim()
+      return {
+        ...record,
+        id: String(record?.id || `${win?.id || 'chat-history'}-voice-${index}`),
+        isSent: false,
+        voiceRead: true,
+        content: String(record?.content || '[语音]'),
+        voiceTranscript: transcript,
+        voiceTranscriptStatus: transcript
+          ? 'success'
+          : String(record?.voiceTranscriptStatus || 'idle').trim() || 'idle'
+      }
+    }
 
     return {
       ...props.state,
-      // 合并转发浮窗中的语音仅支持播放，不显示“转文字”面板（转写只在主聊天页和导出 HTML 提供）
+      // 合并转发浮窗只提供播放和已有转写，不在浮窗内发起新的转写任务。
       messageState: { ...props.state, transcribeVoice: undefined },
       recordTextSegments,
       openRecordUrl,

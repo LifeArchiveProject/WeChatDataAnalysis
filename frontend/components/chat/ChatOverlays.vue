@@ -957,14 +957,19 @@
         定位引用消息
       </button>
       <button
-        v-if="contextMenu.message?.renderType === 'voice' && !privacyMode && voiceTranscriptionAvailable && typeof transcribeVoice === 'function'"
+        v-if="contextMenu.message?.renderType === 'voice'
+          && !privacyMode
+          && nativeVoiceTranscriptionAvailable
+          && typeof transcribeVoice === 'function'
+          && !(contextMenu.message?.voiceTranscriptStatus === 'success'
+            && contextMenu.message?.voiceTranscriptModel === 'wechat-native')"
         class="chat-context-menu__item block w-full text-left px-3 py-2"
         type="button"
         :disabled="contextMenu.message?.voiceTranscriptStatus === 'loading'"
         :class="contextMenu.message?.voiceTranscriptStatus === 'loading' ? 'opacity-50 cursor-not-allowed' : ''"
         @click="onTranscribeVoiceClick"
       >
-        {{ ['success', 'error'].includes(contextMenu.message?.voiceTranscriptStatus) ? '重新转文字' : '转文字' }}
+        {{ contextMenu.message?.voiceTranscriptStatus === 'error' ? '重试微信转文字' : '微信转文字' }}
       </button>
       <button
         class="chat-context-menu__item block w-full text-left px-3 py-2"
@@ -1087,9 +1092,8 @@ export default defineComponent({
       if (!message || typeof transcribe !== 'function') return
       const status = String(message?.voiceTranscriptStatus || '')
       if (status === 'loading') return
-      const hasResult = status === 'success' || status === 'error'
       if (typeof props.state?.closeContextMenu === 'function') props.state.closeContextMenu()
-      void transcribe(message, { force: hasResult })
+      void transcribe(message)
     }
 
     watch(

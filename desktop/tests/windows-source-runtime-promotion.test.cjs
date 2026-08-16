@@ -11,6 +11,13 @@ const {
   PROFILE,
   stageWindowsSourceRuntimeBundle,
 } = require("../scripts/windows-source-runtime-promotion.cjs");
+const {
+  WINDOWS_NATIVE_ASR_ABI_VERSION,
+  WINDOWS_NATIVE_ASR_EXPORTS,
+  WINDOWS_NATIVE_ASR_FEATURE_BIT,
+  WINDOWS_NATIVE_ASR_TARGET,
+} = require("../src/windows-native-asr-capability.cjs");
+const { buildWindowsPeWithExports } = require("./pe-export-fixture.cjs");
 
 const NOW = 1_786_000_100;
 const ISSUED = 1_786_000_000;
@@ -28,10 +35,10 @@ function write(file, value) {
   );
 }
 
-function fixture() {
+function fixture({ clientExports = WINDOWS_NATIVE_ASR_EXPORTS } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wda-windows-source-promotion-"));
   const coreDir = path.join(root, "core");
-  write(path.join(coreDir, "wechatdb_client.dll"), "client");
+  write(path.join(coreDir, "wechatdb_client.dll"), buildWindowsPeWithExports(clientExports));
   write(path.join(coreDir, "wechatdb_broker.exe"), "broker");
   write(path.join(coreDir, "wechatdb_native_build.json"), {
     schemaVersion: 2,
@@ -50,6 +57,9 @@ function fixture() {
     offlineExportSealFormat: "WES2",
     securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
     securityCheckpointCount: 7,
+    nativeAsrAbiVersion: WINDOWS_NATIVE_ASR_ABI_VERSION,
+    nativeAsrFeatureBit: WINDOWS_NATIVE_ASR_FEATURE_BIT,
+    nativeAsrTarget: WINDOWS_NATIVE_ASR_TARGET,
   });
   const provenance = {
     schemaVersion: 1,
@@ -114,7 +124,24 @@ test("Windows promotion rejects packaged native-core artifacts", () => {
   }
 });
 
-test("Windows promotion workflow verifies Producer output before public no-auth download", () => {
+test("Windows promotion rejects a source runtime without fused ASR exports", () => {
+  const value = fixture({ clientExports: ["wce_client_abi_version"] });
+  try {
+    assert.throws(
+      () => stageWindowsSourceRuntimeBundle({
+        coreDir: value.coreDir,
+        stageDir: path.join(value.root, "stage"),
+        releaseTag: "windows-source-runtime-20260808-aaaaaaaa",
+        nowUnix: NOW,
+      }),
+      /missing fused ASR ABI exports/
+    );
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test("Windows promotion workflow verifies the exact Producer Release asset before public no-auth download", () => {
   const workflow = fs.readFileSync(
     path.join(__dirname, "..", "..", ".github", "workflows", "windows-source-runtime-promotion.yml"),
     "utf8"
@@ -126,6 +153,31 @@ test("Windows promotion workflow verifies Producer output before public no-auth 
   assert.ok(publish > verify);
   assert.ok(publicDownload > publish);
   assert.match(workflow, /WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN/);
+  assert.match(workflow, /windows-native-\$env:NATIVE_BUILD_ID/);
+  assert.match(
+    workflow,
+    /wechatdb-native-windows-x64-source-public-\$env:NATIVE_BUILD_ID\.zip/
+  );
+  assert.match(workflow, /gh release download \$releaseTag/);
+  assert.match(workflow, /native_core_source_public_sha256/);
+  assert.match(
+    workflow,
+    /Get-FileHash -LiteralPath \$archive -Algorithm SHA256/
+  );
+  assert.match(
+    workflow,
+    /\$actualArchiveSha256 -cne \$env:NATIVE_SOURCE_PUBLIC_SHA256/
+  );
+  assert.ok(
+    workflow.indexOf("$actualArchiveSha256 =")
+      < workflow.indexOf("Expand-Archive -LiteralPath $archive")
+  );
+  assert.match(workflow, /Expand-Archive -LiteralPath \$archive -DestinationPath \$destination/);
+  assert.match(
+    workflow,
+    /\[string\]\$provenance\.build\.workflowRunId -cne \$env:NATIVE_RUN_ID/
+  );
+  assert.doesNotMatch(workflow, /gh run download/);
   assert.match(workflow, /refs\/tags\/\$env:WCE_SOURCE_RUNTIME_RELEASE_TAG/);
   assert.match(workflow, /--verify-tag/);
   assert.match(workflow, /\$ErrorActionPreference = 'SilentlyContinue'[\s\S]*gh release view/);

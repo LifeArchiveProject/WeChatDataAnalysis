@@ -4,6 +4,9 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const {
+  assertWindowsNativeAsrCapability,
+} = require("../src/windows-native-asr-capability.cjs");
 
 const PROFILE = "windows-source-public";
 const ASSET_NAME = "wechatdataanalysis-windows-source-runtime-x64-v1.tar.gz";
@@ -134,6 +137,7 @@ function validateSourcePublicCore(coreDir, nowUnix) {
     manifest.buildExpiresAtUnix,
     nowUnix
   );
+  assertWindowsNativeAsrCapability({ nativeDir: coreDir, manifest });
   return {
     artifactName: provenance.artifactName,
     buildId,

@@ -37,6 +37,7 @@ from ..chat_helpers import (
     _extract_chatroom_top_message_metadata,
     _extract_image_group_info,
     _extract_md5_from_packed_info,
+    _extract_voice_transcript_from_packed_info,
     _extract_sender_from_group_xml,
     _extract_xml_attr,
     _extract_xml_tag_or_attr,
@@ -3122,6 +3123,11 @@ def _append_full_messages_from_rows(
         create_time = int(r["create_time"] or 0)
         sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
         local_type = int(r["local_type"] or 0)
+        native_voice_transcript = (
+            _extract_voice_transcript_from_packed_info(_row_get_value(r, "packed_info_data"))
+            if local_type == 34
+            else ""
+        )
         sender_username = _decode_sqlite_text(r["sender_username"]).strip()
 
         is_sent = False
@@ -3607,6 +3613,11 @@ def _append_full_messages_from_rows(
                 "videoUrl": video_url,
                 "videoThumbUrl": video_thumb_url,
                 "voiceLength": voice_length,
+                "voiceTranscript": native_voice_transcript,
+                "voiceTranscriptStatus": "success" if native_voice_transcript else "idle",
+                "voiceTranscriptError": "",
+                "voiceTranscriptLanguage": "",
+                "voiceTranscriptModel": "wechat-native" if native_voice_transcript else "",
                 "voipType": voip_type,
                 "quoteUsername": str(quote_username).strip(),
                 "quoteServerId": str(quote_server_id).strip(),
@@ -5077,6 +5088,11 @@ def _collect_chat_messages(
                 create_time = int(r["create_time"] or 0)
                 sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
                 local_type = int(r["local_type"] or 0)
+                native_voice_transcript = (
+                    _extract_voice_transcript_from_packed_info(_row_get_value(r, "packed_info_data"))
+                    if local_type == 34
+                    else ""
+                )
                 sender_username = _decode_sqlite_text(r["sender_username"]).strip()
 
                 is_sent = False
@@ -5512,6 +5528,11 @@ def _collect_chat_messages(
                         "videoUrl": video_url,
                         "videoThumbUrl": video_thumb_url,
                         "voiceLength": voice_length,
+                        "voiceTranscript": native_voice_transcript,
+                        "voiceTranscriptStatus": "success" if native_voice_transcript else "idle",
+                        "voiceTranscriptError": "",
+                        "voiceTranscriptLanguage": "",
+                        "voiceTranscriptModel": "wechat-native" if native_voice_transcript else "",
                         "voipType": voip_type,
                         "quoteUsername": str(quote_username).strip(),
                         "quoteServerId": str(quote_server_id).strip(),
@@ -6495,6 +6516,11 @@ def list_chat_messages(
                 create_time = int(r["create_time"] or 0)
                 sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
                 local_type = int(r["local_type"] or 0)
+                native_voice_transcript = (
+                    _extract_voice_transcript_from_packed_info(_row_get_value(r, "packed_info_data"))
+                    if local_type == 34
+                    else ""
+                )
                 sender_username = _decode_sqlite_text(r["sender_username"]).strip()
 
                 is_sent = False
@@ -6878,6 +6904,11 @@ def list_chat_messages(
                         "videoUrl": video_url,
                         "videoThumbUrl": video_thumb_url,
                         "voiceLength": voice_length,
+                        "voiceTranscript": native_voice_transcript,
+                        "voiceTranscriptStatus": "success" if native_voice_transcript else "idle",
+                        "voiceTranscriptError": "",
+                        "voiceTranscriptLanguage": "",
+                        "voiceTranscriptModel": "wechat-native" if native_voice_transcript else "",
                         "voipType": voip_type,
                         "quoteUsername": str(quote_username).strip(),
                         "quoteServerId": str(quote_server_id).strip(),

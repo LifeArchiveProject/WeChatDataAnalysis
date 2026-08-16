@@ -24,6 +24,7 @@ from .native_core_client import (
     NativeCorePolicyError,
     NativeCoreProtocolError,
     NativeCoreRuntimeStatus,
+    NativeCoreStatus,
     NativeCoreUnavailableError,
     _is_development_native_core_build_manifest,
     _is_production_native_core_build_manifest,
@@ -413,7 +414,8 @@ def validate_native_core_authorization_policy(
     ) or _is_source_public_native_core_build_manifest(manifest):
         if int(time.time()) >= manifest.build_expires_at_unix:
             raise NativeCorePolicyError(
-                "This native core build has reached its fixed expiration time."
+                "This native core build has reached its fixed expiration time.",
+                status=int(NativeCoreStatus.BUILD_MISMATCH),
             )
         _production_license_configuration()
         return "production"
@@ -592,7 +594,8 @@ def _validate_unchanged_device_status(
         or before.startup_nonce != after.startup_nonce
     ):
         raise NativeCorePolicyError(
-            "Native core broker identity changed during license challenge."
+            "Native core broker identity changed during license challenge.",
+            status=int(NativeCoreStatus.TAMPER_DETECTED),
         )
 
 
@@ -632,7 +635,8 @@ def _validated_device_proof(
         or startup_nonce != status.startup_nonce
     ):
         raise NativeCorePolicyError(
-            "Native core device proof does not match the challenged broker state."
+            "Native core device proof does not match the challenged broker state.",
+            status=int(NativeCoreStatus.TAMPER_DETECTED),
         )
     return public_key, signature
 
@@ -1032,7 +1036,8 @@ def _refresh_native_core_lease_internal(
                         ):
                             credential_store.delete()
                             raise NativeCorePolicyError(
-                                "Cached native core lease exceeds the fixed build expiration."
+                                "Cached native core lease exceeds the fixed build expiration.",
+                                status=int(NativeCoreStatus.BUILD_MISMATCH),
                             )
                         configure_product_telemetry(
                             license_url=license_url,
@@ -1110,13 +1115,40 @@ def _refresh_native_core_lease_internal(
             raise
         refreshed_status = client.get_status()
         if not (int(refreshed_status.feature_bits) & int(feature)):
-            raise NativeCorePolicyError("Installed native core lease does not grant the requested feature.")
+            raise NativeCorePolicyError(
+                "Installed native core lease does not grant the requested feature.",
+                status=int(NativeCoreStatus.FEATURE_DENIED),
+            )
         if (
             manifest.build_expires_at_unix > 0
             and refreshed_status.lease_expires_unix > manifest.build_expires_at_unix
         ):
             raise NativeCorePolicyError(
-                "Installed native core lease exceeds the fixed build expiration."
+                "Installed native core lease exceeds the fixed build expiration.",
+                status=int(NativeCoreStatus.BUILD_MISMATCH),
+            )
+        post_install_now = int(time.time())
+        if not _status_grants_feature(
+            refreshed_status,
+            feature,
+            manifest=manifest,
+            now=post_install_now,
+            minimum_validity_seconds=minimum_validity_seconds,
+        ):
+            required_until = post_install_now + max(0, int(minimum_validity_seconds))
+            build_near_expiration = (
+                manifest.build_expires_at_unix > 0
+                and manifest.build_expires_at_unix <= required_until
+            )
+            raise NativeCorePolicyError(
+                "The native core build expires too soon for this operation."
+                if build_near_expiration
+                else "The installed native core lease expires too soon for this operation.",
+                status=int(
+                    NativeCoreStatus.BUILD_MISMATCH
+                    if build_near_expiration
+                    else NativeCoreStatus.LEASE_EXPIRED
+                ),
             )
         if (
             grant is not None

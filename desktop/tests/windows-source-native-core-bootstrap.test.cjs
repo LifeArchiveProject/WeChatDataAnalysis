@@ -16,6 +16,13 @@ const {
   applySourceRuntimeEnvironment,
   ensureSourceNativeCore,
 } = require("../src/source-native-core-bootstrap.cjs");
+const {
+  WINDOWS_NATIVE_ASR_ABI_VERSION,
+  WINDOWS_NATIVE_ASR_EXPORTS,
+  WINDOWS_NATIVE_ASR_FEATURE_BIT,
+  WINDOWS_NATIVE_ASR_TARGET,
+} = require("../src/windows-native-asr-capability.cjs");
+const { buildWindowsPeWithExports } = require("./pe-export-fixture.cjs");
 
 const NOW_UNIX = 1786162000;
 const ISSUED_AT_UNIX = NOW_UNIX - 60;
@@ -51,10 +58,13 @@ const NATIVE_MANIFEST = Object.freeze({
   securityCheckpointSetSha256: "55".repeat(32),
   sourceRuntime: true,
   windowsHostVerification: "same-user-direct-parent",
+  nativeAsrAbiVersion: WINDOWS_NATIVE_ASR_ABI_VERSION,
+  nativeAsrFeatureBit: WINDOWS_NATIVE_ASR_FEATURE_BIT,
+  nativeAsrTarget: WINDOWS_NATIVE_ASR_TARGET,
 });
 
 const PAYLOADS = new Map([
-  ["native-core/wechatdb_client.dll", Buffer.from("client")],
+  ["native-core/wechatdb_client.dll", buildWindowsPeWithExports(WINDOWS_NATIVE_ASR_EXPORTS)],
   ["native-core/wechatdb_broker.exe", Buffer.from("broker")],
   [
     "native-core/wechatdb_native_build.json",
@@ -114,13 +124,16 @@ function writeConfig(root, pin = PIN) {
   return file;
 }
 
-function writeRuntime(root) {
-  for (const [relative, content] of PAYLOADS) {
+function writeRuntime(
+  root,
+  { payloads = PAYLOADS, runtimeManifestRaw = RUNTIME_MANIFEST_RAW } = {}
+) {
+  for (const [relative, content] of payloads) {
     const file = path.join(root, ...relative.split("/"));
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content);
   }
-  fs.writeFileSync(path.join(root, "runtime-manifest.json"), RUNTIME_MANIFEST_RAW);
+  fs.writeFileSync(path.join(root, "runtime-manifest.json"), runtimeManifestRaw);
 }
 
 function fixtureTools() {
@@ -190,6 +203,32 @@ test("Windows source bootstrap downloads publicly once and reuses verified cache
     assert.equal(second.runtimeDir, first.runtimeDir);
   }));
 
+test("Windows source cache rejects a hash-verified legacy client without fused ASR exports", () =>
+  withTempRoot((root) => {
+    const payloads = new Map(PAYLOADS);
+    payloads.set(
+      "native-core/wechatdb_client.dll",
+      buildWindowsPeWithExports(["wce_client_abi_version"])
+    );
+    const runtimeManifest = {
+      ...RUNTIME_MANIFEST,
+      files: Object.fromEntries(
+        [...payloads].map(([name, value]) => [
+          name,
+          { sha256: sha256(value), size: value.length, executable: name.endsWith(".exe") },
+        ])
+      ),
+    };
+    const runtimeManifestRaw = Buffer.from(`${JSON.stringify(runtimeManifest, null, 2)}\n`);
+    const pin = { ...PIN, runtimeManifestSha256: sha256(runtimeManifestRaw) };
+    writeRuntime(root, { payloads, runtimeManifestRaw });
+
+    assert.throws(
+      () => validateWindowsSourceRuntimeDirectory(root, pin, { nowUnix: NOW_UNIX }),
+      /missing fused ASR ABI exports: wce_native_asr_get_status, wce_native_asr_begin, wce_native_asr_poll, wce_native_asr_close/
+    );
+  }));
+
 test("Windows source bootstrap rejects an expired pin before network access", () =>
   withTempRoot((root) => {
     assert.throws(
@@ -216,12 +255,12 @@ test("tracked Windows source pin selects the exact immutable public Release asse
   assert.equal(
     publicReleaseUrl(trackedPin),
     "https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/download/" +
-      "windows-source-runtime-20260809-8e355001-71122b5b/" +
+      "windows-source-runtime-20260816-dfd3ebe2-31937143227/" +
       "wechatdataanalysis-windows-source-runtime-x64-v1.tar.gz"
   );
-  assert.equal(trackedPin.assetSha256, "aa041a31015ab243179c56343e67c4250011193663d9b2a5497c07771140e315");
-  assert.equal(trackedPin.runtimeManifestSha256, "50e35244f9ffb75f03e2dbff69c77bd1f85886b7a9ddb24c3539020646461137");
-  assert.equal(trackedPin.expiresAtUnix, 1790145553);
+  assert.equal(trackedPin.assetSha256, "c3ca8fef41c9b83bd1c620a07b80df3e7b67c329bfd38ca570613f050f0f8ad5");
+  assert.equal(trackedPin.runtimeManifestSha256, "e9b7b381a12ad90c93b6e18718aa17fa85d837baf6054d8e4cb8af576802a661");
+  assert.equal(trackedPin.expiresAtUnix, 1790757765);
 });
 
 test("generic source bootstrap wires the verified Windows directory without macOS-only variables", () =>

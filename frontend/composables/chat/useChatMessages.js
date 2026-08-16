@@ -17,6 +17,34 @@ import { createMessageNormalizer, dedupeMessagesById } from '~/lib/chat/message-
 const DEFAULT_CHAT_SOURCE = 'auto'
 const IMAGE_GROUP_LAYOUT_DURATION_MS = 250
 const IMAGE_GROUP_LAYOUT_EASING = 'cubic-bezier(0.2, 0, 0, 1)'
+const NATIVE_VOICE_DISPATCH_TOKEN = Symbol('nativeVoiceDispatchToken')
+
+const nativeVoiceErrorDetail = (error) => error?.data?.detail || error?.detail || {}
+
+export const mergeWechatNativeVoiceTranscript = (message, payload) => {
+  const model = String(payload?.model ?? payload?.voiceTranscriptModel ?? '').trim().toLowerCase()
+  const text = String(payload?.text ?? payload?.voiceTranscript ?? '').trim()
+  if (model !== 'wechat-native' || !text) return message
+
+  const language = String(payload?.language ?? payload?.voiceTranscriptLanguage ?? '').trim()
+  if (
+    String(message?.voiceTranscript || '').trim() === text
+    && String(message?.voiceTranscriptStatus || '').trim() === 'success'
+    && String(message?.voiceTranscriptModel || '').trim().toLowerCase() === 'wechat-native'
+    && String(message?.voiceTranscriptLanguage || '').trim() === language
+    && !String(message?.voiceTranscriptError || '').trim()
+  ) return message
+
+  return {
+    ...message,
+    voiceTranscript: text,
+    voiceTranscriptStatus: 'success',
+    voiceTranscriptError: '',
+    voiceTranscriptLanguage: language,
+    voiceTranscriptModel: 'wechat-native',
+    voiceTranscriptNativeRequestId: ''
+  }
+}
 
 export const useChatMessages = ({
   api,
@@ -43,6 +71,8 @@ export const useChatMessages = ({
   let messageLoadTargetUsername = ''
   let realtimeRefreshController = null
   let realtimeRefreshTargetUsername = ''
+  let nativeVoiceRevision = 0
+  const nativeVoiceTranscriptPolls = new Map()
 
   const isAbortError = (error, controller = null) => {
     return !!(
@@ -141,6 +171,75 @@ export const useChatMessages = ({
       return voiceTranscriptionStatus.value
     })()
     return await voiceTranscriptionStatusPromise
+  }
+
+  const nativeVoiceTranscriptionStatus = ref(null)
+  const nativeVoiceTranscriptionStatusLoading = ref(false)
+  let nativeVoiceTranscriptionStatusPromise = null
+  let nativeVoiceTranscriptionStatusSequence = 0
+  let nativeVoiceTranscriptionStatusUpdatedAt = 0
+  const nativeVoiceTranscriptionStatusTtlMs = 5000
+  const nativeVoiceTranscriptionStatusKnown = computed(() => !!nativeVoiceTranscriptionStatus.value)
+  const nativeVoiceTranscriptionAvailable = computed(() => nativeVoiceTranscriptionStatus.value?.available === true)
+  const nativeVoiceTranscriptionUnavailableReason = computed(() => {
+    const reason = String(nativeVoiceTranscriptionStatus.value?.reason || '').trim()
+    return ({
+      runtime_trigger_e2e_not_validated: '当前微信版本的原生转写桥接尚未启用。',
+      unsupported_platform: '微信原生语音转文字目前仅支持 Windows。',
+      unsupported_architecture: '微信原生语音转文字需要 64 位 Windows。',
+      weixin_main_ui_not_found: '请先登录并打开微信。',
+      weixin_main_ui_ambiguous: '检测到多个微信主窗口，无法安全选择账号。',
+      weixin_version_unsupported: '当前微信版本暂不支持微信原生语音转文字。请使用微信 4.1.12.26，并完全退出、重新启动微信后再试。',
+      active_account_mismatch: '当前项目账号与已登录微信账号不一致。',
+      active_account_unverified: '无法确认当前项目账号与已登录微信账号一致。',
+      bridge_manager_unavailable: '微信原生语音转文字服务尚未就绪。',
+      inspection_failed: '无法检查微信原生语音转文字状态。请重启本应用和微信后再试。',
+      bridge_restart_required: '桥接状态已失效。请完全退出微信，重启本应用（开发模式下同时重启后端）后，再重新打开并登录微信。'
+    })[reason] || reason || '微信原生语音转文字当前不可用。'
+  })
+
+  const refreshNativeVoiceTranscriptionStatus = async ({ force = false } = {}) => {
+    const account = String(selectedAccount.value || '').trim()
+    if (!account) {
+      nativeVoiceTranscriptionStatus.value = null
+      return null
+    }
+    if (
+      !force
+      && nativeVoiceTranscriptionStatus.value
+      && (Date.now() - nativeVoiceTranscriptionStatusUpdatedAt) < nativeVoiceTranscriptionStatusTtlMs
+    ) return nativeVoiceTranscriptionStatus.value
+    if (nativeVoiceTranscriptionStatusPromise?.account === account) {
+      return await nativeVoiceTranscriptionStatusPromise.promise
+    }
+    const sequence = ++nativeVoiceTranscriptionStatusSequence
+    nativeVoiceTranscriptionStatusLoading.value = true
+    const promise = (async () => {
+      let result
+      try {
+        result = await api.getNativeVoiceTranscriptionStatus({ account })
+      } catch (error) {
+        result = {
+          available: false,
+          reason: String(error?.message || '无法读取微信原生语音转文字状态').trim()
+        }
+      } finally {
+        if (sequence === nativeVoiceTranscriptionStatusSequence) {
+          nativeVoiceTranscriptionStatusLoading.value = false
+          nativeVoiceTranscriptionStatusPromise = null
+        }
+      }
+      if (
+        sequence === nativeVoiceTranscriptionStatusSequence
+        && String(selectedAccount.value || '').trim() === account
+      ) {
+        nativeVoiceTranscriptionStatus.value = result
+        nativeVoiceTranscriptionStatusUpdatedAt = Date.now()
+      }
+      return result
+    })()
+    nativeVoiceTranscriptionStatusPromise = { account, promise }
+    return await promise
   }
 
   const highlightServerIdStr = ref('')
@@ -1120,12 +1219,144 @@ export const useChatMessages = ({
     await playVoiceById(message?.id)
   }
 
+  const stopNativeVoiceTranscriptPolling = () => {
+    nativeVoiceRevision += 1
+    for (const entry of nativeVoiceTranscriptPolls.values()) {
+      try { entry.controller?.abort?.() } catch {}
+    }
+    nativeVoiceTranscriptPolls.clear()
+    for (const list of Object.values(allMessages.value || {})) {
+      if (!Array.isArray(list)) continue
+      for (const message of list) {
+        if (
+          String(message?.voiceTranscriptStatus || '').trim().toLowerCase() === 'loading'
+          && (
+            String(message?.voiceTranscriptNativeRequestId || '').trim()
+            || message?.[NATIVE_VOICE_DISPATCH_TOKEN]
+          )
+        ) {
+          message.voiceTranscriptStatus = 'idle'
+          message.voiceTranscriptError = ''
+          delete message[NATIVE_VOICE_DISPATCH_TOKEN]
+        }
+      }
+    }
+  }
+
+  const waitForNativeVoiceTranscriptPoll = (delayMs, signal) => new Promise((resolve) => {
+    if (signal?.aborted || delayMs <= 0) {
+      resolve()
+      return
+    }
+    const finish = () => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }
+    const timer = setTimeout(finish, delayMs)
+    const onAbort = () => {
+      clearTimeout(timer)
+      finish()
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+
+  // 按 requestId + 精确消息 identity 读取 bridge 回调缓存；packed_info_data 仅作为后端兼容回退。
+  const pollNativeVoiceTranscript = async (
+    message,
+    { requestId = '', maxAttempts = 85, intervalMs = 1200 } = {}
+  ) => {
+    const accountAtStart = String(selectedAccount.value || '').trim()
+    const usernameAtStart = String(selectedContact.value?.username || '').trim()
+    const serverId = String(message?.serverIdStr || message?.serverId || '').trim()
+    const localId = String(message?.localIdStr || message?.localId || '').trim()
+    const nativeRequestId = String(requestId || '').trim()
+    const messageId = String(message?.id || '').trim()
+    if (
+      !accountAtStart
+      || !usernameAtStart
+      || !serverId
+      || serverId === '0'
+      || typeof api?.getNativeVoiceTranscript !== 'function'
+    ) return { status: 'pending', serverId, text: '', language: '', model: '' }
+
+    const pollKey = `${accountAtStart}:${usernameAtStart}:${serverId}:${localId}:${nativeRequestId}`
+    const active = nativeVoiceTranscriptPolls.get(pollKey)
+    if (active?.promise) return await active.promise
+
+    const attempts = Math.max(1, Math.min(120, Math.trunc(Number(maxAttempts) || 1)))
+    const delayMs = Math.max(0, Math.min(10000, Math.trunc(Number(intervalMs) || 0)))
+    const controller = typeof AbortController === 'function' ? new AbortController() : null
+    const entry = { controller, promise: null }
+    entry.promise = (async () => {
+      let result = { status: 'pending', serverId, text: '', language: '', model: '' }
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        if (
+          controller?.signal?.aborted
+          || String(selectedAccount.value || '').trim() !== accountAtStart
+          || String(selectedContact.value?.username || '').trim() !== usernameAtStart
+        ) return { ...result, status: 'cancelled' }
+
+        try {
+          result = await api.getNativeVoiceTranscript({
+            account: accountAtStart,
+            server_id: serverId,
+            username: usernameAtStart,
+            ...(localId && localId !== '0' ? { local_id: localId } : {}),
+            ...(nativeRequestId ? { request_id: nativeRequestId } : {}),
+            ...(controller ? { signal: controller.signal } : {})
+          })
+        } catch (error) {
+          if (isAbortError(error, controller)) return { ...result, status: 'cancelled' }
+          throw error
+        }
+
+        const list = allMessages.value[usernameAtStart]
+        const index = Array.isArray(list)
+          ? list.findIndex((item) => (
+              (messageId && String(item?.id || '') === messageId)
+              || String(item?.serverIdStr || item?.serverId || '').trim() === serverId
+            ))
+          : -1
+        if (index < 0) return { ...result, status: 'stale' }
+
+        const resultStatus = String(result?.status || '').trim().toLowerCase()
+        if (['error', 'expired', 'released'].includes(resultStatus)) {
+          const resultError = new Error(String(
+            result?.message || result?.error?.message || '微信原生语音转文字未能返回结果。'
+          ).trim())
+          resultError.code = String(result?.code || result?.error?.code || `native_transcript_${resultStatus}`).trim()
+          throw resultError
+        }
+
+        const updated = mergeWechatNativeVoiceTranscript(list[index], result)
+        if (updated !== list[index]) {
+          const next = list.slice()
+          next[index] = updated
+          allMessages.value = { ...allMessages.value, [usernameAtStart]: next }
+          return { ...result, status: 'success', model: 'wechat-native' }
+        }
+        if (resultStatus === 'success') return result
+        if (attempt + 1 < attempts) {
+          await waitForNativeVoiceTranscriptPoll(delayMs, controller?.signal)
+        }
+      }
+      return result
+    })().finally(() => {
+      if (nativeVoiceTranscriptPolls.get(pollKey) === entry) nativeVoiceTranscriptPolls.delete(pollKey)
+    })
+    nativeVoiceTranscriptPolls.set(pollKey, entry)
+    return await entry.promise
+  }
+
   // 批量读取当前会话语音消息的转写缓存并合并进消息列表（仅恢复展示，不触发识别）。
   // serverIdStr 为精确字符串，禁止转 Number（19 位 svr_id 超出 JS Number 安全范围）。
   const restoreVoiceTranscripts = async (username) => {
+    const transcriptRevision = nativeVoiceRevision
+    const accountAtStart = String(selectedAccount.value || '').trim()
     const key = String(username || '').trim()
     if (!key || privacyMode?.value) return
     void refreshVoiceTranscriptionStatus()
+    void refreshNativeVoiceTranscriptionStatus()
     const list = allMessages.value[key]
     if (!Array.isArray(list) || !list.length) return
 
@@ -1136,13 +1367,134 @@ export const useChatMessages = ({
       return !status || status === 'idle'
     })
     if (!pending.length) return
+
+    if (typeof api?.lookupNativeVoiceTranscriptionCache === 'function') {
+      try {
+        const nativeResponse = await api.lookupNativeVoiceTranscriptionCache({
+          account: accountAtStart,
+          username: key,
+          items: pending.map((message) => ({
+            server_id: String(message?.serverIdStr || message?.serverId || '').trim(),
+            local_id: String(message?.localIdStr || message?.localId || '').trim()
+          })).filter((item) => item.server_id && item.local_id && item.local_id !== '0')
+        })
+        if (
+          transcriptRevision !== nativeVoiceRevision
+          || String(selectedAccount.value || '').trim() !== accountAtStart
+        ) return
+        const nativeItems = Array.isArray(nativeResponse?.items) ? nativeResponse.items : []
+        if (nativeItems.length) {
+          const hits = new Map(nativeItems.map((item) => [
+            `${String(item?.serverId || '').trim()}:${String(item?.localId || '').trim()}`,
+            item
+          ]))
+          const current = allMessages.value[key]
+          if (!Array.isArray(current) || !current.length) return
+          let changed = false
+          const resumedPolls = []
+          const next = current.map((message) => {
+            const identity = `${String(message?.serverIdStr || message?.serverId || '').trim()}:${String(message?.localIdStr || message?.localId || '').trim()}`
+            const hit = hits.get(identity)
+            const hitStatus = String(hit?.status || '').trim().toLowerCase()
+            let updated = mergeWechatNativeVoiceTranscript(message, hit)
+            if (updated === message && hitStatus === 'pending') {
+              const requestId = String(hit?.requestId || '').trim()
+              if (requestId) {
+                updated = {
+                  ...message,
+                  voiceTranscriptStatus: 'loading',
+                  voiceTranscriptError: '',
+                  voiceTranscriptNativeRequestId: requestId
+                }
+                resumedPolls.push({
+                  message: updated,
+                  requestId,
+                  intervalMs: Math.max(1200, Number(hit?.pollAfterMs) || 0)
+                })
+              }
+            } else if (updated === message && hitStatus === 'error') {
+              updated = {
+                ...message,
+                voiceTranscriptStatus: 'error',
+                voiceTranscriptError: String(hit?.message || '微信原生语音转文字未能返回结果。').trim(),
+                voiceTranscriptNativeRequestId: String(hit?.requestId || '').trim()
+              }
+            }
+            if (updated !== message) changed = true
+            return updated
+          })
+          if (changed) allMessages.value = { ...allMessages.value, [key]: next }
+          for (const resumed of resumedPolls) {
+            void pollNativeVoiceTranscript(resumed.message, {
+              requestId: resumed.requestId,
+              intervalMs: resumed.intervalMs
+            }).then(async (result) => {
+              const status = String(result?.status || '').trim().toLowerCase()
+              if (['success', 'cancelled', 'stale'].includes(status)) return
+              const pendingError = new Error('微信原生语音转文字尚未返回结果，请稍后重试。')
+              pendingError.code = 'native_transcript_pending'
+              throw pendingError
+            }).catch(async (error) => {
+              if (
+                transcriptRevision !== nativeVoiceRevision
+                || String(selectedAccount.value || '').trim() !== accountAtStart
+                || String(selectedContact.value?.username || '').trim() !== key
+              ) return
+              await refreshNativeVoiceTranscriptionStatus({ force: true })
+              if (
+                transcriptRevision !== nativeVoiceRevision
+                || String(selectedAccount.value || '').trim() !== accountAtStart
+                || String(selectedContact.value?.username || '').trim() !== key
+              ) return
+              const messages = allMessages.value[key]
+              const index = Array.isArray(messages)
+                ? messages.findIndex((message) => (
+                    String(message?.id || '') === String(resumed.message?.id || '')
+                    || String(message?.serverIdStr || message?.serverId || '').trim()
+                      === String(resumed.message?.serverIdStr || resumed.message?.serverId || '').trim()
+                  ))
+                : -1
+              if (index < 0) return
+              if (
+                String(messages[index]?.voiceTranscriptNativeRequestId || '').trim()
+                !== resumed.requestId
+              ) return
+              const detail = nativeVoiceErrorDetail(error)
+              const updated = {
+                ...messages[index],
+                voiceTranscriptStatus: 'error',
+                voiceTranscriptError: String(
+                  detail?.message || error?.message || '微信原生语音转文字未能返回结果。'
+                ).trim(),
+                voiceTranscriptNativeRequestId: ''
+              }
+              const replacement = messages.slice()
+              replacement[index] = updated
+              allMessages.value = { ...allMessages.value, [key]: replacement }
+            })
+          }
+        }
+      } catch {}
+    }
+
     if (typeof api?.lookupChatVoiceTranscriptionCache !== 'function') return
+    const projectPending = (allMessages.value[key] || []).filter((message) => {
+      if (String(message?.renderType || '') !== 'voice') return false
+      if (!String(message?.serverIdStr || '').trim()) return false
+      const status = String(message?.voiceTranscriptStatus || 'idle')
+      return !status || status === 'idle'
+    })
+    if (!projectPending.length) return
 
     try {
       const resp = await api.lookupChatVoiceTranscriptionCache({
-        account: selectedAccount.value,
-        server_ids: pending.map((m) => String(m.serverIdStr).trim())
+        account: accountAtStart,
+        server_ids: projectPending.map((m) => String(m.serverIdStr).trim())
       })
+      if (
+        transcriptRevision !== nativeVoiceRevision
+        || String(selectedAccount.value || '').trim() !== accountAtStart
+      ) return
       const items = resp?.items
       if (!items || typeof items !== 'object') return
 
@@ -1163,38 +1515,148 @@ export const useChatMessages = ({
     } catch {}
   }
 
-  const transcribeVoice = async (message, { force = false } = {}) => {
+  const transcribeVoice = async (message) => {
+    const transcriptRevision = nativeVoiceRevision
+    const accountAtStart = String(selectedAccount.value || '').trim()
+    const usernameAtStart = String(selectedContact.value?.username || '').trim()
     // 语音消息的 svr_id 是 19 位大整数，超出 JS Number 安全范围（2^53），
     // 必须使用精确字符串 serverIdStr，否则后端会查不到语音数据。
-    const serverId = String(message?.serverIdStr || message?.serverId || '').trim()
-    if (!message || !serverId || serverId === '0' || message.voiceTranscriptStatus === 'loading') return
+    const serverIdStr = String(message?.serverIdStr ?? '').trim()
+    const serverId = serverIdStr || String(message?.serverId ?? '').trim()
+    const localIdStr = String(message?.localIdStr ?? '').trim()
+    const localId = localIdStr || String(message?.localId ?? '').trim()
+    const usableServerId = serverId && serverId !== '0' ? serverId : ''
+    const usableLocalId = localId && localId !== '0' ? localId : ''
+    if (
+      !message
+      || !accountAtStart
+      || !usernameAtStart
+      || (!usableServerId && !usableLocalId)
+      || message.voiceTranscriptStatus === 'loading'
+    ) return
 
     // 模板渲染的是 renderMessages 的浅拷贝（非响应式），直接改拷贝不会驱动 UI 更新，
     // 且 computed 重算时拷贝会被替换导致状态丢失。必须修改 allMessages 中的原对象。
-    const key = String(selectedContact.value?.username || '').trim()
+    const key = usernameAtStart
     const list = key ? allMessages.value[key] : null
     const target =
       (Array.isArray(list) ? list.find((item) => item?.id === message.id) : null) || message
 
-    const capability = await refreshVoiceTranscriptionStatus({ force: true })
-    if (!capability?.available) return
-
+    const nativeDispatchToken = Symbol('nativeVoiceDispatch')
+    Object.defineProperty(target, NATIVE_VOICE_DISPATCH_TOKEN, {
+      configurable: true,
+      enumerable: false,
+      value: nativeDispatchToken,
+      writable: true
+    })
     target.voiceTranscriptStatus = 'loading'
     target.voiceTranscriptError = ''
-    try {
-      const result = await api.transcribeChatVoice({
-        account: selectedAccount.value,
-        server_id: serverId,
-        force
-      })
-      target.voiceTranscript = String(result?.text || '').trim()
-      target.voiceTranscriptLanguage = String(result?.language || '').trim()
-      target.voiceTranscriptModel = String(result?.model || '').trim()
-      target.voiceTranscriptStatus = 'success'
-    } catch (error) {
-      const detail = error?.data?.detail || error?.detail
-      target.voiceTranscriptError = String(detail?.message || error?.message || '语音识别失败').trim()
+    target.voiceTranscriptNativeRequestId = ''
+
+    const requestIsCurrent = () => !(
+      target[NATIVE_VOICE_DISPATCH_TOKEN] !== nativeDispatchToken
+      || transcriptRevision !== nativeVoiceRevision
+      || String(selectedAccount.value || '').trim() !== accountAtStart
+      || String(selectedContact.value?.username || '').trim() !== usernameAtStart
+    )
+
+    const setVoiceError = (error, fallback = '语音识别失败') => {
+      if (!requestIsCurrent()) return
+      const detail = nativeVoiceErrorDetail(error)
+      target.voiceTranscriptError = String(detail?.message || error?.message || fallback).trim()
       target.voiceTranscriptStatus = 'error'
+      target.voiceTranscriptNativeRequestId = ''
+    }
+
+    if (typeof api?.triggerNativeVoiceTranscription !== 'function') {
+      setVoiceError(null, '当前版本未提供微信原生语音转文字接口。')
+      delete target[NATIVE_VOICE_DISPATCH_TOKEN]
+      return
+    }
+
+    try {
+      const nativeResult = await api.triggerNativeVoiceTranscription({
+        account: accountAtStart,
+        username: usernameAtStart,
+        ...(usableServerId ? { server_id: usableServerId } : {}),
+        ...(usableLocalId ? { local_id: usableLocalId } : {})
+      })
+      if (!requestIsCurrent()) return
+
+      const resolvedServerId = String(nativeResult?.serverId ?? '').trim()
+      const resolvedLocalId = String(nativeResult?.localId ?? '').trim()
+      if (resolvedServerId && resolvedServerId !== '0') target.serverIdStr = resolvedServerId
+      if (resolvedLocalId && resolvedLocalId !== '0') target.localIdStr = resolvedLocalId
+
+      const nativeStatus = String(nativeResult?.status || '').trim().toLowerCase()
+      if (nativeStatus === 'success') {
+        const updated = mergeWechatNativeVoiceTranscript(target, {
+          ...nativeResult,
+          model: 'wechat-native'
+        })
+        if (updated === target) {
+          const invalidResponse = new Error('微信原生语音转写返回了无效结果。')
+          invalidResponse.code = 'native_transport_invalid_response'
+          throw invalidResponse
+        }
+        Object.assign(target, updated)
+        target.voiceTranscriptNativeRequestId = ''
+        return
+      }
+
+      if (nativeStatus === 'accepted' || nativeStatus === 'pending') {
+        const nativeRequestId = String(nativeResult?.requestId || '').trim()
+        if (!nativeRequestId) {
+          const invalidResponse = new Error('微信原生语音转写未返回可轮询的 requestId。')
+          invalidResponse.code = 'native_transport_invalid_response'
+          throw invalidResponse
+        }
+        target.voiceTranscriptNativeRequestId = nativeRequestId
+        const pollResult = await pollNativeVoiceTranscript(target, {
+          requestId: nativeRequestId,
+          intervalMs: Math.max(1200, Number(nativeResult?.pollAfterMs) || 0)
+        })
+        if (!requestIsCurrent()) return
+        if (String(pollResult?.status || '').trim().toLowerCase() === 'success') {
+          const updated = mergeWechatNativeVoiceTranscript(target, {
+            ...pollResult,
+            model: 'wechat-native'
+          })
+          if (updated === target) {
+            const invalidResponse = new Error('微信原生语音转写轮询返回了无效结果。')
+            invalidResponse.code = 'native_transport_invalid_response'
+            setVoiceError(invalidResponse)
+            return
+          }
+          Object.assign(target, updated)
+          target.voiceTranscriptNativeRequestId = ''
+          return
+        }
+        if (['cancelled', 'stale'].includes(String(pollResult?.status || '').trim().toLowerCase())) return
+        const pendingError = new Error('微信原生语音转写尚未返回结果，请稍后重试。')
+        pendingError.code = 'native_transcript_pending'
+        await refreshNativeVoiceTranscriptionStatus({ force: true })
+        if (!requestIsCurrent()) return
+        setVoiceError(pendingError)
+        return
+      }
+
+      const invalidResponse = new Error('微信原生语音转写返回了未知状态。')
+      invalidResponse.code = 'native_transport_invalid_response'
+      throw invalidResponse
+    } catch (error) {
+      if (!requestIsCurrent()) return
+      await refreshNativeVoiceTranscriptionStatus({ force: true })
+      if (!requestIsCurrent()) return
+      setVoiceError(error, '微信原生语音转写触发失败')
+    } finally {
+      if (target[NATIVE_VOICE_DISPATCH_TOKEN] === nativeDispatchToken) {
+        delete target[NATIVE_VOICE_DISPATCH_TOKEN]
+        if (String(target.voiceTranscriptStatus || '').trim().toLowerCase() === 'loading') {
+          target.voiceTranscriptStatus = 'idle'
+          target.voiceTranscriptError = ''
+        }
+      }
     }
   }
 
@@ -1810,17 +2272,47 @@ export const useChatMessages = ({
       loadLargeImagePreferences()
       const latest = hydrateQuoteImageUrls(dedupeMessagesById(rawMessages.map(normalizeMessage)), existing)
 
-      const seenIds = new Set(existing.map((message) => String(message?.id || '')))
+      const latestById = new Map(
+        latest
+          .map((message) => [String(message?.id || ''), message])
+          .filter(([id]) => !!id)
+      )
+      const latestByServerId = new Map(
+        latest
+          .map((message) => [String(message?.serverIdStr || message?.serverId || '').trim(), message])
+          .filter(([serverId]) => !!serverId && serverId !== '0')
+      )
+      let existingChanged = false
+      const updatedExisting = existing.map((message) => {
+        const incoming = latestById.get(String(message?.id || ''))
+          || latestByServerId.get(String(message?.serverIdStr || message?.serverId || '').trim())
+        if (!incoming) return message
+        const updated = mergeWechatNativeVoiceTranscript(message, incoming)
+        if (updated !== message) existingChanged = true
+        return updated
+      })
+
+      const seenIds = new Set(updatedExisting.map((message) => String(message?.id || '')))
+      const seenServerIds = new Set(
+        updatedExisting
+          .map((message) => String(message?.serverIdStr || message?.serverId || '').trim())
+          .filter((serverId) => !!serverId && serverId !== '0')
+      )
       const newOnes = []
       for (const message of latest) {
         const id = String(message?.id || '')
-        if (!id || seenIds.has(id)) continue
+        const serverId = String(message?.serverIdStr || message?.serverId || '').trim()
+        if (!id || seenIds.has(id) || (serverId && serverId !== '0' && seenServerIds.has(serverId))) continue
         seenIds.add(id)
+        if (serverId && serverId !== '0') seenServerIds.add(serverId)
         newOnes.push(message)
       }
-      if (!newOnes.length) return
+      if (!newOnes.length && !existingChanged) return
 
-      allMessages.value = { ...allMessages.value, [username]: hydrateQuoteImageUrls([...existing, ...newOnes]) }
+      allMessages.value = {
+        ...allMessages.value,
+        [username]: hydrateQuoteImageUrls([...updatedExisting, ...newOnes])
+      }
 
       await nextTick()
       const nextContainer = messageContainerRef.value
@@ -1874,6 +2366,7 @@ export const useChatMessages = ({
   const resetMessageState = () => {
     abortMessageLoad()
     abortRealtimeRefresh()
+    stopNativeVoiceTranscriptPolling()
     clearVoicePlaybackState()
     allMessages.value = {}
     messagesMeta.value = {}
@@ -2479,9 +2972,18 @@ export const useChatMessages = ({
     clearContactProfileHoverHideTimer()
   }
 
+  const onNativeVoiceWindowFocus = () => {
+    void refreshNativeVoiceTranscriptionStatus({ force: true })
+  }
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', onNativeVoiceWindowFocus)
+  }
+
   watch(
     () => selectedContact.value?.username,
     (username) => {
+      stopNativeVoiceTranscriptPolling()
       const nextUsername = String(username || '').trim()
       if (messageLoadTargetUsername && messageLoadTargetUsername !== nextUsername) {
         abortMessageLoad()
@@ -2505,6 +3007,13 @@ export const useChatMessages = ({
   watch(
     () => selectedAccount.value,
     () => {
+      stopNativeVoiceTranscriptPolling()
+      nativeVoiceTranscriptionStatusSequence += 1
+      nativeVoiceTranscriptionStatusPromise = null
+      nativeVoiceTranscriptionStatusLoading.value = false
+      nativeVoiceTranscriptionStatus.value = null
+      nativeVoiceTranscriptionStatusUpdatedAt = 0
+      void refreshNativeVoiceTranscriptionStatus()
       clearExpandedImageGroups()
       loadLargeImagePreferences()
       clearContactProfileHoverHideTimer()
@@ -2516,8 +3025,12 @@ export const useChatMessages = ({
   )
 
   onUnmounted(() => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('focus', onNativeVoiceWindowFocus)
+    }
     abortMessageLoad()
     abortRealtimeRefresh()
+    stopNativeVoiceTranscriptPolling()
     if (highlightTimer) clearTimeout(highlightTimer)
     highlightTimer = null
     cancelImageGroupTransition()
@@ -2569,6 +3082,12 @@ export const useChatMessages = ({
     voiceTranscriptionAvailable,
     voiceTranscriptionUnavailableReason,
     refreshVoiceTranscriptionStatus,
+    nativeVoiceTranscriptionStatus,
+    nativeVoiceTranscriptionStatusLoading,
+    nativeVoiceTranscriptionStatusKnown,
+    nativeVoiceTranscriptionAvailable,
+    nativeVoiceTranscriptionUnavailableReason,
+    refreshNativeVoiceTranscriptionStatus,
     highlightServerIdStr,
     highlightMessageId,
     expandedImageGroupKeys,
@@ -2629,6 +3148,9 @@ export const useChatMessages = ({
     setVoiceRef,
     playVoice,
     transcribeVoice,
+    pollNativeVoiceTranscript,
+    restoreVoiceTranscripts,
+    stopNativeVoiceTranscriptPolling,
     playQuoteVoice,
     getQuoteVoiceId,
     getVoiceDurationInSeconds,

@@ -112,6 +112,21 @@
 
 > Excel 格式生成 `.xlsx` 文件；聊天记录、朋友圈和收藏会将对应格式文件与必要资源一起打包为 ZIP。
 
+### Windows 微信原生语音转文字（固定版本）
+
+项目正在接入一条仅面向 Windows x64 固定版本的微信原生语音转文字路径。底层固定 hook 与适配器此前已用两条不同会话中尚无转写缓存的语音完成真实产品链路验收；本次融合进 native-core 的签名制品已经完成构建、离线验证和交付门禁，但仍须在全新微信进程中重新完成产品 E2E 后，才能作为正式兼容性证明。它调用微信客户端内部的在线 ASR 流程（在线检查、音频上传和结果轮询），不是离线识别，也不会把微信内部接口包装成独立的本地模型服务；可用性、网络访问和账号状态仍受微信客户端及其在线服务约束。
+
+这条路径按账号、会话和消息标识直接发起请求，设计目标是不打开目标聊天、不定位语音气泡，也不需要人工点击“转文字”。运行时仍必须保持微信客户端已启动并登录，且当前登录账号必须与正在读取的数据账号一致。目前只允许精确匹配以下客户端构建：
+
+- 微信 `4.1.12.26`（Windows x64）
+- `Weixin.dll` SHA-256：`4914a621a810ecbc0a132b6ff8f612658cfce323d3989b3e5fe32d4ff343ba46`
+
+主操作不会在原生路径失败或不可用时自动回退到 Whisper，避免用户在不知情时切换识别来源。成功结果以**明文**持久化到账号目录的 `_cache/native_voice_transcripts.sqlite3`；需要按本地聊天数据同等敏感级别保护、备份或删除该文件。
+
+远端 hook 与固定版本适配器已编入现有签名的 `wechatdb_client.dll`，控制器由 `wechatdb_broker.exe` 持有；每次开始、轮询和关闭任务都经过 native-core 会话、一次性 nonce 和独立的 `native-asr` 在线授权。该功能不属于离线默认权限，也不再分发独立 hook 或明文 Python controller。
+
+原生 hook 首次使用后会随当前微信进程驻留，直到微信完全退出，目的是避免微信异步回调落入已经卸载的 DLL。不要在同一微信进程内尝试卸载或重复注入；如果 bridge 已经加载后又重启了本项目后端，必须先完全退出并重新启动微信，再使用原生转写。
+
 ### 本地语音转文字（Whisper）
 
 聊天页可以在保留原语音播放的同时，按需将语音识别为中文；HTML、JSON、TXT 和 Excel 导出也可以选择把转写文字与原语音一起写入归档。转写结果按账号、消息 ID、音频内容和模型缓存在账号目录的 `_cache/voice_transcripts.sqlite3`，重复查看或导出不会再次识别。
@@ -207,7 +222,7 @@ npm run dev
 
 首次启动会通过公开 HTTPS 从本仓库固定 Release 下载对应平台的受限原生运行时，并在校验归档 SHA-256、内部文件清单、签名配置和 45 天有效期后缓存。macOS 缓存位于 `~/Library/Caches/WeChatDataAnalysis/source-native-core`，Windows 缓存位于 `%LOCALAPPDATA%\WeChatDataAnalysis\source-native-core`。这一过程不需要 GitHub CLI、GitHub 账号、Token 或私有 Producer 仓库权限。固定运行时过期后执行 `git pull` 获取新的公开固定版本；程序不会接受过期、被修改或平台不匹配的缓存。
 
-`src/wechat_decrypt_tool/native/` 下的 DLL、Broker 和 manifest 被 `.gitignore` 排除是预期设计：源码启动器会把经过固定摘要验证的制品放入用户缓存并通过受控环境变量交给后端，不会把私有 native-core 源码或可误提交的二进制直接放进 Git 工作树。
+私有实时数据库 native-core 的 `wechatdb_client.dll`、`wechatdb_broker.exe`、`wechatdb_native_build.json` 等文件被 `.gitignore` 排除是预期设计：源码启动器会把经过固定摘要验证的制品放入用户缓存并通过受控环境变量交给后端，不会把私有 native-core 源码或可误提交的二进制直接放进 Git 工作树。Windows 微信原生 ASR 已融合进同一组 native-core 制品，不再额外打包独立 hook、manifest 或 Python controller；目标微信版本与内部 ABI 由私有 producer 构建并随 client/broker 的签名、精确摘要和授权策略一起验证。
 
 仅开发不依赖实时数据库的 Web 界面时，也可以分别启动后端和前端。该方式不会执行桌面端原生运行时预检，不应用于验证实时聊天读取：
 
