@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, quote, urlparse
 
+from .account_identity import resolve_account_self_username
 from .chat_accounts import list_chat_account_names, resolve_chat_account_context
 from .logging_config import get_logger
 from .sqlite_diagnostics import collect_sqlite_diagnostics, format_sqlite_diagnostics, is_usable_sqlite_db
@@ -2588,7 +2589,7 @@ def _row_to_search_hit(
             sender_username = xml_sender
 
     if is_sent:
-        sender_username = account_dir.name
+        sender_username = resolve_account_self_username(account_dir)
     elif (not is_group) and (not sender_username):
         sender_username = username
 

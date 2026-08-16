@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
+from .account_source_policy import source_metadata_prefers_decrypted_snapshot
 from .app_paths import get_output_databases_dir
 from .chat_accounts import list_chat_account_names, resolve_chat_account_context
 from .chat_helpers import _decode_message_content
@@ -1148,6 +1149,12 @@ def _load_account_source_info(account_dir: Path) -> dict[str, Any]:
                 data.update(loaded)
     except Exception:
         data = {}
+    # Imported archives are local decrypted snapshots. A key captured on the
+    # current computer may refer to another WeChat data directory for the same
+    # wxid, so never merge that host path into an imported snapshot marker.
+    if source_metadata_prefers_decrypted_snapshot(data):
+        return data
+
     try:
         from .key_store import get_account_keys_from_store, normalize_key_store_path
 
@@ -1331,6 +1338,8 @@ def _guess_wxid_dir_from_common_paths(account_name: str) -> Optional[Path]:
 
 def _resolve_account_wxid_dir(account_dir: Path) -> Optional[Path]:
     info = _load_account_source_info(account_dir)
+    if source_metadata_prefers_decrypted_snapshot(info):
+        return None
     wxid_dir = str(info.get("wxid_dir") or "").strip()
     if wxid_dir:
         try:
@@ -1344,6 +1353,8 @@ def _resolve_account_wxid_dir(account_dir: Path) -> Optional[Path]:
 
 def _resolve_account_db_storage_dir(account_dir: Path) -> Optional[Path]:
     info = _load_account_source_info(account_dir)
+    if source_metadata_prefers_decrypted_snapshot(info):
+        return None
     db_storage_path = str(info.get("db_storage_path") or "").strip()
     if db_storage_path:
         resolved = _resolve_db_storage_path_like_weflow(db_storage_path, account_dir.name)

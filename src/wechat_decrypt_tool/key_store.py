@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from .account_identity import canonical_account_name
 from .app_paths import get_account_keys_path
 
 _KEY_STORE_PATH = get_account_keys_path()
@@ -58,6 +59,25 @@ def _normalize_account_aliases(*values: Optional[str], aliases: Optional[Iterabl
         out.append(key)
 
     return out
+
+
+def _canonical_account_key_name(value: Any) -> str:
+    return canonical_account_name(value)
+
+
+def _stored_account_identity_names(name: str, item: Any) -> set[str]:
+    identities = {
+        _canonical_account_key_name(name),
+        _canonical_account_key_name(
+            (item or {}).get("image_key_derived_wxid") if isinstance(item, dict) else ""
+        ),
+    }
+    if isinstance(item, dict):
+        for key in ("db_key_source_wxid_dir", "image_key_source_wxid_dir"):
+            raw = normalize_key_store_path(item.get(key))
+            if raw:
+                identities.add(_canonical_account_key_name(Path(raw).name))
+    return {value for value in identities if value}
 
 
 def _normalize_image_xor_key(value: Any) -> Optional[int]:
@@ -242,3 +262,53 @@ def remove_account_keys_from_store(account: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def remove_account_family_keys_from_store(account: str) -> list[str]:
+    """Remove canonical/source-suffix aliases for one WeChat account atomically."""
+
+    account = str(account or "").strip()
+    canonical_account = _canonical_account_key_name(account)
+    if not canonical_account:
+        return []
+
+    with _KEY_STORE_LOCK:
+        store = load_account_keys_store()
+        remove_names: list[str] = []
+        target_roots: set[str] = set()
+
+        for name, item in store.items():
+            if canonical_account in _stored_account_identity_names(name, item):
+                remove_names.append(str(name))
+                root = _stored_db_storage_path(item)
+                if root:
+                    target_roots.add(root)
+
+        # Source-equivalent aliases can use a human-facing account name rather
+        # than the canonical wxid. Once one canonical entry identifies the
+        # source root, remove every remaining key-store alias for that root.
+        if target_roots:
+            for name, item in store.items():
+                if str(name) in remove_names:
+                    continue
+                if _stored_db_storage_path(item) in target_roots:
+                    remove_names.append(str(name))
+
+        if not remove_names:
+            return []
+
+        removed_items = [store.pop(name, None) for name in remove_names]
+        _atomic_write_json(_KEY_STORE_PATH, store)
+
+        removed_roots = {
+            root
+            for item in removed_items
+            if (root := _stored_db_storage_path(item))
+        }
+        referenced_roots = {
+            root
+            for item in store.values()
+            if (root := _stored_db_storage_path(item))
+        }
+        _purge_native_raw_key_cache_roots(removed_roots - referenced_roots)
+        return remove_names

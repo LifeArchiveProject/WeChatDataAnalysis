@@ -21,6 +21,8 @@ from starlette.background import BackgroundTask
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, FileResponse  # 返回视频文件
 
+from ..account_identity import resolve_account_self_username
+from ..account_source_policy import account_prefers_decrypted_snapshot
 from ..chat_helpers import _load_contact_rows, _pick_display_name, _resolve_account_dir
 from ..logging_config import get_logger
 from ..source_fallback import build_source_fallback_meta, normalize_data_source
@@ -1445,10 +1447,12 @@ def _get_sns_cover(account_dir: Path, target_wxid: str) -> Optional[dict[str, An
 def api_sns_self_info(account: Optional[str] = None, source: str = "auto"):
 
     account_dir = _resolve_account_dir(account)
-    wxid = account_dir.name
+    wxid = resolve_account_self_username(account_dir)
     requested_source = normalize_data_source(source, "auto")
     if requested_source not in {"auto", "realtime", "decrypted"}:
         raise HTTPException(status_code=400, detail="Invalid source. Use auto, realtime, or decrypted.")
+    if requested_source == "auto" and account_prefers_decrypted_snapshot(account_dir):
+        requested_source = "decrypted"
 
     logger.info(f"[self_info] 开始获取账号信息, 预设 wxid: {wxid}")
 
@@ -1727,6 +1731,8 @@ def list_sns_timeline(
     requested_source = normalize_data_source(source, "auto")
     if requested_source not in {"auto", "realtime", "decrypted"}:
         raise HTTPException(status_code=400, detail="Invalid source. Use auto, realtime, or decrypted.")
+    if requested_source == "auto" and account_prefers_decrypted_snapshot(account_dir):
+        requested_source = "decrypted"
 
     users = _parse_csv_list(usernames)
     kw = str(keyword or "").strip()
@@ -1734,7 +1740,7 @@ def list_sns_timeline(
     cover_data = None
     covers_data: list[dict[str, Any]] = []
     if offset == 0:
-        target_wxid = users[0] if users else account_dir.name
+        target_wxid = users[0] if users else resolve_account_self_username(account_dir)
         covers_data = _get_sns_covers(
             account_dir,
             target_wxid,

@@ -14,6 +14,8 @@ from typing import Any, Callable, Literal, Optional
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field, SecretStr
 
+from ..account_source_policy import account_prefers_decrypted_snapshot
+
 try:
     from pypinyin import Style, lazy_pinyin
 except Exception:  # pragma: no cover - depends on optional runtime package availability
@@ -364,6 +366,8 @@ def _normalize_contacts_source(value: Optional[str]) -> str:
 
 def _resolve_contacts_source_for_account(source_norm: str, account_dir: Path) -> str:
     # 新模式：auto 一律走 direct WCDB。旧本地 contact.db/session.db 只在显式 decrypted 时使用。
+    if source_norm == "auto" and account_prefers_decrypted_snapshot(account_dir):
+        return "decrypted"
     if source_norm == "auto":
         return "realtime"
     return source_norm

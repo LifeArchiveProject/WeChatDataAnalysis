@@ -443,11 +443,16 @@ def _copy_supplemental_account_entries(info: dict, destination: Path) -> None:
 
 def _next_backup_dir(account_output_dir: Path) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    base = account_output_dir.with_name(f"{account_output_dir.name}.backup-{stamp}")
+    # Keep rollback copies outside output/databases. Account discovery treats
+    # directories under databases as selectable accounts, so a sibling
+    # `wxid_xxx.backup-*` would surface stale data in the UI.
+    backup_root = account_output_dir.parent.parent / "account_backups" / account_output_dir.name
+    backup_root.mkdir(parents=True, exist_ok=True)
+    base = backup_root / stamp
     candidate = base
     i = 1
     while candidate.exists():
-        candidate = account_output_dir.with_name(f"{base.name}-{i}")
+        candidate = backup_root / f"{stamp}-{i}"
         i += 1
     return candidate
 
@@ -469,6 +474,11 @@ def _rollback_account_backup(account_output_dir: Path, backup_dir: Optional[Path
         else:
             shutil.rmtree(account_output_dir)
     shutil.move(str(backup_dir), str(account_output_dir))
+    try:
+        backup_dir.parent.rmdir()
+        backup_dir.parent.parent.rmdir()
+    except OSError:
+        pass
 
 
 def _remove_path(path: Optional[Path]) -> None:
@@ -772,9 +782,13 @@ async def import_decrypted_directory(
                 (dst / "_source.json").write_text(
                     json.dumps(
                         {
-                            "db_storage_path": str(path), 
-                            "import_mode": "manual_import", 
-                            "imported_at": __import__('datetime').datetime.now().isoformat(),
+                            # `path` is an archive/decrypted snapshot source, not
+                            # a live WeChat db_storage directory. Recording it as
+                            # db_storage_path makes source=auto reconnect to data
+                            # from the current computer for the same wxid.
+                            "import_source_path": str(path),
+                            "import_mode": "manual_import",
+                            "imported_at": datetime.now().isoformat(),
                             "original_info": info
                         },
                         ensure_ascii=False,
@@ -783,11 +797,8 @@ async def import_decrypted_directory(
                     encoding="utf-8",
                 )
 
-            try:
-                source_path = import_path_obj if archive_source else Path(info.get("account_dir") or import_path_obj)
-                await asyncio.to_thread(_save_source_info, staging_output_dir, source_path, info)
-            except Exception:
-                pass
+            source_path = import_path_obj if archive_source else Path(info.get("account_dir") or import_path_obj)
+            await asyncio.to_thread(_save_source_info, staging_output_dir, source_path, info)
 
             # 9. 构建缓存
             yield _sse({"type": "progress", "percent": 90, "message": "正在构建会话缓存 (这可能需要较长时间)..."})
@@ -807,6 +818,16 @@ async def import_decrypted_directory(
                 yield _sse({"type": "progress", "percent": 96, "message": "正在备份旧账号数据并切换到新归档..."})
             else:
                 yield _sse({"type": "progress", "percent": 96, "message": "正在启用导入的账号数据..."})
+
+            # A cached native handle is keyed by account name and may still be
+            # connected to this computer's live WeChat directory. Invalidate it
+            # before replacing the account snapshot.
+            try:
+                from ..wcdb_realtime import WCDB_REALTIME
+
+                await asyncio.to_thread(WCDB_REALTIME.disconnect, account_name)
+            except Exception:
+                logger.exception("导入前断开实时数据库失败: account=%s", account_name)
             backup_dir = await asyncio.to_thread(_install_staged_account, staging_output_dir, account_output_dir)
             staging_output_dir = None
 
