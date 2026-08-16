@@ -1,5 +1,6 @@
 ﻿"""微信解密工具的FastAPI Web服务器"""
 
+import mimetypes
 import os
 from pathlib import Path
 
@@ -143,8 +144,26 @@ app.include_router(_record_export_router)
 app.include_router(_system_router)
 
 
+# Python's MIME database inherits Windows registry overrides.  Keep the
+# generated frontend's static asset types deterministic across installations.
+for _media_type, _suffix in (
+    ("text/javascript", ".js"),
+    ("text/javascript", ".mjs"),
+    ("text/css", ".css"),
+    ("application/json", ".json"),
+    ("image/svg+xml", ".svg"),
+):
+    mimetypes.add_type(_media_type, _suffix)
+
+
 class _SPAStaticFiles(StaticFiles):
     """StaticFiles with a SPA fallback (Nuxt generate output)."""
+
+    _CONTENT_TYPE_OVERRIDES = {
+        ".js": "text/javascript; charset=utf-8",
+        ".mjs": "text/javascript; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+    }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -180,6 +199,9 @@ class _SPAStaticFiles(StaticFiles):
         normalized = self._normalize_path(path)
         try:
             response = await super().get_response(path, scope)
+            content_type = self._CONTENT_TYPE_OVERRIDES.get(Path(normalized).suffix.lower())
+            if content_type:
+                response.headers["content-type"] = content_type
             return self._apply_cache_headers(normalized, response)
         except StarletteHTTPException as exc:
             if exc.status_code != 404:
