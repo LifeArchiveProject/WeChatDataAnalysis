@@ -329,6 +329,36 @@
   margin: 0;
 }
 
+.wechat-voice-transcript__source {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.2;
+  opacity: 0.62;
+  white-space: nowrap;
+}
+
+.wechat-voice-transcript__source::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.wechat-voice-transcript__source--wechat::before {
+  background: var(--text-secondary);
+}
+
+.wechat-voice-transcript__source--project::before {
+  background: var(--app-accent);
+}
+
 .wechat-voice-transcript--error .wechat-voice-transcript__error {
   opacity: 0.85;
 }

@@ -31,9 +31,10 @@ class TestVoiceTranscriptionContract(unittest.TestCase):
         self.assertIn(':src="message.voiceUrl"', content)
         self.assertIn("message.voiceTranscriptStatus === 'loading'", content)
         self.assertIn("message.voiceTranscriptStatus === 'success'", content)
-        self.assertIn("transcribeVoice(message, { force: true })", content)
+        self.assertIn("transcribeVoice(message)", content)
+        self.assertNotIn("transcribeVoice(message, { force: true })", content)
         self.assertIn("const transcribeVoice = async", messages)
-        self.assertIn("api.transcribeChatVoice", messages)
+        self.assertIn("api.triggerNativeVoiceTranscription", messages)
 
     def test_export_option_is_wired_from_dialog_to_backend(self):
         dialog = (ROOT / "frontend" / "components" / "chat" / "ChatExportDialog.vue").read_text(encoding="utf-8")
