@@ -164,7 +164,11 @@
                       class="hidden"
                     ></audio>
                     <div
-                      v-if="!privacyMode && typeof transcribeVoice === 'function'"
+                      v-if="!privacyMode && (
+                        typeof transcribeVoice === 'function'
+                        || message.voiceTranscriptStatus === 'success'
+                        || !!message.voiceTranscript
+                      )"
                       class="wechat-voice-transcript"
                       :class="[
                         message.isSent ? 'wechat-voice-transcript--sent' : 'wechat-voice-transcript--received',
@@ -172,37 +176,50 @@
                       ]"
                     >
                       <button
-                        v-if="(!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle') && voiceTranscriptionAvailable"
+                        v-if="typeof transcribeVoice === 'function' && !message.voiceTranscript && (!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle') && nativeVoiceTranscriptionAvailable"
                         type="button"
                         class="wechat-voice-transcript__action"
-                        title="将语音识别为中文"
+                        title="使用微信原生语音转文字"
                         @click.stop="transcribeVoice(message)"
                       >
                         <i class="fa-solid fa-language" aria-hidden="true"></i>
-                        <span>转文字</span>
+                        <span>微信转文字</span>
                       </button>
                       <span
-                        v-else-if="(!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle') && (!voiceTranscriptionStatusKnown || voiceTranscriptionStatusLoading)"
+                        v-else-if="!message.voiceTranscript && (!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle') && (!nativeVoiceTranscriptionStatusKnown || nativeVoiceTranscriptionStatusLoading)"
                         class="wechat-voice-transcript__status"
                         role="status"
-                      >正在检查本地模型…</span>
+                      >正在检查微信转写…</span>
                       <span
-                        v-else-if="!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle'"
+                        v-else-if="!message.voiceTranscript && (!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle')"
                         class="wechat-voice-transcript__error"
-                      >{{ voiceTranscriptionUnavailableReason }}</span>
+                      >{{ nativeVoiceTranscriptionUnavailableReason }}</span>
                       <span v-else-if="message.voiceTranscriptStatus === 'loading'" class="wechat-voice-transcript__status" role="status">
                         <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
                         正在转文字…
                       </span>
-                      <p v-else-if="message.voiceTranscriptStatus === 'success'" class="wechat-voice-transcript__text">{{ message.voiceTranscript || '未识别到文字' }}</p>
+                      <template v-else-if="message.voiceTranscriptStatus === 'success' || !!message.voiceTranscript">
+                        <span
+                          class="wechat-voice-transcript__source"
+                          :class="`wechat-voice-transcript__source--${voiceTranscriptSourceKey(message)}`"
+                          :data-transcript-source="voiceTranscriptSourceKey(message)"
+                          :title="voiceTranscriptSourceTitle(message)"
+                        >{{ voiceTranscriptSourceLabel(message) }}</span>
+                        <p class="wechat-voice-transcript__text">{{ message.voiceTranscript || '未识别到文字' }}</p>
+                      </template>
                       <template v-else>
                         <span class="wechat-voice-transcript__error">{{ message.voiceTranscriptError || '语音识别失败' }}</span>
                         <button
+                          v-if="typeof transcribeVoice === 'function' && nativeVoiceTranscriptionAvailable && !nativeVoiceTranscriptionStatusLoading"
                           type="button"
                           class="wechat-voice-transcript__retry"
                           title="重新识别"
-                          @click.stop="transcribeVoice(message, { force: true })"
+                          @click.stop="transcribeVoice(message)"
                         >重试</button>
+                        <span
+                          v-else-if="!nativeVoiceTranscriptionAvailable"
+                          class="wechat-voice-transcript__error"
+                        >{{ nativeVoiceTranscriptionUnavailableReason }}</span>
                       </template>
                     </div>
                   </div>
@@ -593,6 +610,26 @@ export default defineComponent({
       props.state?.toggleImageGroupExpanded?.(groupKey)
     }
 
+    const voiceTranscriptSourceKey = (message) => {
+      const model = String(message?.voiceTranscriptModel || '').trim().toLowerCase()
+      if (model === 'wechat-native') return 'wechat'
+      return model ? 'project' : 'unknown'
+    }
+
+    const voiceTranscriptSourceLabel = (message) => ({
+      wechat: '微信原生转写',
+      project: '本项目转写',
+      unknown: '转写来源未标记'
+    })[voiceTranscriptSourceKey(message)]
+
+    const voiceTranscriptSourceTitle = (message) => {
+      const source = voiceTranscriptSourceKey(message)
+      if (source === 'wechat') return '文字由微信客户端原生语音转文字能力生成'
+      const model = String(message?.voiceTranscriptModel || '').trim()
+      if (source === 'project') return `文字由本项目本地 Whisper 转写（模型：${model}）`
+      return '该转写记录没有来源标记'
+    }
+
     const parseEmojiSegments = (text) => {
       const fn = props.state?.parseTextWithEmoji
       if (typeof fn === 'function') return fn(String(text || ''))
@@ -687,6 +724,9 @@ export default defineComponent({
       onMessageEmojiRenderError,
       imageGroupLazySource,
       toggleImageGroupWithTransition,
+      voiceTranscriptSourceKey,
+      voiceTranscriptSourceLabel,
+      voiceTranscriptSourceTitle,
       wechatPcLogoUrl
     }
   }

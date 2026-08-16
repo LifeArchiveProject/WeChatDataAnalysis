@@ -12,6 +12,10 @@ const {
 const {
   resolveIntegrityNativeArtifact,
 } = require("./integrity-native-packaging.cjs");
+const {
+  assertWindowsNativeAsrCapability,
+  windowsNativeAsrManifestErrors,
+} = require("../src/windows-native-asr-capability.cjs");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const entry = path.join(repoRoot, "src", "wechat_decrypt_tool", "backend_entry.py");
@@ -41,6 +45,11 @@ const LEGACY_WCDB_FILE_NAMES = new Set([
   "WCDB.dll",
   "libwcdb_api.dylib",
   "libWCDB.dylib",
+]);
+const RETIRED_STANDALONE_ASR_FILE_NAMES = new Set([
+  "wechat_native_asr_manifest.json",
+  "wechat_native_asr_python_transport.py",
+  "wechat_native_asr_weixin_hook.dll",
 ]);
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["", "0", "false", "no", "off"]);
@@ -87,6 +96,9 @@ function nativeCoreManifestErrors(manifest) {
   }
   if (manifest.schemaVersion === 2 && Object.prototype.hasOwnProperty.call(manifest, "platform")) {
     errors.push("schemaVersion 2 must not declare platform");
+  }
+  if (manifest.schemaVersion === 2) {
+    errors.push(...windowsNativeAsrManifestErrors(manifest));
   }
   if (typeof manifest.buildId !== "string" || manifest.buildId.trim() === "") {
     errors.push("buildId must be a non-empty string");
@@ -288,6 +300,10 @@ function resolveNativeCoreArtifacts({ env = process.env, platform = process.plat
     );
   }
 
+  if (platform === "win32") {
+    assertWindowsNativeAsrCapability({ nativeDir: artifactDir, manifest });
+  }
+
   return { artifactDir, allowDevelopment, manifest, names, required };
 }
 
@@ -305,7 +321,19 @@ function prepareRuntimeNativeDir(sourceDir, destinationDir) {
         return false;
       }
       const name = path.basename(relative);
-      return !NATIVE_CORE_FILE_NAMES.has(name) && !LEGACY_WCDB_FILE_NAMES.has(name);
+      const pathSegments = normalizedRelative.split("/");
+      if (pathSegments.includes("__pycache__") || name.endsWith(".pyc")) {
+        return false;
+      }
+      if (
+        name.startsWith("wechat_native_asr_python_transport.") ||
+        name.startsWith("win32_native_voice_bridge.")
+      ) {
+        return false;
+      }
+      return !NATIVE_CORE_FILE_NAMES.has(name) &&
+        !LEGACY_WCDB_FILE_NAMES.has(name) &&
+        !RETIRED_STANDALONE_ASR_FILE_NAMES.has(name);
     },
   });
 }

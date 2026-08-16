@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 import requests
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictStr
 
 from ..account_source_policy import account_prefers_decrypted_snapshot
 from ..avatar_cache import (
@@ -83,6 +83,15 @@ from ..voice_transcription import (
     load_voice_data,
     set_voice_transcription_device,
 )
+from ..native_voice_transcription import (
+    NativeVoiceTriggerError,
+    lookup_native_voice_transcript_cache,
+    normalize_native_voice_conversation,
+    parse_native_voice_message_id,
+    resolve_native_voice_target,
+    trigger_native_voice_transcription,
+)
+from ..native_core_voice_asr import native_core_voice_asr_status as native_bridge_status
 
 logger = get_logger(__name__)
 
@@ -109,6 +118,66 @@ class VoiceTranscriptionCacheLookupRequest(BaseModel):
 
 class VoiceTranscriptionSettingsRequest(BaseModel):
     device: str = Field(..., description="推理设备：cpu 或 cuda")
+
+
+class NativeVoiceTranscriptionTriggerRequest(BaseModel):
+    server_id: Optional[StrictStr] = Field(
+        None,
+        description="语音消息服务端 ID（精确十进制字符串）",
+    )
+    local_id: Optional[StrictStr] = Field(
+        None,
+        description="语音消息本地 ID（精确十进制字符串）",
+    )
+    account: StrictStr = Field(..., description="账号目录名（必填）")
+    username: StrictStr = Field(..., description="会话 username")
+
+
+class NativeVoiceTranscriptCacheLookupItem(BaseModel):
+    server_id: StrictStr = Field(..., description="语音消息服务端 ID（精确十进制字符串）")
+    local_id: StrictStr = Field(..., description="语音消息本地 ID（精确十进制字符串）")
+
+
+class NativeVoiceTranscriptCacheLookupRequest(BaseModel):
+    account: StrictStr = Field(..., description="账号目录名（必填）")
+    username: StrictStr = Field(..., description="会话 username")
+    items: list[NativeVoiceTranscriptCacheLookupItem] = Field(
+        default_factory=list,
+        description="当前会话中待恢复的精确消息 identity",
+    )
+
+
+def _is_loopback_host(host: str) -> bool:
+    value = str(host or "").strip().strip("[]")
+    if value.lower() == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(value)
+        return bool(
+            address.is_loopback
+            or (
+                isinstance(address, ipaddress.IPv6Address)
+                and address.ipv4_mapped
+                and address.ipv4_mapped.is_loopback
+            )
+        )
+    except ValueError:
+        return False
+
+
+def _require_local_voice_mutation(request: Request) -> None:
+    """Block cross-origin or LAN callers from triggering local native work."""
+
+    client_host = str(getattr(request.client, "host", "") or "").strip()
+    if not _is_loopback_host(client_host):
+        raise HTTPException(status_code=403, detail="仅允许本机执行语音转写操作。")
+
+    origin = str(request.headers.get("origin") or "").strip()
+    if not origin:
+        return
+    parsed = urlparse(origin)
+    if parsed.scheme not in {"http", "https"} or not _is_loopback_host(parsed.hostname or ""):
+        raise HTTPException(status_code=403, detail="拒绝非本机页面发起语音转写操作。")
 
 
 def _avatar_trace_enabled() -> bool:
@@ -3666,6 +3735,277 @@ async def transcribe_chat_voice(req: VoiceTranscriptionRequest):
             "dependency_missing": 503,
             "model_load_failed": 503,
         }.get(exc.code, 500)
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": exc.user_message},
+        ) from exc
+
+
+@router.get(
+    "/api/chat/media/voice/transcription/native",
+    summary="读取单条微信原生语音转写结果（不触发识别）",
+)
+async def get_chat_native_voice_transcription(
+    request: Request,
+    response: Response,
+    account: StrictStr,
+    username: StrictStr,
+    server_id: StrictStr,
+    local_id: StrictStr,
+    request_id: Optional[StrictStr] = None,
+):
+    _require_local_voice_mutation(request)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        account_name = str(account).strip()
+        if not account_name:
+            raise NativeVoiceTriggerError("invalid_account", "缺少 account。")
+        conversation = normalize_native_voice_conversation(str(username))
+        target_server_id = parse_native_voice_message_id(str(server_id), "server_id")
+        target_local_id = parse_native_voice_message_id(str(local_id), "local_id")
+        native_request_id = str(request_id or "").strip()
+        if native_request_id and (
+            len(native_request_id.encode("utf-8")) > 256
+            or any(ord(char) < 0x20 or ord(char) == 0x7F for char in native_request_id)
+        ):
+            raise NativeVoiceTriggerError(
+                "invalid_request_id",
+                "request_id 格式无效。",
+            )
+        account_dir = _resolve_account_dir(account_name)
+
+        if native_request_id:
+            entry = await asyncio.to_thread(
+                lookup_native_voice_transcript_cache,
+                account_dir,
+                target_server_id,
+                conversation=conversation,
+                local_id=target_local_id,
+                request_id=native_request_id,
+                strict=True,
+            )
+            if entry is None or entry.request_id != native_request_id:
+                return {
+                    "status": "expired",
+                    "serverId": str(target_server_id),
+                    "localId": str(target_local_id),
+                    "requestId": native_request_id,
+                    "text": "",
+                    "language": "",
+                    "model": "",
+                    "code": "native_result_expired",
+                    "message": "微信原生语音转文字任务不存在或已过期。",
+                }
+            if entry.status == "error":
+                return {
+                    "status": "error",
+                    "serverId": str(target_server_id),
+                    "localId": str(target_local_id),
+                    "requestId": native_request_id,
+                    "text": "",
+                    "language": "",
+                    "model": "",
+                    "code": entry.error_code or "native_transcript_failed",
+                    "message": entry.error_message or "微信原生语音转文字未能返回结果。",
+                }
+            text = entry.text if entry.status == "success" else ""
+            return {
+                "status": "success" if text else "pending",
+                "serverId": str(target_server_id),
+                "localId": str(target_local_id),
+                "requestId": native_request_id,
+                "text": text,
+                "language": "",
+                "model": "wechat-native" if text else "",
+            }
+
+        resolved_local_id, resolved_server_id, text = await asyncio.to_thread(
+            resolve_native_voice_target,
+            account_dir,
+            conversation=conversation,
+            server_id=target_server_id,
+            local_id=target_local_id,
+        )
+        return {
+            "status": "success" if text else "pending",
+            "serverId": str(resolved_server_id),
+            "localId": str(resolved_local_id),
+            "requestId": "",
+            "text": text,
+            "language": "",
+            "model": "wechat-native" if text else "",
+        }
+    except NativeVoiceTriggerError as exc:
+        status_code = {
+            "invalid_account": 400,
+            "invalid_conversation": 400,
+            "invalid_message_id": 400,
+            "invalid_request_id": 400,
+            "voice_message_not_found": 404,
+            "voice_message_id_mismatch": 409,
+            "voice_message_ambiguous": 409,
+            "voice_message_unsynced": 409,
+            "native_message_lookup_unavailable": 503,
+            "native_result_store_unavailable": 503,
+        }.get(exc.code, 502)
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": exc.user_message},
+        ) from exc
+
+
+@router.get(
+    "/api/chat/media/voice/transcription/native/status",
+    summary="检查微信原生语音转写桥接能力（只读）",
+)
+async def get_chat_native_voice_transcription_status(
+    request: Request,
+    response: Response,
+    account: StrictStr,
+):
+    _require_local_voice_mutation(request)
+    response.headers["Cache-Control"] = "no-store"
+    account_name = str(account).strip()
+    if not account_name:
+        raise HTTPException(status_code=400, detail="Missing account.")
+    account_dir = _resolve_account_dir(account_name)
+    return await asyncio.to_thread(native_bridge_status, account_dir)
+
+
+@router.post(
+    "/api/chat/media/voice/transcription/native/cache_lookup",
+    summary="批量读取项目保存的微信原生语音转写结果",
+)
+async def lookup_chat_native_voice_transcription_cache(
+    req: NativeVoiceTranscriptCacheLookupRequest,
+    request: Request,
+    response: Response,
+):
+    _require_local_voice_mutation(request)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        account = str(req.account).strip()
+        if not account:
+            raise NativeVoiceTriggerError("invalid_account", "缺少 account。")
+        conversation = normalize_native_voice_conversation(str(req.username))
+        if len(req.items) > 512:
+            raise NativeVoiceTriggerError(
+                "invalid_message_id",
+                "单次最多读取 512 条微信原生转写缓存。",
+            )
+        account_dir = _resolve_account_dir(account)
+        identities: list[tuple[int, int]] = []
+        seen: set[tuple[int, int]] = set()
+        for item in req.items:
+            server_id = parse_native_voice_message_id(str(item.server_id), "server_id")
+            local_id = parse_native_voice_message_id(str(item.local_id), "local_id")
+            identity = (server_id, local_id)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            identities.append(identity)
+
+        def read_entries() -> list[dict[str, str]]:
+            results: list[dict[str, str]] = []
+            for server_id, local_id in identities:
+                entry = lookup_native_voice_transcript_cache(
+                    account_dir,
+                    server_id,
+                    conversation=conversation,
+                    local_id=local_id,
+                    strict=True,
+                )
+                if entry is None:
+                    continue
+                item = {
+                    "serverId": str(server_id),
+                    "localId": str(local_id),
+                    "status": entry.status,
+                    "requestId": entry.request_id,
+                }
+                if entry.status == "success" and entry.text:
+                    item.update(
+                        {
+                            "text": entry.text,
+                            "language": "",
+                            "model": "wechat-native",
+                        }
+                    )
+                elif entry.status == "pending":
+                    item["pollAfterMs"] = 1200
+                elif entry.status == "error":
+                    item.update(
+                        {
+                            "code": entry.error_code,
+                            "message": entry.error_message,
+                        }
+                    )
+                else:
+                    continue
+                results.append(item)
+            return results
+
+        return {
+            "status": "success",
+            "items": await asyncio.to_thread(read_entries),
+        }
+    except NativeVoiceTriggerError as exc:
+        status_code = {
+            "invalid_account": 400,
+            "invalid_conversation": 400,
+            "invalid_message_id": 400,
+            "native_result_store_unavailable": 503,
+        }.get(exc.code, 502)
+        raise HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": exc.user_message},
+        ) from exc
+
+
+@router.post(
+    "/api/chat/media/voice/transcription/native/trigger",
+    summary="触发单条微信原生语音转写",
+)
+async def trigger_chat_native_voice_transcription(
+    req: NativeVoiceTranscriptionTriggerRequest,
+    request: Request,
+    response: Response,
+):
+    _require_local_voice_mutation(request)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        account = str(req.account).strip()
+        if not account:
+            raise NativeVoiceTriggerError("invalid_account", "缺少 account。")
+        account_dir = _resolve_account_dir(account)
+        return await asyncio.to_thread(
+            trigger_native_voice_transcription,
+            account_dir=account_dir,
+            conversation=req.username,
+            server_id=req.server_id,
+            local_id=req.local_id,
+        )
+    except NativeVoiceTriggerError as exc:
+        status_code = {
+            "invalid_message_id": 400,
+            "missing_message_id": 400,
+            "invalid_account": 400,
+            "invalid_conversation": 400,
+            "voice_message_not_found": 404,
+            "voice_message_id_mismatch": 409,
+            "voice_message_ambiguous": 409,
+            "voice_message_unsynced": 409,
+            "native_message_lookup_unavailable": 503,
+            "native_transport_unavailable": 503,
+            "native_asr_not_authorized": 403,
+            "native_weixin_not_running": 503,
+            "native_weixin_version_unsupported": 503,
+            "native_transport_busy": 429,
+            "native_trigger_timeout": 504,
+            "native_trigger_rejected": 409,
+            "native_transport_failed": 502,
+            "native_transport_invalid_response": 502,
+        }.get(exc.code, 502)
         raise HTTPException(
             status_code=status_code,
             detail={"code": exc.code, "message": exc.user_message},

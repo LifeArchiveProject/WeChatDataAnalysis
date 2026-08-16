@@ -7,6 +7,9 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const { resolveNativeCoreRuntimePolicy } = require("./native-core-runtime.cjs");
+const {
+  assertWindowsNativeAsrCapability,
+} = require("./windows-native-asr-capability.cjs");
 
 const ENV_SOURCE_NATIVE_CORE_CACHE_DIR = "WCE_NATIVE_CORE_SOURCE_CACHE_DIR";
 const DEFAULT_CONFIG_PATH = path.resolve(
@@ -439,6 +442,10 @@ function validateWindowsSourceRuntimeDirectory(
   if (policy.artifactState !== "source-public") {
     throw new Error("Windows source-runtime native-core is not the restricted source-public profile");
   }
+  assertWindowsNativeAsrCapability({
+    nativeDir: paths.nativeDir,
+    manifest: policy.manifest,
+  });
   return { ...paths, manifest, pin, policy };
 }
 

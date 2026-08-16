@@ -40,6 +40,7 @@ from wechat_decrypt_tool.native_core_client import (
     NativeCorePolicyError,
     NativeCoreProtocolError,
     NativeCoreRuntimeStatus,
+    NativeCoreStatus,
     NativeCoreUnavailableError,
 )
 from wechat_decrypt_tool.native_core_lease import ENV_LICENSE_TOKEN, ENV_LICENSE_URL
@@ -362,8 +363,9 @@ def test_expired_production_manifest_fails_closed_before_native_loading() -> Non
             buildExpiresAtUnix=now,
         )
 
-        with pytest.raises(NativeCorePolicyError, match="fixed expiration"):
+        with pytest.raises(NativeCorePolicyError, match="fixed expiration") as caught:
             native_core_client._load_native_core_build_manifest(component)
+        assert caught.value.status == NativeCoreStatus.BUILD_MISMATCH
 
 
 @pytest.mark.parametrize("development", [True, False])
@@ -1169,6 +1171,42 @@ def test_valid_lease_path_never_waits_for_the_background_refresh_lock() -> None:
     )
 
 
+def test_refresh_rejects_new_lease_shorter_than_requested_validity() -> None:
+    class NearExpiryClient(_FakeClient):
+        def install_lease(self, lease: bytes) -> None:
+            self.installed.append(bytes(lease))
+            self._status = replace(
+                self._status,
+                license_state=NativeCoreLicenseState.ACTIVE,
+                lease_expires_unix=int(time.time()) + 179,
+                feature_bits=NativeCoreFeature.NATIVE_ASR,
+            )
+
+    client = NearExpiryClient(_manifest(development=True))
+    with (
+        patch.object(
+            native_core_lease,
+            "validate_native_core_authorization_policy",
+            return_value="development",
+        ),
+        patch(
+            "wechat_decrypt_tool.native_core_dev_lease.issue_development_lease",
+            return_value=b"l" * 224,
+        ),
+    ):
+        with pytest.raises(NativeCorePolicyError) as caught:
+            native_core_lease._refresh_native_core_lease_internal(
+                client,
+                NativeCoreFeature.NATIVE_ASR,
+                minimum_validity_seconds=180,
+                force_online=False,
+                background=False,
+            )
+
+    assert caught.value.status == NativeCoreStatus.LEASE_EXPIRED
+    assert client.installed == [b"l" * 224]
+
+
 def test_heartbeat_worker_runs_online_refresh_in_the_background() -> None:
     client = _FakeClient(_manifest(development=False))
     attempted = threading.Event()
@@ -1417,7 +1455,7 @@ def test_production_refresh_rejects_broker_restart_after_challenge() -> None:
             "get_status",
             side_effect=[initial_status, restarted_status],
         ),
-        pytest.raises(NativeCorePolicyError, match="identity changed"),
+        pytest.raises(NativeCorePolicyError, match="identity changed") as caught,
     ):
         native_core_lease.refresh_native_core_lease(
             client,
@@ -1425,6 +1463,7 @@ def test_production_refresh_rejects_broker_restart_after_challenge() -> None:
         )
 
     assert len(opener.requests) == 1
+    assert caught.value.status == NativeCoreStatus.TAMPER_DETECTED
     assert client.proof_calls == []
     assert client.installed == []
 
@@ -1455,7 +1494,7 @@ def test_production_refresh_rejects_proof_for_a_different_broker_state() -> None
             "build_opener",
             return_value=opener,
         ),
-        pytest.raises(NativeCorePolicyError, match="challenged broker state"),
+        pytest.raises(NativeCorePolicyError, match="challenged broker state") as caught,
     ):
         native_core_lease.refresh_native_core_lease(
             client,
@@ -1463,6 +1502,7 @@ def test_production_refresh_rejects_proof_for_a_different_broker_state() -> None
         )
 
     assert len(opener.requests) == 1
+    assert caught.value.status == NativeCoreStatus.TAMPER_DETECTED
     assert client.installed == []
 
 

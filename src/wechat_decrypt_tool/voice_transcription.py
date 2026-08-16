@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import tempfile
 import threading
@@ -22,6 +23,8 @@ _OPENCC_LOOKED_UP = False
 _CUDA_PROBE_CACHE_TTL_SECONDS = 5.0
 _CUDA_PROBE_CACHE_LOCK = threading.Lock()
 _CUDA_PROBE_CACHE: Optional[tuple[float, dict[str, Any]]] = None
+_VOICE_TRANSCRIPT_CACHE_LOCK = threading.Lock()
+_VOICE_TRANSCRIPT_CACHE_EPOCHS: dict[str, int] = {}
 
 from .runtime_settings import (
     VOICE_TRANSCRIPTION_DEVICE_CPU,
@@ -35,6 +38,110 @@ class VoiceTranscriptionError(RuntimeError):
         super().__init__(message)
         self.code = str(code or "voice_transcription_failed")
         self.user_message = str(message or "Voice transcription failed.")
+
+
+def _path_is_link_or_junction(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        if os.name == "nt":
+            attributes = int(getattr(path.lstat(), "st_file_attributes", 0) or 0)
+            return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    except OSError:
+        return False
+    return False
+
+
+def _voice_transcript_cache_account_key(account_dir: Path) -> str:
+    try:
+        value = str(Path(account_dir).resolve(strict=False))
+    except OSError:
+        value = str(Path(account_dir).absolute())
+    return os.path.normcase(value)
+
+
+def _voice_transcript_cache_path(account_dir: Path) -> Path:
+    return Path(account_dir) / "_cache" / "voice_transcripts.sqlite3"
+
+
+def _delete_voice_transcript_cache_unlocked(
+    account_dir: Path,
+    *,
+    expected_root: Optional[Path] = None,
+) -> dict[str, Any]:
+    """Delete project-generated Whisper rows without touching WeChat metadata."""
+
+    account_path = Path(account_dir)
+    account_key = _voice_transcript_cache_account_key(account_path)
+    cache_path = _voice_transcript_cache_path(account_path)
+    deleted_rows = 0
+    deleted_messages = 0
+    if expected_root is not None:
+        root = Path(expected_root)
+        try:
+            account_is_owned = (
+                not _path_is_link_or_junction(root)
+                and not _path_is_link_or_junction(account_path)
+                and account_path.absolute().parent == root.absolute()
+                and account_path.resolve(strict=True).parent == root.resolve(strict=True)
+            )
+        except OSError:
+            account_is_owned = False
+        if not account_is_owned:
+            raise VoiceTranscriptionError(
+                "unsafe_account_path",
+                "账号缓存目录不安全，已拒绝删除。",
+            )
+    if _path_is_link_or_junction(cache_path.parent) or _path_is_link_or_junction(cache_path):
+        raise VoiceTranscriptionError(
+            "unsafe_cache_path",
+            "语音转写缓存路径不安全，已拒绝删除。",
+        )
+    _VOICE_TRANSCRIPT_CACHE_EPOCHS[account_key] = int(
+        _VOICE_TRANSCRIPT_CACHE_EPOCHS.get(account_key, 0)
+    ) + 1
+    if cache_path.is_file():
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = sqlite3.connect(str(cache_path))
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'transcript' LIMIT 1"
+            ).fetchone()
+            if table_exists:
+                row = conn.execute(
+                    "SELECT COUNT(*), COUNT(DISTINCT server_id) FROM transcript"
+                ).fetchone()
+                deleted_rows = int(row[0] or 0) if row else 0
+                deleted_messages = int(row[1] or 0) if row else 0
+                conn.execute("DELETE FROM transcript")
+                conn.commit()
+        except (OSError, sqlite3.Error) as exc:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
+            raise VoiceTranscriptionError(
+                "cache_delete_failed",
+                "本项目语音转写记录删除失败，请重试。",
+            ) from exc
+        finally:
+            if conn is not None:
+                conn.close()
+    return {
+        "status": "success",
+        "account": account_path.name,
+        "deletedRows": deleted_rows,
+        "deletedMessages": deleted_messages,
+        "nativeDeleted": 0,
+    }
+
+
+def delete_voice_transcript_cache(account_dir: Path) -> dict[str, Any]:
+    """Delete only project-generated transcripts for one resolved account."""
+
+    with _VOICE_TRANSCRIPT_CACHE_LOCK:
+        return _delete_voice_transcript_cache_unlocked(account_dir)
 
 
 @dataclass(frozen=True)
@@ -375,6 +482,15 @@ def _coerce_blob(value: Any) -> bytes:
     return text.encode("utf-8", "replace")
 
 
+def _numbered_db_shards(root: Path, prefix: str) -> list[Path]:
+    pattern = re.compile(rf"^{re.escape(prefix)}_[0-9]+\.db$", re.IGNORECASE)
+    return [
+        path
+        for path in sorted(Path(root).glob(f"{prefix}_*.db"))
+        if path.is_file() and pattern.fullmatch(path.name)
+    ]
+
+
 def _convert_silk_to_browser_audio(data: bytes, *, preferred_format: str) -> tuple[bytes, str, str]:
     from .media_helpers import _convert_silk_to_browser_audio as convert
 
@@ -434,6 +550,219 @@ def load_voice_data(account_dir: Path, server_id: int) -> bytes:
     return b""
 
 
+def list_native_voice_transcripts(
+    account_dir: Path,
+    *,
+    cancel_event: Optional[threading.Event] = None,
+    errors: Optional[list[str]] = None,
+    voice_server_ids: Optional[set[int]] = None,
+    target_server_id: Optional[int] = None,
+) -> dict[int, str]:
+    """Read completed WeChat-native transcripts keyed by server ID."""
+
+    from .chat_helpers import _extract_voice_transcript_from_packed_info
+
+    result: dict[int, str] = {}
+    account_path = Path(account_dir)
+    target_id = int(target_server_id or 0)
+    local_errors: list[str] = []
+    local_successes = 0
+    for db_path in _numbered_db_shards(account_path, "message"):
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            tables = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'"
+                )
+            ]
+            for table in tables:
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                quoted = '"' + table.replace('"', '""') + '"'
+                try:
+                    target_where = " AND server_id = ?" if target_id > 0 else ""
+                    target_params = (target_id,) if target_id > 0 else ()
+                    try:
+                        rows = conn.execute(
+                            f"SELECT server_id, packed_info_data FROM {quoted} "
+                            "WHERE local_type = 34 AND server_id > 0"
+                            + target_where,
+                            target_params,
+                        )
+                    except sqlite3.OperationalError:
+                        rows = conn.execute(
+                            f"SELECT server_id, NULL AS packed_info_data FROM {quoted} "
+                            "WHERE local_type = 34 AND server_id > 0"
+                            + target_where,
+                            target_params,
+                        )
+                    for server_id, packed_info in rows:
+                        sid = int(server_id or 0)
+                        if sid <= 0:
+                            continue
+                        if voice_server_ids is not None:
+                            voice_server_ids.add(sid)
+                        if sid in result or packed_info is None:
+                            continue
+                        text = _extract_voice_transcript_from_packed_info(packed_info)
+                        if text:
+                            result[sid] = text
+                except Exception as exc:
+                    local_errors.append(f"{db_path.name}/{table}: {type(exc).__name__}")
+                    continue
+            local_successes += 1
+        except Exception as exc:
+            local_errors.append(f"{db_path.name}: {type(exc).__name__}")
+        finally:
+            if conn is not None:
+                conn.close()
+    if target_id > 0 and target_id in result:
+        return result
+    realtime_errors: list[str] = []
+    from .account_source_policy import account_prefers_decrypted_snapshot
+
+    if not account_prefers_decrypted_snapshot(account_path):
+        for server_id, text in _list_realtime_native_voice_transcripts(
+            account_path,
+            cancel_event=cancel_event,
+            errors=realtime_errors,
+            voice_server_ids=voice_server_ids,
+            target_server_id=target_id if target_id > 0 else None,
+        ).items():
+            result.setdefault(server_id, text)
+    if errors is not None:
+        errors.extend(local_errors)
+        if local_successes == 0:
+            errors.extend(realtime_errors)
+    return result
+
+
+def _list_realtime_native_voice_transcripts(
+    account_dir: Path,
+    *,
+    cancel_event: Optional[threading.Event] = None,
+    errors: Optional[list[str]] = None,
+    voice_server_ids: Optional[set[int]] = None,
+    target_server_id: Optional[int] = None,
+) -> dict[int, str]:
+    """Best-effort native transcript lookup for direct/realtime WCDB mode."""
+
+    from .chat_helpers import _extract_voice_transcript_from_packed_info
+
+    result: dict[int, str] = {}
+    target_id = int(target_server_id or 0)
+    try:
+        from .wcdb_realtime import WCDB_REALTIME, exec_query as _wcdb_exec_query
+
+        realtime = WCDB_REALTIME.ensure_connected(Path(account_dir))
+        message_dir = Path(realtime.db_storage_dir) / "message"
+        for db_path in _numbered_db_shards(message_dir, "message"):
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            try:
+                with realtime.lock:
+                    table_rows = _wcdb_exec_query(
+                        realtime.handle,
+                        kind="message",
+                        path=str(db_path),
+                        sql="SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'",
+                    )
+            except Exception as exc:
+                if errors is not None:
+                    errors.append(f"{db_path.name}: {type(exc).__name__}")
+                continue
+            for table_row in table_rows or []:
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                if not isinstance(table_row, dict):
+                    continue
+                table = str(
+                    next(
+                        (value for key, value in table_row.items() if str(key).lower() == "name"),
+                        "",
+                    )
+                    or ""
+                ).strip()
+                if not table.lower().startswith("msg_"):
+                    continue
+                quoted = '"' + table.replace('"', '""') + '"'
+                try:
+                    with realtime.lock:
+                        try:
+                            target_where = f" AND server_id = {target_id}" if target_id > 0 else ""
+                            rows = _wcdb_exec_query(
+                                realtime.handle,
+                                kind="message",
+                                path=str(db_path),
+                                sql=(
+                                    f"SELECT server_id, packed_info_data FROM {quoted} "
+                                    "WHERE local_type = 34 AND server_id > 0"
+                                    + target_where
+                                ),
+                            )
+                        except Exception:
+                            rows = _wcdb_exec_query(
+                                realtime.handle,
+                                kind="message",
+                                path=str(db_path),
+                                sql=(
+                                    f"SELECT server_id, NULL AS packed_info_data FROM {quoted} "
+                                    "WHERE local_type = 34 AND server_id > 0"
+                                    + target_where
+                                ),
+                            )
+                except Exception as exc:
+                    if errors is not None:
+                        errors.append(f"{db_path.name}/{table}: {type(exc).__name__}")
+                    continue
+                for row in rows or []:
+                    if not isinstance(row, dict):
+                        continue
+                    values = {str(key).lower(): value for key, value in row.items()}
+                    try:
+                        server_id = int(values.get("server_id") or 0)
+                    except Exception:
+                        continue
+                    if server_id <= 0 or server_id in result:
+                        continue
+                    if voice_server_ids is not None:
+                        voice_server_ids.add(server_id)
+                    if values.get("packed_info_data") is None:
+                        continue
+                    text = _extract_voice_transcript_from_packed_info(values.get("packed_info_data"))
+                    if text:
+                        result[server_id] = text
+    except Exception as exc:
+        if errors is not None:
+            errors.append(f"realtime message: {type(exc).__name__}")
+    return result
+
+
+def lookup_native_voice_transcript(
+    account_dir: Path,
+    server_id: int,
+    *,
+    errors: Optional[list[str]] = None,
+) -> str:
+    """Read one completed WeChat-native transcript without triggering recognition."""
+
+    target_id = int(server_id or 0)
+    if target_id <= 0:
+        return ""
+    return str(
+        list_native_voice_transcripts(
+            account_dir,
+            errors=errors,
+            target_server_id=target_id,
+        ).get(target_id)
+        or ""
+    ).strip()
+
+
 class VoiceTranscriptionService:
     def __init__(
         self,
@@ -449,7 +778,7 @@ class VoiceTranscriptionService:
         self._fallback_reason = ""
         self._model_lock = threading.Lock()
         self._inference_lock = threading.Lock()
-        self._cache_lock = threading.Lock()
+        self._cache_lock = _VOICE_TRANSCRIPT_CACHE_LOCK
         self._model_readiness_lock = threading.Lock()
         self._model_readiness_cache: Optional[tuple[float, dict[str, Any]]] = None
 
