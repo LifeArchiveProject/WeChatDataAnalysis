@@ -57,12 +57,12 @@
     </div>
 
     <!-- 航站楼主厅 -->
-    <div v-else class="w-full">
-      <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+    <div v-else class="hall-root w-full" :class="{ 'is-preflight': !passPrinted }">
+      <div class="hall grid grid-cols-1 gap-5 items-start" :class="stacked ? '' : 'lg:grid-cols-12'">
         <!-- ─────────── 值机柜台 ─────────── -->
         <div
-          class="ck-rail w-full lg:col-span-3 flex flex-col items-center transition-transform duration-500 will-change-transform"
-          :class="[leftRailClass, leftDocked ? 'ck-rail--docked' : '']"
+          class="ck-rail w-full flex flex-col items-center transition-transform duration-500 will-change-transform"
+          :class="[stacked ? '' : 'lg:col-span-3', leftRailClass, leftDocked ? 'ck-rail--docked' : '']"
         >
           <template v-if="bestBuddy">
             <div class="ck-sign avio-mono">
@@ -70,54 +70,58 @@
               值机 CHECK-IN
             </div>
 
-            <!-- 证件照格 -->
-            <div
-              class="ck-photo mt-4"
-              :class="{ 'ck-photo--live': phase === 'rolling' }"
-              :title="phase === 'rolling' ? '点击跳过' : ''"
-              @click="skipLottery"
-            >
-              <span class="ck-photo-frame wrapped-privacy-avatar">
-                <i class="grain" aria-hidden="true"></i>
-                <img
-                  v-if="shownAvatarUrl && shownAvatarOk && phase !== 'idle'"
-                  :src="shownAvatarUrl"
-                  class="w-full h-full object-cover"
-                  alt="avatar"
-                  @error="onShownAvatarError"
-                />
-                <svg v-else-if="phase === 'idle'" class="ck-photo-holder" viewBox="0 0 48 48" aria-hidden="true">
-                  <circle cx="24" cy="18" r="8" fill="currentColor" />
-                  <path d="M8 42c1.8-9 8.2-13 16-13s14.2 4 16 13" fill="currentColor" />
-                </svg>
-                <span v-else class="wrapped-number text-3xl text-[#FFFFFF66]">{{ shownAvatarFallback }}</span>
-              </span>
-              <i class="ck-tick ck-tick--tl" aria-hidden="true"></i>
-              <i class="ck-tick ck-tick--tr" aria-hidden="true"></i>
-              <i class="ck-tick ck-tick--bl" aria-hidden="true"></i>
-              <i class="ck-tick ck-tick--br" aria-hidden="true"></i>
-            </div>
+            <!-- 台面：证件照 + 翻牌机。wide/landscape 下 display:contents，柜台仍是一条竖列（零回归）；
+                 竖幅里变成一行并排，省下一整段高度，且放不下时自动折回两行，绝不横向溢出。 -->
+            <div class="ck-desk">
+              <!-- 证件照格 -->
+              <div
+                class="ck-photo mt-4"
+                :class="{ 'ck-photo--live': phase === 'rolling' }"
+                :title="phase === 'rolling' ? '点击跳过' : ''"
+                @click="skipLottery"
+              >
+                <span class="ck-photo-frame wrapped-privacy-avatar">
+                  <i class="grain" aria-hidden="true"></i>
+                  <img
+                    v-if="shownAvatarUrl && shownAvatarOk && phase !== 'idle'"
+                    :src="shownAvatarUrl"
+                    class="w-full h-full object-cover"
+                    alt="avatar"
+                    @error="onShownAvatarError"
+                  />
+                  <svg v-else-if="phase === 'idle'" class="ck-photo-holder" viewBox="0 0 48 48" aria-hidden="true">
+                    <circle cx="24" cy="18" r="8" fill="currentColor" />
+                    <path d="M8 42c1.8-9 8.2-13 16-13s14.2 4 16 13" fill="currentColor" />
+                  </svg>
+                  <span v-else class="wrapped-number text-3xl text-[#FFFFFF66]">{{ shownAvatarFallback }}</span>
+                </span>
+                <i class="ck-tick ck-tick--tl" aria-hidden="true"></i>
+                <i class="ck-tick ck-tick--tr" aria-hidden="true"></i>
+                <i class="ck-tick ck-tick--bl" aria-hidden="true"></i>
+                <i class="ck-tick ck-tick--br" aria-hidden="true"></i>
+              </div>
 
-            <!-- 翻牌机名牌（摇号本体） -->
-            <div
-              class="mt-4 flap-housing wrapped-privacy-name"
-              :class="phase === 'rolling' ? 'cursor-pointer' : ''"
-              :title="phase === 'rolling' ? '点击跳过' : (shownDisplayName || '')"
-              @click="skipLottery"
-            >
-              <i class="grain" aria-hidden="true"></i>
-              <SplitFlapRow
-                :text="flapText"
-                :cell-count="9"
-                :spinning="phase === 'rolling'"
-                :paused="animPaused"
-                :reduced="reducedMotion"
-                :flip-ms="300"
-                :spin-ms="150"
-                :stagger-ms="55"
-                size="lg"
-                @settled="onFlapSettled"
-              />
+              <!-- 翻牌机名牌（摇号本体） -->
+              <div
+                class="mt-4 flap-housing wrapped-privacy-name"
+                :class="phase === 'rolling' ? 'cursor-pointer' : ''"
+                :title="phase === 'rolling' ? '点击跳过' : (shownDisplayName || '')"
+                @click="skipLottery"
+              >
+                <i class="grain" aria-hidden="true"></i>
+                <SplitFlapRow
+                  :text="flapText"
+                  :cell-count="9"
+                  :spinning="phase === 'rolling'"
+                  :paused="animPaused"
+                  :reduced="reducedMotion || flatMotion"
+                  :flip-ms="300"
+                  :spin-ms="150"
+                  :stagger-ms="55"
+                  size="lg"
+                  @settled="onFlapSettled"
+                />
+              </div>
             </div>
 
             <div class="mt-5">
@@ -153,13 +157,17 @@
         </div>
 
         <!-- ─────────── 头等舱登机牌 ─────────── -->
-        <div v-if="passPrinted && bestBuddy" class="w-full lg:col-start-4 lg:col-span-4 lg:self-center flex justify-center">
+        <div
+          v-if="passPrinted && bestBuddy"
+          class="pass-cell w-full flex justify-center"
+          :class="stacked ? '' : 'lg:col-start-4 lg:col-span-4 lg:self-center'"
+        >
             <div class="pass-printer">
               <i class="pass-slot" aria-hidden="true"></i>
               <div
                 ref="passEl"
                 class="pass"
-                :class="{ 'pass--live': passTilt.live, 'pass--reduced': reducedMotion }"
+                :class="{ 'pass--live': passTilt.live, 'pass--reduced': reducedMotion || flatMotion }"
                 :style="passStyle"
                 @pointermove="onPassMove"
                 @pointerleave="onPassLeave"
@@ -258,8 +266,14 @@
         </div>
 
         <!-- ─────────── 出港大屏 ─────────── -->
-        <Transition name="brd-fade">
-          <div v-if="boardOn" class="brd w-full lg:col-start-8 lg:col-span-5" :class="{ 'brd--intro': boardIntro }">
+        <!-- 导出（含退出导出还原）那一帧不走过渡：要的是确定的终态画面，不是「正在上电」 -->
+        <Transition name="brd-fade" :css="!flatMotion">
+          <div
+            v-if="boardOn"
+            class="brd w-full"
+            :class="[stacked ? '' : 'lg:col-start-8 lg:col-span-5', { 'brd--intro': boardIntro }]"
+            :style="{ '--brd-rows-fit': boardRowCount }"
+          >
             <i class="grain" aria-hidden="true"></i>
             <i class="brd-glass" aria-hidden="true"></i>
             <div class="brd-top">
@@ -296,7 +310,7 @@
 
             <div v-if="raceItems.length === 0" class="brd-empty wrapped-body">暂无可展示的航线数据。</div>
 
-            <TransitionGroup v-else name="brd" tag="div" class="brd-body">
+            <TransitionGroup v-else name="brd" tag="div" class="brd-body" :css="!flatMotion">
               <div
                 v-for="(item, idx) in raceItems"
                 :key="item.username"
@@ -314,7 +328,9 @@
                   />
                   <span v-else class="brd-ava-fb wrapped-number">{{ avatarFallback(item.displayName) }}</span>
                 </span>
-                <span class="brd-name wrapped-privacy-name" :title="item.displayName">{{ item.displayName }}</span>
+                <!-- .brd-sub 是「出/进」两列的窄容器化身：容器真的窄到放不下两列数字时，
+                     数字折进名字底下一行，而不是被隐藏掉（原来的 @media 640px 是直接 display:none）。 -->
+                <span class="brd-name wrapped-privacy-name" :title="item.displayName">{{ item.displayName }}<i v-if="stacked" class="brd-sub avio-mono">出 {{ formatInt(item.outV) }} · 进 {{ formatInt(item.inV) }}</i></span>
                 <span class="brd-num avio-mono">{{ formatInt(item.outV) }}</span>
                 <span class="brd-num brd-num--in avio-mono">{{ formatInt(item.inV) }}</span>
                 <span class="brd-total avio-mono">
@@ -336,7 +352,7 @@
       <div
         v-if="initiativeVisible || noticesAny"
         class="apron mt-4"
-        :class="[initiativeEntered ? 'init-entered' : '', reducedMotion ? 'init-reduced' : '']"
+        :class="[initiativeEntered ? 'init-entered' : '', (reducedMotion || flatMotion) ? 'init-reduced' : '']"
       >
         <div class="apron-row">
           <!-- 出发端头：你先开口 -->
@@ -507,7 +523,7 @@
         <div
           v-if="phase === 'revealed' && replyStatsData"
           class="rwy rwy--speed"
-          :class="{ 'rw-on': runwayOn, 'rw-reduced': reducedMotion }"
+          :class="{ 'rw-on': runwayOn, 'rw-reduced': reducedMotion || flatMotion }"
         >
           <div class="rwy-meta avio-mono">
             <b class="rwy-id">RWY 05R</b>
@@ -541,10 +557,11 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
 import { gsap } from 'gsap'
 import { useCountUp } from '~/composables/useCountUp'
 import { useReducedMotion } from '~/composables/useReducedMotion'
+import { useWrappedStage } from '~/composables/useWrappedStage'
 
 const props = defineProps({
   card: { type: Object, required: true },
@@ -553,6 +570,19 @@ const props = defineProps({
 })
 
 const reducedMotion = useReducedMotion()
+
+/* 导出模式（页面级 provide）。为真期间这一页必须**立刻**是终态——
+   开完奖的头等舱、打印好的登机牌、上电的出港大屏，而不是那句「谁坐进了你的头等舱？」。
+   为假时行为与导出功能存在之前一字不差。
+   flatMotion 比 exportMode 多包一帧「还原中」：退出导出把牌收回去时同样不播动画。 */
+const exportMode = inject('wrappedExportMode', ref(false))
+const exportRestoring = ref(false)
+const flatMotion = computed(() => exportMode.value || exportRestoring.value)
+
+// 画幅舞台：Tailwind 的 lg: 是**窗口**断点，舞台化后判断错对象（竖幅舞台里
+// 窗口依旧很宽，lg:grid-cols-12 会把三块压成 30px 一栏）。所以横排/堆叠一律由 tier 驱动。
+const stage = useWrappedStage()
+const stacked = computed(() => ['square', 'portrait', 'tall'].includes(stage.tier.value))
 
 const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
 const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
@@ -772,8 +802,9 @@ const leftRailClass = computed(() => {
   const shouldCenter = phase.value !== 'revealed' || !leftDocked.value
   return [
     'ease-[cubic-bezier(0.22,1,0.36,1)]',
-    // 值机台占 12 栏中的 3 栏：右移 150% 自宽 ≈ 行中央；揭晓后归位左侧
-    shouldCenter ? 'lg:translate-x-[150%]' : ''
+    // 值机台占 12 栏中的 3 栏：右移 150% 自宽 ≈ 行中央；揭晓后归位左侧。
+    // 竖幅是单列堆叠，柜台本来就在正中，再右移 150% 会整块飞出舞台。
+    shouldCenter && !stacked.value ? 'lg:translate-x-[150%]' : ''
   ]
 })
 
@@ -1052,6 +1083,28 @@ const staticBoardItems = computed(() => {
     .map((x, i) => ({ ...x, rank: i + 1 }))
 })
 
+// 大屏定高的行数：取本年度**最终**会上榜的人数（≤10），全程恒定，
+// 回放中行数增减不会改变面板高度（那是页面抖动+FitScale 反复重缩的元凶）。
+// 只有竖幅段会消费它：wide 仍走写死的 260px，逐像素零回归。
+const boardRowCount = computed(() => {
+  const series = raceSeries.value
+  let n = 0
+  if (series.length) {
+    // 全年跑完仍是 0 条的人不会出现在榜上（updateRaceFrame 里 value<=0 就 break），
+    // 所以行数要按「最终有消息的人」算，不是按 series 长度。
+    for (const s of series) {
+      const arr = Array.isArray(s.cumulativeCounts) ? s.cumulativeCounts : []
+      const last = arr.length
+        ? Number(arr[arr.length - 1] || 0)
+        : Number(s.outgoingMessages || 0) + Number(s.incomingMessages || 0)
+      if (last > 0) n += 1
+    }
+  } else {
+    n = staticBoardItems.value.filter((x) => Number(x.value) > 0).length
+  }
+  return Math.max(1, Math.min(10, n))
+})
+
 const racePlaying = ref(false)
 const raceSpeed = ref(1)
 const raceStarted = ref(false)
@@ -1279,27 +1332,27 @@ const gaugePct = computed(() => {
 
 const initiativeEntered = ref(false)
 
-const { display: rateDisplay, restart: playRateCount } = useCountUp(
+const { display: rateDisplay, restart: playRateCount, finish: finishRateCount } = useCountUp(
   () => Number(initiativeRate.value ?? 0),
   { duration: 1.4, decimals: 1 }
 )
-const { display: convDisplay, restart: playConvCount } = useCountUp(
+const { display: convDisplay, restart: playConvCount, finish: finishConvCount } = useCountUp(
   () => Number(initiative.value?.conversationCount || 0),
   { duration: 1.2 }
 )
-const { display: meBigDisplay, restart: playMeBig } = useCountUp(
+const { display: meBigDisplay, restart: playMeBig, finish: finishMeBig } = useCountUp(
   () => Number(initiative.value?.initiatedByMe || 0),
   { duration: 1.3, delay: 0.3 }
 )
-const { display: themBigDisplay, restart: playThemBig } = useCountUp(
+const { display: themBigDisplay, restart: playThemBig, finish: finishThemBig } = useCountUp(
   () => Number(initiative.value?.initiatedByOthers || 0),
   { duration: 1.3, delay: 0.3 }
 )
-const { display: mutualSentDisplay, restart: playMutualSent } = useCountUp(
+const { display: mutualSentDisplay, restart: playMutualSent, finish: finishMutualSent } = useCountUp(
   () => Number(mutualFriend.value?.sentCount || 0),
   { duration: 1.4, delay: 0.3 }
 )
-const { display: mutualRecvDisplay, restart: playMutualRecv } = useCountUp(
+const { display: mutualRecvDisplay, restart: playMutualRecv, finish: finishMutualRecv } = useCountUp(
   () => Number(mutualFriend.value?.receivedCount || 0),
   { duration: 1.4, delay: 0.3 }
 )
@@ -1312,6 +1365,17 @@ const playInitiativeIntro = () => {
   playThemBig()
   playMutualSent()
   playMutualRecv()
+}
+
+// 导出：数字不滚，直接定格在终值
+const finishInitiativeCounts = () => {
+  initiativeEntered.value = true
+  finishRateCount()
+  finishConvCount()
+  finishMeBig()
+  finishThemBig()
+  finishMutualSent()
+  finishMutualRecv()
 }
 
 // ---------------- 激活/暂停编排 ----------------
@@ -1379,6 +1443,135 @@ watch(
     }
   },
   { immediate: true }
+)
+
+/* ---------------- 导出模式 ----------------
+   进去：立刻落到「已开奖 → 靠泊 → 登机牌打印好 → 盖过章 → 大屏上电 → 年终榜跑完 → 跑道亮灯」，
+        一段动画都不播（passPrinted 平时靠 printTimer 160ms 后才置位，导出不能靠它）。
+   出来：还原成进导出之前的样子——没开过奖的仍然没开过奖，
+        否则用户导出一次回来，头等舱旅客已经揭晓，惊喜被剧透。 */
+let exportSnapshot = null
+
+const clearIntroTimers = () => {
+  if (typeof window === 'undefined') return
+  if (introStartTimer) { window.clearTimeout(introStartTimer); introStartTimer = 0 }
+  if (introResetTimer) { window.clearTimeout(introResetTimer); introResetTimer = 0 }
+}
+
+const applyExportTerminal = () => {
+  clearTimers()
+  clearIntroTimers()
+  stopRaceTicker()
+  lotterySnapping = false
+  pendingRevealSequence = false
+
+  phase.value = 'revealed'
+  shownUser.value = bestBuddy.value || shownUser.value
+  shownAvatarOk.value = true
+  leftDocked.value = true
+  passPrinted.value = true
+  stamped.value = true
+  runwayOn.value = true
+  boardOn.value = true
+  boardIntro.value = false
+
+  // 年度回放直接定格在年终榜：不开 ticker，画面不会再动
+  raceStarted.value = true
+  racePlaying.value = false
+  raceSpeed.value = 1
+  raceElapsedMs = 0
+  raceOrder = null
+  if (raceDays.value > 0 && raceSeries.value.length > 0) setRaceStep(raceDays.value)
+  else { raceDay.value = 0; raceItems.value = staticBoardItems.value }
+
+  finishInitiativeCounts()
+}
+
+const applyExportRestore = (snap) => {
+  clearTimers()
+  clearIntroTimers()
+  stopRaceTicker()
+  lotterySnapping = false
+  pendingRevealSequence = false
+
+  if (snap.phase !== 'revealed') {
+    // 导出前还没开奖：整块退回值机柜台的入口态
+    resetAvatarOk()
+    phase.value = 'idle'
+    shownUser.value = null
+    shownAvatarOk.value = true
+    resetRevealState()
+    raceReset()
+    initiativeEntered.value = snap.initiativeEntered
+    return
+  }
+
+  // 导出前就开过奖：各段落回导出前那一帧
+  phase.value = 'revealed'
+  shownUser.value = snap.shownUser
+  shownAvatarOk.value = snap.shownAvatarOk
+  leftDocked.value = snap.leftDocked
+  passPrinted.value = snap.passPrinted
+  stamped.value = snap.stamped
+  runwayOn.value = snap.runwayOn
+  boardOn.value = snap.boardOn
+  boardIntro.value = snap.boardIntro
+  initiativeEntered.value = snap.initiativeEntered
+
+  raceStarted.value = snap.raceStarted
+  raceSpeed.value = snap.raceSpeed
+  raceElapsedMs = snap.raceElapsedMs
+  raceOrder = null
+  if (snap.raceStarted) setRaceStep(snap.raceDay)
+  else { raceDay.value = 0; raceItems.value = snap.raceItems }
+  racePlaying.value = snap.racePlaying
+  if (snap.racePlaying && props.isActive && !animPaused.value) startRaceTicker()
+}
+
+watch(
+  exportMode,
+  (on) => {
+    if (typeof window === 'undefined') return
+    if (on) {
+      if (!exportSnapshot) {
+        exportSnapshot = {
+          phase: phase.value,
+          shownUser: shownUser.value,
+          shownAvatarOk: shownAvatarOk.value,
+          leftDocked: leftDocked.value,
+          boardOn: boardOn.value,
+          boardIntro: boardIntro.value,
+          passPrinted: passPrinted.value,
+          stamped: stamped.value,
+          runwayOn: runwayOn.value,
+          raceStarted: raceStarted.value,
+          racePlaying: racePlaying.value,
+          raceSpeed: raceSpeed.value,
+          raceDay: raceDay.value,
+          raceItems: raceItems.value,
+          raceElapsedMs,
+          initiativeEntered: initiativeEntered.value
+        }
+      }
+      applyExportTerminal()
+      return
+    }
+    const snap = exportSnapshot
+    exportSnapshot = null
+    if (!snap) return
+    exportRestoring.value = true
+    applyExportRestore(snap)
+    nextTick(() => { exportRestoring.value = false })
+  },
+  { immediate: true }
+)
+
+/* 导出期间是「瞬时切页」：这一页刚被翻到时，上面那条 isActive watch 会去排
+   450ms 的公告带入场、离开时又会排 750ms 的复位，导出等不起也不该等 ——
+   翻到就再落一次终态（幂等）。注册在那条 watch 之后，顺序上一定后跑。 */
+watch(
+  () => props.isActive,
+  () => { if (exportMode.value) applyExportTerminal() }
 )
 
 // 后端数据更新（刷新/重试）时回到初始态
@@ -1481,6 +1674,12 @@ onBeforeUnmount(() => {
 
 .ck-rail {
   transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1) !important;
+}
+
+/* 台面只是竖幅用的分组壳：默认 display:contents，证件照与翻牌机仍然是 .ck-rail 的直接
+   flex 子项，wide/landscape 的排布与像素完全不变。竖幅段里它才变成一行并排的 flex。 */
+.ck-desk {
+  display: contents;
 }
 
 .ck-sign {
@@ -1631,6 +1830,9 @@ onBeforeUnmount(() => {
 }
 
 .pass {
+  /* 票根高度是三处互锁常量的唯一真源：冲孔缺口的 y 位置（mask）、金箔内框的下内缩
+     （= --stub-h + 6px 的框边距）、票根自身高度。改任何一处都必须改这里，否则存根必错位。 */
+  --stub-h: 56px;
   position: relative;
   border-radius: 16px;
   padding: 15px 18px 0;
@@ -1647,12 +1849,12 @@ onBeforeUnmount(() => {
     0 22px 44px rgba(5, 80, 45, 0.28);
   /* 票根冲孔缺口；不支持 mask-composite 的环境优雅退化为无缺口 */
   -webkit-mask-image:
-    radial-gradient(circle 8px at 0 calc(100% - 56px), transparent 7.5px, #000 8.5px),
-    radial-gradient(circle 8px at 100% calc(100% - 56px), transparent 7.5px, #000 8.5px);
+    radial-gradient(circle 8px at 0 calc(100% - var(--stub-h)), transparent 7.5px, #000 8.5px),
+    radial-gradient(circle 8px at 100% calc(100% - var(--stub-h)), transparent 7.5px, #000 8.5px);
   -webkit-mask-composite: source-in;
   mask-image:
-    radial-gradient(circle 8px at 0 calc(100% - 56px), transparent 7.5px, #000 8.5px),
-    radial-gradient(circle 8px at 100% calc(100% - 56px), transparent 7.5px, #000 8.5px);
+    radial-gradient(circle 8px at 0 calc(100% - var(--stub-h)), transparent 7.5px, #000 8.5px),
+    radial-gradient(circle 8px at 100% calc(100% - var(--stub-h)), transparent 7.5px, #000 8.5px);
   mask-composite: intersect;
   transform-origin: 50% 0%;
   /* backwards：结束后交还 transform 给指针倾斜的 inline style（forwards 会把它永久盖住） */
@@ -1674,7 +1876,8 @@ onBeforeUnmount(() => {
 .pass::after {
   content: '';
   position: absolute;
-  inset: 6px 6px 62px;
+  /* 62px = --stub-h(56) + 框边距 6px */
+  inset: 6px 6px calc(var(--stub-h) + 6px);
   border-radius: 11px 11px 4px 4px;
   border: 1px solid rgba(236, 209, 140, 0.26);
   pointer-events: none;
@@ -1920,7 +2123,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 56px;
+  height: var(--stub-h);
   margin: 13px -18px 0;
   padding: 9px 16px 10px;
   background: linear-gradient(180deg, #FBF7EB 0%, #F2EBD9 100%);
@@ -2460,18 +2663,8 @@ onBeforeUnmount(() => {
   margin-left: auto;
 }
 
-/* 窄屏：收起出/进两列，只留里程合计，避免横向溢出 */
-@media (max-width: 640px) {
-  .brd-cols,
-  .brd-row {
-    grid-template-columns: 22px 26px minmax(0, 1fr) 88px;
-  }
-
-  .brd-cols .brd-num-h:not(.brd-num-h--total),
-  .brd-row .brd-num {
-    display: none;
-  }
-}
+/* 出/进两列的窄容器兜底见文末竖幅段：不再按窗口宽度 display:none 掉两列数据，
+   而是按大屏自身宽度把它们折进 .brd-sub 一行，数据一个不少。 */
 
 /* ================= 航站公告带 ================= */
 
@@ -2562,7 +2755,7 @@ onBeforeUnmount(() => {
 /* 巨型读数：本区最大字号，端头对置 */
 .apr-num {
   margin-top: 4px;
-  font-size: clamp(32px, 3vw, 42px);
+  font-size: clamp(32px, calc(var(--svw) * 3), 42px);
   font-weight: 800;
   line-height: 1;
   letter-spacing: 0.01em;
@@ -3016,4 +3209,1059 @@ onBeforeUnmount(() => {
   opacity: 1;
   transform: none;
 }
+
+/* ============================================================================
+   画幅重排 · 竖幅三档
+   square 1200×1200 / portrait 1040×1386 · 1074×1342 / tall 900×1600
+
+   面积恒定 ⇒ 同样的构件在竖幅里也装得下，只是要换排布：
+   三列航站厅 → 单列堆叠（值机 → 登机牌 → 大屏 → 停机坪 → closer）。
+   一条铁律：只改「怎么排」，不改「多大」——所有构件尺寸保持 16:9 的设计常量，
+   字号只上调不下调（栏更窄 ⇒ 小字更难读）。
+   16:9（wide）与 4:3（landscape）一律走上面的原始声明，逐像素零回归。
+   ========================================================================== */
+
+/* ---------- 报头 ---------- */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .tm-line {
+  font-size: 12px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .tm-brand {
+  font-size: 11.5px;
+}
+
+/* ---------- 值机柜台：竖排四段 → 证件照与翻牌机并排（省一段高度，构件一个不缩） ---------- */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-sign {
+  font-size: 12px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-desk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+/* 并排后两件构件各自的 mt-4 让位给 .ck-desk 的 gap；尺寸本身一点没动 */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-desk > .ck-photo,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-desk > .flap-housing {
+  margin-top: 0;
+}
+
+/* ---------- 登机牌：3 列字段 → 2 列（6 个字段变 3 行，一个不少） ---------- */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass {
+  /* 存根里的字号统一上调一档，票根同步长高；三处互锁常量由 --stub-h 单点驱动 */
+  --stub-h: 62px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-class i,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-class em,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-port-sub {
+  font-size: 10px;
+}
+
+/* 旅客名不再截断：窄栏里宁可折行也不丢字 */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-port-name {
+  max-width: none;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-field i {
+  font-size: 9.5px;
+  white-space: normal;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-field b {
+  white-space: normal;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-field em {
+  font-size: 10.5px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-speedline {
+  font-size: 12px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-stub-codes i {
+  font-size: 9px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-stub-codes i:first-child {
+  font-size: 10.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-stamp em {
+  font-size: 8px;
+}
+
+/* ---------- 出港大屏：定高 260px → 按行数自然长高 ---------- */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd {
+  --brd-rows: 10;
+  /* 30px = 13px 名字折两行（line-height 1.15）刚好放下，不是把行高压小 */
+  --brd-row-h: 30px;
+  /* 「窄」以大屏自身宽度为准，不再拿窗口宽度当尺子 */
+  container-type: inline-size;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-body {
+  height: calc(var(--brd-rows) * var(--brd-row-h));
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-row {
+  height: var(--brd-row-h);
+}
+
+/* 标题那句「全年往来消息累计」不再被 ellipsis 吃掉 */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-title {
+  font-size: 12px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-title-sub {
+  font-size: 10px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-clock {
+  font-size: 12px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-replay {
+  font-size: 11px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-cols {
+  font-size: 9.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-rank {
+  font-size: 11.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-ava-fb {
+  font-size: 11px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-name {
+  font-size: 13px;
+  line-height: 1.15;
+  white-space: normal;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-num {
+  font-size: 12px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-total {
+  font-size: 14px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-note {
+  flex-wrap: wrap;
+  font-size: 9.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-empty {
+  font-size: 13px;
+}
+
+/* 「出 X · 进 Y」副行：宽容器下由出/进两列承担，只在窄容器分支上岗 */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-sub {
+  display: none;
+  margin-top: 1px;
+  font-style: normal;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  color: rgba(232, 223, 200, 0.46);
+}
+
+/* 窄容器分支：出/进两列折进名字底下一行（原 @media 640px 是直接把两列 display:none 掉，
+   那才是真丢数据；这里只是换个位置放）。380px 是六列排布的临界宽度。 */
+@container (max-width: 380px) {
+  :is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-cols,
+  :is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-row {
+    grid-template-columns: 22px 26px minmax(0, 1fr) 88px;
+  }
+
+  :is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-cols .brd-num-h:not(.brd-num-h--total),
+  :is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-row .brd-num {
+    display: none;
+  }
+
+  :is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-sub {
+    display: block;
+  }
+
+  /* 容器不能被自己的 @container 规则命中，行高只能挂在后代 .brd-body 上（.brd-row 继承） */
+  :is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-body {
+    --brd-row-h: 44px;
+  }
+}
+
+/* ---------- 夜间停机坪：三栏横排 → 两端头并排 + 塔台日志跨栏 ---------- */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apron-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 20px;
+  row-gap: 14px;
+  align-items: start;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-end--dep {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-end--arr {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+/* 左右发丝竖线 → 上下横线 */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-log {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  padding: 12px 0 2px;
+  border-left: 0;
+  border-right: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+/* 巨型读数挂在**宽度轴**上（--svw），竖幅舞台变窄会让它反而缩到 32px。
+   钉死成它在 16:9 下的计算值 42px：构件尺寸是设计常量，不随画幅漂。 */
+[data-frame-tier="landscape"] .apr-num,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-num {
+  font-size: 42px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-word i {
+  font-size: 9.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-sub {
+  font-size: 9.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-chip-fb {
+  font-size: 10px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-chip-name {
+  max-width: none;
+  font-size: 11px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-chip b {
+  font-size: 11.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-log-head {
+  font-size: 9.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc-tag {
+  font-size: 9.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc-body {
+  font-size: 12px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc-chip-ava {
+  font-size: 9px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc-chip b {
+  max-width: none;
+  font-size: 11.5px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc-pending {
+  font-size: 11px;
+}
+
+/* ---------- 05L / 05R 双跑道：说明句放开换行 ---------- */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .rwy-meta {
+  flex-wrap: wrap;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .rwy-id {
+  font-size: 9.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .rwy-name {
+  font-size: 10.5px;
+}
+
+/* P50 / P90 那句话原来是 nowrap + ellipsis，窄栏里会被整句吃掉 */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .rwy-cap {
+  font-size: 12px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .rw-marker em {
+  font-size: 9px;
+}
+
+/* ---------- 尾声 ---------- */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .closer {
+  font-size: 12px;
+}
+
+/* ============================================================================
+   竖幅二次重排 · portrait(3:4 / 4:5) 与 tall(9:16)
+   —— 上面那一段解决了「装得下」，这一段解决「看得清 + 占得满」。
+   两条主线：
+   A. 值机前（.is-preflight）大厅里只有柜台一件东西，那就让它长到填满画幅：
+      证件照改 3:4 竖版大照、翻牌机横向铺满、按钮放大，下半屏不再空着。
+   B. 值机后柜台收成一条横柜台，登机牌与出港大屏改并排两栏 —— 省下的一整段
+      高度还给字号，这样才不用靠 FitScale 整体缩小（改前 9:16 revealed = 0.902）。
+   所有字号一律绝对 px（宽度轴常量），不挂 cqh/vh。square 与 wide/landscape 不受影响。
+   ========================================================================== */
+
+/* ---------- A1 · 大厅骨架：值机后并排两栏 ---------- */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .hall {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 16px;
+  row-gap: 14px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .hall > .ck-rail {
+  grid-column: 1 / -1;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .hall > .pass-cell {
+  grid-column: 1;
+  align-self: start;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .hall > .brd {
+  grid-column: 2;
+  align-self: start;
+}
+
+/* 兜底：有回复数据但没有头等舱旅客（登机牌整块缺席）时，大屏独占整幅，不留空栏 */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .hall:not(:has(.pass-cell)) > .brd {
+  grid-column: 1 / -1;
+}
+
+/* 并排后登机牌吃满自己那一栏（原来锁死 344px，两侧白白空掉） */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-printer {
+  width: 100%;
+}
+
+/* ---------- A2 · 值机前：柜台放大到填满画幅 ---------- */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .ck-desk {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  margin-top: 22px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .ck-desk > .ck-photo,
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .ck-desk > .flap-housing {
+  margin-top: 0;
+}
+
+/* 证件照就该是证件照：竖幅里改 3:4 竖版大照 */
+[data-frame-tier="tall"] .is-preflight .ck-photo {
+  width: 306px;
+  height: 408px;
+  padding: 10px;
+}
+
+[data-frame-tier="portrait"] .is-preflight .ck-photo {
+  width: 264px;
+  height: 352px;
+  padding: 9px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .ck-photo-frame {
+  border-radius: 18px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .ck-tick {
+  width: 22px;
+  height: 22px;
+}
+
+/* 翻牌机横向铺满这一档的版心（格子不缩，是整台机器变大） */
+[data-frame-tier="tall"] .is-preflight :deep(.sf-row) {
+  --sf-u: 76px;
+}
+
+[data-frame-tier="portrait"] .is-preflight :deep(.sf-row) {
+  --sf-u: 82px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .flap-housing {
+  padding: 14px 17px;
+  border-radius: 18px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .flap-housing::before { left: 6px; }
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .flap-housing::after { right: 6px; }
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .flap-housing::before,
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .flap-housing::after {
+  width: 6px;
+  height: 6px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .ck-btn {
+  font-size: 24px;
+  padding: 17px 38px;
+  border-radius: 18px;
+  letter-spacing: 0.1em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .ck-rail > .mt-5 {
+  margin-top: 30px;
+}
+
+/* ---------- A3 · 值机后：柜台收成一条横柜台（把高度让给登机牌与大屏） ---------- */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-rail--docked {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-rail--docked .ck-desk {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  margin-top: 0;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-rail--docked .ck-photo {
+  width: 84px;
+  height: 112px;
+  margin-top: 0;
+  padding: 5px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-rail--docked .flap-housing {
+  margin-top: 0;
+  padding: 8px 10px;
+  border-radius: 11px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-rail--docked :deep(.sf-row) {
+  --sf-w: 30px;
+  --sf-h: 40px;
+  --sf-fs: 19px;
+  --sf-r: 5px;
+  gap: 4px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-rail--docked > .mt-5 {
+  margin-top: 0;
+}
+
+/* ---------- B1 · 报头 ---------- */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .tm-line {
+  gap: 12px;
+  font-size: 17px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .tm-brand {
+  gap: 8px;
+  padding: 5px 13px;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .tm-plane {
+  width: 18px;
+  height: 18px;
+}
+
+/* 报头在竖幅里必然折行（铭牌本身就占半行），分隔圆点会孤零零留在行尾，
+   靠 gap 分段更干净 */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .tm-dot {
+  display: none;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-sign {
+  gap: 9px;
+  padding: 8px 20px;
+  border-radius: 10px;
+  font-size: 18px;
+  letter-spacing: 0.18em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-sign svg {
+  width: 20px;
+  height: 20px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ck-btn--ghost {
+  padding: 10px 22px;
+  font-size: 16px;
+}
+
+/* ---------- B2 · 登机牌：并排一栏里的字号重排 ---------- */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass {
+  --stub-h: 68px;
+  padding: 15px 18px 0;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-airline {
+  font-size: 17px;
+  letter-spacing: 0.2em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-class i,
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-class em {
+  font-size: 12px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-port-code {
+  font-size: 38px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-port-sub {
+  font-size: 12px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-port-name {
+  font-size: 22px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-port-ava {
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-field i {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-field b {
+  font-size: 21px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-field em {
+  font-size: 12.5px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-speedline {
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-stub {
+  height: var(--stub-h);
+  padding: 10px 16px 10px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-stub-codes i {
+  font-size: 12px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-stub-codes i:first-child {
+  font-size: 14px;
+}
+
+/* 印章右移一档：字大了以后 rotate(-8deg) 的右下角会被票面 overflow:hidden 切掉 */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-stamp {
+  right: 26px;
+  bottom: 11px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-stamp i {
+  font-size: 15px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .pass-stamp em {
+  font-size: 11px;
+}
+
+/* ---------- B3 · 出港大屏：并排半栏 ⇒ 早一步折行，字号反而调大 ---------- */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd {
+  padding: 12px 12px 8px;
+  /* 行数取最终上榜人数：9 个人就是 9 行，不再空出第 10 行的高度 */
+  --brd-rows: var(--brd-rows-fit, 10);
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-top {
+  align-items: flex-start;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-title {
+  font-size: 15px;
+  letter-spacing: 0.12em;
+}
+
+/* 半栏里「TOP ROUTES」与副题挤在一行会顶到日期牌上，副题自己占一行 */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-title-sub {
+  display: block;
+  margin-left: 0;
+  margin-top: 3px;
+  font-size: 12px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-clock {
+  font-size: 14px;
+  padding: 4px 9px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-replay {
+  font-size: 13px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-cols {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-rank {
+  font-size: 14px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-ava {
+  width: 26px;
+  height: 26px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-ava-fb {
+  font-size: 13px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-name {
+  font-size: 17px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-num {
+  font-size: 14px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-total {
+  font-size: 19px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-note {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-empty {
+  font-size: 16px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-sub {
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+}
+
+/* 半栏宽（≈410–480px）下六列排不开：出/进折到名字底下，行高给足两行 */
+@container (max-width: 520px) {
+  :is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-cols,
+  :is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-row {
+    grid-template-columns: 26px 30px minmax(0, 1fr) 92px;
+    gap: 8px;
+  }
+
+  :is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-cols .brd-num-h:not(.brd-num-h--total),
+  :is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-row .brd-num {
+    display: none;
+  }
+
+  :is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-sub {
+    display: block;
+  }
+
+  :is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .brd-body {
+    --brd-row-h: 44px;
+  }
+}
+
+/* ---------- B4 · 夜间停机坪 ---------- */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apron {
+  margin-top: 18px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apron-row {
+  column-gap: 18px;
+  row-gap: 16px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-word {
+  font-size: 20px;
+  letter-spacing: 0.12em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-word i {
+  font-size: 14px;
+  letter-spacing: 0.16em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-ic {
+  width: 22px;
+  height: 22px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-sub {
+  margin-top: 6px;
+  font-size: 14px;
+  letter-spacing: 0.1em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-chips {
+  gap: 8px;
+  margin-top: 10px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-chip {
+  padding: 4px 11px 4px 4px;
+  gap: 7px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-chip-ava {
+  width: 26px;
+  height: 26px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-chip-fb {
+  font-size: 13px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-chip-name {
+  font-size: 16px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-chip b {
+  font-size: 17px;
+}
+
+/* 巨型读数：值机前这一屏只有柜台和端头，读数就该是招牌大字；值机后收一档，
+   把高度让给登机牌与大屏。两档都是绝对 px 常量，不随画幅漂。 */
+[data-frame-tier="tall"] .apr-num {
+  font-size: 70px;
+}
+
+[data-frame-tier="portrait"] .apr-num {
+  font-size: 68px;
+}
+
+[data-frame-tier="tall"] .is-preflight .apr-num {
+  font-size: 116px;
+}
+
+[data-frame-tier="portrait"] .is-preflight .apr-num {
+  font-size: 96px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-log {
+  padding-top: 16px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apr-log-head {
+  margin-bottom: 10px;
+  font-size: 14px;
+  letter-spacing: 0.16em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc {
+  gap: 10px;
+  margin-top: 8px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc-tag {
+  font-size: 12.5px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc-body {
+  font-size: 16px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc-chip-ava {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc-chip b {
+  font-size: 16px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .ntc-pending {
+  font-size: 17px;
+}
+
+/* ---------- B5 · 双跑道：值机后并排（05L 左 / 05R 右），值机前独占整幅 ---------- */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apron:has(.rwy--speed) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 18px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apron:has(.rwy--speed) .apron-row {
+  grid-column: 1 / -1;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .apron:has(.rwy--speed) .rwy {
+  margin-top: 14px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .rwy-meta {
+  gap: 12px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .rwy-id {
+  padding: 3px 9px;
+  border-radius: 5px;
+  font-size: 14px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .rwy-name {
+  font-size: 15px;
+  letter-spacing: 0.16em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .rwy-cap {
+  font-size: 16px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .rwy-strip {
+  height: 26px;
+  margin-top: 8px;
+  border-radius: 8px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .rwy-strip {
+  height: 34px;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .rw-marker em {
+  font-size: 12px;
+}
+
+/* ---------- B6 · 尾声 ---------- */
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .closer {
+  margin-top: 12px;
+  font-size: 16px;
+  letter-spacing: 0.24em;
+}
+
+:is([data-frame-tier="portrait"], [data-frame-tier="tall"]) .is-preflight .closer {
+  margin-top: 26px;
+}
+
+/* ---------- B7 · portrait(3:4 / 4:5) 收一档 ----------
+   面积恒定意味着 portrait 比 tall 矮 200–260px（1386/1342 对 1600），
+   却要装同样多的东西。上面那套按 tall 的高度预算调的常量在这里会溢出，
+   所以柜台英雄件与巨型读数各收一档；字号（可读性下限）一律不动。 */
+[data-frame-tier="portrait"] .is-preflight .ck-desk {
+  gap: 18px;
+  margin-top: 18px;
+}
+
+[data-frame-tier="portrait"] .is-preflight .ck-photo {
+  width: 228px;
+  height: 304px;
+  padding: 8px;
+}
+
+[data-frame-tier="portrait"] .is-preflight :deep(.sf-row) {
+  --sf-u: 68px;
+}
+
+[data-frame-tier="portrait"] .is-preflight .ck-btn {
+  font-size: 22px;
+  padding: 14px 32px;
+}
+
+[data-frame-tier="portrait"] .is-preflight .ck-rail > .mt-5 {
+  margin-top: 24px;
+}
+
+[data-frame-tier="portrait"] .is-preflight .apr-num {
+  font-size: 84px;
+}
+
+[data-frame-tier="portrait"] .apr-num {
+  font-size: 58px;
+}
+
+[data-frame-tier="portrait"] .pass {
+  --stub-h: 62px;
+}
+
+[data-frame-tier="portrait"] .ck-rail--docked .ck-photo {
+  width: 74px;
+  height: 99px;
+}
+
+[data-frame-tier="portrait"] .apr-num {
+  font-size: 52px;
+}
+
+[data-frame-tier="portrait"] .apron {
+  margin-top: 14px;
+}
+
+[data-frame-tier="portrait"] .ntc {
+  margin-top: 6px;
+}
+
+[data-frame-tier="portrait"] .pass-speedline {
+  line-height: 1.5;
+}
+
+[data-frame-tier="portrait"] .ck-rail--docked .ck-photo {
+  width: 66px;
+  height: 88px;
+}
+
+[data-frame-tier="portrait"] .closer {
+  margin-top: 10px;
+}
+
+[data-frame-tier="portrait"] .apr-chips {
+  margin-top: 8px;
+}
+
+[data-frame-tier="portrait"] .apr-log {
+  padding-top: 12px;
+}
+
+[data-frame-tier="portrait"] .apr-log-head {
+  margin-bottom: 8px;
+}
+
+[data-frame-tier="portrait"] .apron:has(.rwy--speed) .rwy {
+  margin-top: 10px;
+}
+
+[data-frame-tier="portrait"] .pass {
+  padding: 13px 16px 0;
+}
+
+[data-frame-tier="portrait"] .pass-grid {
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+[data-frame-tier="portrait"] .pass-route {
+  margin-top: 12px;
+}
+
+[data-frame-tier="portrait"] .rwy-strip {
+  margin-top: 6px;
+}
+
+/* 半栏榜单行：名字 + 「出/进」副行两行放进 34px，靠字号互锁（15 + 11.5），不靠裁切 */
+@container (max-width: 520px) {
+  [data-frame-tier="portrait"] .brd-body {
+    --brd-row-h: 33px;
+  }
+
+  [data-frame-tier="portrait"] .brd-name {
+    font-size: 15px;
+  }
+
+  [data-frame-tier="portrait"] .brd-sub {
+    font-size: 11.5px;
+  }
+}
+
+/* ============================================================================
+   9:20（804×1788，手机满屏）· tall 档里更窄更高的那一支
+   比 9:16 窄 96px、高 188px。tall 的规则先全部生效，再由本段覆写；
+   本段选择器与 tall 段同特异性，靠「写在最后」赢 —— 不要往前挪。
+
+   ① 【必修】值机前的翻牌机出画幅：--sf-u:76 时整台机器
+      9*76 + 8*(76/7) + 34(机壳内边距) = 805px，而 9:20 的版心只有 804-48 = 756，
+      左右各溢出 24px（实测 .hall scrollWidth 780、.ck-desk 左缘落到 x=0）。
+      收到 --sf-u:71 + 机壳内边距 14px：720 + 28 = 748，落回 756 内。
+   ② 【放大】多出来的 188px 高度全部还给值机大厅与停机坪：
+      证件照 306×408 → 352×470，巨型读数 116 → 130，跑道灯带、端头字号同步升一档。
+      改动只挂 [data-frame="9:20"]，9:16 一个像素不动。
+   ========================================================================== */
+
+/* ---------- 值机前：柜台英雄件 ---------- */
+[data-frame="9:20"] .ck-sign { font-size: 14px; }
+
+[data-frame="9:20"] .is-preflight .ck-desk {
+  gap: 28px;
+  margin-top: 26px;
+}
+
+/* 证件照按 3:4 继续放大（竖幅越高，这张照片就越像一张真的证件照） */
+[data-frame="9:20"] .is-preflight .ck-photo {
+  width: 364px;
+  height: 486px;
+  padding: 11px;
+}
+
+/* 翻牌机：格宽从 76 收到 71，机壳内边距同步收窄，整台机器 748px 落进 756 版心 */
+[data-frame="9:20"] .is-preflight :deep(.sf-row) { --sf-u: 71px; }
+[data-frame="9:20"] .is-preflight .flap-housing { padding: 14px 14px; }
+
+[data-frame="9:20"] .is-preflight .ck-btn {
+  font-size: 26px;
+  padding: 19px 42px;
+}
+
+[data-frame="9:20"] .is-preflight .ck-rail > .mt-5 { margin-top: 40px; }
+
+/* ---------- 停机坪：巨型读数与端头一起升一档 ---------- */
+[data-frame="9:20"] .apron { margin-top: 24px; }
+/* 这一档的上限是宽度不是高度。.apr-end 在行里等分 (756-18)/2 = 369px，
+   读数是不可断行的一串，字号一大它的 min-content 就把整行顶出画幅：
+   实测 122px → 行宽 760、130px → 785。临界点约 121px，取 118 留 10px 余量。
+   （位数本身仍是数据风险：六位数读数在 9:16 的 116px 下同样放不下，与本档无关。） */
+[data-frame="9:20"] .is-preflight .apr-num { font-size: 118px; }
+[data-frame="9:20"] .apr-word { font-size: 22px; }
+[data-frame="9:20"] .apr-sub { margin-top: 8px; font-size: 15px; }
+/* 头等舱旅客小票只放开纵向间距，头像/姓名/次数一律留在 tall 档：
+   这一行是 apron-row 的宽度驱动者，9:20 版心只有 756，放大一档就把整行顶到画幅边缘，
+   名字稍长一点就会溢出。宽度轴上一分余量都不能花。 */
+[data-frame="9:20"] .apr-chips { gap: 9px; margin-top: 12px; }
+[data-frame="9:20"] .apr-log { padding-top: 20px; }
+[data-frame="9:20"] .apr-log-head { margin-bottom: 12px; font-size: 15px; }
+[data-frame="9:20"] .ntc-body { font-size: 17px; }
+[data-frame="9:20"] .ntc-pending { font-size: 18px; }
+
+/* ---------- 跑道 + 尾声 ---------- */
+[data-frame="9:20"] .rwy-id { font-size: 15px; }
+[data-frame="9:20"] .rwy-name { font-size: 16px; }
+[data-frame="9:20"] .rwy-cap { font-size: 17px; }
+[data-frame="9:20"] .rwy-strip { height: 30px; margin-top: 10px; }
+[data-frame="9:20"] .is-preflight .rwy-strip { height: 46px; }
+[data-frame="9:20"] .closer { font-size: 17px; }
+[data-frame="9:20"] .is-preflight .closer { margin-top: 38px; }
 </style>

@@ -8,7 +8,7 @@
       <h2 class="tf-q1 wrapped-title">{{ titleQ1 }}</h2>
 
       <div class="tf-big" aria-label="全年发送字数">
-        <WrappedOdometer class="tf-big-num wrapped-number" :value="sentChars" :play="odoPlay" :duration="1.5" ink />
+        <WrappedOdometer class="tf-big-num wrapped-number" :value="sentChars" :play="odoPlay" :duration="odoDuration" :stagger="odoStagger" ink />
         <span class="tf-big-unit">字</span>
       </div>
 
@@ -270,7 +270,7 @@
             </transition>
           </div>
           <div ref="hitsEl" class="ime-hits" aria-label="全年敲击次数">
-            <WrappedOdometer class="ime-hits-num wrapped-number" :value="totalKeyHits" :play="odoPlay" :duration="1.7" />
+            <WrappedOdometer class="ime-hits-num wrapped-number" :value="totalKeyHits" :play="odoPlay" :duration="odoDurationHits" :stagger="odoStagger" />
             <span class="ime-hits-unit wrapped-label">次敲击</span>
           </div>
         </div>
@@ -339,7 +339,7 @@
 <script setup>
 import { usePrivacyText } from '~/composables/usePrivacyText'
 const { privacyMode } = usePrivacyText()
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import { useReducedMotion } from '~/composables/useReducedMotion'
 import { useCountUp } from '~/composables/useCountUp'
@@ -367,6 +367,15 @@ const nfInt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
 const formatInt = (n) => nfInt.format(Math.round(Number(n) || 0))
 
 const reducedMotion = useReducedMotion()
+
+/* 导出模式（页面级 provide）。为真期间这一页必须**立刻**是终态：
+   大数滚完、书装订好、纸摞长齐、键帽磨损显影到位，而不是还在 2.4s 的入场编排里。
+   为假时行为与导出功能存在之前一字不差。 */
+const exportMode = inject('wrappedExportMode', ref(false))
+// 里程表的滚轮时长：导出时置 0，读数在第一帧就落到目标位（stagger 同理）
+const odoDuration = computed(() => (exportMode.value ? 0 : 1.5))
+const odoDurationHits = computed(() => (exportMode.value ? 0 : 1.7))
+const odoStagger = computed(() => (exportMode.value ? 0 : 0.055))
 
 const sentChars = computed(() => Number(props.data?.sentChars || 0))
 const receivedChars = computed(() => Number(props.data?.receivedChars || 0))
@@ -401,7 +410,12 @@ const reamPx = computed(() => {
   if (cm <= 0) return 0
   return Math.round(14 + Math.min(1, Math.log1p(cm) / Math.log1p(500)) * 84)
 })
-const { display: a4HeightDisplay, play: playA4Height, finish: finishA4Height } = useCountUp(
+const {
+  display: a4HeightDisplay,
+  value: a4HeightCurrent,
+  play: playA4Height,
+  finish: finishA4Height
+} = useCountUp(
   () => a4HeightValue.value,
   { duration: 1.0, decimals: 1 }
 )
@@ -1183,9 +1197,37 @@ const buildTimeline = () => {
   if (!props.isActive) tl.pause()
 }
 
+/* 导出：入场直接落到终帧。
+   已建过时间线就 progress(1) 把在飞的 from() 全部推到末尾（内联值落在自然值上，
+   不留半透明残影）；没建过就等同 reduced 那条路——那些 from() 是唯一会动这些元素的东西，
+   没建时元素本来就在终态。收尾 stopVignette()：输入法小剧场是无限循环的环境动效，
+   导出要的是一张定得住的帧，不是一直在敲字的帧。 */
+const settleEntranceInstant = () => {
+  if (entranceStartTimer) { window.clearTimeout(entranceStartTimer); entranceStartTimer = 0 }
+  if (entranceTl) entranceTl.progress(1)
+  finishAll()
+  stopVignette()
+}
+
+// 还原：把入场留下的终态收回未入场那一帧，下次翻到本页照旧从头演一遍
+const primeForReplay = () => {
+  if (entranceStartTimer) { window.clearTimeout(entranceStartTimer); entranceStartTimer = 0 }
+  stopVignette()
+  if (entranceTl) { entranceTl.kill(); entranceTl = null }
+  odoPlay.value = false
+  clipRevealed.value = false
+  wearReveal.value = 0
+  a4HeightCurrent.value = 0
+  hasEntered = false
+}
+
 const playEntrance = () => {
   if (!import.meta.client) return
   hasEntered = true
+  if (exportMode.value) {
+    settleEntranceInstant()
+    return
+  }
   if (reducedMotion.value) {
     finishAll()
     return
@@ -1210,7 +1252,8 @@ watch(() => props.isActive, (active) => {
     entranceStartTimer = 0
   }
   if (active) {
-    if (typeof window === 'undefined' || reducedMotion.value) {
+    // 导出模式与 reduced 走同一条：翻到本页立刻是终态，不等那 450ms + 2.4s 编排
+    if (typeof window === 'undefined' || reducedMotion.value || exportMode.value) {
       playEntrance()
       return
     }
@@ -1221,6 +1264,42 @@ watch(() => props.isActive, (active) => {
   } else {
     if (entranceTl) entranceTl.pause()
     stopVignette()
+  }
+}, { immediate: true })
+
+/* 导出模式：进去立刻定格终帧，出来还原成进入导出前的样子。
+   —— 还原必须真的还原：这一页的主体验是「大数滚出来 → 书装订 → 键盘升起 → 磨损显影」，
+      导出一次回来若已经全部落定，这段揭晓就被剧透了。
+   放在 isActive 那条 watch 之后，immediate 才能在「导出已经打开时才挂载」的情况下
+   直接落到终帧。
+   种子值不能等 watch 回调来填：isActive 那条 watch 的 immediate 先跑，
+   它会在导出已开时直接把 hasEntered 置真，晚一步再拍快照就把「没入场过」记成了「入场过」。 */
+let exportSnapshot = exportMode.value ? { hasEntered: false } : null
+
+watch(exportMode, (on) => {
+  if (!import.meta.client) return
+
+  if (on) {
+    if (exportSnapshot) return
+    exportSnapshot = { hasEntered }
+    if (props.isActive) playEntrance()
+    return
+  }
+
+  const snap = exportSnapshot
+  exportSnapshot = null
+  if (!snap) return
+  // 导出前用户已经看过入场了：保持终态，别把进度抹回去
+  if (snap.hasEntered) return
+
+  primeForReplay()
+  // 用户正停在本页：按没进过导出时的路子重新演一遍
+  if (props.isActive) {
+    if (reducedMotion.value) playEntrance()
+    else entranceStartTimer = window.setTimeout(() => {
+      entranceStartTimer = 0
+      playEntrance()
+    }, 450)
   }
 }, { immediate: true })
 
@@ -1254,27 +1333,128 @@ onBeforeUnmount(() => {
   padding: 72px 48px 26px;
 }
 
-@media (min-width: 1024px) {
-  .tf-root--voice {
-    display: grid;
-    grid-template-columns: minmax(215px, 1fr) minmax(0, 2.4fr) minmax(330px, 1.6fr);
-    grid-template-rows: auto 1fr;
-    grid-template-areas:
-      'hero hero voice'
-      'objs kb   voice';
-    column-gap: 44px;
-    row-gap: 22px;
-  }
-  .tf-root--voice > .tf-hero { grid-area: hero; }
-  /* 桌面线：书纸、键盘、留言机三者底边共线 */
-  .tf-root--voice > .tf-objs { grid-area: objs; align-self: end; }
-  .tf-root--voice > .tf-kb { grid-area: kb; align-self: end; }
-  .tf-root--voice > .voice-section {
-    grid-area: voice;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-  }
+/* ============ 画幅重排：判据从「浏览器窗口」换成「舞台画幅档位」 ============
+   deck 渲染在设计像素恒定的舞台盒里，@media 的宽度与版面宽度早已脱钩
+   （竖幅舞台放在宽窗口里照样命中 min-width:1024）。以下一律挂 .wr-stage 的
+   data-frame-tier。阅读顺序在所有画幅下恒定：
+   里程表大数 → 3D 书 → A4 纸摞 → 玻璃输入法候选条 → 可敲击键盘 → 领奖台 → 留言机。 */
+
+/* —— 16:9 / 4:3：三栏桌面（与原 @media(min-width:1024px) 逐条等价） —— */
+[data-frame-tier="wide"] .tf-root--voice,
+[data-frame-tier="landscape"] .tf-root--voice {
+  display: grid;
+  grid-template-columns: minmax(215px, 1fr) minmax(0, 2.4fr) minmax(330px, 1.6fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    'hero hero voice'
+    'objs kb   voice';
+  column-gap: 44px;
+  row-gap: 22px;
+}
+[data-frame-tier="wide"] .tf-root--voice > .tf-hero,
+[data-frame-tier="landscape"] .tf-root--voice > .tf-hero { grid-area: hero; }
+/* 桌面线：书纸、键盘、留言机三者底边共线 */
+[data-frame-tier="wide"] .tf-root--voice > .tf-objs,
+[data-frame-tier="landscape"] .tf-root--voice > .tf-objs { grid-area: objs; align-self: end; }
+[data-frame-tier="wide"] .tf-root--voice > .tf-kb,
+[data-frame-tier="landscape"] .tf-root--voice > .tf-kb { grid-area: kb; align-self: end; }
+[data-frame-tier="wide"] .tf-root--voice > .voice-section,
+[data-frame-tier="landscape"] .tf-root--voice > .voice-section {
+  grid-area: voice;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+/* —— 9:16（900×1600）：重排 + 放大，不是把横幅整块缩下来 ——
+   原来是单列四段纵向流（hero / 书纸 / 键盘 / 留言机），版面只占舞台 75%，
+   上下各空 147 与 108，而字号最小到 6.5px —— 竖幅下等于看不见。
+   ① 书与纸摞收进 hero 右手边并肩（原来独占一整行，白吃 184px 高度）；
+   ② 上下内边距从 72/26 收到 6/12（那两条空带本来就没有内容）；
+   ③ 省下来的高度全部还给字号与构件 —— 见文件末尾「tall 放大」整块。 */
+[data-frame-tier="tall"] .tf-root {
+  display: grid;
+  max-width: none;
+  /* 左栏 hero（大数与元数据要横向铺开），右栏 auto 由书+纸摞的实际宽度决定 */
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'hero  objs'
+    'kb    kb'
+    'voice voice';
+  column-gap: 24px;
+  row-gap: 26px;
+  padding: 6px 24px 12px;
+}
+[data-frame-tier="tall"] .tf-root > .tf-hero { grid-area: hero; }
+[data-frame-tier="tall"] .tf-root > .tf-objs { grid-area: objs; align-self: end; justify-content: flex-end; }
+[data-frame-tier="tall"] .tf-root > .tf-kb { grid-area: kb; }
+[data-frame-tier="tall"] .tf-root > .voice-section { grid-area: voice; }
+
+/* —— 3:4 / 4:5（1040×1386 / 1074×1342）：书纸挪到 hero 右手边并肩，
+      其余仍是纵向流。单纯堆四段会到 ~1420px，超出 4:5 的 1342。 —— */
+[data-frame-tier="portrait"] .tf-root {
+  display: grid;
+  /* 左栏 min 取 520px（≥ 键盘实体 518px）：kb/voice 两行横跨双栏，
+     栅格在摊派跨栏项的 min-content 时只会喂给「内容驱动」的轨道；
+     给左栏一个盖得住键盘的下限，就不存在待分摊的超出量，
+     书纸那栏永远只有它自己的 224px，hero 也不会被反挤。 */
+  grid-template-columns: minmax(520px, 1fr) auto;
+  grid-template-areas:
+    'hero  objs'
+    'kb    kb'
+    'voice voice';
+  column-gap: 30px;
+  row-gap: 18px;
+}
+[data-frame-tier="portrait"] .tf-root > .tf-hero { grid-area: hero; }
+[data-frame-tier="portrait"] .tf-root > .tf-objs { grid-area: objs; align-self: end; }
+[data-frame-tier="portrait"] .tf-root > .tf-kb { grid-area: kb; }
+[data-frame-tier="portrait"] .tf-root > .voice-section { grid-area: voice; }
+
+/* —— 1:1（1200×1200）：最扁的竖幅。纵向流需要 ~1230px，装不下，
+      于是折成 2×2：上排 hero | 书纸，下排 键盘/领奖台 | 留言机。
+      从左到右、从上到下读依旧是那七段的原顺序。
+      ⚠️ 这里一度写过 `min-height: var(--stage-h)` 想把版面撑满画幅，两处反效果：
+      ① 舞台高 1200，可用框只有 1176（外壳 .wr-shell-body 有 24px 上边距），
+         min-height 让内容比框还高 → WrappedFitScale 整卡缩到 0.98，正是「靠缩小适配」；
+      ② 第二行是 minmax(0,1fr) 且键盘 align-self:end，多出来的高度全灌进这一行，
+         hero 与键盘之间实测裂开 452px 空带。
+      版面自然高约 835，让 FitScale 居中留白即可 —— 16:9（733/876）、
+      3:4（1266/1362）、9:16（1450/1576）本来也都是居中留白。 —— */
+[data-frame-tier="square"] .tf-root {
+  display: grid;
+  grid-template-columns: minmax(520px, 1.5fr) minmax(330px, 1fr);
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    'hero objs'
+    'kb   voice';
+  column-gap: 40px;
+  row-gap: 24px;
+}
+/* 没有语音/通话数据时右下角空着，键盘改为横跨整宽（左栏 min 同样要盖住键盘宽度） */
+[data-frame-tier="square"] .tf-root:not(.tf-root--voice) {
+  grid-template-columns: minmax(520px, 1fr) auto;
+  grid-template-areas:
+    'hero objs'
+    'kb   kb';
+}
+[data-frame-tier="square"] .tf-root > .tf-hero { grid-area: hero; }
+[data-frame-tier="square"] .tf-root > .tf-objs { grid-area: objs; align-self: end; }
+[data-frame-tier="square"] .tf-root > .tf-kb { grid-area: kb; align-self: end; }
+[data-frame-tier="square"] .tf-root > .voice-section {
+  grid-area: voice;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+/* 竖幅整宽下留言机会被拉成一条 800px 的长条，不再像一台桌面设备：
+   给它一个与 16:9 右栏相当的机身宽度并居中（只改排布，机身构件尺寸不变）。 */
+[data-frame-tier="portrait"] .tf-root > .voice-section,
+[data-frame-tier="tall"] .tf-root > .voice-section {
+  width: 100%;
+  max-width: 560px;
+  margin-inline: auto;
 }
 
 /* 玻璃背后的柔光色斑 */
@@ -1343,9 +1523,18 @@ onBeforeUnmount(() => {
 }
 
 .tf-big-num {
-  font-size: clamp(46px, 5.2vw, 66px);
+  font-size: clamp(46px, calc(var(--svw) * 5.2), 66px);
   font-weight: 800;
   letter-spacing: -0.01em;
+}
+
+/* 字号挂在 --svw（宽度轴）上：竖幅舞台一变窄，里程表大数就跟着缩到 46-62px。
+   构件尺寸必须是设计常量 → 竖幅一律钉死在 16:9 的计算值 66px。
+   （wide=16*5.2=83.2、landscape=13.86*5.2=72，都被 clamp 压到 66，故不受影响。） */
+[data-frame-tier="square"] .tf-big-num,
+[data-frame-tier="portrait"] .tf-big-num,
+[data-frame-tier="tall"] .tf-big-num {
+  font-size: 66px;
 }
 
 .tf-big-unit {
@@ -1813,13 +2002,16 @@ onBeforeUnmount(() => {
 /* —— 键盘实体：铝壳 —— */
 
 .keyboard-body {
+  /* 键位间距的唯一出处：行间 gap、行内 gap、宽键补偿公式共用这一个值。
+     以前宽键公式里硬编码 3px，改一次间距要改八处，且各画幅无法一致。 */
+  --kb-gap: 3px;
   border-radius: 16px;
   padding: 10px 12px 12px;
   position: relative;
   /* 行距用 gap 而非行的 margin：HUD（绝对定位）插入/移除时不影响 :last-child 匹配，高度恒定 */
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--kb-gap);
   background: linear-gradient(180deg, #f6f7f4 0%, #e7e9e3 58%, #dcdfd7 100%);
   border: 1px solid rgba(0, 0, 0, 0.08);
   box-shadow:
@@ -1831,35 +2023,35 @@ onBeforeUnmount(() => {
 }
 
 .kb-row {
-  @apply flex justify-center gap-[3px];
+  display: flex;
+  justify-content: center;
+  gap: var(--kb-gap, 3px);
 }
 
-/* 键帽 */
+/* 键帽。
+   ⚠️ --unit / height 以前挂 @media(min-width:640px) 做 22↔30px 两档，判据是浏览器窗口，
+   舞台化之后那个断点在任何画幅里都恒真（窗口永远宽于 640），等于只剩大档；
+   而键帽是「构件尺寸」，本就该是设计常量。于是把 16:9 的大档提为唯一值，
+   竖幅 900px 宽也放得下整排（键盘实体约 518px）。16:9 计算值不变。 */
 .kb-key {
-  --unit: 22px;
-  height: 26px;
+  --unit: 30px;
+  height: 34px;
   width: var(--unit);
   position: relative;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
 }
-@media (min-width: 640px) {
-  .kb-key {
-    --unit: 30px;
-    height: 34px;
-  }
-}
 
-/* 宽度变体 */
+/* 宽度变体：N 倍键位 + 被吞掉的 (N-1) 个间距 */
 .kb-w-1 { width: var(--unit); }
-.kb-w-1\.25 { width: calc(var(--unit) * 1.25 + 3px * 0.25); }
-.kb-w-1\.5 { width: calc(var(--unit) * 1.5 + 3px * 0.5); }
-.kb-w-1\.75 { width: calc(var(--unit) * 1.75 + 3px * 0.75); }
-.kb-w-2 { width: calc(var(--unit) * 2 + 3px); }
-.kb-w-2\.25 { width: calc(var(--unit) * 2.25 + 3px * 1.25); }
-.kb-w-2\.75 { width: calc(var(--unit) * 2.75 + 3px * 1.75); }
-.kb-w-6\.25 { width: calc(var(--unit) * 6.25 + 3px * 5.25); }
+.kb-w-1\.25 { width: calc(var(--unit) * 1.25 + var(--kb-gap, 3px) * 0.25); }
+.kb-w-1\.5 { width: calc(var(--unit) * 1.5 + var(--kb-gap, 3px) * 0.5); }
+.kb-w-1\.75 { width: calc(var(--unit) * 1.75 + var(--kb-gap, 3px) * 0.75); }
+.kb-w-2 { width: calc(var(--unit) * 2 + var(--kb-gap, 3px)); }
+.kb-w-2\.25 { width: calc(var(--unit) * 2.25 + var(--kb-gap, 3px) * 1.25); }
+.kb-w-2\.75 { width: calc(var(--unit) * 2.75 + var(--kb-gap, 3px) * 1.75); }
+.kb-w-6\.25 { width: calc(var(--unit) * 6.25 + var(--kb-gap, 3px) * 5.25); }
 
 /* 键座（底部露出的侧壁） */
 .kb-key::before {
@@ -1903,22 +2095,18 @@ onBeforeUnmount(() => {
   transition-duration: 0.05s;
 }
 
+/* 键帽刻字同理：原 7↔8 / 10↔11 / 7↔8 两档也是窗口断点，统一取 16:9 的大档。 */
 .kb-sub {
-  font-size: 7px;
+  font-size: 8px;
   line-height: 1;
   color: #666;
   margin-bottom: 1px;
   opacity: var(--wear-opacity, 1);
   filter: blur(var(--wear-blur, 0px));
 }
-@media (min-width: 640px) {
-  .kb-sub {
-    font-size: 8px;
-  }
-}
 
 .kb-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   color: #262626;
   line-height: 1;
@@ -1927,20 +2115,10 @@ onBeforeUnmount(() => {
   opacity: var(--wear-opacity, 1);
   filter: blur(var(--wear-blur, 0px));
 }
-@media (min-width: 640px) {
-  .kb-label {
-    font-size: 11px;
-  }
-}
 
 .kb-label-sm {
-  font-size: 7px !important;
+  font-size: 8px !important;
   font-weight: 400;
-}
-@media (min-width: 640px) {
-  .kb-label-sm {
-    font-size: 8px !important;
-  }
 }
 
 .kb-space-bar {
@@ -2092,21 +2270,29 @@ onBeforeUnmount(() => {
   color: rgba(0, 0, 0, 0.4);
 }
 
-/* 窄屏：注脚与领奖台上下排 */
-@media (max-width: 639px) {
-  .kb-foot {
-    flex-direction: column;
-    align-items: center;
-    gap: 14px;
-  }
-  .kb-note {
-    max-width: none;
-    text-align: center;
-  }
-  .tf-duo {
-    gap: 24px;
-    flex-wrap: wrap;
-  }
+/* 竖幅：注脚与领奖台改上下排。
+   （原判据是 @media(max-width:639px)，在舞台里永不触发；.tf-duo 那条是早已删掉的
+   模块的残留选择器，一并清掉。） */
+[data-frame-tier="square"] .kb-foot,
+[data-frame-tier="portrait"] .kb-foot,
+[data-frame-tier="tall"] .kb-foot {
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+[data-frame-tier="square"] .kb-note,
+[data-frame-tier="portrait"] .kb-note,
+[data-frame-tier="tall"] .kb-note {
+  max-width: none;
+  text-align: center;
+}
+/* 领奖台三座（空格键那座宽 88px）在窄栏里允许折行，不靠横滚 */
+[data-frame-tier="square"] .podium,
+[data-frame-tier="portrait"] .podium,
+[data-frame-tier="tall"] .podium {
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 14px;
 }
 
 /* ============ 「说给你听」语音与通话 ============ */
@@ -2600,6 +2786,72 @@ onBeforeUnmount(() => {
   user-select: none;
 }
 
+/* ============ 竖幅：留言机上的单行硬约束一律放开 ============
+   横幅右栏有 ~385px 恒定宽度，竖幅里机身宽度改由画幅决定（1:1 约 426px、
+   3:4/9:16 约 560px）。凡是「一行放不下就看不见」的写法（nowrap 撞上
+   space-between 的兄弟、nowrap + overflow:hidden + ellipsis）在这里全部换成换行。
+   —— 未接来电数、最长语音的对方昵称这类字段，宁可占两行也不能没有。 */
+
+/* 液晶屏两行账目：通数/接通/未接、视频×N/语音×N */
+[data-frame-tier="square"] .am-lcd-row2,
+[data-frame-tier="portrait"] .am-lcd-row2,
+[data-frame-tier="tall"] .am-lcd-row2,
+[data-frame-tier="square"] .am-lcd-row3,
+[data-frame-tier="portrait"] .am-lcd-row3,
+[data-frame-tier="tall"] .am-lcd-row3 {
+  flex-wrap: wrap;
+  white-space: normal;
+  row-gap: 4px;
+}
+
+/* 机头铭牌 / A·B 面账目 */
+[data-frame-tier="square"] .am-brand,
+[data-frame-tier="portrait"] .am-brand,
+[data-frame-tier="tall"] .am-brand,
+[data-frame-tier="square"] .am-side-tag,
+[data-frame-tier="portrait"] .am-side-tag,
+[data-frame-tier="tall"] .am-side-tag,
+[data-frame-tier="square"] .am-side-val,
+[data-frame-tier="portrait"] .am-side-val,
+[data-frame-tier="tall"] .am-side-val {
+  white-space: normal;
+}
+
+/* 窗下小字：换算 + 年度最长一条（含对方昵称） */
+[data-frame-tier="square"] .am-strip-note,
+[data-frame-tier="portrait"] .am-strip-note,
+[data-frame-tier="tall"] .am-strip-note,
+[data-frame-tier="square"] .am-strip-longest,
+[data-frame-tier="portrait"] .am-strip-longest,
+[data-frame-tier="tall"] .am-strip-longest {
+  white-space: normal;
+}
+
+/* 单键拨号：三个相框位允许折行 */
+[data-frame-tier="square"] .am-dial-slots,
+[data-frame-tier="portrait"] .am-dial-slots,
+[data-frame-tier="tall"] .am-dial-slots {
+  flex-wrap: wrap;
+  row-gap: 12px;
+}
+
+[data-frame-tier="square"] .am-slot-role,
+[data-frame-tier="portrait"] .am-slot-role,
+[data-frame-tier="tall"] .am-slot-role {
+  white-space: normal;
+}
+
+/* 名字原本 nowrap + overflow:hidden + ellipsis，长昵称直接被截成「…」＝销毁数据 */
+[data-frame-tier="square"] .am-slot-name,
+[data-frame-tier="portrait"] .am-slot-name,
+[data-frame-tier="tall"] .am-slot-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tape-hub { animation: none; }
   .ime-caret { animation: none; }
@@ -2880,4 +3132,247 @@ onBeforeUnmount(() => {
     inset 0 0 1px rgba(255,255,255,0.1);
   z-index: 1;
 }
+
+/* ============ 9:16（tall）放大：把重排省下的高度换成看得清的字号 ============
+   判据只挂 tall —— wide / landscape / square / portrait 一个像素都不动。
+   两条纪律：
+   ① 字号一律绝对 px，不挂 cqh/vh —— 竖幅舞台变高不会二次放大；
+   ② 下限统一 13px。原版里 6.5-9px 的丝印小字（书的版权行、留言机铭牌、
+      走带键注脚、领奖台名次）在 9:16 下缩到人眼分辨不出，一律抬到 13px 以上。 */
+
+/* —— hero：主问句、里程表大数、换算行 —— */
+[data-frame-tier="tall"] .tf-q1 { font-size: 32px; }
+[data-frame-tier="tall"] .tf-big { margin-top: 14px; gap: 12px; }
+[data-frame-tier="tall"] .tf-big-num { font-size: 80px; }
+[data-frame-tier="tall"] .tf-big-unit { font-size: 25px; }
+[data-frame-tier="tall"] .tf-sent-cap { margin-top: 10px; font-size: 17px; }
+[data-frame-tier="tall"] .tf-ask { margin-top: 15px; gap: 6px; }
+[data-frame-tier="tall"] .tf-q2 { font-size: 15px; }
+[data-frame-tier="tall"] .tf-bookline { font-size: 23px; }
+[data-frame-tier="tall"] .tf-meta { margin-top: 16px; gap: 9px 13px; font-size: 17px; }
+[data-frame-tier="tall"] .tf-meta-label { font-size: 15px; }
+[data-frame-tier="tall"] .tf-meta-num { font-size: 28px; }
+[data-frame-tier="tall"] .tf-meta-unit { font-size: 16px; margin-left: -5px; }
+[data-frame-tier="tall"] .tf-meta-sep { height: 15px; }
+[data-frame-tier="tall"] .tf-meta--empty { font-size: 16px; }
+
+/* —— 书 + 纸摞：整体放大约 1.35 倍，封面小字同步抬到可读 —— */
+[data-frame-tier="tall"] .tf-objs { gap: 18px; }
+[data-frame-tier="tall"] .book { --bw: 158px; --bh: 180px; width: calc(var(--bw) + 30px); }
+[data-frame-tier="tall"] .book-3d { margin-bottom: 20px; }
+[data-frame-tier="tall"] .book-shadow { bottom: 18px; height: 28px; }
+[data-frame-tier="tall"] .book-cover { gap: 8px; padding-bottom: 46px; }
+[data-frame-tier="tall"] .book-frame { inset: 9px; }
+[data-frame-tier="tall"] .book-emblem { width: 25px; height: 25px; }
+[data-frame-tier="tall"] .book-title { font-size: 22px; }
+[data-frame-tier="tall"] .book-year { font-size: 14px; }
+[data-frame-tier="tall"] .book-author { bottom: 30px; font-size: 13px; letter-spacing: 0.2em; margin-right: -0.2em; }
+/* 版权行原本 6.5px + 0.24em 字距：13px 下字距要收窄才放得进 158px 的封面 */
+[data-frame-tier="tall"] .book-imprint { bottom: 11px; font-size: 13px; letter-spacing: 0.06em; margin-right: -0.06em; }
+[data-frame-tier="tall"] .book-ribbon { bottom: -16px; width: 12px; height: 26px; }
+[data-frame-tier="tall"] .book-cap { font-size: 14px; }
+[data-frame-tier="tall"] .ream { width: 110px; }
+[data-frame-tier="tall"] .ream-stack { height: calc(var(--rh) * 1.35); }
+[data-frame-tier="tall"] .ream-sheet { height: 10px; }
+/* 张数大到七位时 nowrap 会顶出纸摞宽度，竖幅放开换行 */
+[data-frame-tier="tall"] .ream-cap { margin-top: 10px; font-size: 14px; white-space: normal; }
+
+/* —— 输入法候选条 —— */
+[data-frame-tier="tall"] .ime-bar { gap: 24px; margin-bottom: 22px; padding: 12px 18px; border-radius: 18px; }
+[data-frame-tier="tall"] .ime-left { gap: 12px; min-height: 34px; }
+[data-frame-tier="tall"] .ime-caret { width: 3px; height: 24px; }
+[data-frame-tier="tall"] .ime-py { font-size: 20px; }
+[data-frame-tier="tall"] .ime-cands { gap: 8px; margin-left: 8px; }
+[data-frame-tier="tall"] .ime-cand { gap: 5px; padding: 4px 11px; border-radius: 11px; font-size: 18px; }
+[data-frame-tier="tall"] .ime-cand-no { font-size: 13px; }
+[data-frame-tier="tall"] .ime-hits { gap: 8px; }
+[data-frame-tier="tall"] .ime-hits-num { font-size: 26px; }
+[data-frame-tier="tall"] .ime-hits-unit { font-size: 14px; }
+
+/* —— 键盘实体：键位 30→48px。竖幅列宽 852，整块键盘 15*48+14*4+26 = 802，放得下 ——
+   （宽度公式见 .kb-w-* ：N*unit + (N-1)*gap，故 --kb-gap 也一并放大。） */
+[data-frame-tier="tall"] .keyboard-body { --kb-gap: 4px; padding: 14px 16px 16px; border-radius: 22px; }
+[data-frame-tier="tall"] .kb-key { --unit: 48px; height: 50px; }
+[data-frame-tier="tall"] .kb-key::before { top: 3px; border-radius: 8px; }
+[data-frame-tier="tall"] .kb-key-top { bottom: 3px; border-radius: 8px; }
+[data-frame-tier="tall"] .kb-sub { font-size: 13px; margin-bottom: 2px; }
+[data-frame-tier="tall"] .kb-label { font-size: 20px; }
+[data-frame-tier="tall"] .kb-label-sm { font-size: 14px !important; }
+[data-frame-tier="tall"] .kb-space-bar { height: 5px; }
+[data-frame-tier="tall"] .keyboard-brand { margin-top: 12px; font-size: 13px; }
+[data-frame-tier="tall"] .kb-hud-title { font-size: 16px; }
+[data-frame-tier="tall"] .kb-hud-meta { font-size: 14px; }
+
+/* —— 脚注 + 领奖台：竖幅列宽够宽（802），改回左右并排，省下一整段高度 —— */
+[data-frame-tier="tall"] .kb-foot {
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 20px;
+}
+[data-frame-tier="tall"] .kb-note { max-width: 300px; text-align: left; font-size: 15px; line-height: 1.6; }
+[data-frame-tier="tall"] .podium { gap: 26px; row-gap: 16px; }
+[data-frame-tier="tall"] .pd-item { gap: 8px; }
+/* .pd-key 的 --unit/height 特异性低于上面的 [tier] .kb-key，必须在这里重新钉一遍 */
+[data-frame-tier="tall"] .pd-key { --unit: 58px; height: 62px; }
+[data-frame-tier="tall"] .pd-key--space { --unit: 120px; width: var(--unit); }
+[data-frame-tier="tall"] .pd-key .kb-label { font-size: 22px !important; }
+[data-frame-tier="tall"] .pd-medal { top: -9px; right: -9px; width: 24px; height: 24px; }
+[data-frame-tier="tall"] .pd-medal b { font-size: 13px; }
+[data-frame-tier="tall"] .pd-name { font-size: 17px; }
+[data-frame-tier="tall"] .pd-hits { font-size: 14px; }
+
+/* —— 说给你听：留言机改双栏机身 ——
+   竖幅整宽 852 下，单列机身按放大后的字号会长到 570+px，本卡装不下；
+   液晶屏与走带键归左、磁带舱归右、单键拨号横跨整宽，
+   阅读顺序仍是 通话账目 → 磁带 → 走带键 → 单键拨号。 */
+[data-frame-tier="tall"] .tf-root > .voice-section { max-width: none; margin-inline: 0; margin-top: 0; }
+[data-frame-tier="tall"] .voice-header { gap: 14px; }
+[data-frame-tier="tall"] .voice-title { font-size: 18px; }
+[data-frame-tier="tall"] .voice-sub { font-size: 14px; }
+[data-frame-tier="tall"] .am {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+  row-gap: 10px;
+  margin-top: 12px;
+  padding: 14px 18px 16px;
+  border-radius: 24px;
+}
+[data-frame-tier="tall"] .am > .am-head { grid-column: 1 / -1; }
+[data-frame-tier="tall"] .am > .am-lcd { grid-column: 1; }
+[data-frame-tier="tall"] .am > .am-tapebay { grid-column: 2; grid-row: span 2; }
+[data-frame-tier="tall"] .am > .am-controls { grid-column: 1; align-self: start; }
+[data-frame-tier="tall"] .am > .am-dial { grid-column: 1 / -1; }
+/* 只有通话没有语音时右栏整个缺席，液晶屏改占满机身，免得半边空着 */
+[data-frame-tier="tall"] .am:not(:has(.am-tapebay)) > .am-lcd { grid-column: 1 / -1; }
+
+[data-frame-tier="tall"] .am-head { gap: 14px; }
+[data-frame-tier="tall"] .am-brand { font-size: 13px; }
+[data-frame-tier="tall"] .am-led { width: 9px; height: 9px; }
+[data-frame-tier="tall"] .am-grille { width: 130px; height: 28px; background-size: 8px 7px; }
+[data-frame-tier="tall"] .am-lcd { margin-top: 0; padding: 11px 16px 12px; border-radius: 14px; }
+[data-frame-tier="tall"] .am-lcd-label { font-size: 13px; }
+[data-frame-tier="tall"] .am-lcd-time { font-size: 30px; }
+[data-frame-tier="tall"] .am-lcd-row2 { margin-top: 10px; gap: 12px; font-size: 16px; }
+[data-frame-tier="tall"] .am-lcd-row2 i { height: 13px; }
+[data-frame-tier="tall"] .am-lcd-row3 { margin-top: 9px; gap: 18px; font-size: 15px; }
+[data-frame-tier="tall"] .am-kind svg { width: 16px; height: 16px; }
+[data-frame-tier="tall"] .am-tapebay { margin-top: 0; }
+[data-frame-tier="tall"] .am-sides { gap: 16px; padding: 0 2px 9px; }
+[data-frame-tier="tall"] .am-side-tag { font-size: 13px; }
+[data-frame-tier="tall"] .am-side-val { font-size: 18px; }
+[data-frame-tier="tall"] .am-side-val--dim { font-size: 15px; }
+[data-frame-tier="tall"] .am-window { height: 82px; padding: 0 20px; border-radius: 12px; }
+[data-frame-tier="tall"] .tape-reel { width: 60px; height: 60px; }
+[data-frame-tier="tall"] .tape-pack { width: calc(28px + var(--pack, 0.5) * 30px); height: calc(28px + var(--pack, 0.5) * 30px); }
+[data-frame-tier="tall"] .tape-hub { width: 23px; height: 23px; }
+[data-frame-tier="tall"] .tape-band { left: 46px; right: 46px; bottom: 12px; height: 5px; }
+[data-frame-tier="tall"] .am-strip { margin-top: 10px; gap: 6px 14px; }
+[data-frame-tier="tall"] .am-strip-note,
+[data-frame-tier="tall"] .am-strip-longest { font-size: 13px; }
+/* 走带键 + REW/PLAY/FF/REC 注脚在半幅栏里一行放不下，允许注脚落到第二行 */
+[data-frame-tier="tall"] .am-controls { flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+[data-frame-tier="tall"] .am-btn { width: 56px; height: 34px; border-radius: 8px; }
+[data-frame-tier="tall"] .am-btn svg { width: 16px; height: 11px; }
+[data-frame-tier="tall"] .am-controls-note { font-size: 13px; letter-spacing: 0.1em; }
+[data-frame-tier="tall"] .am-dial { margin-top: 4px; padding-top: 12px; }
+[data-frame-tier="tall"] .am-dial-tag { font-size: 13px; }
+[data-frame-tier="tall"] .am-dial-slots { margin-top: 18px; gap: 26px; }
+[data-frame-tier="tall"] .am-slot { width: 152px; gap: 5px; }
+[data-frame-tier="tall"] .am-frame { width: 58px; height: 58px; border-radius: 15px; }
+[data-frame-tier="tall"] .am-frame .v-avatar { width: 47px; height: 47px; border-radius: 12px; }
+[data-frame-tier="tall"] .am-slot-role { margin-top: 3px; font-size: 13px; }
+[data-frame-tier="tall"] .am-slot-name { font-size: 18px; }
+[data-frame-tier="tall"] .am-slot-note { font-size: 13px; }
+[data-frame-tier="tall"] .v-avatar__fb { font-size: 17px; }
+
+/* 飞出的字母/入册的词：键帽放大后原来的 15-16px 粒子显得像灰尘 */
+[data-frame-tier="tall"] .tf-fx :deep(.tf-glyph) { font-size: 24px; }
+[data-frame-tier="tall"] .tf-fx :deep(.tf-word) { font-size: 19px; padding: 4px 12px; border-radius: 11px; }
+
+/* ============ 9:20（804×1788，手机满屏）：tall 档里更窄更高的那一支 ============
+   它比 9:16 窄 96px、高 188px，tall 的规则会先全部吃到，再由本段覆写。
+   本段所有选择器与 tall 段同特异性（0,2,0），靠「写在后面」生效 —— 不要往前挪。
+
+   ① 【必修】键盘实体出画幅：tall 的 15*48 + 14*4 + 32 + 2 = 810，而 9:20 的列宽只有
+      804-48 = 756。.kb-stage 是 width:fit-content，撑不下就整块溢出到画幅外
+      （实测 .tf-root scrollWidth 834，键盘铭牌与领奖台第三名被画幅右缘切掉）。
+      收键位到 45px、间距 3px、机身内边距 12px：15*45 + 14*3 + 24 + 2 = 743，落回 756 内。
+   ② 【放大】多出来的 188px 高度：书与纸摞从 hero 右手边落到自己一行，hero 拿回整宽
+      756（原来只有 416），大数、换算行、元数据行随之升档；书本身也放大一圈。
+      这是重排换来的放大，不是把 row-gap 摊开。 */
+
+/* —— 版式：hero 独占整宽，书纸自成一行 —— */
+[data-frame="9:20"] .tf-root {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'hero'
+    'objs'
+    'kb'
+    'voice';
+  row-gap: 14px;
+}
+[data-frame="9:20"] .tf-root > .tf-objs { align-self: center; justify-content: center; }
+
+/* —— hero：整宽之后关键读数整体升一档（大数 80 → 96） —— */
+[data-frame="9:20"] .tf-q1 { font-size: 34px; }
+[data-frame="9:20"] .tf-big { margin-top: 12px; gap: 14px; }
+[data-frame="9:20"] .tf-big-num { font-size: 96px; }
+[data-frame="9:20"] .tf-big-unit { font-size: 30px; }
+[data-frame="9:20"] .tf-sent-cap { margin-top: 10px; font-size: 18px; }
+[data-frame="9:20"] .tf-ask { margin-top: 14px; gap: 8px; }
+[data-frame="9:20"] .tf-q2 { font-size: 16px; }
+[data-frame="9:20"] .tf-bookline { font-size: 26px; }
+[data-frame="9:20"] .tf-meta { margin-top: 16px; gap: 8px 16px; font-size: 18px; }
+[data-frame="9:20"] .tf-meta-label { font-size: 16px; }
+[data-frame="9:20"] .tf-meta-num { font-size: 31px; }
+[data-frame="9:20"] .tf-meta-unit { font-size: 17px; margin-left: -6px; }
+[data-frame="9:20"] .tf-meta-sep { height: 17px; }
+
+/* —— 书 + 纸摞：独占一行，横向摊开并放大一圈 —— */
+[data-frame="9:20"] .tf-objs { gap: 44px; }
+[data-frame="9:20"] .book { --bw: 172px; --bh: 190px; width: calc(var(--bw) + 32px); }
+[data-frame="9:20"] .book-3d { margin-bottom: 18px; }
+[data-frame="9:20"] .book-shadow { bottom: 16px; height: 28px; }
+[data-frame="9:20"] .book-cover { gap: 8px; padding-bottom: 48px; }
+[data-frame="9:20"] .book-frame { inset: 10px; }
+[data-frame="9:20"] .book-emblem { width: 27px; height: 27px; }
+[data-frame="9:20"] .book-title { font-size: 24px; }
+[data-frame="9:20"] .book-year { font-size: 15px; }
+[data-frame="9:20"] .book-author { bottom: 32px; font-size: 14px; }
+[data-frame="9:20"] .book-imprint { bottom: 12px; font-size: 13px; }
+[data-frame="9:20"] .book-ribbon { bottom: -16px; width: 13px; height: 28px; }
+[data-frame="9:20"] .book-cap { font-size: 15px; }
+[data-frame="9:20"] .ream { width: 124px; }
+[data-frame="9:20"] .ream-stack { height: calc(var(--rh) * 1.5); }
+[data-frame="9:20"] .ream-sheet { height: 11px; }
+[data-frame="9:20"] .ream-cap { margin-top: 8px; font-size: 15px; }
+
+/* —— 输入法候选条：跟着窄下来的键盘走 —— */
+[data-frame="9:20"] .ime-bar { gap: 18px; margin-bottom: 16px; padding: 12px 16px; }
+[data-frame="9:20"] .ime-hits-num { font-size: 28px; }
+
+/* —— 键盘实体：唯一的出画幅点。45 + 3 + 12 是 756 列宽下的上限组合 —— */
+[data-frame="9:20"] .keyboard-body { --kb-gap: 3px; padding: 13px 12px 14px; }
+[data-frame="9:20"] .kb-key { --unit: 45px; height: 46px; }
+[data-frame="9:20"] .kb-label { font-size: 19px; }
+/* 领奖台键帽是复刻的大号键，必须在 .kb-key 之后重新钉一遍（同特异性） */
+[data-frame="9:20"] .pd-key { --unit: 58px; height: 62px; }
+[data-frame="9:20"] .pd-key--space { --unit: 120px; width: var(--unit); }
+[data-frame="9:20"] .pd-key .kb-label { font-size: 22px !important; }
+[data-frame="9:20"] .kb-foot { margin-top: 18px; }
+
+/* —— 说给你听：整宽 756 的机身，构件按 tall 档不再加码（高度已排满） —— */
+[data-frame="9:20"] .am-window { height: 88px; }
+[data-frame="9:20"] .tape-reel { width: 64px; height: 64px; }
+[data-frame="9:20"] .tape-pack { width: calc(30px + var(--pack, 0.5) * 32px); height: calc(30px + var(--pack, 0.5) * 32px); }
+[data-frame="9:20"] .tape-hub { width: 25px; height: 25px; }
+[data-frame="9:20"] .am-controls { margin-top: 10px; }
+[data-frame="9:20"] .am-dial-slots { margin-top: 14px; }
+[data-frame="9:20"] .am-frame { width: 62px; height: 62px; border-radius: 16px; }
+[data-frame="9:20"] .am-frame .v-avatar { width: 50px; height: 50px; border-radius: 13px; }
+[data-frame="9:20"] .am-slot-name { font-size: 19px; }
+[data-frame="9:20"] .v-avatar__fb { font-size: 18px; }
 </style>

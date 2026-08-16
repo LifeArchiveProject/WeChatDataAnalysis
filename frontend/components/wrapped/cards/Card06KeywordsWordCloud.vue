@@ -1,7 +1,9 @@
 <template>
   <div ref="cardRoot" class="h-full w-full">
-    <!-- 全屏气泡覆盖层：storm/packed/merge/burst 阶段 Teleport 到 body，不受父级 transform 影响 -->
-    <Teleport to="body">
+    <!-- 全屏气泡覆盖层：teleport 到舞台 portal（不是 body）。
+         .wr-stage 带 transform，是其 fixed 后代的包含块，于是 `fixed inset-0` = 铺满舞台盒并随舞台缩放；
+         挂 body 会铺满整个浏览器窗口、糊出信箱边界，分享出图也拍不到。 -->
+    <Teleport :to="stage.portalTarget.value">
       <div
         v-if="showOverlay"
         ref="overlayEl"
@@ -50,9 +52,19 @@
 
     <!-- 这张卡破例不显示外部标题与描述：书名印在封面上，小序印在书里，整屏只有一本书 -->
     <WrappedCardShell :card-id="card.id" :title="card.title" :narrative="''" :variant="variant" :wide="true" :hide-chrome="true">
-      <div class="kw-stage relative w-full h-[92vh] min-h-[520px]">
+      <div class="kw-stage relative w-full h-[calc(var(--svh)*92)] min-h-[520px]">
         <!-- 合着的词典：翻开它，话才涌出来 -->
         <div v-if="phase === 'book' || phase === 'opening' || phase === 'storm'" class="absolute inset-0 flex items-center justify-center">
+          <!-- 画幅重排层：竖幅/方幅里一整屏只有一本书，所以书要**真的变大** ——
+               --kwb-s 乘进书里每一个硬 px（开本、边框、腰封、字号一起长大），
+               而不是在外面套一层 transform：套 scale 不改 CSS 字号，看得见、量不到。
+               只有翻页那一瞬（书要摊成两倍宽）才临时下发一层 scale 让整本退后。
+               16:9 / 跟随窗口下 kwb-fit--z 不挂，声明一条都不生效，逐像素零回归。 -->
+          <div
+            class="kwb-fit"
+            :class="{ 'kwb-fit--z': bookZoomed, 'kwb-fit--open': phase !== 'book' }"
+            :style="bookFitStyle"
+          >
           <div
             ref="bookEl"
             class="kwb"
@@ -149,10 +161,13 @@
             </span>
             </span>
           </div>
+          </div>
         </div>
 
         <!-- 风暴落定后翻开的那本词典 -->
-        <transition name="cloud-fade">
+        <!-- 导出（以及退出导出还原）那一帧不走 800ms 淡入：导出要的是确定的终态画面，
+             跨页是「已经在那儿」而不是「正在浮现」。非导出时 css 恒为 true，行为一字不变。 -->
+        <transition name="cloud-fade" :css="!flatMotion">
           <div v-if="phase === 'cloud'" class="absolute inset-0">
             <KeywordDictionarySpread
               :keywords="keywords"
@@ -177,12 +192,13 @@
 </template>
 
 <script setup>
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { gsap } from 'gsap'
 import KeywordDictionarySpread from '~/components/wrapped/visualizations/KeywordDictionarySpread.vue'
 import { parseTextWithEmoji } from '~/lib/wechat-emojis'
 import { usePrivacyStore } from '~/stores/privacy'
+import { useWrappedStage } from '~/composables/useWrappedStage'
 
 const props = defineProps({
   card: { type: Object, required: true },
@@ -191,6 +207,7 @@ const props = defineProps({
 
 const privacyStore = usePrivacyStore()
 const { privacyMode } = storeToRefs(privacyStore)
+const stage = useWrappedStage()
 
 const cardRoot = ref(null)
 const overlayEl = ref(null)
@@ -206,6 +223,13 @@ const accelerated = ref(true) // 默认加速
 
 // 通知父级 deck 隐藏顶部 UI
 const deckChromeHidden = inject('deckChromeHidden', ref(false))
+
+/* 导出模式（页面级 provide）。为真期间这一页必须**立刻**是终态——翻开的词典跨页，
+   而不是等用户去点那本合着的书。为假时行为与导出功能存在之前一字不差。
+   flatMotion 比 exportMode 多包一帧「还原中」：退出导出时把书收回去也不该看见 800ms 淡出。 */
+const exportMode = inject('wrappedExportMode', ref(false))
+const exportRestoring = ref(false)
+const flatMotion = computed(() => exportMode.value || exportRestoring.value)
 
 const isAnimating = computed(() => ['storm', 'packed', 'merge', 'burst'].includes(phase.value))
 const showOverlay = computed(() => isAnimating.value && !reducedMotion.value)
@@ -263,6 +287,72 @@ const registerBubbleEl = (id, el) => {
 
 const clamp = (v, a, b) => Math.min(Math.max(v, a), b)
 const lerp = (a, b, t) => a + (b - a) * t
+
+// ── 合着那本书的画幅重排 ──
+// 竖幅/方幅里一整屏只有一本书，所以书要**变大**。
+// 关键是「怎么变大」：外面套一层 transform: scale() 不改任何 CSS 字号 ——
+// 截图里字确实大了，可 getComputedStyle 读到的还是 8px / 9px，
+// 「这一幅里字够不够大」就变成一件说不清的事。所以这里算出一个倍数 --kwb-s，
+// 由样式表把它乘进书里每一个硬 px：开本、烫金边框、腰封、落影、字号一起长大，
+// 量到的就是看到的。16:9 / 跟随窗口下倍数恒为 1 且一条声明都不下发，逐像素零回归。
+const BOOK_W = 384
+const BOOK_H = 536
+// 翻开后的横向包围盒（合着尺寸下）：封面绕书脊转出去之后，整本还要右移 152px
+// 才能让「翻开的样子」居中，所以是 384 + 2×152 = 688；翻页时序里还有一次 1.14 的峰值缩放。
+const BOOK_OPEN_W = BOOK_W + 152 * 2
+const BOOK_OPEN_SHIFT = 152
+const BOOK_PEAK_SCALE = 1.14
+// 落影探出书体：左 4% / 右 12%（合起来 1.16 倍宽）、下 30px
+const BOOK_SHADOW_W = 1.16
+const BOOK_SHADOW_H = 30
+
+const FRAMED_TIERS = new Set(['landscape', 'square', 'portrait', 'tall'])
+
+// 竖长画幅里把开本抽高一档：窄高的画幅配窄高的开本，书才不会像浮在中间的一张卡片，
+// 抽出来的高度全部让给封面上半部，题名因此能从「正中」提到「上三分」——真书就是这么排的。
+const bookStretch = computed(() => {
+  const t = stage.tier.value
+  if (t === 'tall') return 1.16
+  if (t === 'portrait') return 1.06
+  return 1
+})
+
+const bookScale = computed(() => {
+  const t = stage.tier.value
+  if (!FRAMED_TIERS.has(t)) return 1
+  const d = stage.design.value
+  const w = Number(d?.w) || 1600
+  // .kw-stage 在框定画幅下取 99 个 --svh（见下方样式）
+  const h = (Number(d?.h) || 900) * 0.99
+  const k = Math.min(
+    (w * 0.94) / (BOOK_W * BOOK_SHADOW_W),
+    (h * 0.94) / (BOOK_H * bookStretch.value + BOOK_SHADOW_H)
+  )
+  return Math.round(clamp(k, 1, 2.4) * 1000) / 1000
+})
+
+// 翻开的一瞬书要摊成两倍宽 —— 放大后的开本在竖幅里装不下。
+// 于是只在翻页那 0.7s 里给整本下发一层 scale( <1 )：书一边翻开一边退后，
+// 翻完立刻被涌出来的消息盖住。静置（合着）时恒为 1，量到的就是真尺寸。
+const bookOpenFit = computed(() => {
+  const s = bookScale.value
+  const d = stage.design.value
+  const w = Number(d?.w) || 1600
+  const h = (Number(d?.h) || 900) * 0.99
+  const k = Math.min(
+    (w * 0.94) / (BOOK_OPEN_W * s * BOOK_PEAK_SCALE),
+    (h * 0.94) / ((BOOK_H * bookStretch.value + BOOK_SHADOW_H) * s * BOOK_PEAK_SCALE)
+  )
+  return Math.round(clamp(k, 0.3, 1) * 1000) / 1000
+})
+
+const bookZoomed = computed(() => bookScale.value !== 1 || bookOpenFit.value !== 1)
+
+const bookFitStyle = computed(() => ({
+  '--kwb-s': String(bookScale.value),
+  '--kwb-stretch': String(bookStretch.value),
+  '--kwb-openfit': String(bookOpenFit.value)
+}))
 
 const hash32 = (s) => {
   const str = String(s || '')
@@ -508,7 +598,8 @@ const openBook = () => {
   gsap.timeline()
     .to(el, { scale: 1.06, duration: 0.34, ease: 'power2.out' }, 0)
     .to(cover, { rotateY: -164, duration: 0.86, ease: 'power3.inOut' }, 0.06)
-    .to(el, { x: 152, duration: 0.86, ease: 'power3.inOut' }, 0.06)
+    // 右移量跟着开本一起放大：它本来就是「半个封面宽」
+    .to(el, { x: BOOK_OPEN_SHIFT * bookScale.value, duration: 0.86, ease: 'power3.inOut' }, 0.06)
     .to(el, { scale: 1.14, duration: 0.5, ease: 'power2.in' }, 0.44)
     // 封面转到一半就放话出来，读起来才是「从书里涌出」而不是「翻完再放动画」
     .call(startStorm, null, 0.46)
@@ -521,15 +612,17 @@ const startStorm = () => {
   // 话从「书此刻真正所在的位置」涌出，而不是点击那一瞬的位置
   const bel = bookEl.value
   if (bel) {
+    // rect 是屏幕 px，气泡活在舞台坐标系里，换算一次
     const r = bel.getBoundingClientRect()
-    stormOrigin = { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    stormOrigin = stage.toStagePoint(r.left + r.width / 2, r.top + r.height / 2)
   } else {
     stormOrigin = null
   }
 
-  // 使用全屏视口尺寸
-  curViewW = window.innerWidth || 0
-  curViewH = window.innerHeight || 0
+  // 舞台盒尺寸（跟随窗口模式下即窗口尺寸）
+  const vp = stage.viewportSize()
+  curViewW = vp.w || 0
+  curViewH = vp.h || 0
   if (!curViewW || !curViewH) return
 
   // 开始 storm
@@ -923,8 +1016,9 @@ const runMergeBurst = (rng, centerX, centerY) => {
 
   mainTl.to(elsSorted, { duration: squeezeDur, scale: 0.66, ease: 'power2.in' })
 
-  const vw = curViewW || window.innerWidth
-  const vh = curViewH || window.innerHeight
+  const vpBurst = stage.viewportSize()
+  const vw = curViewW || vpBurst.w
+  const vh = curViewH || vpBurst.h
   const burstOffsets = deltasSorted.map(() => {
     const ang = rng() * Math.PI * 2
     const rad = Math.min(vw, vh) * (0.28 + rng() * 0.45)
@@ -971,6 +1065,39 @@ watch(
   }
 )
 
+/* 导出模式：进去立刻摊开词典，出来把书重新合上。
+   —— 出来时必须真的还原：不还原的话，用户导出一次再回来浏览，
+      书已经是翻开的，「翻开它」这个惊喜就被剧透了。
+   放在所有状态与函数定义之后，immediate 才能安全地同步跑一次
+   （卡片是在导出已经打开之后才挂载的情况，也要直接落到终态）。 */
+let exportSnapshot = null
+
+watch(exportMode, (on) => {
+  if (!import.meta.client) return
+
+  if (on) {
+    if (exportSnapshot) return
+    exportSnapshot = { phase: phase.value, hasPlayed: hasPlayed.value }
+    if (phase.value !== 'cloud') skipToCloud()
+    return
+  }
+
+  const snap = exportSnapshot
+  exportSnapshot = null
+  if (!snap) return
+  // 导出前本来就摊开着：什么都不用动
+  if (snap.phase === 'cloud') return
+
+  // 还原同样不播动画：这一帧关掉跨页的淡出
+  exportRestoring.value = true
+  reset()                        // 清干净所有计时器/气泡，phase 回 'idle'
+  hasPlayed.value = snap.hasPlayed
+  // 可见就摆回「合着的书」，不可见就留在 idle（等 isVisible 那条 watch 接手），
+  // 与用户从没进过导出时走的是同一条路。
+  maybeStart()
+  nextTick(() => { exportRestoring.value = false })
+}, { immediate: true })
+
 onMounted(() => {
   privacyStore.init()
   if (!import.meta.client) return
@@ -1015,6 +1142,14 @@ onBeforeUnmount(() => {
 
 .kw-halo {
   background: radial-gradient(circle at center, rgba(7, 193, 96, 0.16) 0%, rgba(7, 193, 96, 0.06) 38%, transparent 72%);
+}
+
+/* 画幅重排层。16:9 / 跟随窗口下就是书的设计尺寸，一个字节都没变。 */
+.kwb-fit {
+  position: relative;
+  flex: none;
+  width: 384px;
+  height: 536px;
 }
 
 /* ───────── 合着的年度词典 ─────────
@@ -1586,5 +1721,168 @@ onBeforeUnmount(() => {
 .cloud-fade-leave-to {
   opacity: 0;
   transform: scale(0.96);
+}
+
+/* ============================================================================
+   画幅重排 · 非 16:9 四档
+   landscape 1386×1040 / square 1200×1200 / portrait 1040×1386 · 1074×1342 / tall 900×1600
+
+   这张卡整屏只有一件东西（先是一本合着的书，再是一整幅词典跨页），
+   所以框定画幅里要做的不是收缩而是**放大**：
+     1) 舞台高度从 92 个 --svh 放到 99 个 —— 这张卡 hide-chrome，页头没有别的东西要让位；
+        4:3 也在其列：它的画布只有 1040 高，扣掉 8% 就是白扔 83px；
+     2) 书按 --kwb-s **重新开本**：下面每一条都是 calc(原值 × var(--kwb-s))，
+        开本、烫金框、腰封、落影、字号一起长大 —— 是重排，不是套一层 scale。
+        9:16 下 --kwb-s ≈ 1.9，封面上最小的一行字（8px 的「印行」）也长到 15px；
+     3) 跨页本身在 KeywordDictionarySpread.vue 里按画布重排版式。
+   16:9 / 跟随窗口（wide）不挂 .kwb-fit--z，下面所有声明一条都不命中，逐像素零回归。
+   ========================================================================== */
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kw-stage {
+  height: calc(var(--svh) * 99);
+}
+
+/* ---------- 开本 ---------- */
+.kwb-fit--z {
+  width: calc(384px * var(--kwb-s));
+  height: calc(536px * var(--kwb-s) * var(--kwb-stretch, 1));
+  transform-origin: 50% 50%;
+  transition: transform 700ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+/* 翻页那一瞬整本退后，让摊开的两倍宽仍留在画幅里；合着时恒为 1（真尺寸） */
+.kwb-fit--z.kwb-fit--open {
+  transform: scale(var(--kwb-openfit, 1));
+}
+
+.kwb-fit--z .kwb {
+  width: 100%;
+  height: 100%;
+  perspective: calc(2400px * var(--kwb-s));
+}
+
+/* ---------- 书体：落影 / 书口 / 书脊 / 封面 ---------- */
+.kwb-fit--z .kwb-shadow {
+  bottom: calc(-30px * var(--kwb-s));
+  height: calc(66px * var(--kwb-s));
+  filter: blur(calc(11px * var(--kwb-s)));
+}
+
+.kwb-fit--z .kwb-block {
+  left: calc(18px * var(--kwb-s));
+  right: calc(-14px * var(--kwb-s));
+  top: calc(7px * var(--kwb-s));
+  bottom: calc(3px * var(--kwb-s));
+  transform: translateZ(calc(-6px * var(--kwb-s)));
+}
+
+.kwb-fit--z .kwb-spine {
+  width: calc(34px * var(--kwb-s));
+  transform: translateZ(calc(1px * var(--kwb-s)));
+}
+.kwb-fit--z .kwb-spine::before { top: calc(62px * var(--kwb-s)); }
+.kwb-fit--z .kwb-spine::after { bottom: calc(62px * var(--kwb-s)); }
+
+.kwb-fit--z .kwb-cover {
+  inset: 0 0 0 calc(20px * var(--kwb-s));
+  transform: translateZ(calc(8px * var(--kwb-s)));
+}
+
+/* 抽高的开本把余量全给封面上半部：题名从「正中」提到「上三分」，
+   底下留给著者 / 印行 / 腰封 —— 老精装封面的排法。 */
+.kwb-fit--z .kwb-face {
+  gap: calc(13px * var(--kwb-s));
+  padding: calc(118px * var(--kwb-s)) calc(34px * var(--kwb-s)) calc(96px * var(--kwb-s));
+  justify-content: flex-start;
+}
+
+.kwb-fit--z .kwb-frame { inset: calc(30px * var(--kwb-s)) calc(26px * var(--kwb-s)); }
+.kwb-fit--z .kwb-frame::after { inset: calc(6px * var(--kwb-s)); }
+
+.kwb-fit--z .kwb-seal {
+  width: calc(46px * var(--kwb-s));
+  height: calc(46px * var(--kwb-s));
+  margin-bottom: calc(2px * var(--kwb-s));
+}
+
+.kwb-fit--z .kwb-title {
+  font-size: calc(33px * var(--kwb-s));
+  max-width: calc(300px * var(--kwb-s));
+}
+.kwb-fit--z .kwb-year { font-size: calc(13px * var(--kwb-s)); }
+.kwb-fit--z .kwb-rule { width: calc(66px * var(--kwb-s)); }
+.kwb-fit--z .kwb-author {
+  bottom: calc(128px * var(--kwb-s));
+  font-size: calc(10.5px * var(--kwb-s));
+}
+.kwb-fit--z .kwb-imprint {
+  bottom: calc(112px * var(--kwb-s));
+  font-size: calc(8px * var(--kwb-s));
+}
+
+.kwb-fit--z .kwb-gloss { animation-name: kwb-gloss-z; }
+@keyframes kwb-gloss-z {
+  0%, 66% { transform: translate3d(0, 0, 0) rotate(9deg); }
+  100% { transform: translate3d(calc(480px * var(--kwb-s)), 0, 0) rotate(9deg); }
+}
+
+/* ---------- 腰封 ---------- */
+.kwb-fit--z .kwb-obi {
+  left: calc(1px * var(--kwb-s));
+  right: calc(-14px * var(--kwb-s));
+  bottom: calc(5px * var(--kwb-s));
+  height: calc(88px * var(--kwb-s));
+  gap: calc(4px * var(--kwb-s));
+  padding: 0 calc(34px * var(--kwb-s)) 0 calc(46px * var(--kwb-s));
+  transform: translateZ(calc(11px * var(--kwb-s)));
+}
+.kwb-fit--z .kwb-obi::before {
+  top: calc(6px * var(--kwb-s));
+  left: calc(18px * var(--kwb-s));
+  right: calc(18px * var(--kwb-s));
+  height: calc(2px * var(--kwb-s));
+}
+.kwb-fit--z .kwb-obi-kicker { font-size: calc(9px * var(--kwb-s)); }
+.kwb-fit--z .kwb-obi-title { font-size: calc(14.5px * var(--kwb-s)); }
+.kwb-fit--z .kwb-obi-meta { font-size: calc(9.5px * var(--kwb-s)); }
+
+/* ---------- 扉页 / 内衬（翻开后才看得见，同样按开本长大） ---------- */
+.kwb-fit--z .kwb-leaf::after { width: calc(9px * var(--kwb-s)); }
+.kwb-fit--z .kwb-print {
+  padding: calc(92px * var(--kwb-s)) calc(30px * var(--kwb-s)) 0 calc(36px * var(--kwb-s));
+  gap: calc(17px * var(--kwb-s));
+}
+.kwb-fit--z .kwb-ht-kicker { font-size: calc(11px * var(--kwb-s)); }
+.kwb-fit--z .kwb-ht-title { font-size: calc(31px * var(--kwb-s)); }
+.kwb-fit--z .kwb-ht-rule {
+  width: calc(96px * var(--kwb-s));
+  height: calc(6px * var(--kwb-s));
+}
+.kwb-fit--z .kwb-ht-loz {
+  width: calc(7px * var(--kwb-s));
+  height: calc(7px * var(--kwb-s));
+}
+.kwb-fit--z .kwb-ht-imprint { font-size: calc(10px * var(--kwb-s)); }
+.kwb-fit--z .kwb-ht-folio {
+  bottom: calc(20px * var(--kwb-s));
+  font-size: calc(10px * var(--kwb-s));
+}
+.kwb-fit--z .kwb-endpaper { inset: calc(13px * var(--kwb-s)); }
+.kwb-fit--z .kwb-emblem {
+  width: calc(152px * var(--kwb-s));
+  height: calc(152px * var(--kwb-s));
+}
+.kwb-fit--z .kwb-emblem::before { inset: calc(13px * var(--kwb-s)); }
+.kwb-fit--z .kwb-emblem::after {
+  width: calc(46px * var(--kwb-s));
+  height: calc(46px * var(--kwb-s));
+}
+
+/* 「再看一遍」也跟着画幅长大：竖幅里 11px 的胶囊贴在角上根本读不出来 */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kw-replay {
+  right: 34px;
+  bottom: 28px;
+}
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kw-chip {
+  font-size: 17px;
+  padding: 11px 17px;
 }
 </style>

@@ -9,26 +9,26 @@
 
     <div :class="innerClass">
       <template v-if="variant === 'slide'">
-        <div class="h-full flex flex-col justify-between">
+        <div class="h-full flex flex-col justify-between hero-slide-col">
           <div class="flex items-start justify-between gap-4">
           </div>
 
-          <div class="mt-10 sm:mt-14">
-            <h1 class="wrapped-title text-3xl sm:text-5xl text-[#000000e6] leading-[1.05]">
+          <div class="mt-10 sm:mt-14 hero-title-block">
+            <h1 class="wrapped-title text-3xl sm:text-5xl text-[#000000e6] leading-[1.05] hero-title">
               {{ randomTitle.main }}
               <span class="block mt-3 text-[#07C160]">
                 {{ randomTitle.highlight }}
               </span>
             </h1>
 
-            <div class="mt-7 sm:mt-9 max-w-2xl">
-              <p class="wrapped-body text-base sm:text-lg text-[#00000080]">
+            <div class="mt-7 sm:mt-9 max-w-2xl hero-sub-wrap">
+              <p class="wrapped-body text-base sm:text-lg text-[#00000080] hero-sub">
                 {{ randomSubtitle }}
               </p>
             </div>
           </div>
 
-          <div class="pb-1">
+          <div class="pb-1 hero-foot">
             <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[#00000066]">
               <!-- Intentionally left blank (avoid "feature bullet list" tone on the cover). -->
             </div>
@@ -37,15 +37,16 @@
 
         <div
           v-if="previewQuestions.length > 0"
-          class="pointer-events-none absolute bottom-0 right-0 hidden xl:flex items-end"
+          class="pointer-events-none absolute bottom-0 right-0 hidden xl:flex items-end hero-preview-wrap"
         >
           <div class="pointer-events-auto relative" :class="previewStageClass">
             <div class="relative" :class="previewViewportClass">
               <BitsGridMotion
                 :items="modernPreviewItems"
                 gradient-color="rgba(7, 193, 96, 0.24)"
-                :row-count="7"
-                :column-count="8"
+                :row-count="previewRowCount"
+                :column-count="previewColumnCount"
+                :item-width="previewItemWidth"
                 :scroll-speed="42"
                 :base-offset-x="46"
               >
@@ -105,6 +106,10 @@
 </template>
 
 <script setup>
+import { useWrappedStage } from '~/composables/useWrappedStage'
+
+const stage = useWrappedStage()
+
 // 50 个主标题（主句 + 高亮句）
 const TITLES = [
   { main: '把这一年的聊天', highlight: '轻轻翻一翻' },
@@ -310,12 +315,42 @@ const modernPreviewItems = computed(() => {
 })
 
 const previewStageClass = computed(() => (
-  'w-[620px] h-[420px] translate-x-32 -translate-y-24'
+  'w-[620px] h-[420px] translate-x-32 -translate-y-24 hero-preview-stage'
 ))
 
 const previewViewportClass = computed(() => (
-  'h-[390px] w-[580px]'
+  'h-[390px] w-[580px] hero-preview-viewport'
 ))
+
+// 预告网格的行列数按画幅重排：竖幅里预告带更窄更高，于是「列数减少、行数增加」。
+// 卡片本体尺寸（300×210）在所有画幅下不变——这里改的只是网格的流向，不是构件大小。
+// wide/landscape 必须原样返回 7 / 8，16:9 逐像素零回归。
+//
+// 竖幅/方幅里卡片本体还要**放大**（300×210 → 460×344，见样式段），
+// 于是这里同时给出 itemWidth：它是跑马灯的循环步进依据，必须跟卡宽一致，否则循环会错位。
+//
+// 列数还兼着两件事，取值不能随手拍：
+//  1. 跑马灯循环周期 = 列数 ×（卡宽+12），必须盖住旋转 -15° 后的视口投影宽度，
+//     否则循环到末尾时右侧会露白；
+//  2. 相邻行的取卡步进 = 2×列数（对预告条数取模），步进和条数同余会让每行都从同一张开始，
+//     一屏只剩两三种预告。当前 manifest 是 8 张，5/6 的步进（10/12）刚好把 8 张摊开；
+//     4 列（步进 8）会让每行完全重复，绝对不能取。
+// 行数按「卡更高之后仍要盖满旋转视口」重算：竖幅 460×344 卡的纵向步进是 356px。
+const PREVIEW_GRID_BY_TIER = {
+  wide: { rows: 7, columns: 8, itemWidth: 300 },
+  landscape: { rows: 7, columns: 8, itemWidth: 300 },
+  square: { rows: 5, columns: 5, itemWidth: 460 },
+  portrait: { rows: 6, columns: 5, itemWidth: 460 },
+  tall: { rows: 6, columns: 5, itemWidth: 460 }
+}
+
+const previewGrid = computed(() => (
+  PREVIEW_GRID_BY_TIER[stage.tier.value] || PREVIEW_GRID_BY_TIER.wide
+))
+
+const previewRowCount = computed(() => previewGrid.value.rows)
+const previewColumnCount = computed(() => previewGrid.value.columns)
+const previewItemWidth = computed(() => previewGrid.value.itemWidth)
 
 const yearText = computed(() => `${props.year}年`)
 
@@ -328,7 +363,7 @@ const rootClass = computed(() => {
 
 const innerClass = computed(() => {
   if (props.variant !== 'slide') return 'relative px-6 py-7 sm:px-8 sm:py-9'
-  return 'relative h-full max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12'
+  return 'relative h-full max-w-5xl mx-auto px-6 py-10 sm:px-8 sm:py-12 hero-slide-inner'
 })
 </script>
 
@@ -391,5 +426,223 @@ const innerClass = computed(() => {
 
 .preview-grid-lines span:last-child {
   width: 68%;
+}
+
+/* ==========================================================================
+   画幅重排（只写在 tier 前缀下；16:9 / 跟随窗口 = tier "wide" 一个像素都不动）
+
+   横屏构图是「左中大标题 + 右下角倾斜预告面板」。竖幅里预告面板会被推出画幅右侧，
+   6 条预告文本整体丢失，同时画面上方空一大片。这里把构图改成纵向编辑排版：
+   标题组上移到上中部，预告网格铺成下半屏的整幅横向流（列数减少、行数增加）。
+   字体层级、卡面样式、-15° 倾斜一律沿用横屏那套，只改位置与流向。
+   ========================================================================== */
+
+/* 1) 把随「浏览器窗口宽度」跳变的 sm: 断点值钉成设计常量。
+   舞台是设计像素恒定盒，构件尺寸不该随窗口大小变——窄窗口下标题会掉到 30px、
+   内边距掉到 24/40，下面的排布计算就全不成立了。取值 = 各自在 ≥640px 下的计算值。 */
+[data-frame-tier="landscape"] .hero-slide-inner,
+[data-frame-tier="square"] .hero-slide-inner,
+[data-frame-tier="portrait"] .hero-slide-inner,
+[data-frame-tier="tall"] .hero-slide-inner {
+  padding-left: 32px;
+  padding-right: 32px;
+  padding-top: 48px;
+  padding-bottom: 48px;
+}
+
+[data-frame-tier="landscape"] .hero-title {
+  font-size: 48px;
+}
+
+[data-frame-tier="landscape"] .hero-sub {
+  font-size: 18px;
+  line-height: 28px;
+}
+
+[data-frame-tier="landscape"] .hero-sub-wrap,
+[data-frame-tier="square"] .hero-sub-wrap,
+[data-frame-tier="portrait"] .hero-sub-wrap,
+[data-frame-tier="tall"] .hero-sub-wrap {
+  margin-top: 36px;
+}
+
+/* 2) 预告网格在非 wide 画幅下一律参与排版。
+   原来的 `hidden xl:flex` 挂的是浏览器窗口宽度：固定画幅时舞台会整体缩放，
+   窗口 <1280px 就把整块预告网格 display:none 掉，6 条预告文本直接消失。 */
+/* 16:9 也是「框定画幅」的一种：舞台宽恒为 1600，窗口再窄也不该把预告网格整块隐掉。
+   只有「跟随窗口」（舞台=窗口）时 xl: 断点才是对的判断依据，那一档保持原样。 */
+.wr-stage--framed .hero-preview-wrap,
+[data-frame-tier="landscape"] .hero-preview-wrap,
+[data-frame-tier="square"] .hero-preview-wrap,
+[data-frame-tier="portrait"] .hero-preview-wrap,
+[data-frame-tier="tall"] .hero-preview-wrap {
+  display: flex;
+}
+
+/* 3) 竖幅 / 方幅：标题组顶部对齐并顶到画幅上沿，让出整个下半屏给预告带。
+   以前把标题压到上中部（tall 是 margin-top 232），上面白着一大片、下面预告带也够不到底，
+   文字实际只占画幅中段 75%。现在标题贴顶、预告带贴底，两头都吃满。 */
+[data-frame-tier="square"] .hero-slide-col,
+[data-frame-tier="portrait"] .hero-slide-col,
+[data-frame-tier="tall"] .hero-slide-col {
+  justify-content: flex-start;
+}
+
+/* 标题落点：上一轮为了提占幅把 margin-top 从 232 一刀砍到 36，结果标题贴到画幅顶上（距顶仅 84px / 5%）。
+   改成按画幅高度约 12% 落位——标题仍在上三分之一（封面该有的位置），但不再顶天。
+   数值与下面 .hero-preview-stage 的高度是一组：标题最坏三行时的底边必须留在预告带顶边之上。 */
+[data-frame-tier="square"] .hero-title-block {
+  margin-top: 96px;
+}
+
+[data-frame-tier="portrait"] .hero-title-block {
+  margin-top: 118px;
+}
+
+[data-frame-tier="tall"] .hero-title-block {
+  margin-top: 144px;
+}
+
+/* 3.1) 标题与副标题按画幅放大（不是缩放内容，是重新定字号）。
+   取值卡在「最长的一句刚好不多折一行」上：
+   tall 版心 836，88px 下每行 9.5 字，最长高亮句（11 字）折 2 行，全句最多 3 行；
+   portrait 版心 976/1010、square 版心 1136，字更大反而每行装得下 11 字，最多 2 行。
+   全是绝对 px，不挂高度轴单位，舞台变高不会再把字顶大。 */
+[data-frame-tier="tall"] .hero-title {
+  font-size: 88px;
+}
+
+[data-frame-tier="portrait"] .hero-title {
+  font-size: 84px;
+}
+
+[data-frame-tier="square"] .hero-title {
+  font-size: 80px;
+}
+
+[data-frame-tier="tall"] .hero-sub {
+  font-size: 32px;
+  line-height: 50px;
+}
+
+[data-frame-tier="portrait"] .hero-sub,
+[data-frame-tier="square"] .hero-sub {
+  font-size: 30px;
+  line-height: 48px;
+}
+
+/* max-w-2xl（672）是横屏版心的一半，竖幅里会把 30px 的副标题挤成三行。放开到整幅版心。 */
+[data-frame-tier="square"] .hero-sub-wrap,
+[data-frame-tier="portrait"] .hero-sub-wrap,
+[data-frame-tier="tall"] .hero-sub-wrap {
+  max-width: none;
+  margin-top: 40px;
+}
+
+/* 4) 预告网格：从「右下角浮块」改成「下半屏整幅带」。
+   带子铺满内容列宽（1:1/3:4/4:5 = 1024，9:16 = 900），底部各留出与横屏同量级的余白，
+   保证倾斜卡面与 6 条预告文本全部落在画幅内。 */
+/* left/right 的负值 = 把版心（max-w-5xl，1024）撑回整幅画幅宽：
+   1:1 是 1200 宽，版心只有 1024，预告带两侧各空 88px 的白，画面直接少掉一成。
+   --svw 是舞台版的 1vw（= 设计宽/100），所以这条对任意画幅都成立：
+   9:16（900）算出来是 0，3:4（1040）是 -8，1:1（1200）是 -88。标题仍留在版心里。 */
+[data-frame-tier="square"] .hero-preview-wrap,
+[data-frame-tier="portrait"] .hero-preview-wrap,
+[data-frame-tier="tall"] .hero-preview-wrap {
+  left: calc((100% - var(--svw, 16px) * 100) / 2);
+  right: calc((100% - var(--svw, 16px) * 100) / 2);
+  align-items: stretch;
+}
+
+[data-frame-tier="square"] .hero-preview-wrap,
+[data-frame-tier="portrait"] .hero-preview-wrap,
+[data-frame-tier="tall"] .hero-preview-wrap {
+  bottom: 52px;
+}
+
+/* transform:none 抵掉横屏的 translate-x-32 / -translate-y-24（Tailwind 3 写在 transform 上） */
+[data-frame-tier="square"] .hero-preview-stage,
+[data-frame-tier="portrait"] .hero-preview-stage,
+[data-frame-tier="tall"] .hero-preview-stage {
+  width: 100%;
+  transform: none;
+}
+
+/* 带高 = 画幅高 - 标题组占掉的高度 - 底部 52。
+   标题组最坏情况（tall：3 行标题 + 2 行副标题）落到 515，square/portrait 落到 ~400，
+   带子顶边分别取 548 / 430(4:5) / 436，留出余量，任何一条随机文案都不会压到卡面。 */
+[data-frame-tier="square"] .hero-preview-stage {
+  height: 660px;
+}
+
+[data-frame-tier="portrait"] .hero-preview-stage {
+  height: 782px;
+}
+
+[data-frame-tier="tall"] .hero-preview-stage {
+  height: 880px;
+}
+
+[data-frame-tier="square"] .hero-preview-viewport,
+[data-frame-tier="portrait"] .hero-preview-viewport,
+[data-frame-tier="tall"] .hero-preview-viewport {
+  width: 100%;
+  height: 100%;
+}
+
+/* 5) 预告卡本体在竖幅/方幅里整体放大：300×210 → 460×344。
+   卡面文字原来是 16/13/11px，在 900 宽的舞台上换算过去只有指甲盖大，用户截图里
+   抱怨的就是这一片。放大卡片是为了把字号抬到 26/24/18，而不是把字塞进原来的小卡。
+   注意：这里改的是「本组件用到的那一份 BitsGridMotion 实例」，共享组件本身没动；
+   itemWidth 同步由 PREVIEW_GRID_BY_TIER 传进去，跑马灯循环步进才对得上。 */
+[data-frame-tier="square"] .hero-preview-viewport :deep(.bits-grid-motion-cell),
+[data-frame-tier="portrait"] .hero-preview-viewport :deep(.bits-grid-motion-cell),
+[data-frame-tier="tall"] .hero-preview-viewport :deep(.bits-grid-motion-cell) {
+  min-width: 460px;
+  height: 344px;
+}
+
+[data-frame-tier="square"] .preview-grid-shell :deep(.wrapped-title),
+[data-frame-tier="portrait"] .preview-grid-shell :deep(.wrapped-title),
+[data-frame-tier="tall"] .preview-grid-shell :deep(.wrapped-title) {
+  font-size: 26px;
+  line-height: 1.24;
+}
+
+[data-frame-tier="square"] .preview-grid-body,
+[data-frame-tier="portrait"] .preview-grid-body,
+[data-frame-tier="tall"] .preview-grid-body {
+  height: 176px;
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+
+[data-frame-tier="square"] .preview-grid-summary,
+[data-frame-tier="portrait"] .preview-grid-summary,
+[data-frame-tier="tall"] .preview-grid-summary {
+  font-size: 18px;
+}
+
+/* 24px × 版心 376 = 每行 15.6 字，最长的一条预告问句 17 字正好两行，
+   line-clamp:2 不会真的把字切掉。 */
+[data-frame-tier="square"] .preview-grid-question,
+[data-frame-tier="portrait"] .preview-grid-question,
+[data-frame-tier="tall"] .preview-grid-question {
+  margin-top: 10px;
+  font-size: 24px;
+  line-height: 1.35;
+}
+
+[data-frame-tier="square"] .preview-grid-lines,
+[data-frame-tier="portrait"] .preview-grid-lines,
+[data-frame-tier="tall"] .preview-grid-lines {
+  margin-top: 10px;
+  gap: 7px;
+}
+
+[data-frame-tier="square"] .preview-grid-lines span,
+[data-frame-tier="portrait"] .preview-grid-lines span,
+[data-frame-tier="tall"] .preview-grid-lines span {
+  height: 8px;
 }
 </style>

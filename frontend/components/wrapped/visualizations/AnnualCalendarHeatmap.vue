@@ -1,55 +1,58 @@
 <template>
   <div ref="rootEl" class="w-full" :class="{ 'wr-anim-paused': !isActive }">
-    <div v-if="weeks > 0" class="overflow-x-auto" data-wrapped-scroll-x>
-      <div class="w-max mx-auto" :style="{ '--cell': `${cellPx}px` }">
-        <!-- Month labels：悬停聚焦当月，点击钉住 -->
-        <div
-          class="grid gap-[2px] text-[11px] text-[#00000066] mb-2"
-          :style="{ gridTemplateColumns: `36px repeat(${weeks}, var(--cell))` }"
-        >
-          <div></div>
-          <span
-            v-for="(m, idx) in monthLabels"
-            :key="idx"
-            class="wrapped-number whitespace-nowrap"
-            :class="m.text ? ['hm-month', { 'hm-month--active': activeMonth === m.month }] : ''"
-            @mouseenter="m.text && (monthFocus = m.month)"
-            @mouseleave="m.text && (monthFocus = -1)"
-            @click="m.text && toggleMonthPin(m.month)"
-          >
-            {{ m.text }}
-          </span>
-        </div>
-
-        <!-- Grid：支持鼠标按住拖选一段日期看统计（data-deck-nodrag 防止触屏拖动翻页） -->
-        <div
-          class="grid gap-[2px] items-stretch select-none"
-          data-deck-nodrag
-          :style="{
-            gridTemplateColumns: `36px repeat(${weeks}, var(--cell))`,
-            gridTemplateRows: `repeat(7, var(--cell))`
-          }"
-        >
+    <div v-if="weeks > 0" class="hm-scroller" :class="{ 'hm-scroller--stacked': stacked }" data-wrapped-scroll-x>
+      <div class="hm-body mx-auto" :class="stacked ? 'hm-body--stacked' : 'w-max'" :style="{ '--cell': `${cellPx}px` }">
+        <!-- 竖幅下 1×53 的横条折成多段（段内仍是 7 行 × N 列）：横滚等于把 10–12 月推出视野 -->
+        <div v-for="(seg, si) in segmentViews" :key="si" class="hm-seg">
+          <!-- Month labels：悬停聚焦当月，点击钉住 -->
           <div
-            v-for="(w, wi) in weekdayTicks"
-            :key="wi"
-            class="flex items-center wrapped-body text-[11px] text-[#00000066]"
-            :style="{ gridColumn: '1', gridRow: String(wi + 1) }"
+            class="grid gap-[2px] text-[11px] text-[#00000066] mb-2"
+            :style="{ gridTemplateColumns: `36px repeat(${seg.cols}, var(--cell))` }"
           >
-            {{ w }}
+            <div></div>
+            <span
+              v-for="(m, idx) in seg.months"
+              :key="idx"
+              class="wrapped-number whitespace-nowrap"
+              :class="m.text ? ['hm-month', { 'hm-month--active': activeMonth === m.month }] : ''"
+              @mouseenter="m.text && (monthFocus = m.month)"
+              @mouseleave="m.text && (monthFocus = -1)"
+              @click="m.text && toggleMonthPin(m.month)"
+            >
+              {{ m.text }}
+            </span>
           </div>
 
+          <!-- Grid：支持鼠标按住拖选一段日期看统计（data-deck-nodrag 防止触屏拖动翻页） -->
           <div
-            v-for="(c, idx) in cells"
-            :key="idx"
-            class="heatmap-cell rounded-[2px] transition-transform duration-150 hover:scale-125 hover:z-10"
-            :class="cellClass(c)"
-            :style="cellStyle(c)"
-            @mouseenter="onCellMouseEnter(c, $event)"
-            @mousemove="scheduleTooltipLayout"
-            @mouseleave="hideTooltip"
-            @pointerdown="onCellPointerDown(c, $event)"
-          ></div>
+            class="grid gap-[2px] items-stretch select-none"
+            data-deck-nodrag
+            :style="{
+              gridTemplateColumns: `36px repeat(${seg.cols}, var(--cell))`,
+              gridTemplateRows: `repeat(7, var(--cell))`
+            }"
+          >
+            <div
+              v-for="(w, wi) in weekdayTicks"
+              :key="`wd-${wi}`"
+              class="flex items-center wrapped-body text-[11px] text-[#00000066]"
+              :style="{ gridColumn: '1', gridRow: String(wi + 1) }"
+            >
+              {{ w }}
+            </div>
+
+            <div
+              v-for="(c, idx) in seg.cells"
+              :key="`c-${idx}`"
+              class="heatmap-cell rounded-[2px] transition-transform duration-150 hover:scale-125 hover:z-10"
+              :class="cellClass(c)"
+              :style="cellStyle(c, seg)"
+              @mouseenter="onCellMouseEnter(c, $event)"
+              @mousemove="scheduleTooltipLayout"
+              @mouseleave="hideTooltip"
+              @pointerdown="onCellPointerDown(c, $event)"
+            ></div>
+          </div>
         </div>
 
         <div class="mt-4 flex items-center justify-between gap-4 text-xs text-[#00000066] w-full">
@@ -76,7 +79,9 @@
       </div>
     </div>
 
-    <Teleport to="body">
+    <!-- tooltip 挂舞台 portal：舞台带 transform，fixed 后代以舞台为包含块，
+         所以下面的 left/top 是**舞台坐标**，夹边也按舞台盒算。 -->
+    <Teleport :to="stage.portalTarget.value">
       <Transition name="wr-tip">
         <div
           v-if="tooltipOpen && tooltipCell && tooltipCell.ymd"
@@ -119,6 +124,9 @@
 <script setup>
 import { heatColor } from '~/lib/wrapped/heatmap'
 import { useReducedMotion } from '~/composables/useReducedMotion'
+import { useWrappedStage } from '~/composables/useWrappedStage'
+
+const stage = useWrappedStage()
 
 const props = defineProps({
   year: { type: Number, default: new Date().getFullYear() },
@@ -132,8 +140,15 @@ const props = defineProps({
   focusDoys: { type: Object, default: null }
 })
 
-// Cell size of each day square (px). Tuned to fit Card00 slide width without truncation.
-const cellPx = 15
+// 格子边长。16:9 保持历史值 15px（为 Card00 的 slide 宽度手调过，逐像素零回归）；
+// 竖幅/方幅下改成**按可用宽度撑满**——固定 15px 会让年历缩成中间一小条、两侧大片空白，
+// 那正是「缩小适配」的反面教材。段数也一起按宽度选，让格子落在 20–30px 的舒适区。
+const AXIS_W = 36   // 左侧周几刻度列
+const GAP = 2       // 格间距
+const CELL_MIN = 15
+const CELL_MAX = 26
+
+const availW = ref(0)
 
 const MARKER_ORDER = [
   'sent_chars_max',
@@ -277,6 +292,81 @@ const cells = computed(() => {
     })
   }
   return out
+})
+
+// ---------------- 画幅分段：竖幅把 1×53 的横条折成多段 ----------------
+//
+// cells / monthLabels 的计算逻辑一律不动（doy ↔ col/row 的映射是全年唯一真相），
+// 只在渲染层按 col 区间切片成 N 个子网格，段内列号 = 全局列号 − 段起始列。
+
+// 单列纵向流的画幅：段落居中、图例吃满整行、不再靠横滚兜底
+const stacked = computed(() => {
+  const t = stage.tier.value
+  return t === 'square' || t === 'portrait' || t === 'tall'
+})
+
+// 「把一行填满」的格子边长（不夹上下限）
+const rawCellFor = (n) => {
+  const w = availW.value
+  const cols = Math.max(1, Math.ceil(weeks.value / Math.max(1, n)))
+  if (!(w > 0)) return 0
+  return Math.floor((w - AXIS_W - (cols - 1) * GAP) / cols)
+}
+
+// 段数取「格子还没小到看不清」的**最少**段数。
+// ⚠️ 别反过来按目标格子大小去凑段数：段数越多 → 每段列越少 → 格子越大 → 但总高度也翻倍。
+// 1:1 舞台 1112 宽时一行就能放下 53 列（格子 18px），分两段反而把年历撑到 484px 高、
+// 把整张 Card00 顶出画幅（实测 FitScale 掉到 0.872，等于又在缩小适配）。
+const segmentCount = computed(() => {
+  if (!stacked.value) return 1
+  const cols = weeks.value
+  if (cols <= 0 || !(availW.value > 0)) return 1
+  for (let n = 1; n <= 6; n += 1) if (rawCellFor(n) >= CELL_MIN) return n
+  return 6
+})
+
+// 撑满宽度：段内列数定下来之后，格子边长就是填满这一行的那个值。
+// ⚠️ 只在竖幅/方幅（stacked）生效。横屏（含全屏「跟随窗口」）保持 15px 常量：
+// 那里版心是 max-w-5xl 定宽而窗口可以极宽，按「可用宽」撑会把 53 列算成 26px、
+// 总宽 1518px 直接顶出版心，页面右侧整段被裁（全屏下实测把年历砍到只剩 11 个月）。
+const cellPx = computed(() => {
+  if (!stacked.value) return CELL_MIN
+  const raw = rawCellFor(segmentCount.value)
+  if (!raw) return CELL_MIN
+  return Math.max(CELL_MIN, Math.min(CELL_MAX, raw))
+})
+
+const segments = computed(() => {
+  const cols = weeks.value
+  const n = Math.max(1, segmentCount.value)
+  if (n <= 1 || cols <= 0) return [{ startCol: 0, cols: Math.max(0, cols) }]
+  const per = Math.ceil(cols / n)
+  const out = []
+  for (let s = 0; s < n; s += 1) {
+    const startCol = s * per
+    if (startCol >= cols) break
+    out.push({ startCol, cols: Math.min(per, cols - startCol) })
+  }
+  return out
+})
+
+const segmentViews = computed(() => {
+  const all = cells.value
+  const labels = monthLabels.value
+  return segments.value.map((seg) => {
+    const end = seg.startCol + seg.cols
+    const segCells = all.filter((c) => c.col >= seg.startCol && c.col < end)
+    const months = labels.slice(seg.startCol, end).map((m) => ({ ...m }))
+    // 段从月中开起时首列没有月标：补上该段第一天所属月份（同月标已在段内则不补）
+    if (months.length > 0 && !months[0].text) {
+      const firstValid = segCells.find((c) => c.valid)
+      const mo = firstValid ? Number(firstValid.mon) : -1
+      if (mo >= 0 && !months.some((m) => m.month === mo)) {
+        months[0] = { text: `${mo + 1}月`, month: mo }
+      }
+    }
+    return { startCol: seg.startCol, cols: seg.cols, cells: segCells, months }
+  })
 })
 
 const colorFor = (cell) => {
@@ -429,11 +519,12 @@ const cellClass = (cell) => ({
   'hm-sel': isSelected(cell)
 })
 
-const cellStyle = (cell) => {
+const cellStyle = (cell, seg) => {
+  const startCol = Number(seg?.startCol) || 0
   const style = {
     backgroundColor: colorFor(cell),
-    transformOrigin: originFor(cell),
-    gridColumn: String((cell.col ?? 0) + 2),
+    transformOrigin: originFor(cell, seg),
+    gridColumn: String((cell.col ?? 0) - startCol + 2),
     gridRow: String((cell.row ?? 0) + 1)
   }
   if (entranceAnimating.value) {
@@ -483,25 +574,34 @@ const updateTooltipLayout = () => {
   const tip = tooltipEl.value
   if (!anchor || !tip) return
 
+  // getBoundingClientRect 是**缩放后**的屏幕矩形，而 tooltip 的 left/top 写进舞台坐标系，
+  // 所以锚点与自身尺寸都要先换算回舞台单位，夹边也按舞台盒而不是浏览器窗口。
   const a = anchor.getBoundingClientRect()
   const t = tip.getBoundingClientRect()
   if (!t.width || !t.height) return
 
+  const aTL = stage.toStagePoint(a.left, a.top)
+  const aW = stage.toStageDelta(a.width)
+  const aH = stage.toStageDelta(a.height)
+  const tW = stage.toStageDelta(t.width)
+  const tH = stage.toStageDelta(t.height)
+  const vp = stage.viewportSize()
+
   const gap = 10
   const padding = 10
 
-  let left = a.left + a.width / 2 - t.width / 2
-  left = Math.min(window.innerWidth - padding - t.width, Math.max(padding, left))
+  let left = aTL.x + aW / 2 - tW / 2
+  left = Math.min(vp.w - padding - tW, Math.max(padding, left))
 
-  let top = a.top - gap - t.height
+  let top = aTL.y - gap - tH
   let placement = 'top'
   if (top < padding) {
-    top = a.bottom + gap
+    top = aTL.y + aH + gap
     placement = 'bottom'
   }
 
-  if (top + t.height > window.innerHeight - padding) {
-    top = window.innerHeight - padding - t.height
+  if (top + tH > vp.h - padding) {
+    top = vp.h - padding - tH
   }
 
   tooltipX.value = Math.round(left)
@@ -597,14 +697,30 @@ const onDocPointerDown = (e) => {
   hideTooltip()
 }
 
+// 可用宽度：格子边长与段数都由它推。观察自身布局盒（不受祖先 transform 影响）。
+let availRo = null
+const measureAvail = () => {
+  const el = rootEl.value
+  if (!el) return
+  const w = el.clientWidth
+  if (w > 0 && Math.abs(w - availW.value) > 0.5) availW.value = w
+}
+
 onMounted(() => {
   if (!import.meta.client) return
+  measureAvail()
+  if (typeof ResizeObserver !== 'undefined' && rootEl.value) {
+    availRo = new ResizeObserver(measureAvail)
+    availRo.observe(rootEl.value)
+  }
   window.addEventListener('resize', scheduleTooltipLayout)
   window.addEventListener('pointerup', onWindowPointerUp)
   document.addEventListener('pointerdown', onDocPointerDown, true)
 })
 
 onBeforeUnmount(() => {
+  availRo?.disconnect()
+  availRo = null
   if (!import.meta.client) return
   window.removeEventListener('resize', scheduleTooltipLayout)
   window.removeEventListener('pointerup', onWindowPointerUp)
@@ -627,19 +743,58 @@ const legendColor = (i) => {
   return heatColor(Math.max(1, t * m), m)
 }
 
-const originFor = (cell) => {
+// hover 放大的锚点按**段内相对列**判断：分段后每段都有自己的左右边界
+const originFor = (cell, seg) => {
   if (!cell) return 'center center'
-  const col = Number(cell.col || 0)
+  const startCol = Number(seg?.startCol) || 0
+  const segCols = Number(seg?.cols) || weeks.value
+  const col = Number(cell.col || 0) - startCol
   const row = Number(cell.row || 0)
-  const x = col === 0 ? 'left' : (col === weeks.value - 1 ? 'right' : 'center')
+  const x = col === 0 ? 'left' : (col === segCols - 1 ? 'right' : 'center')
   const y = row === 0 ? 'top' : (row === 6 ? 'bottom' : 'center')
   return `${x} ${y}`
 }
 </script>
 
 <style scoped>
+/* ---------------- 分段容器 ---------------- */
+
+/* 16:9 / 4:3 保持原样：等价于原来的 .overflow-x-auto */
+.hm-scroller {
+  overflow-x: auto;
+}
+
+/* 竖幅：横滚会把 10–12 月推出视野 = 丢数据，这里必须失效 */
+.hm-scroller--stacked {
+  overflow-x: visible;
+}
+
+.hm-seg {
+  width: max-content;
+}
+
+/* 单列纵向流：段落居中堆叠，图例吃满整行（横条时 w-max 会把「最大 N」挤出可视区） */
+.hm-body--stacked {
+  width: 100%;
+}
+
+.hm-body--stacked .hm-seg {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.hm-body--stacked .hm-seg + .hm-seg {
+  margin-top: 14px;
+}
+
+/* 竖幅下信息位放开 nowrap：拖选摘要可能很长，宁可换行也不越界 */
+.hm-body--stacked .hm-info {
+  white-space: normal;
+  text-align: right;
+}
+
 .wr-heatmap-tooltip {
-  @apply relative w-[260px] max-w-[80vw] rounded-2xl border border-[#00000010] bg-[#F5F5F5]/95 backdrop-blur px-3 py-3 shadow-xl;
+  @apply relative w-[260px] max-w-[calc(var(--svw)*80)] rounded-2xl border border-[#00000010] bg-[#F5F5F5]/95 backdrop-blur px-3 py-3 shadow-xl;
 }
 
 .wr-heatmap-tooltip__time {

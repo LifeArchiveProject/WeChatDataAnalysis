@@ -56,8 +56,10 @@
           </div>
         </div>
 
-        <!-- 点开卡片看详细叙事：平时卡面放不下的内容都在这里 -->
-        <Teleport to="body">
+        <!-- 点开卡片看详细叙事：平时卡面放不下的内容都在这里。
+             teleport 到舞台 portal 而不是 body —— 舞台带 transform，是 fixed 后代的包含块，
+             于是这一层自动铺满舞台盒并随舞台缩放，不会溢出信箱边界。 -->
+        <Teleport :to="stage.portalTarget.value">
           <transition name="detail-fade">
             <div v-if="detail" class="hc-detail" :class="{ 'wrapped-privacy': privacyMode }" @click.self="detailIdx = -1">
               <div class="hc-detail-panel">
@@ -174,8 +176,8 @@
           </transition>
         </Teleport>
 
-        <!-- 全年表情涌出：Teleport 到 body，喷洒范围是整个屏幕而不是舞台盒子 -->
-        <Teleport to="body">
+        <!-- 全年表情涌出：喷洒范围 = 舞台盒（画幅之内），不是浏览器窗口 -->
+        <Teleport :to="stage.portalTarget.value">
           <div v-if="phase === 'pour'" class="hc-sift" :class="{ 'wrapped-privacy': privacyMode }" aria-hidden="true">
             <img
               v-for="t in siftThumbs"
@@ -441,10 +443,13 @@
 <script setup>
 import { usePrivacyText } from '~/composables/usePrivacyText'
 const { privacyMode } = usePrivacyText()
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import EmojiPack3D from '~/components/wrapped/visualizations/EmojiPack3D.vue'
 import { formatInt, padNo, rarityForRank, useEmojiUniverse } from '~/composables/useEmojiUniverse'
+import { useWrappedStage } from '~/composables/useWrappedStage'
+
+const stage = useWrappedStage()
 
 const props = defineProps({
   card: { type: Object, required: true },
@@ -756,8 +761,9 @@ const onPackPointerDown = (e) => {
   const r = e.currentTarget?.getBoundingClientRect?.()
   tearDrag = {
     startX: e.clientX,
-    // 卡包只占舞台中间一小条，用它的实际宽度换算手感才对
-    width: Math.max(1, (r?.height || 400) * 0.42),
+    // 卡包只占舞台中间一小条，用它的实际宽度换算手感才对。
+    // 基准取短边：只挂高度轴的话，9:16 舞台上要横拖 600+px 才撕得开，而画面总共才 900 宽。
+    width: Math.max(1, Math.min(r?.width || 400, r?.height || 400) * 0.42),
     base: rip,
     pointerId: e.pointerId
   }
@@ -900,8 +906,8 @@ const runPour = async () => {
   stackLabelOn.value = false
   deckUnder.value = false
   await nextTick()
-  // 喷洒铺满整个视口
-  const m = { w: window.innerWidth, h: window.innerHeight }
+  // 喷洒铺满整个舞台盒（跟随窗口模式下即窗口）
+  const m = stage.viewportSize()
 
   siftThumbs.value = poolThumbs.value.slice(0, MAX_THUMBS)
   await nextTick()
@@ -935,7 +941,7 @@ const runPour = async () => {
   // 逐帧积分：喷泉弧线 + 空气阻尼，不撞墙、不弹跳，飞出画面就散
   const G = 2050          // 重力 px/s²
   const DRAG = 0.32       // 空气阻尼
-  const r = Math.max(60, window.innerHeight * 0.0675)
+  const r = Math.max(60, m.h * 0.0675)
 
   parts = siftThumbs.value.map((t, i) => {
     const rAng = Math.random()
@@ -1274,11 +1280,63 @@ const skipToGallery = () => {
   phase.value = 'gallery'
 }
 
-// 陈列墙格位：C 位占 2×2，其余 1×1。列数按张数推，保证两行放得下
-// （C 位多吃 3 个格位），整面墙一屏全见，不用再拖着轮转。
+// ---------- 陈列墙格位 ----------
+// C 位占 2×2，其余 1×1（所以格位数 = 张数 + 3）。
+// 16:9 沿用「按张数推、保证两行」的原式，逐像素不变。
+// 窄画幅下这条式子会一路撞到 10 列上限：9:16 里每格只剩 66px，--u 掉到 0.67px，
+// 卡面上所有字（卡名/次数/占比）等于全糊掉——看得见轮廓但读不出内容。
+// 换画幅只该改行列数、把卡放大，于是改成：在「行数放得下」的前提下取最少的列数
+// （.hc-root 是 overflow:hidden，多一行就是把最下面一排整排切掉）。
+const CARD_RATIO = 88 / 63    // 卡面比例，行高 = 卡宽 × 它
+
+const wallBox = ref({ w: 0, h: 0, head: 0 })
+let wallRo = null
+
+const measureWall = () => {
+  const el = rootEl.value
+  if (!el || typeof window === 'undefined') return
+  const head = parseFloat(window.getComputedStyle(el).getPropertyValue('--hc-head-h')) || 0
+  const next = { w: el.clientWidth, h: el.clientHeight, head }
+  const cur = wallBox.value
+  if (Math.abs(cur.w - next.w) > 0.5 || Math.abs(cur.h - next.h) > 0.5 || Math.abs(cur.head - next.head) > 0.5) {
+    wallBox.value = next
+  }
+}
+
+onMounted(() => {
+  if (!import.meta.client) return
+  measureWall()
+  nextTick(measureWall)
+  if (typeof ResizeObserver === 'undefined' || !rootEl.value) return
+  // 只观察根盒：列数不改变根盒尺寸，没有反馈回路
+  wallRo = new ResizeObserver(measureWall)
+  wallRo.observe(rootEl.value)
+})
+
 const gridCols = computed(() => {
   const n = cards.value.length + 3
-  return Math.max(4, Math.min(10, Math.ceil(n / 2)))
+  const legacy = Math.max(4, Math.min(10, Math.ceil(n / 2)))
+  if (stage.tier.value === 'wide') return legacy
+  const { w, h, head } = wallBox.value
+  if (!w || !h) return legacy
+  const cq = h / 100
+  const gap = Math.max(9, 1.5 * cq)
+  const padTop = Math.max(Math.min(128, Math.max(92, 13 * cq)), head)
+  const padBottom = Math.max(10, 1.6 * cq)
+  const availW = Math.max(1, w - gap * 2)
+  const availH = Math.max(1, h - padTop - padBottom)
+  // 从最少的列数往上找第一个「行数放得下」的解 —— 也就是这块墙上卡能做到的最大尺寸。
+  // 原来的起点是 round(availW / CELL_PITCH)（把 16:9 的格宽当常量搬过来），
+  // 结果 9:16 上一开口就是 5 列、卡宽 151px，比 16:9 的 185px 还小：画幅更窄、
+  // 卡也更小，卡面上的名字和次数双重挤压。现在 9:16 落到 4 列 / 195px。
+  // 0.985 是留给标题带高度抖动的余量：.hc-root 是 overflow:hidden，多一行就整排切掉。
+  let cols = 2
+  for (; cols < 12; cols += 1) {
+    const cardW = (availW - (cols - 1) * gap) / cols
+    const rows = Math.ceil(n / cols)
+    if (rows * cardW * CARD_RATIO + (rows - 1) * gap <= availH * 0.985) break
+  }
+  return Math.min(cols, 12)
 })
 // C 位基座钉在墙面正中：auto-flow: dense 会把其余卡回填到两侧
 const heroCol = computed(() => Math.max(1, Math.floor((gridCols.value - 2) / 2) + 1))
@@ -1378,7 +1436,49 @@ watch(() => props.active, (on) => {
   if (!on && (phase.value === 'pour' || phase.value === 'draw')) skipToGallery()
 })
 
+/* ── 导出模式：立刻呈现终态（陈列墙），退出时还原 ──
+   闸门在本组件而不是父卡：父卡的 `immersive` 只是 chromeVisible 的只读镜像，
+   推不动这里的 phase（sealed → tearing → pour → draw → gallery），
+   而 `reducedMotion` 只在用户已经撕开卡包之后才短路到 skipToGallery——
+   光挂 reduced 仍然是一个封着的卡包。所以直接 inject 那个开关：
+   inject 跨层级生效，不需要父卡再把 prop 一路传下来。
+
+   ⚠️ 还原必须真的还原：导出一次之后回去浏览，卡包应该仍是封着的。
+   这一页的主体验就是「撕开 → 倾泻 → 发牌」的揭晓过程，被剧透就废了。 */
+const exportMode = inject('wrappedExportMode', ref(false))
+let exportSnapshot = null
+
+const applyExportTerminal = () => {
+  if (exportSnapshot === null) exportSnapshot = phase.value
+  if (phase.value !== 'gallery') skipToGallery()
+}
+
+const applyExportRestore = () => {
+  const snap = exportSnapshot
+  exportSnapshot = null
+  // 导出前用户就已经看到陈列墙了：保持现状，不要把人家的进度抹回去
+  if (snap === null || snap === 'gallery') return
+  // 否则退回封包态：撕口归零、卡片重新藏起来、引导手势重新出现
+  cards.value.forEach((c) => { shown[c.id] = false })
+  setRip(0)
+  packLeaving.value = false
+  flippedIdx.value = -1
+  detailIdx.value = -1
+  touched.value = false
+  siftThumbs.value = []
+  clearFx()
+  phase.value = 'sealed'
+  focus.value = Math.max(0, heroIndex.value)
+}
+
+watch(exportMode, (on) => {
+  if (on) applyExportTerminal()
+  else applyExportRestore()
+}, { immediate: true })
+
 onBeforeUnmount(() => {
+  wallRo?.disconnect()
+  wallRo = null
   if (ceremonyToken) {
     ceremonyToken.dead = true
     ceremonyToken.tweens.forEach((t) => t?.kill?.())
@@ -1478,9 +1578,11 @@ onBeforeUnmount(() => {
   position: absolute;
   left: 0;
   top: 0;
-  width: max(120px, 13.5vh);
-  height: max(120px, 13.5vh);
-  margin: max(-60px, -6.75vh) 0 0 max(-60px, -6.75vh);
+  /* --su 是舞台的双轴基准标量：16:9 下恒等于 --svh（逐像素不变），
+     竖幅下改由短边决定，免得一张缩略图被撑到 200+px */
+  width: max(120px, calc(var(--su, 9px) * 13.5));
+  height: max(120px, calc(var(--su, 9px) * 13.5));
+  margin: max(-60px, calc(var(--su, 9px) * -6.75)) 0 0 max(-60px, calc(var(--su, 9px) * -6.75));
   object-fit: contain;
   opacity: 0;
   border-radius: 6px;
@@ -1501,7 +1603,8 @@ onBeforeUnmount(() => {
 }
 @keyframes hc-guide-in { from { opacity: 0; } to { opacity: 1; } }
 .hc-guide-text {
-  font-size: max(10px, 1.15cqh);
+  /* 字号挂高度轴：竖幅下舞台变高反而会把它撑大。cqmin 在横幅里恒等于 cqh */
+  font-size: max(10px, 1.15cqmin);
   letter-spacing: 0.3em;
   color: rgba(255, 255, 255, 0.44);
 }
@@ -1597,7 +1700,7 @@ onBeforeUnmount(() => {
   bottom: -4cqh;
   transform: translateX(-50%);
   white-space: nowrap;
-  font-size: max(10px, 1.15cqh);
+  font-size: max(10px, 1.15cqmin);
   letter-spacing: 0.26em;
   color: rgba(255, 255, 255, 0.42);
   opacity: 0;
@@ -1611,8 +1714,10 @@ onBeforeUnmount(() => {
   left: 50%;
   top: 44.5%;
   z-index: 35;
-  width: 88cqh;
-  height: 88cqh;
+  /* 挂高度轴的正方形：9:16 舞台上边长会变成一千多像素，把整面墙都罩住。
+     cqmin 在横幅里恒等于 cqh（16:9 逐像素不变），竖幅里改由短边定。 */
+  width: 88cqmin;
+  height: 88cqmin;
   transform: translate(-50%, -50%);
   pointer-events: none;
   background: radial-gradient(closest-side, color-mix(in srgb, var(--rc, #FFCE4A) 26%, transparent), transparent 68%);
@@ -1661,8 +1766,8 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 .hc-cap--on { opacity: 1; transform: translate(-50%, 0); }
-.hc-cap-t { font-size: max(13px, 1.9cqh); letter-spacing: 0.18em; color: rgba(255, 255, 255, 0.92); }
-.hc-cap-l { margin-top: 6px; font-size: max(11px, 1.5cqh); line-height: 1.8; color: rgba(255, 255, 255, 0.55); }
+.hc-cap-t { font-size: max(13px, 1.9cqmin); letter-spacing: 0.18em; color: rgba(255, 255, 255, 0.92); }
+.hc-cap-l { margin-top: 6px; font-size: max(11px, 1.5cqmin); line-height: 1.8; color: rgba(255, 255, 255, 0.55); }
 
 .hc-taphint {
   position: absolute;
@@ -1670,7 +1775,7 @@ onBeforeUnmount(() => {
   bottom: 12cqh;
   transform: translateX(-50%);
   z-index: 97;
-  font-size: max(10px, 1.2cqh);
+  font-size: max(10px, 1.2cqmin);
   letter-spacing: 0.3em;
   color: rgba(255, 255, 255, 0.5);
   animation: hc-hint-pulse 2s ease-in-out infinite;
@@ -1692,8 +1797,10 @@ onBeforeUnmount(() => {
   align-content: center;
   justify-content: center;
   gap: max(9px, 1.5cqh);
-  /* 顶部恒定预留标题带：发牌与陈列同一几何，谢幕时不再整体缩小 */
-  padding: clamp(92px, 13cqh, 128px) max(9px, 1.5cqh) max(10px, 1.6cqh);
+  /* 顶部恒定预留标题带：发牌与陈列同一几何，谢幕时不再整体缩小。
+     --hc-head-h 是外壳量出来的标题带实高（含 4px 顶偏移 + 10px 呼吸）；
+     写死的 clamp 只够两行，长叙事/窄画幅下标题会直接压在顶排卡上。 */
+  padding: max(clamp(92px, 13cqh, 128px), var(--hc-head-h, 0px)) max(9px, 1.5cqh) max(10px, 1.6cqh);
   opacity: 0;
   transition: opacity 380ms ease;
 }
@@ -2260,7 +2367,7 @@ onBeforeUnmount(() => {
   color: rgba(255, 255, 255, 0.6);
 }
 .hc-avatar img { width: 100%; height: 100%; object-fit: cover; }
-.hc-avatar--lg { width: max(26px, 3.6cqh); height: max(26px, 3.6cqh); border-radius: 8px; font-size: max(11px, 1.5cqh); }
+.hc-avatar--lg { width: max(26px, 3.6cqmin); height: max(26px, 3.6cqmin); border-radius: 8px; font-size: max(11px, 1.5cqmin); }
 
 /* ---------- 底部条 ---------- */
 /* ---------- 档案卡的卡面 ---------- */
@@ -2297,20 +2404,20 @@ onBeforeUnmount(() => {
   z-index: 9999;
   display: grid;
   place-items: center;
-  padding: 5vh 4vw;
+  padding: calc(var(--svh) * 5) calc(var(--svw) * 4);
   background: rgba(4, 8, 18, 0.72);
   backdrop-filter: blur(14px);
 }
 .hc-detail-panel {
   position: relative;
   width: min(760px, 100%);
-  max-height: 86vh;
+  max-height: calc(var(--svh) * 86);
   overflow: auto;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: linear-gradient(160deg, #101A2C, #0A121F 60%, #070C16);
   box-shadow: 0 30px 70px rgba(0, 0, 0, 0.6);
-  padding: clamp(18px, 3vh, 30px);
+  padding: clamp(18px, calc(var(--svh) * 3), 30px);
   color: #E8F0FA;
 }
 .hc-detail-close {
@@ -2328,7 +2435,7 @@ onBeforeUnmount(() => {
 }
 .hc-detail-close:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
 
-.hc-detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: clamp(12px, 2vh, 20px); }
+.hc-detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: clamp(12px, calc(var(--svh) * 2), 20px); }
 .hc-detail-tag {
   font-size: 11px;
   font-weight: 700;
@@ -2340,9 +2447,9 @@ onBeforeUnmount(() => {
 }
 .hc-detail-kind { font-size: 11px; letter-spacing: 0.16em; color: rgba(255, 255, 255, 0.42); }
 
-.hc-detail-body { display: flex; gap: clamp(14px, 2.4vw, 26px); align-items: flex-start; }
+.hc-detail-body { display: flex; gap: clamp(14px, calc(var(--svw) * 2.4), 26px); align-items: flex-start; }
 .hc-detail-art {
-  flex: 0 0 clamp(140px, 22vw, 220px);
+  flex: 0 0 clamp(140px, calc(var(--svw) * 22), 220px);
   aspect-ratio: 1;
   border-radius: 12px;
   background: linear-gradient(180deg, #F6FAF7, #DFE9E3);
@@ -2355,7 +2462,7 @@ onBeforeUnmount(() => {
 
 .hc-detail-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .hc-detail-text--full { flex-basis: 100%; }
-.hc-detail-lead { font-size: clamp(13px, 1.6vh, 15px); line-height: 1.85; color: rgba(255, 255, 255, 0.74); }
+.hc-detail-lead { font-size: clamp(13px, calc(var(--svh) * 1.6), 15px); line-height: 1.85; color: rgba(255, 255, 255, 0.74); }
 .hc-detail-lead b { color: #fff; font-weight: 600; }
 .hc-detail-k {
   margin-top: 6px;
@@ -2376,7 +2483,7 @@ onBeforeUnmount(() => {
   line-height: 1;
 }
 .hc-detail-glyph img { width: 100%; height: 100%; object-fit: contain; }
-.hc-detail-name { flex: 0 0 clamp(64px, 12vw, 120px); font-size: 12px; color: rgba(255, 255, 255, 0.66); }
+.hc-detail-name { flex: 0 0 clamp(64px, calc(var(--svw) * 12), 120px); font-size: 12px; color: rgba(255, 255, 255, 0.66); }
 .hc-detail-bar { flex: 1; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
 .hc-detail-bar i { display: block; height: 100%; border-radius: 3px; }
 .hc-detail-num { flex: 0 0 56px; text-align: right; font-size: 12px; color: rgba(255, 255, 255, 0.8); }
@@ -2409,17 +2516,119 @@ onBeforeUnmount(() => {
 }
 .hc-plaque--on { opacity: 1; transform: translate(-50%, 0); }
 .hc-plaque-rule {
-  width: 9cqh;
+  width: 9cqmin;
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
 }
 .hc-plaque-line {
-  font-size: max(10px, 1.3cqh);
+  font-size: max(10px, 1.3cqmin);
   letter-spacing: 0.14em;
   color: rgba(255, 255, 255, 0.5);
   white-space: nowrap;
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.65);
 }
+
+/* 竖幅下铭牌只有九百像素可用：放开 nowrap，宁可折成两行也不许被裁 */
+[data-frame-tier="portrait"] .hc-plaque-line,
+[data-frame-tier="tall"] .hc-plaque-line {
+  white-space: normal;
+  text-align: center;
+  max-width: 92cqw;
+  line-height: 1.5;
+}
+
+/* ══════════════ 竖幅重排 ══════════════
+   舞台上这些小字原来一律挂 cqmin（= 竖幅里的短边 = 画幅宽）的 1.1~1.9%，
+   在 1600 高的 9:16 上换算下来只有 10~17 设计像素，分享到手机上根本读不出来。
+   竖幅统一改挂 cqw 并整体上调到 1.8~3.4%：字号只跟宽度轴走，舞台变高不会再
+   把字撑大、把栏挤窄。横幅（wide）一律不进这一段，逐像素不变。 */
+[data-frame-tier="portrait"] .hc-guide-text,
+[data-frame-tier="tall"] .hc-guide-text { font-size: 2.2cqw; }
+
+[data-frame-tier="portrait"] .hc-stack-label,
+[data-frame-tier="tall"] .hc-stack-label { font-size: 1.8cqw; }
+
+[data-frame-tier="portrait"] .hc-taphint,
+[data-frame-tier="tall"] .hc-taphint { font-size: 2cqw; }
+
+[data-frame-tier="portrait"] .hc-cap,
+[data-frame-tier="tall"] .hc-cap { width: min(88cqw, 92%); }
+[data-frame-tier="portrait"] .hc-cap-t,
+[data-frame-tier="tall"] .hc-cap-t { font-size: 3.4cqw; }
+[data-frame-tier="portrait"] .hc-cap-l,
+[data-frame-tier="tall"] .hc-cap-l { margin-top: 1.2cqw; font-size: 2.4cqw; }
+
+[data-frame-tier="portrait"] .hc-plaque-line,
+[data-frame-tier="tall"] .hc-plaque-line { font-size: 2cqw; }
+[data-frame-tier="portrait"] .hc-plaque-rule,
+[data-frame-tier="tall"] .hc-plaque-rule { width: 14cqw; }
+
+/* 撕口指引原来钉在中心下方 24cqh，卡包在竖幅里放大之后正好压在包身上；
+   竖幅改成挂底边，落在卡包和画幅下沿之间的空带里 */
+[data-frame-tier="portrait"] .hc-guide,
+[data-frame-tier="tall"] .hc-guide {
+  top: auto;
+  bottom: max(24px, 4.5cqh);
+  transform: translateX(-50%);
+}
+
+/* 空态（今年没几张表情）也别用 14/16px 的正文 */
+[data-frame-tier="portrait"] .hc-empty-box,
+[data-frame-tier="tall"] .hc-empty-box { padding: 3cqw 3.6cqw; }
+[data-frame-tier="portrait"] .hc-empty-box > :first-child,
+[data-frame-tier="tall"] .hc-empty-box > :first-child { font-size: 3.2cqw; }
+[data-frame-tier="portrait"] .hc-empty-box > :last-child,
+[data-frame-tier="tall"] .hc-empty-box > :last-child { font-size: 2.2cqw; }
+
+/* ── 卡片详情浮层 ──
+   这一层 teleport 到舞台 portal，不在 .hc-root 里，cq* 会掉到窗口去解析，
+   所以尺寸一律走舞台自己的宽度轴单位 --svw（= 画幅设计宽 / 100）。
+   原来的 11/12/13~15px 是按 1600 宽的横幅定的，搬到 900 宽的竖幅上等于对半糊。 */
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-panel {
+  width: min(100%, calc(var(--svw) * 94));
+  padding: calc(var(--svw) * 3.4);
+}
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-close {
+  width: calc(var(--svw) * 4.6);
+  height: calc(var(--svw) * 4.6);
+  font-size: calc(var(--svw) * 2);
+}
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-tag {
+  font-size: calc(var(--svw) * 1.9);
+  padding: calc(var(--svw) * 0.5) calc(var(--svw) * 1.2);
+}
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-kind { font-size: calc(var(--svw) * 1.9); }
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-lead { font-size: calc(var(--svw) * 2.4); }
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-k { font-size: calc(var(--svw) * 1.8); }
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-name {
+  flex: 0 0 calc(var(--svw) * 16);
+  font-size: calc(var(--svw) * 2.1);
+}
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-num {
+  flex: 0 0 calc(var(--svw) * 8);
+  font-size: calc(var(--svw) * 2.1);
+}
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-glyph {
+  width: calc(var(--svw) * 4);
+  height: calc(var(--svw) * 4);
+  font-size: calc(var(--svw) * 2.8);
+}
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-bar { height: calc(var(--svw) * 1); }
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-list { gap: calc(var(--svw) * 1.2); }
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-list li { gap: calc(var(--svw) * 1.4); }
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-hours { height: calc(var(--svw) * 11); }
+[data-frame-tier]:not([data-frame-tier="wide"]) .hc-detail-hours em { font-size: calc(var(--svw) * 1.6); }
+/* 竖幅里「大图在左、文字在右」只剩两条窄栏：改成上下堆叠，文字拿满整宽 */
+[data-frame-tier="portrait"] .hc-detail-body,
+[data-frame-tier="tall"] .hc-detail-body {
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--svw) * 2.6);
+}
+[data-frame-tier="portrait"] .hc-detail-art,
+[data-frame-tier="tall"] .hc-detail-art { flex: 0 0 auto; width: calc(var(--svw) * 36); }
+[data-frame-tier="portrait"] .hc-detail-text,
+[data-frame-tier="tall"] .hc-detail-text { width: 100%; gap: calc(var(--svw) * 1.4); }
 
 @media (prefers-reduced-motion: reduce) {
   .hc-pack-foil { animation: none; }

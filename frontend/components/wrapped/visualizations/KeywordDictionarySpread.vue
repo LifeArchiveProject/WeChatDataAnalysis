@@ -16,7 +16,17 @@
       :class="{ 'kd-stage--rm': reducedMotion, 'kd-stage--paused': paused }"
     >
       <div class="kd-fit" :style="fitStyle">
-        <div class="kd-spread" :class="{ 'kd-spread--in': entered }">
+        <!-- 版式修饰类：中缝是竖是横、词头侧标在右还是在下，都跟着算出来的版式走，
+             不跟画幅 tier 绑死（同一档画幅换了尺寸也可能换版式）。16:9 两个类都不挂。 -->
+        <div
+          class="kd-spread"
+          :class="{
+            'kd-spread--in': entered,
+            'kd-spread--stack': layout.mode === 'stack',
+            'kd-spread--sideunder': layout.headSideW === 0
+          }"
+          :style="spreadStyle"
+        >
           <!-- ── 纸面层 ── -->
           <div class="kd-paper" aria-hidden="true" />
           <div class="kd-sweep" aria-hidden="true" />
@@ -35,7 +45,7 @@
               <span class="kd-rh-a">微 信 年 度 词 典</span>
               <span class="kd-rh-b">{{ yearCn }}年版 · 正编</span>
             </div>
-            <div class="kd-rule" style="top: 82px" />
+            <div class="kd-rule kd-rule--a" />
 
             <!-- 词头：字号按字数收缩，基线固定，长短句都立在同一条线上 -->
             <div class="kd-hw" @dblclick="toggleExpanded">
@@ -54,20 +64,20 @@
               · 平均 <span class="kd-num">{{ current.avgDays }}</span> 天一次
               · 排名 <span class="kd-num">{{ pad2(current.rank) }}</span> / <span class="kd-num">{{ pad2(entries.length) }}</span>
             </div>
-            <div class="kd-rule" style="top: 360px" />
+            <div class="kd-rule kd-rule--b" />
 
             <!-- 义项：全部由真实数据写成，不编释义 -->
             <div class="kd-def">
               <span class="kd-def-no">1</span><span class="kd-def-body">{{ current.gloss }}</span>
             </div>
 
-            <div class="kd-seclabel" style="top: 500px">
+            <div class="kd-seclabel">
               <span class="kd-seclabel-a">书 证</span>
               <span class="kd-seclabel-b">
                 引自本年聊天记录，一字未改<template v-if="citeTotal > shownCites.length"> · 共 {{ citeTotal }} 条</template>
               </span>
             </div>
-            <div class="kd-rule" style="top: 522px" />
+            <div class="kd-rule kd-rule--c" />
 
             <div class="kd-cites" :class="{ 'kd-cites--expanded': expanded }">
               <div
@@ -97,7 +107,7 @@
             </div>
 
             <!-- 没有真的相关词目时，这条栏线连同「参见」一起收掉，不留孤线 -->
-            <div v-if="seeAlso.length > 0" class="kd-rule" style="top: 780px" />
+            <div v-if="seeAlso.length > 0" class="kd-rule kd-rule--d" />
             <div v-if="seeAlso.length > 0" class="kd-see">
               <span class="kd-see-a">参 见</span>
               <span class="kd-see-b">
@@ -125,7 +135,7 @@
               <span class="kd-rh-a">词 目 索 引</span>
               <span class="kd-rh-b wrapped-privacy-keyword">{{ runningHead }}</span>
             </div>
-            <div class="kd-rule kd-rule--r" style="top: 82px" />
+            <div class="kd-rule kd-rule--r kd-rule--ar" />
 
             <!-- 篇题与小序：卡片的标题和那句「抄经」都印在书里 -->
             <div v-if="title" class="kd-booktitle">{{ title }}</div>
@@ -136,7 +146,7 @@
             </p>
 
             <div class="kd-fanli">
-              <span class="kd-fanli-t">凡例</span>一、词目按本年例数降序排列。　二、朱色者为本年词首，即左页所立之词条。
+              <span class="kd-fanli-t">凡例</span>一、词目按本年例数降序排列。　二、朱色者为本年词首，即{{ leafSideCn }}所立之词条。
             </div>
 
             <div class="kd-idx">
@@ -164,7 +174,7 @@
               </div>
             </div>
 
-            <div class="kd-rule kd-rule--r" style="top: 780px" />
+            <div class="kd-rule kd-rule--r kd-rule--er" />
             <div class="kd-colophon">
               本词典收录短句 <span class="kd-num">{{ fmt(matchedCandidates) }}</span> 条，去重词目
               <span class="kd-num">{{ fmt(uniquePhrases) }}</span>，其中 <span class="kd-num">{{ entries.length }}</span> 条入正编。
@@ -215,9 +225,11 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import { parseTextWithEmoji } from '~/lib/wechat-emojis'
+import { useWrappedStage } from '~/composables/useWrappedStage'
+import { ENTRY_CAP, buildDictionaryLayout } from '~/lib/wrapped-dictionary-layout'
 
 const props = defineProps({
   keywords: { type: Array, default: () => [] }, // [{word,count,weight}]
@@ -231,20 +243,87 @@ const props = defineProps({
   paused: { type: Boolean, default: false }
 })
 
-// ── 设计栅格：整幅跨页固定 1600×820，再整体缩放到可用区域 ──
-// 之所以不是 16:9：卡片上方还有标题与描述，跨页压扁一点才能在同样高度里放得更大。
-const DW = 1600
-const DH = 900
-// 索引区几何（与 CSS 中的绝对定位一一对应，镜片折射靠这套数算）
-const IDX_LEFT = 888
-const IDX_TOP = 250
-const COL_W = 272
-const COL_GAP = 36
-const HEAD_H = 24 + 34
-const ROW_H = 28
-const LENS_R = 84
-// 镜心压在栏左侧这个偏移上——对准正中的话词目会落到镜圈外被裁掉
-const LENS_ANCHOR_X = 36
+// ── 设计栅格：按画幅**换画布**，而不是把同一张跨页缩小 ──
+// 舞台面积恒定（≈1.44M px²）⇒ 同样的字号在每个画幅里都装得下，只要把版式换掉。
+// 版式本身由 lib/wrapped-dictionary-layout.js 从画布宽高推出来（纯几何、有 node 测试兜底），
+// 这里只负责「画布多大」和「把算出来的数发给 CSS」。
+const stage = useWrappedStage()
+
+// 画布必须跟舞台**同比**，否则 fitScale 会在卡内再套一层信箱边 —— 那等于「缩小适配」。
+// wide 保持 1600×900 常量（16:9 与「跟随窗口」逐像素零回归）；
+// 其余档位直接取该画幅的设计盒，做到零信箱（3:4 是 1040×1386、4:5 是 1074×1342，
+// 写死一张 900×1600 会在这两档各留 10%/13% 的空边）。
+const CANVAS = { wide: { w: 1600, h: 900 } }
+
+const tierName = computed(() => stage.tier.value || 'wide')
+const canvas = computed(() => {
+  if (tierName.value === 'wide') return CANVAS.wide
+  const d = stage.design.value
+  const w = Number(d?.w) > 0 ? Number(d.w) : 1600
+  const h = Number(d?.h) > 0 ? Number(d.h) : 900
+  return { w, h }
+})
+const DW = computed(() => canvas.value.w)
+const DH = computed(() => canvas.value.h)
+
+// ── 版口 / 索引栅格 / 取词镜：一套几何，一个真值源 ──
+// 每个数都由 buildDictionaryLayout(画布宽, 画布高) 现算：版心、栏数、每栏行数、
+// 书证条数、释义行数……没有任何一档是硬写的常量，所以换画布不会有词条被排到版口外。
+// rowGeometry、lensRows、nearestRow、拖拽 clamp、词头字号全部读 layout.*，
+// CSS 侧由下面的 spreadStyle 把同一批数字以 --kd-* 变量下发到 .kd-spread，两边绝不会走散。
+// 16:9 的画布恒为 1600×900 ⇒ 算出来逐字段等于改动前写死的那套绝对定位
+//（tests/wrapped-dictionary-layout.test.mjs 里对着 WIDE_BASELINE 逐字段断言）。
+const layout = computed(() => buildDictionaryLayout(DW.value, DH.value))
+
+// 同一批几何数字下发给 CSS。16:9（含「跟随窗口」）的既有声明不读这些变量，所以下发本身无副作用。
+const spreadStyle = computed(() => {
+  const L = layout.value
+  const px = (n) => `${n}px`
+  return {
+    '--kd-pw': px(L.pw),
+    '--kd-leaf-x': px(L.leafX),
+    '--kd-leaf-y': px(L.leafY),
+    '--kd-leaf-h': px(L.leafH),
+    '--kd-pr-x': px(L.prX),
+    '--kd-pr-y': px(L.prY),
+    '--kd-pr-h': px(L.prH),
+    '--kd-gutter-x': px(L.gutterX),
+    '--kd-gutter-y': px(L.gutterY),
+    '--kd-gutter-w': px(L.gutterW),
+    '--kd-gutter-h': px(L.gutterH),
+    '--kd-gutter-line': px(L.gutterLine),
+    '--kd-t-rhead': px(L.tRhead),
+    '--kd-t-rule-a': px(L.tRuleA),
+    '--kd-t-hw': px(L.tHw),
+    '--kd-h-hw': px(L.hHw),
+    '--kd-t-meta': px(L.tMeta),
+    '--kd-t-rule-b': px(L.tRuleB),
+    '--kd-t-def': px(L.tDef),
+    '--kd-t-seclabel': px(L.tSeclabel),
+    '--kd-t-rule-c': px(L.tRuleC),
+    '--kd-t-cites': px(L.tCites),
+    '--kd-h-cites': px(L.hCites),
+    '--kd-t-rule-d': px(L.tRuleD),
+    '--kd-t-see': px(L.tSee),
+    '--kd-t-folio': px(L.tFolio),
+    '--kd-t-rule-ar': px(L.tRuleAR),
+    '--kd-t-btitle': px(L.tBookTitle),
+    '--kd-t-preface': px(L.tPreface),
+    '--kd-t-fanli': px(L.tFanli),
+    '--kd-t-idx': px(L.tIdx),
+    '--kd-t-rule-er': px(L.tRuleE),
+    '--kd-t-colophon': px(L.tColophon),
+    '--kd-t-folio-r': px(L.tFolioR),
+    '--kd-col-w': px(L.colW),
+    '--kd-col-gap': px(L.colGap),
+    '--kd-word-max': px(L.wordMaxW),
+    '--kd-cite-max': px(L.citeMaxW),
+    // 截断行数也是算出来的：页越高，释义 / 书证 / 小序放开得越多（只放开，不收紧）
+    '--kd-def-lines': String(L.defLines),
+    '--kd-cite-lines': String(L.citeLines),
+    '--kd-preface-lines': String(L.prefaceLines)
+  }
+})
 
 const nf = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
 const fmt = (n) => nf.format(Math.round(Number(n) || 0))
@@ -255,6 +334,13 @@ const rootEl = ref(null)
 const stageEl = ref(null)
 const leafEl = ref(null)
 const lensEl = ref(null)
+
+/* 导出模式（页面级 provide）。为真期间跨页必须**立刻**是终态：词头、释义、书证、
+   取词镜全部就位，而不是还在那 1.4s 的 fromTo 里。
+   ⚠️ 不能借 props.reducedMotion 这条现成通路：reduced 的模板里
+   `v-if="!reducedMotion"` 会把整个「玻璃取词镜」拿掉——那是这一页的招牌构件，
+   导出图少了它就废了。所以单独走 exportMode 分支，只跳过动画、不动结构。 */
+const exportMode = inject('wrappedExportMode', ref(false))
 
 const entered = ref(false)
 const flipping = ref(false)
@@ -289,7 +375,8 @@ const entries = computed(() => {
   xs.sort((a, b) => (b.count - a.count) || a.word.localeCompare(b.word))
 
   const total = matchedCandidates.value
-  return xs.slice(0, 32).map((x, i) => {
+  // 正编容量与版式引擎共用一个常量：版口按 ENTRY_CAP 条排，词目再少也不重排
+  return xs.slice(0, ENTRY_CAP).map((x, i) => {
     const avg = x.count > 0 ? 365 / x.count : 0
     const avgDays = avg >= 10 ? String(Math.round(avg)) : avg.toFixed(1)
     const share = total > 0 ? (x.count / total) * 100 : 0
@@ -339,12 +426,12 @@ const current = computed(() => entries.value[currentIndex.value] || entries.valu
   word: '', count: 0, rank: 1, avgDays: '0', charCount: 0, kindLabel: '词', units: 1, gloss: ''
 })
 
-// 词头必须一行放下，且右边要给〔词类〕与字数标注留出位置，否则长句会把侧标顶进中缝
-const HEAD_SIDE_W = 118
-const HEAD_GAP = 24
+// 词头必须一行放下，且右边要给〔词类〕与字数标注留出位置，否则长句会把侧标顶进中缝。
+// 1:1 下侧标改叠到词下面（headSideW/headGap = 0），可用宽度反而比 16:9 更大。
 const headFontSize = computed(() => {
+  const L = layout.value
   const u = Math.max(1, current.value.units || 1)
-  const avail = 580 - HEAD_SIDE_W - HEAD_GAP
+  const avail = L.pw - L.headSideW - L.headGap
   return Math.round(clamp(avail / (u * 1.04), 32, 150))
 })
 
@@ -374,7 +461,10 @@ const citePool = computed(() => {
 })
 const citeTotal = computed(() => citePool.value.length)
 const shownCites = computed(() => {
-  const n = expanded.value ? citePool.value.length : Math.min(3, citePool.value.length)
+  // 竖幅里书证区高出一大截，就多引几条真话把版口填满（citeSlots 下限恒为 3 = 16:9 基线），
+  // 而不是把三条书证的字号拉大——补白只能用真数据补。
+  const slots = Math.max(3, layout.value.citeSlots || 3)
+  const n = expanded.value ? citePool.value.length : Math.min(slots, citePool.value.length)
   return citePool.value.slice(0, n).map((m) => ({ tokens: tokenize(m, current.value.word) }))
 })
 
@@ -402,12 +492,19 @@ const yearCn = computed(() => {
   return y ? Array.from(y).map((c) => map[c] ?? c).join('') : ''
 })
 
-// ── 右页索引：两栏 ──
+// ── 索引：栏数由版式引擎按「可用高度装得下几行」定（16:9/4:3/1:1/3:4/4:5 两栏、9:16 经折装三栏），
+//         ENTRY_CAP 条词目在任何画幅下都一次排完，不分页、不砍词条 ──
 const indexColumns = computed(() => {
   const xs = entries.value
-  const per = Math.ceil(xs.length / 2)
-  return [xs.slice(0, per), xs.slice(per)]
+  const n = Math.max(1, layout.value.cols)
+  const per = Math.max(1, Math.ceil(xs.length / n))
+  const out = []
+  for (let i = 0; i < n; i += 1) out.push(xs.slice(i * per, (i + 1) * per))
+  return out
 })
+
+// 凡例里指路的那半句：左右跨页说「左页」，经折装说「上页」
+const leafSideCn = computed(() => (layout.value.mode === 'stack' ? '上页' : '左页'))
 
 const runningHead = computed(() => {
   const xs = entries.value
@@ -417,16 +514,17 @@ const runningHead = computed(() => {
 
 // 每条词目在设计坐标里的中心（镜片折射与吸附都用它）
 const rowGeometry = computed(() => {
+  const L = layout.value
   const out = []
   indexColumns.value.forEach((col, ci) => {
-    const x = IDX_LEFT + ci * (COL_W + COL_GAP)
+    const x = L.idxLeft + ci * (L.colW + L.colGap)
     col.forEach((e, ri) => {
       out.push({
         word: e.word,
         count: e.count,
         col: ci,
         x,
-        cy: IDX_TOP + HEAD_H + ri * ROW_H + ROW_H / 2
+        cy: L.idxTop + L.headH + ri * L.rowH + L.rowH / 2
       })
     })
   })
@@ -434,27 +532,61 @@ const rowGeometry = computed(() => {
 })
 
 // ── 取词镜 ──
-const lensX = ref(IDX_LEFT + LENS_ANCHOR_X)
-const lensY = ref(IDX_TOP + HEAD_H + ROW_H / 2)
+// 镜片必须留在索引册页的版口里，且整圈都得在画布内（不然 .kd-spread 的
+// overflow:hidden 会把镜圈切掉半个）。16:9 下这两条护栏恒不生效，clamp 结果与改动前逐值相同。
+// ⚠️ 护栏要写在 lensX/lensY 之前：首帧的初值也必须过一遍 clamp。
+// 经折装的第一栏左边缘只离画布 46px，直接用「栏左 + 36」当初值会让镜圈探出画布 2px，
+// 而 placeLens 要等到 onMounted 才纠正。
+const clampLensX = (x) => {
+  const L = layout.value
+  const lo = Math.max(L.idxLeft + L.lensAnchorX - L.lensPadX, L.lensR + 8)
+  const hi = Math.min(
+    L.idxLeft + (L.cols - 1) * (L.colW + L.colGap) + L.lensAnchorX + L.lensPadX,
+    DW.value - L.lensR - 8
+  )
+  return clamp(x, Math.min(lo, hi), Math.max(lo, hi))
+}
+
+const clampLensY = (y) => {
+  const L = layout.value
+  const lo = Math.max(L.idxTop + L.lensPadY, L.lensR + 8)
+  const hi = Math.min(
+    L.idxTop + L.headH + L.lensRows * L.rowH + L.lensPadY,
+    DH.value - L.lensR - 8
+  )
+  return clamp(y, Math.min(lo, hi), Math.max(lo, hi))
+}
+
+const lensX = ref(clampLensX(layout.value.idxLeft + layout.value.lensAnchorX))
+const lensY = ref(clampLensY(layout.value.idxTop + layout.value.headH + layout.value.rowH / 2))
 const lensDragging = ref(false)
 
 const lensStyle = computed(() => ({
-  left: `${lensX.value - LENS_R}px`,
-  top: `${lensY.value - LENS_R}px`
+  left: `${lensX.value - layout.value.lensR}px`,
+  top: `${lensY.value - layout.value.lensR}px`
 }))
+
+// 不带动画地把镜片直接落到某个词目上（首帧 / 数据换了 / 换画幅）
+const placeLens = (word) => {
+  const g = rowGeometry.value.find((r) => r.word === word)
+  if (!g) return
+  lensX.value = clampLensX(g.x + layout.value.lensAnchorX)
+  lensY.value = clampLensY(g.cy)
+}
 
 // 镜下：只取镜圈压着的那一栏。凸透镜是把镜心的东西「推开」而不是压紧，
 // 所以逐行按放大后的真实行高从镜心向外累加排布——这样中心几行永远不会叠字。
 const lensRows = computed(() => {
+  const L = layout.value
   const cx = lensX.value
   const cy = lensY.value
 
   const near = []
   for (const g of rowGeometry.value) {
-    if (Math.abs((g.x + LENS_ANCHOR_X) - cx) > COL_W * 0.92) continue
+    if (Math.abs((g.x + L.lensAnchorX) - cx) > L.colW * 0.92) continue
     const dy = g.cy - cy
-    if (Math.abs(dy) > LENS_R * 1.6) continue
-    const t = clamp(dy / LENS_R, -1, 1)
+    if (Math.abs(dy) > L.lensR * 1.6) continue
+    const t = clamp(dy / L.lensR, -1, 1)
     const bulge = Math.pow(Math.max(0, 1 - t * t), 1.05)
     near.push({ g, dy, bulge, scale: 1 + 0.52 * bulge })
   }
@@ -469,22 +601,22 @@ const lensRows = computed(() => {
   const y = new Array(near.length)
   y[pivot] = near[pivot].dy * 0.35 // 锚行也略向镜心靠一点，避免镜子看起来「粘」在行上
   for (let i = pivot + 1; i < near.length; i += 1) {
-    y[i] = y[i - 1] + (ROW_H * near[i - 1].scale + ROW_H * near[i].scale) / 2 * 1.02
+    y[i] = y[i - 1] + (L.rowH * near[i - 1].scale + L.rowH * near[i].scale) / 2 * 1.02
   }
   for (let i = pivot - 1; i >= 0; i -= 1) {
-    y[i] = y[i + 1] - (ROW_H * near[i + 1].scale + ROW_H * near[i].scale) / 2 * 1.02
+    y[i] = y[i + 1] - (L.rowH * near[i + 1].scale + L.rowH * near[i].scale) / 2 * 1.02
   }
 
   const rows = []
   near.forEach((n, i) => {
-    if (Math.abs(y[i]) > LENS_R * 1.12) return
+    if (Math.abs(y[i]) > L.lensR * 1.12) return
     rows.push({
       word: n.g.word,
       count: n.g.count,
       style: {
-        left: `${n.g.x - (cx - LENS_R)}px`,
-        top: `${LENS_R + y[i] - ROW_H / 2}px`,
-        width: `${COL_W}px`,
+        left: `${n.g.x - (cx - L.lensR)}px`,
+        top: `${L.lensR + y[i] - L.rowH / 2}px`,
+        width: `${L.colW}px`,
         transform: `scale(${n.scale.toFixed(3)})`,
         transformOrigin: `${(cx - n.g.x).toFixed(1)}px 50%`,
         opacity: String(clamp(0.42 + n.bulge * 0.68, 0, 1))
@@ -495,10 +627,11 @@ const lensRows = computed(() => {
 })
 
 const nearestRow = (x, y) => {
+  const L = layout.value
   let best = null
   let bestD = Infinity
   for (const g of rowGeometry.value) {
-    const dx = (g.x + LENS_ANCHOR_X) - x
+    const dx = (g.x + L.lensAnchorX) - x
     const dy = g.cy - y
     // 纵向权重更大：镜片在一栏里上下扫是主要动作
     const d = (dx * dx) * 0.25 + dy * dy
@@ -533,9 +666,9 @@ const step = (dir) => goToIndex(currentIndex.value + dir)
 const snapLensTo = (word) => {
   const g = rowGeometry.value.find((r) => r.word === word)
   if (!g) return
-  const tx = g.x + LENS_ANCHOR_X
-  const ty = g.cy
-  if (props.reducedMotion) {
+  const tx = clampLensX(g.x + layout.value.lensAnchorX)
+  const ty = clampLensY(g.cy)
+  if (props.reducedMotion || exportMode.value) {
     lensX.value = tx
     lensY.value = ty
     return
@@ -553,13 +686,17 @@ const snapLensTo = (word) => {
 }
 
 const playFlip = () => {
-  if (props.reducedMotion || !leafEl.value) return
+  if (props.reducedMotion || exportMode.value || !leafEl.value) return
   if (flipTl) { try { flipTl.kill() } catch {} }
   flipping.value = true
   flipTl = gsap.timeline({ onComplete: () => { flipping.value = false } })
+  // 铰链在中缝上：左右跨页绕右边缘转，经折装绕册页下缘翻
+  const stacked = layout.value.mode === 'stack'
   flipTl.fromTo(leafEl.value,
-    { rotateY: -9, transformOrigin: '100% 50%' },
-    { rotateY: 0, duration: 0.52, ease: 'power3.out', clearProps: 'transform' })
+    stacked ? { rotateX: 9, transformOrigin: '50% 100%' } : { rotateY: -9, transformOrigin: '100% 50%' },
+    stacked
+      ? { rotateX: 0, duration: 0.52, ease: 'power3.out', clearProps: 'transform' }
+      : { rotateY: 0, duration: 0.52, ease: 'power3.out', clearProps: 'transform' })
   const q = leafEl.value.querySelectorAll('.kd-hw-word, .kd-metaline, .kd-def, .kd-cite, .kd-see')
   flipTl.fromTo(q,
     { opacity: 0, y: 10 },
@@ -568,7 +705,7 @@ const playFlip = () => {
 }
 
 const toggleExpanded = () => {
-  if (citeTotal.value <= 3) return
+  if (citeTotal.value <= shownCites.value.length && !expanded.value) return
   expanded.value = !expanded.value
   focusedCite.value = -1
 }
@@ -583,8 +720,8 @@ const designPoint = (e) => {
   if (!el) return { x: 0, y: 0 }
   const rect = el.getBoundingClientRect()
   const s = fitScale.value || 1
-  const offX = (rect.width - DW * s) / 2
-  const offY = (rect.height - DH * s) / 2
+  const offX = (rect.width - DW.value * s) / 2
+  const offY = (rect.height - DH.value * s) / 2
   return {
     x: (e.clientX - rect.left - offX) / s,
     y: (e.clientY - rect.top - offY) / s
@@ -610,9 +747,9 @@ const onLensMove = (e) => {
   const nx = p.x + lensDrag.dx
   const ny = p.y + lensDrag.dy
   if (Math.hypot(nx - lensX.value, ny - lensY.value) > 1) lensDrag.moved = true
-  // 限制在右页版口内，镜片不许跑到左页去
-  lensX.value = clamp(nx, IDX_LEFT + LENS_ANCHOR_X - 30, IDX_LEFT + COL_W + COL_GAP + LENS_ANCHOR_X + 30)
-  lensY.value = clamp(ny, IDX_TOP + 20, IDX_TOP + HEAD_H + 16 * ROW_H + 20)
+  // 限制在索引册页的版口内，镜片不许跑到词条页去
+  lensX.value = clampLensX(nx)
+  lensY.value = clampLensY(ny)
 }
 
 const onLensUp = () => {
@@ -631,8 +768,8 @@ const onLensUp = () => {
 // ── 整幅缩放 ──
 const fitScale = ref(1)
 const fitStyle = computed(() => ({
-  width: `${DW}px`,
-  height: `${DH}px`,
+  width: `${DW.value}px`,
+  height: `${DH.value}px`,
   transform: `scale(${fitScale.value})`
 }))
 
@@ -644,29 +781,47 @@ const measure = () => {
   const h = el.clientHeight
   if (!w || !h) return
   // 留一点版口余量，别让书顶到窗口两边被切掉
-  fitScale.value = Math.min(w / DW, h / DH) * 0.94
+  fitScale.value = Math.min(w / DW.value, h / DH.value) * 0.94
 }
 
 // ── 入场 ──
+// 在飞的入场补间：导出要跳终帧时逐条 progress(1)，让各自的 clearProps 照常收尾，
+// 不留半透明 / 半位移的内联残值（killTweensOf 会把元素按死在中途那一帧）。
+let entryTweens = []
+
 const playEntrance = () => {
   entered.value = true
-  if (props.reducedMotion || !leafEl.value) return
+  entryTweens = []
+  // 导出模式：跨页第一帧就是终态；元素的终值本来就是 CSS 自然值，不建补间即是落定
+  if (props.reducedMotion || exportMode.value || !leafEl.value) return
   const word = leafEl.value.querySelector('.kd-hw-word')
   if (word) {
-    gsap.fromTo(word,
+    entryTweens.push(gsap.fromTo(word,
       { opacity: 0, y: 22, letterSpacing: '0.02em' },
-      { opacity: 1, y: 0, letterSpacing: '-0.045em', duration: 0.86, ease: 'power3.out', delay: 0.22, clearProps: 'letterSpacing' })
+      { opacity: 1, y: 0, letterSpacing: '-0.045em', duration: 0.86, ease: 'power3.out', delay: 0.22, clearProps: 'letterSpacing' }))
   }
   const q = leafEl.value.querySelectorAll('.kd-metaline, .kd-def, .kd-cite, .kd-see')
-  gsap.fromTo(q,
+  entryTweens.push(gsap.fromTo(q,
     { opacity: 0, y: 12 },
-    { opacity: 1, y: 0, duration: 0.6, stagger: 0.07, ease: 'power2.out', delay: 0.4, clearProps: 'opacity,transform' })
+    { opacity: 1, y: 0, duration: 0.6, stagger: 0.07, ease: 'power2.out', delay: 0.4, clearProps: 'opacity,transform' }))
   if (lensEl.value) {
-    gsap.fromTo(lensEl.value,
+    entryTweens.push(gsap.fromTo(lensEl.value,
       { opacity: 0, scale: 0.82 },
-      { opacity: 1, scale: 1, duration: 0.7, ease: 'back.out(1.6)', delay: 0.72, clearProps: 'transform' })
+      { opacity: 1, scale: 1, duration: 0.7, ease: 'back.out(1.6)', delay: 0.72, clearProps: 'transform' }))
   }
 }
+
+/* 导出模式：把在飞的入场 / 翻页 / 镜片补间全部推到末尾。
+   还原不用管：合上词典由 Card06 负责，那会把本组件整个卸掉；
+   用户下次点开是一次全新挂载，onMounted 照旧从头演一遍入场。 */
+watch(exportMode, (on) => {
+  if (!import.meta.client || !on) return
+  entryTweens.forEach((t) => { try { t.progress(1) } catch {} })
+  entryTweens = []
+  if (flipTl) { try { flipTl.progress(1) } catch {} }
+  entered.value = true
+  placeLens(entries.value[currentIndex.value]?.word)
+})
 
 onMounted(() => {
   if (!import.meta.client) return
@@ -679,8 +834,7 @@ onMounted(() => {
     const w = String(props.topKeyword?.word || entries.value[0]?.word || '')
     const i = entries.value.findIndex((e) => e.word === w)
     currentIndex.value = i >= 0 ? i : 0
-    const g = rowGeometry.value.find((r) => r.word === entries.value[currentIndex.value]?.word)
-    if (g) { lensX.value = g.x + LENS_ANCHOR_X; lensY.value = g.cy }
+    placeLens(entries.value[currentIndex.value]?.word)
   }
   playEntrance()
 })
@@ -692,8 +846,15 @@ watch(() => entries.value.map((e) => e.word).join('|'), () => {
   currentIndex.value = i >= 0 ? i : 0
   expanded.value = false
   focusedCite.value = -1
-  const g = rowGeometry.value.find((r) => r.word === entries.value[currentIndex.value]?.word)
-  if (g) { lensX.value = g.x + LENS_ANCHOR_X; lensY.value = g.cy }
+  placeLens(entries.value[currentIndex.value]?.word)
+})
+
+// 换画幅 = 换画布 + 换栅格：镜片的旧坐标属于上一套版式，必须就地重新落位，
+// 顺手重测一次 fitScale（新画布的宽高比变了）。
+watch(layout, () => {
+  if (!import.meta.client) return
+  measure()
+  placeLens(entries.value[currentIndex.value]?.word)
 })
 
 onBeforeUnmount(() => {
@@ -893,6 +1054,16 @@ onBeforeUnmount(() => {
   background: linear-gradient(90deg, var(--p-rule), rgba(92, 78, 56, 0.10) 88%, rgba(92, 78, 56, 0));
 }
 
+/* 栏线的纵坐标原本写在模板的行内 style 上，行内样式没法被画幅重排覆盖，
+   所以改成类。取值与原行内样式逐像素相同：a 82 / b 360 / c 522 / d 780（左页），
+   ar 82 / er 780（右页）。 */
+.kd-rule--a,
+.kd-rule--ar { top: 82px; }
+.kd-rule--b { top: 360px; }
+.kd-rule--c { top: 522px; }
+.kd-rule--d,
+.kd-rule--er { top: 780px; }
+
 .kd-num { font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
 
 .kd-rhead {
@@ -984,6 +1155,8 @@ onBeforeUnmount(() => {
 .kd-seclabel {
   position: absolute;
   left: 0;
+  /* 同上：原来是模板里的行内 style="top: 500px" */
+  top: 500px;
   width: 580px;
   display: flex;
   align-items: baseline;
@@ -1353,5 +1526,253 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) {
   .kd-sweep, .kd-cites, .kd-lens-chroma, .kd-lens-spec { animation: none; }
   .kd-cite { transition: none; }
+}
+
+/* ============================================================================
+   画幅重排 · 非 16:9 四档
+   landscape 1386×1040 / square 1200×1200 / portrait 1040×1386 · 1074×1342 / tall 900×1600
+
+   ⚠️ landscape（4:3）必须在这张名单里：它的画布是 1386×1040，而上面那套原始声明是
+   按 1600×900 写死的（右页 left:888 + width:580 = 1468），照抄过去右页会被裁掉 82px，
+   连第二栏的例数都在画布外面。
+
+   面积恒定 ⇒ 同一套字号、行高、镜片直径在每个画幅里都装得下，换的只是版式：
+     landscape / square / portrait  左右跨页：版心与中缝按画布宽度重算
+                      （1386 宽仍是 580 版心；1200/1074/1040 宽收到 516/453/436）。
+                      版心窄于 560 时，词头的〔词类〕与字数从词的右边挪到词的下面，
+                      于是词头可用宽度反而与 16:9 的 438 持平甚至更大。
+     tall             左右跨页 → 上下叠页（经折装）：上册页立词条，中缝转成横向折痕带，
+                      下册页排索引；32 条词目由 2 栏 × 16 行转成 3 栏 × 11 行，一次排完。
+   版式（跨页 / 经折装）不由 tier 决定，而由画布算出来，所以这里凡是跟版式有关的
+   声明一律挂 .kd-spread--stack / .kd-spread--sideunder 这两个修饰类；
+   16:9 两个类都不挂，也不读任何 --kd-* 变量，逐像素零回归。
+   所有几何量由 lib/wrapped-dictionary-layout.js 算出、经 .kd-spread 上的 --kd-* 变量下发，
+   这里只负责「谁读哪个变量」——CSS 与取词镜的光学共用同一个真值源。
+   ========================================================================== */
+
+/* ---------- 两张册页的位置与开本 ---------- */
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-leaf {
+  left: var(--kd-leaf-x);
+  top: var(--kd-leaf-y);
+  bottom: auto;
+  height: var(--kd-leaf-h);
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-page-r {
+  left: var(--kd-pr-x);
+  top: var(--kd-pr-y);
+  bottom: auto;
+  height: var(--kd-pr-h);
+}
+
+/* 版心宽度：原版所有写死的 580px 一起改口径。
+   ⚠️ 这里必须把选择器一条条摊开写：Vue 的 scoped 改写在「末尾复合选择器是 :is()」时
+   会把 [data-v] 塞进最前面那个 :is()（即挂到 .wr-stage 上），规则会永远不命中。 */
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-leaf,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-page-r,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rhead,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rule,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-hw,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-metaline,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-def,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-seclabel,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-cites,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-see,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-folio--r,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-catch,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-booktitle,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-preface,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-fanli,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-idx,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-colophon {
+  width: var(--kd-pw);
+}
+
+/* ---------- 词条页（16:9 的左页 / 经折装的上册页） ---------- */
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rhead { top: var(--kd-t-rhead); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rule--a { top: var(--kd-t-rule-a); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rule--b { top: var(--kd-t-rule-b); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rule--c { top: var(--kd-t-rule-c); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rule--d { top: var(--kd-t-rule-d); }
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-hw {
+  top: var(--kd-t-hw);
+  height: var(--kd-h-hw);
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-metaline { top: var(--kd-t-meta); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-def { top: var(--kd-t-def); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-seclabel { top: var(--kd-t-seclabel); }
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-cites {
+  top: var(--kd-t-cites);
+  max-height: var(--kd-h-cites);
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-see { top: var(--kd-t-see); }
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-folio--l,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-catch {
+  top: var(--kd-t-folio);
+}
+
+/* ---------- 索引页（16:9 的右页 / 经折装的下册页） ---------- */
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rule--ar { top: var(--kd-t-rule-ar); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rule--er { top: var(--kd-t-rule-er); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-booktitle { top: var(--kd-t-btitle); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-preface { top: var(--kd-t-preface); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-fanli { top: var(--kd-t-fanli); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-colophon { top: var(--kd-t-colophon); }
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-folio--r { top: var(--kd-t-folio-r); }
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-idx {
+  top: var(--kd-t-idx);
+  gap: var(--kd-col-gap);
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-col {
+  width: var(--kd-col-w);
+}
+
+/* ---------- 放开 16:9 里为了保住栏宽而设的截断（行高/字号一律不动） ---------- */
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rh-b {
+  max-width: calc(var(--kd-pw) - 200px);
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rh-b,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-metaline,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-fanli,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-colophon,
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-see-b {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-w {
+  max-width: var(--kd-word-max);
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-cq {
+  max-width: var(--kd-cite-max);
+}
+
+/* ---------- 截断行数：一律读算出来的行数，只放开不收紧 ----------
+   页越高，释义 / 书证 / 小序能给的行数越多；16:9 不读这些变量，仍是 3 / 2 / 2 行。 */
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-def-body {
+  -webkit-line-clamp: var(--kd-def-lines);
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-cq {
+  -webkit-line-clamp: var(--kd-cite-lines);
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-preface {
+  -webkit-line-clamp: var(--kd-preface-lines);
+}
+
+/* ---------- 左右跨页：中缝仍是竖的，位置与宽度按画布重算 ---------- */
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-gutter {
+  left: var(--kd-gutter-x);
+  width: var(--kd-gutter-w);
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-gutter::after {
+  left: var(--kd-gutter-line);
+}
+
+/* ---------- 版心窄于 560：词头的〔词类〕与字数改叠在词下面 ----------
+   挂类而不是挂档位：1:1、3:4、4:5 都会走到这一支，将来画布再变也不用改选择器。
+   词头盒的高度（--kd-h-hw）已经把多出来的这一行算进去了。 */
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-spread--sideunder .kd-hw {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-spread--sideunder .kd-hw-side {
+  padding-bottom: 0;
+}
+
+/* ============================================================================
+   竖幅 / 方幅的正文字号（square · portrait · tall）
+
+   这一档画布短边只有 900~1200，成品是给手机看的：16:9 那套 10 / 10.5 / 11px 的
+   小字换算到竖幅成品里只剩四五个屏幕像素，读不出来。所以这里**只提字号**，
+   不动任何一个由 lib/wrapped-dictionary-layout.js 算出来的几何量：
+     · .kd-chead 盒高恒 24 + 34 = IDX_HEAD_H(58)，字长大不撑高；
+     · .kd-row 行高恒 28（line-height 28px），16px 的词目仍是一行一格；
+     · 凡例 / 小序的行高增量（各 ≤ 3px）落在版式引擎预留的 8~16px 行间距里。
+   16:9 与 4:3（landscape）不挂这一段，字号一个都不动。
+   ========================================================================== */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-chead-a,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-chead-b {
+  font-size: 12.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-rhead,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-seclabel-a,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-seclabel-b,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-see-a,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-catch,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-fanli {
+  font-size: 12.5px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-folio,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-colophon {
+  font-size: 13px;
+}
+
+/* 书证序号：圈随字长大，圈在 .kd-cite 里是 flex-start 对齐的小件，不影响行高 */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-cno {
+  width: 20px;
+  height: 20px;
+  margin-top: 6px;
+  font-size: 12.5px;
+}
+
+/* 索引正文：这一页 32 行词目就是版面的主体，字号定这一幅读不读得下去 */
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-row {
+  font-size: 16px;
+}
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-ct {
+  font-size: 16px;
+  min-width: 38px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-metaline,
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-see-b {
+  font-size: 15px;
+}
+
+:is([data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-preface {
+  font-size: 15px;
+}
+
+/* ---------- 经折装（上下叠页）：中缝转成横向折痕带 ---------- */
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-spread--stack .kd-gutter {
+  left: var(--kd-gutter-x);
+  top: var(--kd-gutter-y);
+  bottom: auto;
+  width: var(--kd-gutter-w);
+  height: var(--kd-gutter-h);
+  background: linear-gradient(180deg,
+    rgba(88, 74, 52, 0) 0%,
+    rgba(88, 74, 52, 0.035) 30%,
+    rgba(88, 74, 52, 0.10) 48%,
+    rgba(88, 74, 52, 0.115) 50%,
+    rgba(88, 74, 52, 0.035) 70%,
+    rgba(88, 74, 52, 0) 100%);
+}
+
+:is([data-frame-tier="landscape"], [data-frame-tier="square"], [data-frame-tier="portrait"], [data-frame-tier="tall"]) .kd-spread--stack .kd-gutter::after {
+  left: 0;
+  top: var(--kd-gutter-line);
+  bottom: auto;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(88, 74, 52, 0.05), rgba(88, 74, 52, 0.24) 22%, rgba(88, 74, 52, 0.24) 78%, rgba(88, 74, 52, 0.05));
 }
 </style>

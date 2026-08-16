@@ -7,6 +7,9 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
+import { useWrappedStage } from '~/composables/useWrappedStage'
+
+const stage = useWrappedStage()
 
 /**
  * 年度卡包（3D）。
@@ -58,6 +61,20 @@ const PACK_W = 1.0
 const PACK_H = 1.46
 const PACK_D = 0.085
 const STRIP_H = 0.2
+
+// 相机双轴贴合。只按单轴取距的话，9:16 舞台上卡包会被撑到近满宽。
+// 纵向跨度对应原来的 z=4.7（卡包高 ≈ 视口高的 58%），横向留出 1.9 个卡包宽；
+// 16:9 下横向这一支恒不约束（≈2.0 ≪ 4.7），构图逐像素不变。
+const FIT_V_SPAN = PACK_H * 1.725
+const FIT_H_SPAN = PACK_W * 1.9
+// 竖幅另一套跨度：横向留 1.9 个包宽这条在 9:16 上把卡包压到只剩 52% 宽 / 43% 高，
+// 一大半画幅是空的，包上印的字（发送数 / 收录数 / 13 CARDS）也跟着糊。
+// 横向收到 1.36 个包宽、纵向收到 1.60 个包高之后，9:16 上卡包 ≈ 73% 宽 / 60% 高，
+// 印字整体放大约 1.4 倍。只在 aspect < 0.9 时启用，横幅与 1:1 的取距仍由纵向那一支
+// 决定（16:9 逐像素不变）。
+const FIT_V_SPAN_TALL = PACK_H * 1.6
+const FIT_H_SPAN_TALL = PACK_W * 1.36
+const FOV = 30
 
 let rip = 0
 let opened = false
@@ -532,15 +549,16 @@ const build = async () => {
     alpha: true,
     powerPreference: 'high-performance'
   })
-  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1))
+  // 计入舞台缩放：画布 CSS 尺寸是舞台单位，上屏物理尺寸还要乘一次 stage.scale
+  renderer.setPixelRatio(stage.pixelRatio(3))
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.toneMappingExposure = 1.15
   renderer.setClearAlpha(0)
 
   scene = new THREE.Scene()
-  camera = new THREE.PerspectiveCamera(30, 1, 0.1, 50)
-  camera.position.set(0, 0, 4.4)
+  camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 50)
+  camera.position.set(0, 0, fitZ())
 
   // 环境反射：PMREM 预滤后，iridescence 才有东西可以折射出彩虹
   const envTex = buildEnvTexture()
@@ -678,12 +696,14 @@ const build = async () => {
   resize()
   ready = true
 
-  // 开场推镜：从远处压过来，比静止的正面图有戏得多
+  // 开场推镜：从远处压过来，比静止的正面图有戏得多。
+  // 起止点挂在双轴贴合距离上（16:9 下正是原来的 5.6 → 4.7）
+  const z1 = fitZ()
   if (!props.reducedMotion) {
-    gsap.fromTo(
+    introTween = gsap.fromTo(
       camera.position,
-      { z: 5.6 },
-      { z: 4.7, duration: 1.5, ease: 'power3.out' }
+      { z: z1 * 1.19 },
+      { z: z1, duration: 1.5, ease: 'power3.out', onComplete: () => { introTween = null } }
     )
     gsap.fromTo(
       packGroup.rotation,
@@ -691,7 +711,7 @@ const build = async () => {
       { y: -0.18, x: 0.04, duration: 1.6, ease: 'power3.out' }
     )
   } else {
-    camera.position.z = 4.7
+    camera.position.z = z1
     packGroup.rotation.set(0, -0.18, 0)
   }
 
@@ -839,6 +859,28 @@ const autoOpen = (delay = 0) => {
 defineExpose({ setRip, autoOpen, openBurst, getMouth, get rip() { return rip } })
 
 // ---------- 循环 / 尺寸 ----------
+// 换画幅时画布上屏物理尺寸变了，像素比要跟着重设，否则 3D 卡包发糊
+watch(() => stage.scale.value, () => {
+  if (!renderer) return
+  renderer.setPixelRatio(stage.pixelRatio(3))
+  resize()
+})
+
+// 当前画幅下的取距：纵向 / 横向各贴合一次，取远的那个
+const fitZ = () => {
+  const el = rootEl.value
+  const w = el?.clientWidth || 0
+  const h = el?.clientHeight || 0
+  const aspect = w > 0 && h > 0 ? w / h : 16 / 9
+  const halfTan = Math.tan((FOV * Math.PI) / 360)
+  const tall = aspect < 0.9
+  const vSpan = tall ? FIT_V_SPAN_TALL : FIT_V_SPAN
+  const hSpan = tall ? FIT_H_SPAN_TALL : FIT_H_SPAN
+  return Math.max(vSpan / (2 * halfTan), hSpan / (2 * halfTan * aspect))
+}
+
+let introTween = null
+
 const resize = () => {
   const el = rootEl.value
   if (!el || !renderer || !camera) return
@@ -848,6 +890,8 @@ const resize = () => {
   renderer.setSize(w, h, false)
   camera.aspect = w / h
   camera.updateProjectionMatrix()
+  // 换画幅要重新取距；开场推镜期间交给时间线，免得两边打架
+  if (ready && !introTween?.isActive?.()) camera.position.z = fitZ()
 }
 
 const loop = () => {
@@ -896,6 +940,8 @@ onBeforeUnmount(() => {
   destroyed = true
   if (raf) cancelAnimationFrame(raf)
   autoTween?.kill?.()
+  introTween?.kill?.()
+  introTween = null
   window.removeEventListener('pointermove', onPointerMove)
   ro?.disconnect?.()
   ro = null

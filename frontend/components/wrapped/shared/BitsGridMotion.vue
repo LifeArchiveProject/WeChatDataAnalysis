@@ -33,7 +33,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import gsap from 'gsap'
 
 const props = defineProps({
@@ -94,6 +94,22 @@ const resolveIndex = (rowIndex, columnIndex) => (
   (Number(rowIndex) - 1) * renderColumnCount.value + (Number(columnIndex) - 1)
 )
 
+// 循环周期 = 一屏列数 × 单元步进。列数由调用方按画幅给（竖幅列数更少），
+// 换画幅时必须跟着重算，否则跑马灯会卡在旧周期上：要么整排瞬移，要么右侧露白。
+const loopSpan = computed(() => (
+  safeColumnCount.value * (safeItemWidth.value + safeRowGap.value)
+))
+
+watch(loopSpan, (next) => {
+  loopDistance = next > 0 ? next : 0
+  if (loopDistance <= 0) {
+    marqueeX.value = 0
+    return
+  }
+  // 把当前位移折回新周期内，避免换画幅那一帧整排跳一下
+  marqueeX.value = -(Math.abs(marqueeX.value) % loopDistance)
+})
+
 const updateMotion = () => {
   if (typeof window === 'undefined') return
 
@@ -112,7 +128,7 @@ const updateMotion = () => {
 onMounted(() => {
   if (typeof window === 'undefined') return
 
-  loopDistance = safeColumnCount.value * (safeItemWidth.value + safeRowGap.value)
+  loopDistance = loopSpan.value
   marqueeX.value = 0
   lastTickAt = 0
 
