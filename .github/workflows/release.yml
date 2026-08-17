@@ -58,6 +58,7 @@ jobs:
         env:
           NATIVE_ARTIFACT_REPOSITORY: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_REPOSITORY }}
           NATIVE_ARTIFACT_RUN_ID: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_RUN_ID }}
+          NATIVE_ARTIFACT_SHA256: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_SHA256 }}
           NATIVE_SOURCE_REVISION: ${{ vars.WCE_NATIVE_CORE_SOURCE_REVISION }}
           NATIVE_BUILD_ID: ${{ vars.WCE_NATIVE_CORE_BUILD_ID }}
           NATIVE_CLIENT_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 }}
@@ -74,6 +75,12 @@ jobs:
           [long]$runId = 0
           if (-not [long]::TryParse($rawRunId, [ref]$runId) -or $runId -le 0) {
             throw "WCE_NATIVE_CORE_ARTIFACT_RUN_ID must be an explicit positive workflow run ID."
+          }
+
+          $artifactSha256 = ([string]$env:NATIVE_ARTIFACT_SHA256).Trim().ToLowerInvariant()
+          if ($artifactSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $artifactSha256 -match '^0{64}$') {
+            throw "WCE_NATIVE_CORE_ARTIFACT_SHA256 must be a non-zero lowercase SHA-256 digest."
           }
 
           $sourceRevision = ([string]$env:NATIVE_SOURCE_REVISION).Trim()
@@ -105,6 +112,7 @@ jobs:
 
           "repository=$repository" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "run-id=$runId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "artifact-sha256=$artifactSha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "source-revision=$sourceRevision" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "build-id=$buildId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "client-signer-sha256=$clientSigner" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -180,14 +188,41 @@ jobs:
             frontend/package-lock.json
             desktop/package-lock.json
 
-      - name: Download pinned native production artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: wechatdb-native-windows-x64-production
-          path: ${{ runner.temp }}/wechatdb-native-windows-x64-production
-          repository: ${{ steps.native-artifact-source.outputs.repository }}
-          run-id: ${{ steps.native-artifact-source.outputs.run-id }}
-          github-token: ${{ secrets.WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN || github.token }}
+      - name: Download pinned native production release asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN }}
+          NATIVE_REPOSITORY: ${{ steps.native-artifact-source.outputs.repository }}
+          NATIVE_BUILD_ID: ${{ steps.native-artifact-source.outputs.build-id }}
+          NATIVE_ARTIFACT_SHA256: ${{ steps.native-artifact-source.outputs.artifact-sha256 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN is required to download the private native Release."
+          }
+          $releaseTag = "windows-native-$env:NATIVE_BUILD_ID"
+          $assetName = "wechatdb-native-windows-x64-production-$env:NATIVE_BUILD_ID.zip"
+          $archivePath = Join-Path $env:RUNNER_TEMP $assetName
+          $artifactPath = Join-Path $env:RUNNER_TEMP 'wechatdb-native-windows-x64-production'
+          if ((Test-Path -LiteralPath $archivePath) -or
+              (Test-Path -LiteralPath $artifactPath)) {
+            throw "Native Release destination already exists on the clean runner."
+          }
+
+          gh release download $releaseTag `
+            --repo $env:NATIVE_REPOSITORY `
+            --pattern $assetName `
+            --dir $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0 -or
+              -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+            throw "Failed to download the exact native production Release asset."
+          }
+
+          $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -cne $env:NATIVE_ARTIFACT_SHA256) {
+            throw "Native production Release asset SHA-256 does not match the pinned digest."
+          }
+          New-Item -ItemType Directory -Path $artifactPath | Out-Null
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $artifactPath
 
       - name: Import protected cloud signing identity
         id: cloud-signing

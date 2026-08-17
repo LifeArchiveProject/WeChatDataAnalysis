@@ -153,6 +153,15 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
   assert.doesNotMatch(windowsJob, /WECHAT_TOOL_NATIVE_CORE_(?:LIBRARY|BROKER)/);
   assert.match(windowsJob, /WCE_NATIVE_CORE_SOURCE_REVISION/);
   assert.match(windowsJob, /WCE_NATIVE_CORE_BUILD_ID/);
+  assert.match(windowsJob, /WCE_NATIVE_CORE_ARTIFACT_SHA256/);
+  assert.match(windowsJob, /WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN/);
+  assert.match(windowsJob, /gh release download \$releaseTag/);
+  assert.match(
+    windowsJob,
+    /wechatdb-native-windows-x64-production-\$env:NATIVE_BUILD_ID\.zip/
+  );
+  assert.match(windowsJob, /Get-FileHash -LiteralPath \$archivePath -Algorithm SHA256/);
+  assert.match(windowsJob, /Expand-Archive -LiteralPath \$archivePath/);
   assert.match(windowsJob, /WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH/);
   assert.match(windowsJob, /WCE_WINDOWS_PRIVATE_ROOT_SHA256/);
   assert.match(windowsJob, /WCE_RFC3161_TIMESTAMP_URL/);
@@ -211,6 +220,9 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
   assert.match(windowsJob, /WORKFLOW_RUN_ID:\s*\$\{\{ github\.run_id \}\}/);
   assert.match(windowsJob, /WORKFLOW_RUN_ATTEMPT:\s*\$\{\{ github\.run_attempt \}\}/);
 
+  const downloadIndex = windowsJob.indexOf("gh release download $releaseTag");
+  const archiveHashIndex = windowsJob.indexOf("Get-FileHash -LiteralPath $archivePath");
+  const expandIndex = windowsJob.indexOf("Expand-Archive -LiteralPath $archivePath");
   const importIndex = windowsJob.indexOf("Import-WindowsCloudSigningIdentity.ps1");
   const validateIndex = windowsJob.indexOf("Validate native production artifact");
   const pythonDependenciesIndex = windowsJob.indexOf("Install Python dependencies");
@@ -218,7 +230,9 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
   const buildIndex = windowsJob.indexOf("Build Windows installer");
   const uploadIndex = windowsJob.indexOf("Upload Windows release files");
   const cleanupIndex = windowsJob.indexOf("Remove-WindowsCloudSigningIdentity.ps1");
-  assert.ok(importIndex >= 0 && importIndex < validateIndex);
+  assert.ok(downloadIndex >= 0 && downloadIndex < archiveHashIndex);
+  assert.ok(archiveHashIndex < expandIndex && expandIndex < importIndex);
+  assert.ok(importIndex < validateIndex);
   assert.ok(
     validateIndex < pythonDependenciesIndex && pythonDependenciesIndex < pythonTestsIndex
   );
