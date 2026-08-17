@@ -737,13 +737,231 @@
             <button
               @click="skipToChat"
               :disabled="emojiDownloading"
+              class="inline-flex items-center px-4 py-2.5 text-[#7F7F7F] rounded-lg font-medium hover:bg-[#F0F5F1] hover:text-[#07C160] transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              跳过语音转文字
+            </button>
+            <button
+              @click="goToVoiceTranscriptionStep"
+              :disabled="emojiDownloading"
               class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-lg font-medium shadow-sm shadow-[#07C160]/20 hover:bg-[#06AD56] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              查看聊天记录
+              下一步：语音转文字
               <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
               </svg>
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 步骤5: 可选的语音转文字 -->
+      <div v-if="currentStep === 4" class="bg-white rounded-2xl border border-[#EDEDED]">
+        <div class="p-8">
+          <div class="flex items-center mb-6">
+            <div class="w-12 h-12 bg-[#576B95] rounded-lg flex items-center justify-center mr-4">
+              <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2a3 3 0 00-3 3v7a3 3 0 006 0V5a3 3 0 00-3-3zM5 10v2a7 7 0 0014 0v-2M12 19v3m-4 0h8"/>
+              </svg>
+            </div>
+            <div>
+              <h2 class="text-xl font-bold text-[#000000e6]">语音转文字（可选）</h2>
+              <p class="text-sm text-[#7F7F7F]">提前处理全部语音，进入聊天后会直接显示在语音下方</p>
+            </div>
+          </div>
+
+          <div class="rounded-xl border border-[#E5E9E7] bg-[#F8FAF9] p-4">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <div class="text-sm font-semibold text-[#26332B]">本地处理，不上传语音</div>
+                <p class="mt-1 text-xs leading-5 text-[#6F7E74]">
+                  已由微信转写的语音会直接复用数据库文字；其余语音才会交给本地 Whisper。您也可以跳过，之后在聊天页右侧面板继续。
+                </p>
+              </div>
+              <button
+                type="button"
+                class="shrink-0 text-xs text-[#576B95] hover:text-[#07C160] disabled:opacity-50"
+                :disabled="voiceOnboardingLoading"
+                @click="refreshVoiceOnboarding"
+              >刷新状态</button>
+            </div>
+          </div>
+
+          <div v-if="voiceOnboardingLoading && !voiceOnboardingStatus" class="py-10 text-center text-sm text-[#7F7F7F]">
+            正在检查本地模型…
+          </div>
+
+          <template v-else>
+            <div class="mt-5">
+              <div class="mb-2 flex items-center justify-between">
+                <h3 class="text-sm font-semibold text-[var(--app-text-primary)]">选择模型</h3>
+                <span class="text-xs text-[var(--app-text-muted)]">当前设备：{{ voiceOnboardingDeviceText }}</span>
+              </div>
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <article
+                  v-for="model in voiceOnboardingModels"
+                  :key="model.id"
+                  :aria-current="model.selected ? 'true' : undefined"
+                  class="flex min-h-[108px] min-w-0 flex-col rounded-[9px] border p-3 transition"
+                  :class="model.selected ? 'border-[var(--app-accent)] bg-[var(--app-surface-soft)]' : 'border-[var(--app-border)] bg-[var(--app-surface-bg)] hover:border-[var(--app-accent)]'"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <span class="min-w-0 truncate text-[13px] font-semibold text-[var(--app-text-primary)]">{{ model.name }}</span>
+                      <span v-if="model.selected" class="shrink-0 rounded-full bg-[var(--app-surface-muted)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--app-accent)]">已选择</span>
+                    </div>
+                    <span class="shrink-0 text-[10px] font-medium" :class="voiceOnboardingModelStateClass(model)">
+                      {{ voiceOnboardingModelStateText(model) }}
+                    </span>
+                  </div>
+                  <div class="mt-1 text-[11px] text-[var(--app-text-muted)]">{{ model.size }} · {{ model.speed }}</div>
+
+                  <div
+                    v-if="isVoiceModelDownloading(model)"
+                    data-testid="voice-onboarding-model-progress"
+                    class="mt-2"
+                  >
+                    <div class="flex items-center justify-between gap-2 text-[10px] leading-relaxed">
+                      <span class="text-[var(--app-text-secondary)]">{{ voiceModelDownloadStageText(model) }}</span>
+                      <span class="tabular-nums text-[var(--app-accent)]">{{ voiceModelDownloadProgressText(model) }}</span>
+                    </div>
+                    <div
+                      class="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--app-surface-muted)]"
+                      role="progressbar"
+                      :aria-label="`${model.name} 模型下载进度`"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      :aria-valuenow="voiceModelDownloadPercent(model)"
+                      :aria-valuetext="voiceModelDownloadProgressText(model)"
+                    >
+                      <div
+                        class="h-full rounded-full bg-[var(--app-accent)] transition-[width] duration-200 ease-out"
+                        :style="{ width: `${voiceModelDownloadPercent(model)}%` }"
+                      />
+                    </div>
+                  </div>
+                  <div v-if="model.downloadError" class="mt-1 text-[10px] leading-relaxed text-[var(--danger-color)]">{{ model.downloadError }}</div>
+                  <div v-else-if="model.downloaded && !model.deletable" class="mt-1 text-[10px] leading-relaxed text-[var(--app-text-secondary)]">共享缓存可直接使用，但不会由本应用删除。</div>
+
+                  <div class="mt-auto flex flex-wrap items-center justify-end gap-1.5 pt-2">
+                    <button
+                      v-if="model.downloaded && !model.selected"
+                      type="button"
+                      class="rounded-[5px] border border-[var(--app-border)] bg-[var(--app-surface-bg)] px-2 py-1 text-[10px] font-medium text-[var(--app-accent)] transition hover:bg-[var(--app-neutral-btn-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="voiceOnboardingModelDisabled(model)"
+                      :title="voiceOnboardingModelTitle(model)"
+                      @click="prepareVoiceOnboardingModel(model)"
+                    >{{ isVoiceModelActionBusy(model.id, 'select') ? '选择中…' : '选择' }}</button>
+                    <button
+                      v-if="!model.downloaded && !isVoiceModelDeleting(model)"
+                      type="button"
+                      class="whitespace-nowrap rounded-[5px] bg-[var(--app-accent)] px-2 py-1 text-[10px] font-medium text-white transition hover:bg-[var(--app-accent-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                      :disabled="voiceOnboardingModelDisabled(model)"
+                      :title="voiceOnboardingModelTitle(model)"
+                      @click="prepareVoiceOnboardingModel(model)"
+                    >{{ voiceModelDownloadButtonText(model) }}</button>
+                    <button
+                      v-if="canDeleteVoiceOnboardingModel(model)"
+                      type="button"
+                      class="rounded-[5px] border border-[var(--app-border)] px-2 py-1 text-[10px] text-[var(--danger-color)] transition hover:bg-[var(--app-neutral-btn-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                      :disabled="isVoiceModelDeleting(model)"
+                      :title="isVoiceModelDownloading(model) || isVoiceModelActionBusy(model.id, 'download') ? `停止下载并删除 ${model.name}` : `删除本机上的 ${model.name}`"
+                      @click="removeVoiceOnboardingModel(model)"
+                    >{{ isVoiceModelDeleting(model) ? '删除中…' : (isVoiceModelDownloading(model) || isVoiceModelActionBusy(model.id, 'download') ? '停止并删除' : '删除') }}</button>
+                  </div>
+                </article>
+              </div>
+              <p v-if="voiceOnboardingModelLocked" class="mt-3 text-xs text-[var(--app-text-secondary)]">
+                模型由 WECHAT_TOOL_WHISPER_MODEL 环境变量固定，只能准备当前指定模型。
+              </p>
+              <p v-if="voiceOnboardingError" class="mt-3 text-xs text-[var(--danger-color)]">{{ voiceOnboardingError }}</p>
+              <p v-else-if="voiceModelDownloading" class="mt-3 text-xs text-[var(--app-accent)]">正在下载并准备模型，请保持网络连接…</p>
+              <p v-else-if="voiceOnboardingStatus && !voiceOnboardingStatus.available" class="mt-3 text-xs text-[var(--app-text-secondary)]">
+                {{ voiceOnboardingStatus.reason || '当前模型尚未准备好，请先点击上方模型下载。' }}
+              </p>
+              <p v-if="voiceOnboardingMessage" class="mt-2 text-xs text-[var(--app-accent)]">{{ voiceOnboardingMessage }}</p>
+            </div>
+
+            <div class="mt-4 text-xs">
+              <div class="flex items-start justify-end gap-2">
+                <label for="voice-onboarding-concurrency" class="font-medium text-[var(--app-text-secondary)]">并发线程数</label>
+                <div class="text-right">
+                  <div class="flex items-center justify-end gap-1.5">
+                    <input
+                      id="voice-onboarding-concurrency"
+                      data-testid="voice-onboarding-concurrency"
+                      type="number"
+                      min="0"
+                      step="1"
+                      inputmode="numeric"
+                      :value="voiceBatchConcurrencyDraft"
+                      class="h-7 w-14 rounded-md border border-[var(--app-border)] bg-[var(--app-surface-bg)] px-1.5 text-center text-xs tabular-nums text-[var(--app-text-primary)] outline-none focus:border-[var(--app-accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                      :class="voiceBatchConcurrencyError ? 'border-[var(--danger-color)]' : ''"
+                      :disabled="voiceBatchRunning || voiceOnboardingLoading || voiceModelBusy"
+                      :aria-invalid="voiceBatchConcurrencyError ? 'true' : 'false'"
+                      :aria-describedby="voiceBatchConcurrencyError ? 'voice-onboarding-concurrency-hint voice-onboarding-concurrency-error' : 'voice-onboarding-concurrency-hint'"
+                      title="0 自动，输入正整数"
+                      @input="onVoiceBatchConcurrencyInput"
+                      @blur="commitVoiceBatchConcurrency"
+                      @keydown.enter.prevent="commitVoiceBatchConcurrency"
+                    >
+                    <span id="voice-onboarding-concurrency-hint" class="text-[var(--app-text-secondary)]">0 自动，输入正整数</span>
+                  </div>
+                  <p v-if="voiceBatchConcurrencyError" id="voice-onboarding-concurrency-error" class="mt-1 text-[10px] text-[var(--danger-color)]" role="alert">
+                    {{ voiceBatchConcurrencyError }}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="voiceOnboardingBatch && voiceOnboardingBatch.status !== 'idle'" class="mt-5 rounded-xl border border-[#D8E9DF] bg-white p-4">
+              <div class="flex items-center justify-between gap-4 text-sm">
+                <span class="font-medium text-[#26332B]">{{ voiceBatchStatusText }}</span>
+                <div class="flex items-center gap-2">
+                  <span v-if="voiceBatchActualConcurrency" class="rounded-full bg-[var(--app-surface-muted)] px-2 py-0.5 text-[10px] font-medium text-[var(--app-accent)]">并发 {{ voiceBatchActualConcurrency }}</span>
+                  <span class="font-mono text-[#576B95]">{{ Number(voiceOnboardingBatch.percent || 0) }}%</span>
+                </div>
+              </div>
+              <div class="mt-2 h-2 overflow-hidden rounded-full bg-[#E5EFE9]">
+                <div class="h-full rounded-full bg-[#07C160] transition-[width] duration-300" :style="{ width: `${Number(voiceOnboardingBatch.percent || 0)}%` }" />
+              </div>
+              <div class="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
+                <div><div class="text-base font-semibold text-[#26332B]">{{ voiceOnboardingBatch.completed || 0 }}/{{ voiceOnboardingBatch.total || 0 }}</div><div class="text-[10px] text-[#7F7F7F]">已处理</div></div>
+                <div><div class="text-base font-semibold text-[#078A45]">{{ voiceOnboardingBatch.success || 0 }}</div><div class="text-[10px] text-[#7F7F7F]">成功</div></div>
+                <div><div class="text-base font-semibold text-[#576B95]">{{ voiceOnboardingBatch.native || 0 }}</div><div class="text-[10px] text-[#7F7F7F]">微信原生</div></div>
+                <div><div class="text-base font-semibold text-[#C83C3C]">{{ voiceOnboardingBatch.failed || 0 }}</div><div class="text-[10px] text-[#7F7F7F]">失败</div></div>
+              </div>
+              <p v-if="voiceOnboardingBatch.warning" class="mt-3 text-xs text-[#A06A19]">{{ voiceOnboardingBatch.warning }}</p>
+              <p v-if="voiceOnboardingBatch.error" class="mt-3 text-xs text-[#C83C3C]">{{ voiceOnboardingBatch.error }}</p>
+            </div>
+          </template>
+
+          <div class="mt-6 flex flex-wrap items-center gap-3 border-t border-[#EDEDED] pt-5">
+            <button type="button" data-testid="decrypt-step-back" @click="goBackFromCurrentStep" class="inline-flex items-center px-4 py-2.5 text-[#5B6B60] rounded-lg font-medium hover:bg-[#F0F5F1] hover:text-[#07C160] transition-colors duration-200">
+              <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+              上一步
+            </button>
+            <div class="flex-1"></div>
+            <button type="button" @click="skipToChat" class="inline-flex items-center px-4 py-2.5 text-[#7F7F7F] rounded-lg font-medium hover:bg-[#F0F5F1] hover:text-[#07C160]">跳过，查看聊天记录</button>
+            <button
+              v-if="voiceBatchRunning"
+              type="button"
+              @click="cancelVoiceOnboardingBatch"
+              class="inline-flex items-center px-5 py-2.5 border border-[#E8C6C6] text-[#C83C3C] rounded-lg font-medium hover:bg-[#FFF5F5]"
+            >停止转换</button>
+            <button
+              v-else-if="voiceOnboardingBatch?.status === 'done'"
+              type="button"
+              @click="skipToChat"
+              class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56]"
+            >完成并查看聊天记录</button>
+            <button
+              v-else
+              type="button"
+              :disabled="!voiceOnboardingStatus?.available || voiceModelBusy || voiceOnboardingLoading"
+              @click="startVoiceOnboardingBatch"
+              class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56] disabled:cursor-not-allowed disabled:opacity-50"
+            >提前转换全部语音</button>
           </div>
         </div>
       </div>
@@ -822,7 +1040,25 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '~/composables/useApi'
 import { normalizeWechatInstallPath, readStoredWechatInstallPath } from '~/lib/wechat-install-path'
 
-const { decryptDatabase, saveMediaKeys, getSavedKeys, getKeys, getImageKey, getImageKeyMemory, getWxStatus, getPlatformCapabilities } = useApi()
+const {
+  decryptDatabase,
+  saveMediaKeys,
+  getSavedKeys,
+  getKeys,
+  getImageKey,
+  getImageKeyMemory,
+  getWxStatus,
+  getPlatformCapabilities,
+  getVoiceTranscriptionStatus,
+  setVoiceTranscriptionModel,
+  downloadVoiceTranscriptionModel,
+  getVoiceTranscriptionModelDownload,
+  deleteVoiceTranscriptionModel,
+  startVoiceTranscriptionBatch,
+  getLatestVoiceTranscriptionBatch,
+  getVoiceTranscriptionBatch,
+  cancelVoiceTranscriptionBatch,
+} = useApi()
 
 const loading = ref(false)
 const error = ref('')
@@ -896,8 +1132,309 @@ const steps = [
   { title: '数据库解密' },
   { title: '填写图片密钥' },
   { title: '图片解密' },
-  { title: '表情下载' }
+  { title: '表情下载' },
+  { title: '语音转文字' }
 ]
+
+const voiceOnboardingStatus = ref(null)
+const voiceOnboardingBatch = ref(null)
+const voiceBatchConcurrency = ref(0)
+const voiceBatchConcurrencyDraft = ref('0')
+const voiceBatchConcurrencyError = ref('')
+const voiceBatchConcurrencyBadInput = ref(false)
+const voiceOnboardingLoading = ref(false)
+const voiceOnboardingError = ref('')
+const voiceOnboardingMessage = ref('')
+const voiceModelAction = ref({ id: '', type: '' })
+const voiceModelDeletePendingIds = ref([])
+const voiceModelDownloadGenerations = new Map()
+const voiceModelDownloadStartPromises = new Map()
+const voiceModelObservationEpochs = new Map()
+let voiceOnboardingRefreshRevision = 0
+let voiceOnboardingLifecycleEpoch = 0
+let voiceOnboardingDisposed = false
+let voiceModelPollTimer = null
+let voiceBatchPollTimer = null
+const voiceOnboardingModels = computed(() => Array.isArray(voiceOnboardingStatus.value?.models)
+  ? voiceOnboardingStatus.value.models
+  : [])
+const normalizeVoiceModelDownloadPercent = (value) => {
+  const percent = Number(value)
+  return Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : 0
+}
+const normalizeVoiceModelDownloadBytes = (value) => {
+  const bytes = Number(value)
+  return Number.isFinite(bytes) ? Math.max(0, bytes) : 0
+}
+const formatVoiceModelBytes = (value) => {
+  const bytes = normalizeVoiceModelDownloadBytes(value)
+  if (bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = bytes
+  let unitIndex = 0
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+  const digits = size >= 100 || unitIndex === 0 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(digits)} ${units[unitIndex]}`
+}
+const isVoiceModelDownloading = (model) => ['queued', 'running'].includes(String(model?.downloadStatus || '').toLowerCase())
+const isVoiceModelDeletePending = (modelId) => voiceModelDeletePendingIds.value.includes(String(modelId || '').trim())
+const isVoiceModelServerDeleting = (model) => String(model?.downloadStage || '').trim().toLowerCase() === 'cancelling'
+const isVoiceModelDeleting = (model) => isVoiceModelDeletePending(model?.id) || isVoiceModelServerDeleting(model)
+const setVoiceModelDeletePending = (modelId, pending) => {
+  const id = String(modelId || '').trim()
+  if (!id) return
+  const ids = new Set(voiceModelDeletePendingIds.value)
+  if (pending) ids.add(id)
+  else ids.delete(id)
+  voiceModelDeletePendingIds.value = [...ids]
+}
+const voiceModelDownloadGeneration = (modelId) => voiceModelDownloadGenerations.get(String(modelId || '').trim()) || 0
+const invalidateVoiceModelDownload = (modelId) => {
+  const id = String(modelId || '').trim()
+  const generation = voiceModelDownloadGeneration(id) + 1
+  voiceModelDownloadGenerations.set(id, generation)
+  return generation
+}
+const voiceModelObservationEpoch = (modelId) => voiceModelObservationEpochs.get(String(modelId || '').trim()) || 0
+const invalidateVoiceModelObservation = (modelId) => {
+  const id = String(modelId || '').trim()
+  const epoch = voiceModelObservationEpoch(id) + 1
+  voiceModelObservationEpochs.set(id, epoch)
+  return epoch
+}
+const beginVoiceModelRefreshObservations = () => new Map(voiceOnboardingModels.value
+  .map((model) => String(model?.id || '').trim())
+  .filter(Boolean)
+  .map((id) => [id, invalidateVoiceModelObservation(id)]))
+const isVoiceOnboardingLifecycleActive = (epoch) => (
+  !voiceOnboardingDisposed && epoch === voiceOnboardingLifecycleEpoch
+)
+const isVoiceModelActionBusy = (modelId, type = '') => {
+  const action = voiceModelAction.value
+  if (!type) return action.id === String(modelId || '')
+  return action.id === String(modelId || '') && action.type === type
+}
+const voiceModelDownloading = computed(() => (
+  voiceModelAction.value.type === 'download'
+  || voiceOnboardingModels.value.some(isVoiceModelDownloading)
+))
+const voiceModelBusy = computed(() => (
+  !!voiceModelAction.value.id
+  || voiceModelDeletePendingIds.value.length > 0
+  || voiceOnboardingModels.value.some((model) => isVoiceModelDownloading(model) || isVoiceModelDeleting(model))
+))
+const voiceOnboardingDeviceText = computed(() => {
+  const device = String(voiceOnboardingStatus.value?.requestedDevice || voiceOnboardingStatus.value?.device || 'cpu')
+  return device === 'cuda' ? 'NVIDIA GPU' : 'CPU'
+})
+const voiceBatchRunning = computed(() => ['queued', 'running'].includes(String(voiceOnboardingBatch.value?.status || '')))
+const normalizeVoiceBatchConcurrency = (value) => {
+  const concurrency = Number(value)
+  return Number.isInteger(concurrency) && concurrency >= 0 ? concurrency : 0
+}
+const parseVoiceBatchConcurrencyDraft = (value) => {
+  const draft = String(value ?? '').trim()
+  if (!draft) return { valid: true, value: 0 }
+  const concurrency = Number(draft)
+  return Number.isInteger(concurrency) && concurrency >= 0
+    ? { valid: true, value: concurrency }
+    : { valid: false, value: null }
+}
+const syncVoiceBatchConcurrencyDraft = (value) => {
+  const concurrency = normalizeVoiceBatchConcurrency(value)
+  voiceBatchConcurrency.value = concurrency
+  voiceBatchConcurrencyDraft.value = String(concurrency)
+  voiceBatchConcurrencyError.value = ''
+  voiceBatchConcurrencyBadInput.value = false
+}
+const onVoiceBatchConcurrencyInput = (event) => {
+  voiceBatchConcurrencyDraft.value = String(event?.target?.value ?? '')
+  voiceBatchConcurrencyBadInput.value = event?.target?.validity?.badInput === true
+  if (!voiceBatchConcurrencyBadInput.value && parseVoiceBatchConcurrencyDraft(voiceBatchConcurrencyDraft.value).valid) {
+    voiceBatchConcurrencyError.value = ''
+  }
+}
+const commitVoiceBatchConcurrency = (event) => {
+  if (voiceBatchRunning.value || voiceOnboardingLoading.value || voiceModelBusy.value) return false
+  const parsed = parseVoiceBatchConcurrencyDraft(voiceBatchConcurrencyDraft.value)
+  if (voiceBatchConcurrencyBadInput.value || event?.target?.validity?.badInput === true || !parsed.valid) {
+    voiceBatchConcurrencyError.value = '不支持：请输入 0 或正整数'
+    return false
+  }
+  voiceBatchConcurrency.value = parsed.value
+  voiceBatchConcurrencyDraft.value = String(parsed.value)
+  if (event?.target) event.target.value = String(parsed.value)
+  voiceBatchConcurrencyError.value = ''
+  voiceBatchConcurrencyBadInput.value = false
+  return true
+}
+const voiceBatchActualConcurrency = computed(() => normalizeVoiceBatchConcurrency(voiceOnboardingBatch.value?.concurrency))
+const applyVoiceOnboardingBatch = (job) => {
+  voiceOnboardingBatch.value = job && typeof job === 'object' ? job : { status: 'idle', percent: 0 }
+  if (job && Object.prototype.hasOwnProperty.call(job, 'requestedConcurrency')) {
+    syncVoiceBatchConcurrencyDraft(job.requestedConcurrency)
+  }
+}
+const voiceOnboardingModelLocked = computed(() => String(voiceOnboardingStatus.value?.modelSettingSource || '') === 'env')
+const voiceOnboardingModelDisabled = (model) => (
+  !model?.id
+  || voiceModelBusy.value
+  || voiceOnboardingLoading.value
+  || voiceBatchRunning.value
+  || ['queued', 'running'].includes(String(model?.downloadStatus || ''))
+  || (!model?.downloaded && model?.downloadable === false)
+  || (voiceOnboardingModelLocked.value && !model?.selected)
+  || (model?.selected && model?.downloaded)
+)
+const voiceOnboardingModelTitle = (model) => {
+  if (voiceBatchRunning.value) return '批量转写运行时不能切换或下载模型'
+  if (voiceOnboardingModelLocked.value && !model?.selected) return '模型由启动环境变量固定'
+  if (!model?.downloaded && model?.downloadable === false) return model?.reason || '当前模型不可下载'
+  if (model?.selected && model?.downloaded) return '当前模型已准备好'
+  return model?.downloaded ? `选择 ${model?.name || model?.id}` : `下载 ${model?.name || model?.id}`
+}
+const voiceModelDownloadPercent = (model) => normalizeVoiceModelDownloadPercent(model?.downloadPercent)
+const voiceModelDownloadStageText = (model) => {
+  if (String(model?.downloadStatus || '').toLowerCase() === 'queued') return '等待下载'
+  const stage = String(model?.downloadStage || '').trim().toLowerCase()
+  if (stage === 'cancelling') return '正在停止'
+  if (/prepar|metadata|resolv/.test(stage)) return '准备下载'
+  if (/final|install|validat|verify/.test(stage)) return '正在校验模型'
+  return '正在下载'
+}
+const voiceModelDownloadProgressText = (model) => {
+  const percent = voiceModelDownloadPercent(model)
+  const downloadedBytes = normalizeVoiceModelDownloadBytes(model?.downloadedBytes)
+  const totalBytes = normalizeVoiceModelDownloadBytes(model?.totalBytes)
+  if (totalBytes > 0) return `${percent}% · ${formatVoiceModelBytes(downloadedBytes)} / ${formatVoiceModelBytes(totalBytes)}`
+  if (downloadedBytes > 0) return `${formatVoiceModelBytes(downloadedBytes)} 已下载`
+  return voiceModelDownloadStageText(model)
+}
+const voiceModelDownloadButtonText = (model) => {
+  if (isVoiceModelDownloading(model)) {
+    const stage = voiceModelDownloadStageText(model)
+    return normalizeVoiceModelDownloadBytes(model?.totalBytes) > 0
+      ? `${stage} ${voiceModelDownloadPercent(model)}%`
+      : stage
+  }
+  if (isVoiceModelActionBusy(model?.id, 'download')) return '准备下载…'
+  return '下载'
+}
+const voiceOnboardingModelStateText = (model) => {
+  const status = String(model?.downloadStatus || '').toLowerCase()
+  if (isVoiceModelDeleting(model)) return '正在删除'
+  if (isVoiceModelActionBusy(model?.id, 'download')) return '准备下载'
+  if (status === 'queued') return '等待下载'
+  if (String(model?.downloadStage || '').toLowerCase() === 'cancelling') return '正在停止'
+  if (status === 'running') return `下载 ${voiceModelDownloadPercent(model)}%`
+  if (model?.downloaded) return model?.source === 'external-cache' ? '共享缓存' : '已下载'
+  if (status === 'error') return '下载失败'
+  return model?.downloadable ? '需下载' : '不可用'
+}
+const voiceOnboardingModelStateClass = (model) => {
+  const status = String(model?.downloadStatus || '').toLowerCase()
+  if (isVoiceModelDownloading(model) || model?.downloaded) return 'text-[var(--app-accent)]'
+  if (status === 'error') return 'text-[var(--danger-color)]'
+  return 'text-[var(--app-text-muted)]'
+}
+const canDeleteVoiceOnboardingModel = (model) => !!model?.id && (
+  model.deletable
+  || isVoiceModelDownloading(model)
+  || isVoiceModelActionBusy(model.id, 'download')
+  || isVoiceModelDeleting(model)
+)
+const applyVoiceOnboardingStatus = (status, { observationEpochs = null } = {}) => {
+  if (voiceOnboardingDisposed || !status || typeof status !== 'object') return
+  const selectedModel = String(status.model || '').trim()
+  const currentModels = new Map(voiceOnboardingModels.value.map((model) => [model.id, model]))
+  const models = (Array.isArray(status.models) ? status.models : []).map((item) => {
+    const id = String(item?.id || '').trim()
+    const expectedObservationEpoch = observationEpochs?.get(id)
+    if (
+      expectedObservationEpoch !== undefined
+      && expectedObservationEpoch !== voiceModelObservationEpoch(id)
+      && currentModels.has(id)
+    ) return currentModels.get(id)
+    const deleting = isVoiceModelDeletePending(id)
+    const serverDeleting = String(item?.downloadStage || '').trim().toLowerCase() === 'cancelling'
+    const downloaded = !deleting && item?.downloaded === true
+    let downloadStatus = String(item?.downloadStatus || 'idle').trim().toLowerCase()
+    if (deleting && !serverDeleting) downloadStatus = 'idle'
+    if ((!downloaded && downloadStatus === 'done') || (downloaded && downloadStatus === 'error')) downloadStatus = 'idle'
+    const active = ['queued', 'running'].includes(downloadStatus)
+    return {
+      ...item,
+      id,
+      name: String(item?.name || id).trim() || id,
+      selected: item?.selected === true || id === selectedModel,
+      downloaded,
+      downloadable: item?.downloadable !== false,
+      deletable: item?.deletable !== false,
+      downloadStatus,
+      downloadError: downloadStatus === 'error' ? String(item?.downloadError || '').trim() : '',
+      downloadJobId: active ? String(item?.downloadJobId || '').trim() : '',
+      downloadPercent: normalizeVoiceModelDownloadPercent(item?.downloadPercent),
+      downloadedBytes: normalizeVoiceModelDownloadBytes(item?.downloadedBytes),
+      totalBytes: normalizeVoiceModelDownloadBytes(item?.totalBytes),
+      downloadStage: String(item?.downloadStage || '').trim(),
+    }
+  }).filter((item) => item.id)
+  voiceOnboardingStatus.value = { ...status, models }
+  scheduleVoiceModelPoll()
+}
+const updateVoiceOnboardingModelDownload = (modelId, job) => {
+  const id = String(modelId || '').trim()
+  if (!voiceOnboardingStatus.value || isVoiceModelDeletePending(id)) return
+  const status = String(job?.status || 'idle').trim().toLowerCase()
+  const active = ['queued', 'running'].includes(status)
+  voiceOnboardingStatus.value = {
+    ...voiceOnboardingStatus.value,
+    models: voiceOnboardingModels.value.map((model) => model.id === id
+      ? {
+          ...model,
+          downloadStatus: status,
+          downloadError: String(job?.error || '').trim(),
+          downloadJobId: active ? String(job?.jobId || model.downloadJobId || '').trim() : '',
+          downloadPercent: normalizeVoiceModelDownloadPercent(job?.percent),
+          downloadedBytes: normalizeVoiceModelDownloadBytes(job?.downloadedBytes),
+          totalBytes: normalizeVoiceModelDownloadBytes(job?.totalBytes),
+          downloadStage: String(job?.stage || '').trim(),
+        }
+      : model),
+  }
+}
+const clearVoiceOnboardingModelDownloadState = (modelId) => {
+  const id = String(modelId || '').trim()
+  if (!voiceOnboardingStatus.value) return
+  voiceOnboardingStatus.value = {
+    ...voiceOnboardingStatus.value,
+    models: voiceOnboardingModels.value.map((model) => model.id === id
+      ? {
+          ...model,
+          downloaded: false,
+          downloadStatus: 'idle',
+          downloadError: '',
+          downloadJobId: '',
+          downloadPercent: 0,
+          downloadedBytes: 0,
+          totalBytes: 0,
+          downloadStage: '',
+        }
+      : model),
+  }
+}
+const voiceBatchStatusText = computed(() => {
+  const status = String(voiceOnboardingBatch.value?.status || '')
+  if (status === 'queued') return '等待开始'
+  if (status === 'running') return '正在转换全部语音'
+  if (status === 'done') return '语音转换完成'
+  if (status === 'cancelled') return '已停止转换'
+  if (status === 'error') return '转换任务失败'
+  return '语音转换'
+})
 
 // 表单数据
 const formData = reactive({
@@ -1786,6 +2323,17 @@ const closeEmojiDownloadEventSource = () => {
 }
 
 onBeforeUnmount(() => {
+  voiceOnboardingDisposed = true
+  voiceOnboardingLifecycleEpoch += 1
+  voiceOnboardingRefreshRevision += 1
+  const activeVoiceModelIds = new Set([
+    ...voiceOnboardingModels.value.map((model) => String(model?.id || '').trim()),
+    ...voiceModelDownloadStartPromises.keys(),
+  ])
+  activeVoiceModelIds.forEach((modelId) => {
+    invalidateVoiceModelDownload(modelId)
+    invalidateVoiceModelObservation(modelId)
+  })
   settleGuideDialog(false)
   cancelDbKeyAcquisition()
   ensureKeysRevision += 1
@@ -1793,6 +2341,8 @@ onBeforeUnmount(() => {
   closeDbDecryptEventSource()
   closeMediaDecryptEventSource()
   closeEmojiDownloadEventSource()
+  clearVoiceModelPoll()
+  clearVoiceBatchPoll()
 })
 
 const resetDbDecryptProgress = () => {
@@ -2253,6 +2803,273 @@ const cancelEmojiDownload = () => {
   closeEmojiDownloadEventSource()
 }
 
+const clearVoiceModelPoll = () => {
+  if (voiceModelPollTimer) clearTimeout(voiceModelPollTimer)
+  voiceModelPollTimer = null
+}
+
+function scheduleVoiceModelPoll() {
+  if (voiceOnboardingDisposed || voiceModelPollTimer || currentStep.value !== 4) return
+  const model = voiceOnboardingModels.value.find((item) => (
+    isVoiceModelDownloading(item)
+    && item.downloadJobId
+    && !isVoiceModelDeletePending(item.id)
+  ))
+  if (!model) return
+  const generation = voiceModelDownloadGeneration(model.id)
+  const lifecycleEpoch = voiceOnboardingLifecycleEpoch
+  voiceModelPollTimer = setTimeout(() => {
+    voiceModelPollTimer = null
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    void pollVoiceModelDownload(model, generation, lifecycleEpoch)
+  }, 1000)
+}
+
+const clearVoiceBatchPoll = () => {
+  if (voiceBatchPollTimer) clearTimeout(voiceBatchPollTimer)
+  voiceBatchPollTimer = null
+}
+
+const pollVoiceOnboardingBatch = async (jobId, lifecycleEpoch = voiceOnboardingLifecycleEpoch) => {
+  clearVoiceBatchPoll()
+  if (!jobId || !isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+  try {
+    const job = await getVoiceTranscriptionBatch(jobId)
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    applyVoiceOnboardingBatch(job)
+    if (['queued', 'running'].includes(String(job?.status || ''))) {
+      voiceBatchPollTimer = setTimeout(() => pollVoiceOnboardingBatch(jobId, lifecycleEpoch), 1000)
+    }
+  } catch (e) {
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    voiceOnboardingError.value = String(e?.message || '读取语音转换进度失败')
+  }
+}
+
+const refreshVoiceOnboarding = async ({ preserveError = false } = {}) => {
+  const lifecycleEpoch = voiceOnboardingLifecycleEpoch
+  if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+  const refreshRevision = ++voiceOnboardingRefreshRevision
+  clearVoiceModelPoll()
+  const observationEpochs = beginVoiceModelRefreshObservations()
+  voiceOnboardingLoading.value = true
+  if (!preserveError) voiceOnboardingError.value = ''
+  try {
+    const [status, batch] = await Promise.all([
+      getVoiceTranscriptionStatus(),
+      getLatestVoiceTranscriptionBatch(mediaAccount.value || ''),
+    ])
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch) || refreshRevision !== voiceOnboardingRefreshRevision) return
+    applyVoiceOnboardingStatus(status, { observationEpochs })
+    applyVoiceOnboardingBatch(batch)
+    if (['queued', 'running'].includes(String(batch?.status || '')) && batch?.jobId) {
+      void pollVoiceOnboardingBatch(batch.jobId, lifecycleEpoch)
+    }
+  } catch (e) {
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch) || refreshRevision !== voiceOnboardingRefreshRevision) return
+    voiceOnboardingError.value = String(e?.message || '读取语音转文字状态失败')
+  } finally {
+    if (isVoiceOnboardingLifecycleActive(lifecycleEpoch) && refreshRevision === voiceOnboardingRefreshRevision) {
+      voiceOnboardingLoading.value = false
+    }
+  }
+}
+
+const pollVoiceModelDownload = async (
+  model,
+  generation = voiceModelDownloadGeneration(model?.id),
+  lifecycleEpoch = voiceOnboardingLifecycleEpoch,
+) => {
+  if (!model?.id || !model.downloadJobId || !isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+  if (generation !== voiceModelDownloadGeneration(model.id) || isVoiceModelDeletePending(model.id)) return
+  const observationEpoch = invalidateVoiceModelObservation(model.id)
+  try {
+    const job = await getVoiceTranscriptionModelDownload(model.downloadJobId)
+    if (
+      !isVoiceOnboardingLifecycleActive(lifecycleEpoch)
+      || generation !== voiceModelDownloadGeneration(model.id)
+      || observationEpoch !== voiceModelObservationEpoch(model.id)
+      || isVoiceModelDeletePending(model.id)
+    ) return
+    updateVoiceOnboardingModelDownload(model.id, job)
+    if (['queued', 'running'].includes(String(job?.status || ''))) {
+      voiceOnboardingError.value = ''
+      scheduleVoiceModelPoll()
+      return
+    }
+    const downloadError = job?.status === 'error'
+      ? String(job?.error || '模型下载失败')
+      : ''
+    if (downloadError) voiceOnboardingError.value = downloadError
+    await refreshVoiceOnboarding({ preserveError: !!downloadError })
+  } catch (e) {
+    if (
+      !isVoiceOnboardingLifecycleActive(lifecycleEpoch)
+      || generation !== voiceModelDownloadGeneration(model.id)
+      || observationEpoch !== voiceModelObservationEpoch(model.id)
+      || isVoiceModelDeletePending(model.id)
+    ) return
+    voiceOnboardingError.value = String(e?.message || '模型下载状态读取失败')
+    await refreshVoiceOnboarding({ preserveError: true })
+    scheduleVoiceModelPoll()
+  }
+}
+
+const prepareVoiceOnboardingModel = async (model) => {
+  const lifecycleEpoch = voiceOnboardingLifecycleEpoch
+  if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch) || voiceOnboardingModelDisabled(model)) return
+  const generation = voiceModelDownloadGeneration(model.id)
+  const actionType = model.downloaded ? 'select' : 'download'
+  voiceModelAction.value = { id: model.id, type: actionType }
+  voiceOnboardingError.value = ''
+  voiceOnboardingMessage.value = ''
+  let startRequest = null
+  try {
+    if (!model.selected) {
+      const response = await setVoiceTranscriptionModel(model.id)
+      if (
+        !isVoiceOnboardingLifecycleActive(lifecycleEpoch)
+        || generation !== voiceModelDownloadGeneration(model.id)
+        || isVoiceModelDeletePending(model.id)
+      ) return
+      voiceOnboardingRefreshRevision += 1
+      voiceOnboardingLoading.value = false
+      invalidateVoiceModelObservation(model.id)
+      applyVoiceOnboardingStatus(response?.configuration || response)
+    }
+    if (model.downloaded) {
+      await refreshVoiceOnboarding()
+      return
+    }
+    startRequest = downloadVoiceTranscriptionModel(model.id)
+    voiceModelDownloadStartPromises.set(model.id, startRequest)
+    const job = await startRequest
+    if (
+      !isVoiceOnboardingLifecycleActive(lifecycleEpoch)
+      || generation !== voiceModelDownloadGeneration(model.id)
+      || isVoiceModelDeletePending(model.id)
+    ) return
+    voiceOnboardingRefreshRevision += 1
+    voiceOnboardingLoading.value = false
+    invalidateVoiceModelObservation(model.id)
+    updateVoiceOnboardingModelDownload(model.id, job)
+    voiceOnboardingMessage.value = `${model.name} 已加入下载队列。`
+    scheduleVoiceModelPoll()
+  } catch (e) {
+    if (
+      !isVoiceOnboardingLifecycleActive(lifecycleEpoch)
+      || generation !== voiceModelDownloadGeneration(model.id)
+      || isVoiceModelDeletePending(model.id)
+    ) return
+    voiceOnboardingError.value = String(e?.message || '模型准备失败')
+  } finally {
+    if (startRequest && voiceModelDownloadStartPromises.get(model.id) === startRequest) {
+      voiceModelDownloadStartPromises.delete(model.id)
+    }
+    if (isVoiceOnboardingLifecycleActive(lifecycleEpoch) && isVoiceModelActionBusy(model.id, actionType)) {
+      voiceModelAction.value = { id: '', type: '' }
+    }
+  }
+}
+
+const removeVoiceOnboardingModel = async (model) => {
+  const lifecycleEpoch = voiceOnboardingLifecycleEpoch
+  if (
+    !isVoiceOnboardingLifecycleActive(lifecycleEpoch)
+    || !canDeleteVoiceOnboardingModel(model)
+    || isVoiceModelDeleting(model)
+  ) return
+  const stoppingDownload = isVoiceModelDownloading(model) || isVoiceModelActionBusy(model.id, 'download')
+  const message = stoppingDownload
+    ? `确定停止 ${model.name} 模型的下载并删除已下载的临时文件吗？`
+    : `确定删除本机上的 ${model.name} 模型吗？需要时可重新下载。`
+  if (!window.confirm(message)) return
+
+  voiceOnboardingRefreshRevision += 1
+  invalidateVoiceModelDownload(model.id)
+  invalidateVoiceModelObservation(model.id)
+  setVoiceModelDeletePending(model.id, true)
+  voiceModelAction.value = { id: model.id, type: 'delete' }
+  voiceOnboardingError.value = ''
+  voiceOnboardingMessage.value = ''
+  clearVoiceModelPoll()
+  clearVoiceOnboardingModelDownloadState(model.id)
+  try {
+    const pendingStart = voiceModelDownloadStartPromises.get(model.id)
+    if (pendingStart) {
+      try {
+        await pendingStart
+      } catch {}
+    }
+    const result = await deleteVoiceTranscriptionModel(model.id)
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    await refreshVoiceOnboarding()
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    const freedBytes = normalizeVoiceModelDownloadBytes(result?.freedBytes)
+    voiceOnboardingMessage.value = freedBytes > 0
+      ? `已删除 ${model.name}，释放 ${formatVoiceModelBytes(freedBytes)}。`
+      : `${model.name} 的本地缓存已清理。`
+  } catch (e) {
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    setVoiceModelDeletePending(model.id, false)
+    await refreshVoiceOnboarding({ preserveError: true })
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    voiceOnboardingError.value = String(e?.message || `删除 ${model.name} 失败`)
+  } finally {
+    if (isVoiceOnboardingLifecycleActive(lifecycleEpoch)) {
+      setVoiceModelDeletePending(model.id, false)
+      if (isVoiceModelActionBusy(model.id, 'delete')) voiceModelAction.value = { id: '', type: '' }
+      scheduleVoiceModelPoll()
+    }
+  }
+}
+
+const startVoiceOnboardingBatch = async () => {
+  const lifecycleEpoch = voiceOnboardingLifecycleEpoch
+  if (
+    !isVoiceOnboardingLifecycleActive(lifecycleEpoch)
+    || !voiceOnboardingStatus.value?.available
+    || voiceBatchRunning.value
+    || !commitVoiceBatchConcurrency()
+  ) return
+  voiceOnboardingError.value = ''
+  try {
+    const job = await startVoiceTranscriptionBatch({
+      account: mediaAccount.value || null,
+      force: false,
+      concurrency: voiceBatchConcurrency.value,
+    })
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    applyVoiceOnboardingBatch(job)
+    void pollVoiceOnboardingBatch(job?.jobId, lifecycleEpoch)
+  } catch (e) {
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    voiceOnboardingError.value = String(e?.message || '启动批量语音转换失败')
+  }
+}
+
+const cancelVoiceOnboardingBatch = async () => {
+  const lifecycleEpoch = voiceOnboardingLifecycleEpoch
+  const jobId = String(voiceOnboardingBatch.value?.jobId || '')
+  if (!jobId || !isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+  try {
+    await cancelVoiceTranscriptionBatch(jobId)
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    await pollVoiceOnboardingBatch(jobId, lifecycleEpoch)
+  } catch (e) {
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    voiceOnboardingError.value = String(e?.message || '停止语音转换失败')
+  }
+}
+
+const goToVoiceTranscriptionStep = async () => {
+  if (emojiDownloading.value) return
+  error.value = ''
+  warning.value = ''
+  currentStep.value = 4
+  await refreshVoiceOnboarding()
+}
+
 const cancelDatabaseDecrypt = () => {
   if (!loading.value) return
 
@@ -2279,6 +3096,8 @@ const confirmBackFromRunningStep = () => {
       ? { title: '图片仍在解密', description: '返回填写图片密钥会停止当前图片解密，已经完成的图片会保留。' }
       : currentStep.value === 3 && emojiDownloading.value
         ? { title: '表情仍在下载', description: '返回图片解密会停止当前下载，已经完成的表情会保留。' }
+        : currentStep.value === 4 && voiceBatchRunning.value
+          ? { title: '语音仍在转换', description: '返回表情下载会停止当前批量转换，已经完成的文字会保留。' }
         : null
 
   if (!runningStep) return Promise.resolve(true)
@@ -2313,6 +3132,8 @@ const goBackFromCurrentStep = async () => {
   }
   if (fromStep === 2) cancelMediaDecrypt()
   if (fromStep === 3) cancelEmojiDownload()
+  if (fromStep === 4 && voiceBatchRunning.value) await cancelVoiceOnboardingBatch()
+  if (fromStep === 4) clearVoiceModelPoll()
   error.value = ''
   warning.value = ''
   currentStep.value = Math.max(0, fromStep - 1)

@@ -13,6 +13,7 @@ const {
 } = require("../scripts/build-backend.cjs");
 const {
   WINDOWS_NATIVE_ASR_ABI_VERSION,
+  WINDOWS_NATIVE_ASR_AUTHORIZATION,
   WINDOWS_NATIVE_ASR_EXPORTS,
   WINDOWS_NATIVE_ASR_FEATURE_BIT,
   WINDOWS_NATIVE_ASR_TARGET,
@@ -45,6 +46,7 @@ const PRODUCTION_MANIFEST = Object.freeze({
   securityCheckpointCount: 7,
   securityCheckpointSetSha256: "bb".repeat(32),
   nativeAsrAbiVersion: WINDOWS_NATIVE_ASR_ABI_VERSION,
+  nativeAsrAuthorization: WINDOWS_NATIVE_ASR_AUTHORIZATION,
   nativeAsrFeatureBit: WINDOWS_NATIVE_ASR_FEATURE_BIT,
   nativeAsrTarget: WINDOWS_NATIVE_ASR_TARGET,
 });
@@ -67,9 +69,10 @@ const DEVELOPMENT_MANIFEST = Object.freeze({
   securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
   securityCheckpointCount: 7,
   securityCheckpointSetSha256: "bb".repeat(32),
-  nativeAsrAbiVersion: WINDOWS_NATIVE_ASR_ABI_VERSION,
-  nativeAsrFeatureBit: WINDOWS_NATIVE_ASR_FEATURE_BIT,
-  nativeAsrTarget: WINDOWS_NATIVE_ASR_TARGET,
+  nativeAsrAbiVersion: 0,
+  nativeAsrAuthorization: "none",
+  nativeAsrFeatureBit: 0,
+  nativeAsrTarget: { wechatVersion: "", weixinSha256: "" },
 });
 
 const MACOS_DEVELOPMENT_MANIFEST = Object.freeze({
@@ -253,6 +256,7 @@ test("Windows staging rejects a manifest without the fused ASR contract", () => 
   const artifactDir = path.join(root, "artifacts");
   const legacyManifest = { ...PRODUCTION_MANIFEST };
   delete legacyManifest.nativeAsrAbiVersion;
+  delete legacyManifest.nativeAsrAuthorization;
   delete legacyManifest.nativeAsrFeatureBit;
   delete legacyManifest.nativeAsrTarget;
   writeArtifactSet(artifactDir, "win32", legacyManifest);
@@ -264,7 +268,29 @@ test("Windows staging rejects a manifest without the fused ASR contract", () => 
           env: { WCE_NATIVE_CORE_ARTIFACT_DIR: artifactDir },
           platform: "win32",
         }),
-      /nativeAsrAbiVersion must equal 1.*nativeAsrFeatureBit must equal 16.*nativeAsrTarget must be an object/
+      /nativeAsrAbiVersion must equal 1.*nativeAsrFeatureBit must equal 16.*nativeAsrAuthorization must equal database-read.*nativeAsrTarget must be an object/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows staging rejects a fused ASR runtime with a separate entitlement contract", () => {
+  const root = makeTempDir();
+  const artifactDir = path.join(root, "artifacts");
+  writeArtifactSet(artifactDir, "win32", {
+    ...PRODUCTION_MANIFEST,
+    nativeAsrAuthorization: "native-asr",
+  });
+
+  try {
+    assert.throws(
+      () =>
+        resolveNativeCoreArtifacts({
+          env: { WCE_NATIVE_CORE_ARTIFACT_DIR: artifactDir },
+          platform: "win32",
+        }),
+      /nativeAsrAuthorization must equal database-read/
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -496,7 +522,9 @@ test("development artifacts require an explicit local override", () => {
   const artifactDir = path.join(root, "artifacts");
   const destination = path.join(root, "stage");
   fs.mkdirSync(destination, { recursive: true });
-  writeArtifactSet(artifactDir, "win32", DEVELOPMENT_MANIFEST);
+  writeArtifactSet(artifactDir, "win32", DEVELOPMENT_MANIFEST, {
+    clientExports: ["wce_client_abi_version"],
+  });
 
   try {
     assert.throws(
@@ -539,6 +567,7 @@ test("development artifacts require an explicit local override", () => {
     });
     assert.equal(result.staged, true);
     assert.equal(result.allowDevelopment, true);
+    assert.equal(result.manifest.nativeAsrAuthorization, "none");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

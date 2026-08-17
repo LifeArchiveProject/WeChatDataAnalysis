@@ -523,6 +523,82 @@ class TestChatExportTargets(unittest.TestCase):
             self.assertGreater(len(message_query_limits), 2)
             self.assertLessEqual(max(message_query_limits), 1000)
 
+    def test_realtime_message_stream_yields_before_loading_every_page_and_checks_cancel(self):
+        from wechat_decrypt_tool import chat_realtime_reader as reader
+
+        class Cancelled(Exception):
+            pass
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account_dir = root / "wxid_account"
+            db_storage = root / "db_storage"
+            message_dir = db_storage / "message"
+            account_dir.mkdir(parents=True)
+            message_dir.mkdir(parents=True)
+            db_path = message_dir / "message_0.db"
+            db_path.write_bytes(b"fixture")
+
+            username = "wxid_stream_friend"
+            table_name = f"Msg_{hashlib.md5(username.encode('utf-8')).hexdigest()}"
+            data_queries = 0
+
+            def row(local_id: int):
+                return {
+                    "local_id": local_id,
+                    "server_id": local_id * 10,
+                    "local_type": 1,
+                    "sort_seq": local_id,
+                    "real_sender_id": 2,
+                    "create_time": 1_700_000_000 + local_id,
+                    "message_content": f"message {local_id}",
+                    "compress_content": None,
+                    "packed_info_data": None,
+                    "sender_username": username,
+                }
+
+            def fake_exec_query(_handle, *, kind, path, sql):
+                nonlocal data_queries
+                self.assertEqual(kind, "message")
+                self.assertEqual(Path(path), db_path)
+                if "sqlite_master" in sql:
+                    return [{"name": table_name}]
+                if sql.startswith("SELECT rowid AS rowid FROM Name2Id"):
+                    return [{"rowid": 1}]
+                data_queries += 1
+                return [row(1), row(2)] if data_queries == 1 else [row(3)]
+
+            cancelled = False
+
+            def checkpoint():
+                if cancelled:
+                    raise Cancelled()
+
+            stream = reader.iter_realtime_message_rows(
+                rt_conn=_DummyRealtimeConn(),
+                account_dir=account_dir,
+                username=username,
+                db_storage_dir=db_storage,
+                exec_query=fake_exec_query,
+                open_cursor=lambda *_args, **_kwargs: self.fail("cursor fallback should not run"),
+                fetch_batch=lambda *_args, **_kwargs: self.fail("cursor fallback should not run"),
+                close_cursor=lambda *_args, **_kwargs: None,
+                get_messages=lambda *_args, **_kwargs: self.fail("native fallback should not run"),
+                normalize_item=lambda item: dict(item),
+                page_size=2,
+                checkpoint=checkpoint,
+            )
+
+            self.assertEqual(next(stream)["local_id"], 1)
+            self.assertEqual(data_queries, 1, "first row must not wait for the second page")
+            self.assertEqual(next(stream)["local_id"], 2)
+            self.assertEqual(data_queries, 1)
+
+            cancelled = True
+            with self.assertRaises(Cancelled):
+                next(stream)
+            self.assertEqual(data_queries, 1, "cancel must be observed before the next blocking query")
+
 
 if __name__ == "__main__":
     unittest.main()

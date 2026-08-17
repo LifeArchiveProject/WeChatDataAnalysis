@@ -16,14 +16,12 @@ from .native_core_client import (
     NativeCoreAsrRequestState,
     NativeCoreClient,
     NativeCoreError,
-    NativeCoreFeature,
     NativeCorePolicyError,
     NativeCoreProtocolError,
     NativeCoreStatus,
     NativeCoreUnavailableError,
     get_native_core_client,
 )
-from .native_core_lease import refresh_native_core_lease
 from .native_voice_transcription import (
     NativeVoiceTriggerCommand,
     NativeVoiceTriggerError,
@@ -36,7 +34,6 @@ from .native_voice_transcription import (
 
 _POLL_INTERVAL_SECONDS = 1.0
 _POLL_TIMEOUT_SECONDS = 100.0
-_LEASE_MINIMUM_VALIDITY_SECONDS = 180
 _EXPECTED_WECHAT_VERSION = "4.1.12.26"
 _CLOSE_RETRY_DELAYS_SECONDS = (0.05, 0.15)
 
@@ -149,7 +146,7 @@ def _reason_error(reason: NativeCoreAsrReason) -> NativeVoiceTriggerError:
     return NativeVoiceTriggerError(code, message)
 
 
-_NATIVE_ASR_AUTHORIZATION_STATUSES = {
+_NATIVE_ASR_POLICY_STATUSES = {
     NativeCoreStatus.LICENSE_REQUIRED,
     NativeCoreStatus.LEASE_INVALID,
     NativeCoreStatus.LEASE_EXPIRED,
@@ -183,10 +180,10 @@ def _native_core_status_error(
             "native_trigger_timeout",
             "等待微信原生语音转文字结果超时。",
         )
-    if known in _NATIVE_ASR_AUTHORIZATION_STATUSES:
+    if known in _NATIVE_ASR_POLICY_STATUSES:
         return NativeVoiceTriggerError(
-            "native_asr_not_authorized",
-            "当前授权未包含微信原生语音转文字功能，或授权已过期。",
+            "native_transport_unavailable",
+            "当前受保护 DLL 或构建中的微信原生语音转文字功能不可用。",
         )
     if known in _NATIVE_ASR_INTEGRITY_STATUSES:
         return NativeVoiceTriggerError(
@@ -222,8 +219,8 @@ def _native_core_error(exc: BaseException) -> NativeVoiceTriggerError:
             return mapped
     if isinstance(exc, NativeCorePolicyError):
         return NativeVoiceTriggerError(
-            "native_asr_not_authorized",
-            "当前授权未包含微信原生语音转文字功能，或授权已过期。",
+            "native_transport_unavailable",
+            "当前受保护 DLL 或构建中的微信原生语音转文字功能不可用。",
         )
     if isinstance(exc, (NativeCoreUnavailableError, NativeCoreProtocolError)):
         return NativeVoiceTriggerError(
@@ -237,7 +234,7 @@ def _native_core_error(exc: BaseException) -> NativeVoiceTriggerError:
 
 
 def native_core_voice_asr_status(account_dir: Optional[Path] = None) -> dict[str, object]:
-    """Passively inspect readiness through the licensed native-core broker."""
+    """Passively inspect readiness through the protected native-core broker."""
 
     result: dict[str, object] = {
         "available": False,
@@ -277,7 +274,7 @@ def native_core_voice_asr_status(account_dir: Optional[Path] = None) -> dict[str
         )
         return result
     except NativeCorePolicyError:
-        result["reason"] = "bridge_manager_unavailable"
+        result["reason"] = "protected_build_unavailable"
         return result
     except (NativeCoreError, OSError, ValueError):
         result["reason"] = "inspection_failed"
@@ -378,11 +375,6 @@ class NativeCoreVoiceAsrTransport:
                 )
                 if not status.ready or status.reason is not NativeCoreAsrReason.READY:
                     raise _reason_error(status.reason)
-                refresh_native_core_lease(
-                    client,
-                    NativeCoreFeature.NATIVE_ASR,
-                    minimum_validity_seconds=_LEASE_MINIMUM_VALIDITY_SECONDS,
-                )
                 request_handle = client.begin_native_asr(
                     command.account,
                     command.account_dir,

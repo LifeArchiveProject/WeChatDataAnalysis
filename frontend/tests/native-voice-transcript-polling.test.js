@@ -679,6 +679,24 @@ describe('微信原生转写 native-first 编排', () => {
     wrapper.unmount()
   })
 
+  it('受保护 DLL 或构建不可用时不显示单独 ASR 授权提示', async () => {
+    const api = {
+      getNativeVoiceTranscriptionStatus: vi.fn().mockResolvedValue({
+        available: false,
+        reason: 'protected_build_unavailable'
+      })
+    }
+    const { state, wrapper } = mountChatMessagesState(api)
+
+    await state.refreshNativeVoiceTranscriptionStatus({ force: true })
+
+    expect(state.nativeVoiceTranscriptionUnavailableReason.value).toBe(
+      '当前受保护 DLL 或构建中的微信原生语音转文字功能不可用。'
+    )
+    expect(state.nativeVoiceTranscriptionUnavailableReason.value).not.toContain('授权')
+    wrapper.unmount()
+  })
+
   it.each([
     'native_transport_unavailable',
     'native_weixin_not_running',

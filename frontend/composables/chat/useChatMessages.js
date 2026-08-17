@@ -13,6 +13,7 @@ import {
   findImageGroupKeyByMessageId
 } from '~/lib/chat/image-groups'
 import { createMessageNormalizer, dedupeMessagesById } from '~/lib/chat/message-normalizer'
+import { PROJECT_VOICE_TRANSCRIPTS_INVALIDATED_EVENT } from '~/lib/voice-transcript-invalidation'
 
 const DEFAULT_CHAT_SOURCE = 'auto'
 const IMAGE_GROUP_LAYOUT_DURATION_MS = 250
@@ -20,6 +21,24 @@ const IMAGE_GROUP_LAYOUT_EASING = 'cubic-bezier(0.2, 0, 0, 1)'
 const NATIVE_VOICE_DISPATCH_TOKEN = Symbol('nativeVoiceDispatchToken')
 
 const nativeVoiceErrorDetail = (error) => error?.data?.detail || error?.detail || {}
+
+export const clearProjectVoiceTranscripts = (loadedConversations) => {
+  if (!loadedConversations || typeof loadedConversations !== 'object') return
+  for (const list of Object.values(loadedConversations)) {
+    if (!Array.isArray(list)) continue
+    for (const message of list) {
+      const model = String(message?.voiceTranscriptModel || '').trim().toLowerCase()
+      const status = String(message?.voiceTranscriptStatus || '').trim().toLowerCase()
+      if (model === 'wechat-native') continue
+      if (!model && status !== 'loading') continue
+      message.voiceTranscript = ''
+      message.voiceTranscriptStatus = 'idle'
+      message.voiceTranscriptError = ''
+      message.voiceTranscriptLanguage = ''
+      message.voiceTranscriptModel = ''
+    }
+  }
+}
 
 export const mergeWechatNativeVoiceTranscript = (message, payload) => {
   const model = String(payload?.model ?? payload?.voiceTranscriptModel ?? '').trim().toLowerCase()
@@ -72,6 +91,7 @@ export const useChatMessages = ({
   let realtimeRefreshController = null
   let realtimeRefreshTargetUsername = ''
   let nativeVoiceRevision = 0
+  let projectTranscriptRevision = 0
   const nativeVoiceTranscriptPolls = new Map()
 
   const isAbortError = (error, controller = null) => {
@@ -192,6 +212,7 @@ export const useChatMessages = ({
       weixin_version_unsupported: '当前微信版本暂不支持微信原生语音转文字。请使用微信 4.1.12.26，并完全退出、重新启动微信后再试。',
       active_account_mismatch: '当前项目账号与已登录微信账号不一致。',
       active_account_unverified: '无法确认当前项目账号与已登录微信账号一致。',
+      protected_build_unavailable: '当前受保护 DLL 或构建中的微信原生语音转文字功能不可用。',
       bridge_manager_unavailable: '微信原生语音转文字服务尚未就绪。',
       inspection_failed: '无法检查微信原生语音转文字状态。请重启本应用和微信后再试。',
       bridge_restart_required: '桥接状态已失效。请完全退出微信，重启本应用（开发模式下同时重启后端）后，再重新打开并登录微信。'
@@ -1219,6 +1240,11 @@ export const useChatMessages = ({
     await playVoiceById(message?.id)
   }
 
+  const invalidateProjectVoiceTranscripts = () => {
+    projectTranscriptRevision += 1
+    clearProjectVoiceTranscripts(allMessages.value)
+  }
+
   const stopNativeVoiceTranscriptPolling = () => {
     nativeVoiceRevision += 1
     for (const entry of nativeVoiceTranscriptPolls.values()) {
@@ -1351,7 +1377,8 @@ export const useChatMessages = ({
   // 批量读取当前会话语音消息的转写缓存并合并进消息列表（仅恢复展示，不触发识别）。
   // serverIdStr 为精确字符串，禁止转 Number（19 位 svr_id 超出 JS Number 安全范围）。
   const restoreVoiceTranscripts = async (username) => {
-    const transcriptRevision = nativeVoiceRevision
+    const nativeTranscriptRevision = nativeVoiceRevision
+    const transcriptRevision = projectTranscriptRevision
     const accountAtStart = String(selectedAccount.value || '').trim()
     const key = String(username || '').trim()
     if (!key || privacyMode?.value) return
@@ -1379,7 +1406,7 @@ export const useChatMessages = ({
           })).filter((item) => item.server_id && item.local_id && item.local_id !== '0')
         })
         if (
-          transcriptRevision !== nativeVoiceRevision
+          nativeTranscriptRevision !== nativeVoiceRevision
           || String(selectedAccount.value || '').trim() !== accountAtStart
         ) return
         const nativeItems = Array.isArray(nativeResponse?.items) ? nativeResponse.items : []
@@ -1436,13 +1463,13 @@ export const useChatMessages = ({
               throw pendingError
             }).catch(async (error) => {
               if (
-                transcriptRevision !== nativeVoiceRevision
+                nativeTranscriptRevision !== nativeVoiceRevision
                 || String(selectedAccount.value || '').trim() !== accountAtStart
                 || String(selectedContact.value?.username || '').trim() !== key
               ) return
               await refreshNativeVoiceTranscriptionStatus({ force: true })
               if (
-                transcriptRevision !== nativeVoiceRevision
+                nativeTranscriptRevision !== nativeVoiceRevision
                 || String(selectedAccount.value || '').trim() !== accountAtStart
                 || String(selectedContact.value?.username || '').trim() !== key
               ) return
@@ -1492,7 +1519,7 @@ export const useChatMessages = ({
         server_ids: projectPending.map((m) => String(m.serverIdStr).trim())
       })
       if (
-        transcriptRevision !== nativeVoiceRevision
+        transcriptRevision !== projectTranscriptRevision
         || String(selectedAccount.value || '').trim() !== accountAtStart
       ) return
       const items = resp?.items
@@ -2364,6 +2391,7 @@ export const useChatMessages = ({
   }
 
   const resetMessageState = () => {
+    projectTranscriptRevision += 1
     abortMessageLoad()
     abortRealtimeRefresh()
     stopNativeVoiceTranscriptPolling()
@@ -2972,11 +3000,17 @@ export const useChatMessages = ({
     clearContactProfileHoverHideTimer()
   }
 
+  const onProjectVoiceTranscriptsInvalidated = () => {
+    invalidateProjectVoiceTranscripts()
+    if (selectedContact.value?.username) void refreshSelectedMessages()
+  }
+
   const onNativeVoiceWindowFocus = () => {
     void refreshNativeVoiceTranscriptionStatus({ force: true })
   }
 
   if (typeof window !== 'undefined') {
+    window.addEventListener(PROJECT_VOICE_TRANSCRIPTS_INVALIDATED_EVENT, onProjectVoiceTranscriptsInvalidated)
     window.addEventListener('focus', onNativeVoiceWindowFocus)
   }
 
@@ -3026,6 +3060,7 @@ export const useChatMessages = ({
 
   onUnmounted(() => {
     if (typeof window !== 'undefined') {
+      window.removeEventListener(PROJECT_VOICE_TRANSCRIPTS_INVALIDATED_EVENT, onProjectVoiceTranscriptsInvalidated)
       window.removeEventListener('focus', onNativeVoiceWindowFocus)
     }
     abortMessageLoad()
@@ -3151,6 +3186,7 @@ export const useChatMessages = ({
     pollNativeVoiceTranscript,
     restoreVoiceTranscripts,
     stopNativeVoiceTranscriptPolling,
+    invalidateProjectVoiceTranscripts,
     playQuoteVoice,
     getQuoteVoiceId,
     getVoiceDurationInSeconds,

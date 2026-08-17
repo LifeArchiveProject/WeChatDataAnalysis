@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .card_01_cyber_schedule import WeekdayHourHeatmap, compute_weekday_hour_heatmap
-from ...chat_search_index import get_chat_search_index_db_path
+from ...chat_search_index import get_chat_search_index_db_path, get_chat_search_index_status
 from ...chat_helpers import (
     _build_avatar_url,
     _decode_sqlite_text,
@@ -229,7 +229,12 @@ def compute_annual_daily_counts(*, account_dir: Path, year: int, sender_username
 
     # Prefer using our unified search index if available; it's much faster than scanning all msg tables.
     index_path = get_chat_search_index_db_path(account_dir)
-    if index_path.exists():
+    try:
+        index_status = get_chat_search_index_status(account_dir, source="auto")
+        index_up_to_date = bool((index_status.get("index") or {}).get("upToDate"))
+    except Exception:
+        index_up_to_date = False
+    if index_up_to_date and index_path.exists():
         conn = sqlite3.connect(str(index_path))
         try:
             has_fts = (

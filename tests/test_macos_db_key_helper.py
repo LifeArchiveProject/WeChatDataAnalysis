@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import logging
 import subprocess
 import sys
 import time
@@ -424,6 +425,49 @@ def test_process_access_denial_identifies_missing_helper_entitlement(tmp_path: P
     assert invalid_helper.value.code == "HELPER_DEBUGGER_ENTITLEMENT_MISSING"
     assert invalid_helper.value.retryable is False
     assert "重新安装" in str(invalid_helper.value)
+
+
+def test_process_access_diagnostics_log_has_privacy_safe_component_context(
+    caplog, tmp_path: Path
+):
+    bundle = _validated_bundle(tmp_path)
+    diagnostics = helper.MacosProcessAccessDiagnostics(
+        macos_version="15.7.4",
+        macos_build="24G517",
+        target_bundle_id="com.tencent.xinWeChat",
+        target_version="4.1.12",
+        target_build="269365",
+        target_hardened_runtime=True,
+        target_get_task_allow=False,
+        target_entitlements_state="parsed",
+        helper_hardened_runtime=True,
+        helper_debugger_entitlement=True,
+        helper_entitlements_state="parsed",
+    )
+
+    with caplog.at_level(logging.WARNING, logger=helper.logger.name):
+        with pytest.raises(helper.MacosDbKeyAuthorizationError):
+            _run_fake(
+                bundle,
+                stdout=b"",
+                returncode=27,
+                access_diagnostics_provider=lambda _pid, _helper_path: diagnostics,
+            )
+
+    from wechat_decrypt_tool import __version__
+
+    message = next(
+        record.getMessage()
+        for record in caplog.records
+        if "[macos-db-key] access diagnostics:" in record.getMessage()
+    )
+    assert "schema=2" in message
+    assert f"wcda_version={__version__}" in message
+    assert f"helper_build_id={BUILD_NAME}" in message
+    assert "helper_signature_mode=self-signed" in message
+    assert "helper_source_runtime=False" in message
+    assert "target_entitlements_state=parsed" in message
+    assert "helper_entitlements_state=parsed" in message
 
 
 def test_process_access_diagnostics_failure_preserves_coarse_error(tmp_path: Path):

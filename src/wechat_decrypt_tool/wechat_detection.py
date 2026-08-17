@@ -1180,29 +1180,25 @@ def detect_wechat_installation(data_root_path: str | None = None) -> Dict[str, A
 
 def detect_current_logged_in_account(base_path: str = None) -> Dict[str, Any]:
     """
-    通过 global_config 解析 或 key_info.db 时间检测当前登录的微信账号
-    """
-    # print(f"[DEBUG] 开始检测当前登录账号，提供的base_path: {base_path}")
+    根据 key_info.db 最近活动时间推测账号，global_config 仅作为回退。
 
+    global_config 可能保留上一个登录账号，不能单独证明当前会话。
+    """
     if base_path is None:
         detected_dirs = auto_detect_wechat_data_dirs()
         if not detected_dirs:
-            return {"current_account": None, "message": "未检测到微信数据目录"}
+            return {
+                "current_account": None,
+                "latest_time": None,
+                "source": None,
+                "confidence": None,
+                "global_config_account": None,
+                "message": "未检测到微信数据目录",
+            }
         base_path = detected_dirs[0]
 
-    # 1. 新特性：优先尝试从 global_config 解析完整用户信息
     parsed_config = parse_global_config(base_path)
-    if parsed_config and parsed_config.get('wxid'):
-        logger.debug("从 global_config 成功解析出账号: %s", parsed_config["wxid"])
-        return {
-            "current_account": parsed_config["wxid"],  # 不带校验位的 wxid
-            "nickname": parsed_config.get("nickname"),
-            "avatar": parsed_config.get("avatar"),
-            "latest_time": None,
-            "message": f"通过 global_config 检测到最近登录账号: {parsed_config['wxid']}"
-        }
-
-    # 2. 降级回退机制：原先基于 key_info.db 的时间探测逻辑
+    global_config_account = parsed_config.get("wxid") if parsed_config else None
     latest_time = None
     current_account = None
 
@@ -1223,88 +1219,91 @@ def detect_current_logged_in_account(base_path: str = None) -> Dict[str, Any]:
     except (PermissionError, OSError):
         pass
 
-    login_dir = None
-    for path in possible_login_paths:
+    login_dirs = []
+    for path in dict.fromkeys(possible_login_paths):
         logger.debug("检查路径: %s", path)
-        if os.path.exists(path):
-            login_dir = path
-            logger.debug("找到登录目录: %s", login_dir)
-            break
+        if os.path.isdir(path):
+            login_dirs.append(path)
+            logger.debug("找到登录目录: %s", path)
 
-    if not login_dir:
-        return {
-            "current_account": None,
-            "latest_time": None,
-            "message": f"未找到登录信息目录，尝试的路径: {possible_login_paths}"
-        }
-
-    try:
-        # 遍历登录目录下的所有账号文件夹
-        items = os.listdir(login_dir)
-        logger.debug("登录目录内容: %s", items)
+    for login_dir in login_dirs:
+        try:
+            items = sorted(os.listdir(login_dir))
+            logger.debug("登录目录内容: %s", items)
+        except (PermissionError, OSError) as e:
+            logger.debug("无法访问登录目录: %s，错误: %s", login_dir, e)
+            continue
 
         for item in items:
             item_path = os.path.join(login_dir, item)
-            logger.debug(
-                "检查项目: %s，路径: %s，是否为目录: %s",
-                item,
-                item_path,
-                os.path.isdir(item_path),
-            )
-
             if not os.path.isdir(item_path):
                 continue
 
-            # 检查key_info.db文件
             key_info_path = os.path.join(item_path, "key_info.db")
-            logger.debug(
-                "检查 key_info.db 文件: %s，是否存在: %s",
-                key_info_path,
-                os.path.exists(key_info_path),
-            )
-
-            if not os.path.exists(key_info_path):
+            if not os.path.isfile(key_info_path):
                 continue
 
-            # 获取文件修改时间
             try:
-                file_time = os.path.getmtime(key_info_path)
+                activity_paths = [key_info_path, f"{key_info_path}-wal"]
+                file_time = max(
+                    os.path.getmtime(path)
+                    for path in activity_paths
+                    if os.path.isfile(path)
+                )
                 file_datetime = datetime.fromtimestamp(file_time)
-                logger.debug("找到 key_info.db 文件: %s，修改时间: %s", key_info_path, file_datetime)
+                logger.debug("找到 key_info.db 活动: %s，修改时间: %s", key_info_path, file_datetime)
 
-                # 更新最新登录的账号
                 if latest_time is None or file_time > latest_time:
                     latest_time = file_time
                     current_account = item
-                    logger.debug("更新最新登录账号: %s，时间: %s", current_account, file_datetime)
-
+                    logger.debug("更新最近活动账号: %s，时间: %s", current_account, file_datetime)
             except OSError as e:
                 logger.debug("无法获取文件时间: %s，错误: %s", key_info_path, e)
-                continue
-
-    except (PermissionError, OSError) as e:
-        logger.debug("无法访问登录目录: %s，错误: %s", login_dir, e)
-        return {
-            "current_account": None,
-            "latest_time": None,
-            "message": f"无法访问登录目录: {e}"
-        }
 
     if current_account:
-        logger.debug("最终结果: 当前登录账号 %s，时间 %s", current_account, latest_time)
-        return {
+        logger.debug("最终结果: 最近活动账号 %s，时间 %s", current_account, latest_time)
+        result = {
             "current_account": current_account,
             "latest_time": latest_time,
             "latest_time_formatted": datetime.fromtimestamp(latest_time).isoformat() if latest_time else None,
-            "message": f"检测到当前登录账号: {current_account}"
+            "source": "key_info_mtime",
+            "confidence": "medium",
+            "global_config_account": global_config_account,
+            "message": f"根据 key_info.db 最近活动推测账号: {current_account}",
         }
-    else:
-        logger.debug("最终结果: 未检测到当前登录账号")
+        if current_account == global_config_account:
+            result.update({
+                "nickname": parsed_config.get("nickname"),
+                "avatar": parsed_config.get("avatar"),
+            })
+        return result
+
+    if global_config_account:
+        logger.debug("未找到 key_info.db 活动，回退使用 global_config: %s", global_config_account)
         return {
-            "current_account": None,
+            "current_account": global_config_account,
+            "nickname": parsed_config.get("nickname"),
+            "avatar": parsed_config.get("avatar"),
             "latest_time": None,
-            "message": "未检测到当前登录账号"
+            "source": "global_config",
+            "confidence": "low",
+            "global_config_account": global_config_account,
+            "message": f"通过 global_config 读取到已保存账号: {global_config_account}",
         }
+
+    logger.debug("最终结果: 未推测到账号")
+    return {
+        "current_account": None,
+        "latest_time": None,
+        "source": None,
+        "confidence": None,
+        "global_config_account": None,
+        "message": (
+            "未检测到账号活动"
+            if login_dirs
+            else f"未找到登录信息目录，尝试的路径: {possible_login_paths}"
+        ),
+    }
 
 
 def get_wechat_info() -> Dict[str, Any]:

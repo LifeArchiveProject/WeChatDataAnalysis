@@ -109,6 +109,7 @@ from ..wcdb_realtime import (
     get_messages as _wcdb_get_messages,
     get_sessions as _wcdb_get_sessions,
     open_message_cursor as _wcdb_open_message_cursor,
+    resolve_account_native_wxid as _wcdb_resolve_account_native_wxid,
 )
 
 logger = get_logger(__name__)
@@ -3084,8 +3085,11 @@ def _append_full_messages_from_rows(
     my_rowid: Optional[int],
     resource_conn: Optional[sqlite3.Connection],
     resource_chat_id: Optional[int],
+    self_username: str = "",
 ) -> None:
-    self_username = resolve_account_self_username(account_dir)
+    resolved_self_username = str(
+        self_username or resolve_account_self_username(account_dir) or account_dir.name or ""
+    ).strip()
     contact_conn: Optional[sqlite3.Connection] = None
     alias_cache: dict[str, str] = {}
     if is_group:
@@ -3175,7 +3179,7 @@ def _append_full_messages_from_rows(
             if not is_sent:
                 try:
                     su = str(sender_username or "").strip().lower()
-                    me = str(self_username or "").strip().lower()
+                    me = resolved_self_username.lower()
                     if su and me and su == me:
                         is_sent = True
                 except Exception:
@@ -3209,7 +3213,7 @@ def _append_full_messages_from_rows(
                 sender_username = xml_sender
 
         if is_sent:
-            sender_username = self_username
+            sender_username = resolved_self_username
         elif (not is_group) and (not sender_username):
             sender_username = username
 
@@ -4207,6 +4211,9 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
     wxid_dir = "" if snapshot_preferred else str(getattr(ctx, "wxid_dir", "") or "").strip()
     realtime_db_storage = str(realtime_status.get("db_storage_dir") or "").strip()
     realtime_session_db = str(realtime_status.get("session_db_path") or "").strip()
+    identity_status = dict(realtime_status)
+    identity_status["db_storage_dir"] = realtime_db_storage or db_storage_path
+    native_wxid = _wcdb_resolve_account_native_wxid(account_dir, identity_status)
     data_source_path = realtime_db_storage or db_storage_path or wxid_dir or str(account_dir)
     realtime_available = bool(
         realtime_status.get("dll_present")
@@ -4246,6 +4253,11 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
     return {
         "account": ctx.name,
         "name": ctx.name,
+        # The output/account directory may carry a WeFlow collision suffix
+        # (for example SimpleChinese_a73c).  Avatar rows are keyed by the
+        # native WeChat username (SimpleChinese), so expose both identities.
+        "selfUsername": native_wxid,
+        "nativeWxid": native_wxid,
         "mode": getattr(ctx, "mode", "unknown"),
         "defaultSource": active_source,
         "path": data_source_path,
@@ -4268,6 +4280,7 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
         "realtime": {
             "available": bool(realtime_available),
             "connected": bool(realtime_status.get("connected")),
+            "nativeWxid": native_wxid,
             "dllPresent": bool(realtime_status.get("dll_present")),
             "keyPresent": bool(realtime_status.get("key_present")),
             "dbStorageDir": realtime_db_storage,
@@ -4984,6 +4997,28 @@ def list_chat_sessions(
     }
 
 
+def _resolve_message_self_rowid(
+    conn: sqlite3.Connection,
+    account_dir: Path,
+) -> tuple[Optional[int], str]:
+    """Prefer persisted snapshot identity, then try the native WeFlow identity."""
+
+    rowid, matched_username = resolve_account_self_rowid(conn, account_dir)
+    if rowid is not None:
+        return rowid, matched_username
+    native_username = _wcdb_resolve_account_native_wxid(account_dir)
+    if not native_username:
+        return rowid, matched_username
+    native_rowid, native_match = resolve_account_self_rowid(
+        conn,
+        account_dir,
+        candidates=(native_username,),
+    )
+    if native_rowid is not None:
+        return native_rowid, native_match
+    return rowid, matched_username
+
+
 def _collect_chat_messages(
     *,
     username: str,
@@ -5026,10 +5061,11 @@ def _collect_chat_messages(
             if not table_name:
                 continue
 
-            my_rowid, _matched_self_username = resolve_account_self_rowid(
+            my_rowid, _matched_self_username = _resolve_message_self_rowid(
                 conn,
                 account_dir,
             )
+            db_self_username = _matched_self_username or self_username
 
             quoted_table = _quote_ident(table_name)
             has_packed_info_data = False
@@ -5130,7 +5166,7 @@ def _collect_chat_messages(
                         sender_username = xml_sender
 
                 if is_sent:
-                    sender_username = self_username
+                    sender_username = db_self_username
                 elif (not is_group) and (not sender_username):
                     sender_username = username
 
@@ -6308,6 +6344,7 @@ def list_chat_messages(
                 my_rowid=my_rowid_realtime if used_exec_query else None,
                 resource_conn=resource_conn,
                 resource_chat_id=resource_chat_id,
+                self_username=_wcdb_resolve_account_native_wxid(account_dir, rt_conn),
             )
 
             if progressive_filter:
@@ -7707,6 +7744,7 @@ async def _search_chat_messages_via_fts(
         ordered_keys.append(key4)
 
     hit_by_key: dict[tuple[Path, str, str, int], dict[str, Any]] = {}
+    self_username = _wcdb_resolve_account_native_wxid(account_dir)
 
     for (db_path, table_name, conv_username), local_ids in groups.items():
         uniq_local_ids = list(dict.fromkeys([int(x) for x in local_ids if int(x) > 0]))
@@ -7717,10 +7755,11 @@ async def _search_chat_messages_via_fts(
         msg_conn.row_factory = sqlite3.Row
         msg_conn.text_factory = bytes
         try:
-            my_rowid, _matched_self_username = resolve_account_self_rowid(
+            my_rowid, _matched_self_username = _resolve_message_self_rowid(
                 msg_conn,
                 account_dir,
             )
+            db_self_username = _matched_self_username or self_username
 
             placeholders = ",".join(["?"] * len(uniq_local_ids))
             quoted_table = _quote_ident(table_name)
@@ -7763,6 +7802,7 @@ async def _search_chat_messages_via_fts(
                         account_dir=account_dir,
                         is_group=is_group,
                         my_rowid=my_rowid,
+                        self_username=db_self_username,
                     )
                 except Exception:
                     continue
@@ -8206,6 +8246,7 @@ async def get_chat_messages_around(
                     my_rowid=None,
                     resource_conn=resource_conn,
                     resource_chat_id=resource_chat_id,
+                    self_username=_wcdb_resolve_account_native_wxid(account_dir, rt_conn),
                 )
             finally:
                 if resource_conn is not None:
@@ -8398,6 +8439,7 @@ async def get_chat_messages_around(
     quote_usernames_all: list[str] = []
     pat_usernames_all: set[str] = set()
     is_group = bool(username.endswith("@chatroom"))
+    self_username = _wcdb_resolve_account_native_wxid(account_dir)
 
     for db_path in db_paths:
         conn: Optional[sqlite3.Connection] = None
@@ -8416,10 +8458,11 @@ async def get_chat_messages_around(
             if not table_name:
                 continue
 
-            my_rowid, _matched_self_username = resolve_account_self_rowid(
+            my_rowid, _matched_self_username = _resolve_message_self_rowid(
                 conn,
                 account_dir,
             )
+            db_self_username = _matched_self_username or self_username
 
             quoted_table = _quote_ident(table_name)
             has_packed_info_data = False
@@ -8591,6 +8634,7 @@ async def get_chat_messages_around(
                 my_rowid=my_rowid,
                 resource_conn=resource_conn,
                 resource_chat_id=resource_chat_id,
+                self_username=db_self_username,
             )
         except HTTPException:
             raise

@@ -22,6 +22,27 @@ from wechat_decrypt_tool.routers import chat_media as chat_media_router
 
 
 class TestSnsPageDecryptedSource(unittest.TestCase):
+    def test_snapshot_status_is_local_only_and_tracks_wal_changes(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "wxid_me"
+            account_dir.mkdir(parents=True)
+            (account_dir / "sns.db").write_bytes(b"snapshot")
+
+            with (
+                mock.patch.object(sns_router, "_resolve_account_dir", return_value=account_dir),
+                mock.patch.object(sns_router.WCDB_REALTIME, "get_status") as get_status,
+                mock.patch.object(sns_router.WCDB_REALTIME, "ensure_connected") as ensure_connected,
+            ):
+                before = sns_router.get_sns_snapshot_status(account=account_dir.name)
+                (account_dir / "sns.db-wal").write_bytes(b"wal-change")
+                after = sns_router.get_sns_snapshot_status(account=account_dir.name)
+
+        get_status.assert_not_called()
+        ensure_connected.assert_not_called()
+        self.assertEqual(before.get("status"), "ok")
+        self.assertTrue(before.get("available"))
+        self.assertNotEqual(before.get("version"), after.get("version"))
+
     def test_self_info_decrypted_sources_never_open_wcdb(self):
         with TemporaryDirectory() as td:
             account_dir = Path(td) / "wxid_me"
@@ -140,6 +161,126 @@ class TestSnsPageDecryptedSource(unittest.TestCase):
         )
         self.assertIn("const resetSnsMediaErrors", page)
         self.assertRegex(page, re.compile(r"if \(reset\) \{\s*resetSnsMediaErrors\(\)"))
+
+    def test_sns_page_syncs_snapshot_before_refreshing_decrypted_data(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+        api = (ROOT / "frontend" / "composables" / "useApi.js").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            api,
+            re.compile(
+                r"const syncSnsRealtimeLatest = async \(params = \{\}\) => \{"
+                r"[\s\S]{0,500}/sns/realtime/sync_latest"
+            ),
+        )
+        self.assertIn("syncSnsRealtimeLatest,", api)
+        self.assertIn("getSnsSnapshotStatus,", api)
+        self.assertRegex(
+            page,
+            re.compile(
+                r"const refreshSnsData = async \(\) => \{"
+                r"[\s\S]{0,800}await syncLatestSnsWithTimeout"
+                r"[\s\S]{0,800}await loadSnsUsers\(\)"
+                r"[\s\S]{0,800}await loadPosts\(\{ reset: true \}\)"
+                r"[\s\S]{0,200}if \(snapshotLoaded\) await updateSnsSnapshotBaseline"
+            ),
+        )
+        self.assertIn('@click="refreshSnsData"', page)
+        self.assertIn("refreshQueued = true", page)
+        self.assertIn("syncStatus === 'ok' || syncStatus === 'noop'", page)
+        self.assertIn("实时同步失败，当前显示本地快照", page)
+
+    def test_sns_page_passively_refreshes_on_focus_and_visibility_with_throttle(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+
+        self.assertIn("const SNS_PASSIVE_REFRESH_THROTTLE_MS =", page)
+        self.assertIn("const onSnsPassiveRefresh = () => {", page)
+        self.assertIn("document.visibilityState !== 'visible'", page)
+        self.assertIn("if (passiveRefreshTimer !== null) return", page)
+        self.assertIn("SNS_PASSIVE_REFRESH_THROTTLE_MS - elapsed", page)
+        self.assertIn("window.addEventListener('focus', onSnsPassiveRefresh)", page)
+        self.assertIn("document.addEventListener('visibilitychange', onSnsPassiveRefresh)", page)
+        self.assertIn("window.removeEventListener('focus', onSnsPassiveRefresh)", page)
+        self.assertIn("document.removeEventListener('visibilitychange', onSnsPassiveRefresh)", page)
+
+    def test_sns_page_polls_only_the_local_snapshot_version_while_visible(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+        api = (ROOT / "frontend" / "composables" / "useApi.js").read_text(encoding="utf-8")
+        poll = page.split("const pollSnsSnapshotVersion = async () => {", 1)[1].split(
+            "\n\nwatch(", 1
+        )[0]
+
+        self.assertRegex(
+            api,
+            re.compile(
+                r"const getSnsSnapshotStatus = async \(params = \{\}\) => \{"
+                r"[\s\S]{0,400}/sns/snapshot/status"
+            ),
+        )
+        self.assertIn("document.visibilityState !== 'visible'", poll)
+        self.assertIn("await readSnsSnapshotVersion(account)", poll)
+        self.assertIn("await loadPosts({ reset: true })", poll)
+        self.assertIn("if (snapshotLoaded && account ===", poll)
+        self.assertNotIn("syncLatestSnsWithTimeout", poll)
+        self.assertNotIn("syncSnsRealtimeLatest", poll)
+        self.assertIn("window.setInterval(", page)
+        self.assertIn("SNS_SNAPSHOT_POLL_INTERVAL_MS", page)
+        self.assertIn("window.clearInterval(snsSnapshotPollTimer)", page)
+
+    def test_sns_reset_requests_supersede_stale_timeline_requests(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+        load_posts = page.split("const loadPosts = async ({ reset }) => {", 1)[1].split(
+            "\nwatch(", 1
+        )[0]
+
+        self.assertIn("let postsRequestGeneration = 0", page)
+        self.assertIn("const isCurrentPostsRequest = (generation, account) =>", page)
+        self.assertIn("const account = String(selectedAccount.value || '').trim()", load_posts)
+        self.assertIn("if (!reset && isLoading.value) return", load_posts)
+        self.assertIn("const generation = ++postsRequestGeneration", load_posts)
+        self.assertGreaterEqual(
+            load_posts.count("isCurrentPostsRequest(generation, account)"),
+            3,
+        )
+        self.assertRegex(
+            load_posts,
+            re.compile(
+                r"await api\.listSnsTimeline\([\s\S]+?"
+                r"if \(!isCurrentPostsRequest\(generation, account\)\) return"
+            ),
+        )
+        self.assertRegex(
+            load_posts,
+            re.compile(
+                r"catch \(e\) \{\s*"
+                r"if \(isCurrentPostsRequest\(generation, account\)\) \{[\s\S]+?"
+                r"error\.value"
+            ),
+        )
+        self.assertRegex(
+            load_posts,
+            re.compile(
+                r"finally \{\s*"
+                r"if \(isCurrentPostsRequest\(generation, account\)\) \{\s*"
+                r"isLoading\.value = false"
+            ),
+        )
+
+    def test_sns_realtime_sync_timeout_falls_back_to_snapshot(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+
+        self.assertIn("const SNS_REALTIME_SYNC_TIMEOUT_MS =", page)
+        self.assertIn("const syncLatestSnsWithTimeout = async (account) => {", page)
+        self.assertIn("Promise.race", page)
+        self.assertRegex(
+            page,
+            re.compile(
+                r"api\.syncSnsRealtimeLatest\(\{ account, force: 1 \}\)\.then\("
+                r"[\s\S]{0,200}\(error\) => \(\{ type: 'error', error \}\)"
+            ),
+        )
+        self.assertIn("await syncLatestSnsWithTimeout(account)", page)
+        self.assertIn("朋友圈实时同步超时", page)
 
     def test_http_route_defaults_preserve_auto_contract(self):
         self.assertEqual(

@@ -143,6 +143,13 @@ class NativeCoreAsrRequestState(IntEnum):
 _NATIVE_CORE_OFFLINE_BOOTSTRAP_FEATURES = (
     NativeCoreFeature.DATABASE_READ | NativeCoreFeature.EXPORT
 )
+_NATIVE_CORE_WINDOWS_NATIVE_ASR_ABI_VERSION = 1
+_NATIVE_CORE_WINDOWS_NATIVE_ASR_FEATURE_BIT = int(NativeCoreFeature.NATIVE_ASR)
+_NATIVE_CORE_WINDOWS_NATIVE_ASR_AUTHORIZATION = "database-read"
+_NATIVE_CORE_WINDOWS_NATIVE_ASR_WECHAT_VERSION = "4.1.12.26"
+_NATIVE_CORE_WINDOWS_NATIVE_ASR_WEIXIN_SHA256 = (
+    "4914a621a810ecbc0a132b6ff8f612658cfce323d3989b3e5fe32d4ff343ba46"
+)
 
 
 class NativeCoreDatabaseKeyMode(IntEnum):
@@ -520,6 +527,11 @@ class NativeCoreBuildManifest:
     distribution_mode: str = "public"
     distribution_capsule: str | None = field(default=None, repr=False)
     platform: str = "windows"
+    native_asr_abi_version: int = 0
+    native_asr_feature_bit: int = 0
+    native_asr_authorization: str = ""
+    native_asr_target_wechat_version: str = ""
+    native_asr_target_weixin_sha256: str = ""
     macos_client_signer_sha256: bytes = field(default=b"\0" * 32, repr=False)
     macos_broker_signer_sha256: bytes = field(default=b"\0" * 32, repr=False)
     macos_host_signer_sha256: bytes = field(default=b"\0" * 32, repr=False)
@@ -941,6 +953,10 @@ def _load_native_core_build_manifest(
     offline_bootstrap_feature_bits_value = payload.get(
         "offlineBootstrapFeatureBits"
     )
+    native_asr_abi_version_value = payload.get("nativeAsrAbiVersion", 0)
+    native_asr_feature_bit_value = payload.get("nativeAsrFeatureBit", 0)
+    native_asr_authorization_value = payload.get("nativeAsrAuthorization", "")
+    native_asr_target_value = payload.get("nativeAsrTarget")
     offline_export_seal_format = payload.get("offlineExportSealFormat")
     distribution_mode_value = payload.get("distributionMode")
     distribution_capsule_value = payload.get("distributionCapsule")
@@ -1131,10 +1147,31 @@ def _load_native_core_build_manifest(
             raise NativeCoreProtocolError(
                 "wechatdb native build manifest contains an invalid macOS private-PKI policy."
             )
+    if native_asr_target_value is None:
+        native_asr_target_wechat_version = ""
+        native_asr_target_weixin_sha256 = ""
+    elif (
+        not isinstance(native_asr_target_value, dict)
+        or frozenset(native_asr_target_value)
+        != frozenset({"wechatVersion", "weixinSha256"})
+        or not isinstance(native_asr_target_value.get("wechatVersion"), str)
+        or not isinstance(native_asr_target_value.get("weixinSha256"), str)
+    ):
+        raise NativeCoreProtocolError(
+            "wechatdb native build manifest contains an invalid native ASR target."
+        )
+    else:
+        native_asr_target_wechat_version = native_asr_target_value["wechatVersion"]
+        native_asr_target_weixin_sha256 = native_asr_target_value["weixinSha256"]
     if (
         type(offline_bootstrap_feature_bits_value) is not int
         or offline_bootstrap_feature_bits_value < 0
         or not isinstance(offline_export_seal_format, str)
+        or type(native_asr_abi_version_value) is not int
+        or native_asr_abi_version_value < 0
+        or type(native_asr_feature_bit_value) is not int
+        or native_asr_feature_bit_value < 0
+        or not isinstance(native_asr_authorization_value, str)
     ):
         raise NativeCoreProtocolError(
             "wechatdb native build manifest contains invalid offline bootstrap fields."
@@ -1247,6 +1284,11 @@ def _load_native_core_build_manifest(
         distribution_mode=distribution_mode,
         distribution_capsule=distribution_capsule,
         platform=manifest_platform,
+        native_asr_abi_version=native_asr_abi_version_value,
+        native_asr_feature_bit=native_asr_feature_bit_value,
+        native_asr_authorization=native_asr_authorization_value,
+        native_asr_target_wechat_version=native_asr_target_wechat_version,
+        native_asr_target_weixin_sha256=native_asr_target_weixin_sha256,
         macos_client_signer_sha256=macos_client_signer_digest,
         macos_broker_signer_sha256=macos_broker_signer_digest,
         macos_host_signer_sha256=macos_host_signer_digest,
@@ -1776,6 +1818,16 @@ class NativeCoreClient:
             manifest.distribution_mode != self._build_manifest.distribution_mode
             or manifest.distribution_capsule
             != self._build_manifest.distribution_capsule
+            or manifest.native_asr_authorization
+            != self._build_manifest.native_asr_authorization
+            or manifest.native_asr_abi_version
+            != self._build_manifest.native_asr_abi_version
+            or manifest.native_asr_feature_bit
+            != self._build_manifest.native_asr_feature_bit
+            or manifest.native_asr_target_wechat_version
+            != self._build_manifest.native_asr_target_wechat_version
+            or manifest.native_asr_target_weixin_sha256
+            != self._build_manifest.native_asr_target_weixin_sha256
         ):
             raise NativeCoreProtocolError(
                 "wechatdb native distribution identity changed after client initialization."
@@ -1867,7 +1919,76 @@ class NativeCoreClient:
                 "wechatdb native client has an incomplete native ASR ABI: "
                 + ", ".join(missing_native_asr_symbols)
             )
-        self._supports_native_asr = bool(available_native_asr_symbols)
+        formal_windows_build = (
+            self._build_manifest.platform == "windows"
+            and not self._build_manifest.development_build
+        )
+        disabled_native_asr_contract = (
+            self._build_manifest.native_asr_abi_version == 0
+            and self._build_manifest.native_asr_feature_bit == 0
+            and self._build_manifest.native_asr_authorization in {"", "none"}
+            and self._build_manifest.native_asr_target_wechat_version == ""
+            and self._build_manifest.native_asr_target_weixin_sha256 == ""
+        )
+        fused_native_asr_contract = (
+            formal_windows_build and not disabled_native_asr_contract
+        )
+        if fused_native_asr_contract:
+            native_asr_manifest_errors: list[str] = []
+            if (
+                self._build_manifest.native_asr_abi_version
+                != _NATIVE_CORE_WINDOWS_NATIVE_ASR_ABI_VERSION
+            ):
+                native_asr_manifest_errors.append(
+                    "nativeAsrAbiVersion must equal "
+                    f"{_NATIVE_CORE_WINDOWS_NATIVE_ASR_ABI_VERSION}"
+                )
+            if (
+                self._build_manifest.native_asr_feature_bit
+                != _NATIVE_CORE_WINDOWS_NATIVE_ASR_FEATURE_BIT
+            ):
+                native_asr_manifest_errors.append(
+                    "nativeAsrFeatureBit must equal "
+                    f"{_NATIVE_CORE_WINDOWS_NATIVE_ASR_FEATURE_BIT}"
+                )
+            if (
+                self._build_manifest.native_asr_authorization
+                != _NATIVE_CORE_WINDOWS_NATIVE_ASR_AUTHORIZATION
+            ):
+                native_asr_manifest_errors.append(
+                    "nativeAsrAuthorization must equal "
+                    f"{_NATIVE_CORE_WINDOWS_NATIVE_ASR_AUTHORIZATION}"
+                )
+            if (
+                self._build_manifest.native_asr_target_wechat_version
+                != _NATIVE_CORE_WINDOWS_NATIVE_ASR_WECHAT_VERSION
+            ):
+                native_asr_manifest_errors.append(
+                    "nativeAsrTarget.wechatVersion must equal "
+                    f"{_NATIVE_CORE_WINDOWS_NATIVE_ASR_WECHAT_VERSION}"
+                )
+            if (
+                self._build_manifest.native_asr_target_weixin_sha256
+                != _NATIVE_CORE_WINDOWS_NATIVE_ASR_WEIXIN_SHA256
+            ):
+                native_asr_manifest_errors.append(
+                    "nativeAsrTarget.weixinSha256 must equal "
+                    f"{_NATIVE_CORE_WINDOWS_NATIVE_ASR_WEIXIN_SHA256}"
+                )
+            if native_asr_manifest_errors:
+                raise NativeCoreProtocolError(
+                    "wechatdb native ASR manifest "
+                    + "; ".join(native_asr_manifest_errors)
+                    + "."
+                )
+            if not available_native_asr_symbols:
+                raise NativeCoreProtocolError(
+                    "wechatdb native ASR manifest declares fused support, but the "
+                    "client is missing all native ASR ABI symbols."
+                )
+        self._supports_native_asr = bool(available_native_asr_symbols) and (
+            fused_native_asr_contract
+        )
         self._supports_export_verification = hasattr(lib, "wce_export_verify_seal")
         if (
             self._build_manifest.root_public_key_compiled

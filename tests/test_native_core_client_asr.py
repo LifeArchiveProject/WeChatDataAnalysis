@@ -50,6 +50,9 @@ _NATIVE_ASR_SYMBOLS = (
     "wce_native_asr_poll",
     "wce_native_asr_close",
 )
+_NATIVE_ASR_WEIXIN_SHA256 = (
+    "4914a621a810ecbc0a132b6ff8f612658cfce323d3989b3e5fe32d4ff343ba46"
+)
 
 
 class _FakeFunction:
@@ -68,10 +71,29 @@ def _abi_library(*, native_asr_symbols: tuple[str, ...] = ()) -> SimpleNamespace
     return SimpleNamespace(**functions)
 
 
-def _configure_client(library: SimpleNamespace) -> NativeCoreClient:
+def _configure_client(
+    library: SimpleNamespace,
+    *,
+    platform: str = "windows",
+    development_build: bool = False,
+    native_asr_abi_version: int = 1,
+    native_asr_feature_bit: int = 16,
+    native_asr_authorization: str = "database-read",
+    native_asr_target_wechat_version: str = "4.1.12.26",
+    native_asr_target_weixin_sha256: str = _NATIVE_ASR_WEIXIN_SHA256,
+) -> NativeCoreClient:
     client = object.__new__(NativeCoreClient)
     client._library = library
-    client._build_manifest = SimpleNamespace(root_public_key_compiled=False)
+    client._build_manifest = SimpleNamespace(
+        root_public_key_compiled=False,
+        platform=platform,
+        development_build=development_build,
+        native_asr_abi_version=native_asr_abi_version,
+        native_asr_feature_bit=native_asr_feature_bit,
+        native_asr_authorization=native_asr_authorization,
+        native_asr_target_wechat_version=native_asr_target_wechat_version,
+        native_asr_target_weixin_sha256=native_asr_target_weixin_sha256,
+    )
     client._configure_abi()
     return client
 
@@ -203,13 +225,31 @@ def test_native_asr_ctypes_layout_matches_public_abi() -> None:
     assert NativeCoreFeature.NATIVE_ASR == 1 << 4
 
 
-def test_old_runtime_without_asr_exports_keeps_core_abi_usable() -> None:
-    library = _abi_library()
+@pytest.mark.parametrize("authorization", ["", "none"])
+@pytest.mark.parametrize(
+    "native_asr_symbols",
+    [(), _NATIVE_ASR_SYMBOLS],
+    ids=["legacy-no-exports", "generic-exports"],
+)
+def test_formal_non_fused_manifest_keeps_core_abi_usable(
+    authorization: str,
+    native_asr_symbols: tuple[str, ...],
+) -> None:
+    library = _abi_library(native_asr_symbols=native_asr_symbols)
 
-    client = _configure_client(library)
+    client = _configure_client(
+        library,
+        native_asr_abi_version=0,
+        native_asr_feature_bit=0,
+        native_asr_authorization=authorization,
+        native_asr_target_wechat_version="",
+        native_asr_target_weixin_sha256="",
+    )
 
     assert client.supports_native_asr is False
     assert library.wce_database_open.argtypes is not None
+    if native_asr_symbols:
+        assert library.wce_native_asr_get_status.argtypes is None
     with pytest.raises(NativeCoreProtocolError, match="does not implement"):
         client.get_native_asr_status("wxid_example", Path.cwd().resolve())
 
@@ -218,7 +258,15 @@ def test_partial_native_asr_exports_are_rejected_as_incomplete_abi() -> None:
     library = _abi_library(native_asr_symbols=("wce_native_asr_get_status",))
 
     with pytest.raises(NativeCoreProtocolError, match="incomplete native ASR ABI") as caught:
-        _configure_client(library)
+        _configure_client(
+            library,
+            development_build=True,
+            native_asr_abi_version=0,
+            native_asr_feature_bit=0,
+            native_asr_authorization="none",
+            native_asr_target_wechat_version="",
+            native_asr_target_weixin_sha256="",
+        )
 
     assert "wce_native_asr_begin" in str(caught.value)
     assert "wce_native_asr_poll" in str(caught.value)
@@ -228,7 +276,7 @@ def test_partial_native_asr_exports_are_rejected_as_incomplete_abi() -> None:
 def test_complete_native_asr_exports_are_bound_as_one_optional_feature() -> None:
     library = _abi_library(native_asr_symbols=_NATIVE_ASR_SYMBOLS)
 
-    client = _configure_client(library)
+    client = _configure_client(library, native_asr_authorization="database-read")
 
     assert client.supports_native_asr is True
     assert library.wce_native_asr_get_status.argtypes == [
@@ -242,6 +290,81 @@ def test_complete_native_asr_exports_are_bound_as_one_optional_feature() -> None
         ctypes.POINTER(native._WceNativeAsrPollResult),
         ctypes.POINTER(native._WceOwnedBuffer),
     ]
+
+
+def test_windows_development_exports_do_not_enable_non_fused_native_asr() -> None:
+    library = _abi_library(native_asr_symbols=_NATIVE_ASR_SYMBOLS)
+
+    client = _configure_client(
+        library,
+        development_build=True,
+        native_asr_abi_version=0,
+        native_asr_feature_bit=0,
+        native_asr_authorization="none",
+        native_asr_target_wechat_version="",
+        native_asr_target_weixin_sha256="",
+    )
+
+    assert client.supports_native_asr is False
+    assert library.wce_native_asr_get_status.argtypes is None
+    with pytest.raises(NativeCoreProtocolError, match="does not implement"):
+        client.get_native_asr_status("wxid_example", Path.cwd().resolve())
+
+
+@pytest.mark.parametrize("authorization", ["", "none"])
+def test_macos_exports_do_not_enable_or_require_windows_native_asr_contract(
+    authorization: str,
+) -> None:
+    library = _abi_library(native_asr_symbols=_NATIVE_ASR_SYMBOLS)
+
+    client = _configure_client(
+        library,
+        platform="macos",
+        native_asr_abi_version=0,
+        native_asr_feature_bit=0,
+        native_asr_authorization=authorization,
+        native_asr_target_wechat_version="",
+        native_asr_target_weixin_sha256="",
+    )
+
+    assert client.supports_native_asr is False
+    assert library.wce_native_asr_get_status.argtypes is None
+
+
+@pytest.mark.parametrize("authorization", ["", "native-asr"])
+def test_complete_native_asr_exports_require_database_read_manifest_contract(
+    authorization: str,
+) -> None:
+    library = _abi_library(native_asr_symbols=_NATIVE_ASR_SYMBOLS)
+
+    with pytest.raises(
+        NativeCoreProtocolError,
+        match="nativeAsrAuthorization must equal database-read",
+    ):
+        _configure_client(library, native_asr_authorization=authorization)
+
+
+def test_formal_windows_legacy_manifest_fails_closed() -> None:
+    library = _abi_library(native_asr_symbols=_NATIVE_ASR_SYMBOLS)
+
+    with pytest.raises(
+        NativeCoreProtocolError,
+        match="nativeAsrAuthorization must equal database-read",
+    ):
+        _configure_client(
+            library,
+            native_asr_authorization="",
+        )
+
+
+def test_formal_fused_manifest_without_asr_exports_is_rejected() -> None:
+    library = _abi_library()
+
+    with pytest.raises(
+        NativeCoreProtocolError,
+        match="manifest declares fused support.*missing all native ASR ABI symbols",
+    ):
+        _configure_client(library)
 
 
 def test_native_asr_status_begin_poll_and_close_round_trip(tmp_path: Path) -> None:

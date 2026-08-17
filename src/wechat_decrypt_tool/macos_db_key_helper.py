@@ -19,6 +19,7 @@ from typing import Callable, Mapping
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 
+from . import __version__ as APP_VERSION
 from .logging_config import get_logger
 from .platform_support import mac_db_key_bundle_dir
 
@@ -267,8 +268,10 @@ class MacosProcessAccessDiagnostics:
     target_build: str = ""
     target_hardened_runtime: bool | None = None
     target_get_task_allow: bool | None = None
+    target_entitlements_state: str = "not_checked"
     helper_hardened_runtime: bool | None = None
     helper_debugger_entitlement: bool | None = None
+    helper_entitlements_state: str = "not_checked"
 
 
 def _sha256_file(path: Path) -> tuple[str, int]:
@@ -827,14 +830,21 @@ def _collect_process_access_diagnostics(
     bundle_id, target_version, target_build = _read_app_identity(app_bundle)
     target_hardened_runtime: bool | None = None
     target_get_task_allow: bool | None = None
+    target_entitlements_state = "not_checked"
     if app_bundle is not None:
         target_hardened_runtime, target_entitlements = _codesign_access_metadata(app_bundle)
+        target_entitlements_state = (
+            "parsed" if target_entitlements is not None else "unavailable"
+        )
         if target_entitlements is not None:
             target_get_task_allow = (
                 target_entitlements.get("com.apple.security.get-task-allow") is True
             )
 
     helper_hardened_runtime, helper_entitlements = _codesign_access_metadata(helper_path)
+    helper_entitlements_state = (
+        "parsed" if helper_entitlements is not None else "unavailable"
+    )
     helper_debugger_entitlement: bool | None = None
     if helper_entitlements is not None:
         helper_debugger_entitlement = (
@@ -849,8 +859,10 @@ def _collect_process_access_diagnostics(
         target_build=target_build,
         target_hardened_runtime=target_hardened_runtime,
         target_get_task_allow=target_get_task_allow,
+        target_entitlements_state=target_entitlements_state,
         helper_hardened_runtime=helper_hardened_runtime,
         helper_debugger_entitlement=helper_debugger_entitlement,
+        helper_entitlements_state=helper_entitlements_state,
     )
 
 
@@ -1055,11 +1067,18 @@ def _run_capture_helper(
                 diagnostics = MacosProcessAccessDiagnostics()
             logger.warning(
                 (
-                    "[macos-db-key] access diagnostics: pid=%s macos_version=%s "
+                    "[macos-db-key] access diagnostics: schema=2 wcda_version=%s "
+                    "helper_build_id=%s helper_signature_mode=%s helper_source_runtime=%s "
+                    "pid=%s macos_version=%s "
                     "macos_build=%s target_bundle_id=%s target_version=%s target_build=%s "
                     "target_hardened_runtime=%s target_get_task_allow=%s "
-                    "helper_hardened_runtime=%s helper_debugger_entitlement=%s"
+                    "target_entitlements_state=%s helper_hardened_runtime=%s "
+                    "helper_debugger_entitlement=%s helper_entitlements_state=%s"
                 ),
+                APP_VERSION,
+                bundle.build_id,
+                bundle.signature_mode,
+                bundle.source_runtime,
                 pid,
                 diagnostics.macos_version or "unknown",
                 diagnostics.macos_build or "unknown",
@@ -1068,8 +1087,10 @@ def _run_capture_helper(
                 diagnostics.target_build or "unknown",
                 diagnostics.target_hardened_runtime,
                 diagnostics.target_get_task_allow,
+                diagnostics.target_entitlements_state,
                 diagnostics.helper_hardened_runtime,
                 diagnostics.helper_debugger_entitlement,
+                diagnostics.helper_entitlements_state,
             )
             raise _process_access_denied_error(diagnostics)
         if return_code == 28:

@@ -5,9 +5,15 @@ const path = require("node:path");
 
 const WINDOWS_NATIVE_ASR_ABI_VERSION = 1;
 const WINDOWS_NATIVE_ASR_FEATURE_BIT = 16;
+const WINDOWS_NATIVE_ASR_AUTHORIZATION = "database-read";
+const WINDOWS_NATIVE_ASR_DISABLED_AUTHORIZATION = "none";
 const WINDOWS_NATIVE_ASR_TARGET = Object.freeze({
   wechatVersion: "4.1.12.26",
   weixinSha256: "4914a621a810ecbc0a132b6ff8f612658cfce323d3989b3e5fe32d4ff343ba46",
+});
+const WINDOWS_NATIVE_ASR_DISABLED_TARGET = Object.freeze({
+  wechatVersion: "",
+  weixinSha256: "",
 });
 const WINDOWS_NATIVE_ASR_EXPORTS = Object.freeze([
   "wce_native_asr_get_status",
@@ -184,11 +190,23 @@ function readWindowsPeExportNames(clientPath, fsImpl = fs) {
 
 function windowsNativeAsrManifestErrors(manifest) {
   const errors = [];
-  if (manifest?.nativeAsrAbiVersion !== WINDOWS_NATIVE_ASR_ABI_VERSION) {
-    errors.push(`nativeAsrAbiVersion must equal ${WINDOWS_NATIVE_ASR_ABI_VERSION}`);
+  const fused = manifest?.developmentBuild === false;
+  const expectedAbiVersion = fused ? WINDOWS_NATIVE_ASR_ABI_VERSION : 0;
+  const expectedFeatureBit = fused ? WINDOWS_NATIVE_ASR_FEATURE_BIT : 0;
+  const expectedAuthorization = fused
+    ? WINDOWS_NATIVE_ASR_AUTHORIZATION
+    : WINDOWS_NATIVE_ASR_DISABLED_AUTHORIZATION;
+  const expectedTarget = fused
+    ? WINDOWS_NATIVE_ASR_TARGET
+    : WINDOWS_NATIVE_ASR_DISABLED_TARGET;
+  if (manifest?.nativeAsrAbiVersion !== expectedAbiVersion) {
+    errors.push(`nativeAsrAbiVersion must equal ${expectedAbiVersion}`);
   }
-  if (manifest?.nativeAsrFeatureBit !== WINDOWS_NATIVE_ASR_FEATURE_BIT) {
-    errors.push(`nativeAsrFeatureBit must equal ${WINDOWS_NATIVE_ASR_FEATURE_BIT}`);
+  if (manifest?.nativeAsrFeatureBit !== expectedFeatureBit) {
+    errors.push(`nativeAsrFeatureBit must equal ${expectedFeatureBit}`);
+  }
+  if (manifest?.nativeAsrAuthorization !== expectedAuthorization) {
+    errors.push(`nativeAsrAuthorization must equal ${expectedAuthorization}`);
   }
   const target = manifest?.nativeAsrTarget;
   if (!target || Array.isArray(target) || typeof target !== "object") {
@@ -202,14 +220,14 @@ function windowsNativeAsrManifestErrors(manifest) {
     ) {
       errors.push("nativeAsrTarget must contain exactly wechatVersion and weixinSha256");
     }
-    if (target.wechatVersion !== WINDOWS_NATIVE_ASR_TARGET.wechatVersion) {
+    if (target.wechatVersion !== expectedTarget.wechatVersion) {
       errors.push(
-        `nativeAsrTarget.wechatVersion must equal ${WINDOWS_NATIVE_ASR_TARGET.wechatVersion}`
+        `nativeAsrTarget.wechatVersion must equal ${expectedTarget.wechatVersion}`
       );
     }
-    if (target.weixinSha256 !== WINDOWS_NATIVE_ASR_TARGET.weixinSha256) {
+    if (target.weixinSha256 !== expectedTarget.weixinSha256) {
       errors.push(
-        `nativeAsrTarget.weixinSha256 must equal ${WINDOWS_NATIVE_ASR_TARGET.weixinSha256}`
+        `nativeAsrTarget.weixinSha256 must equal ${expectedTarget.weixinSha256}`
       );
     }
   }
@@ -221,6 +239,16 @@ function assertWindowsNativeAsrCapability({ nativeDir, manifest, fsImpl = fs }) 
   if (manifestErrors.length > 0) {
     throw new Error(`Windows native-core manifest ${manifestErrors.join("; ")}`);
   }
+  if (manifest.developmentBuild === true) {
+    return Object.freeze({
+      available: false,
+      abiVersion: 0,
+      featureBit: 0,
+      authorization: WINDOWS_NATIVE_ASR_DISABLED_AUTHORIZATION,
+      target: WINDOWS_NATIVE_ASR_DISABLED_TARGET,
+      exports: Object.freeze([]),
+    });
+  }
   const clientPath = path.join(path.resolve(String(nativeDir || "")), "wechatdb_client.dll");
   const exports = readWindowsPeExportNames(clientPath, fsImpl);
   const missing = WINDOWS_NATIVE_ASR_EXPORTS.filter((name) => !exports.has(name));
@@ -230,8 +258,10 @@ function assertWindowsNativeAsrCapability({ nativeDir, manifest, fsImpl = fs }) 
     );
   }
   return Object.freeze({
+    available: true,
     abiVersion: WINDOWS_NATIVE_ASR_ABI_VERSION,
     featureBit: WINDOWS_NATIVE_ASR_FEATURE_BIT,
+    authorization: WINDOWS_NATIVE_ASR_AUTHORIZATION,
     target: WINDOWS_NATIVE_ASR_TARGET,
     exports: WINDOWS_NATIVE_ASR_EXPORTS,
   });
@@ -239,6 +269,9 @@ function assertWindowsNativeAsrCapability({ nativeDir, manifest, fsImpl = fs }) 
 
 module.exports = {
   WINDOWS_NATIVE_ASR_ABI_VERSION,
+  WINDOWS_NATIVE_ASR_AUTHORIZATION,
+  WINDOWS_NATIVE_ASR_DISABLED_AUTHORIZATION,
+  WINDOWS_NATIVE_ASR_DISABLED_TARGET,
   WINDOWS_NATIVE_ASR_FEATURE_BIT,
   WINDOWS_NATIVE_ASR_EXPORTS,
   WINDOWS_NATIVE_ASR_TARGET,

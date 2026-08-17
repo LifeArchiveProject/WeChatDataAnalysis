@@ -25,6 +25,15 @@ def windows_manifest(*, source_runtime: bool = False) -> dict[str, object]:
         "developmentBuild": False,
         "offlineBootstrapFeatureBits": 3,
         "offlineExportSealFormat": "WES2",
+        "nativeAsrAbiVersion": 1,
+        "nativeAsrFeatureBit": 16,
+        "nativeAsrAuthorization": "database-read",
+        "nativeAsrTarget": {
+            "wechatVersion": "4.1.12.26",
+            "weixinSha256": (
+                "4914a621a810ecbc0a132b6ff8f612658cfce323d3989b3e5fe32d4ff343ba46"
+            ),
+        },
         "codeSignatureEnforced": True,
         "rootPublicKeyCompiled": True,
         "testHooksEnabled": False,
@@ -65,6 +74,10 @@ def test_windows_source_public_manifest_retains_production_security(
     assert manifest.platform == "windows"
     assert manifest.source_runtime is True
     assert manifest.windows_host_verification == "same-user-direct-parent"
+    assert manifest.native_asr_abi_version == 1
+    assert manifest.native_asr_feature_bit == 16
+    assert manifest.native_asr_authorization == "database-read"
+    assert manifest.native_asr_target_wechat_version == "4.1.12.26"
     assert native_core_client._is_source_public_native_core_build_manifest(manifest)
     assert not native_core_client._is_production_native_core_build_manifest(manifest)
     assert native_core_lease.validate_native_core_authorization_policy(manifest) == "production"
