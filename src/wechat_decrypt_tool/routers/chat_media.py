@@ -4166,7 +4166,6 @@ async def trigger_chat_native_voice_transcription(
             "voice_message_unsynced": 409,
             "native_message_lookup_unavailable": 503,
             "native_transport_unavailable": 503,
-            "native_asr_not_authorized": 403,
             "native_weixin_not_running": 503,
             "native_weixin_version_unsupported": 503,
             "native_transport_busy": 429,

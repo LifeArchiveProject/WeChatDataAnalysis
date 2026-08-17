@@ -212,6 +212,7 @@ export const useChatMessages = ({
       weixin_version_unsupported: '当前微信版本暂不支持微信原生语音转文字。请使用微信 4.1.12.26，并完全退出、重新启动微信后再试。',
       active_account_mismatch: '当前项目账号与已登录微信账号不一致。',
       active_account_unverified: '无法确认当前项目账号与已登录微信账号一致。',
+      protected_build_unavailable: '当前受保护 DLL 或构建中的微信原生语音转文字功能不可用。',
       bridge_manager_unavailable: '微信原生语音转文字服务尚未就绪。',
       inspection_failed: '无法检查微信原生语音转文字状态。请重启本应用和微信后再试。',
       bridge_restart_required: '桥接状态已失效。请完全退出微信，重启本应用（开发模式下同时重启后端）后，再重新打开并登录微信。'

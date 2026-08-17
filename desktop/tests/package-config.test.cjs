@@ -165,6 +165,8 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
   assert.match(windowsJob, /\$provenance\.build\.distributionMode -cne 'public'/);
   assert.match(windowsJob, /distributionMode = 'public'/);
   assert.match(windowsJob, /offlineBootstrapFeatureBits -ne 3/);
+  assert.match(windowsJob, /nativeAsrAuthorization -cne 'database-read'/);
+  assert.match(windowsJob, /nativeAsrAuthorization = 'database-read'/);
   assert.match(windowsJob, /offlineExportSealFormat -cne 'WES2'/);
   assert.match(windowsJob, /WCE-AUTOMATED-ANALYSIS-NOTICE-V2/);
   assert.match(windowsJob, /WCE-AI-CHECKPOINT-SET-V3/);
