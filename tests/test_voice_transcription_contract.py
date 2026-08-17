@@ -66,6 +66,7 @@ class TestVoiceTranscriptionContract(unittest.TestCase):
         self.assertIn('"ctranslate2"', build)
         self.assertIn('"av"', build)
         self.assertIn('"opencc"', build)
+        self.assertIn('const os = require("os");', build)
         self.assertIn('"--smoke-opencc"', build)
         self.assertNotIn("windowsNativeCandidates", build)
         self.assertIn("buildIntegrityNativeBinary()", build)
