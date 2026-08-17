@@ -330,7 +330,7 @@ npm run dist:mac
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=LifeArchiveProject/WeChatDataAnalysis&type=Date)](https://www.star-history.com/#LifeArchiveProject/WeChatDataAnalysis&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=LifeArchiveProject/WeChatDataAnalysis&type=Date)](https://star-history.dera.page/#LifeArchiveProject/WeChatDataAnalysis&type=Date)
 
 ## 贡献
 
