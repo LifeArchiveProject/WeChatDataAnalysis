@@ -61,7 +61,7 @@ def _seed_stale_index(path: Path) -> None:
         conn.close()
 
 
-def test_wrapped_discards_index_older_than_decrypted_message_shards() -> None:
+def test_wrapped_keeps_usable_index_older_than_decrypted_message_shards() -> None:
     import wechat_decrypt_tool.chat_search_index as search_index
     import wechat_decrypt_tool.wrapped.service as wrapped_service
 
@@ -80,9 +80,11 @@ def test_wrapped_discards_index_older_than_decrypted_message_shards() -> None:
         stale_cache = account_dir / "_wrapped" / "cache" / "global_2026_card_0_v36.json"
         stale_cache.parent.mkdir(parents=True)
         stale_cache.write_text('{"stale": true}', encoding="utf-8")
+        os.utime(stale_cache, ns=(now_ns - 3_000_000_000, now_ns - 3_000_000_000))
 
         status = search_index.get_chat_search_index_status(account_dir, source="auto")
-        assert status["index"]["ready"] is False
+        assert status["index"]["ready"] is True
+        assert status["index"]["upToDate"] is False
         assert status["index"]["staleForSourceData"] is True
 
         with patch.object(wrapped_service, "_resolve_account_dir", return_value=account_dir):
@@ -92,7 +94,7 @@ def test_wrapped_discards_index_older_than_decrypted_message_shards() -> None:
             )
 
         assert result["availableYears"] == [2026, 2025]
-        assert not index_db.exists()
+        assert index_db.exists()
         assert not stale_cache.exists()
 
         from wechat_decrypt_tool.wrapped.cards.card_00_global_overview import (
@@ -108,7 +110,7 @@ def test_wrapped_discards_index_older_than_decrypted_message_shards() -> None:
         assert daily_counts[jan_30_index] == 1
 
 
-def test_wal_sidecar_touch_does_not_mark_index_stale() -> None:
+def test_wal_touch_is_ignored_and_newer_source_keeps_index_usable() -> None:
     """读库会刷新 -wal 的 mtime，不能因此判定索引过期。
 
     2026-08-14 线上事故：用户构建完索引后，实时同步/搜索读了一次分片库，
@@ -145,4 +147,6 @@ def test_wal_sidecar_touch_does_not_mark_index_stale() -> None:
         os.utime(message_db, ns=(now_ns, now_ns))
         status = search_index.get_chat_search_index_status(account_dir, source="auto")
         assert status["index"]["staleForSourceData"] is True
-        assert status["index"]["ready"] is False
+        assert status["index"]["ready"] is True
+        assert status["index"]["upToDate"] is False
+        assert index_db.exists()

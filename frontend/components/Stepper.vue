@@ -3,10 +3,12 @@
     <div class="flex items-center justify-between">
       <div v-for="(step, index) in steps" :key="index" class="flex items-center flex-1" :class="index === steps.length - 1 ? 'flex-none' : ''">
         <!-- 步骤圆点 -->
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-1.5 sm:gap-2">
           <div
             class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[11px] font-medium transition-colors duration-200"
             :class="getStepClass(index)"
+            :aria-label="`${index + 1}. ${step.title}`"
+            :title="step.title"
           >
             <!-- 已完成显示勾选 -->
             <svg v-if="index < currentStep" class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -17,7 +19,7 @@
           </div>
           <!-- 步骤标题 -->
           <div
-            class="whitespace-nowrap text-[13px] transition-colors duration-200"
+            class="hidden whitespace-nowrap text-[13px] transition-colors duration-200 sm:block"
             :class="getTextClass(index)"
           >
             {{ step.title }}
@@ -27,7 +29,7 @@
         <!-- 连接线 -->
         <div
           v-if="index < steps.length - 1"
-          class="mx-3 h-px flex-1 transition-colors duration-200"
+          class="mx-1.5 h-px flex-1 transition-colors duration-200 sm:mx-3"
           :class="index < currentStep ? 'bg-[#9BD9B5]' : 'bg-[rgba(17,24,20,0.12)]'"
         ></div>
       </div>
