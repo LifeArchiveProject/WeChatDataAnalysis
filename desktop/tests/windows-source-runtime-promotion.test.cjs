@@ -13,6 +13,7 @@ const {
 } = require("../scripts/windows-source-runtime-promotion.cjs");
 const {
   WINDOWS_NATIVE_ASR_ABI_VERSION,
+  WINDOWS_NATIVE_ASR_AUTHORIZATION,
   WINDOWS_NATIVE_ASR_EXPORTS,
   WINDOWS_NATIVE_ASR_FEATURE_BIT,
   WINDOWS_NATIVE_ASR_TARGET,
@@ -58,6 +59,7 @@ function fixture({ clientExports = WINDOWS_NATIVE_ASR_EXPORTS } = {}) {
     securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
     securityCheckpointCount: 7,
     nativeAsrAbiVersion: WINDOWS_NATIVE_ASR_ABI_VERSION,
+    nativeAsrAuthorization: WINDOWS_NATIVE_ASR_AUTHORIZATION,
     nativeAsrFeatureBit: WINDOWS_NATIVE_ASR_FEATURE_BIT,
     nativeAsrTarget: WINDOWS_NATIVE_ASR_TARGET,
   });
@@ -135,6 +137,27 @@ test("Windows promotion rejects a source runtime without fused ASR exports", () 
         nowUnix: NOW,
       }),
       /missing fused ASR ABI exports/
+    );
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test("Windows promotion rejects a source runtime with separate ASR authorization", () => {
+  const value = fixture();
+  try {
+    const manifestPath = path.join(value.coreDir, "wechatdb_native_build.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.nativeAsrAuthorization = "native-asr";
+    write(manifestPath, manifest);
+    assert.throws(
+      () => stageWindowsSourceRuntimeBundle({
+        coreDir: value.coreDir,
+        stageDir: path.join(value.root, "stage"),
+        releaseTag: "windows-source-runtime-20260808-aaaaaaaa",
+        nowUnix: NOW,
+      }),
+      /nativeAsrAuthorization must equal database-read/
     );
   } finally {
     fs.rmSync(value.root, { recursive: true, force: true });

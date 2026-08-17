@@ -123,7 +123,7 @@
 
 主操作不会在原生路径失败或不可用时自动回退到 Whisper，避免用户在不知情时切换识别来源。成功结果以**明文**持久化到账号目录的 `_cache/native_voice_transcripts.sqlite3`；需要按本地聊天数据同等敏感级别保护、备份或删除该文件。
 
-远端 hook 与固定版本适配器已编入现有签名的 `wechatdb_client.dll`，控制器由 `wechatdb_broker.exe` 持有；每次开始、轮询和关闭任务都经过 native-core 会话、一次性 nonce 和独立的 `native-asr` 在线授权。该功能不属于离线默认权限，也不再分发独立 hook 或明文 Python controller。
+远端 hook 与固定版本适配器已编入现有签名的 `wechatdb_client.dll`，控制器由 `wechatdb_broker.exe` 持有；每次开始、轮询和关闭任务都经过 native-core 会话与一次性 nonce，并继承该 DLL 已有的数据库读取授权，不再要求单独的 `native-asr` 在线授权。该能力仍受 DLL 签名、固定构建有效期和目标微信版本校验约束，也不再分发独立 hook 或明文 Python controller。
 
 原生 hook 首次使用后会随当前微信进程驻留，直到微信完全退出，目的是避免微信异步回调落入已经卸载的 DLL。不要在同一微信进程内尝试卸载或重复注入；如果 bridge 已经加载后又重启了本项目后端，必须先完全退出并重新启动微信，再使用原生转写。
 

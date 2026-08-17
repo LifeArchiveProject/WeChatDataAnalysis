@@ -13,6 +13,7 @@ const {
 } = require("../scripts/native-core-before-pack.cjs");
 const {
   WINDOWS_NATIVE_ASR_ABI_VERSION,
+  WINDOWS_NATIVE_ASR_AUTHORIZATION,
   WINDOWS_NATIVE_ASR_EXPORTS,
   WINDOWS_NATIVE_ASR_FEATURE_BIT,
   WINDOWS_NATIVE_ASR_TARGET,
@@ -45,6 +46,7 @@ const PRODUCTION_MANIFEST = Object.freeze({
   securityCheckpointCount: 7,
   securityCheckpointSetSha256: "bb".repeat(32),
   nativeAsrAbiVersion: WINDOWS_NATIVE_ASR_ABI_VERSION,
+  nativeAsrAuthorization: WINDOWS_NATIVE_ASR_AUTHORIZATION,
   nativeAsrFeatureBit: WINDOWS_NATIVE_ASR_FEATURE_BIT,
   nativeAsrTarget: WINDOWS_NATIVE_ASR_TARGET,
 });

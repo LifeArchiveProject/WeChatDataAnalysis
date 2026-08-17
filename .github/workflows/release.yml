@@ -236,8 +236,9 @@ jobs:
             throw "GitHub releases require the shared public native distribution mode."
           }
           if ([uint64]$manifest.offlineBootstrapFeatureBits -ne 3 -or
+              $manifest.nativeAsrAuthorization -cne 'database-read' -or
               $manifest.offlineExportSealFormat -cne 'WES2') {
-            throw "Native production artifact does not provide the required offline 3/WES2 contract."
+            throw "Native production artifact does not provide the required offline 3/WES2 and database-read ASR contract."
           }
           if ($manifest.securityNoticeId -cne
                 'WCE-AUTOMATED-ANALYSIS-NOTICE-V2' -or
@@ -283,6 +284,8 @@ jobs:
                 [long]$manifest.buildExpiresAtUnix -or
               [uint64]$provenance.build.offlineBootstrapFeatureBits -ne
                 [uint64]$manifest.offlineBootstrapFeatureBits -or
+              $provenance.build.nativeAsrAuthorization -cne
+                $manifest.nativeAsrAuthorization -or
               $provenance.build.offlineExportSealFormat -cne
                 $manifest.offlineExportSealFormat -or
               $provenance.build.workflowRunId -cne $env:WCE_NATIVE_CORE_ARTIFACT_RUN_ID -or
@@ -611,6 +614,7 @@ jobs:
               buildId = $env:NATIVE_BUILD_ID
               distributionMode = 'public'
               offlineBootstrapFeatureBits = [uint64]3
+              nativeAsrAuthorization = 'database-read'
               offlineExportSealFormat = 'WES2'
               securityNoticeId = 'WCE-AUTOMATED-ANALYSIS-NOTICE-V2'
               securityNoticeSha256 = $env:WCE_NATIVE_CORE_SECURITY_NOTICE_SHA256

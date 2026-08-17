@@ -73,6 +73,15 @@ def _manifest(*, development: bool) -> NativeCoreBuildManifest:
             else NativeCoreFeature.DATABASE_READ | NativeCoreFeature.EXPORT
         ),
         offline_export_seal_format="none" if development else "WES2",
+        native_asr_abi_version=0 if development else 1,
+        native_asr_feature_bit=0 if development else 16,
+        native_asr_authorization="none" if development else "database-read",
+        native_asr_target_wechat_version="" if development else "4.1.12.26",
+        native_asr_target_weixin_sha256=(
+            ""
+            if development
+            else "4914a621a810ecbc0a132b6ff8f612658cfce323d3989b3e5fe32d4ff343ba46"
+        ),
         build_issued_at_unix=0 if development else _PRODUCTION_BUILD_ISSUED_AT,
         build_expires_at_unix=0 if development else _PRODUCTION_BUILD_EXPIRES_AT,
     )
@@ -226,6 +235,13 @@ def _write_component(
                     manifest.offline_bootstrap_feature_bits
                 ),
                 "offlineExportSealFormat": manifest.offline_export_seal_format,
+                "nativeAsrAbiVersion": manifest.native_asr_abi_version,
+                "nativeAsrFeatureBit": manifest.native_asr_feature_bit,
+                "nativeAsrAuthorization": manifest.native_asr_authorization,
+                "nativeAsrTarget": {
+                    "wechatVersion": manifest.native_asr_target_wechat_version,
+                    "weixinSha256": manifest.native_asr_target_weixin_sha256,
+                },
                 "codeSignatureEnforced": manifest.code_signature_enforced,
                 "rootPublicKeyCompiled": manifest.root_public_key_compiled,
                 "testHooksEnabled": manifest.test_hooks_enabled,
