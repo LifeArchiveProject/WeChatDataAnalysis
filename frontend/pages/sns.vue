@@ -3,9 +3,19 @@
     <!-- 左侧朋友圈联系人 -->
     <div class="w-[280px] flex flex-col min-h-0 border-r border-gray-200 bg-[#EDEDED]" style="background-color: var(--app-shell-bg)">
       <div class="p-3">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-2">
           <div class="text-sm font-semibold text-gray-700">朋友圈联系人</div>
-          <div class="text-xs text-gray-500">{{ visibleSnsUsers.length }}</div>
+          <div class="flex items-center gap-2">
+            <div class="text-xs text-gray-500">{{ visibleSnsUsers.length }}</div>
+            <button
+                type="button"
+                class="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="!selectedAccount || isRefreshing || isLoading"
+                @click="refreshSnsData"
+            >
+              {{ isRefreshing ? '刷新中…' : '刷新' }}
+            </button>
+          </div>
         </div>
         <input
             v-model="snsUserQuery"
@@ -13,6 +23,7 @@
             placeholder="搜索"
             class="mt-2 w-full px-3 py-2 rounded-md border border-gray-200 bg-white text-sm outline-none focus:ring-2 focus:ring-[#576b95]/30 focus:border-[#576b95]"
         />
+        <div v-if="syncWarning" class="mt-2 text-xs leading-5 text-amber-700">{{ syncWarning }}</div>
 
         <div class="mt-3">
           <button
@@ -1010,7 +1021,9 @@ const hasMore = ref(true)
 const cachePagingExhausted = ref(false)
 const timelineScrollEl = ref(null)
 const isLoading = ref(false)
+const isRefreshing = ref(false)
 const error = ref('')
+const syncWarning = ref('')
 const snsUseCache = ref(true)
 
 const coverData = ref(null)
@@ -2782,9 +2795,100 @@ const loadAccounts = async () => {
   }
 }
 
+let refreshQueued = false
+const SNS_REALTIME_SYNC_TIMEOUT_MS = 10000
+const SNS_SNAPSHOT_POLL_INTERVAL_MS = 5000
+let snsSnapshotVersion = ''
+let snsSnapshotPollTimer = null
+let snsSnapshotPollInFlight = false
+
+const readSnsSnapshotVersion = async (account) => {
+  const resp = await api.getSnsSnapshotStatus({ account })
+  if (String(resp?.status || '').toLowerCase() !== 'ok' || !resp?.available) return ''
+  return String(resp?.version || '').trim()
+}
+
+const updateSnsSnapshotBaseline = async (account) => {
+  try {
+    const version = await readSnsSnapshotVersion(account)
+    if (version && account === String(selectedAccount.value || '').trim()) {
+      snsSnapshotVersion = version
+    }
+  } catch {}
+}
+
+const syncLatestSnsWithTimeout = async (account) => {
+  let timeoutId = null
+  const syncOutcome = api.syncSnsRealtimeLatest({ account, force: 1 }).then(
+    (value) => ({ type: 'result', value }),
+    (error) => ({ type: 'error', error })
+  )
+  const timeoutOutcome = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve({ type: 'timeout' }), SNS_REALTIME_SYNC_TIMEOUT_MS)
+  })
+
+  try {
+    const outcome = await Promise.race([syncOutcome, timeoutOutcome])
+    if (outcome?.type === 'timeout') {
+      throw new Error(`朋友圈实时同步超时（${SNS_REALTIME_SYNC_TIMEOUT_MS / 1000} 秒）`)
+    }
+    if (outcome?.type === 'error') throw outcome.error
+    return outcome?.value
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId)
+  }
+}
+
+const refreshSnsData = async () => {
+  if (!String(selectedAccount.value || '').trim()) return
+  if (isRefreshing.value) {
+    refreshQueued = true
+    return
+  }
+
+  isRefreshing.value = true
+  try {
+    do {
+      refreshQueued = false
+      const account = String(selectedAccount.value || '').trim()
+      if (!account) break
+
+      try {
+        const syncResult = await syncLatestSnsWithTimeout(account)
+        const syncStatus = String(syncResult?.status || '').trim().toLowerCase()
+        if (syncStatus === 'ok' || syncStatus === 'noop') {
+          syncWarning.value = ''
+        } else {
+          syncWarning.value = '实时同步失败，当前显示本地快照'
+          console.warn('同步最新朋友圈未成功，继续读取已解密快照', syncResult)
+        }
+      } catch (e) {
+        syncWarning.value = '实时同步失败，当前显示本地快照'
+        console.warn('同步最新朋友圈失败，继续读取已解密快照', e)
+      }
+      await loadSelfInfo()
+      await loadSnsUsers()
+      const snapshotLoaded = await loadPosts({ reset: true })
+      if (snapshotLoaded) await updateSnsSnapshotBaseline(account)
+    } while (refreshQueued)
+  } finally {
+    isRefreshing.value = false
+  }
+}
+
+let postsRequestGeneration = 0
+
+const isCurrentPostsRequest = (generation, account) => {
+  return generation === postsRequestGeneration
+    && account === String(selectedAccount.value || '').trim()
+}
+
 const loadPosts = async ({ reset }) => {
-  if (!selectedAccount.value) return
-  if (isLoading.value) return
+  const account = String(selectedAccount.value || '').trim()
+  if (!account) return false
+  if (!reset && isLoading.value) return false
+  const selectedUsername = String(selectedSnsUser.value || '').trim()
+  const generation = ++postsRequestGeneration
   error.value = ''
   isLoading.value = true
   try {
@@ -2803,12 +2907,14 @@ const loadPosts = async ({ reset }) => {
     }
     const offset = reset ? 0 : Number(timelineOffset.value || 0)
     const resp = await api.listSnsTimeline({
-      account: selectedAccount.value,
+      account,
       limit: pageSize,
       offset,
       source: 'decrypted',
-      usernames: selectedSnsUser.value ? [String(selectedSnsUser.value).trim()] : []
+      usernames: selectedUsername ? [selectedUsername] : []
     })
+    if (!isCurrentPostsRequest(generation, account)) return false
+
     const items = Array.isArray(resp?.timeline) ? resp.timeline : []
     // Advance offset by the number of rows consumed by the backend.
     // When `hasMore` is true, the backend definitely scanned at least `limit` raw rows (even if it filtered some out).
@@ -2838,7 +2944,7 @@ const loadPosts = async ({ reset }) => {
     }
 
     // Keep sidebar count from lagging behind what we've already loaded (useful when sqlite snapshot is incomplete).
-    const selUname = String(selectedSnsUser.value || '').trim()
+    const selUname = selectedUsername
     if (selUname && Array.isArray(snsUsers.value) && snsUsers.value.length > 0) {
       const idx = snsUsers.value.findIndex((u) => String(u?.username || '').trim() === selUname)
       if (idx >= 0) {
@@ -2860,28 +2966,64 @@ const loadPosts = async ({ reset }) => {
     const shown = Array.isArray(posts.value) ? posts.value.length : 0
     const allowCachePaging = !cachePagingExhausted.value && cachedTotal > 0 && shown < cachedTotal
     hasMore.value = backendHasMore || allowCachePaging
+    return true
   } catch (e) {
-    error.value = e?.message || '加载朋友圈失败'
-  } finally {
-    isLoading.value = false
-
-    // Auto-trigger next page when we're already near bottom (e.g. first page too short to scroll,
-    // or we need to continue paging from cache after WCDB "visible subset" ends).
-    if (process.client) {
-      setTimeout(async () => {
-        try {
-          await nextTick()
-        } catch {}
-        if (error.value) return
-        if (isLoading.value || !hasMore.value) return
-        const el = timelineScrollEl.value
-        if (!el) return
-        const { scrollTop, clientHeight, scrollHeight } = el
-        if (scrollTop + clientHeight >= scrollHeight - 200) {
-          loadPosts({ reset: false })
-        }
-      }, 0)
+    if (isCurrentPostsRequest(generation, account)) {
+      error.value = e?.message || '加载朋友圈失败'
     }
+    return false
+  } finally {
+    if (isCurrentPostsRequest(generation, account)) {
+      isLoading.value = false
+
+      // Auto-trigger next page when we're already near bottom (e.g. first page too short to scroll,
+      // or we need to continue paging from cache after WCDB "visible subset" ends).
+      if (process.client) {
+        setTimeout(async () => {
+          try {
+            await nextTick()
+          } catch {}
+          if (!isCurrentPostsRequest(generation, account)) return
+          if (error.value) return
+          if (isLoading.value || !hasMore.value) return
+          const el = timelineScrollEl.value
+          if (!el) return
+          const { scrollTop, clientHeight, scrollHeight } = el
+          if (scrollTop + clientHeight >= scrollHeight - 200) {
+            loadPosts({ reset: false })
+          }
+        }, 0)
+      }
+    }
+  }
+}
+
+const pollSnsSnapshotVersion = async () => {
+  if (!process.client || document.visibilityState !== 'visible') return
+  if (snsSnapshotPollInFlight || isRefreshing.value) return
+  const account = String(selectedAccount.value || '').trim()
+  if (!account) return
+
+  snsSnapshotPollInFlight = true
+  try {
+    const version = await readSnsSnapshotVersion(account)
+    if (!version || account !== String(selectedAccount.value || '').trim()) return
+    if (!snsSnapshotVersion) {
+      snsSnapshotVersion = version
+      return
+    }
+    if (version === snsSnapshotVersion) return
+
+    await loadSelfInfo()
+    await loadSnsUsers()
+    const snapshotLoaded = await loadPosts({ reset: true })
+    if (snapshotLoaded && account === String(selectedAccount.value || '').trim() && !error.value) {
+      snsSnapshotVersion = version
+    }
+  } catch {
+    // Snapshot-version polling is best-effort; the next interval retries.
+  } finally {
+    snsSnapshotPollInFlight = false
   }
 }
 
@@ -2902,13 +3044,13 @@ watch(
         snsUserQuery.value = ''
         selectedSnsUser.value = ''
         snsUsers.value = []
+        syncWarning.value = ''
+        snsSnapshotVersion = ''
         snsAvatarErrors.value = {}
         activeLivePhotoKey.value = ''
         resetSnsMediaErrors()
         if (previewCtx.value) closeImagePreview()
-        await loadSelfInfo()
-        await loadSnsUsers()
-        await loadPosts({ reset: true })
+        await refreshSnsData()
       }
     },
     { immediate: true }
@@ -2972,17 +3114,63 @@ const onGlobalKeyDown = (e) => {
   }
 }
 
+const SNS_PASSIVE_REFRESH_THROTTLE_MS = 5000
+const SNS_PASSIVE_REFRESH_EVENT_DELAY_MS = 200
+let lastPassiveRefreshAt = 0
+let passiveRefreshTimer = null
+
+const runPassiveSnsRefresh = () => {
+  passiveRefreshTimer = null
+  if (!process.client) return
+  if (document.visibilityState !== 'visible') return
+  if (!String(selectedAccount.value || '').trim()) return
+  lastPassiveRefreshAt = Date.now()
+  void refreshSnsData()
+}
+
+const onSnsPassiveRefresh = () => {
+  if (!process.client) return
+  if (document.visibilityState !== 'visible') return
+  if (!String(selectedAccount.value || '').trim()) return
+
+  const elapsed = Date.now() - lastPassiveRefreshAt
+  if (passiveRefreshTimer !== null) return
+  passiveRefreshTimer = window.setTimeout(
+    runPassiveSnsRefresh,
+    Math.max(
+      SNS_PASSIVE_REFRESH_EVENT_DELAY_MS,
+      SNS_PASSIVE_REFRESH_THROTTLE_MS - elapsed
+    )
+  )
+}
+
 onMounted(() => {
   if (!process.client) return
   document.addEventListener('click', onGlobalClick)
   document.addEventListener('keydown', onGlobalKeyDown)
+  window.addEventListener('focus', onSnsPassiveRefresh)
+  document.addEventListener('visibilitychange', onSnsPassiveRefresh)
+  snsSnapshotPollTimer = window.setInterval(
+    () => { void pollSnsSnapshotVersion() },
+    SNS_SNAPSHOT_POLL_INTERVAL_MS
+  )
 })
 
 onUnmounted(() => {
   if (!process.client) return
   stopSnsExportPolling()
+  if (passiveRefreshTimer !== null) {
+    window.clearTimeout(passiveRefreshTimer)
+    passiveRefreshTimer = null
+  }
+  if (snsSnapshotPollTimer !== null) {
+    window.clearInterval(snsSnapshotPollTimer)
+    snsSnapshotPollTimer = null
+  }
   document.removeEventListener('click', onGlobalClick)
   document.removeEventListener('keydown', onGlobalKeyDown)
+  window.removeEventListener('focus', onSnsPassiveRefresh)
+  document.removeEventListener('visibilitychange', onSnsPassiveRefresh)
 })
 
 const getProxyExternalUrl = (url) => {

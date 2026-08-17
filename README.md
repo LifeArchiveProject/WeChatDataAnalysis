@@ -25,11 +25,11 @@
     <td align="center" colspan="2"><img src="frontend/public/style1.png" alt="年度总结 Modern" width="800"/></td>
   </tr>
   <tr>
-    <td><img src="frontend/public/AnnualSummary1.png" alt="AnnualSummary 1" width="400"/></td>
-    <td><img src="frontend/public/AnnualSummary2.png" alt="AnnualSummary 2" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary1.gif" alt="AnnualSummary 1" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary2.gif" alt="AnnualSummary 2" width="400"/></td>
   </tr>
   <tr>
-    <td><img src="frontend/public/AnnualSummary3.png" alt="AnnualSummary 3" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary3.gif" alt="AnnualSummary 3" width="400"/></td>
     <td><img src="frontend/public/AnnualSummary4.gif" alt="AnnualSummary 4" width="400"/></td>
   </tr>
   <tr>

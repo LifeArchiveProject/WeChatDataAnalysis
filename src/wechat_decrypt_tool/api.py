@@ -21,6 +21,7 @@ request_logger = get_logger("wechat_decrypt_tool.request")
 from . import __version__ as APP_VERSION
 from .path_fix import PathFixRoute
 from .chat_realtime_autosync import CHAT_REALTIME_AUTOSYNC
+from .sns_realtime_autosync import SNS_REALTIME_AUTOSYNC
 from .routers.chat import router as _chat_router
 from .routers.chat_contacts import router as _chat_contacts_router
 from .routers.chat_export import router as _chat_export_router
@@ -274,12 +275,20 @@ async def _startup_background_jobs() -> None:
         CHAT_REALTIME_AUTOSYNC.start()
     except Exception:
         logger.exception("Failed to start realtime autosync service")
+    try:
+        SNS_REALTIME_AUTOSYNC.start()
+    except Exception:
+        logger.exception("Failed to start SNS realtime autosync service")
 
 
 @app.on_event("shutdown")
 async def _shutdown_wcdb_realtime() -> None:
     try:
         CHAT_REALTIME_AUTOSYNC.stop()
+    except Exception:
+        pass
+    try:
+        SNS_REALTIME_AUTOSYNC.stop()
     except Exception:
         pass
     try:

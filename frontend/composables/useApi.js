@@ -356,6 +356,22 @@ export const useApi = () => {
     return await request(url)
   }
 
+  const syncSnsRealtimeLatest = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.max_scan != null) query.set('max_scan', String(params.max_scan))
+    if (params && params.force != null) query.set('force', String(params.force))
+    const url = '/sns/realtime/sync_latest' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'POST' })
+  }
+
+  const getSnsSnapshotStatus = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/sns/snapshot/status' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
   const openChatMediaFolder = async (params = {}) => {
     const query = new URLSearchParams()
     if (params && params.account) query.set('account', params.account)
@@ -417,10 +433,40 @@ export const useApi = () => {
     return await request('/chat/media/voice/transcription/status')
   }
 
-  const setVoiceTranscriptionDevice = async (device) => {
+  const setVoiceTranscriptionSettings = async (data = {}) => {
+    const body = {}
+    if (data.device != null) body.device = String(data.device || '').trim().toLowerCase()
+    if (data.model != null) body.model = String(data.model || '').trim()
     return await request('/chat/media/voice/transcription/settings', {
       method: 'PUT',
-      body: { device: String(device || '').trim().toLowerCase() }
+      body
+    })
+  }
+
+  const setVoiceTranscriptionDevice = async (device) => {
+    return await setVoiceTranscriptionSettings({ device })
+  }
+
+  const setVoiceTranscriptionModel = async (model) => {
+    return await setVoiceTranscriptionSettings({ model })
+  }
+
+  const downloadVoiceTranscriptionModel = async (model) => {
+    const modelId = encodeURIComponent(String(model || '').trim())
+    return await request(`/chat/media/voice/transcription/models/${modelId}/download`, {
+      method: 'POST'
+    })
+  }
+
+  const getVoiceTranscriptionModelDownload = async (jobId) => {
+    const id = encodeURIComponent(String(jobId || '').trim())
+    return await request(`/chat/media/voice/transcription/models/downloads/${id}`)
+  }
+
+  const deleteVoiceTranscriptionModel = async (model) => {
+    const modelId = encodeURIComponent(String(model || '').trim())
+    return await request(`/chat/media/voice/transcription/models/${modelId}`, {
+      method: 'DELETE'
     })
   }
 
@@ -502,6 +548,46 @@ export const useApi = () => {
           ? data.server_ids.map((v) => String(v ?? '').trim()).filter(Boolean)
           : []
       }
+    })
+  }
+
+  const deleteAllVoiceTranscriptionCache = async () => {
+    return await request('/chat/media/voice/transcription/cache/all', {
+      method: 'DELETE'
+    })
+  }
+
+  const startVoiceTranscriptionBatch = async (data = {}) => {
+    const requestedConcurrency = data.concurrency
+    const concurrency = requestedConcurrency === null || requestedConcurrency === undefined || requestedConcurrency === ''
+      ? 0
+      : requestedConcurrency
+    if (typeof concurrency !== 'number' || !Number.isInteger(concurrency) || concurrency < 0) {
+      throw new RangeError('并发线程数必须是非负整数（0 表示自动）')
+    }
+    return await request('/chat/media/voice/transcription/batch', {
+      method: 'POST',
+      body: {
+        account: data.account || null,
+        force: !!data.force,
+        concurrency
+      }
+    })
+  }
+
+  const getLatestVoiceTranscriptionBatch = async (account = '') => {
+    const query = new URLSearchParams()
+    if (account) query.set('account', String(account))
+    return await request(`/chat/media/voice/transcription/batch${query.toString() ? `?${query.toString()}` : ''}`)
+  }
+
+  const getVoiceTranscriptionBatch = async (jobId) => {
+    return await request(`/chat/media/voice/transcription/batch/${encodeURIComponent(String(jobId || '').trim())}`)
+  }
+
+  const cancelVoiceTranscriptionBatch = async (jobId) => {
+    return await request(`/chat/media/voice/transcription/batch/${encodeURIComponent(String(jobId || '').trim())}`, {
+      method: 'DELETE'
     })
   }
 
@@ -925,19 +1011,31 @@ export const useApi = () => {
     resolveAppMsg,
     listSnsTimeline,
     listSnsUsers,
+    syncSnsRealtimeLatest,
+    getSnsSnapshotStatus,
     openChatMediaFolder,
     downloadChatEmoji,
     saveMediaKeys,
     getSavedKeys,
     decryptAllMedia,
     getVoiceTranscriptionStatus,
+    setVoiceTranscriptionSettings,
     setVoiceTranscriptionDevice,
+    setVoiceTranscriptionModel,
+    downloadVoiceTranscriptionModel,
+    getVoiceTranscriptionModelDownload,
+    deleteVoiceTranscriptionModel,
     transcribeChatVoice,
     getNativeVoiceTranscript,
     triggerNativeVoiceTranscription,
     getNativeVoiceTranscriptionStatus,
     lookupNativeVoiceTranscriptionCache,
     lookupChatVoiceTranscriptionCache,
+    deleteAllVoiceTranscriptionCache,
+    startVoiceTranscriptionBatch,
+    getLatestVoiceTranscriptionBatch,
+    getVoiceTranscriptionBatch,
+    cancelVoiceTranscriptionBatch,
     createChatExport,
     getChatExport,
     listChatExports,

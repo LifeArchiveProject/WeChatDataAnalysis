@@ -81,6 +81,58 @@ def normalize_sns_cache_url(url: str) -> str:
         return f"{stable_base}?{'&'.join(params)}" if params else stable_base
 
 
+def _sns_remote_diagnostic_log(
+    event: str,
+    *,
+    url: str,
+    diagnostic_id: str = "",
+    key: str = "",
+    token: str = "",
+    error: Optional[BaseException] = None,
+    **fields: object,
+) -> None:
+    raw_url = str(url or "").strip()
+    try:
+        host = str(urlparse(raw_url).hostname or "").strip().lower()
+    except Exception:
+        host = ""
+
+    stable_url = normalize_sns_cache_url(raw_url)
+    payload: dict[str, object] = {
+        "diagnosticId": str(diagnostic_id or ""),
+        "event": str(event or ""),
+        "urlHost": host,
+        "urlIdentity": (
+            hashlib.sha256(stable_url.encode("utf-8", errors="ignore")).hexdigest()[:16]
+            if stable_url
+            else ""
+        ),
+        **fields,
+    }
+
+    if error is not None:
+        error_text = str(error).strip() or repr(error)
+        for sensitive in (raw_url, str(key or ""), str(token or "")):
+            if sensitive:
+                error_text = error_text.replace(sensitive, "<redacted>")
+        error_text = re.sub(r"https?://[^\s\"']+", "<url-redacted>", error_text, flags=re.I)
+        payload["errorType"] = type(error).__name__
+        payload["errorText"] = error_text[:500]
+
+        response = getattr(error, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code is not None:
+            try:
+                payload["statusCode"] = int(status_code)
+            except Exception:
+                payload["statusCode"] = str(status_code)
+
+    logger.info(
+        "[sns_media] %s",
+        json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True),
+    )
+
+
 def fix_sns_cdn_url(url: str, *, token: str = "", is_video: bool = False) -> str:
     """WeFlow-compatible SNS CDN URL normalization.
 
@@ -836,6 +888,7 @@ async def try_fetch_and_decrypt_sns_image_remote(
     token: str,
     use_cache: bool,
     client: Optional[httpx.AsyncClient] = None,
+    diagnostic_id: str = "",
 ) -> Optional[SnsRemoteImageResult]:
     """Try WeFlow-style: download from CDN -> WxIsaac64 full-file XOR -> return bytes.
 
@@ -844,14 +897,40 @@ async def try_fetch_and_decrypt_sns_image_remote(
     """
     u_fixed = fix_sns_cdn_url(url, token=token, is_video=False)
     if not u_fixed:
+        if str(url or "").strip():
+            _sns_remote_diagnostic_log(
+                "remote:reject",
+                url=str(url or ""),
+                diagnostic_id=diagnostic_id,
+                key=key,
+                token=token,
+                reason="url-normalization-empty",
+            )
         return None
 
     try:
         p = urlparse(u_fixed)
         host = str(p.hostname or "").strip().lower()
-    except Exception:
+    except Exception as exc:
+        _sns_remote_diagnostic_log(
+            "remote:reject",
+            url=u_fixed,
+            diagnostic_id=diagnostic_id,
+            key=key,
+            token=token,
+            reason="url-parse-error",
+            error=exc,
+        )
         return None
     if not is_allowed_sns_media_host(host):
+        _sns_remote_diagnostic_log(
+            "remote:reject",
+            url=u_fixed,
+            diagnostic_id=diagnostic_id,
+            key=key,
+            token=token,
+            reason="host-not-allowed",
+        )
         return None
 
     cache_dir, cache_stem = _sns_remote_cache_dir_and_stem(account_dir, url=u_fixed, key=str(key or ""))
@@ -871,10 +950,25 @@ async def try_fetch_and_decrypt_sns_image_remote(
     try:
         raw, _content_type, x_enc = await _download_sns_remote_bytes(u_fixed, client=client)
     except Exception as e:
-        logger.info("[sns_media] remote download failed: %s", e)
+        _sns_remote_diagnostic_log(
+            "remote:download-error",
+            url=u_fixed,
+            diagnostic_id=diagnostic_id,
+            key=key,
+            token=token,
+            error=e,
+        )
         return None
 
     if not raw:
+        _sns_remote_diagnostic_log(
+            "remote:decode-rejected",
+            url=u_fixed,
+            diagnostic_id=diagnostic_id,
+            key=key,
+            token=token,
+            reason="empty-download",
+        )
         return None
 
     # First, validate whether the CDN already returned a real image.
@@ -907,9 +1001,30 @@ async def try_fetch_and_decrypt_sns_image_remote(
                     mt = mt_raw
                     decrypted = False
                 else:
+                    _sns_remote_diagnostic_log(
+                        "remote:decode-rejected",
+                        url=u_fixed,
+                        diagnostic_id=diagnostic_id,
+                        key=key,
+                        token=token,
+                        reason="decrypted-bytes-not-image",
+                        rawBytes=len(raw),
+                        rawMediaType=str(mt_raw or ""),
+                        xEnc=str(x_enc or ""),
+                    )
                     return None
         except Exception as e:
-            logger.info("[sns_media] remote decrypt failed: %s", e)
+            _sns_remote_diagnostic_log(
+                "remote:decrypt-error",
+                url=u_fixed,
+                diagnostic_id=diagnostic_id,
+                key=key,
+                token=token,
+                error=e,
+                rawBytes=len(raw),
+                rawMediaType=str(mt_raw or ""),
+                xEnc=str(x_enc or ""),
+            )
             if not mt_raw:
                 return None
             decoded = raw
@@ -917,6 +1032,16 @@ async def try_fetch_and_decrypt_sns_image_remote(
             decrypted = False
 
     if not mt:
+        _sns_remote_diagnostic_log(
+            "remote:decode-rejected",
+            url=u_fixed,
+            diagnostic_id=diagnostic_id,
+            key=key,
+            token=token,
+            reason="unsupported-image-bytes",
+            rawBytes=len(raw),
+            xEnc=str(x_enc or ""),
+        )
         return None
 
     try:
@@ -937,7 +1062,17 @@ async def try_fetch_and_decrypt_sns_image_remote(
                     other.unlink(missing_ok=True)
             except Exception:
                 continue
-    except Exception:
+    except Exception as exc:
+        _sns_remote_diagnostic_log(
+            "remote:cache-write-error",
+            url=u_fixed,
+            diagnostic_id=diagnostic_id,
+            key=key,
+            token=token,
+            error=exc,
+            decodedBytes=len(decoded),
+            mediaType=str(mt or ""),
+        )
         cache_path = None
 
     return SnsRemoteImageResult(
