@@ -4,6 +4,7 @@ import unittest
 import importlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,69 @@ class TestLoggingConfigDataDir(unittest.TestCase):
         base = Path(self._td.name) / "output" / "logs"
         self.assertTrue(log_file.is_relative_to(base))
         self.assertTrue(log_file.exists())
+
+    def test_setup_logging_records_runtime_summary(self):
+        with (
+            patch.object(self.logging_config.sys, "platform", "darwin"),
+            patch.object(
+                self.logging_config.platform,
+                "mac_ver",
+                return_value=("15.7.4", ("", "", ""), "arm64"),
+            ),
+            patch.object(self.logging_config.platform, "release", return_value="24.6.0"),
+            patch.object(self.logging_config.platform, "machine", return_value="arm64"),
+            patch.object(self.logging_config.platform, "python_version", return_value="3.11.9"),
+            patch.object(self.logging_config.sys, "frozen", True, create=True),
+        ):
+            log_file = self.logging_config.setup_logging()
+
+        from wechat_decrypt_tool import __version__
+
+        text = log_file.read_text(encoding="utf-8")
+        self.assertIn(
+            "[runtime] "
+            f"app_version={__version__} platform=macos os_version=15.7.4 "
+            "kernel_release=24.6.0 architecture=arm64 process_bits=64 "
+            "python_version=3.11.9 runtime_mode=frozen",
+            text,
+        )
+        self.assertNotIn("hostname=", text)
+        self.assertNotIn("serial", text.lower())
+
+    def test_log_file_preserves_account_and_path_context(self):
+        log_file = self.logging_config.setup_logging()
+        logger = self.logging_config.get_logger("tests.context")
+        logger.info(
+            "request_account=wxid_private resolved_account=wxid_private "
+            "account_dir=wxid_private_a1b2 "
+            "mac_path=/Users/alice/Library/Application Support/WCDA "
+            r"win_path=C:\Users\bob\Documents\WCDA"
+        )
+        for handler in logger.root.handlers:
+            handler.flush()
+
+        text = log_file.read_text(encoding="utf-8")
+        self.assertIn("request_account=wxid_private", text)
+        self.assertIn("resolved_account=wxid_private", text)
+        self.assertIn("account_dir=wxid_private_a1b2", text)
+        self.assertIn("mac_path=/Users/alice/Library/Application Support/WCDA", text)
+        self.assertIn(r"win_path=C:\Users\bob\Documents\WCDA", text)
+
+    def test_runtime_probe_failure_does_not_block_logging_or_leak_details(self):
+        with (
+            patch.object(self.logging_config.sys, "platform", "darwin"),
+            patch.object(
+                self.logging_config.platform,
+                "mac_ver",
+                side_effect=RuntimeError("private path: /Users/alice/Library"),
+            ),
+        ):
+            log_file = self.logging_config.setup_logging()
+
+        text = log_file.read_text(encoding="utf-8")
+        self.assertIn("[runtime] unavailable error_type=RuntimeError", text)
+        self.assertNotIn("private path", text)
+        self.assertNotIn("/Users/alice", text)
 
 
 if __name__ == "__main__":

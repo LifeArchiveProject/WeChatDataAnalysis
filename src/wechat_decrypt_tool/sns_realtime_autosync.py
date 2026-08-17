@@ -5,8 +5,8 @@ Why:
   can lag behind or miss data (e.g. you viewed it when it was visible, then it became "only last 3 days").
 - For export/offline browsing, we want to keep a local append-only cache of Moments that were visible at some point.
 
-This module runs a lightweight background poller that watches db_storage/sns*.db mtime changes and triggers a cheap
-incremental sync of the latest N Moments into the decrypted snapshot.
+This module runs a lightweight background poller that watches sns.db/WAL mtime changes and triggers a cheap incremental
+sync of the latest N Moments into the decrypted snapshot.
 """
 
 from __future__ import annotations
@@ -64,10 +64,8 @@ def _scan_sns_db_mtime_ns(db_storage_dir: Path) -> int:
     candidates: list[Path] = [
         base / "sns" / "sns.db",
         base / "sns" / "sns.db-wal",
-        base / "sns" / "sns.db-shm",
         base / "sns.db",
         base / "sns.db-wal",
-        base / "sns.db-shm",
     ]
     max_ns = 0
     for p in candidates:
@@ -82,6 +80,7 @@ class _AccountState:
     last_mtime_ns: int = 0
     due_at: float = 0.0
     last_sync_end_at: float = 0.0
+    retry_count: int = 0
     thread: Optional[threading.Thread] = None
 
 
@@ -123,8 +122,49 @@ class SnsRealtimeAutoSyncService:
 
     def stop(self) -> None:
         self._stop.set()
+
+        # Join outside `_mu`: account runners take the same lock in their
+        # `finally` block, so waiting while holding it would deadlock shutdown.
         with self._mu:
+            main_thread = self._thread
             self._thread = None
+
+        current = threading.current_thread()
+        if main_thread is not None and main_thread is not current:
+            try:
+                main_thread.join(timeout=5.0)
+            except Exception:
+                pass
+
+        # The poller is now stopped (or has observed `_stop`), so it cannot add
+        # more account workers while this snapshot is taken.
+        with self._mu:
+            worker_threads = list(
+                dict.fromkeys(
+                    st.thread
+                    for st in self._states.values()
+                    if st.thread is not None and st.thread is not current
+                )
+            )
+
+        for worker_thread in worker_threads:
+            try:
+                worker_thread.join(timeout=5.0)
+            except Exception:
+                pass
+
+    def _retry_delay_seconds(self, retry_count: int) -> float:
+        base_seconds = max(1.0, float(self._interval_ms) / 1000.0)
+        exponent = max(0, min(int(retry_count) - 1, 10))
+        return min(60.0, base_seconds * float(2**exponent))
+
+    def _schedule_retry_locked(self, st: _AccountState, *, now: float) -> float:
+        st.retry_count = int(st.retry_count or 0) + 1
+        delay_seconds = self._retry_delay_seconds(st.retry_count)
+        retry_due_at = float(now) + delay_seconds
+        if st.due_at <= float(now) or st.due_at > retry_due_at:
+            st.due_at = retry_due_at
+        return delay_seconds
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -168,10 +208,11 @@ class SnsRealtimeAutoSyncService:
                 st = self._states.setdefault(acc, _AccountState())
                 if mtime_ns and mtime_ns != st.last_mtime_ns:
                     st.last_mtime_ns = int(mtime_ns)
+                    st.retry_count = 0
                     st.due_at = now + (float(self._debounce_ms) / 1000.0)
 
         # Schedule daemon threads.
-        to_start: list[threading.Thread] = []
+        to_start: list[tuple[str, threading.Thread]] = []
         with self._mu:
             keep = set(accounts)
             for acc in list(self._states.keys()):
@@ -208,37 +249,98 @@ class SnsRealtimeAutoSyncService:
                     daemon=True,
                 )
                 st.thread = th
-                to_start.append(th)
+                to_start.append((acc, th))
                 running += 1
 
-        for th in to_start:
+        for acc, th in to_start:
             if self._stop.is_set():
+                with self._mu:
+                    st = self._states.get(acc)
+                    if st is not None and st.thread is th:
+                        st.thread = None
+                        if st.due_at <= 0:
+                            st.due_at = time.time()
                 break
             try:
                 th.start()
             except Exception:
+                now = time.time()
                 with self._mu:
-                    for acc, st in self._states.items():
-                        if st.thread is th:
-                            st.thread = None
-                            break
+                    st = self._states.get(acc)
+                    if st is not None and st.thread is th:
+                        st.thread = None
+                        st.last_sync_end_at = now
+                        self._schedule_retry_locked(st, now=now)
+                logger.exception("[sns-autosync] failed to start worker account=%s", acc)
 
     def _sync_account_runner(self, account: str) -> None:
         account = str(account or "").strip()
-        try:
-            if self._stop.is_set() or (not account):
-                return
-            res = self._sync_account(account)
-            upserted = int((res or {}).get("upserted") or 0)
-            logger.info("[sns-autosync] sync done account=%s upserted=%s", account, upserted)
-        except Exception:
-            logger.exception("[sns-autosync] sync failed account=%s", account)
-        finally:
+        if not account:
+            return
+        if self._stop.is_set():
             with self._mu:
                 st = self._states.get(account)
                 if st is not None:
                     st.thread = None
-                    st.last_sync_end_at = time.time()
+            return
+
+        status = "error"
+        detail = ""
+        upserted = 0
+        raised = False
+        try:
+            res = self._sync_account(account)
+            status = str((res or {}).get("status") or "error").strip().lower()
+            upserted = int((res or {}).get("upserted") or 0)
+            detail = str((res or {}).get("error") or (res or {}).get("reason") or "").strip()
+        except Exception as exc:
+            raised = True
+            detail = str(exc)
+            logger.exception("[sns-autosync] sync failed account=%s", account)
+        finally:
+            now = time.time()
+            retry_count = 0
+            retry_delay_seconds = 0.0
+            with self._mu:
+                st = self._states.get(account)
+                if st is not None:
+                    st.thread = None
+                    st.last_sync_end_at = now
+                    non_retryable_skip = status == "skipped" and detail.lower() in {
+                        "backlog exceeds scan cap",
+                        "missing account",
+                        "paused",
+                        "service stopping",
+                    }
+                    if status in {"ok", "noop"} or non_retryable_skip:
+                        st.retry_count = 0
+                    elif not self._stop.is_set():
+                        retry_delay_seconds = self._schedule_retry_locked(st, now=now)
+                    retry_count = int(st.retry_count or 0)
+
+        if status in {"ok", "noop"}:
+            logger.info(
+                "[sns-autosync] sync done account=%s status=%s upserted=%s",
+                account,
+                status,
+                upserted,
+            )
+        elif status == "skipped":
+            logger.warning(
+                "[sns-autosync] sync skipped account=%s reason=%s retry_count=%s retry_in_s=%.1f",
+                account,
+                detail or "unknown",
+                retry_count,
+                retry_delay_seconds,
+            )
+        elif not raised:
+            logger.error(
+                "[sns-autosync] sync failed account=%s error=%s retry_count=%s retry_in_s=%.1f",
+                account,
+                detail or "unknown",
+                retry_count,
+                retry_delay_seconds,
+            )
 
     def _sync_account(self, account: str) -> dict[str, Any]:
         account = str(account or "").strip()
@@ -262,7 +364,9 @@ class SnsRealtimeAutoSyncService:
             return sync_sns_realtime_timeline_latest(
                 account=account,
                 max_scan=int(self._max_scan),
-                force=0,
+                # A database/WAL mtime change may only update comments or likes
+                # on an existing tid, so max-id-only short-circuiting is unsafe.
+                force=1,
             )
         except HTTPException as e:
             return {"status": "error", "error": str(e.detail or "")}
@@ -271,4 +375,3 @@ class SnsRealtimeAutoSyncService:
 
 
 SNS_REALTIME_AUTOSYNC = SnsRealtimeAutoSyncService()
-

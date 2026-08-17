@@ -33,6 +33,21 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
             </svg>
           </button>
+          <button
+            type="button"
+            class="header-btn-icon"
+            :class="{ 'header-btn-icon-active': voiceSidebarOpen }"
+            :disabled="!selectedContact"
+            :aria-pressed="voiceSidebarOpen"
+            aria-label="语音转文字"
+            title="语音转文字"
+            @click="toggleVoiceSidebar"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="8" y="3" width="8" height="12" rx="4" />
+              <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" />
+            </svg>
+          </button>
           <button class="header-btn-icon" :class="{ 'header-btn-icon-active': resourceSidebarOpen }" @click="toggleResourceSidebar" :disabled="!selectedContact" title="查看图片和视频资源">
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="4" width="18" height="16" rx="2" />
