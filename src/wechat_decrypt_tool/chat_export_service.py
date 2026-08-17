@@ -336,6 +336,8 @@ _VOICE_TRANSCRIPT_EXPORT_CSS = """
 _MOBILE_EXPORT_CSS = """
 /* 离线导出页的移动端布局：桌面端保留三栏结构，窄屏切换为微信式聊天界面。 */
 .wce-mobile-back,
+.wce-mobile-sessions-toggle,
+.wce-mobile-session-heading,
 .wce-mobile-tools-toggle,
 .wce-mobile-tools-button { display: none; }
 .wce-chat-heading { display: flex; align-items: center; min-width: 0; }
@@ -354,8 +356,70 @@ _MOBILE_EXPORT_CSS = """
     min-height: 0;
     overflow: hidden;
   }
-  .wce-rail,
+  .wce-rail { display: none !important; }
   .wce-session-panel { display: none !important; }
+  .wce-mobile-sessions-toggle {
+    position: absolute;
+    top: env(safe-area-inset-top, 0px);
+    left: max(0px, env(safe-area-inset-left, 0px));
+    z-index: 60;
+    display: block;
+    width: 48px;
+    height: 48px;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .wce-mobile-sessions-toggle:checked ~ .wce-session-panel {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: flex !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: 100%;
+    border-right: 0;
+  }
+  .wce-mobile-session-heading {
+    position: relative;
+    box-sizing: content-box;
+    display: flex;
+    flex: 0 0 auto;
+    height: 48px;
+    align-items: center;
+    justify-content: center;
+    padding-top: env(safe-area-inset-top, 0px);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    background: #ededed;
+  }
+  .wce-mobile-session-close {
+    position: absolute;
+    bottom: 0;
+    left: max(0px, env(safe-area-inset-left, 0px));
+    display: flex;
+    width: 48px;
+    height: 48px;
+    align-items: center;
+    justify-content: center;
+    color: #181818;
+  }
+  .wce-mobile-session-title {
+    margin: 0;
+    color: #191919;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+  .wce-mobile-sessions-toggle:active ~ .wce-session-panel .wce-mobile-session-close,
+  .wce-mobile-sessions-toggle:not(:checked):active ~ .wce-chat-area .wce-mobile-back { opacity: 0.45; }
+  .wce-mobile-sessions-toggle:focus-visible ~ .wce-session-panel .wce-mobile-session-close,
+  .wce-mobile-sessions-toggle:not(:checked):focus-visible ~ .wce-chat-area .wce-mobile-back {
+    border-radius: 6px;
+    outline: 2px solid rgba(7, 193, 96, 0.75);
+    outline-offset: -5px;
+  }
   .wce-chat-area,
   .wce-chat-main,
   .wce-chat-col { width: 100%; min-width: 0; }
@@ -417,10 +481,7 @@ _MOBILE_EXPORT_CSS = """
     background: transparent;
     cursor: pointer;
   }
-  .wce-mobile-back:active,
   .wce-mobile-tools-toggle:active + .wce-mobile-tools-button { opacity: 0.45; }
-  .wce-mobile-back:focus { outline: none; }
-  .wce-mobile-back:focus-visible,
   .wce-mobile-tools-toggle:focus-visible + .wce-mobile-tools-button {
     border-radius: 6px;
     outline: 2px solid rgba(7, 193, 96, 0.75);
@@ -4944,6 +5005,7 @@ def _write_conversation_html(
 
             # Root
             tw.write('<div class="wce-root h-screen flex overflow-hidden" style="background-color:#EDEDED">\n')
+            tw.write('  <input id="wceMobileSessionsToggle" class="wce-mobile-sessions-toggle" type="checkbox" aria-controls="wceSessionPanel" aria-label="切换会话列表" autocomplete="off" />\n')
 
             # Left rail (avatar + chat icon)
             tw.write(
@@ -4983,8 +5045,16 @@ def _write_conversation_html(
 
             # Middle session list (all exported conversations)
             tw.write(
-                '<div class="wce-session-panel session-list-panel border-r border-gray-200 flex flex-col min-h-0 shrink-0 relative" style="background-color:#F7F7F7;--session-list-width:295px">\n'
+                '<div id="wceSessionPanel" class="wce-session-panel session-list-panel border-r border-gray-200 flex flex-col min-h-0 shrink-0 relative" style="background-color:#F7F7F7;--session-list-width:295px">\n'
             )
+            tw.write('  <div class="wce-mobile-session-heading">\n')
+            tw.write('    <label class="wce-mobile-session-close" for="wceMobileSessionsToggle" aria-hidden="true">\n')
+            tw.write('      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">\n')
+            tw.write('        <path d="M15 5L8 12L15 19" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />\n')
+            tw.write("      </svg>\n")
+            tw.write("    </label>\n")
+            tw.write('    <h2 class="wce-mobile-session-title">聊天</h2>\n')
+            tw.write("  </div>\n")
             tw.write('  <div class="p-3 border-b border-gray-200" style="background-color:#F7F7F7">\n')
             tw.write(
                 '    <div class="flex items-center gap-2">\n'
@@ -5094,14 +5164,11 @@ def _write_conversation_html(
             tw.write('      <div class="flex-1 flex flex-col min-h-0 relative">\n')
 
             tw.write('        <div class="chat-header wce-chat-header">\n')
-            tw.write(
-                f'          <a class="wce-mobile-back" href="{esc_attr(rel_root + "index.html")}" '
-                'aria-label="返回会话列表" title="返回会话列表">\n'
-            )
+            tw.write('          <label class="wce-mobile-back" for="wceMobileSessionsToggle" aria-hidden="true">\n')
             tw.write('            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">\n')
             tw.write('              <path d="M15 5L8 12L15 19" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />\n')
             tw.write("            </svg>\n")
-            tw.write("          </a>\n")
+            tw.write("          </label>\n")
             tw.write('          <div class="wce-chat-heading">\n')
             tw.write(f'            <h2 class="wce-chat-title text-base font-medium text-gray-900">{esc_text(chat_title)}</h2>\n')
             tw.write("          </div>\n")
