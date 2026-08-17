@@ -147,11 +147,34 @@ test("macOS private workflow keeps the canonical Producer and WCDA certificate v
   assert.match(workflow, /wechatdb-native-macos-arm64-production/);
   assert.match(workflow, /macos-native-core-packaging\.cjs/);
   assert.match(workflow, /WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256/);
+  assert.match(workflow, /WCE_INTEGRITY_ARTIFACT_SHA256/);
   assert.match(workflow, /WCE_MACOS_PRIVATE_ROOT_CERT_PATH/);
   assert.match(workflow, /macos-private-pki-root\.cer/);
   assert.match(workflow, /consumer-smoke-macos-arm64/);
   assert.match(workflow, /needs: build-macos-arm64/);
   assert.match(workflow, /macos-private-pki-runtime\.test\.cjs/);
+});
+
+test("macOS private workflow verifies the pinned integrity Release before extraction", () => {
+  assert.match(workflow, /release_tag="macos-integrity-\$WCE_INTEGRITY_BUILD_ID"/);
+  assert.match(
+    workflow,
+    /asset_name="wce-integrity-macos-arm64-production-\$WCE_INTEGRITY_BUILD_ID\.zip"/
+  );
+  assert.match(workflow, /gh release download "\$release_tag"/);
+  assert.match(workflow, /shasum -a 256 "\$archive"/);
+  assert.match(workflow, /test "\$actual_sha256" = "\$WCE_INTEGRITY_ARTIFACT_SHA256"/);
+  assert.match(workflow, /\/usr\/bin\/unzip -q "\$archive" -d "\$artifact_dir"/);
+  assert.doesNotMatch(
+    workflow,
+    /gh run download "\$WCE_INTEGRITY_ARTIFACT_RUN_ID"/
+  );
+
+  const downloadIndex = workflow.indexOf('gh release download "$release_tag"');
+  const hashIndex = workflow.indexOf('shasum -a 256 "$archive"');
+  const extractIndex = workflow.indexOf('/usr/bin/unzip -q "$archive"');
+  assert.ok(downloadIndex >= 0 && downloadIndex < hashIndex);
+  assert.ok(hashIndex < extractIndex);
 });
 
 test("macOS private workflow retries transient Producer artifact downloads from a clean directory", () => {

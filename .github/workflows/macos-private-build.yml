@@ -59,6 +59,7 @@ jobs:
       WCE_NATIVE_CORE_ALLOW_DEVELOPMENT_ARTIFACTS: "0"
       WCE_INTEGRITY_ARTIFACT_REPOSITORY: ${{ vars.WCE_INTEGRITY_ARTIFACT_REPOSITORY }}
       WCE_INTEGRITY_ARTIFACT_RUN_ID: ${{ vars.WCE_INTEGRITY_ARTIFACT_RUN_ID }}
+      WCE_INTEGRITY_ARTIFACT_SHA256: ${{ vars.WCE_INTEGRITY_ARTIFACT_SHA256 }}
       WCE_INTEGRITY_SOURCE_REVISION: ${{ vars.WCE_INTEGRITY_SOURCE_REVISION }}
       WCE_INTEGRITY_BUILD_ID: ${{ vars.WCE_INTEGRITY_BUILD_ID }}
       WCE_INTEGRITY_BINARY_SHA256: ${{ vars.WCE_INTEGRITY_BINARY_SHA256 }}
@@ -144,6 +145,8 @@ jobs:
           test "$WCE_NATIVE_CORE_HOST_SIGNING_IDENTIFIER" = "com.lifearchive.wechatdataanalysis.backend"
           [[ "$WCE_INTEGRITY_ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
           [[ "$WCE_INTEGRITY_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$WCE_INTEGRITY_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ ! "$WCE_INTEGRITY_ARTIFACT_SHA256" =~ ^0{64}$ ]]
           [[ "$WCE_INTEGRITY_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
           [[ "$WCE_INTEGRITY_BUILD_ID" =~ ^[A-Za-z0-9._-]{8,128}$ ]]
           [[ "$WCE_INTEGRITY_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -218,15 +221,18 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
+          release_tag="macos-integrity-$WCE_INTEGRITY_BUILD_ID"
+          asset_name="wce-integrity-macos-arm64-production-$WCE_INTEGRITY_BUILD_ID.zip"
+          archive="$RUNNER_TEMP/$asset_name"
           artifact_dir="$RUNNER_TEMP/wce-integrity-macos-arm64-production"
           downloaded=0
+          test ! -e "$artifact_dir"
           for attempt in 1 2 3; do
-            rm -rf "$artifact_dir"
-            mkdir -p "$artifact_dir"
-            if gh run download "$WCE_INTEGRITY_ARTIFACT_RUN_ID" \
+            rm -f "$archive"
+            if gh release download "$release_tag" \
               --repo "$WCE_INTEGRITY_ARTIFACT_REPOSITORY" \
-              --name wce-integrity-macos-arm64-production \
-              --dir "$artifact_dir"
+              --pattern "$asset_name" \
+              --dir "$RUNNER_TEMP"
             then
               downloaded=1
               break
@@ -236,6 +242,11 @@ jobs:
             fi
           done
           test "$downloaded" = 1
+          test -s "$archive"
+          actual_sha256="$(shasum -a 256 "$archive" | awk '{print $1}')"
+          test "$actual_sha256" = "$WCE_INTEGRITY_ARTIFACT_SHA256"
+          mkdir -p "$artifact_dir"
+          /usr/bin/unzip -q "$archive" -d "$artifact_dir"
           test -f "$artifact_dir/libwce_integrity.dylib"
           test -f "$artifact_dir/wce_integrity_build.json"
           test -f "$artifact_dir/provenance.json"
