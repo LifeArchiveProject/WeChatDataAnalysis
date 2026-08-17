@@ -35,6 +35,10 @@ def _manifest(*, development: bool) -> dict[str, object]:
             "developmentBuild": True,
             "offlineBootstrapFeatureBits": 0,
             "offlineExportSealFormat": "none",
+            "nativeAsrAbiVersion": 0,
+            "nativeAsrFeatureBit": 0,
+            "nativeAsrAuthorization": "none",
+            "nativeAsrTarget": {"wechatVersion": "", "weixinSha256": ""},
             "codeSignatureEnforced": False,
             "rootPublicKeyCompiled": False,
             "testHooksEnabled": True,
@@ -49,6 +53,15 @@ def _manifest(*, development: bool) -> dict[str, object]:
         "developmentBuild": False,
         "offlineBootstrapFeatureBits": 3,
         "offlineExportSealFormat": "WES2",
+        "nativeAsrAbiVersion": 1,
+        "nativeAsrFeatureBit": 16,
+        "nativeAsrAuthorization": "database-read",
+        "nativeAsrTarget": {
+            "wechatVersion": "4.1.12.26",
+            "weixinSha256": (
+                "4914a621a810ecbc0a132b6ff8f612658cfce323d3989b3e5fe32d4ff343ba46"
+            ),
+        },
         "codeSignatureEnforced": True,
         "rootPublicKeyCompiled": True,
         "testHooksEnabled": False,
