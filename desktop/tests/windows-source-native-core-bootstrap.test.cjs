@@ -257,12 +257,12 @@ test("tracked Windows source pin selects the exact immutable public Release asse
   assert.equal(
     publicReleaseUrl(trackedPin),
     "https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/download/" +
-      "windows-source-runtime-20260816-dfd3ebe2-31937143227/" +
+      "windows-source-runtime-20260817-7795dced-32004006556/" +
       "wechatdataanalysis-windows-source-runtime-x64-v1.tar.gz"
   );
-  assert.equal(trackedPin.assetSha256, "c3ca8fef41c9b83bd1c620a07b80df3e7b67c329bfd38ca570613f050f0f8ad5");
-  assert.equal(trackedPin.runtimeManifestSha256, "e9b7b381a12ad90c93b6e18718aa17fa85d837baf6054d8e4cb8af576802a661");
-  assert.equal(trackedPin.expiresAtUnix, 1790757765);
+  assert.equal(trackedPin.assetSha256, "5e7eeb7e824616aa462f5cbb5b21369516014b5a323c41b6456d71ec1d860ec9");
+  assert.equal(trackedPin.runtimeManifestSha256, "e6902d4a6d3536ff96e2d58bff5af5287bec216423d1f2c224b29c16dc3cb0d9");
+  assert.equal(trackedPin.expiresAtUnix, 1790838083);
 });
 
 test("generic source bootstrap wires the verified Windows directory without macOS-only variables", () =>
