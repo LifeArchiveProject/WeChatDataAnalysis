@@ -2685,7 +2685,11 @@ def _row_to_search_hit(
     account_dir: Path,
     is_group: bool,
     my_rowid: Optional[int],
+    self_username: str = "",
 ) -> dict[str, Any]:
+    resolved_self_username = str(
+        self_username or resolve_account_self_username(account_dir) or account_dir.name or ""
+    ).strip()
     local_id = int(r["local_id"] or 0)
     create_time = int(r["create_time"] or 0)
     sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
@@ -2714,7 +2718,7 @@ def _row_to_search_hit(
             sender_username = xml_sender
 
     if is_sent:
-        sender_username = resolve_account_self_username(account_dir)
+        sender_username = resolved_self_username
     elif (not is_group) and (not sender_username):
         sender_username = username
 

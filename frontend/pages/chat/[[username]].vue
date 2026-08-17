@@ -1,5 +1,5 @@
 <template>
-  <div class="chat-page-shell h-screen w-full min-w-0 flex overflow-hidden">
+  <div class="chat-page-shell relative h-screen w-full min-w-0 flex overflow-hidden">
     <SessionListPanel :state="chatState" />
 
     <div class="chat-page-main flex-1 flex flex-col min-h-0 min-w-0">
@@ -9,6 +9,7 @@
     </div>
 
     <ResourceSidebar :state="chatState" />
+    <VoiceTranscriptionSidebar :state="chatState" />
     <ChatOverlays :state="chatState" />
   </div>
 </template>
@@ -18,6 +19,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import ResourceSidebar from '~/components/chat/ResourceSidebar.vue'
+import VoiceTranscriptionSidebar from '~/components/chat/VoiceTranscriptionSidebar.vue'
 import { useApi } from '~/composables/useApi'
 import { createEmptySearchContext, useChatSearch } from '~/composables/chat/useChatSearch'
 import { useChatSessions } from '~/composables/chat/useChatSessions'
@@ -38,6 +40,7 @@ import {
 } from '~/lib/chat/formatters'
 import { heatColor } from '~/lib/wrapped/heatmap'
 import { parseTextWithEmoji } from '~/lib/wechat-emojis'
+import { PROJECT_VOICE_TRANSCRIPTS_INVALIDATED_EVENT } from '~/lib/voice-transcript-invalidation'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { useChatRealtimeStore } from '~/stores/chatRealtime'
 import { usePrivacyStore } from '~/stores/privacy'
@@ -53,6 +56,7 @@ useHead({
 const route = useRoute()
 const api = useApi()
 const apiBase = useApiBase()
+const { openDialog: openSettingsDialog } = useSettingsDialog()
 
 const routeUsername = computed(() => {
   const raw = route.params.username
@@ -508,6 +512,267 @@ const {
 
 const { stopExportPolling } = exportState
 
+const voiceSidebarOpen = ref(false)
+const voicePanelBusy = ref(false)
+const voicePanelError = ref('')
+const voiceBatchJob = ref({ status: 'idle', percent: 0 })
+const voiceBatchConcurrency = ref(0)
+let voiceBatchPollTimer = null
+let voicePanelRequestRevision = 0
+
+const isVoiceBatchActive = (job = voiceBatchJob.value) => {
+  return ['queued', 'running'].includes(String(job?.status || '').toLowerCase())
+}
+
+const normalizeVoiceBatchConcurrency = (value) => {
+  const concurrency = Number(value)
+  return Number.isInteger(concurrency) && concurrency >= 0 ? concurrency : 0
+}
+
+const setVoiceBatchConcurrency = (value) => {
+  if (voicePanelBusy.value || isVoiceBatchActive()) return
+  voiceBatchConcurrency.value = normalizeVoiceBatchConcurrency(value)
+}
+
+const voiceApiErrorMessage = (error, fallback) => {
+  const detail = error?.data?.detail || error?.detail
+  if (detail && typeof detail === 'object') return String(detail.message || fallback)
+  return String(detail || error?.message || fallback)
+}
+
+const isVoiceJobMissingError = (error) => {
+  const status = Number(error?.statusCode || error?.status || error?.response?.status || 0)
+  return status === 404 || /\b404\b|(?:任务|job).*(?:不存在|not found)/i.test(voiceApiErrorMessage(error, ''))
+}
+
+const beginVoicePanelRequest = () => {
+  const context = {
+    revision: ++voicePanelRequestRevision,
+    account: String(selectedAccount.value || '')
+  }
+  voicePanelBusy.value = true
+  voicePanelError.value = ''
+  stopVoiceBatchPolling()
+  return context
+}
+
+const voicePanelContextStillCurrent = (context) => (
+  context?.revision === voicePanelRequestRevision
+  && context.account === String(selectedAccount.value || '')
+)
+
+const stopVoiceBatchPolling = () => {
+  if (!voiceBatchPollTimer) return
+  clearTimeout(voiceBatchPollTimer)
+  voiceBatchPollTimer = null
+}
+
+const scheduleVoiceBatchPoll = () => {
+  stopVoiceBatchPolling()
+  if (!process.client || !voiceSidebarOpen.value || !isVoiceBatchActive()) return
+  voiceBatchPollTimer = window.setTimeout(() => {
+    voiceBatchPollTimer = null
+    void pollVoiceBatch()
+  }, 1200)
+}
+
+const applyVoiceBatchJob = (job) => {
+  const wasActive = isVoiceBatchActive()
+  voiceBatchJob.value = job && typeof job === 'object' ? job : { status: 'idle', percent: 0 }
+  if (job && Object.prototype.hasOwnProperty.call(job, 'requestedConcurrency')) {
+    voiceBatchConcurrency.value = normalizeVoiceBatchConcurrency(job.requestedConcurrency)
+  }
+  if (wasActive && !isVoiceBatchActive() && selectedContact.value?.username) {
+    void refreshSelectedMessages()
+  }
+  scheduleVoiceBatchPoll()
+}
+
+const pollVoiceBatch = async () => {
+  if (!voiceSidebarOpen.value || !selectedAccount.value) return
+  const context = {
+    revision: voicePanelRequestRevision,
+    account: String(selectedAccount.value)
+  }
+  const jobId = String(voiceBatchJob.value?.jobId || '').trim()
+  try {
+    const job = jobId && isVoiceBatchActive()
+      ? await api.getVoiceTranscriptionBatch(jobId)
+      : await api.getLatestVoiceTranscriptionBatch(context.account)
+    if (!voicePanelContextStillCurrent(context)) return
+    if (job?.account && String(job.account) !== context.account) {
+      voiceBatchJob.value = { status: 'idle', percent: 0 }
+      voicePanelError.value = '之前的批量转写任务与当前账号不匹配，请重新开始。'
+      stopVoiceBatchPolling()
+      return
+    }
+    voicePanelError.value = ''
+    applyVoiceBatchJob(job)
+  } catch (error) {
+    if (!voicePanelContextStillCurrent(context)) return
+    if (isVoiceJobMissingError(error)) {
+      voiceBatchJob.value = { status: 'idle', percent: 0 }
+      voicePanelError.value = '之前的批量转写任务已失效，请重新开始。'
+      stopVoiceBatchPolling()
+      return
+    }
+    voicePanelError.value = voiceApiErrorMessage(error, '无法读取批量转写进度')
+    scheduleVoiceBatchPoll()
+  }
+}
+
+const refreshVoicePanel = async () => {
+  if (voicePanelBusy.value) return
+  const context = beginVoicePanelRequest()
+  try {
+    await messageState.refreshVoiceTranscriptionStatus({ force: true })
+    if (!voicePanelContextStillCurrent(context)) return
+    if (context.account) {
+      const job = await api.getLatestVoiceTranscriptionBatch(context.account)
+      if (!voicePanelContextStillCurrent(context)) return
+      applyVoiceBatchJob(job)
+    }
+  } catch (error) {
+    if (!voicePanelContextStillCurrent(context)) return
+    voicePanelError.value = voiceApiErrorMessage(error, '无法读取语音转文字状态')
+  } finally {
+    if (voicePanelContextStillCurrent(context)) {
+      voicePanelBusy.value = false
+      scheduleVoiceBatchPoll()
+    }
+  }
+}
+
+const setVoicePanelDevice = async (device) => {
+  if (voicePanelBusy.value || isVoiceBatchActive()) return
+  const context = beginVoicePanelRequest()
+  try {
+    await api.setVoiceTranscriptionDevice(device)
+    await messageState.refreshVoiceTranscriptionStatus({ force: true })
+  } catch (error) {
+    if (!voicePanelContextStillCurrent(context)) return
+    voicePanelError.value = voiceApiErrorMessage(error, '无法保存推理设备')
+  } finally {
+    if (voicePanelContextStillCurrent(context)) voicePanelBusy.value = false
+  }
+}
+
+const setVoicePanelModel = async (model) => {
+  if (voicePanelBusy.value || isVoiceBatchActive()) return
+  const context = beginVoicePanelRequest()
+  try {
+    await api.setVoiceTranscriptionModel(model)
+    await messageState.refreshVoiceTranscriptionStatus({ force: true })
+  } catch (error) {
+    if (!voicePanelContextStillCurrent(context)) return
+    voicePanelError.value = voiceApiErrorMessage(error, '无法保存识别模型')
+  } finally {
+    if (voicePanelContextStillCurrent(context)) voicePanelBusy.value = false
+  }
+}
+
+const startVoiceBatch = async () => {
+  if (voicePanelBusy.value || isVoiceBatchActive() || !selectedAccount.value) return
+  const context = beginVoicePanelRequest()
+  try {
+    const job = await api.startVoiceTranscriptionBatch({
+      account: context.account,
+      force: false,
+      concurrency: normalizeVoiceBatchConcurrency(voiceBatchConcurrency.value)
+    })
+    if (!voicePanelContextStillCurrent(context)) return
+    applyVoiceBatchJob(job)
+  } catch (error) {
+    if (!voicePanelContextStillCurrent(context)) return
+    voicePanelError.value = voiceApiErrorMessage(error, '无法开始批量语音转写')
+  } finally {
+    if (voicePanelContextStillCurrent(context)) {
+      voicePanelBusy.value = false
+      scheduleVoiceBatchPoll()
+    }
+  }
+}
+
+const cancelVoiceBatch = async () => {
+  const jobId = String(voiceBatchJob.value?.jobId || '').trim()
+  if (!jobId || voicePanelBusy.value || !isVoiceBatchActive()) return
+  const context = beginVoicePanelRequest()
+  try {
+    const job = await api.cancelVoiceTranscriptionBatch(jobId)
+    if (!voicePanelContextStillCurrent(context)) return
+    applyVoiceBatchJob(job)
+  } catch (error) {
+    if (!voicePanelContextStillCurrent(context)) return
+    voicePanelError.value = voiceApiErrorMessage(error, '无法取消批量语音转写')
+  } finally {
+    if (voicePanelContextStillCurrent(context)) {
+      voicePanelBusy.value = false
+      scheduleVoiceBatchPoll()
+    }
+  }
+}
+
+const closeVoiceSidebar = () => {
+  if (!voiceSidebarOpen.value) return
+  voiceSidebarOpen.value = false
+  voicePanelRequestRevision += 1
+  voicePanelBusy.value = false
+  stopVoiceBatchPolling()
+}
+
+const openVoiceSidebar = () => {
+  messageState.closeResourceSidebar()
+  searchState.closeMessageSearch('voice-panel')
+  searchState.closeTimeSidebar()
+  voiceSidebarOpen.value = true
+  void refreshVoicePanel()
+}
+
+const toggleVoiceSidebar = () => {
+  if (voiceSidebarOpen.value) {
+    closeVoiceSidebar()
+    return
+  }
+  openVoiceSidebar()
+}
+
+const toggleChatResourceSidebar = async () => {
+  closeVoiceSidebar()
+  await messageState.toggleResourceSidebar()
+}
+
+const toggleChatMessageSearch = async () => {
+  closeVoiceSidebar()
+  await searchState.toggleMessageSearch()
+}
+
+const openChatMessageSearch = async () => {
+  closeVoiceSidebar()
+  await searchState.openMessageSearch()
+}
+
+const toggleChatTimeSidebar = async () => {
+  closeVoiceSidebar()
+  await searchState.toggleTimeSidebar()
+}
+
+const openVoiceModelSettings = () => {
+  closeVoiceSidebar()
+  openSettingsDialog('voice')
+}
+
+const resetVoiceBatchState = () => {
+  voicePanelRequestRevision += 1
+  stopVoiceBatchPolling()
+  voicePanelBusy.value = false
+  voicePanelError.value = ''
+  voiceBatchJob.value = { status: 'idle', percent: 0 }
+}
+
+const onProjectVoiceTranscriptsInvalidated = () => {
+  resetVoiceBatchState()
+}
+
 let accountBootstrapInProgress = false
 let accountChangeInProgress = false
 
@@ -519,6 +784,7 @@ const resetAccountScopedState = () => {
   closeModifyTextUnavailableDialog()
   clearContactProfileHoverHideTimer()
   closeContactProfileCard()
+  resetVoiceBatchState()
 }
 
 const REALTIME_SESSIONS_REFRESH_MIN_INTERVAL_MS = 3000
@@ -616,7 +882,7 @@ const onGlobalKeyDown = (event) => {
 
   if ((event.ctrlKey || event.metaKey) && lower === 'f') {
     event.preventDefault()
-    searchState.openMessageSearch()
+    void openChatMessageSearch()
     return
   }
 
@@ -633,6 +899,7 @@ const onGlobalKeyDown = (event) => {
     if (searchState.messageSearchSenderDropdownOpen.value) searchState.closeMessageSearchSenderDropdown()
     if (searchState.messageSearchOpen.value) searchState.closeMessageSearch()
     if (searchState.timeSidebarOpen.value) searchState.closeTimeSidebar()
+    if (voiceSidebarOpen.value) closeVoiceSidebar()
     if (searchContext.value?.active) exitSearchContext()
   }
 }
@@ -691,6 +958,7 @@ const onVisibilityChange = () => {
 onMounted(async () => {
   if (!process.client) return
 
+  window.addEventListener(PROJECT_VOICE_TRANSCRIPTS_INVALIDATED_EVENT, onProjectVoiceTranscriptsInvalidated)
   await resolveDesktopDebugEnabled()
   logChatBootstrap('route mount start', {
     requestedUsername: routeUsername.value,
@@ -757,11 +1025,13 @@ onUnmounted(() => {
   document.removeEventListener('touchend', onFloatingWindowMouseUp)
   document.removeEventListener('touchcancel', onFloatingWindowMouseUp)
   window.removeEventListener('focus', onWindowFocus)
+  window.removeEventListener(PROJECT_VOICE_TRANSCRIPTS_INVALIDATED_EVENT, onProjectVoiceTranscriptsInvalidated)
   document.removeEventListener('visibilitychange', onVisibilityChange)
 
   if (locateServerIdTimer) clearTimeout(locateServerIdTimer)
   locateServerIdTimer = null
   cancelQueuedRealtimeSessionsRefresh()
+  stopVoiceBatchPolling()
   void realtimeStore.disable({ silent: true })
   stopSessionListResize()
   stopExportPolling()
@@ -812,6 +1082,7 @@ watch(
     if (accountBootstrapInProgress) return
     if (String(next || '') === String(prev || '')) return
     await onAccountChange()
+    if (voiceSidebarOpen.value) await refreshVoicePanel()
   }
 )
 
@@ -864,6 +1135,25 @@ const chatState = {
   ...searchState,
   ...exportState,
   ...editingState,
-  ...historyState
+  ...historyState,
+  voiceSidebarOpen,
+  voicePanelBusy,
+  voicePanelError,
+  voiceBatchJob,
+  voiceBatchConcurrency,
+  openVoiceSidebar,
+  closeVoiceSidebar,
+  toggleVoiceSidebar,
+  refreshVoicePanel,
+  setVoicePanelDevice,
+  setVoicePanelModel,
+  setVoiceBatchConcurrency,
+  startVoiceBatch,
+  cancelVoiceBatch,
+  openVoiceModelSettings,
+  toggleResourceSidebar: toggleChatResourceSidebar,
+  toggleMessageSearch: toggleChatMessageSearch,
+  openMessageSearch: openChatMessageSearch,
+  toggleTimeSidebar: toggleChatTimeSidebar
 }
 </script>

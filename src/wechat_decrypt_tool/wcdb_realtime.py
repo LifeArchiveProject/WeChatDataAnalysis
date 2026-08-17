@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Mapping, Optional, TypeVar
 
 from . import native_core_realtime
 from .key_store import get_account_keys_from_store
@@ -46,11 +46,15 @@ def _normalize_native_account_name(dir_name: str) -> str:
     if not trimmed:
         return trimmed
 
+    # WeFlow appends a four-hex collision suffix to its output directory.
+    # Strip only that final segment; a native wxid may contain underscores.
+    # Requiring another segment before the suffix keeps values such as
+    # ``wxid_dead`` intact while normalizing ``wxid_real_user_a73c``.
     if trimmed.lower().startswith("wxid_"):
-        match = re.match(r"^(wxid_[^_]+)", trimmed, flags=re.IGNORECASE)
-        return match.group(1) if match else trimmed
+        suffix_match = re.match(r"^(wxid_.+)_([0-9a-fA-F]{4})$", trimmed, flags=re.IGNORECASE)
+        return suffix_match.group(1) if suffix_match else trimmed
 
-    suffix_match = re.match(r"^(.+)_([a-zA-Z0-9]{4})$", trimmed)
+    suffix_match = re.match(r"^(.+)_([0-9a-fA-F]{4})$", trimmed)
     return suffix_match.group(1) if suffix_match else trimmed
 
 
@@ -321,6 +325,35 @@ class WCDBRealtimeConnection:
     session_db_path: Path
     connected_at: float
     lock: threading.Lock
+
+
+def resolve_account_native_wxid(
+    account_dir: Path,
+    connection: Any | None = None,
+) -> str:
+    """Resolve the native WeChat username behind a possibly suffixed account directory."""
+    if isinstance(connection, Mapping):
+        native_value = connection.get("native_wxid") or connection.get("nativeWxid")
+        db_storage_dir = connection.get("db_storage_dir") or connection.get("dbStorageDir")
+    else:
+        native_value = getattr(connection, "native_wxid", "")
+        db_storage_dir = getattr(connection, "db_storage_dir", None)
+
+    native_wxid = str(native_value or "").strip()
+    if native_wxid:
+        return native_wxid
+
+    account_path = Path(account_dir)
+    if db_storage_dir is None:
+        try:
+            db_storage_dir = _resolve_account_db_storage_dir(account_path)
+        except Exception:
+            db_storage_dir = None
+    try:
+        storage_path = Path(db_storage_dir) if db_storage_dir is not None else None
+    except Exception:
+        storage_path = None
+    return _derive_native_wxid(account_path.name, storage_path)
 
 
 class WCDBRealtimeManager:
@@ -781,5 +814,6 @@ __all__ = [
     "get_sns_timeline",
     "open_account",
     "open_message_cursor",
+    "resolve_account_native_wxid",
     "shutdown",
 ]
