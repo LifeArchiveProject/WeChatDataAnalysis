@@ -536,7 +536,15 @@ main { position: relative; z-index: 1; }
 }
 .deck__name { font-size: clamp(2rem, 3.4vw, 3.5rem); font-weight: 900; line-height: 1.04; letter-spacing: -0.03em; }
 .deck__desc { margin-top: clamp(16px, 2.4vh, 26px); font-size: clamp(13px, 1.05vw, 15.5px); line-height: 1.75; color: var(--ink-dim); max-width: 40ch; }
-.deck__meta { margin-top: clamp(20px, 3vh, 34px); padding-top: 16px; border-top: 1px solid var(--line); font-size: 10.5px; letter-spacing: 0.18em; color: var(--neon); opacity: 0.9; }
+.deck__meta { margin-top: clamp(20px, 3vh, 34px); padding-top: 16px; border-top: 1px solid var(--line); font-size: 10.5px; line-height: 1.7; letter-spacing: 0.18em; color: var(--neon); opacity: 0.9; }
+.deck__meta--groups { display: grid; gap: 11px; letter-spacing: 0; }
+.deck__capability { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; align-items: start; }
+.deck__capability-label {
+  padding: 3px 5px; border: 1px solid rgba(61, 242, 141, 0.28);
+  color: var(--ink-dim); font-size: 8.5px; line-height: 1.45; letter-spacing: 0.08em;
+  text-align: center; white-space: nowrap;
+}
+.deck__capability-items { font-size: 10px; line-height: 1.75; letter-spacing: 0.08em; color: var(--neon); }
 .deck__dots { display: flex; gap: 7px; align-items: center; margin-top: 18px; }
 .deck__dots i { width: 16px; height: 2px; background: var(--line-strong); transition: width 0.4s var(--ease-out), background 0.4s, box-shadow 0.4s; }
 .deck__dots i.on { width: 34px; background: var(--neon); box-shadow: 0 0 8px var(--glow); }
@@ -984,6 +992,10 @@ main { position: relative; z-index: 1; }
   .deck__num { font-size: clamp(3rem, 12vw, 4.4rem); margin: 12px 0; }
   .deck__desc { display: none; }
   .deck__meta { margin-top: 14px; padding-top: 12px; }
+  .deck__meta--groups { gap: 7px; }
+  .deck__capability { grid-template-columns: 78px minmax(0, 1fr); gap: 8px; }
+  .deck__capability-label { font-size: 7.5px; padding: 2px 4px; }
+  .deck__capability-items { font-size: 8.5px; line-height: 1.55; letter-spacing: 0.04em; }
   .decrypt__chat { width: min(360px, 88vw); }
   .decrypt__hud { top: 84px; }
   .dtitle { top: 17vh; }
