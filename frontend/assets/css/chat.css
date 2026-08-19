@@ -213,18 +213,8 @@
 /* 语音消息样式 - 微信风格 */
 .wechat-voice-wrapper {
   display: flex;
-  flex-direction: column;
   width: 100%;
   position: relative;
-  gap: 6px;
-}
-
-.wechat-voice-wrapper--received {
-  align-items: flex-start;
-}
-
-.wechat-voice-wrapper--sent {
-  align-items: flex-end;
 }
 
 .wechat-voice-bubble {
@@ -327,6 +317,31 @@
 
 .wechat-voice-transcript__text {
   margin: 0;
+}
+
+.wechat-voice-transcript__official,
+.wechat-voice-transcript__local {
+  display: block;
+}
+
+.wechat-voice-transcript__official + .wechat-voice-transcript__action,
+.wechat-voice-transcript__official + .wechat-voice-transcript__status,
+.wechat-voice-transcript__official + .wechat-voice-transcript__local {
+  margin-top: 6px;
+}
+
+.wechat-voice-transcript__label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  opacity: 0.62;
+}
+
+.wechat-voice-transcript__official-pending {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  opacity: 0.68;
 }
 
 .wechat-voice-transcript--error .wechat-voice-transcript__error {

@@ -164,45 +164,56 @@
                       class="hidden"
                     ></audio>
                     <div
-                      v-if="!privacyMode && typeof transcribeVoice === 'function'"
+                      v-if="!privacyMode && (message.wechatTranscript || typeof transcribeVoice === 'function')"
                       class="wechat-voice-transcript"
                       :class="[
                         message.isSent ? 'wechat-voice-transcript--sent' : 'wechat-voice-transcript--received',
                         message.voiceTranscriptStatus === 'error' ? 'wechat-voice-transcript--error' : ''
                       ]"
                     >
+                      <div v-if="message.wechatTranscript" class="wechat-voice-transcript__official">
+                        <span class="wechat-voice-transcript__label">微信转写</span>
+                        <p class="wechat-voice-transcript__text">{{ message.wechatTranscript }}</p>
+                      </div>
+                      <span
+                        v-if="!message.wechatTranscript && (!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle')"
+                        class="wechat-voice-transcript__official-pending"
+                      >微信转写尚未同步，请在微信中切换会话后刷新</span>
                       <button
-                        v-if="(!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle') && voiceTranscriptionAvailable"
+                        v-if="typeof transcribeVoice === 'function' && (!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle') && voiceTranscriptionAvailable"
                         type="button"
                         class="wechat-voice-transcript__action"
                         title="将语音识别为中文"
                         @click.stop="transcribeVoice(message)"
                       >
                         <i class="fa-solid fa-language" aria-hidden="true"></i>
-                        <span>转文字</span>
+                        <span>本地辅助识别</span>
                       </button>
                       <span
                         v-else-if="(!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle') && (!voiceTranscriptionStatusKnown || voiceTranscriptionStatusLoading)"
                         class="wechat-voice-transcript__status"
                         role="status"
-                      >正在检查本地模型…</span>
+                      >正在检查本地辅助识别模型…</span>
                       <span
                         v-else-if="!message.voiceTranscriptStatus || message.voiceTranscriptStatus === 'idle'"
                         class="wechat-voice-transcript__error"
                       >{{ voiceTranscriptionUnavailableReason }}</span>
                       <span v-else-if="message.voiceTranscriptStatus === 'loading'" class="wechat-voice-transcript__status" role="status">
                         <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
-                        正在转文字…
+                        正在本地辅助识别…
                       </span>
-                      <p v-else-if="message.voiceTranscriptStatus === 'success'" class="wechat-voice-transcript__text">{{ message.voiceTranscript || '未识别到文字' }}</p>
+                      <div v-else-if="message.voiceTranscriptStatus === 'success'" class="wechat-voice-transcript__local">
+                        <span class="wechat-voice-transcript__label">本地辅助识别</span>
+                        <p class="wechat-voice-transcript__text">{{ message.voiceTranscript || '未识别到文字' }}</p>
+                      </div>
                       <template v-else>
                         <span class="wechat-voice-transcript__error">{{ message.voiceTranscriptError || '语音识别失败' }}</span>
                         <button
                           type="button"
                           class="wechat-voice-transcript__retry"
-                          title="重新识别"
+                          title="重新本地识别"
                           @click.stop="transcribeVoice(message, { force: true })"
-                        >重试</button>
+                        >重新本地识别</button>
                       </template>
                     </div>
                   </div>

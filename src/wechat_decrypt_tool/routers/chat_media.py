@@ -97,6 +97,8 @@ _VIDEO_DIR_INDEX_MAX_ENTRIES = 32
 
 class VoiceTranscriptionRequest(BaseModel):
     server_id: int = Field(..., description="语音消息服务端 ID")
+    local_id: Optional[int] = Field(None, description="语音消息本地 ID，仅用于主动识别的安全回退")
+    create_time: Optional[int] = Field(None, description="语音消息创建时间，仅用于主动识别的安全回退")
     account: Optional[str] = Field(None, description="账号目录名")
     force: bool = Field(False, description="忽略缓存并重新识别")
 
@@ -3637,7 +3639,8 @@ async def set_chat_voice_transcription_settings(req: VoiceTranscriptionSettingsR
 
 @router.post("/api/chat/media/voice/transcription", summary="将语音消息转成中文文字")
 async def transcribe_chat_voice(req: VoiceTranscriptionRequest):
-    if int(req.server_id or 0) <= 0:
+    has_message_locator = int(req.local_id or 0) > 0 and int(req.create_time or 0) > 0
+    if int(req.server_id or 0) <= 0 and not has_message_locator:
         raise HTTPException(status_code=400, detail="Missing server_id.")
     service = get_voice_transcription_service()
 
@@ -3647,6 +3650,8 @@ async def transcribe_chat_voice(req: VoiceTranscriptionRequest):
         return service.transcribe_voice(
             account_dir=account_dir,
             server_id=int(req.server_id),
+            local_id=req.local_id,
+            create_time=req.create_time,
             force=bool(req.force),
         )
 

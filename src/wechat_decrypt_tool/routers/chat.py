@@ -88,6 +88,7 @@ from ..session_last_message import (
 )
 from ..sqlite_diagnostics import collect_sqlite_diagnostics, format_sqlite_diagnostics
 from ..source_fallback import build_source_fallback_meta
+from ..wechat_voice_transcript import extract_wechat_transcript
 from ..wcdb_realtime import (
     WCDBRealtimeError,
     WCDB_REALTIME,
@@ -3095,6 +3096,7 @@ def _append_full_messages_from_rows(
         create_time = int(r["create_time"] or 0)
         sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
         local_type = int(r["local_type"] or 0)
+        wechat_transcript = extract_wechat_transcript(_row_get_value(r, "packed_info_data")) if local_type == 34 else ""
         sender_username = _decode_sqlite_text(r["sender_username"]).strip()
 
         is_sent = False
@@ -3580,6 +3582,8 @@ def _append_full_messages_from_rows(
                 "videoUrl": video_url,
                 "videoThumbUrl": video_thumb_url,
                 "voiceLength": voice_length,
+                "wechatTranscript": wechat_transcript,
+                "transcriptSource": "wechat" if wechat_transcript else "",
                 "voipType": voip_type,
                 "quoteUsername": str(quote_username).strip(),
                 "quoteServerId": str(quote_server_id).strip(),
@@ -4972,6 +4976,7 @@ def _collect_chat_messages(
                 create_time = int(r["create_time"] or 0)
                 sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
                 local_type = int(r["local_type"] or 0)
+                wechat_transcript = extract_wechat_transcript(_row_get_value(r, "packed_info_data")) if local_type == 34 else ""
                 sender_username = _decode_sqlite_text(r["sender_username"]).strip()
 
                 is_sent = False
@@ -5407,6 +5412,8 @@ def _collect_chat_messages(
                         "videoUrl": video_url,
                         "videoThumbUrl": video_thumb_url,
                         "voiceLength": voice_length,
+                        "wechatTranscript": wechat_transcript,
+                        "transcriptSource": "wechat" if wechat_transcript else "",
                         "voipType": voip_type,
                         "quoteUsername": str(quote_username).strip(),
                         "quoteServerId": str(quote_server_id).strip(),
@@ -6389,6 +6396,7 @@ def list_chat_messages(
                 create_time = int(r["create_time"] or 0)
                 sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
                 local_type = int(r["local_type"] or 0)
+                wechat_transcript = extract_wechat_transcript(_row_get_value(r, "packed_info_data")) if local_type == 34 else ""
                 sender_username = _decode_sqlite_text(r["sender_username"]).strip()
 
                 is_sent = False
@@ -6772,6 +6780,8 @@ def list_chat_messages(
                         "videoUrl": video_url,
                         "videoThumbUrl": video_thumb_url,
                         "voiceLength": voice_length,
+                        "wechatTranscript": wechat_transcript,
+                        "transcriptSource": "wechat" if wechat_transcript else "",
                         "voipType": voip_type,
                         "quoteUsername": str(quote_username).strip(),
                         "quoteServerId": str(quote_server_id).strip(),

@@ -338,6 +338,8 @@ export const createMessageNormalizer = ({
       transferReceived: msg.paySubType === '3' || msg.transferStatus === '已收款' || msg.transferStatus === '已被接收',
       voiceUrl: normalizedVoiceUrl || '',
       voiceDuration: msg.voiceLength || msg.voiceDuration || '',
+      wechatTranscript: String(msg.wechatTranscript || '').trim(),
+      transcriptSource: String(msg.transcriptSource || '').trim(),
       voiceTranscript: String(msg.voiceTranscript || '').trim(),
       voiceTranscriptStatus: String(msg.voiceTranscriptStatus || (msg.voiceTranscript ? 'success' : 'idle')).trim() || 'idle',
       voiceTranscriptError: String(msg.voiceTranscriptError || '').trim(),
@@ -376,4 +378,25 @@ export const dedupeMessagesById = (list) => {
     output.push(item)
   }
   return output
+}
+
+// 服务端 reset/realtime 返回的新对象不能丢失用户主动触发的本地识别状态。
+// 官方微信转写字段始终来自 next；本地字段仅在 next 未提供时沿用 previous。
+export const mergeMessageTranscriptState = (next, previous) => {
+  if (!next || !previous) return next
+  const previousStatus = String(previous.voiceTranscriptStatus || '').trim()
+  const previousHasLocalState = previousStatus && previousStatus !== 'idle'
+    || !!String(previous.voiceTranscript || '').trim()
+    || !!String(previous.voiceTranscriptError || '').trim()
+    || !!String(previous.voiceTranscriptLanguage || '').trim()
+    || !!String(previous.voiceTranscriptModel || '').trim()
+  if (!previousHasLocalState) return next
+  return {
+    ...next,
+    voiceTranscript: String(previous.voiceTranscript || '').trim(),
+    voiceTranscriptStatus: previousStatus || 'idle',
+    voiceTranscriptError: String(previous.voiceTranscriptError || '').trim(),
+    voiceTranscriptLanguage: String(previous.voiceTranscriptLanguage || '').trim(),
+    voiceTranscriptModel: String(previous.voiceTranscriptModel || '').trim()
+  }
 }

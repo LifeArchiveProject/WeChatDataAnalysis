@@ -7,6 +7,10 @@ dist/
 wheels/
 *.egg-info
 
+# Local dependencies and runtime output (may include logs or WeChat data)
+/node_modules/
+/src/output/
+
 # Virtual environments
 .venv
 /output/

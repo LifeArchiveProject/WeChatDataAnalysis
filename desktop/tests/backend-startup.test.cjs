@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   DEVELOPMENT_BACKEND_STARTUP_TIMEOUT_MS,
@@ -8,6 +10,14 @@ const {
   resolveBackendStartupTimeoutMs,
   shouldRetryBackendOnDifferentPort,
 } = require("../src/backend-startup.cjs");
+
+test("development backend avoids editable uv installs on Unicode paths", () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, "..", "src", "main.cjs"), "utf8");
+  assert.match(
+    mainSource,
+    /spawn\("uv", \["run", "--no-dev", "--no-editable", "main\.py"\]/
+  );
+});
 
 test("health checks require the expected 200 JSON identity", () => {
   assert.equal(

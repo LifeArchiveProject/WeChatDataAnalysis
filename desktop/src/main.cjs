@@ -2067,7 +2067,9 @@ function startBackend() {
     // The desktop backend only needs runtime dependencies. Letting `uv run`
     // include the default dev group can block Electron startup on an unrelated
     // pytest/Pygments download before Python is even launched.
-    backendProc = spawn("uv", ["run", "--no-dev", "main.py"], {
+    // Avoid an editable-install .pth that Python 3.11 decodes using the active
+    // Windows locale. This keeps source launches working from Unicode paths.
+    backendProc = spawn("uv", ["run", "--no-dev", "--no-editable", "main.py"], {
       cwd: repoRoot(),
       env,
       stdio: "inherit",

@@ -12,7 +12,17 @@ import {
   deriveImageGroupMessages,
   findImageGroupKeyByMessageId
 } from '~/lib/chat/image-groups'
-import { createMessageNormalizer, dedupeMessagesById } from '~/lib/chat/message-normalizer'
+import { createMessageNormalizer, dedupeMessagesById, mergeMessageTranscriptState } from '~/lib/chat/message-normalizer'
+
+export const updateVoiceTranscriptById = (getMessages, messageId, patch = {}) => {
+  const id = String(messageId || '').trim()
+  const list = typeof getMessages === 'function' ? getMessages() : null
+  if (!id || !Array.isArray(list)) return false
+  const target = list.find((item) => String(item?.id || '').trim() === id)
+  if (!target) return false
+  Object.assign(target, patch)
+  return true
+}
 
 const DEFAULT_CHAT_SOURCE = 'auto'
 const IMAGE_GROUP_LAYOUT_DURATION_MS = 250
@@ -1167,34 +1177,47 @@ export const useChatMessages = ({
     // 语音消息的 svr_id 是 19 位大整数，超出 JS Number 安全范围（2^53），
     // 必须使用精确字符串 serverIdStr，否则后端会查不到语音数据。
     const serverId = String(message?.serverIdStr || message?.serverId || '').trim()
-    if (!message || !serverId || serverId === '0' || message.voiceTranscriptStatus === 'loading') return
+    if (!message || !serverId || serverId === '0') return
 
     // 模板渲染的是 renderMessages 的浅拷贝（非响应式），直接改拷贝不会驱动 UI 更新，
     // 且 computed 重算时拷贝会被替换导致状态丢失。必须修改 allMessages 中的原对象。
     const key = String(selectedContact.value?.username || '').trim()
-    const list = key ? allMessages.value[key] : null
-    const target =
-      (Array.isArray(list) ? list.find((item) => item?.id === message.id) : null) || message
+    const messageId = String(message?.id || '').trim()
+    const findCurrentMessage = () => {
+      const list = key ? allMessages.value[key] : null
+      if (!messageId || !Array.isArray(list)) return null
+      return list.find((item) => String(item?.id || '').trim() === messageId) || null
+    }
+
+    if (findCurrentMessage()?.voiceTranscriptStatus === 'loading') return
 
     const capability = await refreshVoiceTranscriptionStatus({ force: true })
     if (!capability?.available) return
 
-    target.voiceTranscriptStatus = 'loading'
-    target.voiceTranscriptError = ''
+    if (!updateVoiceTranscriptById(() => key ? allMessages.value[key] : null, messageId, {
+      voiceTranscriptStatus: 'loading',
+      voiceTranscriptError: ''
+    })) return
     try {
       const result = await api.transcribeChatVoice({
         account: selectedAccount.value,
         server_id: serverId,
+        local_id: Number(message?.localId || 0),
+        create_time: Number(message?.createTime || 0),
         force
       })
-      target.voiceTranscript = String(result?.text || '').trim()
-      target.voiceTranscriptLanguage = String(result?.language || '').trim()
-      target.voiceTranscriptModel = String(result?.model || '').trim()
-      target.voiceTranscriptStatus = 'success'
+      updateVoiceTranscriptById(() => key ? allMessages.value[key] : null, messageId, {
+        voiceTranscript: String(result?.text || '').trim(),
+        voiceTranscriptLanguage: String(result?.language || '').trim(),
+        voiceTranscriptModel: String(result?.model || '').trim(),
+        voiceTranscriptStatus: 'success'
+      })
     } catch (error) {
       const detail = error?.data?.detail || error?.detail
-      target.voiceTranscriptError = String(detail?.message || error?.message || '语音识别失败').trim()
-      target.voiceTranscriptStatus = 'error'
+      updateVoiceTranscriptById(() => key ? allMessages.value[key] : null, messageId, {
+        voiceTranscriptError: String(detail?.message || error?.message || '语音识别失败').trim(),
+        voiceTranscriptStatus: 'error'
+      })
     }
   }
 
@@ -1636,7 +1659,9 @@ export const useChatMessages = ({
         mappedCount: mapped.length
       })
       if (reset) {
-        allMessages.value = { ...allMessages.value, [username]: hydrateQuoteImageUrls(mapped) }
+        const previousById = new Map(existing.map((item) => [String(item?.id || ''), item]))
+        const merged = mapped.map((item) => mergeMessageTranscriptState(item, previousById.get(String(item?.id || ''))))
+        allMessages.value = { ...allMessages.value, [username]: hydrateQuoteImageUrls(merged) }
       } else {
         const existingIds = new Set(existing.map((message) => String(message?.id || '')))
         const older = mapped.filter((message) => {
@@ -1808,23 +1833,35 @@ export const useChatMessages = ({
 
       const rawMessages = response?.messages || []
       loadLargeImagePreferences()
-      const latest = hydrateQuoteImageUrls(dedupeMessagesById(rawMessages.map(normalizeMessage)), existing)
+      const existingById = new Map(existing.map((item) => [String(item?.id || ''), item]))
+      const latest = hydrateQuoteImageUrls(dedupeMessagesById(rawMessages.map(normalizeMessage)).map((item) => (
+        mergeMessageTranscriptState(item, existingById.get(String(item?.id || '')))
+      )), existing)
 
       const seenIds = new Set(existing.map((message) => String(message?.id || '')))
       const newOnes = []
+      const latestById = new Map(latest.map((message) => [String(message?.id || ''), message]))
+      let replacedExisting = false
+      const refreshedExisting = existing.map((message) => {
+        const id = String(message?.id || '')
+        const replacement = id ? latestById.get(id) : null
+        if (!replacement) return message
+        replacedExisting = true
+        return replacement
+      })
       for (const message of latest) {
         const id = String(message?.id || '')
         if (!id || seenIds.has(id)) continue
         seenIds.add(id)
         newOnes.push(message)
       }
-      if (!newOnes.length) return
+      if (!newOnes.length && !replacedExisting) return
 
-      allMessages.value = { ...allMessages.value, [username]: hydrateQuoteImageUrls([...existing, ...newOnes]) }
+      allMessages.value = { ...allMessages.value, [username]: hydrateQuoteImageUrls([...refreshedExisting, ...newOnes]) }
 
       await nextTick()
       const nextContainer = messageContainerRef.value
-      if (nextContainer && atBottom) {
+      if (nextContainer && newOnes.length > 0 && atBottom) {
         nextContainer.scrollTop = nextContainer.scrollHeight
       }
       updateJumpToBottomState()

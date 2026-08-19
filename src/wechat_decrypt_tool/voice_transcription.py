@@ -381,47 +381,69 @@ def _convert_silk_to_browser_audio(data: bytes, *, preferred_format: str) -> tup
     return convert(data, preferred_format=preferred_format)
 
 
-def load_voice_data(account_dir: Path, server_id: int) -> bytes:
+def load_voice_data(
+    account_dir: Path,
+    server_id: int,
+    *,
+    local_id: Optional[int] = None,
+    create_time: Optional[int] = None,
+) -> bytes:
     account_path = Path(account_dir)
     sid = int(server_id or 0)
-    if sid <= 0:
-        return b""
-
-    media_db_path = account_path / "media_0.db"
-    if media_db_path.exists():
-        conn: Optional[sqlite3.Connection] = None
-        try:
-            conn = sqlite3.connect(str(media_db_path))
-            row = conn.execute(
-                "SELECT voice_data FROM VoiceInfo WHERE svr_id = ? ORDER BY create_time DESC LIMIT 1",
-                (sid,),
-            ).fetchone()
-            if row:
-                data = _coerce_blob(row[0])
-                if data:
-                    return data
-        except Exception:
-            pass
-        finally:
-            if conn is not None:
-                conn.close()
+    try:
+        lid = int(local_id or 0)
+    except Exception:
+        lid = 0
+    try:
+        timestamp = int(create_time or 0)
+    except Exception:
+        timestamp = 0
+    can_fallback = lid > 0 and timestamp > 0
+    fallback_candidates: list[bytes] = []
+    realtime: Any = None
+    realtime_db_paths: list[Path] = []
 
     try:
         from .wcdb_realtime import WCDB_REALTIME, exec_query as _wcdb_exec_query
 
         realtime = WCDB_REALTIME.ensure_connected(account_path)
         media_dir = Path(realtime.db_storage_dir) / "message"
-        sql = f"SELECT voice_data FROM VoiceInfo WHERE svr_id = {sid} ORDER BY create_time DESC LIMIT 1"
-        for realtime_db_path in sorted(media_dir.glob("media_*.db")):
-            if not realtime_db_path.is_file():
-                continue
+        realtime_db_paths = [
+            path for path in sorted(media_dir.glob("media_*.db")) if path.is_file()
+        ]
+    except Exception:
+        _wcdb_exec_query = None
+
+    media_db_path = account_path / "media_0.db"
+    if media_db_path.exists():
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = sqlite3.connect(str(media_db_path))
+            if sid > 0:
+                row = conn.execute(
+                    "SELECT voice_data FROM VoiceInfo WHERE svr_id = ? ORDER BY create_time DESC LIMIT 1",
+                    (sid,),
+                ).fetchone()
+                if row:
+                    data = _coerce_blob(row[0])
+                    if data:
+                        return data
+        except Exception:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+
+    if sid > 0 and realtime is not None and _wcdb_exec_query is not None:
+        exact_sql = f"SELECT voice_data FROM VoiceInfo WHERE svr_id = {sid} ORDER BY create_time DESC LIMIT 1"
+        for realtime_db_path in realtime_db_paths:
             try:
                 with realtime.lock:
                     rows = _wcdb_exec_query(
                         realtime.handle,
                         kind="message",
                         path=str(realtime_db_path),
-                        sql=sql,
+                        sql=exact_sql,
                     )
             except Exception:
                 rows = []
@@ -429,8 +451,55 @@ def load_voice_data(account_dir: Path, server_id: int) -> bytes:
                 data = _coerce_blob(rows[0].get("voice_data"))
                 if data:
                     return data
-    except Exception:
-        pass
+
+    if not can_fallback:
+        return b""
+
+    if media_db_path.exists():
+        conn = None
+        try:
+            conn = sqlite3.connect(str(media_db_path))
+            rows = conn.execute(
+                "SELECT voice_data FROM VoiceInfo "
+                "WHERE local_id = ? AND create_time = ? AND voice_data IS NOT NULL AND length(voice_data) > 0 "
+                "LIMIT 2",
+                (lid, timestamp),
+            ).fetchall()
+            if len(rows) == 1:
+                data = _coerce_blob(rows[0][0])
+                if data:
+                    fallback_candidates.append(data)
+        except Exception:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+
+    if realtime is not None and _wcdb_exec_query is not None:
+        fallback_sql = (
+            "SELECT voice_data FROM VoiceInfo "
+            f"WHERE local_id = {lid} AND create_time = {timestamp} "
+            "AND voice_data IS NOT NULL AND length(voice_data) > 0 LIMIT 2"
+        )
+        for realtime_db_path in realtime_db_paths:
+            try:
+                with realtime.lock:
+                    rows = _wcdb_exec_query(
+                        realtime.handle,
+                        kind="message",
+                        path=str(realtime_db_path),
+                        sql=fallback_sql,
+                    )
+            except Exception:
+                rows = []
+            for row in rows[:2]:
+                data = _coerce_blob(row.get("voice_data"))
+                if data:
+                    fallback_candidates.append(data)
+                if len(fallback_candidates) > 1:
+                    return b""
+    if len(fallback_candidates) == 1:
+        return fallback_candidates[0]
     return b""
 
 
@@ -551,6 +620,8 @@ class VoiceTranscriptionService:
         server_id: int,
         force: bool = False,
         voice_data: Optional[bytes] = None,
+        local_id: Optional[int] = None,
+        create_time: Optional[int] = None,
     ) -> dict[str, Any]:
         if not self.config.enabled:
             raise VoiceTranscriptionError("disabled", "语音转文字功能未启用。")
@@ -558,16 +629,23 @@ class VoiceTranscriptionService:
             raise VoiceTranscriptionError("model_not_configured", "未配置 Whisper 模型。")
 
         sid = int(server_id or 0)
-        if sid <= 0:
+        try:
+            has_message_locator = int(local_id or 0) > 0 and int(create_time or 0) > 0
+        except Exception:
+            has_message_locator = False
+        if sid <= 0 and not has_message_locator:
             raise VoiceTranscriptionError("invalid_server_id", "语音消息 ID 无效。")
 
-        data = bytes(voice_data) if voice_data is not None else load_voice_data(Path(account_dir), sid)
+        data = bytes(voice_data) if voice_data is not None else load_voice_data(
+            Path(account_dir), sid, local_id=local_id, create_time=create_time
+        )
         if not data:
             raise VoiceTranscriptionError("voice_not_found", "未找到语音数据。")
 
         source_hash = hashlib.sha256(data).hexdigest()
-        if not force:
-            cached = self._read_cache(Path(account_dir), sid, source_hash)
+        cache_id = sid if sid > 0 else None
+        if not force and cache_id is not None:
+            cached = self._read_cache(Path(account_dir), cache_id, source_hash)
             if cached is not None:
                 cached["cached"] = True
                 return cached
@@ -584,8 +662,8 @@ class VoiceTranscriptionService:
                 temp_path = Path(temp_file.name)
 
             with self._inference_lock:
-                if not force:
-                    cached = self._read_cache(Path(account_dir), sid, source_hash)
+                if not force and cache_id is not None:
+                    cached = self._read_cache(Path(account_dir), cache_id, source_hash)
                     if cached is not None:
                         cached["cached"] = True
                         return cached
@@ -625,10 +703,11 @@ class VoiceTranscriptionService:
                 "computeType": self._active_compute_type or self.config.compute_type,
                 "cached": False,
             }
-            try:
-                self._write_cache(Path(account_dir), sid, source_hash, result)
-            except Exception:
-                pass
+            if cache_id is not None:
+                try:
+                    self._write_cache(Path(account_dir), cache_id, source_hash, result)
+                except Exception:
+                    pass
             return result
         finally:
             if temp_path is not None:
