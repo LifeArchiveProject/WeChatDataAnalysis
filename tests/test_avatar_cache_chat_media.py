@@ -6,6 +6,7 @@ import unittest
 import importlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -178,6 +179,82 @@ class TestAvatarCacheChatMedia(unittest.TestCase):
                 resp2 = client.get("/api/chat/avatar", params={"account": account, "username": username})
                 self.assertEqual(resp2.status_code, 200)
                 self.assertEqual(resp2.content, resp.content)
+            finally:
+                _close_logging_handlers()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+                if prev_cache is None:
+                    os.environ.pop("WECHAT_TOOL_AVATAR_CACHE_ENABLED", None)
+                else:
+                    os.environ["WECHAT_TOOL_AVATAR_CACHE_ENABLED"] = prev_cache
+
+    def test_direct_avatar_without_head_image_db_uses_remote_fallback(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        # 1x1 PNG; the point of this test is the missing local DB path, not
+        # remote HTTP itself, so requests is stubbed below.
+        png = bytes.fromhex(
+            "89504E470D0A1A0A"
+            "0000000D49484452000000010000000108060000001F15C489"
+            "0000000D49444154789C6360606060000000050001A5F64540"
+            "0000000049454E44AE426082"
+        )
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_direct_avatar"
+            username = "wxid_friend"
+            account_dir = root / "output" / "databases" / account
+            account_dir.mkdir(parents=True, exist_ok=True)
+            (account_dir / "_source.json").write_text(
+                '{"db_storage_path": "C:/wechat/db_storage"}',
+                encoding="utf-8",
+            )
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            prev_cache = os.environ.get("WECHAT_TOOL_AVATAR_CACHE_ENABLED")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                os.environ["WECHAT_TOOL_AVATAR_CACHE_ENABLED"] = "1"
+
+                import wechat_decrypt_tool.app_paths as app_paths
+                import wechat_decrypt_tool.chat_helpers as chat_helpers
+                import wechat_decrypt_tool.avatar_cache as avatar_cache
+                import wechat_decrypt_tool.routers.chat_media as chat_media
+
+                importlib.reload(app_paths)
+                importlib.reload(chat_helpers)
+                importlib.reload(avatar_cache)
+                importlib.reload(chat_media)
+
+                fake_response = Mock()
+                fake_response.status_code = 200
+                fake_response.headers = {"Content-Type": "image/png"}
+                fake_response.iter_content.return_value = [png]
+                fake_response.raise_for_status.return_value = None
+
+                app = FastAPI()
+                app.include_router(chat_media.router)
+                client = TestClient(app)
+                remote_url = "https://wx.qlogo.cn/mmhead/direct-avatar/132"
+                with patch.object(chat_media, "_resolve_avatar_remote_url", return_value=remote_url), patch.object(
+                    chat_media.requests,
+                    "get",
+                    return_value=fake_response,
+                ) as get_remote:
+                    response = client.get(
+                        "/api/chat/avatar",
+                        params={"account": account, "username": username},
+                    )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.headers.get("content-type", "").startswith("image/"))
+                self.assertEqual(response.content, png)
+                get_remote.assert_called()
+                self.assertFalse((account_dir / "head_image.db").exists())
             finally:
                 _close_logging_handlers()
                 if prev_data is None:

@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { resolve } from 'node:path'
 
 import {
   buildAccountAvatarUrl,
   resolveAccountSelfUsername,
 } from '../lib/account-avatar.js'
+
+const sidebarSource = readFileSync(resolve(process.cwd(), 'components/SidebarRail.vue'), 'utf8')
 
 
 test('uses the native self username instead of the suffixed account directory', () => {
@@ -37,4 +41,12 @@ test('explicit backend identity wins over directory-name inference', () => {
     }),
     'wxid_real_user',
   )
+})
+
+
+test('sidebar prefers the self display name while retaining the account id', () => {
+  assert.match(sidebarSource, /item\.displayName \|\| item\.account/)
+  assert.match(sidebarSource, /selectedAccountDisplayName \|\| selectedAccount/)
+  assert.match(sidebarSource, /\{\{ selectedAccount \}\}/)
+  assert.match(sidebarSource, /selfDisplayName[\s\S]*?nickname/)
 })
