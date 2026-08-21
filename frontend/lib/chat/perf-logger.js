@@ -70,20 +70,50 @@ export const createPerfTrace = (channel, baseDetails = {}) => {
   }
 }
 
-export const getLatestResourceTiming = (resourceUrl) => {
+export const resolveResourceTimingUrl = (baseUrl, requestUrl) => {
+  const base = String(baseUrl || '').trim().replace(/\/+$/, '')
+  const path = String(requestUrl || '').trim().replace(/^\/+/, '')
+  if (!path) return ''
+
+  try {
+    const combined = base ? `${base}/${path}` : `/${path}`
+    if (/^https?:\/\//i.test(combined)) return new URL(combined).href
+    if (typeof window === 'undefined' || !window.location?.href) return combined
+    return new URL(combined, window.location.href).href
+  } catch {
+    return ''
+  }
+}
+
+export const getLatestResourceTiming = (resourceUrl, { startedAfter = 0 } = {}) => {
   const url = String(resourceUrl || '').trim()
   if (!url || typeof performance === 'undefined' || typeof performance.getEntriesByName !== 'function') {
     return {}
   }
 
   try {
-    const entries = performance.getEntriesByName(url)
+    const threshold = Number(startedAfter)
+    const entries = performance.getEntriesByName(url).filter((entry) => (
+      !Number.isFinite(threshold)
+      || threshold <= 0
+      || Number(entry?.startTime) >= threshold
+    ))
     if (!entries?.length) return {}
     const entry = entries[entries.length - 1]
+    const requestStart = Number(entry.requestStart)
+    const responseStart = Number(entry.responseStart)
+    const responseEnd = Number(entry.responseEnd)
+    const fetchStart = Number(entry.fetchStart)
     return {
       resourceDurationMs: roundPerfMs(entry.duration),
-      fetchStartMs: roundPerfMs(entry.fetchStart),
-      responseEndMs: roundPerfMs(entry.responseEnd),
+      resourceStartMs: roundPerfMs(entry.startTime),
+      fetchStartMs: roundPerfMs(fetchStart),
+      requestStartMs: roundPerfMs(requestStart),
+      responseStartMs: roundPerfMs(responseStart),
+      responseEndMs: roundPerfMs(responseEnd),
+      queueMs: roundPerfMs(requestStart - fetchStart),
+      ttfbMs: roundPerfMs(responseStart - requestStart),
+      downloadMs: roundPerfMs(responseEnd - responseStart),
       transferSize: Number.isFinite(entry.transferSize) ? Number(entry.transferSize) : null,
       encodedBodySize: Number.isFinite(entry.encodedBodySize) ? Number(entry.encodedBodySize) : null,
       decodedBodySize: Number.isFinite(entry.decodedBodySize) ? Number(entry.decodedBodySize) : null,

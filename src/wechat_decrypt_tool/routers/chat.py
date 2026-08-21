@@ -88,7 +88,7 @@ from ..chat_realtime_reader import (
 from ..database_filters import list_countable_database_names
 from ..key_store import remove_account_family_keys_from_store
 from ..path_fix import PathFixRoute
-from ..perf_trace import create_perf_trace
+from ..perf_trace import create_perf_trace, get_request_perf_context
 from ..session_last_message import (
     build_session_last_message_table,
     get_session_last_message_status,
@@ -6295,6 +6295,10 @@ def list_chat_messages(
     scan_limit: int = 320,
     source: Optional[str] = None,
 ):
+    handler_started_perf = time.perf_counter()
+    handler_started_epoch_ms = time.time_ns() / 1_000_000
+    request_perf = get_request_perf_context(request)
+
     if not username:
         raise HTTPException(status_code=400, detail="Missing username.")
     if limit <= 0:
@@ -6320,9 +6324,31 @@ def list_chat_messages(
     head_image_db_path = account_dir / "head_image.db"
     message_resource_db_path = account_dir / "message_resource.db"
     base_url = str(request.base_url).rstrip("/")
+    request_perf_fields: dict[str, Any] = {}
+    asgi_arrived_perf = request_perf.get("asgiArrivedPerf")
+    if isinstance(asgi_arrived_perf, (int, float)):
+        request_perf_fields = {
+            "clientTraceId": request_perf.get("clientTraceId"),
+            "clientSentEpochMs": request_perf.get("clientSentEpochMs"),
+            "asgiArrivedEpochMs": request_perf.get("asgiArrivedEpochMs"),
+            "handlerStartedEpochMs": round(handler_started_epoch_ms, 3),
+            "asgiQueueMs": round(
+                (handler_started_perf - float(asgi_arrived_perf)) * 1000.0,
+                1,
+            ),
+        }
+    request_trace_options = (
+        {
+            "trace_id": str(request_perf.get("traceId") or "") or None,
+            "started_at": handler_started_perf,
+        }
+        if request_perf
+        else {}
+    )
     _trace_id, trace = create_perf_trace(
         logger,
         "chat.messages",
+        **request_trace_options,
         account=account_dir.name,
         username=username,
         source=source_norm or "default",
@@ -6333,6 +6359,7 @@ def list_chat_messages(
         filterMode=str(filter_mode or ""),
         scanOffset=int(scan_offset),
         scanLimit=int(scan_limit),
+        **request_perf_fields,
     )
     trace("request:start")
 
@@ -7305,6 +7332,7 @@ def list_chat_messages(
         contact_db_path=contact_db_path,
         chatroom_id=username,
         sender_usernames=uniq_senders,
+        allow_native_fallback=False,
     )
     trace(
         "sender-fallbacks:loaded",
@@ -7573,6 +7601,7 @@ async def _search_chat_messages_via_fts(
     include_hidden: bool,
     include_official: bool,
     source: Optional[str] = None,
+    allow_native_enrichment: bool = True,
 ) -> dict[str, Any]:
     tokens = _make_search_tokens(q)
     if not tokens:
@@ -8015,7 +8044,11 @@ async def _search_chat_messages_via_fts(
 
             need_display = list(dict.fromkeys(need_display))
             need_avatar = list(dict.fromkeys(need_avatar))
-            if (need_display or need_avatar) and not account_prefers_decrypted_snapshot(account_dir):
+            if (
+                allow_native_enrichment
+                and (need_display or need_avatar)
+                and not account_prefers_decrypted_snapshot(account_dir)
+            ):
                 wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
                 with wcdb_conn.lock:
                     if need_display:
@@ -8042,6 +8075,7 @@ async def _search_chat_messages_via_fts(
             contact_db_path=contact_db_path,
             chatroom_id=username,
             sender_usernames=[str(x.get("senderUsername") or "") for x in hits],
+            allow_native_fallback=allow_native_enrichment,
         )
 
         for h in hits:
@@ -8099,7 +8133,11 @@ async def _search_chat_messages_via_fts(
 
             need_display = list(dict.fromkeys(need_display))
             need_avatar = list(dict.fromkeys(need_avatar))
-            if (need_display or need_avatar) and not account_prefers_decrypted_snapshot(account_dir):
+            if (
+                allow_native_enrichment
+                and (need_display or need_avatar)
+                and not account_prefers_decrypted_snapshot(account_dir)
+            ):
                 wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
                 with wcdb_conn.lock:
                     if need_display:
@@ -8125,6 +8163,7 @@ async def _search_chat_messages_via_fts(
                 contact_db_path=contact_db_path,
                 chatroom_id=cu,
                 sender_usernames=senders,
+                allow_native_fallback=allow_native_enrichment,
             )
 
         for h in hits:
@@ -8211,6 +8250,7 @@ async def search_chat_messages(
     include_hidden: bool = False,
     include_official: bool = False,
     source: Optional[str] = None,
+    allow_native_enrichment: bool = True,
     session_limit: int = 200,
     per_chat_scan: int = 200,
     scan_limit: int = 20000,
@@ -8232,6 +8272,7 @@ async def search_chat_messages(
         include_hidden=include_hidden,
         include_official=include_official,
         source=source_requested,
+        allow_native_enrichment=allow_native_enrichment,
     )
     if isinstance(response, dict):
         if source_requested in {"auto", "realtime", "decrypted"}:

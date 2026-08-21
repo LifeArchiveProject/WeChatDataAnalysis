@@ -2144,6 +2144,7 @@ export const useChatMessages = ({
         }
         params.source = DEFAULT_CHAT_SOURCE
         if (requestController) params.signal = requestController.signal
+        if (isChatPerfLoggingEnabled()) params.perfTraceId = trace.id
         trace.log('loadMessages:request:start', {
           requestIndex,
           offset: requestOffset,

@@ -42,6 +42,7 @@ from .routers.general import router as _general_router
 from .routers.favorites import router as _favorites_router
 from .routers.record_export import router as _record_export_router
 from .request_logging import log_server_errors_middleware
+from .perf_trace import ChatRequestPerfMiddleware
 from .native_core_telemetry import (
     record_product_event,
     shutdown_product_telemetry,
@@ -120,6 +121,9 @@ async def _record_content_free_product_events(request: Request, call_next):
     elif is_export:
         record_product_event("export_failed")
     return response
+
+
+app.add_middleware(ChatRequestPerfMiddleware, logger=request_logger)
 
 
 app.include_router(_health_router)

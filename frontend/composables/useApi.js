@@ -1,4 +1,11 @@
 import { reportServerError } from '~/lib/server-error-logging'
+import {
+  getLatestResourceTiming,
+  isChatPerfLoggingEnabled,
+  logPerfChannel,
+  nowPerfMs,
+  resolveResourceTimingUrl
+} from '~/lib/chat/perf-logger'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 
 const chatContactsListCache = new Map()
@@ -41,10 +48,33 @@ export const useApi = () => {
   
   // 基础请求函数
   const request = async (url, options = {}) => {
+    const fetchOptions = { ...options }
+    const perfTraceId = String(fetchOptions.perfTraceId || '').trim()
+    delete fetchOptions.perfTraceId
+    const perfEnabled = !!perfTraceId && isChatPerfLoggingEnabled()
+    const resourceUrl = perfEnabled ? resolveResourceTimingUrl(baseURL, url) : ''
+    const sentEpochMs = perfEnabled ? Date.now() : 0
+    const requestStartedAt = perfEnabled ? nowPerfMs() : 0
+    let requestError = ''
+
+    if (perfEnabled) {
+      try { performance.setResourceTimingBufferSize?.(5000) } catch {}
+      const headers = new Headers(fetchOptions.headers || undefined)
+      headers.set('X-WCDA-Perf-Trace', perfTraceId)
+      headers.set('X-WCDA-Perf-Sent-Ms', String(sentEpochMs))
+      fetchOptions.headers = headers
+      logPerfChannel('chat-api', 'request:dispatch', {
+        traceId: perfTraceId,
+        requestUrl: resourceUrl,
+        sentEpochMs,
+        requestStartedAtMs: Number(requestStartedAt.toFixed(1))
+      })
+    }
+
     try {
       const response = await $fetch(url, {
         baseURL,
-        ...options,
+        ...fetchOptions,
         async onResponseError({ response }) {
           if (response.status >= 400 && response.status < 500) {
             const fallback = response.status === 400
@@ -70,10 +100,24 @@ export const useApi = () => {
       chatAccounts.applySourceResponse(response)
       return response
     } catch (error) {
+      requestError = String(error?.message || error?.name || 'request failed')
       if (!isAbortRequestError(error)) {
         console.error('API请求错误:', error)
       }
       throw error
+    } finally {
+      if (perfEnabled) {
+        const timing = getLatestResourceTiming(resourceUrl, { startedAfter: requestStartedAt })
+        logPerfChannel('chat-api', requestError ? 'request:error' : 'request:complete', {
+          traceId: perfTraceId,
+          requestUrl: resourceUrl,
+          sentEpochMs,
+          elapsedMs: Number((nowPerfMs() - requestStartedAt).toFixed(1)),
+          resourceTimingFound: Object.keys(timing).length > 0,
+          ...timing,
+          ...(requestError ? { error: requestError } : {})
+        })
+      }
     }
   }
   
@@ -174,7 +218,10 @@ export const useApi = () => {
     if (params && params.scan_limit != null) query.set('scan_limit', String(params.scan_limit))
     if (params && params.source) query.set('source', params.source)
     const url = '/chat/messages' + (query.toString() ? `?${query.toString()}` : '')
-    return await request(url, params?.signal ? { signal: params.signal } : {})
+    return await request(url, {
+      ...(params?.signal ? { signal: params.signal } : {}),
+      ...(params?.perfTraceId ? { perfTraceId: params.perfTraceId } : {})
+    })
   }
 
   const getChatMessageRaw = async (params = {}) => {
