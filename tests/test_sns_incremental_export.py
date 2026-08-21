@@ -162,6 +162,84 @@ def test_browser_patch_stages_state_last_and_reuses_unchanged_files():
         assert second_job.change_manifest["files"] == []
 
 
+def test_browser_patch_restores_only_missing_managed_media():
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        account_dir = root / "wxid_me"
+        account_dir.mkdir()
+        users = [{
+            "username": "wxid_friend",
+            "displayName": "Alice",
+            "posts": [{"id": "42", "_contentFingerprint": "same"}],
+            "cover": None,
+        }]
+        with mock.patch.object(service, "_account_display_name", return_value="Me"):
+            state, old, changed, folder, _warning = service._prepare_incremental_baseline(
+                account_dir=account_dir,
+                export_format="html",
+                users=users,
+                requested_folder_name="",
+                supplied_baseline={},
+                reset_baseline=False,
+            )
+
+        archive_path = root / "first.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("Alice.html", '<img src="media/photo.jpg">')
+            archive.writestr("media/photo.jpg", b"photo")
+
+        manager = service.SnsExportManager()
+        first_job = service.ExportJob(export_id="browser-first", account="wxid_me")
+        manager._materialize_folder_export(
+            job=first_job,
+            zip_path=archive_path,
+            exports_root=root,
+            account_dir=account_dir,
+            export_format="html",
+            users=users,
+            state=state,
+            old_state=old,
+            changed_users=changed,
+            folder_name=folder,
+            desktop_output=False,
+            reset_baseline=False,
+        )
+        baseline_path = first_job.staged_files[first_job.change_manifest["state"]["fileId"]]
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+
+        with mock.patch.object(service, "_account_display_name", return_value="Me"):
+            next_state, next_old, next_changed, _, _ = service._prepare_incremental_baseline(
+                account_dir=account_dir,
+                export_format="html",
+                users=users,
+                requested_folder_name=folder,
+                supplied_baseline=baseline,
+                reset_baseline=False,
+                missing_files=["media/photo.jpg"],
+            )
+        assert next_changed == {"wxid_friend"}
+
+        second_job = service.ExportJob(export_id="browser-repair", account="wxid_me")
+        manager._materialize_folder_export(
+            job=second_job,
+            zip_path=archive_path,
+            exports_root=root,
+            account_dir=account_dir,
+            export_format="html",
+            users=users,
+            state=next_state,
+            old_state=next_old,
+            changed_users=next_changed,
+            folder_name=folder,
+            desktop_output=False,
+            reset_baseline=False,
+            missing_files=["media/photo.jpg"],
+        )
+        assert [entry["path"] for entry in second_job.change_manifest["files"]] == ["media/photo.jpg"]
+        assert second_job.incremental["filesChanged"] == 1
+        assert second_job.incremental["filesReused"] == 1
+
+
 def test_changed_html_removes_only_files_managed_by_old_baseline():
     with TemporaryDirectory() as td:
         root = Path(td)
@@ -288,6 +366,21 @@ def test_desktop_folder_export_is_atomic_and_second_run_reuses_contact_file():
         assert contact_file.stat().st_mtime_ns == before
         assert second_job.incremental["usersReused"] == 1
         assert second_job.incremental["filesChanged"] == 0
+
+        # 直接选中已有导出根目录时，应在原目录增量补回，不能再创建同名子目录。
+        contact_file.unlink()
+        direct_options = {**options, "outputDir": str(output)}
+        repair_job = service.ExportJob(export_id="desktop-repair", account="wxid_me", options=direct_options)
+        with (
+            mock.patch.object(service, "sync_sns_realtime_timeline_latest", return_value={"status": "noop"}),
+            mock.patch.object(service, "write_zip_integrity_sidecars"),
+            mock.patch.object(service, "_account_display_name", return_value="Me"),
+        ):
+            repair_output = manager._run_job(repair_job, account_dir)
+        assert repair_output == output
+        assert contact_file.is_file()
+        assert not (output / "Alice_朋友圈").exists()
+        assert repair_job.incremental["filesChanged"] == 1
 
 
 def test_html_folder_export_uses_stable_css_without_zip_integrity_runtime():

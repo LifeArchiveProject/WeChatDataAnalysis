@@ -370,6 +370,7 @@ def _prepare_incremental_baseline(
     requested_folder_name: str,
     supplied_baseline: dict[str, Any],
     reset_baseline: bool,
+    missing_files: Optional[list[str]] = None,
 ) -> tuple[dict[str, Any], dict[str, Any], set[str], str, str]:
     """生成本轮基线，并返回旧基线、变更联系人集合和警告。"""
     old = supplied_baseline if isinstance(supplied_baseline, dict) else {}
@@ -396,6 +397,13 @@ def _prepare_incremental_baseline(
     allocated: set[str] = set()
     user_states: dict[str, Any] = {}
     changed: set[str] = set()
+    missing_paths = {
+        str(value or "").replace("\\", "/").lstrip("/")
+        for value in (missing_files or [])
+        if str(value or "").strip()
+        and ".." not in Path(str(value or "").replace("\\", "/")).parts
+    }
+    claimed_missing_paths: set[str] = set()
 
     for item in users:
         username = str(item.get("username") or "").strip()
@@ -448,6 +456,22 @@ def _prepare_incremental_baseline(
         semantic_keys = {"displayName", "output", "profileFingerprint", "coverFingerprint", "posts"}
         if any(state.get(key) != old_user.get(key) for key in semantic_keys):
             changed.add(username)
+        managed_paths = {
+            str(value or "").replace("\\", "/").lstrip("/")
+            for value in (state.get("managedFiles") or [])
+            if str(value or "").strip()
+        }
+        if output:
+            managed_paths.add(output)
+        user_missing = missing_paths & managed_paths
+        if user_missing:
+            changed.add(username)
+            claimed_missing_paths.update(user_missing)
+
+    # 共享资源理论上会出现在至少一个联系人的 managedFiles 中。旧版基线若没有记录归属，
+    # 保守地重建本轮联系人，确保缺失文件仍有机会进入增量补丁。
+    if missing_paths - claimed_missing_paths:
+        changed.update(user_states)
 
     account_display = _account_display_name(account_dir)
     default_root = (
@@ -1204,7 +1228,11 @@ class ExportJob:
     content_key: Optional[bytearray] = field(default=None, repr=False)
 
     def to_public_dict(self) -> dict[str, Any]:
-        public_options = {key: value for key, value in self.options.items() if key != "baseline"}
+        public_options = {
+            key: value
+            for key, value in self.options.items()
+            if key not in {"baseline", "missingFiles"}
+        }
         return {
             "exportId": self.export_id,
             "account": self.account,
@@ -1305,13 +1333,25 @@ class SnsExportManager:
         folder_name: str,
         desktop_output: bool,
         reset_baseline: bool,
+        missing_files: Optional[list[str]] = None,
+        desktop_target_root: Optional[Path] = None,
     ) -> Path:
         staging_dir = (exports_root / f".sns-folder-{job.export_id}").resolve()
         if staging_dir.exists():
             shutil.rmtree(staging_dir, ignore_errors=True)
         staging_dir.mkdir(parents=True, exist_ok=True)
         job.staging_dir = staging_dir
-        target_root = (exports_root / folder_name).resolve() if desktop_output else None
+        target_root = (
+            Path(desktop_target_root).resolve()
+            if desktop_output and desktop_target_root is not None
+            else ((exports_root / folder_name).resolve() if desktop_output else None)
+        )
+        missing_paths = {
+            str(value or "").replace("\\", "/").lstrip("/")
+            for value in (missing_files or [])
+            if str(value or "").strip()
+            and ".." not in Path(str(value or "").replace("\\", "/")).parts
+        }
 
         extension = _sns_export_extension(export_format)
         original_user_paths: dict[str, str] = {}
@@ -1422,6 +1462,7 @@ class SnsExportManager:
                     not reset_baseline
                     and str(previous.get("sha256") or "") == digest
                     and int(previous.get("size") or -1) == len(payload)
+                    and target_path not in missing_paths
                     and (existing_target is None or existing_target.is_file())
                 ):
                     continue
@@ -1520,6 +1561,7 @@ class SnsExportManager:
         output_mode: ExportOutputMode = "zip",
         folder_name: Optional[str] = None,
         baseline: Optional[dict[str, Any]] = None,
+        missing_files: Optional[list[str]] = None,
         reset_baseline: bool = False,
         encrypt: bool = False,
         content_key: bytearray | None = None,
@@ -1543,6 +1585,11 @@ class SnsExportManager:
                 "outputMode": "folder" if str(output_mode or "zip") == "folder" else "zip",
                 "folderName": str(folder_name or "").strip(),
                 "baseline": _json_safe(baseline or {}),
+                "missingFiles": [
+                    str(value or "").replace("\\", "/").lstrip("/")
+                    for value in (missing_files or [])
+                    if str(value or "").strip()
+                ],
                 "resetBaseline": bool(reset_baseline),
                 "encrypted": bool(encrypt),
             },
@@ -1675,6 +1722,11 @@ class SnsExportManager:
             raise ValueError("增量目录模式不支持整包加密，请改用 ZIP 模式。")
         requested_folder_name = str(opts.get("folderName") or "").strip()
         supplied_baseline = opts.get("baseline") if isinstance(opts.get("baseline"), dict) else {}
+        supplied_missing_files = [
+            str(value or "").replace("\\", "/").lstrip("/")
+            for value in (opts.get("missingFiles") or [])
+            if str(value or "").strip()
+        ]
         reset_baseline = bool(opts.get("resetBaseline"))
         desktop_folder_output = output_mode == "folder" and bool(str(opts.get("outputDir") or "").strip())
         exports_root = _resolve_export_output_dir(account_dir, opts.get("outputDir"))
@@ -1703,6 +1755,7 @@ class SnsExportManager:
         incremental_old_state: dict[str, Any] = {}
         incremental_changed_users: set[str] = set()
         incremental_folder_name = ""
+        incremental_desktop_target_root: Optional[Path] = None
         ui_public_dir = _resolve_ui_public_dir()
 
         emoji_table = _load_wechat_emoji_table()
@@ -2843,12 +2896,43 @@ class SnsExportManager:
                         requested_folder_name=requested_folder_name,
                         supplied_baseline=supplied_baseline,
                         reset_baseline=reset_baseline,
+                        missing_files=supplied_missing_files,
                     )
-                    if desktop_folder_output and not reset_baseline:
-                        disk_baseline_path = exports_root / incremental_folder_name / _SNS_INCREMENTAL_STATE_NAME
-                        if disk_baseline_path.exists() and disk_baseline_path.is_file():
+                    if desktop_folder_output:
+                        nested_target_root = (exports_root / incremental_folder_name).resolve()
+                        direct_baseline_path = exports_root / _SNS_INCREMENTAL_STATE_NAME
+                        # 允许用户直接选中已有的导出根目录；此前会再套一层同名目录，
+                        # 既读不到原基线，也无法补回用户手动删除的媒体文件。
+                        direct_baseline: dict[str, Any] = {}
+                        if direct_baseline_path.exists() and direct_baseline_path.is_file():
                             try:
-                                disk_baseline = json.loads(disk_baseline_path.read_text(encoding="utf-8"))
+                                loaded_direct = json.loads(direct_baseline_path.read_text(encoding="utf-8"))
+                                direct_baseline = loaded_direct if isinstance(loaded_direct, dict) else {}
+                            except Exception:
+                                direct_baseline = {}
+                        direct_matches = bool(
+                            exports_root.name == incremental_folder_name
+                            or (
+                                direct_baseline_path.is_file()
+                                and (
+                                    str(direct_baseline.get("account") or "") == account_dir.name
+                                    and str(direct_baseline.get("format") or "") == export_format
+                                    and str(direct_baseline.get("folderName") or "") == incremental_folder_name
+                                )
+                            )
+                        )
+                        if direct_matches:
+                            incremental_desktop_target_root = exports_root.resolve()
+                        else:
+                            incremental_desktop_target_root = nested_target_root
+                        disk_baseline_path = incremental_desktop_target_root / _SNS_INCREMENTAL_STATE_NAME
+                        if not reset_baseline and disk_baseline_path.exists() and disk_baseline_path.is_file():
+                            try:
+                                disk_baseline = (
+                                    direct_baseline
+                                    if disk_baseline_path == direct_baseline_path and direct_baseline
+                                    else json.loads(disk_baseline_path.read_text(encoding="utf-8"))
+                                )
                             except Exception:
                                 disk_baseline = {"invalid": True}
                             (
@@ -2864,11 +2948,15 @@ class SnsExportManager:
                                 requested_folder_name=incremental_folder_name,
                                 supplied_baseline=disk_baseline,
                                 reset_baseline=False,
+                                missing_files=supplied_missing_files,
                             )
                     if baseline_warning:
                         job.warning = " ".join(part for part in [job.warning, baseline_warning] if part)
                     if desktop_folder_output and incremental_old_state:
-                        desktop_root = (exports_root / incremental_folder_name).resolve()
+                        desktop_root = (
+                            incremental_desktop_target_root
+                            or (exports_root / incremental_folder_name).resolve()
+                        )
                         for username, user_state in (incremental_state.get("users") or {}).items():
                             if not isinstance(user_state, dict):
                                 continue
@@ -3426,6 +3514,8 @@ class SnsExportManager:
                     folder_name=incremental_folder_name,
                     desktop_output=desktop_folder_output,
                     reset_baseline=reset_baseline,
+                    missing_files=supplied_missing_files,
+                    desktop_target_root=incremental_desktop_target_root,
                 )
             finally:
                 try:

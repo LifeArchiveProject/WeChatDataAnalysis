@@ -29,6 +29,10 @@ class SnsExportCreateRequest(BaseModel):
     output_mode: ExportOutputMode = Field("zip", description="输出方式：zip=全量压缩包；folder=自动增量目录")
     folder_name: Optional[str] = Field(None, description="增量导出根目录名")
     baseline: Optional[dict[str, Any]] = Field(None, description="浏览器端读取的上轮增量基线")
+    missing_files: list[str] = Field(
+        default_factory=list,
+        description="浏览器目录批量核对后发现缺失或大小不一致的受管理文件",
+    )
     reset_baseline: bool = Field(False, description="是否忽略旧基线并完整重建")
     encrypt: bool = Field(False, description="是否使用 WEC1 加密最终导出文件")
     content_key_base64: Optional[SecretStr] = Field(
@@ -43,6 +47,8 @@ async def create_sns_export(req: SnsExportCreateRequest):
         baseline_size = len(json.dumps(req.baseline, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         if baseline_size > 128 * 1024 * 1024:
             raise HTTPException(status_code=413, detail="Incremental baseline is too large.")
+    if len(req.missing_files) > 100_000:
+        raise HTTPException(status_code=413, detail="Too many missing incremental files.")
     try:
         content_key = decode_export_content_key(
             req.content_key_base64.get_secret_value() if req.content_key_base64 else None,
@@ -62,6 +68,7 @@ async def create_sns_export(req: SnsExportCreateRequest):
             output_mode=req.output_mode,
             folder_name=req.folder_name,
             baseline=req.baseline,
+            missing_files=req.missing_files,
             reset_baseline=bool(req.reset_baseline),
             encrypt=bool(req.encrypt),
             content_key=content_key,

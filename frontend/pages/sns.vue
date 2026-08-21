@@ -29,7 +29,7 @@
           <button
               type="button"
               class="w-full px-3 py-2.5 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              :disabled="!selectedAccount"
+              :disabled="!isSnsPageMounted || !selectedAccount"
               @click="openExportModal"
           >
             导出朋友圈
@@ -1130,6 +1130,8 @@ const timelineScrollEl = ref(null)
 const snsUserScrollEl = ref(null)
 const isLoading = ref(false)
 const isRefreshing = ref(false)
+// 首次水合时保持按钮禁用，挂载后再按账号状态启用，避免服务端 disabled 残留。
+const isSnsPageMounted = ref(false)
 const error = ref('')
 const syncWarning = ref('')
 const snsUseCache = ref(true)
@@ -1351,6 +1353,8 @@ const isIncrementalFolderMode = computed(() => exportOutputMode.value === 'folde
 const exportDestinationRequired = computed(() => isIncrementalFolderMode.value)
 const exportBaselineStatusLabel = computed(() => ({
   ready: '已读取上轮基线',
+  checking: '正在核对目录文件',
+  repair: '发现缺失文件，将增量补回',
   new: '未发现基线，将首次完整生成',
   invalid: '基线损坏，将完整重建',
   auto: '桌面端将自动读取目标目录基线'
@@ -1760,24 +1764,109 @@ const getSnsIncrementalFileUrl = (exportId, fileId) => {
   return `${apiBase}/sns/exports/${encodeURIComponent(String(exportId || ''))}/files/${encodeURIComponent(String(fileId || ''))}`
 }
 
+const SNS_EXPORT_BASELINE_FILE = '.wechat-sns-export.json'
+
+const readBrowserSnsBaselineFromRoot = async (root) => {
+  if (!root || typeof root.getFileHandle !== 'function') return { found: false, baseline: null }
+  try {
+    const handle = await root.getFileHandle(SNS_EXPORT_BASELINE_FILE)
+    const file = await handle.getFile()
+    return { found: true, baseline: JSON.parse(await file.text()) }
+  } catch (error) {
+    if (error?.name === 'NotFoundError') return { found: false, baseline: null }
+    // 损坏的基线交给后端判定，用户会在任务中看到完整重建警告。
+    return { found: true, baseline: { invalid: true } }
+  }
+}
+
+const browserSnsBaselineMatchesSelection = (baseline) => {
+  if (!baseline || typeof baseline !== 'object' || baseline.invalid) return false
+  return String(baseline.account || '') === String(selectedAccount.value || '')
+    && String(baseline.format || '') === String(exportFormat.value || '')
+    && String(baseline.folderName || '') === String(exportFolderNamePreview.value || '')
+}
+
 const getBrowserSnsExportRoot = async ({ create = true } = {}) => {
-  const parent = exportFolderHandle.value
-  if (!parent || typeof parent.getDirectoryHandle !== 'function') return null
-  return await parent.getDirectoryHandle(exportFolderNamePreview.value, { create })
+  const selected = exportFolderHandle.value
+  if (!selected || typeof selected.getDirectoryHandle !== 'function') return null
+
+  // 如果用户直接选中了已有导出根目录，就复用该目录；否则把所选目录视为父目录。
+  const direct = await readBrowserSnsBaselineFromRoot(selected)
+  if (
+    String(selected.name || '') === String(exportFolderNamePreview.value || '')
+    || (direct.found && browserSnsBaselineMatchesSelection(direct.baseline))
+  ) {
+    return selected
+  }
+
+  try {
+    return await selected.getDirectoryHandle(exportFolderNamePreview.value, { create: false })
+  } catch (error) {
+    if (error?.name !== 'NotFoundError' || !create) throw error
+    return await selected.getDirectoryHandle(exportFolderNamePreview.value, { create: true })
+  }
 }
 
 const readBrowserSnsExportBaseline = async () => {
   try {
     const root = await getBrowserSnsExportRoot({ create: false })
     if (!root) return null
-    const handle = await root.getFileHandle('.wechat-sns-export.json')
-    const file = await handle.getFile()
-    return JSON.parse(await file.text())
+    return (await readBrowserSnsBaselineFromRoot(root)).baseline
   } catch (error) {
     if (error?.name === 'NotFoundError') return null
-    // 损坏的基线交给后端判定，用户会在任务中看到完整重建警告。
     return { invalid: true }
   }
+}
+
+const normalizeSnsManagedPath = (value) => {
+  const parts = String(value || '').replace(/\\/g, '/').split('/').filter((part) => part && part !== '.')
+  if (!parts.length || parts.some((part) => part === '..')) return ''
+  return parts.join('/')
+}
+
+const findMissingBrowserSnsManagedFiles = async (root, baseline) => {
+  const files = baseline?.files && typeof baseline.files === 'object' ? baseline.files : {}
+  const entries = Object.entries(files)
+    .map(([path, metadata]) => [normalizeSnsManagedPath(path), metadata])
+    .filter(([path]) => !!path)
+  if (!entries.length) return []
+
+  // 同一目录只获取一次句柄，再用有限并发批量核对文件存在性与大小。
+  const directoryCache = new Map([['', Promise.resolve(root)]])
+  const getDirectory = (parts) => {
+    const key = parts.join('/')
+    if (directoryCache.has(key)) return directoryCache.get(key)
+    const parentParts = parts.slice(0, -1)
+    const promise = getDirectory(parentParts).then((parent) => parent.getDirectoryHandle(parts.at(-1), { create: false }))
+    directoryCache.set(key, promise)
+    return promise
+  }
+
+  const missing = []
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < entries.length) {
+      const [path, metadata] = entries[cursor++]
+      const parts = path.split('/')
+      try {
+        const directory = await getDirectory(parts.slice(0, -1))
+        const fileHandle = await directory.getFileHandle(parts.at(-1), { create: false })
+        const file = await fileHandle.getFile()
+        const expectedSize = Number(metadata?.size)
+        if (Number.isFinite(expectedSize) && expectedSize >= 0 && Number(file.size) !== expectedSize) {
+          missing.push(path)
+        }
+      } catch (error) {
+        if (error?.name === 'NotFoundError' || error?.name === 'TypeMismatchError') {
+          missing.push(path)
+          continue
+        }
+        throw error
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(16, entries.length) }, () => worker()))
+  return [...new Set(missing)].sort()
 }
 
 const resolveBrowserDirectory = async (root, parts, { create = true } = {}) => {
@@ -2050,13 +2139,29 @@ const startSnsExport = async ({ scope, usernames, fileName } = {}) => {
   }
 
   try {
-    const baseline = (
+    let baseline = null
+    let missingFiles = []
+    if (
       isIncrementalFolderMode.value
       && hasWebExportFolder.value
       && !exportResetBaseline.value
-    ) ? await readBrowserSnsExportBaseline() : null
+    ) {
+      exportBaselineStatus.value = 'checking'
+      let root = null
+      try {
+        root = await getBrowserSnsExportRoot({ create: false })
+      } catch (error) {
+        if (error?.name !== 'NotFoundError') throw error
+      }
+      baseline = root ? (await readBrowserSnsBaselineFromRoot(root)).baseline : null
+      if (baseline && !baseline.invalid && root) {
+        missingFiles = await findMissingBrowserSnsManagedFiles(root, baseline)
+      }
+    }
     if (isIncrementalFolderMode.value && hasWebExportFolder.value) {
-      exportBaselineStatus.value = baseline?.invalid ? 'invalid' : (baseline ? 'ready' : 'new')
+      exportBaselineStatus.value = baseline?.invalid
+        ? 'invalid'
+        : (baseline ? (missingFiles.length ? 'repair' : 'ready') : 'new')
     }
     const resp = await api.createSnsExport({
       account: selectedAccount.value,
@@ -2069,6 +2174,7 @@ const startSnsExport = async ({ scope, usernames, fileName } = {}) => {
       output_mode: exportOutputMode.value,
       folder_name: isIncrementalFolderMode.value ? exportFolderNamePreview.value : null,
       baseline,
+      missing_files: missingFiles,
       reset_baseline: isIncrementalFolderMode.value && exportResetBaseline.value
     })
     exportJob.value = resp?.job || null
@@ -4090,6 +4196,7 @@ watch(
 
 
 onMounted(async () => {
+  isSnsPageMounted.value = true
   privacyStore.init()
   snsUseCache.value = readLocalBoolSetting(SNS_SETTING_USE_CACHE_KEY, true)
   await loadAccounts()

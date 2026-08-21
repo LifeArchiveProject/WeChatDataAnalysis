@@ -717,6 +717,7 @@ export const useApi = () => {
         output_mode: data.output_mode === 'folder' ? 'folder' : 'zip',
         folder_name: data.folder_name || null,
         baseline: data.baseline && typeof data.baseline === 'object' ? data.baseline : null,
+        missing_files: Array.isArray(data.missing_files) ? data.missing_files : [],
         reset_baseline: !!data.reset_baseline
       }
     })
