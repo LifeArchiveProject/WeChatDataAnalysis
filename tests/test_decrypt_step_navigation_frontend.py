@@ -167,6 +167,20 @@ def test_voice_onboarding_selected_model_is_explicit_and_accessible():
     assert ">已选择</span>" in source
 
 
+def test_voice_onboarding_can_select_cpu_or_available_cuda():
+    source = read_decrypt_page()
+
+    assert "setVoiceTranscriptionDevice," in source
+    assert 'data-testid="voice-onboarding-device-cpu"' in source
+    assert 'data-testid="voice-onboarding-device-cuda"' in source
+    assert "@click=\"setVoiceOnboardingDevice('cpu')\"" in source
+    assert "@click=\"setVoiceOnboardingDevice('cuda')\"" in source
+    assert "voiceOnboardingStatus.value?.cuda?.available === true" in source
+    assert "voiceOnboardingStatus.value?.deviceSource || '') === 'env'" in source
+    assert "await setVoiceTranscriptionDevice(next)" in source
+    assert "applyVoiceOnboardingStatus(response?.configuration || response)" in source
+
+
 def test_five_step_header_stays_within_narrow_viewports():
     source = (ROOT / "frontend" / "components" / "Stepper.vue").read_text(encoding="utf-8")
 
