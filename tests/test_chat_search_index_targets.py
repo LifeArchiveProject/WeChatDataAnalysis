@@ -313,6 +313,41 @@ class TestChatSearchIndexTargets(unittest.TestCase):
             self.assertEqual(len(resp.get("hits") or []), 2)
             self.assertIn("新奶酪", (resp.get("hits") or [])[0].get("content"))
 
+    def test_search_can_skip_native_metadata_enrichment(self):
+        import wechat_decrypt_tool.chat_search_index as idx
+        from wechat_decrypt_tool.routers import chat as chat_router
+
+        with TemporaryDirectory() as td:
+            account_dir = self._prepare_single_char_account(Path(td))
+            idx._build_worker(account_dir, rebuild=True, source="auto")
+
+            with (
+                patch.object(chat_router, "_resolve_account_dir", return_value=account_dir),
+                patch.object(
+                    chat_router.WCDB_REALTIME,
+                    "ensure_connected",
+                    side_effect=AssertionError("native enrichment must stay off"),
+                ) as ensure_connected,
+                patch.object(chat_router, "_load_group_nickname_map", return_value={}) as group_names,
+            ):
+                resp = asyncio.run(
+                    chat_router.search_chat_messages(
+                        _DummyRequest(),
+                        q="奶",
+                        account="wxid_account",
+                        username="wxid_friend",
+                        limit=10,
+                        offset=0,
+                        source="auto",
+                        allow_native_enrichment=False,
+                    )
+                )
+
+            self.assertEqual(resp.get("status"), "success")
+            self.assertEqual(len(resp.get("hits") or []), 2)
+            ensure_connected.assert_not_called()
+            self.assertFalse(group_names.call_args.kwargs["allow_native_fallback"])
+
     def test_high_frequency_single_character_search_uses_recent_probe(self):
         import wechat_decrypt_tool.chat_search_index as idx
         from wechat_decrypt_tool.routers import chat as chat_router
