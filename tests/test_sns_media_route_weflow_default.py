@@ -93,6 +93,39 @@ class TestSnsMediaRouteWeFlowDefault(unittest.TestCase):
         self.assertEqual(resp.body, b"remote")
         self.assertEqual(resp.headers.get("X-SNS-Source"), "remote-decrypt")
 
+    def test_heuristic_rejects_cache_files_far_from_post_time(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            wxid_dir = Path(td) / "wxid"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            wxid_dir.mkdir(parents=True, exist_ok=True)
+
+            # 旧动态附近没有缓存文件时，不得从多年后的缓存中按相同尺寸猜图。
+            create_time = 1_531_913_605
+            recent_cache_time = 1_787_146_219.0
+            with mock.patch(
+                "wechat_decrypt_tool.routers.sns._resolve_account_wxid_dir",
+                return_value=wxid_dir,
+            ):
+                with mock.patch(
+                    "wechat_decrypt_tool.routers.sns._sns_img_time_index",
+                    return_value=([recent_cache_time], [str(wxid_dir / "unrelated-image")]),
+                ):
+                    with mock.patch(
+                        "wechat_decrypt_tool.routers.sns._read_and_maybe_decrypt_media"
+                    ) as decode:
+                        resolved = sns._resolve_sns_cached_image_path(
+                            account_dir_str=str(account_dir),
+                            create_time=create_time,
+                            width=1440,
+                            height=1080,
+                            idx=0,
+                            total_size=108713,
+                        )
+
+        self.assertIsNone(resolved)
+        decode.assert_not_called()
+
     def test_route_logs_redacted_identity_and_local_match_details(self):
         with TemporaryDirectory() as td:
             account_dir = Path(td) / "acc"

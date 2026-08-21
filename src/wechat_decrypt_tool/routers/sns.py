@@ -1,6 +1,7 @@
 from bisect import bisect_left, bisect_right
 from functools import lru_cache
 from pathlib import Path
+import asyncio
 import os
 import base64
 import hashlib
@@ -18,8 +19,8 @@ from urllib.parse import urlparse
 
 from starlette.background import BackgroundTask
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response, FileResponse  # 返回视频文件
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response, FileResponse, StreamingResponse  # 返回视频文件
 
 from ..account_identity import resolve_account_self_username
 from ..account_source_policy import account_prefers_decrypted_snapshot
@@ -29,6 +30,7 @@ from ..source_fallback import build_source_fallback_meta, normalize_data_source
 from ..media_helpers import _read_and_maybe_decrypt_media, _resolve_account_wxid_dir
 from ..path_fix import PathFixRoute
 from ..perf_trace import create_perf_trace
+from ..sns_realtime_autosync import SNS_REALTIME_AUTOSYNC
 from .. import sns_media as _sns_media
 from ..wcdb_realtime import (
     WCDBRealtimeError,
@@ -64,6 +66,9 @@ _SNS_TIMELINE_AUTO_CACHE_TTL_SECONDS = 60
 # Key: (account_dir.name, sorted(usernames), keyword) -> (expires_at_ts, force_sqlite)
 _SNS_TIMELINE_AUTO_CACHE: dict[tuple[str, tuple[str, ...], str], tuple[float, bool]] = {}
 _SNS_TIMELINE_AUTO_CACHE_MU = threading.Lock()
+_SNS_MEDIA_SLOW_LOOKUP_LIMITER = threading.BoundedSemaphore(4)
+_SNS_INDEX_SCHEDULE_LOCK = threading.Lock()
+_SNS_INDEX_SCHEDULED: set[str] = set()
 
 
 def _sns_timeline_auto_cache_key(account_dir: Path, users: list[str], kw: str) -> tuple[str, tuple[str, ...], str]:
@@ -275,10 +280,19 @@ def _write_sns_realtime_sync_state(account_dir: Path, data: dict[str, Any]) -> b
         with _sns_decrypted_db_lock(Path(account_dir).name):
             # Never let an older concurrent sync move the high-water mark back.
             current = _read_sns_realtime_sync_state(account_dir)
+            try:
+                current_max = int(str(current.get("maxId") or current.get("max_id") or "0"))
+                requested_max = int(str(data.get("maxId") or data.get("max_id") or "0"))
+            except Exception:
+                current_max = 0
+                requested_max = 0
+            # 高水位没有推进时连 updatedAt 也不重写，避免定时核对制造磁盘抖动。
+            if current_max > 0 and requested_max > 0 and requested_max <= current_max:
+                return True
+
             merged = dict(current)
             merged.update(data)
             try:
-                current_max = int(str(current.get("maxId") or current.get("max_id") or "0"))
                 next_max = int(str(merged.get("maxId") or merged.get("max_id") or "0"))
                 if current_max > next_max:
                     merged["maxId"] = str(current_max)
@@ -354,6 +368,11 @@ def _ensure_decrypted_sns_db(account_dir: Path) -> Path:
             )
             """
         )
+        # 朋友圈页按联系人分页时固定使用 user_name + tid，索引只建在派生快照上。
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sns_timeline_user_tid "
+            "ON SnsTimeLine(user_name, tid DESC)"
+        )
         conn.commit()
     finally:
         try:
@@ -366,20 +385,37 @@ def _ensure_decrypted_sns_db(account_dir: Path) -> Path:
 
 def _upsert_sns_timeline_rows_to_decrypted_db(
     account_dir: Path,
-    rows: list[tuple[int, str, str, Optional[str]]],
+    rows: list[tuple[int, str, str, Optional[Any]]],
     *,
     source: str,
-) -> int:
-    """Upsert rows into decrypted `{account}/sns.db` to avoid local missing data.
+) -> dict[str, Any]:
+    """幂等写入派生的 ``sns.db``，避免无变化同步反复改动快照版本。
 
     rows: [(tid_signed, user_name, content_xml, pack_info_buf_or_none)]
     """
     if not rows:
-        return 0
+        return {"success": True, "prepared": 0, "changed": 0, "unchanged": 0}
 
     sns_db_path = _ensure_decrypted_sns_db(account_dir)
 
-    # Serialize writes per-account to avoid sqlite "database is locked" errors under concurrency.
+    def _sqlite_text(value: Any) -> str:
+        if isinstance(value, memoryview):
+            value = value.tobytes()
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value).decode("utf-8", errors="ignore")
+        return str(value or "")
+
+    def _pack_blob(value: Any) -> Optional[bytes]:
+        """pack_info_buf 是二进制协议字段，统一转 BLOB，禁止 SQLite 按 UTF-8 解码。"""
+        if value is None:
+            return None
+        if isinstance(value, memoryview):
+            return value.tobytes()
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value)
+        return str(value).encode("utf-8", errors="surrogatepass")
+
+    # 同一账号的派生库只允许一个写入者，避免自动同步和手动刷新互相抢锁。
     with _sns_decrypted_db_lock(Path(account_dir).name):
         conn = sqlite3.connect(str(sns_db_path), timeout=2.0)
         try:
@@ -397,6 +433,71 @@ def _upsert_sns_timeline_rows_to_decrypted_db(
 
             has_pack = "pack_info_buf" in cols
 
+            # 同一个 tid 只保留本轮最后一份数据；正常实时查询不会重复，
+            # 这里仍做防御性去重，避免完成度统计被重复行干扰。
+            incoming_by_tid: dict[int, tuple[int, str, str, Optional[bytes]]] = {}
+            for tid, user_name, content_xml, pack_info_buf in rows:
+                tid_value = int(tid)
+                incoming_by_tid[tid_value] = (
+                    tid_value,
+                    str(user_name or "").strip(),
+                    str(content_xml or ""),
+                    _pack_blob(pack_info_buf),
+                )
+            normalized_rows = list(incoming_by_tid.values())
+
+            existing_by_tid: dict[int, tuple[str, str, Optional[bytes]]] = {}
+            tids = list(incoming_by_tid.keys())
+            # 兼容 SQLite 较低的绑定参数上限，分块读取已有值。
+            for start in range(0, len(tids), 800):
+                chunk = tids[start:start + 800]
+                placeholders = ",".join(["?"] * len(chunk))
+                selected_columns = (
+                    "tid, user_name, content, CAST(pack_info_buf AS BLOB)"
+                    if has_pack
+                    else "tid, user_name, content"
+                )
+                existing_rows = conn.execute(
+                    f"SELECT {selected_columns} FROM SnsTimeLine WHERE tid IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                for existing in existing_rows or []:
+                    tid_value = int(existing[0])
+                    pack_value = _pack_blob(existing[3]) if has_pack and len(existing) > 3 else None
+                    existing_by_tid[tid_value] = (
+                        _sqlite_text(existing[1]).strip(),
+                        _sqlite_text(existing[2]),
+                        pack_value,
+                    )
+
+            changed_rows: list[tuple[int, str, str, Optional[bytes]]] = []
+            unchanged = 0
+            for tid_value, user_name, content_xml, pack_info_buf in normalized_rows:
+                existing = existing_by_tid.get(tid_value)
+                if existing is None:
+                    changed_rows.append((tid_value, user_name, content_xml, pack_info_buf))
+                    continue
+
+                existing_user, existing_content, existing_pack = existing
+                effective_content = content_xml if content_xml else existing_content
+                effective_pack = pack_info_buf if pack_info_buf is not None else existing_pack
+                if (
+                    user_name == existing_user
+                    and effective_content == existing_content
+                    and (not has_pack or effective_pack == existing_pack)
+                ):
+                    unchanged += 1
+                    continue
+                changed_rows.append((tid_value, user_name, content_xml, pack_info_buf))
+
+            if not changed_rows:
+                return {
+                    "success": True,
+                    "prepared": len(normalized_rows),
+                    "changed": 0,
+                    "unchanged": unchanged,
+                }
+
             if has_pack:
                 sql = """
                     INSERT INTO SnsTimeLine (tid, user_name, content, pack_info_buf)
@@ -406,7 +507,7 @@ def _upsert_sns_timeline_rows_to_decrypted_db(
                       content=COALESCE(NULLIF(excluded.content, ''), SnsTimeLine.content),
                       pack_info_buf=COALESCE(excluded.pack_info_buf, SnsTimeLine.pack_info_buf)
                 """
-                data = [(int(tid), str(u or "").strip(), str(c or ""), p) for tid, u, c, p in rows]
+                data = changed_rows
             else:
                 sql = """
                     INSERT INTO SnsTimeLine (tid, user_name, content)
@@ -415,18 +516,36 @@ def _upsert_sns_timeline_rows_to_decrypted_db(
                       user_name=excluded.user_name,
                       content=COALESCE(NULLIF(excluded.content, ''), SnsTimeLine.content)
                 """
-                data = [(int(tid), str(u or "").strip(), str(c or "")) for tid, u, c, _p in rows]
+                data = [(tid, user_name, content_xml) for tid, user_name, content_xml, _pack in changed_rows]
 
             conn.executemany(sql, data)
             conn.commit()
-            return len(rows)
+            return {
+                "success": True,
+                "prepared": len(normalized_rows),
+                "changed": len(changed_rows),
+                "unchanged": unchanged,
+            }
         except Exception as e:
-            logger.debug("[sns] decrypted sns.db upsert failed source=%s err=%s", source, e)
+            raw_error_text = f"{type(e).__name__}: {e}"
+            error_text = raw_error_text.encode("ascii", errors="backslashreplace").decode("ascii")
+            logger.warning(
+                "[sns] decrypted sns.db upsert failed source=%s prepared=%s err=%s",
+                source,
+                len(rows),
+                error_text,
+            )
             try:
                 conn.rollback()
             except Exception:
                 pass
-            return 0
+            return {
+                "success": False,
+                "prepared": len(rows),
+                "changed": 0,
+                "unchanged": 0,
+                "error": error_text,
+            }
         finally:
             try:
                 conn.close()
@@ -1310,25 +1429,37 @@ def _resolve_sns_cached_image_path(
         l = bisect_left(mtimes, lo)
         r = bisect_right(mtimes, hi)
         if l >= r:
-            l = max(0, len(mtimes) - 800)
-            r = len(mtimes)
+            # 发布时间附近没有候选时不能退化成“最近 800 张”全局猜图：
+            # 老动态很容易因此命中多年后的同尺寸图片，造成缩略图与原图串图。
+            return None
     else:
         l = max(0, len(mtimes) - 800)
         r = len(mtimes)
 
-    candidates: list[tuple[float, str]] = []
+    candidates: list[tuple[int, float, str]] = []
     for j in range(l, r):
         try:
+            path = Path(paths[j])
+            size_diff = abs(int(path.stat().st_size) - total_size_i) if total_size_i > 0 else 0
             if create_time_i > 0:
-                candidates.append((abs(mtimes[j] - float(create_time_i)), paths[j]))
+                candidates.append((size_diff, abs(mtimes[j] - float(create_time_i)), paths[j]))
             else:
-                candidates.append((-mtimes[j], paths[j]))
+                candidates.append((size_diff, -mtimes[j], paths[j]))
         except Exception:
             continue
-    candidates.sort(key=lambda x: x[0])
+    candidates.sort(key=lambda x: (x[0], x[1], x[2]))
+
+    # 旧版缓存没有稳定 key 时才会进入这里。先利用文件大小和时间收窄范围，
+    # 避免一张图在请求线程里解密上千个候选文件。
+    if total_size_i > 0:
+        tolerance = max(4096, int(total_size_i * 0.05))
+        close_candidates = [item for item in candidates if item[0] <= tolerance]
+        if close_candidates:
+            candidates = close_candidates
+    candidates = candidates[:128]
 
     matched: list[tuple[int, float, str]] = []
-    for diff, pstr in candidates[:2000]:
+    for _stat_size_diff, diff, pstr in candidates:
         try:
             p = Path(pstr)
             payload, media_type = _read_and_maybe_decrypt_media(p, account_dir)
@@ -1355,6 +1486,12 @@ def _resolve_sns_cached_image_path(
         matched.sort(key=lambda x: (x[0], x[1], x[2]))
         return matched[0][2]
     return None
+
+
+def _resolve_sns_cached_image_path_bounded(**kwargs: Any) -> Optional[str]:
+    """限制高成本旧缓存匹配的并发，避免磁盘和解密任务互相放大。"""
+    with _SNS_MEDIA_SLOW_LOOKUP_LIMITER:
+        return _resolve_sns_cached_image_path(**kwargs)
 
 
 def _resolve_sns_cached_video_path(
@@ -1617,11 +1754,55 @@ def get_sns_snapshot_status(account: Optional[str] = None):
     return _build_sns_snapshot_status(account_dir)
 
 
+def _format_sns_sse_event(event: dict[str, Any]) -> str:
+    """生成 EventSource 可解析的事件帧。"""
+    event_type = str(event.get("type") or "message").strip() or "message"
+    sequence = int(event.get("sequence") or 0)
+    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+    return f"id: {sequence}\nevent: {event_type}\ndata: {payload}\n\n"
+
+
+@router.get("/api/sns/realtime/events", summary="订阅朋友圈实时同步事件")
+async def stream_sns_realtime_events(request: Request, account: Optional[str] = None):
+    """通过 SSE 推送文件事件同步结果；心跳不会查询数据库。"""
+    account_dir = _resolve_account_dir(account)
+    resolved_account = str(account_dir.name or "").strip()
+    loop = asyncio.get_running_loop()
+    token, queue, ready = SNS_REALTIME_AUTOSYNC.subscribe(resolved_account, loop=loop)
+
+    async def event_stream():
+        try:
+            yield _format_sns_sse_event(ready)
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except TimeoutError:
+                    if await request.is_disconnected():
+                        break
+                    yield ": ping\n\n"
+                    continue
+                yield _format_sns_sse_event(event)
+        finally:
+            SNS_REALTIME_AUTOSYNC.unsubscribe(resolved_account, token)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/api/sns/realtime/sync_latest", summary="实时朋友圈同步到解密库（增量）")
 def sync_sns_realtime_timeline_latest(
     account: Optional[str] = None,
     max_scan: int = 200,
     force: int = 0,
+    scan_offset: Optional[int] = None,
+    usernames: Optional[str] = None,
 ):
     """Sync latest visible Moments from WCDB realtime into decrypted `{account}/sns.db`.
 
@@ -1642,7 +1823,39 @@ def sync_sns_realtime_timeline_latest(
     except Exception:
         force_flag = False
 
+    window_mode = scan_offset is not None
+    try:
+        requested_scan_offset = max(0, int(scan_offset or 0))
+    except Exception:
+        requested_scan_offset = 0
+    scan_users = _parse_csv_list(usernames)
+
     account_dir = _resolve_account_dir(account)
+    snapshot_version_before = str(_build_sns_snapshot_status(account_dir).get("version") or "")
+
+    def _sync_response(
+        payload: dict[str, Any],
+        *,
+        prepared: int = 0,
+        changed: int = 0,
+        unchanged: int = 0,
+        highwater_advanced: bool = False,
+    ) -> dict[str, Any]:
+        """统一补齐同步统计和快照版本，便于前端无额外请求地判断是否合并。"""
+        snapshot = _build_sns_snapshot_status(account_dir)
+        current_version = str(snapshot.get("version") or "")
+        result = dict(payload)
+        result["prepared"] = int(prepared)
+        result["changed"] = int(changed)
+        result["unchanged"] = int(unchanged)
+        # 兼容旧字段；现在只表示真正发生的插入或更新数量。
+        result["upserted"] = int(changed)
+        result["snapshotChanged"] = bool(current_version != snapshot_version_before)
+        result["snapshotVersion"] = current_version
+        result["highwaterAdvanced"] = bool(highwater_advanced)
+        result["scanOffset"] = int(requested_scan_offset)
+        result["scanLimit"] = int(lim)
+        return result
 
     # If there is no local decrypted sns.db yet, force a first-time materialization.
     try:
@@ -1657,11 +1870,12 @@ def sync_sns_realtime_timeline_latest(
         raise HTTPException(status_code=404, detail="WCDB realtime not available.")
 
     st = _read_sns_realtime_sync_state(account_dir)
-    last_max_id_u = 0
+    persisted_max_id_u = 0
     try:
-        last_max_id_u = int(str(st.get("maxId") or st.get("max_id") or "0").strip() or "0")
+        persisted_max_id_u = int(str(st.get("maxId") or st.get("max_id") or "0").strip() or "0")
     except Exception:
-        last_max_id_u = 0
+        persisted_max_id_u = 0
+    last_max_id_u = int(persisted_max_id_u)
     if last_max_id_u <= 0:
         last_max_id_u = _max_sns_timeline_tid_unsigned_in_decrypted_sqlite(account_dir / "sns.db")
 
@@ -1670,7 +1884,7 @@ def sync_sns_realtime_timeline_latest(
     t0 = time.perf_counter()
     rows: list[dict[str, Any]] = []
     max_id_u = 0
-    upsert_rows: list[tuple[int, str, str, Optional[str]]] = []
+    upsert_rows: list[tuple[int, str, str, Optional[Any]]] = []
     required_tids: set[int] = set()
     source_exhausted = False
     highwater_reached = False
@@ -1681,9 +1895,10 @@ def sync_sns_realtime_timeline_latest(
         # accumulated while autosync was absent, keep scanning until we cross
         # the previous high-water mark so advancing it cannot create a gap.
         page_size = max(1, min(int(lim), 200))
-        scan_cap = 2000
+        # 浮动窗口只读取本轮指定区间；旧调用仍保留跨页追赶高水位的行为。
+        scan_cap = int(lim) if window_mode else 2000
         raw_scanned = 0
-        offset = 0
+        offset = int(requested_scan_offset)
         seen_tids_u: set[int] = set()
         while raw_scanned < scan_cap:
             take = min(page_size, scan_cap - raw_scanned)
@@ -1691,7 +1906,7 @@ def sync_sns_realtime_timeline_latest(
                 conn.handle,
                 limit=take,
                 offset=offset,
-                usernames=[],
+                usernames=scan_users,
                 keyword="",
             )
             batch = list(batch or [])
@@ -1720,36 +1935,42 @@ def sync_sns_realtime_timeline_latest(
                 highwater_reached = True
             if batch_count < take:
                 source_exhausted = True
-            if source_exhausted or highwater_reached or batch_count <= 0:
+            if source_exhausted or batch_count <= 0 or ((not window_mode) and highwater_reached):
                 break
 
-        backlog_truncated = bool(
+        backlog_truncated = bool((not window_mode) and (
             raw_scanned >= scan_cap and (not source_exhausted) and (not highwater_reached)
-        )
+        ))
 
         if not rows:
+            if window_mode:
+                return _sync_response({
+                    "status": "noop",
+                    "reason": "window_empty",
+                    "scanned": 0,
+                    "maxId": str(last_max_id_u or 0),
+                    "elapsedMs": int((time.perf_counter() - t0) * 1000.0),
+                })
             snapshot_count = _count_sns_timeline_posts_in_decrypted_sqlite(
                 account_dir / "sns.db",
                 users=[],
                 kw="",
             )
             if last_max_id_u > 0 or snapshot_count > 0:
-                return {
+                return _sync_response({
                     "status": "error",
                     "error": "realtime_timeline_empty_with_existing_snapshot",
                     "scanned": 0,
                     "snapshotCount": int(snapshot_count),
-                    "upserted": 0,
                     "maxId": str(last_max_id_u or 0),
                     "elapsedMs": int((time.perf_counter() - t0) * 1000.0),
-                }
-            return {
+                })
+            return _sync_response({
                 "status": "noop",
                 "scanned": 0,
-                "upserted": 0,
                 "maxId": str(last_max_id_u or 0),
                 "elapsedMs": int((time.perf_counter() - t0) * 1000.0),
-            }
+            })
 
         # Compute the newest unsigned tid/id from WCDB rows.
         for r in rows:
@@ -1764,14 +1985,28 @@ def sync_sns_realtime_timeline_latest(
 
         if (not force_flag) and max_id_u and (max_id_u <= last_max_id_u):
             # No new top item; skip heavy exec_query + sqlite writes.
-            return {
+            committed_max_id_u = max(int(max_id_u), int(last_max_id_u or 0))
+            highwater_advanced = committed_max_id_u > int(persisted_max_id_u or 0)
+            if highwater_advanced:
+                next_state = dict(st)
+                next_state["maxId"] = str(committed_max_id_u)
+                next_state["updatedAt"] = int(time.time())
+                if _write_sns_realtime_sync_state(account_dir, next_state) is False:
+                    return _sync_response({
+                        "status": "error",
+                        "error": "sync_state_write_failed",
+                        "scanned": len(rows),
+                        "maxId": str(committed_max_id_u),
+                        "lastMaxId": str(last_max_id_u),
+                        "elapsedMs": int((time.perf_counter() - t0) * 1000.0),
+                    })
+            return _sync_response({
                 "status": "noop",
                 "scanned": len(rows),
-                "upserted": 0,
-                "maxId": str(max_id_u),
+                "maxId": str(committed_max_id_u),
                 "lastMaxId": str(last_max_id_u),
                 "elapsedMs": int((time.perf_counter() - t0) * 1000.0),
-            }
+            }, highwater_advanced=highwater_advanced)
 
         username_by_tid: dict[int, str] = {}
         rawxml_by_tid: dict[int, str] = {}
@@ -1833,8 +2068,11 @@ def sync_sns_realtime_timeline_latest(
                 if not uname:
                     continue
                 pack = rr.get("pack_info_buf")
-                pack_text = None if pack is None else str(pack)
-                upsert_rows.append((tid_val, uname, content_xml, pack_text))
+                if isinstance(pack, memoryview):
+                    pack = pack.tobytes()
+                elif isinstance(pack, bytearray):
+                    pack = bytes(pack)
+                upsert_rows.append((tid_val, uname, content_xml, pack))
         # Fallback per missing tid instead of only when the SQL query returned no
         # rows. Partial WCDB reads are possible; without this, one existing tid
         # could stay stale while the sync incorrectly reports success.
@@ -1848,35 +2086,55 @@ def sync_sns_realtime_timeline_latest(
             upsert_rows.append((int(tid_val), str(uname), str(raw_xml), None))
             prepared_tids_in_lock.add(int(tid_val))
 
-    upserted = _upsert_sns_timeline_rows_to_decrypted_db(
+    upsert_result = _upsert_sns_timeline_rows_to_decrypted_db(
         account_dir,
         upsert_rows,
         source="realtime-sync-latest",
     )
 
+    prepared_count = len(upsert_rows)
+    if isinstance(upsert_result, dict):
+        write_success = bool(upsert_result.get("success"))
+        reported_prepared = int(upsert_result.get("prepared") or 0)
+        changed_count = int(upsert_result.get("changed") or 0)
+        unchanged_count = int(upsert_result.get("unchanged") or 0)
+        write_error = str(upsert_result.get("error") or "").strip()
+    else:
+        # 兼容内部测试或第三方补丁仍返回旧版整数的情况。
+        changed_count = int(upsert_result or 0)
+        unchanged_count = 0
+        reported_prepared = prepared_count
+        write_success = changed_count == prepared_count
+        write_error = ""
+
     prepared_tids = {int(row[0]) for row in upsert_rows}
     missing_required_tids = required_tids - prepared_tids
-    snapshot_complete = bool(upsert_rows) and int(upserted) == len(upsert_rows) and not missing_required_tids
+    snapshot_complete = bool(upsert_rows) and all((
+        write_success,
+        reported_prepared == prepared_count,
+        changed_count + unchanged_count == prepared_count,
+        not missing_required_tids,
+    ))
     if not snapshot_complete:
         logger.warning(
-            "[sns-sync] snapshot write incomplete account=%s scanned=%s prepared=%s upserted=%s missing_required=%s",
+            "[sns-sync] snapshot write incomplete account=%s scanned=%s prepared=%s changed=%s unchanged=%s missing_required=%s",
             account_dir.name,
             len(rows),
-            len(upsert_rows),
-            int(upserted),
+            prepared_count,
+            changed_count,
+            unchanged_count,
             len(missing_required_tids),
         )
-        return {
+        return _sync_response({
             "status": "error",
             "error": "decrypted_snapshot_write_incomplete",
             "scanned": len(rows),
-            "prepared": len(upsert_rows),
-            "upserted": int(upserted),
             "missingRequired": len(missing_required_tids),
+            "writeError": write_error,
             "maxId": str(max_id_u or 0),
             "lastMaxId": str(last_max_id_u or 0),
             "elapsedMs": int((time.perf_counter() - t0) * 1000.0),
-        }
+        }, prepared=prepared_count, changed=changed_count, unchanged=unchanged_count)
 
     if backlog_truncated:
         logger.warning(
@@ -1885,44 +2143,40 @@ def sync_sns_realtime_timeline_latest(
             len(rows),
             last_max_id_u,
         )
-        return {
+        return _sync_response({
             "status": "skipped",
             "reason": "backlog exceeds scan cap",
             "partial": True,
             "scanned": len(rows),
-            "prepared": len(upsert_rows),
-            "upserted": int(upserted),
             "maxId": str(max_id_u or 0),
             "lastMaxId": str(last_max_id_u or 0),
             "elapsedMs": int((time.perf_counter() - t0) * 1000.0),
-        }
+        }, prepared=prepared_count, changed=changed_count, unchanged=unchanged_count)
 
-    if max_id_u:
-        committed_max_id_u = max(int(max_id_u), int(last_max_id_u or 0))
+    committed_max_id_u = max(int(max_id_u or 0), int(last_max_id_u or 0))
+    highwater_advanced = committed_max_id_u > int(persisted_max_id_u or 0)
+    if committed_max_id_u and highwater_advanced:
         st2 = dict(st)
         st2["maxId"] = str(committed_max_id_u)
         st2["updatedAt"] = int(time.time())
         if _write_sns_realtime_sync_state(account_dir, st2) is False:
             logger.warning("[sns-sync] state write failed account=%s", account_dir.name)
-            return {
+            return _sync_response({
                 "status": "error",
                 "error": "sync_state_write_failed",
                 "scanned": len(rows),
-                "prepared": len(upsert_rows),
-                "upserted": int(upserted),
                 "maxId": str(committed_max_id_u),
                 "lastMaxId": str(last_max_id_u or 0),
                 "elapsedMs": int((time.perf_counter() - t0) * 1000.0),
-            }
+            }, prepared=prepared_count, changed=changed_count, unchanged=unchanged_count)
 
-    return {
-        "status": "ok",
+    return _sync_response({
+        "status": "ok" if changed_count > 0 or highwater_advanced else "noop",
         "scanned": len(rows),
-        "upserted": int(upserted),
-        "maxId": str(max(int(max_id_u or 0), int(last_max_id_u or 0))),
+        "maxId": str(committed_max_id_u),
         "lastMaxId": str(last_max_id_u or 0),
         "elapsedMs": int((time.perf_counter() - t0) * 1000.0),
-    }
+    }, prepared=prepared_count, changed=changed_count, unchanged=unchanged_count, highwater_advanced=highwater_advanced)
 
 
 @router.get("/api/sns/timeline", summary="获取朋友圈时间线")
@@ -2199,7 +2453,7 @@ def list_sns_timeline(
         sql_rows = sql_rows[: int(limit)]
 
         post_usernames3: list[str] = []
-        upsert_rows3: list[tuple[int, str, str, Optional[str]]] = []
+        upsert_rows3: list[tuple[int, str, str, Optional[Any]]] = []
 
         # Prepare contact/biz mapping (same as other code paths).
         for rr in sql_rows:
@@ -2292,7 +2546,7 @@ def list_sns_timeline(
             )
 
             pack3 = rr.get("pack_info_buf")
-            upsert_rows3.append((int(tid3), uname3, content_xml3, None if pack3 is None else str(pack3)))
+            upsert_rows3.append((int(tid3), uname3, content_xml3, pack3))
 
         if official_usernames3 and contact_db_path.exists():
             official_rows3 = _load_contact_rows(contact_db_path, list(official_usernames3))
@@ -2330,7 +2584,7 @@ def list_sns_timeline(
     fallback_reason = ""
     try:
         conn = WCDB_REALTIME.ensure_connected(account_dir)
-        writeback_rows: list[tuple[int, str, str, Optional[str]]] = []
+        writeback_rows: list[tuple[int, str, str, Optional[Any]]] = []
 
         cached_posts_total = 0
         if users:
@@ -2438,7 +2692,7 @@ def list_sns_timeline(
                             uname1 = username_by_tid.get(tid_val, "")
                         if uname1 and content_xml:
                             pack = rr.get("pack_info_buf")
-                            writeback_rows.append((tid_val, uname1, content_xml, None if pack is None else str(pack)))
+                            writeback_rows.append((tid_val, uname1, content_xml, pack))
             except Exception:
                 content_by_tid = {}
                 writeback_rows = []
@@ -2695,35 +2949,67 @@ def list_sns_timeline(
     return fallback
 
 
-@router.get("/api/sns/users", summary="列出朋友圈联系人（按发圈数统计）")
-def list_sns_users(
-    account: Optional[str] = None,
-    keyword: Optional[str] = None,
-    limit: int = 5000,
-):
-    account_dir = _resolve_account_dir(account)
-    sns_db_path = account_dir / "sns.db"
-    if not sns_db_path.exists():
-        raise HTTPException(status_code=404, detail="sns.db not found for this account.")
+def _sns_file_version(path: Path) -> tuple[int, int, int, int]:
+    """返回主文件和 WAL 的轻量版本，用于联系人统计缓存失效。"""
+    values: list[int] = []
+    for candidate in (Path(path), Path(f"{path}-wal")):
+        try:
+            stat = candidate.stat()
+            values.extend((int(stat.st_mtime_ns), int(stat.st_size)))
+        except Exception:
+            values.extend((0, 0))
+    return values[0], values[1], values[2], values[3]
 
-    contact_db_path = account_dir / "contact.db"
 
-    try:
-        lim = int(limit or 5000)
-    except Exception:
-        lim = 5000
-    if lim <= 0:
-        lim = 5000
-    if lim > 5000:
-        lim = 5000
+def _schedule_sns_user_tid_index(sns_db_path: Path) -> None:
+    """在后台补齐联系人时间线索引，不让首次页面查询等待建索引。"""
+    key = str(Path(sns_db_path).resolve())
+    with _SNS_INDEX_SCHEDULE_LOCK:
+        if key in _SNS_INDEX_SCHEDULED:
+            return
+        _SNS_INDEX_SCHEDULED.add(key)
 
-    kw = str(keyword or "").strip().lower()
+    def worker() -> None:
+        try:
+            conn = sqlite3.connect(str(sns_db_path), timeout=2)
+            try:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_sns_timeline_user_tid "
+                    "ON SnsTimeLine(user_name, tid DESC)"
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.info("[sns] background index creation deferred: %s", exc)
+            with _SNS_INDEX_SCHEDULE_LOCK:
+                _SNS_INDEX_SCHEDULED.discard(key)
 
+    threading.Thread(
+        target=worker,
+        name=f"sns-index-{hashlib.sha256(key.encode('utf-8')).hexdigest()[:8]}",
+        daemon=True,
+    ).start()
+
+
+@lru_cache(maxsize=16)
+def _load_sns_users_cached(
+    sns_db_path: str,
+    _sns_mtime_ns: int,
+    _sns_size: int,
+    _sns_wal_mtime_ns: int,
+    _sns_wal_size: int,
+    contact_db_path: str,
+    _contact_mtime_ns: int,
+    _contact_size: int,
+    _contact_wal_mtime_ns: int,
+    _contact_wal_size: int,
+) -> tuple[tuple[str, str, int], ...]:
+    """按数据库版本缓存完整联系人统计，搜索和 limit 在外层处理。"""
     conn = sqlite3.connect(str(sns_db_path))
     conn.row_factory = sqlite3.Row
     try:
-        cur = conn.cursor()
-        cur.execute(
+        rows = conn.execute(
             """
             SELECT
               user_name AS username,
@@ -2738,45 +3024,69 @@ def list_sns_users(
             GROUP BY user_name
             ORDER BY postCount DESC, totalCount DESC
             """
-        )
-        rows = cur.fetchall() or []
+        ).fetchall() or []
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        conn.close()
 
-    usernames = [str(r["username"] or "").strip() for r in rows if r is not None]
-    usernames = [u for u in usernames if u]
-    contact_rows = _load_contact_rows(contact_db_path, usernames) if contact_db_path.exists() else {}
+    usernames = [str(row["username"] or "").strip() for row in rows if row is not None]
+    usernames = [username for username in usernames if username]
+    contact_path = Path(contact_db_path)
+    contact_rows = _load_contact_rows(contact_path, usernames) if contact_path.exists() else {}
 
-    items: list[dict[str, Any]] = []
-
-    def _clean_name(v: Any) -> str:
-        return str(v or "").replace("\xa0", " ").strip()
-
-    for r in rows:
-        try:
-            uname = str(r["username"] or "").strip()
-        except Exception:
-            uname = ""
-        if not uname:
+    result: list[tuple[str, str, int]] = []
+    for row in rows:
+        username = str(row["username"] or "").strip()
+        if not username:
             continue
-
         try:
-            post_count = int(r["postCount"] or 0)
+            post_count = int(row["postCount"] or 0)
         except Exception:
             post_count = 0
         if post_count <= 0:
             continue
+        display = str(_pick_display_name(contact_rows.get(username), username) or "")
+        display = display.replace("\xa0", " ").strip() or username
+        result.append((username, display, post_count))
+    return tuple(result)
 
-        row = contact_rows.get(uname)
-        display = _clean_name(_pick_display_name(row, uname)) or uname
 
-        if kw:
-            if kw not in uname.lower() and kw not in display.lower():
-                continue
+@router.get("/api/sns/users", summary="列出朋友圈联系人（按发圈数统计）")
+def list_sns_users(
+    account: Optional[str] = None,
+    keyword: Optional[str] = None,
+    limit: int = 5000,
+):
+    account_dir = _resolve_account_dir(account)
+    sns_db_path = account_dir / "sns.db"
+    if not sns_db_path.exists():
+        raise HTTPException(status_code=404, detail="sns.db not found for this account.")
+    _schedule_sns_user_tid_index(sns_db_path)
 
+    contact_db_path = account_dir / "contact.db"
+
+    try:
+        lim = int(limit or 5000)
+    except Exception:
+        lim = 5000
+    if lim <= 0:
+        lim = 5000
+    if lim > 5000:
+        lim = 5000
+
+    kw = str(keyword or "").strip().lower()
+    sns_version = _sns_file_version(sns_db_path)
+    contact_version = _sns_file_version(contact_db_path)
+    cached_items = _load_sns_users_cached(
+        str(sns_db_path),
+        *sns_version,
+        str(contact_db_path),
+        *contact_version,
+    )
+
+    items: list[dict[str, Any]] = []
+    for uname, display, post_count in cached_items:
+        if kw and kw not in uname.lower() and kw not in display.lower():
+            continue
         items.append({"username": uname, "displayName": display, "postCount": post_count})
         if len(items) >= lim:
             break
@@ -3366,7 +3676,10 @@ async def get_sns_media(
         # 3) 旧版启发式匹配：发布时间、尺寸、文件大小和同尺寸组内序号。
         if not local_path:
             try:
-                local_path = _resolve_sns_cached_image_path(
+                # 启发式匹配需要枚举和解密候选文件，放到有界后台线程，
+                # 避免一张图占住 FastAPI 事件循环并拖慢时间线和健康检查。
+                local_path = await asyncio.to_thread(
+                    _resolve_sns_cached_image_path_bounded,
                     account_dir_str=str(account_dir),
                     create_time=int(create_time or 0),
                     width=int(width or 0),
@@ -3391,7 +3704,11 @@ async def get_sns_media(
                 **_sns_media_path_trace_fields(local_path, create_time=int(create_time or 0)),
             )
             try:
-                payload, local_media_type = _read_and_maybe_decrypt_media(Path(local_path), account_dir)
+                payload, local_media_type = await asyncio.to_thread(
+                    _read_and_maybe_decrypt_media,
+                    Path(local_path),
+                    account_dir,
+                )
                 if payload and str(local_media_type or "").startswith("image/"):
                     resp = Response(content=payload, media_type=str(local_media_type or "image/jpeg"))
                     resp.headers["Cache-Control"] = "public, max-age=31536000"

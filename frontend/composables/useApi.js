@@ -408,6 +408,12 @@ export const useApi = () => {
     if (params && params.account) query.set('account', params.account)
     if (params && params.max_scan != null) query.set('max_scan', String(params.max_scan))
     if (params && params.force != null) query.set('force', String(params.force))
+    if (params && params.scan_offset != null) query.set('scan_offset', String(params.scan_offset))
+    if (params && Array.isArray(params.usernames) && params.usernames.length > 0) {
+      query.set('usernames', params.usernames.join(','))
+    } else if (params && typeof params.usernames === 'string' && params.usernames) {
+      query.set('usernames', params.usernames)
+    }
     const url = '/sns/realtime/sync_latest' + (query.toString() ? `?${query.toString()}` : '')
     return await request(url, { method: 'POST' })
   }
@@ -707,7 +713,11 @@ export const useApi = () => {
         format: data.format || 'html',
         use_cache: data.use_cache == null ? true : !!data.use_cache,
         output_dir: data.output_dir == null ? null : String(data.output_dir || '').trim(),
-        file_name: data.file_name || null
+        file_name: data.file_name || null,
+        output_mode: data.output_mode === 'folder' ? 'folder' : 'zip',
+        folder_name: data.folder_name || null,
+        baseline: data.baseline && typeof data.baseline === 'object' ? data.baseline : null,
+        reset_baseline: !!data.reset_baseline
       }
     })
   }

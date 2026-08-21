@@ -1,30 +1,28 @@
-"""SNS (Moments) realtime -> decrypted sqlite incremental sync.
-
-Why:
-- We can read the latest Moments via WCDB realtime, but the decrypted snapshot (`output/databases/{account}/sns.db`)
-  can lag behind or miss data (e.g. you viewed it when it was visible, then it became "only last 3 days").
-- For export/offline browsing, we want to keep a local append-only cache of Moments that were visible at some point.
-
-This module runs a lightweight background poller that watches sns.db/WAL mtime changes and triggers a cheap incremental
-sync of the latest N Moments into the decrypted snapshot.
-"""
+"""基于系统文件事件的朋友圈实时增量同步服务。"""
 
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 import threading
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import HTTPException
+from watchfiles import watch
 
 from .chat_helpers import _list_decrypted_accounts, _resolve_account_dir
 from .logging_config import get_logger
 from .wcdb_realtime import WCDB_REALTIME
 
 logger = get_logger(__name__)
+
+_SNS_SOURCE_FILE_NAMES = frozenset({"sns.db", "sns.db-wal", "sns.db-shm"})
+_PUBLIC_ERROR_CODE_RE = re.compile(r"^[a-z0-9_\-]{1,80}$", flags=re.IGNORECASE)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -37,341 +35,575 @@ def _env_bool(name: str, default: bool) -> bool:
 def _env_int(name: str, default: int, *, min_v: int, max_v: int) -> int:
     raw = str(os.environ.get(name, "") or "").strip()
     try:
-        v = int(raw)
+        value = int(raw)
     except Exception:
-        v = int(default)
-    if v < min_v:
-        v = min_v
-    if v > max_v:
-        v = max_v
-    return v
+        value = int(default)
+    return max(int(min_v), min(int(max_v), value))
 
 
-def _mtime_ns(path: Path) -> int:
+def _normalize_watch_key(path: Path) -> str:
     try:
-        st = path.stat()
-        m_ns = int(getattr(st, "st_mtime_ns", 0) or 0)
-        if m_ns <= 0:
-            m_ns = int(float(getattr(st, "st_mtime", 0.0) or 0.0) * 1_000_000_000)
-        return int(m_ns)
+        value = str(Path(path).resolve())
     except Exception:
-        return 0
+        value = str(Path(path))
+    return os.path.normcase(value)
 
 
-def _scan_sns_db_mtime_ns(db_storage_dir: Path) -> int:
-    """Best-effort "latest mtime" signal for sns.db buckets."""
+def _is_sns_source_path(path: str | Path) -> bool:
+    return Path(path).name.lower() in _SNS_SOURCE_FILE_NAMES
+
+
+def _resolve_sns_watch_dir(db_storage_dir: Path) -> Path:
+    """解析微信源朋友圈目录，绝不监听程序自己的解密输出目录。"""
     base = Path(db_storage_dir)
-    candidates: list[Path] = [
-        base / "sns" / "sns.db",
-        base / "sns" / "sns.db-wal",
-        base / "sns.db",
-        base / "sns.db-wal",
-    ]
-    max_ns = 0
-    for p in candidates:
-        v = _mtime_ns(p)
-        if v > max_ns:
-            max_ns = v
-    return int(max_ns)
+    nested = base / "sns"
+    if nested.exists() and nested.is_dir():
+        return nested
+    return base
+
+
+@dataclass
+class _Subscriber:
+    loop: asyncio.AbstractEventLoop
+    queue: asyncio.Queue
 
 
 @dataclass
 class _AccountState:
-    last_mtime_ns: int = 0
-    due_at: float = 0.0
-    last_sync_end_at: float = 0.0
-    retry_count: int = 0
+    source_revision: int = 0
+    sequence: int = 0
+    sync_running: bool = False
+    pending_revision: int = 0
+    pending_reason: str = ""
+    worker: Optional[threading.Thread] = None
+    watch_key: str = ""
+    watcher_available: bool = False
+    watcher_error: str = ""
+    startup_scheduled: bool = False
+    ignore_shm_until: float = 0.0
+    subscribers: dict[str, _Subscriber] = field(default_factory=dict)
+
+
+@dataclass
+class _WatchState:
+    path: Path
+    accounts: set[str] = field(default_factory=set)
     thread: Optional[threading.Thread] = None
 
 
 class SnsRealtimeAutoSyncService:
+    """用操作系统文件通知触发朋友圈同步，并向 SSE 订阅者广播结果。"""
+
     def __init__(self) -> None:
         self._enabled = _env_bool("WECHAT_TOOL_SNS_AUTOSYNC", True)
-        self._interval_ms = _env_int("WECHAT_TOOL_SNS_AUTOSYNC_INTERVAL_MS", 2000, min_v=500, max_v=60_000)
-        self._debounce_ms = _env_int("WECHAT_TOOL_SNS_AUTOSYNC_DEBOUNCE_MS", 800, min_v=0, max_v=60_000)
-        self._min_sync_interval_ms = _env_int(
-            "WECHAT_TOOL_SNS_AUTOSYNC_MIN_SYNC_INTERVAL_MS", 5000, min_v=0, max_v=300_000
+        self._debounce_ms = _env_int(
+            "WECHAT_TOOL_SNS_AUTOSYNC_DEBOUNCE_MS",
+            300,
+            min_v=50,
+            max_v=5000,
         )
         self._workers = _env_int("WECHAT_TOOL_SNS_AUTOSYNC_WORKERS", 1, min_v=1, max_v=4)
         self._max_scan = _env_int("WECHAT_TOOL_SNS_AUTOSYNC_MAX_SCAN", 200, min_v=20, max_v=2000)
+        self._retry_delays = (0.8, 2.0)
 
-        self._mu = threading.Lock()
+        self._mu = threading.RLock()
         self._states: dict[str, _AccountState] = {}
+        self._watchers: dict[str, _WatchState] = {}
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._started = False
+        self._worker_slots = threading.BoundedSemaphore(self._workers)
 
     def start(self) -> None:
         if not self._enabled:
-            logger.info("[sns-autosync] disabled by env WECHAT_TOOL_SNS_AUTOSYNC=0")
+            logger.info("[sns-autosync] 已通过 WECHAT_TOOL_SNS_AUTOSYNC=0 禁用")
             return
         with self._mu:
-            if self._thread is not None and self._thread.is_alive():
+            if self._started:
                 return
+            self._started = True
             self._stop.clear()
-            th = threading.Thread(target=self._run, name="sns-realtime-autosync", daemon=True)
-            self._thread = th
-            th.start()
+            thread = threading.Thread(
+                target=self._bootstrap_accounts,
+                name="sns-event-autosync-bootstrap",
+                daemon=True,
+            )
+            self._thread = thread
+            thread.start()
         logger.info(
-            "[sns-autosync] started interval_ms=%s debounce_ms=%s min_sync_interval_ms=%s max_scan=%s workers=%s",
-            int(self._interval_ms),
-            int(self._debounce_ms),
-            int(self._min_sync_interval_ms),
-            int(self._max_scan),
-            int(self._workers),
+            "[sns-autosync] 文件事件同步已启动 debounce_ms=%s max_scan=%s workers=%s",
+            self._debounce_ms,
+            self._max_scan,
+            self._workers,
         )
 
     def stop(self) -> None:
         self._stop.set()
-
-        # Join outside `_mu`: account runners take the same lock in their
-        # `finally` block, so waiting while holding it would deadlock shutdown.
-        with self._mu:
-            main_thread = self._thread
-            self._thread = None
-
         current = threading.current_thread()
-        if main_thread is not None and main_thread is not current:
+        with self._mu:
+            threads: list[threading.Thread] = []
+            if self._thread is not None and self._thread is not current:
+                threads.append(self._thread)
+            for watcher in self._watchers.values():
+                if watcher.thread is not None and watcher.thread is not current:
+                    threads.append(watcher.thread)
+            for state in self._states.values():
+                if state.worker is not None and state.worker is not current:
+                    threads.append(state.worker)
+
+        for thread in list(dict.fromkeys(threads)):
             try:
-                main_thread.join(timeout=5.0)
+                thread.join(timeout=5.0)
             except Exception:
                 pass
 
-        # The poller is now stopped (or has observed `_stop`), so it cannot add
-        # more account workers while this snapshot is taken.
         with self._mu:
-            worker_threads = list(
-                dict.fromkeys(
-                    st.thread
-                    for st in self._states.values()
-                    if st.thread is not None and st.thread is not current
-                )
-            )
+            self._thread = None
+            self._started = False
+            self._watchers.clear()
+            for state in self._states.values():
+                state.sync_running = False
+                state.worker = None
+                state.watch_key = ""
+                state.watcher_available = False
+                state.startup_scheduled = False
+                state.subscribers.clear()
 
-        for worker_thread in worker_threads:
-            try:
-                worker_thread.join(timeout=5.0)
-            except Exception:
-                pass
-
-    def _retry_delay_seconds(self, retry_count: int) -> float:
-        base_seconds = max(1.0, float(self._interval_ms) / 1000.0)
-        exponent = max(0, min(int(retry_count) - 1, 10))
-        return min(60.0, base_seconds * float(2**exponent))
-
-    def _schedule_retry_locked(self, st: _AccountState, *, now: float) -> float:
-        st.retry_count = int(st.retry_count or 0) + 1
-        delay_seconds = self._retry_delay_seconds(st.retry_count)
-        retry_due_at = float(now) + delay_seconds
-        if st.due_at <= float(now) or st.due_at > retry_due_at:
-            st.due_at = retry_due_at
-        return delay_seconds
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            tick_t0 = time.perf_counter()
-            try:
-                self._tick()
-            except Exception:
-                logger.exception("[sns-autosync] tick failed")
-
-            elapsed_ms = (time.perf_counter() - tick_t0) * 1000.0
-            sleep_ms = max(200.0, float(self._interval_ms) - elapsed_ms)
-            self._stop.wait(timeout=sleep_ms / 1000.0)
-
-    def _tick(self) -> None:
-        accounts = _list_decrypted_accounts()
-        now = time.time()
-        if not accounts:
-            return
-
-        for acc in accounts:
-            if self._stop.is_set():
-                break
-            try:
-                account_dir = _resolve_account_dir(acc)
-            except HTTPException:
-                continue
-            except Exception:
-                continue
-
-            info = WCDB_REALTIME.get_status(account_dir)
-            available = bool(info.get("dll_present") and info.get("key_present") and info.get("db_storage_dir"))
-            if not available:
-                continue
-
-            db_storage_dir = Path(str(info.get("db_storage_dir") or "").strip())
-            if not db_storage_dir.exists() or not db_storage_dir.is_dir():
-                continue
-
-            mtime_ns = _scan_sns_db_mtime_ns(db_storage_dir)
-            with self._mu:
-                st = self._states.setdefault(acc, _AccountState())
-                if mtime_ns and mtime_ns != st.last_mtime_ns:
-                    st.last_mtime_ns = int(mtime_ns)
-                    st.retry_count = 0
-                    st.due_at = now + (float(self._debounce_ms) / 1000.0)
-
-        # Schedule daemon threads.
-        to_start: list[tuple[str, threading.Thread]] = []
-        with self._mu:
-            keep = set(accounts)
-            for acc in list(self._states.keys()):
-                if acc not in keep:
-                    self._states.pop(acc, None)
-
-            running = 0
-            for st in self._states.values():
-                th = st.thread
-                if th is not None and th.is_alive():
-                    running += 1
-                elif th is not None and (not th.is_alive()):
-                    st.thread = None
-
-            for acc, st in self._states.items():
-                if running >= int(self._workers):
-                    break
-                if st.due_at <= 0 or st.due_at > now:
-                    continue
-                if st.thread is not None and st.thread.is_alive():
-                    continue
-
-                since = now - float(st.last_sync_end_at or 0.0)
-                min_interval = float(self._min_sync_interval_ms) / 1000.0
-                if min_interval > 0 and since < min_interval:
-                    st.due_at = now + (min_interval - since)
-                    continue
-
-                st.due_at = 0.0
-                th = threading.Thread(
-                    target=self._sync_account_runner,
-                    args=(acc,),
-                    name=f"sns-autosync-{acc}",
-                    daemon=True,
-                )
-                st.thread = th
-                to_start.append((acc, th))
-                running += 1
-
-        for acc, th in to_start:
-            if self._stop.is_set():
-                with self._mu:
-                    st = self._states.get(acc)
-                    if st is not None and st.thread is th:
-                        st.thread = None
-                        if st.due_at <= 0:
-                            st.due_at = time.time()
-                break
-            try:
-                th.start()
-            except Exception:
-                now = time.time()
-                with self._mu:
-                    st = self._states.get(acc)
-                    if st is not None and st.thread is th:
-                        st.thread = None
-                        st.last_sync_end_at = now
-                        self._schedule_retry_locked(st, now=now)
-                logger.exception("[sns-autosync] failed to start worker account=%s", acc)
-
-    def _sync_account_runner(self, account: str) -> None:
-        account = str(account or "").strip()
-        if not account:
-            return
-        if self._stop.is_set():
-            with self._mu:
-                st = self._states.get(account)
-                if st is not None:
-                    st.thread = None
-            return
-
-        status = "error"
-        detail = ""
-        upserted = 0
-        raised = False
+    def _bootstrap_accounts(self) -> None:
+        """启动时只枚举一次账号；后续账号由 SSE 连接动态注册。"""
         try:
-            res = self._sync_account(account)
-            status = str((res or {}).get("status") or "error").strip().lower()
-            upserted = int((res or {}).get("upserted") or 0)
-            detail = str((res or {}).get("error") or (res or {}).get("reason") or "").strip()
-        except Exception as exc:
-            raised = True
-            detail = str(exc)
-            logger.exception("[sns-autosync] sync failed account=%s", account)
-        finally:
-            now = time.time()
-            retry_count = 0
-            retry_delay_seconds = 0.0
-            with self._mu:
-                st = self._states.get(account)
-                if st is not None:
-                    st.thread = None
-                    st.last_sync_end_at = now
-                    non_retryable_skip = status == "skipped" and detail.lower() in {
-                        "backlog exceeds scan cap",
-                        "missing account",
-                        "paused",
-                        "service stopping",
-                    }
-                    if status in {"ok", "noop"} or non_retryable_skip:
-                        st.retry_count = 0
-                    elif not self._stop.is_set():
-                        retry_delay_seconds = self._schedule_retry_locked(st, now=now)
-                    retry_count = int(st.retry_count or 0)
+            accounts = list(_list_decrypted_accounts() or [])
+        except Exception:
+            logger.exception("[sns-autosync] 初始账号枚举失败")
+            return
+        for account in accounts:
+            if self._stop.is_set():
+                return
+            self.ensure_account(account, schedule_startup=True)
 
-        if status in {"ok", "noop"}:
-            logger.info(
-                "[sns-autosync] sync done account=%s status=%s upserted=%s",
-                account,
-                status,
-                upserted,
-            )
-        elif status == "skipped":
-            logger.warning(
-                "[sns-autosync] sync skipped account=%s reason=%s retry_count=%s retry_in_s=%.1f",
-                account,
-                detail or "unknown",
-                retry_count,
-                retry_delay_seconds,
-            )
-        elif not raised:
-            logger.error(
-                "[sns-autosync] sync failed account=%s error=%s retry_count=%s retry_in_s=%.1f",
-                account,
-                detail or "unknown",
-                retry_count,
-                retry_delay_seconds,
-            )
-
-    def _sync_account(self, account: str) -> dict[str, Any]:
+    def ensure_account(self, account: str, *, schedule_startup: bool = True) -> dict[str, Any]:
         account = str(account or "").strip()
+        if not self._enabled:
+            return {
+                "available": False,
+                "code": "sns_event_sync_disabled",
+                "message": "朋友圈文件事件同步已禁用",
+            }
         if not account:
-            return {"status": "skipped", "reason": "missing account"}
+            return {"available": False, "code": "missing_account", "message": "缺少账号参数"}
 
         try:
             account_dir = _resolve_account_dir(account)
-        except Exception as e:
-            return {"status": "skipped", "reason": f"resolve account failed: {e}"}
+        except HTTPException:
+            return {"available": False, "code": "account_not_found", "message": "账号不存在"}
+        except Exception:
+            return {"available": False, "code": "account_not_found", "message": "账号不存在"}
 
         info = WCDB_REALTIME.get_status(account_dir)
         available = bool(info.get("dll_present") and info.get("key_present") and info.get("db_storage_dir"))
         if not available:
-            return {"status": "skipped", "reason": "realtime not available"}
+            return {
+                "available": False,
+                "code": "realtime_not_available",
+                "message": "实时组件未连接，请使用手动刷新",
+            }
 
-        # Import lazily to avoid startup import ordering issues.
+        db_storage_dir = Path(str(info.get("db_storage_dir") or "").strip())
+        watch_dir = _resolve_sns_watch_dir(db_storage_dir)
+        if not watch_dir.exists() or not watch_dir.is_dir():
+            return {
+                "available": False,
+                "code": "sns_watch_directory_unavailable",
+                "message": "朋友圈源数据库目录不可用，请使用手动刷新",
+            }
+
+        watch_key = _normalize_watch_key(watch_dir)
+        watcher_thread: Optional[threading.Thread] = None
+        should_schedule_startup = False
+        with self._mu:
+            state = self._states.setdefault(account, _AccountState())
+            state.watch_key = watch_key
+            state.watcher_available = True
+            state.watcher_error = ""
+
+            watcher = self._watchers.get(watch_key)
+            if watcher is None:
+                watcher = _WatchState(path=watch_dir)
+                self._watchers[watch_key] = watcher
+            watcher.accounts.add(account)
+            if watcher.thread is None:
+                watcher_thread = threading.Thread(
+                    target=self._watch_directory,
+                    args=(watch_key,),
+                    name=f"sns-file-watch-{len(self._watchers)}",
+                    daemon=True,
+                )
+                watcher.thread = watcher_thread
+
+            if schedule_startup and not state.startup_scheduled:
+                state.startup_scheduled = True
+                should_schedule_startup = True
+
+        if watcher_thread is not None:
+            try:
+                watcher_thread.start()
+            except Exception:
+                with self._mu:
+                    watcher = self._watchers.get(watch_key)
+                    if watcher is not None and watcher.thread is watcher_thread:
+                        watcher.thread = None
+                self._mark_watcher_failed(watch_key, "sns_file_watch_unavailable")
+                return {
+                    "available": False,
+                    "code": "sns_file_watch_unavailable",
+                    "message": "系统文件通知不可用，请使用手动刷新",
+                }
+
+        if should_schedule_startup:
+            self._schedule_sync(account, reason="startup")
+        return {"available": True, "watchDirectory": str(watch_dir)}
+
+    def _watch_directory(self, watch_key: str) -> None:
+        with self._mu:
+            watcher = self._watchers.get(watch_key)
+            if watcher is None:
+                return
+            watch_dir = watcher.path
+
+        try:
+            for changes in watch(
+                str(watch_dir),
+                watch_filter=lambda _change, path: _is_sns_source_path(path),
+                debounce=int(self._debounce_ms),
+                step=min(100, int(self._debounce_ms)),
+                stop_event=self._stop,
+                recursive=False,
+                force_polling=False,
+                yield_on_timeout=False,
+            ):
+                if self._stop.is_set():
+                    return
+                if not changes:
+                    continue
+                changed_names = {
+                    Path(path).name.lower()
+                    for _change, path in changes
+                    if _is_sns_source_path(path)
+                }
+                pure_shm_change = bool(changed_names) and changed_names <= {"sns.db-shm"}
+                with self._mu:
+                    current = self._watchers.get(watch_key)
+                    accounts = list(current.accounts) if current is not None else []
+                for account in accounts:
+                    with self._mu:
+                        state = self._states.get(account)
+                        suppress_own_shm = bool(
+                            pure_shm_change
+                            and state is not None
+                            and (
+                                state.sync_running
+                                or time.monotonic() < float(state.ignore_shm_until or 0.0)
+                            )
+                        )
+                    if suppress_own_shm:
+                        continue
+                    self._schedule_sync(account, reason="file_event")
+            if not self._stop.is_set():
+                logger.error("[sns-autosync] 系统文件监听意外结束")
+                self._mark_watcher_failed(watch_key, "sns_file_watch_unavailable")
+        except Exception:
+            if not self._stop.is_set():
+                logger.exception("[sns-autosync] 系统文件监听失败")
+                self._mark_watcher_failed(watch_key, "sns_file_watch_unavailable")
+
+    def _mark_watcher_failed(self, watch_key: str, code: str) -> None:
+        with self._mu:
+            watcher = self._watchers.get(watch_key)
+            accounts = list(watcher.accounts) if watcher is not None else []
+            if watcher is not None:
+                watcher.thread = None
+            for account in accounts:
+                state = self._states.get(account)
+                if state is not None:
+                    state.watcher_available = False
+                    state.watcher_error = code
+        for account in accounts:
+            self._publish_error(
+                account,
+                source_revision=0,
+                code=code,
+                message="系统文件通知不可用，请使用手动刷新",
+                retryable=False,
+            )
+
+    def _schedule_sync(self, account: str, *, reason: str) -> None:
+        account = str(account or "").strip()
+        if not account or self._stop.is_set():
+            return
+
+        worker: Optional[threading.Thread] = None
+        with self._mu:
+            state = self._states.setdefault(account, _AccountState())
+            state.source_revision += 1
+            revision = state.source_revision
+            if state.sync_running:
+                state.pending_revision = revision
+                state.pending_reason = reason
+                return
+
+            state.sync_running = True
+            worker = threading.Thread(
+                target=self._sync_account_runner,
+                args=(account, reason, revision),
+                name=f"sns-event-sync-{account}",
+                daemon=True,
+            )
+            state.worker = worker
+
+        try:
+            worker.start()
+        except Exception:
+            with self._mu:
+                state = self._states.get(account)
+                if state is not None and state.worker is worker:
+                    state.sync_running = False
+                    state.worker = None
+            logger.exception("[sns-autosync] 启动同步线程失败 account=%s", account)
+            self._publish_error(
+                account,
+                source_revision=revision,
+                code="sns_sync_worker_unavailable",
+                message="朋友圈实时同步线程不可用，请使用手动刷新",
+                retryable=False,
+            )
+
+    def _sync_account_runner(self, account: str, reason: str, revision: int) -> None:
+        current_thread = threading.current_thread()
+        try:
+            while not self._stop.is_set():
+                result, superseded = self._sync_with_bounded_retries(account, revision)
+                # WCDB 读取可能刷新共享内存文件；短暂忽略纯 -shm 事件，防止读取自身形成事件环。
+                with self._mu:
+                    state = self._states.get(account)
+                    if state is not None:
+                        state.ignore_shm_until = max(
+                            float(state.ignore_shm_until or 0.0),
+                            time.monotonic() + max(1.0, float(self._debounce_ms) / 500.0),
+                        )
+                if not superseded and not self._stop.is_set():
+                    self._publish_sync_result(account, reason, revision, result)
+
+                with self._mu:
+                    state = self._states.get(account)
+                    if state is None:
+                        return
+                    if state.pending_revision > revision:
+                        revision = state.pending_revision
+                        reason = state.pending_reason or "file_event"
+                        state.pending_revision = 0
+                        state.pending_reason = ""
+                        continue
+                    state.sync_running = False
+                    if state.worker is current_thread:
+                        state.worker = None
+                    return
+        finally:
+            with self._mu:
+                state = self._states.get(account)
+                if state is not None and state.worker is current_thread:
+                    state.sync_running = False
+                    state.worker = None
+
+    def _sync_with_bounded_retries(self, account: str, revision: int) -> tuple[dict[str, Any], bool]:
+        last_result: dict[str, Any] = {"status": "error", "error": "sns_sync_failed"}
+        for attempt in range(len(self._retry_delays) + 1):
+            if self._stop.is_set():
+                return {"status": "skipped", "reason": "service_stopping"}, False
+            try:
+                with self._worker_slots:
+                    if self._stop.is_set():
+                        return {"status": "skipped", "reason": "service_stopping"}, False
+                    last_result = dict(self._sync_account(account) or {})
+            except Exception:
+                logger.exception("[sns-autosync] 同步失败 account=%s", account)
+                last_result = {"status": "error", "error": "sns_sync_failed"}
+
+            if not self._should_retry(last_result) or attempt >= len(self._retry_delays):
+                return last_result, False
+
+            with self._mu:
+                state = self._states.get(account)
+                if state is not None and state.pending_revision > revision:
+                    return last_result, True
+            if self._stop.wait(timeout=float(self._retry_delays[attempt])):
+                return last_result, False
+        return last_result, False
+
+    @staticmethod
+    def _should_retry(result: dict[str, Any]) -> bool:
+        status = str((result or {}).get("status") or "error").strip().lower()
+        if status == "error":
+            return True
+        if status == "noop":
+            try:
+                return int((result or {}).get("scanned") or 0) <= 0
+            except Exception:
+                return True
+        return False
+
+    def _sync_account(self, account: str) -> dict[str, Any]:
+        account = str(account or "").strip()
+        if not account:
+            return {"status": "skipped", "reason": "missing_account"}
+
+        try:
+            account_dir = _resolve_account_dir(account)
+        except Exception:
+            return {"status": "skipped", "reason": "account_not_found"}
+
+        info = WCDB_REALTIME.get_status(account_dir)
+        available = bool(info.get("dll_present") and info.get("key_present") and info.get("db_storage_dir"))
+        if not available:
+            return {"status": "skipped", "reason": "realtime_not_available"}
+
+        # 延迟导入，避免路由模块初始化时产生循环依赖。
         from .routers.sns import sync_sns_realtime_timeline_latest
 
         try:
             return sync_sns_realtime_timeline_latest(
                 account=account,
                 max_scan=int(self._max_scan),
-                # A database/WAL mtime change may only update comments or likes
-                # on an existing tid, so max-id-only short-circuiting is unsafe.
+                # 文件事件也可能只是更新已有动态的评论或点赞，因此必须强制核对。
                 force=1,
             )
-        except HTTPException as e:
-            return {"status": "error", "error": str(e.detail or "")}
-        except Exception as e:
-            return {"status": "error", "error": str(e)}
+        except HTTPException as exc:
+            return {"status": "error", "error": str(exc.detail or "sns_sync_failed")}
+        except Exception:
+            logger.exception("[sns-autosync] 增量同步调用失败 account=%s", account)
+            return {"status": "error", "error": "sns_sync_failed"}
+
+    def subscribe(
+        self,
+        account: str,
+        *,
+        loop: asyncio.AbstractEventLoop,
+    ) -> tuple[str, asyncio.Queue, dict[str, Any]]:
+        account = str(account or "").strip()
+        availability = self.ensure_account(account, schedule_startup=True)
+        token = uuid.uuid4().hex
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+        with self._mu:
+            state = self._states.setdefault(account, _AccountState())
+            state.subscribers[token] = _Subscriber(loop=loop, queue=queue)
+            sequence = state.sequence
+            watcher_available = bool(state.watcher_available and availability.get("available"))
+
+        ready = {
+            "type": "ready",
+            "account": account,
+            "sequence": int(sequence),
+            "snapshotVersion": self._current_snapshot_version(account),
+            "watcherAvailable": watcher_available,
+            "timestamp": int(time.time() * 1000),
+        }
+        if not watcher_available:
+            ready["code"] = str(availability.get("code") or "sns_file_watch_unavailable")
+            ready["message"] = str(availability.get("message") or "系统文件通知不可用，请使用手动刷新")
+        return token, queue, ready
+
+    def unsubscribe(self, account: str, token: str) -> None:
+        with self._mu:
+            state = self._states.get(str(account or "").strip())
+            if state is not None:
+                state.subscribers.pop(str(token or ""), None)
+
+    def _current_snapshot_version(self, account: str) -> str:
+        try:
+            account_dir = _resolve_account_dir(account)
+            from .routers.sns import _build_sns_snapshot_status
+
+            return str(_build_sns_snapshot_status(account_dir).get("version") or "")
+        except Exception:
+            return ""
+
+    def _publish_sync_result(self, account: str, reason: str, revision: int, result: dict[str, Any]) -> None:
+        status = str((result or {}).get("status") or "error").strip().lower()
+        if status in {"ok", "noop"}:
+            event = {
+                "type": "change",
+                "account": account,
+                "sourceRevision": int(revision),
+                "reason": reason,
+                "status": status,
+                "snapshotVersion": str((result or {}).get("snapshotVersion") or ""),
+                "snapshotChanged": bool((result or {}).get("snapshotChanged")),
+                "changed": int((result or {}).get("changed") or (result or {}).get("upserted") or 0),
+                "highwaterAdvanced": bool((result or {}).get("highwaterAdvanced")),
+                "scanned": int((result or {}).get("scanned") or 0),
+                "timestamp": int(time.time() * 1000),
+            }
+            self._publish_event(account, event)
+            logger.info(
+                "[sns-autosync] 事件同步完成 account=%s reason=%s revision=%s status=%s changed=%s",
+                account,
+                reason,
+                revision,
+                status,
+                event["changed"],
+            )
+            return
+
+        raw_code = str((result or {}).get("error") or (result or {}).get("reason") or "sns_sync_failed").strip()
+        code = raw_code if _PUBLIC_ERROR_CODE_RE.fullmatch(raw_code) else "sns_sync_failed"
+        self._publish_error(
+            account,
+            source_revision=revision,
+            code=code,
+            message="朋友圈实时同步失败，请使用手动刷新",
+            retryable=False,
+        )
+
+    def _publish_error(
+        self,
+        account: str,
+        *,
+        source_revision: int,
+        code: str,
+        message: str,
+        retryable: bool,
+    ) -> None:
+        self._publish_event(account, {
+            "type": "sync_error",
+            "account": account,
+            "sourceRevision": int(source_revision),
+            "code": code,
+            "message": message,
+            "retryable": bool(retryable),
+            "timestamp": int(time.time() * 1000),
+        })
+
+    @staticmethod
+    def _offer_latest(queue: asyncio.Queue, event: dict[str, Any]) -> None:
+        try:
+            if queue.full():
+                queue.get_nowait()
+            queue.put_nowait(event)
+        except Exception:
+            pass
+
+    def _publish_event(self, account: str, event: dict[str, Any]) -> None:
+        with self._mu:
+            state = self._states.setdefault(account, _AccountState())
+            state.sequence += 1
+            payload = dict(event)
+            payload["sequence"] = int(state.sequence)
+            subscribers = list(state.subscribers.values())
+
+        for subscriber in subscribers:
+            try:
+                subscriber.loop.call_soon_threadsafe(self._offer_latest, subscriber.queue, payload)
+            except Exception:
+                pass
 
 
 SNS_REALTIME_AUTOSYNC = SnsRealtimeAutoSyncService()

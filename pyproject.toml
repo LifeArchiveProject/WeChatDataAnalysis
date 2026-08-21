@@ -26,6 +26,7 @@ dependencies = [
     "yara-python>=4.5.2; sys_platform == 'win32'",
     "packaging",
     "httpx",
+    "watchfiles>=1.1.0",
 ]
 
 [project.optional-dependencies]
