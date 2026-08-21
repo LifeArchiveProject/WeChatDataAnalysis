@@ -792,6 +792,41 @@
           </div>
 
           <template v-else>
+            <div class="mt-5 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface-bg)] p-4">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 class="text-sm font-semibold text-[var(--app-text-primary)]">选择推理设备</h3>
+                  <p class="mt-1 text-xs text-[var(--app-text-muted)]">CPU 兼容所有设备；NVIDIA GPU 使用 CUDA 加速，失败会自动回退 CPU。</p>
+                </div>
+                <div class="flex shrink-0 overflow-hidden rounded-md border border-[var(--app-border)]" role="radiogroup" aria-label="语音转文字推理设备">
+                  <button
+                    type="button"
+                    role="radio"
+                    data-testid="voice-onboarding-device-cpu"
+                    :aria-checked="voiceOnboardingRequestedDevice === 'cpu'"
+                    :class="voiceOnboardingRequestedDevice === 'cpu' ? 'bg-[var(--app-surface-muted)] text-[var(--app-accent)]' : 'text-[var(--app-text-secondary)] hover:bg-[var(--app-neutral-btn-hover)]'"
+                    :disabled="voiceOnboardingDeviceBusy || voiceOnboardingLoading || voiceBatchRunning || voiceModelBusy || voiceOnboardingDeviceLocked"
+                    class="px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
+                    @click="setVoiceOnboardingDevice('cpu')"
+                  >CPU</button>
+                  <button
+                    type="button"
+                    role="radio"
+                    data-testid="voice-onboarding-device-cuda"
+                    :aria-checked="voiceOnboardingRequestedDevice === 'cuda'"
+                    :class="voiceOnboardingRequestedDevice === 'cuda' ? 'bg-[var(--app-surface-muted)] text-[var(--app-accent)]' : 'text-[var(--app-text-secondary)] hover:bg-[var(--app-neutral-btn-hover)]'"
+                    :disabled="voiceOnboardingDeviceBusy || voiceOnboardingLoading || voiceBatchRunning || voiceModelBusy || voiceOnboardingDeviceLocked || !voiceOnboardingCudaAvailable"
+                    :title="voiceOnboardingCudaAvailable ? '使用 NVIDIA CUDA 加速' : (voiceOnboardingCudaReason || '未检测到可用的 NVIDIA CUDA 设备')"
+                    class="border-l border-[var(--app-border)] px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
+                    @click="setVoiceOnboardingDevice('cuda')"
+                  >NVIDIA GPU</button>
+                </div>
+              </div>
+              <p v-if="voiceOnboardingDeviceLocked" class="mt-2 text-xs text-[var(--app-text-secondary)]">推理设备由 WECHAT_TOOL_WHISPER_DEVICE 环境变量固定，无法在这里切换。</p>
+              <p v-else-if="voiceOnboardingStatus?.fallbackReason" class="mt-2 text-xs text-[var(--app-text-secondary)]">{{ voiceOnboardingStatus.fallbackReason }}</p>
+              <p v-else-if="!voiceOnboardingCudaAvailable && voiceOnboardingCudaReason" class="mt-2 text-xs text-[var(--app-text-secondary)]">{{ voiceOnboardingCudaReason }}</p>
+            </div>
+
             <div class="mt-5">
               <div class="mb-2 flex items-center justify-between">
                 <h3 class="text-sm font-semibold text-[var(--app-text-primary)]">选择模型</h3>
@@ -952,14 +987,14 @@
             <button
               v-else
               type="button"
-              :disabled="!voiceOnboardingStatus?.available || voiceModelBusy || voiceOnboardingLoading"
+              :disabled="!voiceOnboardingStatus?.available || voiceModelBusy || voiceOnboardingLoading || voiceOnboardingDeviceBusy"
               @click="startVoiceOnboardingBatch('local')"
               class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56] disabled:cursor-not-allowed disabled:opacity-50"
             >{{ voiceOnboardingBatch?.status === 'done' ? '再次扫描全部语音' : '本地批量转文字' }}</button>
             <button
               v-if="!voiceBatchRunning"
               type="button"
-              :disabled="!voiceNativeAvailable || voiceModelBusy || voiceOnboardingLoading"
+              :disabled="!voiceNativeAvailable || voiceModelBusy || voiceOnboardingLoading || voiceOnboardingDeviceBusy"
               :title="voiceNativeAvailable ? '逐条调用微信原生转写，任务会串行执行' : (voiceNativeReason || '微信原生转写当前不可用')"
               @click="startVoiceOnboardingBatch('wechat-native')"
               class="inline-flex items-center px-6 py-2.5 border border-[#07C160] text-[#078A45] rounded-lg font-medium hover:bg-[#F0F8F2] disabled:cursor-not-allowed disabled:opacity-50"
@@ -1054,6 +1089,7 @@ const {
   getPlatformCapabilities,
   getVoiceTranscriptionStatus,
   getNativeVoiceTranscriptionStatus,
+  setVoiceTranscriptionDevice,
   setVoiceTranscriptionModel,
   downloadVoiceTranscriptionModel,
   getVoiceTranscriptionModelDownload,
@@ -1148,6 +1184,7 @@ const voiceBatchConcurrencyDraft = ref('0')
 const voiceBatchConcurrencyError = ref('')
 const voiceBatchConcurrencyBadInput = ref(false)
 const voiceOnboardingLoading = ref(false)
+const voiceOnboardingDeviceBusy = ref(false)
 const voiceOnboardingError = ref('')
 const voiceOnboardingMessage = ref('')
 const voiceModelAction = ref({ id: '', type: '' })
@@ -1231,10 +1268,14 @@ const voiceModelBusy = computed(() => (
   || voiceModelDeletePendingIds.value.length > 0
   || voiceOnboardingModels.value.some((model) => isVoiceModelDownloading(model) || isVoiceModelDeleting(model))
 ))
-const voiceOnboardingDeviceText = computed(() => {
+const voiceOnboardingRequestedDevice = computed(() => {
   const device = String(voiceOnboardingStatus.value?.requestedDevice || voiceOnboardingStatus.value?.device || 'cpu')
-  return device === 'cuda' ? 'NVIDIA GPU' : 'CPU'
+  return device === 'cuda' ? 'cuda' : 'cpu'
 })
+const voiceOnboardingDeviceText = computed(() => voiceOnboardingRequestedDevice.value === 'cuda' ? 'NVIDIA GPU' : 'CPU')
+const voiceOnboardingDeviceLocked = computed(() => String(voiceOnboardingStatus.value?.deviceSource || '') === 'env')
+const voiceOnboardingCudaAvailable = computed(() => voiceOnboardingStatus.value?.cuda?.available === true)
+const voiceOnboardingCudaReason = computed(() => String(voiceOnboardingStatus.value?.cuda?.reason || '').trim())
 const voiceBatchRunning = computed(() => ['queued', 'running'].includes(String(voiceOnboardingBatch.value?.status || '')))
 const voiceNativeAvailable = computed(() => voiceNativeStatus.value?.available === true)
 const voiceNativeReason = computed(() => String(voiceNativeStatus.value?.reason || '').trim())
@@ -1289,6 +1330,7 @@ const voiceOnboardingModelLocked = computed(() => String(voiceOnboardingStatus.v
 const voiceOnboardingModelDisabled = (model) => (
   !model?.id
   || voiceModelBusy.value
+  || voiceOnboardingDeviceBusy.value
   || voiceOnboardingLoading.value
   || voiceBatchRunning.value
   || ['queued', 'running'].includes(String(model?.downloadStatus || ''))
@@ -2884,6 +2926,35 @@ const refreshVoiceOnboarding = async ({ preserveError = false } = {}) => {
   }
 }
 
+const setVoiceOnboardingDevice = async (device) => {
+  const lifecycleEpoch = voiceOnboardingLifecycleEpoch
+  const next = String(device || '').trim().toLowerCase()
+  if (
+    !isVoiceOnboardingLifecycleActive(lifecycleEpoch)
+    || !['cpu', 'cuda'].includes(next)
+    || next === voiceOnboardingRequestedDevice.value
+    || (next === 'cuda' && !voiceOnboardingCudaAvailable.value)
+    || voiceOnboardingDeviceBusy.value
+    || voiceOnboardingLoading.value
+    || voiceBatchRunning.value
+    || voiceModelBusy.value
+    || voiceOnboardingDeviceLocked.value
+  ) return
+
+  voiceOnboardingDeviceBusy.value = true
+  voiceOnboardingError.value = ''
+  try {
+    const response = await setVoiceTranscriptionDevice(next)
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    applyVoiceOnboardingStatus(response?.configuration || response)
+  } catch (e) {
+    if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
+    voiceOnboardingError.value = String(e?.message || '设置语音转文字推理设备失败')
+  } finally {
+    if (isVoiceOnboardingLifecycleActive(lifecycleEpoch)) voiceOnboardingDeviceBusy.value = false
+  }
+}
+
 const pollVoiceModelDownload = async (
   model,
   generation = voiceModelDownloadGeneration(model?.id),
@@ -3039,6 +3110,7 @@ const startVoiceOnboardingBatch = async (engine = 'local') => {
     !isVoiceOnboardingLifecycleActive(lifecycleEpoch)
     || (engine === 'local' ? !voiceOnboardingStatus.value?.available : !voiceNativeAvailable.value)
     || voiceBatchRunning.value
+    || voiceOnboardingDeviceBusy.value
     || !commitVoiceBatchConcurrency()
   ) return
   voiceOnboardingError.value = ''
