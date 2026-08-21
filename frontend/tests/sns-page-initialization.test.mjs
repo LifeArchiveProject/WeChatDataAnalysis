@@ -72,3 +72,26 @@ test('朋友圈使用 SSE 事件单飞核对随视口浮动的上下窗口', asy
   assert.doesNotMatch(source, /SNS_VISIBLE_RECONCILE_INTERVAL_MS/)
   assert.doesNotMatch(source, /scheduleSnsVisibleReconcile/)
 })
+
+
+test('朋友圈导出按钮在客户端挂载后再解除禁用，避免水合残留', async () => {
+  const source = await readFile(new URL('../pages/sns.vue', import.meta.url), 'utf8')
+
+  assert.match(source, /:disabled="!isSnsPageMounted \|\| !selectedAccount"/)
+  assert.match(source, /const isSnsPageMounted = ref\(false\)/)
+  assert.match(source, /onMounted\(async \(\) => \{\s*isSnsPageMounted\.value = true/)
+})
+
+
+test('朋友圈文件夹增量导出会批量核对并补回缺失媒体', async () => {
+  const source = await readFile(new URL('../pages/sns.vue', import.meta.url), 'utf8')
+  const apiSource = await readFile(new URL('../composables/useApi.js', import.meta.url), 'utf8')
+
+  assert.match(source, /const findMissingBrowserSnsManagedFiles = async \(root, baseline\)/)
+  assert.match(source, /new Map\(\[\['', Promise\.resolve\(root\)\]\]\)/)
+  assert.match(source, /Math\.min\(16, entries\.length\)/)
+  assert.match(source, /missingFiles = await findMissingBrowserSnsManagedFiles\(root, baseline\)/)
+  assert.match(source, /missing_files: missingFiles/)
+  assert.match(source, /const direct = await readBrowserSnsBaselineFromRoot\(selected\)/)
+  assert.match(apiSource, /missing_files: Array\.isArray\(data\.missing_files\)/)
+})
