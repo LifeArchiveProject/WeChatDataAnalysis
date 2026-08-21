@@ -12,7 +12,7 @@ _LEGACY_BACKUP_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 _WXID_SOURCE_SUFFIX_RE = re.compile(
-    r"^(?P<account>wxid_[^_\s]+)_[0-9a-f]{4}$",
+    r"^(?P<account>wxid_[^\s]+)_[0-9a-f]{4}$",
     re.IGNORECASE,
 )
 

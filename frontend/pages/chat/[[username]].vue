@@ -775,6 +775,8 @@ const onProjectVoiceTranscriptsInvalidated = () => {
 
 let accountBootstrapInProgress = false
 let accountChangeInProgress = false
+let accountChangeQueued = false
+let accountChangeDisposed = false
 
 const resetAccountScopedState = () => {
   selectedContact.value = null
@@ -826,10 +828,17 @@ const cancelQueuedRealtimeSessionsRefresh = () => {
 }
 
 const onAccountChange = async () => {
-  if (accountChangeInProgress) return
+  // A second selection can arrive while the previous account's session
+  // request is being aborted.  Coalesce those changes and replay the latest
+  // selected account instead of dropping the watcher event.
+  if (accountChangeInProgress) {
+    accountChangeQueued = true
+    return
+  }
   accountChangeInProgress = true
   cancelQueuedRealtimeSessionsRefresh()
   try {
+    const accountAtStart = String(selectedAccount.value || '').trim()
     logChatBootstrap('accountChange:start', {
       selectedAccount: selectedAccount.value
     })
@@ -843,6 +852,11 @@ const onAccountChange = async () => {
       contactsError.value = error?.message || '加载会话失败'
     } finally {
       isLoadingContacts.value = false
+    }
+
+    if (accountAtStart !== String(selectedAccount.value || '').trim()) {
+      accountChangeQueued = true
+      return
     }
 
     logChatBootstrap('accountChange:applyRouteSelection:start', {
@@ -860,6 +874,14 @@ const onAccountChange = async () => {
     })
   } finally {
     accountChangeInProgress = false
+    if (accountChangeQueued && !accountChangeDisposed) {
+      accountChangeQueued = false
+      void onAccountChange().catch((error) => {
+        contactsError.value = error?.message || '加载会话失败'
+      })
+    } else if (accountChangeDisposed) {
+      accountChangeQueued = false
+    }
   }
 }
 
@@ -1016,6 +1038,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (!process.client) return
+
+  accountChangeDisposed = true
+  accountChangeQueued = false
 
   document.removeEventListener('click', onGlobalClick)
   document.removeEventListener('keydown', onGlobalKeyDown)

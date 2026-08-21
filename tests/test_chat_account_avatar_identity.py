@@ -1,4 +1,5 @@
 import hashlib
+import json
 import sqlite3
 import threading
 import zipfile
@@ -90,6 +91,86 @@ def test_account_info_derives_native_username_when_realtime_status_omits_it(tmp_
         info = chat_router._chat_account_context_public(ctx)
 
     assert info["selfUsername"] == "wxid_example"
+
+
+def test_account_info_reads_persisted_self_display_name_without_starting_native(
+    tmp_path: Path,
+) -> None:
+    ctx = _context(tmp_path, "wxid_profile")
+    (ctx.account_dir / "account.json").write_text(
+        json.dumps({"username": "wxid_profile", "nick": "本地昵称"}),
+        encoding="utf-8",
+    )
+
+    with (
+        patch.object(chat_router, "list_countable_database_names", return_value=[]),
+        patch.object(chat_router.WCDB_REALTIME, "get_status", return_value={}),
+        patch.object(chat_router.WCDB_REALTIME, "get_connection", return_value=None),
+        patch.object(chat_router.WCDB_REALTIME, "ensure_connected") as ensure_connected,
+    ):
+        info = chat_router._chat_account_context_public(ctx)
+
+    assert info["selfDisplayName"] == "本地昵称"
+    assert info["nickname"] == "本地昵称"
+    assert info["displayName"] == "本地昵称"
+    ensure_connected.assert_not_called()
+
+
+def test_account_info_reuses_existing_connection_and_does_not_start_each_account(
+    tmp_path: Path,
+) -> None:
+    ctx = _context(tmp_path, "wxid_live_profile")
+    connection = _RealtimeConnection("wxid_live_profile")
+
+    with (
+        patch.object(chat_router, "list_countable_database_names", return_value=[]),
+        patch.object(chat_router.WCDB_REALTIME, "get_status", return_value={}),
+        patch.object(chat_router.WCDB_REALTIME, "get_connection", return_value=connection),
+        patch.object(
+            chat_router,
+            "_wcdb_get_display_names",
+            return_value={"wxid_live_profile": "实时昵称"},
+        ),
+        patch.object(chat_router.WCDB_REALTIME, "ensure_connected") as ensure_connected,
+    ):
+        info = chat_router._chat_account_context_public(ctx)
+
+    assert info["selfDisplayName"] == "实时昵称"
+    ensure_connected.assert_not_called()
+
+
+def test_account_info_can_lazily_connect_only_selected_account_for_nickname(
+    tmp_path: Path,
+) -> None:
+    ctx = _context(tmp_path, "wxid_lazy_profile")
+    connection = _RealtimeConnection("wxid_lazy_profile")
+
+    with (
+        patch.object(chat_router, "resolve_chat_account_context", return_value=ctx),
+        patch.object(chat_router, "list_countable_database_names", return_value=[]),
+        patch.object(
+            chat_router.WCDB_REALTIME,
+            "get_status",
+            return_value={
+                "dll_present": True,
+                "key_present": True,
+                "db_storage_dir": ctx.db_storage_path,
+                "session_db_path": str(Path(ctx.db_storage_path) / "session" / "session.db"),
+            },
+        ),
+        patch.object(chat_router.WCDB_REALTIME, "get_connection", return_value=None),
+        patch.object(chat_router.WCDB_REALTIME, "ensure_connected", return_value=connection) as ensure_connected,
+        patch.object(
+            chat_router,
+            "_wcdb_get_display_names",
+            return_value={"wxid_lazy_profile": "懒加载昵称"},
+        ),
+    ):
+        info = chat_router.get_chat_account_info(account=ctx.name)
+
+    assert info["selfDisplayName"] == "懒加载昵称"
+    assert info["nickname"] == "懒加载昵称"
+    ensure_connected.assert_called_once()
 
 
 def test_native_username_derivation_preserves_internal_underscores(tmp_path: Path) -> None:

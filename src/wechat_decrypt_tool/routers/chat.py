@@ -103,6 +103,7 @@ from ..wcdb_realtime import (
     exec_query as _wcdb_exec_query,
     fetch_message_batch as _wcdb_fetch_message_batch,
     get_avatar_urls as _wcdb_get_avatar_urls,
+    get_contact as _wcdb_get_contact,
     get_display_names as _wcdb_get_display_names,
     get_group_members as _wcdb_get_group_members,
     get_group_nicknames as _wcdb_get_group_nicknames,
@@ -4193,7 +4194,140 @@ async def list_chat_accounts():
     }
 
 
-def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
+_ACCOUNT_PROFILE_NAME_KEYS = (
+    "selfDisplayName",
+    "self_display_name",
+    "nickname",
+    "nickName",
+    "nick_name",
+    "nick",
+    "displayName",
+    "display_name",
+)
+_ACCOUNT_PROFILE_INVISIBLE_CHARS = ("\u3164", "\u200b", "\u200c", "\u200d", "\ufeff")
+
+
+def _clean_account_display_name(value: Any, fallback_username: str = "") -> str:
+    text = str(value or "")
+    for char in _ACCOUNT_PROFILE_INVISIBLE_CHARS:
+        text = text.replace(char, "")
+    text = text.strip()
+    fallback = str(fallback_username or "").strip()
+    if not text or (fallback and text.casefold() == fallback.casefold()):
+        return ""
+    return text
+
+
+def _read_account_profile_display_name(account_dir: Path, fallback_username: str) -> str:
+    """Read a persisted account nickname without probing/starting native WCDB."""
+    for filename in ("account.json", "_source.json"):
+        try:
+            value = json.loads((Path(account_dir) / filename).read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(value, dict):
+            continue
+        candidates: list[dict[str, Any]] = [value]
+        for nested_key in ("original_info", "profile"):
+            nested = value.get(nested_key)
+            if isinstance(nested, dict):
+                candidates.append(nested)
+        for candidate in candidates:
+            for key in _ACCOUNT_PROFILE_NAME_KEYS:
+                display_name = _clean_account_display_name(candidate.get(key), fallback_username)
+                if display_name:
+                    return display_name
+    return ""
+
+
+def _resolve_account_self_display_name(
+    account_dir: Path,
+    native_wxid: str,
+    *,
+    snapshot_preferred: bool = False,
+    allow_native_connection: bool = False,
+    expected_db_storage_dir: str = "",
+) -> str:
+    """Resolve the self nickname from cheap metadata or an existing WCDB handle.
+
+    `/api/chat/accounts` calls this with `allow_native_connection=False`, so
+    listing several accounts never opens one native handle per account.  The
+    account-info route may opt into a single lazy connection for the selected
+    account when no persisted/local name is available.
+    """
+    account_path = Path(account_dir)
+    username = str(native_wxid or account_path.name or "").strip()
+
+    def _from_contact_row(row: Any) -> str:
+        try:
+            return _clean_account_display_name(_pick_display_name(row, username), username)
+        except Exception:
+            return ""
+
+    def _from_connection(connection: Any) -> str:
+        if connection is None:
+            return ""
+        try:
+            expected_root = str(expected_db_storage_dir or "").strip()
+            actual_root = str(getattr(connection, "db_storage_dir", "") or "").strip()
+            if expected_root and actual_root:
+                if Path(expected_root).expanduser().resolve() != Path(actual_root).expanduser().resolve():
+                    return ""
+            with connection.lock:
+                names = _wcdb_get_display_names(connection.handle, [username])
+                display_name = _clean_account_display_name(
+                    (names or {}).get(username),
+                    username,
+                )
+                if display_name:
+                    return display_name
+                return _from_contact_row(_wcdb_get_contact(connection.handle, username))
+        except Exception:
+            return ""
+
+    # A direct account may already have been connected by chat/realtime or by
+    # the avatar endpoint.  Reuse that handle, but never start one here unless
+    # the caller explicitly requested the selected-account lazy path.
+    if not snapshot_preferred:
+        try:
+            display_name = _from_connection(WCDB_REALTIME.get_connection(account_path.name))
+            if display_name:
+                return display_name
+        except Exception:
+            pass
+
+    if allow_native_connection and not snapshot_preferred:
+        try:
+            connection = WCDB_REALTIME.ensure_connected(account_path, timeout=2.0)
+            display_name = _from_connection(connection)
+            if display_name:
+                return display_name
+        except Exception:
+            pass
+
+    display_name = _read_account_profile_display_name(account_path, username)
+    if display_name:
+        return display_name
+
+    # Imported snapshots expose contact.db but direct accounts may retain a
+    # stale decrypted copy from the prior source.  Never use that copy for a
+    # direct account; the native path above is the source of truth there.
+    if snapshot_preferred:
+        try:
+            rows = _load_contact_rows(account_path / "contact.db", [username])
+            display_name = _from_contact_row((rows or {}).get(username))
+            if display_name:
+                return display_name
+        except Exception:
+            pass
+    return ""
+
+
+def _chat_account_context_public(
+    ctx: Any,
+    *,
+    allow_native_display_name: bool = False,
+) -> dict[str, Any]:
     account_dir = Path(ctx.account_dir)
     db_files = list_countable_database_names(account_dir)
     snapshot_preferred = bool(
@@ -4220,6 +4354,20 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
         and realtime_status.get("key_present")
         and realtime_db_storage
         and realtime_session_db
+    )
+    self_display_name = _resolve_account_self_display_name(
+        account_dir,
+        native_wxid,
+        snapshot_preferred=snapshot_preferred,
+        # Only make the selected-account lazy probe when the cheap status
+        # probe says the native components and source are usable. This avoids
+        # turning a missing broker into a cached connection failure.
+        allow_native_connection=(
+            allow_native_display_name
+            and realtime_available
+            and not bool(realtime_status.get("recent_failure"))
+        ),
+        expected_db_storage_dir=realtime_db_storage or db_storage_path,
     )
     has_decrypted_dbs = bool(getattr(ctx, "has_decrypted_dbs", False))
     realtime_preferred = bool(db_storage_path or wxid_dir or realtime_db_storage)
@@ -4258,6 +4406,9 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
         # native WeChat username (SimpleChinese), so expose both identities.
         "selfUsername": native_wxid,
         "nativeWxid": native_wxid,
+        "selfDisplayName": self_display_name,
+        "nickname": self_display_name,
+        "displayName": self_display_name,
         "mode": getattr(ctx, "mode", "unknown"),
         "defaultSource": active_source,
         "path": data_source_path,
@@ -4314,7 +4465,7 @@ def get_chat_account_info(account: Optional[str] = None):
     except Exception:
         session_updated_at = 0
 
-    info = _chat_account_context_public(ctx)
+    info = _chat_account_context_public(ctx, allow_native_display_name=True)
     if not session_updated_at:
         try:
             rt_session_db = Path(str((info.get("realtime") or {}).get("sessionDbPath") or ""))

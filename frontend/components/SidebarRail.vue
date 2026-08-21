@@ -390,7 +390,8 @@
                 </div>
               </div>
               <div class="min-w-0 flex-1">
-                <div class="truncate text-[13px] font-semibold text-[#222]">{{ item.account }}</div>
+                <div class="truncate text-[13px] font-semibold text-[#222]">{{ item.displayName || item.account }}</div>
+                <div v-if="item.displayName" class="truncate text-[10px] text-[#8a8a8a]">{{ item.account }}</div>
               </div>
               <div class="flex shrink-0 items-center gap-1">
                 <span class="rounded-full bg-[#eefbf4] px-1.5 py-0.5 text-[10px] font-medium text-[#07964c]">DB</span>
@@ -420,8 +421,9 @@
               </div>
             </div>
             <div class="min-w-0 flex-1">
-              <div class="truncate text-[14px] font-semibold text-[#222]">{{ selectedAccount || '未选择账号' }}</div>
-              <div class="mt-0.5 text-[11px] text-[#8a8a8a]">账号标识（wxid）</div>
+              <div class="truncate text-[14px] font-semibold text-[#222]">{{ selectedAccountDisplayName || selectedAccount || '未选择账号' }}</div>
+              <div v-if="selectedAccountDisplayName" class="mt-0.5 truncate text-[11px] text-[#8a8a8a]">{{ selectedAccount }}</div>
+              <div v-else class="mt-0.5 text-[11px] text-[#8a8a8a]">账号标识（wxid）</div>
             </div>
           </div>
 
@@ -538,6 +540,21 @@ const accountAvatarUrl = (account, info = null) => {
   return buildAccountAvatarUrl(apiBase, acc, resolvedInfo)
 }
 
+const accountDisplayName = (account, info = null) => {
+  const acc = normalizeAccountName(account)
+  const source = info && typeof info === 'object' ? info : {}
+  const candidate = normalizeAccountName(
+    source.selfDisplayName
+    || source.self_display_name
+    || source.nickname
+    || source.nickName
+    || source.nick_name
+    || source.displayName
+    || source.display_name
+  )
+  return candidate && candidate.toLowerCase() !== acc.toLowerCase() ? candidate : ''
+}
+
 const accountFallbackText = (account) => {
   const value = normalizeAccountName(account)
   if (!value) return '我'
@@ -554,6 +571,7 @@ const switchableAccountItems = computed(() => {
       return {
         account,
         active: account === normalizeAccountName(selectedAccount.value),
+        displayName: accountDisplayName(account, info),
         avatarUrl: accountAvatarUrl(account, info),
       }
     })
@@ -697,6 +715,12 @@ const selfAvatarUrl = computed(() => {
   const acc = String(selectedAccount.value || '').trim()
   if (!acc) return ''
   return accountAvatarUrl(acc, accountInfo.value || accountInfoByName.value?.[acc] || null)
+})
+
+const selectedAccountDisplayName = computed(() => {
+  const acc = String(selectedAccount.value || '').trim()
+  if (!acc) return ''
+  return accountDisplayName(acc, accountInfo.value || accountInfoByName.value?.[acc] || null)
 })
 
 const refreshSwitchableAccounts = async () => {

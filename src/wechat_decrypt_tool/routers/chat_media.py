@@ -1307,7 +1307,9 @@ async def get_chat_avatar(username: str, account: Optional[str] = None, source: 
 
     head_image_db_path = account_dir / "head_image.db"
     if not head_image_db_path.exists():
-        # No local head_image.db: allow fallback from cached/remote URL path.
+        # A direct account may not ship a decrypted head_image.db. Keep the
+        # cache fast path, then treat the local source as empty and continue
+        # to the WCDB/remote fallback below.
         if cached_file is not None and user_entry:
             headers = build_avatar_cache_response_headers(user_entry)
             trace("response:ready", result="user-cache-hit-no-head-image", mediaType=str(user_entry.get("media_type") or ""))
@@ -1316,10 +1318,12 @@ async def get_chat_avatar(username: str, account: Optional[str] = None, source: 
                 media_type=str(user_entry.get("media_type") or "application/octet-stream"),
                 headers=headers,
             )
-        trace("response:error", result="head-image-db-missing")
-        raise HTTPException(status_code=404, detail="head_image.db not found.")
+        trace("head-image:unavailable", result="head-image-db-missing-fallback")
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE head_image (username TEXT, md5 TEXT, image_buffer BLOB, update_time INTEGER)")
+    else:
+        conn = sqlite3.connect(str(head_image_db_path))
 
-    conn = sqlite3.connect(str(head_image_db_path))
     try:
         meta = conn.execute(
             "SELECT md5, update_time FROM head_image WHERE username = ? ORDER BY update_time DESC LIMIT 1",

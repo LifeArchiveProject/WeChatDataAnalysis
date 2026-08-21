@@ -104,6 +104,25 @@ afterEach(() => {
 })
 
 describe('聊天页语音转文字侧栏', () => {
+  it('快速切换多个账号时保留最后一次选择', () => {
+    const accountChangeSource = chatPageSource.slice(
+      chatPageSource.indexOf('const onAccountChange = async () =>'),
+      chatPageSource.indexOf('const onGlobalClick = (event) =>')
+    )
+
+    expect(chatPageSource).toContain('let accountChangeQueued = false')
+    expect(accountChangeSource).toMatch(
+      /if \(accountChangeInProgress\) \{\s*accountChangeQueued = true\s*return\s*\}/s
+    )
+    expect(accountChangeSource).toContain('const accountAtStart = String(selectedAccount.value || \'\').trim()')
+    expect(accountChangeSource).toMatch(
+      /if \(accountAtStart !== String\(selectedAccount\.value \|\| ''\)\.trim\(\)\) \{[\s\S]*?accountChangeQueued = true[\s\S]*?return/s
+    )
+    expect(accountChangeSource).toMatch(
+      /finally \{[\s\S]*?if \(accountChangeQueued[\s\S]*?\) \{[\s\S]*?accountChangeQueued = false[\s\S]*?void onAccountChange\(\)/s
+    )
+  })
+
   it('微信原生结果不承诺 force 重跑，失败时只提供普通重试', () => {
     expect(chatMessagesSource).toContain('const transcribeVoice = async (message) =>')
     expect(chatMessagesSource).not.toContain('const transcribeVoice = async (message, { force')

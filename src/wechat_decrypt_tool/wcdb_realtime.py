@@ -557,6 +557,10 @@ class WCDBRealtimeManager:
         _native_core_mode_value()
 
         while True:
+            stale_connection: WCDBRealtimeConnection | None = None
+            reused_connection: WCDBRealtimeConnection | None = None
+            waiter: threading.Event | None = None
+            connect_now = False
             with self._mu:
                 recent_failure = self._recent_failure_locked(account)
                 root_failure = self._recent_failure_locked(root_key)
@@ -577,21 +581,40 @@ class WCDBRealtimeManager:
                 existing = self._conns.get(account)
                 if existing is not None:
                     if existing.handle > 0 and _is_native_core_handle(existing.handle):
-                        return existing
-                    self._conns.pop(account, None)
+                        if self._database_root_key(existing.db_storage_dir) == root_key:
+                            return existing
+                        # The account name was reused for a new WeChat data
+                        # root. Do not return a valid handle for the old root.
+                        self._conns.pop(account, None)
+                        if not any(cached is existing for cached in self._conns.values()):
+                            stale_connection = existing
+                    else:
+                        self._conns.pop(account, None)
 
                 existing = self._connection_for_root_locked(root_key)
                 if existing is not None:
                     self._conns[account] = existing
                     self._failed.pop(account, None)
-                    return existing
+                    reused_connection = existing
 
-                waiter = self._connecting_roots.get(root_key)
-                if waiter is None:
+                if reused_connection is None:
+                    waiter = self._connecting_roots.get(root_key)
+                if reused_connection is None and waiter is None:
                     waiter = threading.Event()
                     self._connecting[account] = waiter
                     self._connecting_roots[root_key] = waiter
-                    break
+                    connect_now = True
+
+            if stale_connection is not None:
+                try:
+                    with stale_connection.lock:
+                        close_account(stale_connection.handle)
+                except Exception:
+                    pass
+            if reused_connection is not None:
+                return reused_connection
+            if connect_now:
+                break
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
