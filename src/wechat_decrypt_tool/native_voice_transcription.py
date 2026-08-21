@@ -68,6 +68,14 @@ class NativeVoiceTranscriptCacheEntry:
     expires_at: Optional[float]
 
 
+@dataclass(frozen=True)
+class NativeVoiceBatchTarget:
+    conversation: str
+    server_id: int
+    local_id: int
+    text: str = ""
+
+
 class NativeVoiceTriggerTransport(Protocol):
     def trigger(self, command: NativeVoiceTriggerCommand) -> NativeVoiceTriggerReceipt:
         """Dispatch one bounded request; transcript polling belongs to the caller."""
@@ -575,6 +583,206 @@ def _message_db_paths(root: Path, conversation: str) -> list[Path]:
     return (business + normal) if conversation.startswith("gh_") else (normal + business)
 
 
+def _batch_target_from_values(
+    conversation: str,
+    local_id: object,
+    server_id: object,
+    packed_info: object,
+) -> Optional[NativeVoiceBatchTarget]:
+    try:
+        resolved_local_id = int(local_id or 0)
+        resolved_server_id = int(server_id or 0)
+    except (TypeError, ValueError):
+        return None
+    if not conversation or resolved_local_id <= 0 or resolved_server_id <= 0:
+        return None
+    return NativeVoiceBatchTarget(
+        conversation=conversation,
+        server_id=resolved_server_id,
+        local_id=resolved_local_id,
+        text=_extract_voice_transcript_from_packed_info(packed_info),
+    )
+
+
+def _merge_native_batch_target(
+    targets: dict[tuple[str, int, int], NativeVoiceBatchTarget],
+    target: Optional[NativeVoiceBatchTarget],
+) -> None:
+    if target is None:
+        return
+    key = (target.conversation, target.server_id, target.local_id)
+    current = targets.get(key)
+    if current is None or (target.text and not current.text):
+        targets[key] = target
+
+
+def _table_conversation_map(table_names: list[str], usernames: list[object]) -> dict[str, str]:
+    known = {str(name or "").lower() for name in table_names}
+    result: dict[str, str] = {}
+    for value in usernames:
+        conversation = str(value or "").strip()
+        if not conversation:
+            continue
+        table = f"msg_{hashlib.md5(conversation.encode('utf-8')).hexdigest()}"
+        if table in known:
+            result[table] = conversation
+    return result
+
+
+def list_native_voice_batch_targets(
+    account_dir: Path,
+    *,
+    cancel_event: Optional[threading.Event] = None,
+    errors: Optional[list[str]] = None,
+) -> list[NativeVoiceBatchTarget]:
+    """List account-wide voice identities that the native bridge can trigger."""
+
+    account_path = Path(account_dir)
+    targets: dict[tuple[str, int, int], NativeVoiceBatchTarget] = {}
+    scan_errors: list[str] = []
+
+    for db_path in _message_db_paths(account_path, ""):
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            table_names = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND lower(name) LIKE 'msg_%'"
+                )
+                if row and row[0]
+            ]
+            usernames: list[object] = []
+            for column in ("user_name", "username"):
+                try:
+                    usernames = [row[0] for row in conn.execute(f"SELECT {column} FROM Name2Id")]
+                    break
+                except sqlite3.Error:
+                    continue
+            table_map = _table_conversation_map(table_names, usernames)
+            for table_name in table_names:
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                conversation = table_map.get(table_name.lower(), "")
+                if not conversation:
+                    continue
+                quoted = '"' + table_name.replace('"', '""') + '"'
+                try:
+                    rows = conn.execute(
+                        f"SELECT local_id, server_id, packed_info_data FROM {quoted} "
+                        "WHERE local_type = 34 AND local_id > 0 AND server_id > 0"
+                    )
+                except sqlite3.OperationalError:
+                    rows = conn.execute(
+                        f"SELECT local_id, server_id, NULL FROM {quoted} "
+                        "WHERE local_type = 34 AND local_id > 0 AND server_id > 0"
+                    )
+                for local_id, server_id, packed_info in rows:
+                    _merge_native_batch_target(
+                        targets,
+                        _batch_target_from_values(conversation, local_id, server_id, packed_info),
+                    )
+        except Exception as exc:
+            scan_errors.append(f"local:{db_path.name}:{type(exc).__name__}")
+        finally:
+            if conn is not None:
+                conn.close()
+
+    if not account_prefers_decrypted_snapshot(account_path):
+        try:
+            from .wcdb_realtime import WCDB_REALTIME, exec_query as wcdb_exec_query
+
+            realtime = WCDB_REALTIME.ensure_connected(account_path)
+            message_dir = Path(realtime.db_storage_dir) / "message"
+            for db_path in _message_db_paths(message_dir, ""):
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                try:
+                    with realtime.lock:
+                        table_rows = wcdb_exec_query(
+                            realtime.handle,
+                            kind="message",
+                            path=str(db_path),
+                            sql="SELECT name FROM sqlite_master WHERE type='table' AND lower(name) LIKE 'msg_%'",
+                        )
+                    table_names = [
+                        str(next((value for key, value in row.items() if str(key).lower() == "name"), "") or "")
+                        for row in table_rows or []
+                        if isinstance(row, dict)
+                    ]
+                    username_rows: list[dict[str, object]] = []
+                    for column in ("user_name", "username"):
+                        try:
+                            with realtime.lock:
+                                username_rows = wcdb_exec_query(
+                                    realtime.handle,
+                                    kind="message",
+                                    path=str(db_path),
+                                    sql=f"SELECT {column} FROM Name2Id",
+                                )
+                            break
+                        except Exception:
+                            continue
+                    usernames = [
+                        next(iter(row.values()), "")
+                        for row in username_rows or []
+                        if isinstance(row, dict)
+                    ]
+                    table_map = _table_conversation_map(table_names, usernames)
+                    for table_name in table_names:
+                        if cancel_event is not None and cancel_event.is_set():
+                            break
+                        conversation = table_map.get(table_name.lower(), "")
+                        if not conversation:
+                            continue
+                        quoted = '"' + table_name.replace('"', '""') + '"'
+                        try:
+                            with realtime.lock:
+                                rows = wcdb_exec_query(
+                                    realtime.handle,
+                                    kind="message",
+                                    path=str(db_path),
+                                    sql=(
+                                        f"SELECT local_id, server_id, packed_info_data FROM {quoted} "
+                                        "WHERE local_type = 34 AND local_id > 0 AND server_id > 0"
+                                    ),
+                                )
+                        except Exception:
+                            with realtime.lock:
+                                rows = wcdb_exec_query(
+                                    realtime.handle,
+                                    kind="message",
+                                    path=str(db_path),
+                                    sql=(
+                                        f"SELECT local_id, server_id, NULL AS packed_info_data FROM {quoted} "
+                                        "WHERE local_type = 34 AND local_id > 0 AND server_id > 0"
+                                    ),
+                                )
+                        for row in rows or []:
+                            if not isinstance(row, dict):
+                                continue
+                            values = {str(key).lower(): value for key, value in row.items()}
+                            _merge_native_batch_target(
+                                targets,
+                                _batch_target_from_values(
+                                    conversation,
+                                    values.get("local_id"),
+                                    values.get("server_id"),
+                                    values.get("packed_info_data"),
+                                ),
+                            )
+                except Exception as exc:
+                    scan_errors.append(f"realtime:{db_path.name}:{type(exc).__name__}")
+        except Exception as exc:
+            scan_errors.append(f"realtime:connect:{type(exc).__name__}")
+
+    if errors is not None:
+        errors.extend(scan_errors)
+    return sorted(targets.values(), key=lambda item: (item.conversation, item.server_id, item.local_id))
+
+
 @dataclass
 class _VoiceTargetQueryResult:
     rows: set[tuple[int, int]]
@@ -831,32 +1039,31 @@ def resolve_native_voice_target(
     return target[0], target[1], text
 
 
-def trigger_native_voice_transcription(
+def _dispatch_resolved_native_voice_transcription(
     *,
     account_dir: Path,
     conversation: str,
-    server_id: Optional[str] = None,
-    local_id: Optional[str] = None,
+    server_id: int,
+    local_id: int,
+    existing_text: str = "",
     transport: Optional[NativeVoiceTriggerTransport] = None,
 ) -> dict[str, object]:
-    """Resolve, fast-path, and dispatch once; never poll or sleep in the POST path."""
-
-    resolved_conversation = normalize_native_voice_conversation(conversation)
-    parsed_server_id = parse_native_voice_message_id(server_id, "server_id")
-    parsed_local_id = parse_native_voice_message_id(local_id, "local_id")
-    if parsed_server_id <= 0 and parsed_local_id <= 0:
-        raise NativeVoiceTriggerError(
-            "missing_message_id",
-            "server_id 和 local_id 至少需要提供一个。",
-        )
-    parsed_local_id, parsed_server_id, existing_text = resolve_native_voice_target(
-        Path(account_dir),
-        conversation=resolved_conversation,
-        server_id=parsed_server_id,
-        local_id=parsed_local_id,
-    )
+    """Dispatch a validated target; batch callers already did the DB scan."""
 
     account_path = Path(account_dir)
+    resolved_conversation = normalize_native_voice_conversation(conversation)
+    parsed_server_id = parse_native_voice_message_id(str(server_id), "server_id")
+    parsed_local_id = parse_native_voice_message_id(str(local_id), "local_id")
+    cached_text = str(
+        existing_text
+        or lookup_cached_native_voice_transcript(
+            account_path,
+            parsed_server_id,
+            conversation=resolved_conversation,
+            local_id=parsed_local_id,
+        )
+        or ""
+    ).strip()
     response_base: dict[str, object] = {
         "serverId": str(parsed_server_id),
         "localId": str(parsed_local_id) if parsed_local_id > 0 else "",
@@ -864,11 +1071,11 @@ def trigger_native_voice_transcription(
         "conversation": resolved_conversation,
         "language": "",
     }
-    if existing_text:
+    if cached_text:
         return {
             "status": "success",
             **response_base,
-            "text": existing_text,
+            "text": cached_text,
             "model": "wechat-native",
             "requestId": "",
             "pollAfterMs": 0,
@@ -913,3 +1120,38 @@ def trigger_native_voice_transcription(
         "requestId": receipt_request_id,
         "pollAfterMs": 1200,
     }
+
+
+def trigger_native_voice_transcription(
+    *,
+    account_dir: Path,
+    conversation: str,
+    server_id: Optional[str] = None,
+    local_id: Optional[str] = None,
+    transport: Optional[NativeVoiceTriggerTransport] = None,
+) -> dict[str, object]:
+    """Resolve, fast-path, and dispatch once; never poll or sleep in the POST path."""
+
+    resolved_conversation = normalize_native_voice_conversation(conversation)
+    parsed_server_id = parse_native_voice_message_id(server_id, "server_id")
+    parsed_local_id = parse_native_voice_message_id(local_id, "local_id")
+    if parsed_server_id <= 0 and parsed_local_id <= 0:
+        raise NativeVoiceTriggerError(
+            "missing_message_id",
+            "server_id 和 local_id 至少需要提供一个。",
+        )
+    parsed_local_id, parsed_server_id, existing_text = resolve_native_voice_target(
+        Path(account_dir),
+        conversation=resolved_conversation,
+        server_id=parsed_server_id,
+        local_id=parsed_local_id,
+    )
+
+    return _dispatch_resolved_native_voice_transcription(
+        account_dir=Path(account_dir),
+        conversation=resolved_conversation,
+        server_id=parsed_server_id,
+        local_id=parsed_local_id,
+        existing_text=existing_text,
+        transport=transport,
+    )

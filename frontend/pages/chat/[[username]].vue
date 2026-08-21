@@ -625,7 +625,10 @@ const refreshVoicePanel = async () => {
   if (voicePanelBusy.value) return
   const context = beginVoicePanelRequest()
   try {
-    await messageState.refreshVoiceTranscriptionStatus({ force: true })
+    await Promise.all([
+      messageState.refreshVoiceTranscriptionStatus({ force: true }),
+      messageState.refreshNativeVoiceTranscriptionStatus({ force: true })
+    ])
     if (!voicePanelContextStillCurrent(context)) return
     if (context.account) {
       const job = await api.getLatestVoiceTranscriptionBatch(context.account)
@@ -671,14 +674,15 @@ const setVoicePanelModel = async (model) => {
   }
 }
 
-const startVoiceBatch = async () => {
+const startVoiceBatch = async (engine = 'local') => {
   if (voicePanelBusy.value || isVoiceBatchActive() || !selectedAccount.value) return
   const context = beginVoicePanelRequest()
   try {
     const job = await api.startVoiceTranscriptionBatch({
       account: context.account,
       force: false,
-      concurrency: normalizeVoiceBatchConcurrency(voiceBatchConcurrency.value)
+      concurrency: normalizeVoiceBatchConcurrency(voiceBatchConcurrency.value),
+      engine
     })
     if (!voicePanelContextStillCurrent(context)) return
     applyVoiceBatchJob(job)

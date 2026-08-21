@@ -202,6 +202,26 @@ class TestVoiceTranscriptionManagementApi(unittest.TestCase):
             concurrency=37,
         )
 
+    def test_batch_endpoint_forwards_wechat_native_engine(self):
+        job = {"jobId": "voice-native-1", "engine": "wechat-native", "status": "queued"}
+        with (
+            patch.object(chat_media, "_resolve_account_dir", return_value=Path("wxid_demo")),
+            patch.object(chat_media.VOICE_TRANSCRIPTION_BATCH_MANAGER, "start", return_value=job) as start,
+        ):
+            response = self.client.post(
+                "/api/chat/media/voice/transcription/batch",
+                json={"account": "wxid_demo", "engine": "wechat-native"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        start.assert_called_once_with(
+            account="wxid_demo",
+            account_dir=Path("wxid_demo"),
+            force=False,
+            concurrency=None,
+            engine="wechat-native",
+        )
+
     def test_batch_endpoint_rejects_negative_or_non_integer_concurrency(self):
         for concurrency in (-1, 1.5, "5", True):
             with self.subTest(concurrency=concurrency):

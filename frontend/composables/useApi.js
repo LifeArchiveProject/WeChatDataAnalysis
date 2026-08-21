@@ -565,13 +565,19 @@ export const useApi = () => {
     if (typeof concurrency !== 'number' || !Number.isInteger(concurrency) || concurrency < 0) {
       throw new RangeError('并发线程数必须是非负整数（0 表示自动）')
     }
+    const engine = String(data.engine || 'local').trim().toLowerCase()
+    if (!['local', 'wechat-native'].includes(engine)) {
+      throw new RangeError('不支持的批量转写方式')
+    }
+    const body = {
+      account: data.account || null,
+      force: !!data.force,
+      concurrency
+    }
+    if (engine !== 'local') body.engine = engine
     return await request('/chat/media/voice/transcription/batch', {
       method: 'POST',
-      body: {
-        account: data.account || null,
-        force: !!data.force,
-        concurrency
-      }
+      body
     })
   }
 

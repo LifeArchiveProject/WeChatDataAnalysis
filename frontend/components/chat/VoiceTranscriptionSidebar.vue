@@ -204,8 +204,17 @@
             type="button"
             class="voice-batch-start mt-3 w-full rounded-md px-3 py-1.5 text-xs font-medium text-white transition-colors"
             :disabled="voicePanelBusy || !voiceStatus.available"
-            @click="onStartVoiceBatch"
-          >{{ voiceBatchStatus === 'done' ? '再次扫描全部语音' : '转写全部语音' }}</button>
+            @click="onStartVoiceBatch('local')"
+          >{{ voiceBatchStatus === 'done' && voiceBatchEngine === 'local' ? '再次扫描全部语音' : '本地批量转文字' }}</button>
+          <button
+            v-if="!voiceBatchActive"
+            type="button"
+            class="voice-native-batch-start mt-2 w-full rounded-md border px-3 py-1.5 text-xs font-medium transition-colors"
+            :disabled="voicePanelBusy || !voiceNativeAvailable"
+            :title="voiceNativeAvailable ? '逐条调用微信原生转写，任务会串行执行' : (voiceNativeReason || '微信原生转写当前不可用')"
+            @click="onStartVoiceBatch('wechat-native')"
+          >微信原生批量转文字</button>
+          <p v-if="!voiceNativeAvailable && voiceNativeReason" class="voice-panel-warning mt-1.5 text-[10px]">{{ voiceNativeReason }}</p>
         </section>
       </div>
     </aside>
@@ -229,6 +238,13 @@ export default defineComponent({
   },
   setup(props) {
     const voiceStatus = computed(() => readMaybeRef(props.state.voiceTranscriptionStatus) || {})
+    const voiceNativeStatus = computed(() => readMaybeRef(props.state.nativeVoiceTranscriptionStatus) || {})
+    const voiceNativeAvailable = computed(() => voiceNativeStatus.value.available === true)
+    const voiceNativeReason = computed(() => String(
+      readMaybeRef(props.state.nativeVoiceTranscriptionUnavailableReason)
+      || voiceNativeStatus.value.reason
+      || ''
+    ).trim())
     const voiceModels = computed(() => Array.isArray(voiceStatus.value.models) ? voiceStatus.value.models : [])
     const voiceSelectableModels = computed(() => voiceModels.value.filter((model) => model?.downloaded === true))
     const voiceCurrentModel = computed(() => String(voiceStatus.value.model || '').trim())
@@ -255,6 +271,7 @@ export default defineComponent({
 
     const voiceBatchJob = computed(() => readMaybeRef(props.state.voiceBatchJob) || { status: 'idle' })
     const voiceBatchStatus = computed(() => String(voiceBatchJob.value.status || 'idle').toLowerCase())
+    const voiceBatchEngine = computed(() => String(voiceBatchJob.value.engine || 'local').toLowerCase())
     const voiceBatchActive = computed(() => activeBatchStatuses.has(voiceBatchStatus.value))
     const normalizeVoiceBatchConcurrency = (value) => {
       const concurrency = Number(value)
@@ -334,14 +351,17 @@ export default defineComponent({
       return true
     }
 
-    const onStartVoiceBatch = () => {
+    const onStartVoiceBatch = (engine = 'local') => {
       if (!commitConcurrencyDraft()) return
-      props.state.startVoiceBatch?.()
+      props.state.startVoiceBatch?.(engine)
     }
 
     return {
       ...props.state,
       voiceStatus,
+      voiceNativeStatus,
+      voiceNativeAvailable,
+      voiceNativeReason,
       voiceModels,
       voiceSelectableModels,
       voiceCurrentModel,
@@ -354,6 +374,7 @@ export default defineComponent({
       voiceActiveDeviceLabel,
       voiceBatchJob,
       voiceBatchStatus,
+      voiceBatchEngine,
       voiceBatchActive,
       voiceBatchConcurrency,
       voiceBatchConcurrencyDraft,
@@ -558,7 +579,17 @@ export default defineComponent({
   background: var(--app-accent-hover);
 }
 
+.voice-native-batch-start {
+  border-color: var(--app-accent);
+  color: var(--app-accent);
+}
+
+.voice-native-batch-start:hover:not(:disabled) {
+  background: rgb(7 193 96 / 8%);
+}
+
 .voice-batch-start:disabled,
+.voice-native-batch-start:disabled,
 .voice-batch-cancel:disabled {
   cursor: not-allowed;
   opacity: 0.5;

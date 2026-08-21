@@ -209,6 +209,27 @@ def _voice_transcript_cache_path(account_dir: Path) -> Path:
     return Path(account_dir) / "_cache" / "voice_transcripts.sqlite3"
 
 
+def has_voice_transcript_cache(account_dir: Path, server_id: int) -> bool:
+    """Return whether any non-empty project transcript already exists for a voice."""
+
+    path = _voice_transcript_cache_path(Path(account_dir))
+    if not path.exists() or int(server_id or 0) <= 0:
+        return False
+    with _VOICE_TRANSCRIPT_CACHE_LOCK:
+        try:
+            conn = sqlite3.connect(str(path))
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM transcript WHERE server_id = ? AND trim(text) <> '' LIMIT 1",
+                    (int(server_id),),
+                ).fetchone()
+                return bool(row)
+            finally:
+                conn.close()
+        except (OSError, sqlite3.Error):
+            return False
+
+
 def _capture_voice_transcript_cache_epoch(account_dir: Path) -> int:
     key = _voice_transcript_cache_account_key(account_dir)
     with _VOICE_TRANSCRIPT_CACHE_LOCK:
@@ -2776,10 +2797,18 @@ class VoiceTranscriptionBatchManager:
         account_dir: Path,
         force: bool = False,
         concurrency: Optional[int] = None,
+        engine: str = "local",
     ) -> dict[str, Any]:
         account_name = str(account or Path(account_dir).name or "").strip()
+        engine_name = str(engine or "local").strip().lower()
+        if engine_name not in {"local", "wechat-native"}:
+            raise VoiceTranscriptionError("invalid_engine", "不支持的批量转写方式。")
         service_lease: Optional[_VoiceTranscriptionServiceLease] = None
         activity_key = ""
+        service: Optional[VoiceTranscriptionService] = None
+        cache_generation = 0
+        requested_concurrency = 0
+        effective_concurrency = 1
         with self._lock:
             previous_id = self._latest_by_account.get(account_name)
             previous = self._jobs.get(previous_id or "")
@@ -2790,32 +2819,44 @@ class VoiceTranscriptionBatchManager:
                     "batch_busy",
                     "已有其他账号正在批量转写，请等待其完成或先取消。",
                 )
-            if self._uses_global_service:
-                service_lease = acquire_voice_transcription_service_lease()
-                service = service_lease.service
-            else:
-                service = self._service_getter()
-                activity_key = acquire_voice_model_activity(service.config.model)
-            try:
-                service.ensure_available()
-                cache_generation = capture_voice_transcript_cache_generation()
-                requested_concurrency, effective_concurrency = resolve_voice_transcription_batch_concurrency(
-                    concurrency,
-                    service.config,
-                )
-            except Exception:
-                if service_lease is not None:
-                    service_lease.release()
+            if engine_name == "local":
+                if self._uses_global_service:
+                    service_lease = acquire_voice_transcription_service_lease()
+                    service = service_lease.service
                 else:
-                    release_voice_model_activity(activity_key)
-                raise
+                    service = self._service_getter()
+                    activity_key = acquire_voice_model_activity(service.config.model)
+                try:
+                    service.ensure_available()
+                    cache_generation = capture_voice_transcript_cache_generation()
+                    requested_concurrency, effective_concurrency = resolve_voice_transcription_batch_concurrency(
+                        concurrency,
+                        service.config,
+                    )
+                except Exception:
+                    if service_lease is not None:
+                        service_lease.release()
+                    else:
+                        release_voice_model_activity(activity_key)
+                    raise
+            else:
+                from .native_core_voice_asr import native_core_voice_asr_status
+
+                native_status = native_core_voice_asr_status(Path(account_dir))
+                if not native_status.get("available"):
+                    reason = str(native_status.get("reason") or "bridge_unavailable")
+                    raise VoiceTranscriptionError(
+                        "native_not_ready",
+                        f"微信原生语音转文字当前不可用（{reason}）。",
+                    )
             job_id = f"voice-batch-{uuid.uuid4().hex}"
             job = {
                 "jobId": job_id,
                 "account": account_name,
-                "model": _public_model_name(service.config.model),
+                "engine": engine_name,
+                "model": _public_model_name(service.config.model) if service is not None else "wechat-native",
                 "requestedConcurrency": requested_concurrency,
-                "concurrency": effective_concurrency,
+                "concurrency": effective_concurrency if engine_name == "local" else 1,
                 "status": "queued",
                 "total": 0,
                 "completed": 0,
@@ -2850,6 +2891,13 @@ class VoiceTranscriptionBatchManager:
             name=f"voice-batch-{account_name}",
             daemon=True,
         )
+        if engine_name == "wechat-native":
+            thread = threading.Thread(
+                target=self._run_native,
+                args=(job_id, Path(account_dir)),
+                name=f"voice-native-batch-{account_name}",
+                daemon=True,
+            )
         try:
             thread.start()
         except Exception:
@@ -2945,6 +2993,144 @@ class VoiceTranscriptionBatchManager:
             job["currentServerId"] = str(server_id)
             if outcome.get("error"):
                 job["error"] = str(outcome["error"])
+
+    @staticmethod
+    def _transcribe_native_batch_item(
+        *,
+        account_dir: Path,
+        target: Any,
+        cancel_event: threading.Event,
+    ) -> dict[str, Any]:
+        from .native_voice_transcription import (
+            NativeVoiceTriggerError,
+            _dispatch_resolved_native_voice_transcription,
+            lookup_native_voice_transcript_cache,
+        )
+
+        if cancel_event.is_set():
+            raise _VoiceTranscriptionCancelled()
+        if has_voice_transcript_cache(account_dir, int(target.server_id)):
+            return {"success": 1, "native": 0, "cached": 1, "failed": 0, "error": ""}
+
+        deadline = time.monotonic() + 115.0
+        while not cancel_event.is_set() and time.monotonic() < deadline:
+            try:
+                result = _dispatch_resolved_native_voice_transcription(
+                    account_dir=account_dir,
+                    conversation=target.conversation,
+                    server_id=int(target.server_id),
+                    local_id=int(target.local_id),
+                    existing_text=str(target.text or ""),
+                )
+            except NativeVoiceTriggerError as exc:
+                if exc.code == "native_transport_busy":
+                    time.sleep(1.0)
+                    continue
+                return {"success": 0, "native": 0, "cached": 0, "failed": 1, "error": exc.user_message}
+
+            if str(result.get("status") or "") == "success":
+                return {"success": 1, "native": 1, "cached": 0, "failed": 0, "error": ""}
+            request_id = str(result.get("requestId") or "")
+            if not request_id:
+                return {
+                    "success": 0,
+                    "native": 0,
+                    "cached": 0,
+                    "failed": 1,
+                    "error": "微信原生语音转文字未返回任务编号。",
+                }
+            while not cancel_event.is_set() and time.monotonic() < deadline:
+                try:
+                    entry = lookup_native_voice_transcript_cache(
+                        account_dir,
+                        int(target.server_id),
+                        conversation=target.conversation,
+                        local_id=int(target.local_id),
+                        request_id=request_id,
+                        strict=True,
+                    )
+                except NativeVoiceTriggerError as exc:
+                    return {"success": 0, "native": 0, "cached": 0, "failed": 1, "error": exc.user_message}
+                if entry is not None and entry.status == "success" and entry.text:
+                    return {"success": 1, "native": 1, "cached": 0, "failed": 0, "error": ""}
+                if entry is not None and entry.status == "error":
+                    return {
+                        "success": 0,
+                        "native": 0,
+                        "cached": 0,
+                        "failed": 1,
+                        "error": entry.error_message or "微信原生语音转文字失败。",
+                    }
+                time.sleep(1.0)
+            break
+        if cancel_event.is_set():
+            raise _VoiceTranscriptionCancelled()
+        return {
+            "success": 0,
+            "native": 0,
+            "cached": 0,
+            "failed": 1,
+            "error": "等待微信原生语音转文字结果超时。",
+        }
+
+    def _run_native(self, job_id: str, account_dir: Path) -> None:
+        from .native_voice_transcription import list_native_voice_batch_targets
+
+        self._update(job_id, status="running", startedAt=time.time(), stage="scan")
+        try:
+            cancel_event = self._cancel_events[job_id]
+            scan_errors: list[str] = []
+            targets = list_native_voice_batch_targets(
+                account_dir,
+                cancel_event=cancel_event,
+                errors=scan_errors,
+            )
+            if cancel_event.is_set():
+                self._update(job_id, status="cancelled", currentServerId="", finishedAt=time.time())
+                return
+            if scan_errors:
+                self._update(
+                    job_id,
+                    warning=f"有 {len(set(scan_errors))} 个数据库范围未能完整扫描，结果可能不完整。",
+                    scanWarningCount=len(set(scan_errors)),
+                )
+            self._update(
+                job_id,
+                total=len(targets),
+                concurrency=1,
+                percent=100 if not targets else 0,
+                stage="transcribe",
+            )
+            if not targets:
+                self._update(job_id, status="done", currentServerId="", finishedAt=time.time())
+                return
+            for target in targets:
+                if cancel_event.is_set():
+                    break
+                self._update(job_id, currentServerId=str(target.server_id))
+                try:
+                    outcome = self._transcribe_native_batch_item(
+                        account_dir=account_dir,
+                        target=target,
+                        cancel_event=cancel_event,
+                    )
+                except _VoiceTranscriptionCancelled:
+                    break
+                self._record_batch_result(job_id, int(target.server_id), outcome, len(targets))
+            if cancel_event.is_set():
+                self._update(job_id, status="cancelled", currentServerId="", finishedAt=time.time())
+            else:
+                self._update(job_id, status="done", percent=100, currentServerId="", finishedAt=time.time())
+        except _VoiceTranscriptionCancelled:
+            self._update(job_id, status="cancelled", currentServerId="", finishedAt=time.time())
+        except Exception as exc:
+            self._update(
+                job_id,
+                status="error",
+                currentServerId="",
+                error=f"微信原生批量转写失败：{type(exc).__name__}",
+                finishedAt=time.time(),
+            )
 
     def _run(
         self,

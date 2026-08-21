@@ -72,6 +72,8 @@ const makeState = (overrides = {}) => ({
     ]
   }),
   voiceTranscriptionStatusLoading: ref(false),
+  nativeVoiceTranscriptionStatus: ref({ available: true, reason: '' }),
+  nativeVoiceTranscriptionUnavailableReason: ref(''),
   voicePanelBusy: ref(false),
   voicePanelError: ref(''),
   voiceBatchConcurrency: ref(0),
@@ -178,6 +180,16 @@ describe('聊天页语音转文字侧栏', () => {
 
     await wrapper.get('.voice-batch-start').trigger('click')
     expect(state.startVoiceBatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('消息侧栏提供独立微信原生批量入口', async () => {
+    const state = makeState({ voiceBatchJob: ref({ status: 'idle', percent: 0 }) })
+    const wrapper = mount(VoiceTranscriptionSidebar, { props: { state } })
+
+    expect(wrapper.get('.voice-batch-start').text()).toBe('本地批量转文字')
+    expect(wrapper.get('.voice-native-batch-start').text()).toBe('微信原生批量转文字')
+    await wrapper.get('.voice-native-batch-start').trigger('click')
+    expect(state.startVoiceBatch).toHaveBeenCalledWith('wechat-native')
   })
 
   it('并发线程数保留非法草稿并在修正前阻止启动', async () => {
@@ -318,6 +330,9 @@ describe('聊天页语音转文字侧栏', () => {
 
     expect(chatPageSource).toContain('const voiceBatchConcurrency = ref(0)')
     expect(chatPageSource).toContain('concurrency: normalizeVoiceBatchConcurrency(voiceBatchConcurrency.value)')
+    expect(chatPageSource).toContain("const startVoiceBatch = async (engine = 'local')")
+    expect(voiceSidebarSource).toContain('微信原生批量转文字')
+    expect(voiceSidebarSource).toContain("onStartVoiceBatch('wechat-native')")
     expect(chatPageSource).toContain("hasOwnProperty.call(job, 'requestedConcurrency')")
 
     expect(decryptPageSource).toContain('data-testid="voice-onboarding-concurrency"')
@@ -340,6 +355,9 @@ describe('聊天页语音转文字侧栏', () => {
     expect(decryptPageSource).toContain('|| !commitVoiceBatchConcurrency()')
     expect(decryptPageSource).toContain('并发 {{ voiceBatchActualConcurrency }}')
     expect(decryptPageSource).toContain('concurrency: voiceBatchConcurrency.value')
+    expect(decryptPageSource).toContain('微信原生批量转文字')
+    expect(decryptPageSource).toContain("startVoiceOnboardingBatch('wechat-native')")
+    expect(decryptPageSource).toContain("getNativeVoiceTranscriptionStatus({ account: mediaAccount.value })")
     expect(decryptPageSource).toContain("hasOwnProperty.call(job, 'requestedConcurrency')")
     expect(decryptPageSource).toContain('syncVoiceBatchConcurrencyDraft(job.requestedConcurrency)')
   })
@@ -574,6 +592,7 @@ describe('聊天页语音转文字侧栏', () => {
     await api.startVoiceTranscriptionBatch({ account: 'wxid_demo', force: true, concurrency: 5 })
     await api.startVoiceTranscriptionBatch({ account: 'wxid_demo', force: true, concurrency: 16 })
     await api.startVoiceTranscriptionBatch({ account: 'wxid_demo', force: true, concurrency: 128 })
+    await api.startVoiceTranscriptionBatch({ account: 'wxid_demo', engine: 'wechat-native' })
 
     for (const call of [1, 2, 3, 4]) {
       expect(fetch).toHaveBeenNthCalledWith(call, '/chat/media/voice/transcription/batch', expect.objectContaining({
@@ -585,13 +604,16 @@ describe('聊天页语音转文字侧栏', () => {
         body: { account: 'wxid_demo', force: true, concurrency }
       }))
     }
+    expect(fetch).toHaveBeenNthCalledWith(8, '/chat/media/voice/transcription/batch', expect.objectContaining({
+      body: { account: 'wxid_demo', force: false, concurrency: 0, engine: 'wechat-native' }
+    }))
 
     for (const concurrency of [2.5, -1, '3', 'bad', ' ', true]) {
       await expect(api.startVoiceTranscriptionBatch({ account: 'wxid_demo', concurrency })).rejects.toThrow(
         '并发线程数必须是非负整数（0 表示自动）'
       )
     }
-    expect(fetch).toHaveBeenCalledTimes(7)
+    expect(fetch).toHaveBeenCalledTimes(8)
   })
 
   it('全局删除 API 不携带账号并调用明确的 all 路由', async () => {

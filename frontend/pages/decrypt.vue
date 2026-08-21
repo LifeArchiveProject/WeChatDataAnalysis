@@ -950,18 +950,21 @@
               class="inline-flex items-center px-5 py-2.5 border border-[#E8C6C6] text-[#C83C3C] rounded-lg font-medium hover:bg-[#FFF5F5]"
             >停止转换</button>
             <button
-              v-else-if="voiceOnboardingBatch?.status === 'done'"
-              type="button"
-              @click="skipToChat"
-              class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56]"
-            >完成并查看聊天记录</button>
-            <button
               v-else
               type="button"
               :disabled="!voiceOnboardingStatus?.available || voiceModelBusy || voiceOnboardingLoading"
-              @click="startVoiceOnboardingBatch"
+              @click="startVoiceOnboardingBatch('local')"
               class="inline-flex items-center px-6 py-2.5 bg-[#07C160] text-white rounded-lg font-medium hover:bg-[#06AD56] disabled:cursor-not-allowed disabled:opacity-50"
-            >提前转换全部语音</button>
+            >{{ voiceOnboardingBatch?.status === 'done' ? '再次扫描全部语音' : '本地批量转文字' }}</button>
+            <button
+              v-if="!voiceBatchRunning"
+              type="button"
+              :disabled="!voiceNativeAvailable || voiceModelBusy || voiceOnboardingLoading"
+              :title="voiceNativeAvailable ? '逐条调用微信原生转写，任务会串行执行' : (voiceNativeReason || '微信原生转写当前不可用')"
+              @click="startVoiceOnboardingBatch('wechat-native')"
+              class="inline-flex items-center px-6 py-2.5 border border-[#07C160] text-[#078A45] rounded-lg font-medium hover:bg-[#F0F8F2] disabled:cursor-not-allowed disabled:opacity-50"
+            >微信原生批量转文字</button>
+            <p v-if="!voiceNativeAvailable && voiceNativeReason" class="basis-full text-xs text-[#A06A19]">{{ voiceNativeReason }}</p>
           </div>
         </div>
       </div>
@@ -1050,6 +1053,7 @@ const {
   getWxStatus,
   getPlatformCapabilities,
   getVoiceTranscriptionStatus,
+  getNativeVoiceTranscriptionStatus,
   setVoiceTranscriptionModel,
   downloadVoiceTranscriptionModel,
   getVoiceTranscriptionModelDownload,
@@ -1137,6 +1141,7 @@ const steps = [
 ]
 
 const voiceOnboardingStatus = ref(null)
+const voiceNativeStatus = ref(null)
 const voiceOnboardingBatch = ref(null)
 const voiceBatchConcurrency = ref(0)
 const voiceBatchConcurrencyDraft = ref('0')
@@ -1231,6 +1236,8 @@ const voiceOnboardingDeviceText = computed(() => {
   return device === 'cuda' ? 'NVIDIA GPU' : 'CPU'
 })
 const voiceBatchRunning = computed(() => ['queued', 'running'].includes(String(voiceOnboardingBatch.value?.status || '')))
+const voiceNativeAvailable = computed(() => voiceNativeStatus.value?.available === true)
+const voiceNativeReason = computed(() => String(voiceNativeStatus.value?.reason || '').trim())
 const normalizeVoiceBatchConcurrency = (value) => {
   const concurrency = Number(value)
   return Number.isInteger(concurrency) && concurrency >= 0 ? concurrency : 0
@@ -2855,12 +2862,14 @@ const refreshVoiceOnboarding = async ({ preserveError = false } = {}) => {
   voiceOnboardingLoading.value = true
   if (!preserveError) voiceOnboardingError.value = ''
   try {
-    const [status, batch] = await Promise.all([
+    const [status, batch, nativeStatus] = await Promise.all([
       getVoiceTranscriptionStatus(),
       getLatestVoiceTranscriptionBatch(mediaAccount.value || ''),
+      mediaAccount.value ? getNativeVoiceTranscriptionStatus({ account: mediaAccount.value }) : Promise.resolve(null),
     ])
     if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch) || refreshRevision !== voiceOnboardingRefreshRevision) return
     applyVoiceOnboardingStatus(status, { observationEpochs })
+    voiceNativeStatus.value = nativeStatus
     applyVoiceOnboardingBatch(batch)
     if (['queued', 'running'].includes(String(batch?.status || '')) && batch?.jobId) {
       void pollVoiceOnboardingBatch(batch.jobId, lifecycleEpoch)
@@ -3024,11 +3033,11 @@ const removeVoiceOnboardingModel = async (model) => {
   }
 }
 
-const startVoiceOnboardingBatch = async () => {
+const startVoiceOnboardingBatch = async (engine = 'local') => {
   const lifecycleEpoch = voiceOnboardingLifecycleEpoch
   if (
     !isVoiceOnboardingLifecycleActive(lifecycleEpoch)
-    || !voiceOnboardingStatus.value?.available
+    || (engine === 'local' ? !voiceOnboardingStatus.value?.available : !voiceNativeAvailable.value)
     || voiceBatchRunning.value
     || !commitVoiceBatchConcurrency()
   ) return
@@ -3038,6 +3047,7 @@ const startVoiceOnboardingBatch = async () => {
       account: mediaAccount.value || null,
       force: false,
       concurrency: voiceBatchConcurrency.value,
+      engine,
     })
     if (!isVoiceOnboardingLifecycleActive(lifecycleEpoch)) return
     applyVoiceOnboardingBatch(job)

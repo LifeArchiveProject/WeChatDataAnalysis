@@ -130,6 +130,7 @@ class VoiceTranscriptionSettingsRequest(BaseModel):
 class VoiceTranscriptionBatchRequest(BaseModel):
     account: Optional[str] = Field(None, description="账号目录名")
     force: bool = Field(False, description="忽略现有 Whisper 缓存并重新识别")
+    engine: StrictStr = Field("local", description="批量转写方式：local 或 wechat-native")
     concurrency: Optional[conint(strict=True, ge=0)] = Field(  # type: ignore[valid-type]
         None,
         description="并发语音数；0 或省略表示自动，正整数不设固定上限",
@@ -3778,17 +3779,22 @@ async def start_chat_voice_transcription_batch(req: VoiceTranscriptionBatchReque
     _require_local_voice_mutation(request)
     account_dir = _resolve_account_dir(req.account)
     try:
+        start_args = {
+            "account": account_dir.name,
+            "account_dir": account_dir,
+            "force": bool(req.force),
+            "concurrency": req.concurrency,
+        }
+        if str(req.engine or "local") != "local":
+            start_args["engine"] = str(req.engine)
         return await asyncio.to_thread(
             VOICE_TRANSCRIPTION_BATCH_MANAGER.start,
-            account=account_dir.name,
-            account_dir=account_dir,
-            force=bool(req.force),
-            concurrency=req.concurrency,
+            **start_args,
         )
     except VoiceTranscriptionError as exc:
         status_code = (
             503
-            if exc.code in {"model_not_ready", "dependency_missing", "disabled"}
+            if exc.code in {"model_not_ready", "dependency_missing", "disabled", "native_not_ready"}
             else 409
             if exc.code in {"batch_busy", "model_busy", "service_retired"}
             else 400
