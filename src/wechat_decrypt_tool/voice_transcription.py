@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import gc
 import importlib.util
+import logging
 import os
 import re
 import shutil
+import socket
 import sqlite3
+import ssl
 import stat
 import subprocess
 import tempfile
@@ -19,8 +23,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+import httpx
+
 
 TRANSCRIPT_TEXT_VERSION = 1
+logger = logging.getLogger(__name__)
 _OPENCC_CONVERTER: Any = None
 _OPENCC_LOOKED_UP = False
 _OPENCC_CONVERTER_LOCK = threading.Lock()
@@ -2367,6 +2374,57 @@ def _download_voice_model_snapshot(
     return Path(downloaded_dir)
 
 
+def _voice_model_download_error_message(exc: Exception) -> str:
+    chain: list[BaseException] = []
+    current: Optional[BaseException] = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+
+    if any(isinstance(item, OSError) and item.errno == errno.ENOSPC for item in chain):
+        return "模型下载失败：磁盘空间不足。"
+    if any(
+        isinstance(item, PermissionError)
+        or (isinstance(item, OSError) and item.errno in {errno.EACCES, errno.EPERM, errno.EROFS})
+        for item in chain
+    ):
+        return "模型下载失败：模型目录没有写入权限。"
+
+    details = " ".join(f"{type(item).__name__}: {item}" for item in chain).lower()
+    if any(isinstance(item, httpx.ProxyError) for item in chain) or "proxy" in details:
+        return "连接模型服务器的代理失败，请检查系统代理设置后重试。"
+    if any(isinstance(item, ssl.SSLError) for item in chain) or any(
+        marker in details
+        for marker in ("certificate", "ssl", "tls", "unexpected_eof_while_reading", "wrong version number")
+    ):
+        return "与模型服务器建立 HTTPS 安全连接失败，请检查系统时间、代理或安全软件证书后重试。"
+    if any(isinstance(item, (httpx.TimeoutException, TimeoutError)) for item in chain):
+        return "连接模型服务器超时，请检查网络或代理后重试。"
+    if any(
+        isinstance(item, (httpx.NetworkError, socket.gaierror, ConnectionError))
+        for item in chain
+    ):
+        return "无法连接模型服务器，请检查网络或代理后重试。"
+
+    status_code = next(
+        (
+            int(getattr(getattr(item, "response", None), "status_code", 0) or 0)
+            for item in chain
+            if getattr(getattr(item, "response", None), "status_code", None)
+        ),
+        0,
+    )
+    if status_code in {401, 403}:
+        return "模型服务器拒绝访问，请检查网络出口或访问权限后重试。"
+    if status_code == 429:
+        return "模型服务器请求过于频繁，请稍后重试。"
+    if status_code >= 500:
+        return "模型服务器暂时不可用，请稍后重试。"
+    return f"模型下载失败：{type(exc).__name__}"
+
+
 class _VoiceModelDownloadCancelled(RuntimeError):
     pass
 
@@ -2666,11 +2724,17 @@ class VoiceModelDownloadManager:
                 finishedAt=time.time(),
             )
         except Exception as exc:
+            logger.exception(
+                "[voice-model-download] failed model=%s job_id=%s error_type=%s",
+                model_id,
+                job_id,
+                type(exc).__name__,
+            )
             self._update(
                 job_id,
                 status="error",
                 stage="error",
-                error=f"模型下载失败：{type(exc).__name__}",
+                error=_voice_model_download_error_message(exc),
                 finishedAt=time.time(),
             )
         finally:

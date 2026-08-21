@@ -14,6 +14,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, Mock, patch
 
+import httpx
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -787,6 +789,27 @@ class TestVoiceModelDeletion(unittest.TestCase):
         self.assertEqual(stages_left, [])
         self.assertEqual(job["stage"], "done")
         self.assertEqual(job["percent"], 100)
+
+    def test_download_reports_tls_failure_and_logs_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "wechat_decrypt_tool.voice_transcription._download_voice_model_snapshot",
+            side_effect=httpx.ConnectError("SSL CERTIFICATE_VERIFY_FAILED"),
+        ), patch(
+            "wechat_decrypt_tool.voice_transcription.get_voice_model_storage_root",
+            return_value=Path(tmp) / "voice_models",
+        ), self.assertLogs("wechat_decrypt_tool.voice_transcription", level="ERROR") as logs:
+            manager = VoiceModelDownloadManager()
+            job = manager.start("small")
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                job = manager.get(job["jobId"])
+                if job["status"] not in {"queued", "running"}:
+                    break
+                time.sleep(0.01)
+
+        self.assertEqual(job["status"], "error")
+        self.assertIn("HTTPS 安全连接失败", job["error"])
+        self.assertIn("[voice-model-download] failed model=small", "\n".join(logs.output))
 
     def test_snapshot_download_reports_huggingface_aggregate_bytes(self):
         calls = []
