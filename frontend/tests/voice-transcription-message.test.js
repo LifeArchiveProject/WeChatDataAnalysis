@@ -34,6 +34,7 @@ const makeState = () => ({
   voiceTranscriptionUnavailableReason: '',
   selectedContact: { username: 'wxid_friend' },
   transcribeVoice: vi.fn(),
+  transcribeVoiceLocally: vi.fn(),
   getVoiceWidth: () => '96px',
   getVoiceDurationInSeconds: () => 3,
   playVoice: vi.fn(),
@@ -73,6 +74,9 @@ describe('语音消息转写状态', () => {
     })
 
     expect(wrapper.text()).toContain('转文字')
+    expect(wrapper.get('.wechat-voice-transcript__local-action').text()).toContain('本地转文字')
+    expect(wrapper.get('.wechat-voice-transcript__icon--wechat').attributes('src')).toMatch(/^data:image\/svg\+xml/)
+    expect(wrapper.get('.wechat-voice-transcript__icon:not(.wechat-voice-transcript__icon--wechat)').classes()).toContain('fa-language')
     await wrapper.setProps({
       message: makeMessage({
         voiceTranscriptStatus: 'success',
@@ -112,14 +116,14 @@ describe('语音消息转写状态', () => {
     })
     await wrapper.setProps({ message: failedMessage })
     expect(wrapper.text()).toContain('CUDA 不可用，已回退失败')
-    expect(wrapper.text()).toContain('重试')
+    expect(wrapper.get('.wechat-voice-transcript__retry').attributes('title')).toContain('重试')
 
     await wrapper.get('.wechat-voice-transcript__retry').trigger('click')
     await nextTick()
     expect(state.transcribeVoice).toHaveBeenLastCalledWith(failedMessage)
   })
 
-  it('微信原生桥接不可用时不提供主转写按钮并显示原因', () => {
+  it('微信原生桥接不可用时显示本地转写按钮并保留原因', async () => {
     const state = {
       ...makeState(),
       nativeVoiceTranscriptionAvailable: false,
@@ -130,8 +134,51 @@ describe('语音消息转写状态', () => {
       props: { state, message: makeMessage() }
     })
 
-    expect(wrapper.find('.wechat-voice-transcript__action').exists()).toBe(false)
-    expect(wrapper.text()).toContain('请使用微信 4.1.12.26')
+    expect(wrapper.find('.wechat-voice-transcript__action:not(.wechat-voice-transcript__local-action)').exists()).toBe(false)
+    expect(wrapper.get('.wechat-voice-transcript__local-action').text()).toContain('本地转文字')
+    await wrapper.get('.wechat-voice-transcript__local-action').trigger('click')
+    expect(state.transcribeVoiceLocally).toHaveBeenCalledWith(expect.objectContaining({ id: 'voice-1' }))
+    expect(state.transcribeVoice).not.toHaveBeenCalled()
+    expect(wrapper.get('.wechat-voice-transcript__local-action').attributes('title')).toContain('请使用微信 4.1.12.26')
+    expect(wrapper.text()).not.toContain('当前微信版本暂不支持微信原生语音转文字')
+  })
+
+  it('本地模型尚未下载时仍显示本地入口并保留模型原因', async () => {
+    const state = {
+      ...makeState(),
+      nativeVoiceTranscriptionAvailable: false,
+      nativeVoiceTranscriptionUnavailableReason: '微信原生不可用',
+      voiceTranscriptionAvailable: false,
+      voiceTranscriptionUnavailableReason: 'Whisper 模型尚未下载到本机缓存。'
+    }
+    const wrapper = mount(MessageContent, {
+      ...mountOptions,
+      props: { state, message: makeMessage() }
+    })
+
+    expect(wrapper.get('.wechat-voice-transcript__local-action').text()).toContain('本地转文字')
+    expect(wrapper.get('.wechat-voice-transcript__local-action').attributes('title')).toContain('Whisper 模型尚未下载到本机缓存。')
+    await wrapper.get('.wechat-voice-transcript__local-action').trigger('click')
+    expect(state.transcribeVoiceLocally).toHaveBeenCalledWith(expect.objectContaining({ id: 'voice-1' }))
+  })
+
+  it('微信原生转写失败时同时提供本地转写按钮', async () => {
+    const state = makeState()
+    const wrapper = mount(MessageContent, {
+      ...mountOptions,
+      props: {
+        state,
+        message: makeMessage({
+          voiceTranscriptStatus: 'error',
+          voiceTranscriptError: '微信原生语音转写调用失败'
+        })
+      }
+    })
+
+    expect(wrapper.get('.wechat-voice-transcript__retry').text()).toContain('微信转文字')
+    expect(wrapper.get('.wechat-voice-transcript__local-action').text()).toContain('本地转文字')
+    await wrapper.get('.wechat-voice-transcript__local-action').trigger('click')
+    expect(state.transcribeVoiceLocally).toHaveBeenCalledTimes(1)
   })
 
   it('桥接要求重启时隐藏错误态重试按钮并显示权威状态', () => {
@@ -153,8 +200,9 @@ describe('语音消息转写状态', () => {
     })
 
     expect(wrapper.find('.wechat-voice-transcript__retry').exists()).toBe(false)
-    expect(wrapper.text()).toContain('完全退出微信')
-    expect(wrapper.text()).toContain('重启本应用')
+    expect(wrapper.get('.wechat-voice-transcript__local-action').text()).toContain('本地转文字')
+    expect(wrapper.get('.wechat-voice-transcript__local-action').attributes('title')).toContain('完全退出微信')
+    expect(wrapper.get('.wechat-voice-transcript__local-action').attributes('title')).toContain('重启本应用')
   })
 
   it('合并转发浮窗在不提供新转写操作时仍展示微信原生文字', () => {

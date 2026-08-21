@@ -535,6 +535,52 @@ describe('微信原生转写 native-first 编排', () => {
     wrapper.unmount()
   })
 
+  it('原生失败不自动回退，用户显式点击本地转文字后才调用 Whisper', async () => {
+    const api = {
+      triggerNativeVoiceTranscription: vi.fn().mockRejectedValue(
+        nativeError('native_transport_failed', '微信原生转写失败')
+      ),
+      getNativeVoiceTranscriptionStatus: vi.fn().mockResolvedValue({
+        available: false,
+        reason: 'bridge_restart_required'
+      }),
+      getVoiceTranscriptionStatus: vi.fn().mockResolvedValue({ available: true }),
+      transcribeChatVoice: vi.fn().mockResolvedValue({
+        status: 'success',
+        serverId: '9007199254740993',
+        text: '本地 Whisper 文字',
+        language: 'zh',
+        model: 'small'
+      })
+    }
+    const { state, wrapper } = mountChatMessagesState(api)
+    const message = existingVoice()
+    state.allMessages.value = { wxid_friend: [message] }
+
+    await state.transcribeVoice(message)
+    expect(api.transcribeChatVoice).not.toHaveBeenCalled()
+    expect(message).toMatchObject({
+      voiceTranscriptStatus: 'error',
+      voiceTranscriptError: '微信原生转写失败'
+    })
+
+    await state.transcribeVoiceLocally(message)
+    expect(api.getVoiceTranscriptionStatus).toHaveBeenCalledWith()
+    expect(api.transcribeChatVoice).toHaveBeenCalledWith({
+      account: 'account-a',
+      server_id: '9007199254740993',
+      force: false
+    })
+    expect(message).toMatchObject({
+      voiceTranscript: '本地 Whisper 文字',
+      voiceTranscriptStatus: 'success',
+      voiceTranscriptLanguage: 'zh',
+      voiceTranscriptModel: 'small',
+      voiceTranscriptError: ''
+    })
+    wrapper.unmount()
+  })
+
   it('accepted 后使用既有精确 server_id 轮询并合并微信结果', async () => {
     const api = {
       triggerNativeVoiceTranscription: vi.fn().mockResolvedValue({

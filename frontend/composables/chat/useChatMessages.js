@@ -1687,6 +1687,99 @@ export const useChatMessages = ({
     }
   }
 
+  // 本地 Whisper 是用户显式选择的备用路径；原生转写失败时不要静默切换来源。
+  const transcribeVoiceLocally = async (message, { force = false } = {}) => {
+    const transcriptRevision = projectTranscriptRevision
+    const accountAtStart = String(selectedAccount.value || '').trim()
+    const usernameAtStart = String(selectedContact.value?.username || '').trim()
+    // 与微信原生路径一样，svr_id 必须保留精确字符串，不能经过 Number。
+    const serverIdStr = String(message?.serverIdStr ?? '').trim()
+    const serverId = serverIdStr || String(message?.serverId ?? '').trim()
+    const usableServerId = serverId && serverId !== '0' ? serverId : ''
+    if (
+      !message
+      || !accountAtStart
+      || !usernameAtStart
+      || !usableServerId
+      || message.voiceTranscriptStatus === 'loading'
+    ) return
+
+    const key = usernameAtStart
+    const list = key ? allMessages.value[key] : null
+    const target =
+      (Array.isArray(list) ? list.find((item) => item?.id === message.id) : null) || message
+    const localDispatchToken = Symbol('localVoiceDispatch')
+    Object.defineProperty(target, NATIVE_VOICE_DISPATCH_TOKEN, {
+      configurable: true,
+      enumerable: false,
+      value: localDispatchToken,
+      writable: true
+    })
+    target.voiceTranscriptStatus = 'loading'
+    target.voiceTranscriptError = ''
+    target.voiceTranscriptNativeRequestId = ''
+
+    const requestIsCurrent = () => !(
+      target[NATIVE_VOICE_DISPATCH_TOKEN] !== localDispatchToken
+      || transcriptRevision !== projectTranscriptRevision
+      || String(selectedAccount.value || '').trim() !== accountAtStart
+      || String(selectedContact.value?.username || '').trim() !== usernameAtStart
+    )
+
+    const setVoiceError = (error, fallback = '本地语音转文字失败') => {
+      if (!requestIsCurrent()) return
+      const detail = nativeVoiceErrorDetail(error)
+      target.voiceTranscriptError = String(detail?.message || error?.message || fallback).trim()
+      target.voiceTranscriptStatus = 'error'
+      target.voiceTranscriptNativeRequestId = ''
+    }
+
+    try {
+      if (typeof api?.transcribeChatVoice !== 'function') {
+        setVoiceError(null, '当前版本未提供本地语音转文字接口。')
+        return
+      }
+      const capability = await refreshVoiceTranscriptionStatus({ force: true })
+      if (!requestIsCurrent()) return
+      if (!capability?.available) {
+        setVoiceError(
+          { message: String(capability?.reason || '本地 Whisper 模型尚未准备好。').trim() },
+          '本地 Whisper 模型尚未准备好。'
+        )
+        return
+      }
+
+      const result = await api.transcribeChatVoice({
+        account: accountAtStart,
+        server_id: usableServerId,
+        force: !!force
+      })
+      if (!requestIsCurrent()) return
+
+      const text = String(result?.text || '').trim()
+      if (!text) {
+        setVoiceError(null, '本地语音转文字未返回文字。')
+        return
+      }
+      target.voiceTranscript = text
+      target.voiceTranscriptLanguage = String(result?.language || '').trim()
+      target.voiceTranscriptModel = String(result?.model || '').trim()
+      target.voiceTranscriptStatus = 'success'
+      target.voiceTranscriptError = ''
+      target.voiceTranscriptNativeRequestId = ''
+    } catch (error) {
+      setVoiceError(error)
+    } finally {
+      if (target[NATIVE_VOICE_DISPATCH_TOKEN] === localDispatchToken) {
+        delete target[NATIVE_VOICE_DISPATCH_TOKEN]
+        if (String(target.voiceTranscriptStatus || '').trim().toLowerCase() === 'loading') {
+          target.voiceTranscriptStatus = 'idle'
+          target.voiceTranscriptError = ''
+        }
+      }
+    }
+  }
+
   const getQuoteVoiceId = (message) => `quote-${String(message?.quoteServerId || message?.id || '')}`
 
   const playQuoteVoice = async (message) => {
@@ -3183,6 +3276,7 @@ export const useChatMessages = ({
     setVoiceRef,
     playVoice,
     transcribeVoice,
+    transcribeVoiceLocally,
     pollNativeVoiceTranscript,
     restoreVoiceTranscripts,
     stopNativeVoiceTranscriptPolling,

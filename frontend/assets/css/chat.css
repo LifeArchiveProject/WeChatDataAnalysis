@@ -299,23 +299,64 @@
   color: var(--chat-bubble-sent-text);
 }
 
+.wechat-voice-transcript--actions {
+  padding: 0;
+  background: transparent;
+  color: var(--app-text-secondary);
+  white-space: normal;
+  overflow: visible;
+}
+
+.wechat-voice-transcript__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .wechat-voice-transcript__action,
 .wechat-voice-transcript__retry {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: inherit;
+  min-height: 26px;
+  padding: 4px 9px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-surface-bg);
+  color: var(--app-text-secondary);
   font: inherit;
-  opacity: 0.85;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
 .wechat-voice-transcript__action:hover,
 .wechat-voice-transcript__retry:hover {
-  opacity: 1;
+  background: var(--app-surface-soft);
+  border-color: var(--app-border-soft);
+  color: var(--app-text-primary);
+}
+
+.wechat-voice-transcript__action--wechat {
+  border-color: rgba(7, 193, 96, 0.28);
+}
+
+.wechat-voice-transcript__action--wechat:hover {
+  border-color: rgba(7, 193, 96, 0.48);
+  color: var(--app-text-primary);
+}
+
+.wechat-voice-transcript__icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.wechat-voice-transcript__icon--wechat {
+  object-fit: contain;
 }
 
 .wechat-voice-transcript__status {
@@ -364,9 +405,7 @@
 }
 
 .wechat-voice-transcript__retry {
-  margin-left: 8px;
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  margin-left: 0;
 }
 
 .wechat-voice-content {
