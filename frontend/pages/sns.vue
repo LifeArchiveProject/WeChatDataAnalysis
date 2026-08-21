@@ -29,7 +29,7 @@
           <button
               type="button"
               class="w-full px-3 py-2.5 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              :disabled="!selectedAccount"
+              :disabled="!isSnsPageMounted || !selectedAccount"
               @click="openExportModal"
           >
             导出朋友圈
@@ -37,7 +37,7 @@
         </div>
       </div>
 
-      <div class="flex-1 overflow-auto min-h-0 bg-white">
+      <div ref="snsUserScrollEl" class="flex-1 overflow-auto min-h-0 bg-white" @scroll="onSnsUserScroll">
         <div
             class="px-3 py-2 text-sm cursor-pointer flex items-center gap-2 border-b border-gray-100 hover:bg-gray-50"
             :class="selectedSnsUser ? 'text-gray-700' : 'bg-gray-50 text-gray-900 font-medium'"
@@ -48,7 +48,7 @@
         </div>
 
         <div
-            v-for="u in filteredSnsUsers"
+            v-for="u in renderedSnsUsers"
             :key="u.username"
             class="px-3 py-2 text-sm cursor-pointer flex items-center gap-2 border-b border-gray-100 hover:bg-gray-50"
             :class="selectedSnsUser === u.username ? 'bg-gray-50 text-gray-900 font-medium' : 'text-gray-700'"
@@ -57,10 +57,12 @@
           <div class="w-8 h-8 rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
             <img
                 v-if="postAvatarUrl(u.username) && !hasSnsAvatarError(u.username)"
-                :src="postAvatarUrl(u.username)"
+                v-chat-lazy-src="postAvatarUrl(u.username)"
                 :alt="u.displayName || u.username"
                 class="w-full h-full object-cover"
                 referrerpolicy="no-referrer"
+                loading="lazy"
+                decoding="async"
                 @error="onSnsAvatarError(u.username)"
             />
             <div
@@ -183,7 +185,13 @@
               compact
             />
 
-	          <div v-for="post in posts" :key="post.id" class="bg-white rounded-sm px-4 py-4 mb-3">
+	          <div
+                v-for="(post, postIndex) in posts"
+                :key="post.id"
+                class="bg-white rounded-sm px-4 py-4 mb-3"
+                :data-sns-post-index="postIndex"
+                :data-sns-post-id="String(post.id || post.tid || '')"
+              >
 	            <div class="flex items-start gap-3" @contextmenu.prevent="openPostContextMenu($event, post)">
               <div class="w-9 h-9 rounded-md overflow-hidden bg-gray-300 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
                 <img
@@ -681,35 +689,53 @@
               </div>
 
               <div class="app-export-load-state">共 {{ exportFilteredSnsUsers.length }} 个结果</div>
-              <div class="app-export-contact-list" role="listbox" aria-label="可导出的朋友圈联系人" aria-multiselectable="true">
+              <div
+                ref="exportContactListEl"
+                class="app-export-contact-list"
+                role="listbox"
+                aria-label="可导出的朋友圈联系人"
+                aria-multiselectable="true"
+                @scroll="onExportContactListScroll"
+              >
                 <div v-if="!exportFilteredSnsUsers.length" class="app-export-empty">没有匹配的联系人</div>
-                <label
-                  v-for="u in exportFilteredSnsUsers"
-                  :key="u.username"
-                  class="app-export-contact"
-                  :class="{ 'is-active': exportSelectedUsernameSet.has(u.username) }"
-                  role="option"
-                  :aria-selected="exportSelectedUsernameSet.has(u.username)"
-                >
-                  <input v-model="exportSelectedUsernames" type="checkbox" :value="u.username" class="sr-only" />
-                  <span class="app-export-checkbox" aria-hidden="true">
-                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg>
-                  </span>
-                  <span class="app-export-contact__avatar" :class="{ 'privacy-blur': privacyMode }">
-                    <img
-                      v-if="postAvatarUrl(u.username) && !hasSnsAvatarError(u.username)"
-                      :src="postAvatarUrl(u.username)"
-                      :alt="`${u.displayName || u.username}头像`"
-                      referrerpolicy="no-referrer"
-                      @error="onSnsAvatarError(u.username)"
-                    />
-                    <span v-else>{{ (u.displayName || u.username || '友').charAt(0) }}</span>
-                  </span>
-                  <span class="app-export-contact__copy" :class="{ 'privacy-blur': privacyMode }">
-                    <strong>{{ u.displayName || u.username }}</strong>
-                    <small>{{ u.username }} · {{ u.postCount || 0 }} 条</small>
-                  </span>
-                </label>
+                <div v-else class="app-export-contact-virtualizer" :style="{ height: `${exportContactVirtualTotalHeight}px` }">
+                  <div
+                    class="app-export-contact-virtualizer__viewport"
+                    :style="{ transform: `translateY(${exportContactVirtualOffsetTop}px)` }"
+                  >
+                    <label
+                      v-for="(u, virtualIndex) in exportRenderedSnsUsers"
+                      :key="u.username"
+                      class="app-export-contact"
+                      :class="{ 'is-active': exportSelectedUsernameSet.has(u.username) }"
+                      role="option"
+                      :aria-selected="exportSelectedUsernameSet.has(u.username)"
+                      :aria-posinset="exportContactVirtualStartIndex + virtualIndex + 1"
+                      :aria-setsize="exportFilteredSnsUsers.length"
+                    >
+                      <input v-model="exportSelectedUsernames" type="checkbox" :value="u.username" class="sr-only" />
+                      <span class="app-export-checkbox" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg>
+                      </span>
+                      <span class="app-export-contact__avatar" :class="{ 'privacy-blur': privacyMode }">
+                        <img
+                          v-if="postAvatarUrl(u.username) && !hasSnsAvatarError(u.username)"
+                          v-chat-lazy-src="postAvatarUrl(u.username)"
+                          :alt="`${u.displayName || u.username}头像`"
+                          referrerpolicy="no-referrer"
+                          loading="lazy"
+                          decoding="async"
+                          @error="onSnsAvatarError(u.username)"
+                        />
+                        <span v-else>{{ (u.displayName || u.username || '友').charAt(0) }}</span>
+                      </span>
+                      <span class="app-export-contact__copy" :class="{ 'privacy-blur': privacyMode }">
+                        <strong>{{ u.displayName || u.username }}</strong>
+                        <small>{{ u.username }} · {{ u.postCount || 0 }} 条</small>
+                      </span>
+                    </label>
+                  </div>
+                </div>
               </div>
             </section>
 
@@ -717,14 +743,22 @@
               <section class="app-export-panel" aria-labelledby="sns-export-format-title">
                 <header class="app-export-panel__header">
                   <div>
-                    <h3 id="sns-export-format-title">格式与文件</h3>
-                    <p>选择离线 ZIP 内的结果格式和文件名。</p>
+                    <h3 id="sns-export-format-title">导出设置</h3>
+                    <p>先选择结果格式，再选择输出方式。</p>
                   </div>
-                  <span class="app-export-badge">{{ exportFormatLabel }}</span>
+                  <span class="app-export-badge">{{ exportFormatLabel }} · {{ exportOutputModeLabel }}</span>
                 </header>
 
-                <div class="min-w-[280px]">
-                  <div class="grid grid-cols-2 gap-2 sm:grid-cols-4" :class="'app-export-format-grid'">
+                <fieldset class="app-export-option-group min-w-[280px]">
+                  <legend class="sr-only">文件格式</legend>
+                  <div class="app-export-option-group__header">
+                    <span class="app-export-option-group__index">1</span>
+                    <div>
+                      <strong>文件格式</strong>
+                      <small>每位联系人生成一种可独立查看的结果文件</small>
+                    </div>
+                  </div>
+                  <div class="app-export-format-grid">
                     <label
                       v-for="item in exportFormatOptions"
                       :key="item.value"
@@ -739,14 +773,70 @@
                       </span>
                     </label>
                   </div>
-                </div>
+                </fieldset>
 
-                <div class="app-export-field">
-                  <div class="app-export-field__label">
-                    <label for="sns-export-file-name">ZIP 文件名</label>
-                    <span>可选，留空时自动生成</span>
+                <fieldset class="app-export-option-group">
+                  <legend class="sr-only">输出方式</legend>
+                  <div class="app-export-option-group__header">
+                    <span class="app-export-option-group__index">2</span>
+                    <div>
+                      <strong>输出方式</strong>
+                      <small>选择一次性压缩包，或可持续更新的增量目录</small>
+                    </div>
                   </div>
-                  <input id="sns-export-file-name" v-model="exportFileName" type="text" class="app-export-input" placeholder="例如：朋友圈_2026-07-12.zip" />
+                  <div class="app-export-format-grid app-export-output-mode-grid">
+                    <label class="app-export-format-option" :class="{ 'is-active': exportOutputMode === 'zip' }">
+                      <input v-model="exportOutputMode" type="radio" value="zip" class="sr-only" />
+                      <span class="app-export-format-option__code">ZIP 全量</span>
+                      <span class="app-export-format-option__meta">一次性压缩包</span>
+                      <span class="app-export-radio-check" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg>
+                      </span>
+                    </label>
+                    <label
+                      class="app-export-format-option"
+                      :class="{
+                        'is-active': exportOutputMode === 'folder',
+                        'is-disabled': !isDesktopExportRuntime() && !isWebDirectoryPickerSupported()
+                      }"
+                    >
+                      <input v-model="exportOutputMode" type="radio" value="folder" class="sr-only" :disabled="!isDesktopExportRuntime() && !isWebDirectoryPickerSupported()" />
+                      <span class="app-export-format-option__code app-export-format-option__code--split">
+                        <span>文件夹</span>
+                        <small>自动增量</small>
+                      </span>
+                      <span class="app-export-format-option__meta">只更新变化内容</span>
+                      <span class="app-export-radio-check" aria-hidden="true">
+                        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8" /></svg>
+                      </span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                <div class="app-export-mode-details">
+                  <div v-if="exportOutputMode === 'zip'" class="app-export-field app-export-field--plain">
+                    <div class="app-export-field__label">
+                      <label for="sns-export-file-name">ZIP 文件名</label>
+                      <span>可选，留空时自动生成</span>
+                    </div>
+                    <input id="sns-export-file-name" v-model="exportFileName" type="text" class="app-export-input" placeholder="例如：朋友圈_2026-07-12.zip" />
+                  </div>
+                  <div v-else class="app-export-incremental-details">
+                    <div class="app-export-folder-preview">
+                      <div>
+                        <span>默认根目录</span>
+                        <strong :title="exportFolderNamePreview">{{ exportFolderNamePreview }}</strong>
+                      </div>
+                      <span class="app-export-folder-preview__status">{{ exportBaselineStatusLabel }}</span>
+                    </div>
+                    <label class="app-export-reset-option">
+                      <input v-model="exportResetBaseline" type="checkbox" />
+                      <span>
+                        <strong>重置增量基线</strong>
+                        <small>下次完整重建；不会删除目录中未被基线管理的文件</small>
+                      </span>
+                    </label>
+                  </div>
                 </div>
               </section>
 
@@ -756,14 +846,14 @@
                     <h3 id="sns-export-output-title">保存位置</h3>
                     <p>{{ exportFolderHint }}</p>
                   </div>
-                  <span class="app-export-badge" :class="{ 'app-export-badge--warning': !hasSelectedExportFolder }">{{ hasSelectedExportFolder ? exportFolderModeText : '需要目录' }}</span>
+                  <span class="app-export-badge" :class="{ 'app-export-badge--warning': exportDestinationRequired && !hasSelectedExportFolder }">{{ hasSelectedExportFolder ? exportFolderModeText : (exportDestinationRequired ? '需要目录' : '目录可选') }}</span>
                 </header>
 
                 <div class="app-export-destination" :class="{ 'has-value': hasSelectedExportFolder }">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5h7l2-2h9v13H3z" /></svg>
                   <div class="app-export-destination__copy">
                     <strong :title="exportFolder || '尚未选择导出目录'">{{ exportFolder || '尚未选择导出目录' }}</strong>
-                    <small>{{ hasSelectedExportFolder ? '导出完成后会写入此目录' : '开始导出前需要先完成此项' }}</small>
+                    <small>{{ hasSelectedExportFolder ? '导出完成后会写入此目录' : (exportDestinationRequired ? '增量模式开始前需要选择目录' : '可直接导出并下载 ZIP') }}</small>
                   </div>
                   <button type="button" class="app-export-secondary-button" :disabled="exportSaveBusy" @click="chooseExportFolder">
                     {{ hasSelectedExportFolder ? '更改' : '选择目录' }}
@@ -788,6 +878,14 @@
                   <div><span>格式</span><strong>{{ exportActiveFormatLabel }}</strong></div>
                   <div><span>已复制媒体</span><strong>{{ exportJob.progress?.mediaCopied || 0 }}</strong></div>
                   <div><span>缺失媒体</span><strong>{{ exportJob.progress?.mediaMissing || 0 }}</strong></div>
+                </div>
+                <div class="app-export-load-state">当前阶段：{{ snsExportPhaseLabel }}</div>
+                <div v-if="exportJob.warning" class="app-export-result app-export-result--warning" role="status">
+                  <span>{{ exportJob.warning }}</span>
+                </div>
+                <div v-if="exportJob.status === 'done' && exportJob.options?.outputMode === 'folder'" class="app-export-load-state">
+                  增量结果：变更 {{ exportJob.incremental?.usersChanged || 0 }} 人，复用 {{ exportJob.incremental?.usersReused || 0 }} 人，
+                  新写 {{ exportJob.incremental?.filesChanged || 0 }} 个文件。
                 </div>
 
                 <div class="app-export-progress-block">
@@ -852,13 +950,22 @@
                 <div v-else-if="exportSaveMsg" class="app-export-result app-export-result--success">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg>
                   <span>{{ exportSaveMsg }}</span>
-                  <button v-if="exportJob.status === 'done' && exportJob.exportId && hasWebExportFolder" type="button" class="app-export-secondary-button" :disabled="exportSaveBusy" @click="saveSnsExportToSelectedFolder()">
+                  <button v-if="exportJob.status === 'done' && exportJob.exportId && hasWebExportFolder && exportJob.options?.outputMode !== 'folder'" type="button" class="app-export-secondary-button" :disabled="exportSaveBusy" @click="saveSnsExportToSelectedFolder()">
                     {{ exportSaveBusy ? '保存中…' : '重新保存' }}
                   </button>
                 </div>
                 <button v-else-if="exportJob.status === 'done' && exportJob.exportId && hasWebExportFolder" type="button" class="app-export-secondary-button sns-export-save-button" :disabled="exportSaveBusy" @click="saveSnsExportToSelectedFolder()">
                   {{ exportSaveBusy ? '保存中…' : '保存到已选文件夹' }}
                 </button>
+                <button v-if="exportSaveError && exportJob.status === 'done' && exportJob.exportId && hasWebExportFolder" type="button" class="app-export-secondary-button sns-export-save-button" :disabled="exportSaveBusy" @click="saveSnsExportToSelectedFolder()">
+                  {{ exportSaveBusy ? '重试中…' : '重试写入' }}
+                </button>
+                <a
+                  v-if="exportJob.status === 'done' && exportJob.exportId && exportJob.options?.outputMode !== 'folder'"
+                  class="app-export-secondary-button sns-export-save-button inline-flex"
+                  :href="getSnsExportDownloadUrl(exportJob.exportId)"
+                  :download="guessSnsExportZipName(exportJob)"
+                >下载 ZIP</a>
               </section>
             </main>
           </div>
@@ -870,7 +977,7 @@
             <span class="app-export-summary__separator"></span>
             <span>格式 <strong>{{ exportFormatLabel }}</strong></span>
             <span class="app-export-summary__separator"></span>
-            <span class="app-export-summary__path" :class="{ 'is-missing': !hasSelectedExportFolder }">{{ exportFolder || '尚未选择目录' }}</span>
+            <span class="app-export-summary__path" :class="{ 'is-missing': exportDestinationRequired && !hasSelectedExportFolder }">{{ exportFolder || (exportDestinationRequired ? '尚未选择目录' : 'ZIP 完成后可下载') }}</span>
           </div>
           <div class="app-export-footer__actions">
             <button type="button" class="app-export-secondary-button" @click="closeExportModal">取消</button>
@@ -1020,8 +1127,11 @@ const hasMore = ref(true)
 // If we hit an empty page, stop trying to avoid infinite requests.
 const cachePagingExhausted = ref(false)
 const timelineScrollEl = ref(null)
+const snsUserScrollEl = ref(null)
 const isLoading = ref(false)
 const isRefreshing = ref(false)
+// 首次水合时保持按钮禁用，挂载后再按账号状态启用，避免服务端 disabled 残留。
+const isSnsPageMounted = ref(false)
 const error = ref('')
 const syncWarning = ref('')
 const snsUseCache = ref(true)
@@ -1064,6 +1174,8 @@ const formatCoverTime = (tsSeconds) => {
 // 左侧朋友圈联系人栏
 const snsUsers = ref([])
 const snsUserQuery = ref('')
+const SNS_USER_RENDER_BATCH = 80
+const snsUserRenderLimit = ref(SNS_USER_RENDER_BATCH)
 // 空字符串表示“全部”
 const selectedSnsUser = ref('')
 const snsAvatarErrors = ref({})
@@ -1124,12 +1236,38 @@ const filteredSnsUsers = computed(() => {
   })
 })
 
+const renderedSnsUsers = computed(() => {
+  return filteredSnsUsers.value.slice(0, Math.max(SNS_USER_RENDER_BATCH, snsUserRenderLimit.value))
+})
+
+const resetSnsUserRenderWindow = () => {
+  snsUserRenderLimit.value = SNS_USER_RENDER_BATCH
+  if (process.client && snsUserScrollEl.value) {
+    snsUserScrollEl.value.scrollTop = 0
+  }
+}
+
+const onSnsUserScroll = (event) => {
+  const el = event?.target || snsUserScrollEl.value
+  if (!el || snsUserRenderLimit.value >= filteredSnsUsers.value.length) return
+  if (el.scrollTop + el.clientHeight < el.scrollHeight - 240) return
+  snsUserRenderLimit.value = Math.min(
+    filteredSnsUsers.value.length,
+    snsUserRenderLimit.value + SNS_USER_RENDER_BATCH
+  )
+}
+
+watch(snsUserQuery, resetSnsUserRenderWindow)
+
 const pageSize = 20
 
 const apiBase = useApiBase()
 
 // 朋友圈导出（离线 ZIP）
 const exportFormat = ref('html')
+const exportOutputMode = ref('zip')
+const exportResetBaseline = ref(false)
+const exportBaselineStatus = ref('unknown')
 const exportFormatOptions = [
   { value: 'html', label: 'HTML', meta: '可阅读网页' },
   { value: 'json', label: 'JSON', meta: '结构化数据' },
@@ -1151,9 +1289,15 @@ const exportModalOpen = ref(false)
 const exportFileName = ref('')
 const exportSearchQuery = ref('')
 const exportSelectedUsernames = ref([])
+const exportContactListEl = ref(null)
+const exportContactScrollTop = ref(0)
+const exportContactViewportHeight = ref(0)
+const SNS_EXPORT_CONTACT_ROW_HEIGHT = 53
+const SNS_EXPORT_CONTACT_OVERSCAN = 6
 const isExportCancelling = ref(false)
 let exportEventSource = null
 let exportPollTimer = null
+let exportContactResizeObserver = null
 
 const asNumber = (v) => {
   const n = Number(v)
@@ -1205,8 +1349,43 @@ const hasSelectedExportFolder = computed(() => {
   return !!(hasDesktopExportFolder.value || hasWebExportFolder.value)
 })
 
+const isIncrementalFolderMode = computed(() => exportOutputMode.value === 'folder')
+const exportDestinationRequired = computed(() => isIncrementalFolderMode.value)
+const exportBaselineStatusLabel = computed(() => ({
+  ready: '已读取上轮基线',
+  checking: '正在核对目录文件',
+  repair: '发现缺失文件，将增量补回',
+  new: '未发现基线，将首次完整生成',
+  invalid: '基线损坏，将完整重建',
+  auto: '桌面端将自动读取目标目录基线'
+}[exportBaselineStatus.value] || '选择目录后检查基线'))
+
 const exportFormatLabel = computed(() => {
   return exportFormatOptions.find((item) => item.value === exportFormat.value)?.label || 'HTML'
+})
+
+const exportOutputModeLabel = computed(() => {
+  return exportOutputMode.value === 'folder' ? '自动增量' : 'ZIP 全量'
+})
+
+const sanitizeSnsExportName = (value, fallback = '朋友圈') => {
+  let cleaned = String(value || '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100)
+    .replace(/[. ]+$/g, '')
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(cleaned)) cleaned = `_${cleaned}`
+  return cleaned || fallback
+}
+
+const exportFolderNamePreview = computed(() => {
+  const selected = normalizeExportSelectedUsernames(exportSelectedUsernames.value)
+  if (selected.length === 1) {
+    const item = visibleSnsUsers.value.find((user) => String(user?.username || '') === selected[0])
+    return sanitizeSnsExportName(`${sanitizeSnsExportName(item?.displayName || item?.username, '联系人')}_朋友圈`)
+  }
+  return sanitizeSnsExportName(`${sanitizeSnsExportName(selfInfo.value?.nickname || selectedAccount.value, '当前账号')}_朋友圈`)
 })
 
 const exportActiveFormat = computed(() => {
@@ -1271,6 +1450,16 @@ const snsExportStatusLabel = computed(() => {
   return '等待中'
 })
 
+const snsExportPhaseLabel = computed(() => ({
+  syncing: '同步最新数据',
+  reading: '读取快照',
+  comparing: '比较变化',
+  media: '准备媒体',
+  writing: '写入文件',
+  finalizing: '收尾',
+  done: '已完成'
+}[String(exportJob.value?.progress?.phase || '')] || '等待中'))
+
 const canCancelSnsExport = computed(() => {
   if (!exportJob.value?.exportId) return false
   const status = String(exportJob.value?.status || '').trim()
@@ -1295,7 +1484,7 @@ const handleExportPrimaryAction = async () => {
   await startSnsExportFromModal()
 }
 
-const normalizeExportSelectedUsernames = (list) => {
+function normalizeExportSelectedUsernames(list) {
   const validUsernames = new Set(
     visibleSnsUsers.value
       .map((item) => String(item?.username || '').trim())
@@ -1329,6 +1518,79 @@ const exportFilteredSnsUsers = computed(() => {
     const displayName = String(item?.displayName || '').toLowerCase()
     return username.includes(q) || displayName.includes(q)
   })
+})
+
+const exportContactVirtualStartIndex = computed(() => {
+  const maximumStart = Math.max(0, exportFilteredSnsUsers.value.length - 1)
+  const visibleStart = Math.floor(exportContactScrollTop.value / SNS_EXPORT_CONTACT_ROW_HEIGHT)
+  return Math.min(maximumStart, Math.max(0, visibleStart - SNS_EXPORT_CONTACT_OVERSCAN))
+})
+
+const exportContactVirtualEndIndex = computed(() => {
+  const viewportHeight = Math.max(
+    SNS_EXPORT_CONTACT_ROW_HEIGHT,
+    exportContactViewportHeight.value || (SNS_EXPORT_CONTACT_ROW_HEIGHT * 10)
+  )
+  const visibleCount = Math.ceil(viewportHeight / SNS_EXPORT_CONTACT_ROW_HEIGHT)
+  return Math.min(
+    exportFilteredSnsUsers.value.length,
+    exportContactVirtualStartIndex.value + visibleCount + (SNS_EXPORT_CONTACT_OVERSCAN * 2)
+  )
+})
+
+const exportRenderedSnsUsers = computed(() => {
+  return exportFilteredSnsUsers.value.slice(
+    exportContactVirtualStartIndex.value,
+    exportContactVirtualEndIndex.value
+  )
+})
+
+const exportContactVirtualOffsetTop = computed(() => {
+  return exportContactVirtualStartIndex.value * SNS_EXPORT_CONTACT_ROW_HEIGHT
+})
+
+const exportContactVirtualTotalHeight = computed(() => {
+  return exportFilteredSnsUsers.value.length * SNS_EXPORT_CONTACT_ROW_HEIGHT
+})
+
+const syncExportContactViewport = () => {
+  const el = exportContactListEl.value
+  if (!el) return
+  exportContactScrollTop.value = Math.max(0, Number(el.scrollTop || 0))
+  exportContactViewportHeight.value = Math.max(0, Number(el.clientHeight || 0))
+}
+
+const onExportContactListScroll = (event) => {
+  const el = event?.currentTarget || exportContactListEl.value
+  if (!el) return
+  exportContactScrollTop.value = Math.max(0, Number(el.scrollTop || 0))
+  exportContactViewportHeight.value = Math.max(0, Number(el.clientHeight || 0))
+}
+
+const resetExportContactVirtualWindow = async () => {
+  exportContactScrollTop.value = 0
+  await nextTick()
+  if (exportContactListEl.value) exportContactListEl.value.scrollTop = 0
+  syncExportContactViewport()
+}
+
+const stopExportContactResizeObserver = () => {
+  if (!exportContactResizeObserver) return
+  exportContactResizeObserver.disconnect()
+  exportContactResizeObserver = null
+}
+
+watch(exportSearchQuery, () => {
+  void resetExportContactVirtualWindow()
+})
+
+watch(exportModalOpen, async (isOpen) => {
+  stopExportContactResizeObserver()
+  if (!isOpen || !process.client) return
+  await resetExportContactVirtualWindow()
+  if (typeof window.ResizeObserver !== 'function' || !exportContactListEl.value) return
+  exportContactResizeObserver = new window.ResizeObserver(syncExportContactViewport)
+  exportContactResizeObserver.observe(exportContactListEl.value)
 })
 
 const exportFilteredSnsUsernames = computed(() => {
@@ -1391,6 +1653,11 @@ const exportFolderModeText = computed(() => {
 })
 
 const exportFolderHint = computed(() => {
+  if (!isIncrementalFolderMode.value) {
+    return hasSelectedExportFolder.value
+      ? 'ZIP 完成后会保存到所选目录，也可直接下载。'
+      : '保存目录可选；导出完成后可直接下载 ZIP。'
+  }
   if (isDesktopExportRuntime()) {
     return hasDesktopExportFolder.value
       ? '\u4f1a\u50cf\u666e\u901a\u804a\u5929\u8bb0\u5f55\u5bfc\u51fa\u4e00\u6837\uff0c\u5b8c\u6210\u540e\u76f4\u63a5\u5199\u5165\u4e0a\u9762\u7684\u6587\u4ef6\u5939\u3002'
@@ -1417,6 +1684,12 @@ const guessSnsExportZipName = (job) => {
 
 const exportSaveProgressText = computed(() => {
   if (exportSaveState.value !== 'saving') return ''
+  if (String(exportJob.value?.options?.outputMode || '') === 'folder') {
+    const progress = exportSaveBytesTotal.value > 0
+      ? `（${formatBytes(exportSaveBytesWritten.value)} / ${formatBytes(exportSaveBytesTotal.value)}）`
+      : ''
+    return `正在增量更新目录：${exportFolderNamePreview.value}${progress}`
+  }
   const fileName = guessSnsExportZipName(exportJob.value)
   if (exportSaveBytesTotal.value > 0) {
     return `\u6b63\u5728\u4fdd\u5b58\u5230\u6d4f\u89c8\u5668\u76ee\u5f55\uff1a${fileName}\uff08${formatBytes(exportSaveBytesWritten.value)} / ${formatBytes(exportSaveBytesTotal.value)}\uff09`
@@ -1427,6 +1700,8 @@ const exportSaveProgressText = computed(() => {
 const exportOutputPathText = computed(() => {
   if (String(exportJob.value?.status || '') !== 'done') return ''
   if (hasWebExportFolder.value) return ''
+  const folderPath = String(exportJob.value?.folderPath || '').trim()
+  if (folderPath) return folderPath
   const raw = exportBackendZipPath.value
   if (!raw) return ''
   if (isDesktopExportRuntime()) return raw
@@ -1448,6 +1723,7 @@ const chooseExportFolder = async () => {
       if (result && !result.canceled && Array.isArray(result.filePaths) && result.filePaths.length > 0) {
         exportFolder.value = String(result.filePaths[0] || '').trim()
         exportFolderHandle.value = null
+        exportBaselineStatus.value = 'auto'
       }
       return
     }
@@ -1457,6 +1733,8 @@ const chooseExportFolder = async () => {
       if (handle) {
         exportFolderHandle.value = handle
         exportFolder.value = `\u6d4f\u89c8\u5668\u76ee\u5f55\uff1a${String(handle.name || '\u5df2\u9009\u62e9')}`
+        const baseline = await readBrowserSnsExportBaseline()
+        exportBaselineStatus.value = baseline?.invalid ? 'invalid' : (baseline ? 'ready' : 'new')
       }
       return
     }
@@ -1474,11 +1752,203 @@ const chooseExportFolder = async () => {
 const clearExportFolderSelection = () => {
   exportFolder.value = ''
   exportFolderHandle.value = null
+  exportBaselineStatus.value = 'unknown'
   resetExportSaveFeedback({ resetAutoSavedFor: true })
 }
 
 const getSnsExportDownloadUrl = (exportId) => {
   return `${apiBase}/sns/exports/${encodeURIComponent(String(exportId || ''))}/download`
+}
+
+const getSnsIncrementalFileUrl = (exportId, fileId) => {
+  return `${apiBase}/sns/exports/${encodeURIComponent(String(exportId || ''))}/files/${encodeURIComponent(String(fileId || ''))}`
+}
+
+const SNS_EXPORT_BASELINE_FILE = '.wechat-sns-export.json'
+
+const readBrowserSnsBaselineFromRoot = async (root) => {
+  if (!root || typeof root.getFileHandle !== 'function') return { found: false, baseline: null }
+  try {
+    const handle = await root.getFileHandle(SNS_EXPORT_BASELINE_FILE)
+    const file = await handle.getFile()
+    return { found: true, baseline: JSON.parse(await file.text()) }
+  } catch (error) {
+    if (error?.name === 'NotFoundError') return { found: false, baseline: null }
+    // 损坏的基线交给后端判定，用户会在任务中看到完整重建警告。
+    return { found: true, baseline: { invalid: true } }
+  }
+}
+
+const browserSnsBaselineMatchesSelection = (baseline) => {
+  if (!baseline || typeof baseline !== 'object' || baseline.invalid) return false
+  return String(baseline.account || '') === String(selectedAccount.value || '')
+    && String(baseline.format || '') === String(exportFormat.value || '')
+    && String(baseline.folderName || '') === String(exportFolderNamePreview.value || '')
+}
+
+const getBrowserSnsExportRoot = async ({ create = true } = {}) => {
+  const selected = exportFolderHandle.value
+  if (!selected || typeof selected.getDirectoryHandle !== 'function') return null
+
+  // 如果用户直接选中了已有导出根目录，就复用该目录；否则把所选目录视为父目录。
+  const direct = await readBrowserSnsBaselineFromRoot(selected)
+  if (
+    String(selected.name || '') === String(exportFolderNamePreview.value || '')
+    || (direct.found && browserSnsBaselineMatchesSelection(direct.baseline))
+  ) {
+    return selected
+  }
+
+  try {
+    return await selected.getDirectoryHandle(exportFolderNamePreview.value, { create: false })
+  } catch (error) {
+    if (error?.name !== 'NotFoundError' || !create) throw error
+    return await selected.getDirectoryHandle(exportFolderNamePreview.value, { create: true })
+  }
+}
+
+const readBrowserSnsExportBaseline = async () => {
+  try {
+    const root = await getBrowserSnsExportRoot({ create: false })
+    if (!root) return null
+    return (await readBrowserSnsBaselineFromRoot(root)).baseline
+  } catch (error) {
+    if (error?.name === 'NotFoundError') return null
+    return { invalid: true }
+  }
+}
+
+const normalizeSnsManagedPath = (value) => {
+  const parts = String(value || '').replace(/\\/g, '/').split('/').filter((part) => part && part !== '.')
+  if (!parts.length || parts.some((part) => part === '..')) return ''
+  return parts.join('/')
+}
+
+const findMissingBrowserSnsManagedFiles = async (root, baseline) => {
+  const files = baseline?.files && typeof baseline.files === 'object' ? baseline.files : {}
+  const entries = Object.entries(files)
+    .map(([path, metadata]) => [normalizeSnsManagedPath(path), metadata])
+    .filter(([path]) => !!path)
+  if (!entries.length) return []
+
+  // 同一目录只获取一次句柄，再用有限并发批量核对文件存在性与大小。
+  const directoryCache = new Map([['', Promise.resolve(root)]])
+  const getDirectory = (parts) => {
+    const key = parts.join('/')
+    if (directoryCache.has(key)) return directoryCache.get(key)
+    const parentParts = parts.slice(0, -1)
+    const promise = getDirectory(parentParts).then((parent) => parent.getDirectoryHandle(parts.at(-1), { create: false }))
+    directoryCache.set(key, promise)
+    return promise
+  }
+
+  const missing = []
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < entries.length) {
+      const [path, metadata] = entries[cursor++]
+      const parts = path.split('/')
+      try {
+        const directory = await getDirectory(parts.slice(0, -1))
+        const fileHandle = await directory.getFileHandle(parts.at(-1), { create: false })
+        const file = await fileHandle.getFile()
+        const expectedSize = Number(metadata?.size)
+        if (Number.isFinite(expectedSize) && expectedSize >= 0 && Number(file.size) !== expectedSize) {
+          missing.push(path)
+        }
+      } catch (error) {
+        if (error?.name === 'NotFoundError' || error?.name === 'TypeMismatchError') {
+          missing.push(path)
+          continue
+        }
+        throw error
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(16, entries.length) }, () => worker()))
+  return [...new Set(missing)].sort()
+}
+
+const resolveBrowserDirectory = async (root, parts, { create = true } = {}) => {
+  let current = root
+  for (const part of parts) {
+    current = await current.getDirectoryHandle(part, { create })
+  }
+  return current
+}
+
+const writeResponseToBrowserFile = async (root, relativePath, response) => {
+  const parts = String(relativePath || '').split('/').filter((part) => part && part !== '.' && part !== '..')
+  if (!parts.length) throw new Error('增量文件路径无效')
+  const parent = await resolveBrowserDirectory(root, parts.slice(0, -1), { create: true })
+  const fileHandle = await parent.getFileHandle(parts.at(-1), { create: true })
+  const writable = await fileHandle.createWritable()
+  try {
+    if (response.body && typeof response.body.getReader === 'function') {
+      const reader = response.body.getReader()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (!value?.byteLength) continue
+        await writable.write(value)
+        exportSaveBytesWritten.value += value.byteLength
+      }
+    } else {
+      const blob = await response.blob()
+      await writable.write(blob)
+      exportSaveBytesWritten.value += asNumber(blob.size)
+    }
+    await writable.close()
+  } catch (error) {
+    try { await writable.abort() } catch {}
+    throw error
+  }
+}
+
+const removeBrowserManagedFile = async (root, relativePath) => {
+  const parts = String(relativePath || '').split('/').filter((part) => part && part !== '.' && part !== '..')
+  if (!parts.length) return
+  try {
+    const parent = await resolveBrowserDirectory(root, parts.slice(0, -1), { create: false })
+    await parent.removeEntry(parts.at(-1))
+  } catch (error) {
+    if (error?.name !== 'NotFoundError') throw error
+  }
+}
+
+const saveIncrementalSnsExportToBrowser = async (exportId) => {
+  const manifestUrl = `${apiBase}/sns/exports/${encodeURIComponent(String(exportId))}/files`
+  const manifestResponse = await fetch(manifestUrl)
+  if (!manifestResponse.ok) throw new Error(`读取增量文件清单失败（${manifestResponse.status}）`)
+  const payload = await manifestResponse.json()
+  const manifest = payload?.manifest || {}
+  const root = await getBrowserSnsExportRoot({ create: true })
+  if (!root) throw new Error('未选择浏览器导出目录')
+  const files = Array.isArray(manifest.files) ? manifest.files : []
+  exportSaveBytesTotal.value = files.reduce((sum, item) => sum + asNumber(item?.size), asNumber(manifest?.state?.size))
+
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < files.length) {
+      const entry = files[cursor++]
+      const response = await fetch(getSnsIncrementalFileUrl(exportId, entry?.fileId))
+      if (!response.ok) throw new Error(`下载增量文件失败（${response.status}）`)
+      await writeResponseToBrowserFile(root, entry?.path, response)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(4, Math.max(1, files.length)) }, () => worker()))
+
+  for (const stalePath of Array.isArray(manifest.stale) ? manifest.stale : []) {
+    await removeBrowserManagedFile(root, stalePath)
+  }
+
+  // 基线始终最后写入，中断时下一轮仍可依据旧基线安全重试。
+  const stateResponse = await fetch(getSnsIncrementalFileUrl(exportId, manifest?.state?.fileId))
+  if (!stateResponse.ok) throw new Error(`下载增量基线失败（${stateResponse.status}）`)
+  await writeResponseToBrowserFile(root, '.wechat-sns-export.json', stateResponse)
+  const commitResponse = await fetch(`${apiBase}/sns/exports/${encodeURIComponent(String(exportId))}/commit`, { method: 'POST' })
+  if (!commitResponse.ok) throw new Error(`提交增量导出状态失败（${commitResponse.status}）`)
+  return manifest
 }
 
 const saveSnsExportToSelectedFolder = async (options = {}) => {
@@ -1504,6 +1974,14 @@ const saveSnsExportToSelectedFolder = async (options = {}) => {
   exportSaveBusy.value = true
   exportSaveState.value = 'saving'
   try {
+    if (String(exportJob.value?.options?.outputMode || '') === 'folder') {
+      const manifest = await saveIncrementalSnsExportToBrowser(exportId)
+      exportAutoSavedFor.value = String(exportId)
+      exportSaveState.value = 'success'
+      const stats = manifest?.stats || {}
+      exportSaveMsg.value = `增量目录已更新：${manifest?.folderName || exportFolderNamePreview.value}\n新写 ${stats.filesChanged || 0} 个文件，复用 ${stats.filesReused || 0} 个文件。`
+      return
+    }
     const response = await fetch(getSnsExportDownloadUrl(exportId))
     if (!response.ok) {
       await reportServerErrorFromResponse(response, {
@@ -1619,6 +2097,7 @@ const startSnsExportPolling = (exportId) => {
 }
 
 const ensureSnsExportFolderReady = () => {
+  if (!isIncrementalFolderMode.value) return true
   if (hasSelectedExportFolder.value) return true
   exportError.value = isDesktopExportRuntime() || isWebDirectoryPickerSupported()
     ? '\u8bf7\u5148\u9009\u62e9\u5bfc\u51fa\u76ee\u5f55'
@@ -1660,6 +2139,30 @@ const startSnsExport = async ({ scope, usernames, fileName } = {}) => {
   }
 
   try {
+    let baseline = null
+    let missingFiles = []
+    if (
+      isIncrementalFolderMode.value
+      && hasWebExportFolder.value
+      && !exportResetBaseline.value
+    ) {
+      exportBaselineStatus.value = 'checking'
+      let root = null
+      try {
+        root = await getBrowserSnsExportRoot({ create: false })
+      } catch (error) {
+        if (error?.name !== 'NotFoundError') throw error
+      }
+      baseline = root ? (await readBrowserSnsBaselineFromRoot(root)).baseline : null
+      if (baseline && !baseline.invalid && root) {
+        missingFiles = await findMissingBrowserSnsManagedFiles(root, baseline)
+      }
+    }
+    if (isIncrementalFolderMode.value && hasWebExportFolder.value) {
+      exportBaselineStatus.value = baseline?.invalid
+        ? 'invalid'
+        : (baseline ? (missingFiles.length ? 'repair' : 'ready') : 'new')
+    }
     const resp = await api.createSnsExport({
       account: selectedAccount.value,
       scope: normalizedScope,
@@ -1667,7 +2170,12 @@ const startSnsExport = async ({ scope, usernames, fileName } = {}) => {
       format: exportFormat.value,
       use_cache: snsUseCache.value ? 1 : 0,
       output_dir: hasDesktopExportFolder.value ? String(exportFolder.value || '').trim() : null,
-      file_name: String(fileName || '').trim() || null
+      file_name: String(fileName || '').trim() || null,
+      output_mode: exportOutputMode.value,
+      folder_name: isIncrementalFolderMode.value ? exportFolderNamePreview.value : null,
+      baseline,
+      missing_files: missingFiles,
+      reset_baseline: isIncrementalFolderMode.value && exportResetBaseline.value
     })
     exportJob.value = resp?.job || null
     const exportId = exportJob.value?.exportId
@@ -1710,13 +2218,19 @@ const articleThumbStage = ref({}) // postId -> 'proxy' | 'none'
 
 const selfInfo = ref({ wxid: '', nickname: '' })
 
+watch(exportFolderNamePreview, () => {
+  if (hasDesktopExportFolder.value) exportBaselineStatus.value = 'auto'
+  else if (hasWebExportFolder.value) exportBaselineStatus.value = 'unknown'
+})
+
 const loadSelfInfo = async () => {
   if (!selectedAccount.value) return
   const requestUrl = `${apiBase}/sns/self_info?account=${encodeURIComponent(selectedAccount.value)}&source=decrypted`
   try {
     const resp = await $fetch(requestUrl)
     if (resp && resp.wxid) {
-      selfInfo.value = resp
+      const unchanged = Object.keys(resp).every((key) => resp[key] === selfInfo.value?.[key])
+      if (!unchanged) selfInfo.value = resp
     }
   } catch (e) {
     await reportServerErrorFromError(e, {
@@ -1729,7 +2243,7 @@ const loadSelfInfo = async () => {
   }
 }
 
-const loadSnsUsers = async () => {
+const loadSnsUsers = async ({ preserveExisting = false } = {}) => {
   const acc = String(selectedAccount.value || '').trim()
   if (!acc) {
     snsUsers.value = []
@@ -1738,10 +2252,29 @@ const loadSnsUsers = async () => {
 
   try {
     const resp = await api.listSnsUsers({ account: acc, limit: 5000 })
-    snsUsers.value = Array.isArray(resp?.items) ? resp.items : []
+    const nextItems = Array.isArray(resp?.items) ? resp.items : []
+    if (!preserveExisting || snsUsers.value.length === 0) {
+      snsUsers.value = nextItems
+      return
+    }
+
+    // 刷新时保留现有顺序和节点，只更新统计或资料发生变化的联系人。
+    const nextByUsername = new Map(
+      nextItems.map((item) => [String(item?.username || '').trim(), item])
+    )
+    const merged = snsUsers.value.map((current) => {
+      const username = String(current?.username || '').trim()
+      const incoming = nextByUsername.get(username)
+      if (!incoming) return current
+      nextByUsername.delete(username)
+      const unchanged = Object.keys(incoming).every((key) => incoming[key] === current?.[key])
+      return unchanged ? current : { ...current, ...incoming }
+    })
+    for (const item of nextByUsername.values()) merged.push(item)
+    snsUsers.value = merged
   } catch (e) {
     console.error('加载朋友圈联系人失败', e)
-    snsUsers.value = []
+    // 后台刷新失败时保留已显示的联系人，避免侧边栏闪空。
   }
 }
 
@@ -2043,6 +2576,7 @@ const onCopyPostJsonClick = async () => {
 
 const onScroll = (e) => {
   const { scrollTop, clientHeight, scrollHeight } = e.target
+  scheduleSnsVisibleWindowUpdate()
   if (scrollTop + clientHeight >= scrollHeight - 200) {
     if (hasMore.value && !isLoading.value) {
       loadPosts({ reset: false })
@@ -2133,7 +2667,15 @@ const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
   if (/^https?:\/\//i.test(raw)) {
     try {
       const host = new URL(raw).hostname.toLowerCase()
-      if (host.endsWith('.qpic.cn') || host.endsWith('.qlogo.cn') || host.endsWith('.tc.qq.com')) {
+      const thumbCandidate = String(m?.thumb || m?.thumbUrl || '').trim()
+      const isThumbRequest = (!preferFull) && !!thumbCandidate && raw === upgradeTencentHttps(thumbCandidate)
+      if (
+        host.endsWith('.qpic.cn')
+        || host.endsWith('.qlogo.cn')
+        || host.endsWith('.tc.qq.com')
+        // video.qq.com 同时承载视频与加密封面，这里只代理封面，避免把视频送进图片接口。
+        || (host.endsWith('.video.qq.com') && isThumbRequest)
+      ) {
         const acc = String(selectedAccount.value || '').trim()
         const ct = String(post?.createTime || '').trim()
         const w = String(m?.size?.width || m?.size?.w || '').trim()
@@ -2166,8 +2708,6 @@ const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
         const mediaType = String(m?.type || '2').trim()
         if (mediaType) parts.set('media_type', mediaType)
 
-        const thumbCandidate = String(m?.thumb || m?.thumbUrl || '').trim()
-        const isThumbRequest = (!preferFull) && !!thumbCandidate && raw === upgradeTencentHttps(thumbCandidate)
         const token = String(
           isThumbRequest
             ? (m?.thumbToken || m?.thumbUrlToken || m?.thumbAttrs?.token || m?.token || m?.urlAttrs?.token || '')
@@ -2175,10 +2715,15 @@ const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
         ).trim()
         if (token) parts.set('token', token)
 
+        // 视频封面与视频本体共用 `<enc key="...">` 里的 videoKey；
+        // thumbAttrs.key 常见值为 "0"，不能用于解密加密封面。
+        const videoKey = Number(m?.type || 0) === 6
+          ? String(m?.videoKey || '').trim()
+          : ''
         const key = String(
           isThumbRequest
-            ? (m?.thumbKey || m?.thumbAttrs?.key || m?.key || m?.urlAttrs?.key || '')
-            : (m?.key || m?.urlAttrs?.key || m?.thumbKey || m?.thumbAttrs?.key || '')
+            ? (videoKey || m?.thumbKey || m?.thumbAttrs?.key || m?.key || m?.urlAttrs?.key || '')
+            : (videoKey || m?.key || m?.urlAttrs?.key || m?.thumbKey || m?.thumbAttrs?.key || '')
         ).trim()
         if (key) parts.set('key', key)
 
@@ -2188,7 +2733,7 @@ const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
         if (md5) parts.set('md5', md5)
         if (preferFull) parts.set('variant', 'full')
         // 修改后端媒体匹配逻辑时递增版本号，避免浏览器复用旧的错误缓存。
-        parts.set('v', preferFull ? '12' : '11')
+        parts.set('v', '14')
         parts.set('url', raw)
         return `${apiBase}/sns/media?${parts.toString()}`
       }
@@ -2797,10 +3342,23 @@ const loadAccounts = async () => {
 
 let refreshQueued = false
 const SNS_REALTIME_SYNC_TIMEOUT_MS = 10000
-const SNS_SNAPSHOT_POLL_INTERVAL_MS = 5000
+const SNS_VISIBLE_RECONCILE_BUFFER_MIN = 20
+const SNS_VISIBLE_RECONCILE_WINDOW_MAX = 200
+const SNS_MANUAL_REFRESH_SCAN_LIMIT = 200
+const SNS_EVENT_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 30000]
 let snsSnapshotVersion = ''
-let snsSnapshotPollTimer = null
-let snsSnapshotPollInFlight = false
+let snsRealtimeSyncInFlight = null
+let snsVisibleReconcilePromise = null
+let snsEventSource = null
+let snsEventAccount = ''
+let snsEventReconnectTimer = null
+let snsEventReconnectAttempt = 0
+let snsLastEventSequence = 0
+let snsQueuedRealtimeEvent = null
+let snsPageUnmounted = false
+let snsVisiblePostStart = 0
+let snsVisiblePostEnd = -1
+let snsVisibleWindowRaf = null
 
 const readSnsSnapshotVersion = async (account) => {
   const resp = await api.getSnsSnapshotStatus({ account })
@@ -2817,9 +3375,54 @@ const updateSnsSnapshotBaseline = async (account) => {
   } catch {}
 }
 
-const syncLatestSnsWithTimeout = async (account) => {
+const waitForSnsRealtimeSyncIdle = async () => {
+  const pending = snsRealtimeSyncInFlight
+  if (!pending) return
+  try {
+    await pending
+  } catch {}
+}
+
+const beginSnsRealtimeSync = (
+  account,
+  { maxScan, scanOffset = null, usernames = [] } = {}
+) => {
+  if (snsRealtimeSyncInFlight) return null
+
+  const requestPromise = Promise.resolve().then(() => api.syncSnsRealtimeLatest({
+    account,
+    force: 1,
+    max_scan: maxScan,
+    scan_offset: scanOffset,
+    usernames
+  }))
+  let trackedPromise = null
+  trackedPromise = requestPromise.finally(() => {
+    if (snsRealtimeSyncInFlight === trackedPromise) {
+      snsRealtimeSyncInFlight = null
+    }
+  })
+  snsRealtimeSyncInFlight = trackedPromise
+  return trackedPromise
+}
+
+const syncLatestSnsWithTimeout = async (
+  account,
+  {
+    maxScan = SNS_MANUAL_REFRESH_SCAN_LIMIT,
+    scanOffset = null,
+    usernames = [],
+    waitForCurrent = false
+  } = {}
+) => {
+  if (waitForCurrent) await waitForSnsRealtimeSyncIdle()
+  if (account !== String(selectedAccount.value || '').trim()) return null
+
+  const requestPromise = beginSnsRealtimeSync(account, { maxScan, scanOffset, usernames })
+  if (!requestPromise) return null
+
   let timeoutId = null
-  const syncOutcome = api.syncSnsRealtimeLatest({ account, force: 1 }).then(
+  const syncOutcome = requestPromise.then(
     (value) => ({ type: 'result', value }),
     (error) => ({ type: 'error', error })
   )
@@ -2839,6 +3442,49 @@ const syncLatestSnsWithTimeout = async (account) => {
   }
 }
 
+const describeSnsSyncFailure = (failure) => {
+  const code = String(
+    failure?.error
+    || failure?.code
+    || failure?.detail?.code
+    || ''
+  ).trim()
+  const message = String(
+    failure?.message
+    || (typeof failure?.detail === 'string' ? failure.detail : '')
+    || failure?.reason
+    || ''
+  ).trim()
+  const status = Number(failure?.status || failure?.statusCode || 0)
+  const searchable = `${code} ${message}`.toLowerCase()
+
+  if (searchable.includes('超时') || searchable.includes('timeout')) {
+    return '实时同步响应超时，后台任务仍可能完成；当前先显示本地快照'
+  }
+  if (
+    status === 404
+    || searchable.includes('wcdb realtime not available')
+    || searchable.includes('realtime_not_available')
+  ) {
+    return '实时组件未连接，请确认微信已登录且数据库密钥有效；当前显示本地快照'
+  }
+  if (code === 'decrypted_snapshot_write_incomplete') {
+    return '实时数据已读取，但写入本地快照失败；当前显示旧快照'
+  }
+  if (code === 'realtime_timeline_empty_with_existing_snapshot') {
+    return '微信实时库暂未返回数据，稍后会自动重试；当前显示本地快照'
+  }
+  if (code === 'sync_state_write_failed') {
+    return '实时数据已读取，但同步状态保存失败；稍后会自动重试'
+  }
+  if (searchable.includes('failed to fetch') || searchable.includes('network')) {
+    return '后端连接中断，暂时无法实时同步；当前显示本地快照'
+  }
+  return code
+    ? `实时同步失败（${code}），当前显示本地快照`
+    : '实时同步失败，当前显示本地快照'
+}
+
 const refreshSnsData = async () => {
   if (!String(selectedAccount.value || '').trim()) return
   if (isRefreshing.value) {
@@ -2852,24 +3498,62 @@ const refreshSnsData = async () => {
       refreshQueued = false
       const account = String(selectedAccount.value || '').trim()
       if (!account) break
+      const reconcileWindow = getSnsVisibleReconcileWindow()
+      const selectedUsername = String(selectedSnsUser.value || '').trim()
+      let shouldMergeTimeline = false
 
+      // 按钮本身显示刷新状态，避免插入提示行导致联系人列表上下跳动。
+      syncWarning.value = ''
+      const activeReconcile = snsVisibleReconcilePromise
+      if (activeReconcile) {
+        try {
+          await activeReconcile
+        } catch {}
+      }
       try {
-        const syncResult = await syncLatestSnsWithTimeout(account)
+        const syncResult = await syncLatestSnsWithTimeout(account, {
+          maxScan: SNS_MANUAL_REFRESH_SCAN_LIMIT,
+          scanOffset: reconcileWindow.scanOffset,
+          usernames: selectedUsername ? [selectedUsername] : [],
+          waitForCurrent: true
+        })
         const syncStatus = String(syncResult?.status || '').trim().toLowerCase()
         if (syncStatus === 'ok' || syncStatus === 'noop') {
           syncWarning.value = ''
+          const responseVersion = String(syncResult?.snapshotVersion || '').trim()
+          shouldMergeTimeline = !!(
+            Number(syncResult?.changed ?? syncResult?.upserted ?? 0) > 0
+            || syncResult?.snapshotChanged === true
+            || (responseVersion && snsSnapshotVersion && responseVersion !== snsSnapshotVersion)
+          )
         } else {
-          syncWarning.value = '实时同步失败，当前显示本地快照'
+          syncWarning.value = describeSnsSyncFailure(syncResult)
           console.warn('同步最新朋友圈未成功，继续读取已解密快照', syncResult)
         }
       } catch (e) {
-        syncWarning.value = '实时同步失败，当前显示本地快照'
+        syncWarning.value = describeSnsSyncFailure(e)
         console.warn('同步最新朋友圈失败，继续读取已解密快照', e)
       }
-      await loadSelfInfo()
-      await loadSnsUsers()
-      const snapshotLoaded = await loadPosts({ reset: true })
-      if (snapshotLoaded) await updateSnsSnapshotBaseline(account)
+      if (!shouldMergeTimeline) {
+        try {
+          const localVersion = await readSnsSnapshotVersion(account)
+          shouldMergeTimeline = !!(
+            localVersion
+            && snsSnapshotVersion
+            && localVersion !== snsSnapshotVersion
+          )
+        } catch {}
+      }
+      if (account !== String(selectedAccount.value || '').trim()) break
+      const refreshTasks = [loadSelfInfo()]
+      if (shouldMergeTimeline) {
+        refreshTasks.push(
+          loadSnsUsers({ preserveExisting: true }),
+          mergeVisiblePostsWindow(reconcileWindow)
+        )
+      }
+      await Promise.all(refreshTasks)
+      await updateSnsSnapshotBaseline(account)
     } while (refreshQueued)
   } finally {
     isRefreshing.value = false
@@ -2899,6 +3583,7 @@ const loadPosts = async ({ reset }) => {
       cachePagingExhausted.value = false
       seenPostIds.clear()
       posts.value = []
+      resetSnsVisiblePostWindow()
       if (process.client && timelineScrollEl.value) {
         try {
           timelineScrollEl.value.scrollTop = 0
@@ -2942,6 +3627,7 @@ const loadPosts = async ({ reset }) => {
     } else {
       posts.value = [...posts.value, ...nextItems]
     }
+    scheduleSnsVisibleWindowUpdate()
 
     // Keep sidebar count from lagging behind what we've already loaded (useful when sqlite snapshot is incomplete).
     const selUname = selectedUsername
@@ -2998,32 +3684,439 @@ const loadPosts = async ({ reset }) => {
   }
 }
 
-const pollSnsSnapshotVersion = async () => {
-  if (!process.client || document.visibilityState !== 'visible') return
-  if (snsSnapshotPollInFlight || isRefreshing.value) return
-  const account = String(selectedAccount.value || '').trim()
-  if (!account) return
+const updateSnsVisiblePostWindow = () => {
+  if (!process.client) return
+  const scrollEl = timelineScrollEl.value
+  if (!scrollEl) return
 
-  snsSnapshotPollInFlight = true
+  const containerRect = scrollEl.getBoundingClientRect()
+  const nodes = scrollEl.querySelectorAll('[data-sns-post-index]')
+  let first = -1
+  let last = -1
+  for (const node of nodes) {
+    const rect = node.getBoundingClientRect()
+    if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) continue
+    const index = Number(node.getAttribute('data-sns-post-index'))
+    if (!Number.isFinite(index)) continue
+    if (first < 0) first = index
+    last = index
+  }
+
+  if (first >= 0) {
+    snsVisiblePostStart = first
+    snsVisiblePostEnd = last
+  }
+}
+
+const scheduleSnsVisibleWindowUpdate = () => {
+  if (!process.client || snsPageUnmounted || snsVisibleWindowRaf !== null) return
+  snsVisibleWindowRaf = window.requestAnimationFrame(() => {
+    snsVisibleWindowRaf = null
+    updateSnsVisiblePostWindow()
+  })
+}
+
+const resetSnsVisiblePostWindow = () => {
+  snsVisiblePostStart = 0
+  snsVisiblePostEnd = -1
+  scheduleSnsVisibleWindowUpdate()
+}
+
+// 以当前可视动态为中心，向上、向下各扩一屏（至少 20 条），窗口会随滚动浮动。
+const getSnsVisibleReconcileWindow = () => {
+  updateSnsVisiblePostWindow()
+  const loadedCount = Array.isArray(posts.value) ? posts.value.length : 0
+  const fallbackEnd = Math.max(0, Math.min(Math.max(0, loadedCount - 1), pageSize - 1))
+  const visibleStart = Math.max(0, Number(snsVisiblePostStart || 0))
+  const visibleEnd = Math.max(
+    visibleStart,
+    snsVisiblePostEnd >= visibleStart ? Number(snsVisiblePostEnd) : fallbackEnd
+  )
+  const visibleCount = Math.max(1, visibleEnd - visibleStart + 1)
+  const bufferSize = Math.max(SNS_VISIBLE_RECONCILE_BUFFER_MIN, visibleCount)
+  const scanOffset = Math.max(0, visibleStart - bufferSize)
+  const requestedEnd = visibleEnd + bufferSize
+  const maxScan = Math.max(
+    pageSize,
+    Math.min(SNS_VISIBLE_RECONCILE_WINDOW_MAX, requestedEnd - scanOffset + 1)
+  )
+  return { scanOffset, maxScan, visibleStart, visibleEnd }
+}
+
+const findSnsPostNodeById = (postId) => {
+  const scrollEl = timelineScrollEl.value
+  if (!scrollEl || !postId) return null
+  const nodes = scrollEl.querySelectorAll('[data-sns-post-id]')
+  for (const node of nodes) {
+    if (String(node.getAttribute('data-sns-post-id') || '') === String(postId)) return node
+  }
+  return null
+}
+
+const captureSnsScrollAnchor = () => {
+  if (!process.client) return null
+  updateSnsVisiblePostWindow()
+  const anchorPost = posts.value[snsVisiblePostStart]
+  const anchorId = String(anchorPost?.id || anchorPost?.tid || '').trim()
+  const node = findSnsPostNodeById(anchorId)
+  const scrollEl = timelineScrollEl.value
+  if (!node || !scrollEl) return null
+  return {
+    postId: anchorId,
+    top: node.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top
+  }
+}
+
+const restoreSnsScrollAnchor = async (anchor) => {
+  if (!process.client || !anchor?.postId) return
+  await nextTick()
+  const scrollEl = timelineScrollEl.value
+  const node = findSnsPostNodeById(anchor.postId)
+  if (!scrollEl || !node) return
+  const nextTop = node.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top
+  const delta = nextTop - Number(anchor.top || 0)
+  if (Math.abs(delta) >= 0.5) scrollEl.scrollTop += delta
+}
+
+const snsPostUnsignedId = (post) => {
+  const raw = String(post?.id || post?.tid || '').trim()
+  if (!raw) return null
+  try {
+    return BigInt.asUintN(64, BigInt(raw))
+  } catch {
+    return null
+  }
+}
+
+const compareSnsPostsNewestFirst = (left, right) => {
+  const leftId = snsPostUnsignedId(left)
+  const rightId = snsPostUnsignedId(right)
+  if (leftId !== null && rightId !== null && leftId !== rightId) return leftId > rightId ? -1 : 1
+  return Number(right?.createTime || 0) - Number(left?.createTime || 0)
+}
+
+// 同步后按同一个浮动区间读取快照；用动态 ID 合并，并保持当前可视动态的位置。
+const mergeVisiblePostsWindow = async (windowRange = getSnsVisibleReconcileWindow()) => {
+  const account = String(selectedAccount.value || '').trim()
+  const selectedUsername = String(selectedSnsUser.value || '').trim()
+  if (!account) return false
+  const scanOffset = Math.max(0, Number(windowRange?.scanOffset || 0))
+  const maxScan = Math.max(1, Math.min(
+    SNS_VISIBLE_RECONCILE_WINDOW_MAX,
+    Number(windowRange?.maxScan || pageSize)
+  ))
+  const anchor = captureSnsScrollAnchor()
+  try {
+    const resp = await api.listSnsTimeline({
+      account,
+      limit: maxScan,
+      offset: scanOffset,
+      source: 'decrypted',
+      usernames: selectedUsername ? [selectedUsername] : []
+    })
+    if (
+      account !== String(selectedAccount.value || '').trim()
+      || selectedUsername !== String(selectedSnsUser.value || '').trim()
+    ) return false
+
+    const freshWindow = (Array.isArray(resp?.timeline) ? resp.timeline : []).filter((item) => item && item.type !== 7)
+    const mergedById = new Map()
+    const unkeyed = []
+    for (const item of posts.value) {
+      const postId = String(item?.id || item?.tid || '').trim()
+      if (postId) {
+        mergedById.set(postId, item)
+      } else {
+        unkeyed.push(item)
+      }
+    }
+    for (const item of freshWindow) {
+      const postId = String(item?.id || item?.tid || '').trim()
+      if (postId) {
+        mergedById.set(postId, item)
+        seenPostIds.add(postId)
+      } else {
+        unkeyed.push(item)
+      }
+    }
+    posts.value = [...mergedById.values(), ...unkeyed].sort(compareSnsPostsNewestFirst)
+
+    const limitUsed = Number(resp?.limit || maxScan) || maxScan
+    const consumedEnd = scanOffset + (resp?.hasMore ? limitUsed : freshWindow.length)
+    if (scanOffset <= Number(timelineOffset.value || 0)) {
+      timelineOffset.value = Math.max(Number(timelineOffset.value || 0), consumedEnd)
+    }
+    if (resp?.hasMore) hasMore.value = true
+
+    if (scanOffset === 0) coverData.value = resp?.cover || coverData.value
+    const nextCovers = Array.isArray(resp?.covers) ? resp.covers : []
+    if (scanOffset === 0 && nextCovers.length > 0) {
+      covers.value = nextCovers
+      coverIndex.value = Math.min(coverIndex.value, nextCovers.length - 1)
+    }
+    await restoreSnsScrollAnchor(anchor)
+    scheduleSnsVisibleWindowUpdate()
+    return true
+  } catch (e) {
+    console.warn('合并朋友圈浮动窗口失败', e)
+    return false
+  }
+}
+
+const mergeLatestPosts = async () => mergeVisiblePostsWindow(getSnsVisibleReconcileWindow())
+
+// 首屏三路并行读取本地快照，不等待实时同步。
+const loadLocalSnsData = async () => {
+  const account = String(selectedAccount.value || '').trim()
+  if (!account) return false
+  const [, , loaded] = await Promise.all([
+    loadSelfInfo(),
+    loadSnsUsers(),
+    loadPosts({ reset: true })
+  ])
+  if (loaded) await updateSnsSnapshotBaseline(account)
+  return loaded
+}
+
+const reconcileSnsSnapshotOnce = async () => {
+  if (!process.client || document.visibilityState !== 'visible') return false
+  const account = String(selectedAccount.value || '').trim()
+  if (!account) return false
+
   try {
     const version = await readSnsSnapshotVersion(account)
-    if (!version || account !== String(selectedAccount.value || '').trim()) return
-    if (!snsSnapshotVersion) {
-      snsSnapshotVersion = version
-      return
-    }
-    if (version === snsSnapshotVersion) return
+    if (!version || account !== String(selectedAccount.value || '').trim()) return false
+    if (version === snsSnapshotVersion) return false
 
-    await loadSelfInfo()
-    await loadSnsUsers()
-    const snapshotLoaded = await loadPosts({ reset: true })
-    if (snapshotLoaded && account === String(selectedAccount.value || '').trim() && !error.value) {
+    const [, timelineMerged] = await Promise.all([
+      loadSnsUsers({ preserveExisting: true }),
+      mergeVisiblePostsWindow(getSnsVisibleReconcileWindow())
+    ])
+    if (!timelineMerged) return false
+    if (account === String(selectedAccount.value || '').trim() && !error.value) {
       snsSnapshotVersion = version
     }
+    return true
   } catch {
-    // Snapshot-version polling is best-effort; the next interval retries.
-  } finally {
-    snsSnapshotPollInFlight = false
+    // 这里只在窗口恢复可见或 SSE 重连时检查一次，不启动周期轮询。
+    return false
+  }
+}
+
+const clearSnsEventReconnectTimer = () => {
+  if (!process.client || snsEventReconnectTimer === null) return
+  window.clearTimeout(snsEventReconnectTimer)
+  snsEventReconnectTimer = null
+}
+
+const closeSnsEventStream = ({ resetAttempt = false } = {}) => {
+  clearSnsEventReconnectTimer()
+  const source = snsEventSource
+  snsEventSource = null
+  snsEventAccount = ''
+  if (source) {
+    try {
+      source.close()
+    } catch {}
+  }
+  if (resetAttempt) snsEventReconnectAttempt = 0
+}
+
+const parseSnsRealtimeEvent = (event) => {
+  try {
+    return JSON.parse(String(event?.data || '{}'))
+  } catch {
+    return null
+  }
+}
+
+const scheduleSnsEventReconnect = () => {
+  if (!process.client || snsPageUnmounted || snsEventReconnectTimer !== null) return
+  if (document.visibilityState !== 'visible') return
+  if (!String(selectedAccount.value || '').trim()) return
+  const index = Math.min(snsEventReconnectAttempt, SNS_EVENT_RECONNECT_DELAYS_MS.length - 1)
+  const delayMs = SNS_EVENT_RECONNECT_DELAYS_MS[index]
+  snsEventReconnectAttempt = Math.min(snsEventReconnectAttempt + 1, SNS_EVENT_RECONNECT_DELAYS_MS.length)
+  snsEventReconnectTimer = window.setTimeout(() => {
+    snsEventReconnectTimer = null
+    connectSnsEventStream()
+  }, delayMs)
+}
+
+// 文件事件到达后只核对当前可见窗口；连续事件合并为一个尾随任务。
+const queueSnsRealtimeReconcile = (eventPayload) => {
+  snsQueuedRealtimeEvent = eventPayload
+  if (snsVisibleReconcilePromise) return snsVisibleReconcilePromise
+
+  let trackedPromise = null
+  const task = (async () => {
+    let changed = false
+    while (snsQueuedRealtimeEvent) {
+      const payload = snsQueuedRealtimeEvent
+      snsQueuedRealtimeEvent = null
+      if (!process.client || snsPageUnmounted || document.visibilityState !== 'visible') continue
+
+      const account = String(selectedAccount.value || '').trim()
+      if (!account || String(payload?.account || '') !== account) continue
+      const reconcileWindow = getSnsVisibleReconcileWindow()
+      const selectedUsername = String(selectedSnsUser.value || '').trim()
+      const needsTargetedSync = !!selectedUsername || reconcileWindow.scanOffset > 0
+      let syncResult = null
+
+      try {
+        if (needsTargetedSync) {
+          syncResult = await syncLatestSnsWithTimeout(account, {
+            maxScan: reconcileWindow.maxScan,
+            scanOffset: reconcileWindow.scanOffset,
+            usernames: selectedUsername ? [selectedUsername] : [],
+            waitForCurrent: true
+          })
+          const status = String(syncResult?.status || '').trim().toLowerCase()
+          if (status !== 'ok' && status !== 'noop') {
+            const syncError = new Error(String(syncResult?.error || syncResult?.reason || '朋友圈事件同步失败'))
+            syncError.code = String(syncResult?.error || '')
+            throw syncError
+          }
+        }
+
+        if (
+          account !== String(selectedAccount.value || '').trim()
+          || selectedUsername !== String(selectedSnsUser.value || '').trim()
+        ) continue
+
+        const responseVersion = String(
+          syncResult?.snapshotVersion
+          || payload?.snapshotVersion
+          || ''
+        ).trim()
+        const changedCount = Number(syncResult?.changed ?? syncResult?.upserted ?? payload?.changed ?? 0) || 0
+        const versionChanged = !!(
+          responseVersion
+          && snsSnapshotVersion
+          && responseVersion !== snsSnapshotVersion
+        )
+        const shouldMerge = !!(
+          changedCount > 0
+          || syncResult?.snapshotChanged === true
+          || payload?.snapshotChanged === true
+          || versionChanged
+        )
+
+        if (shouldMerge) {
+          const [, timelineMerged] = await Promise.all([
+            loadSnsUsers({ preserveExisting: true }),
+            mergeVisiblePostsWindow(reconcileWindow)
+          ])
+          if (!timelineMerged) {
+            throw new Error('朋友圈本地快照合并失败')
+          }
+          changed = true
+        }
+        if (responseVersion) {
+          snsSnapshotVersion = responseVersion
+        } else if (shouldMerge) {
+          await updateSnsSnapshotBaseline(account)
+        }
+        syncWarning.value = ''
+      } catch (e) {
+        if (account === String(selectedAccount.value || '').trim()) {
+          syncWarning.value = describeSnsSyncFailure(e)
+        }
+        console.warn('朋友圈事件对账失败，继续使用本地快照', e)
+      }
+    }
+    return changed
+  })()
+
+  trackedPromise = task.finally(() => {
+    if (snsVisibleReconcilePromise === trackedPromise) {
+      snsVisibleReconcilePromise = null
+    }
+    if (snsQueuedRealtimeEvent) queueSnsRealtimeReconcile(snsQueuedRealtimeEvent)
+  })
+  snsVisibleReconcilePromise = trackedPromise
+  return trackedPromise
+}
+
+const onSnsRealtimeReady = async (event) => {
+  const payload = parseSnsRealtimeEvent(event)
+  const account = String(selectedAccount.value || '').trim()
+  if (!payload || String(payload?.account || '') !== account) return
+
+  snsEventReconnectAttempt = 0
+  snsLastEventSequence = Math.max(snsLastEventSequence, Number(payload?.sequence || 0))
+  if (payload?.watcherAvailable === false) {
+    syncWarning.value = String(payload?.message || '系统文件通知不可用，请使用手动刷新')
+    return
+  }
+
+  const version = String(payload?.snapshotVersion || '').trim()
+  const versionChanged = !!(version && version !== snsSnapshotVersion)
+  const reconcileWindow = getSnsVisibleReconcileWindow()
+  const needsTargetedRecovery = !!String(selectedSnsUser.value || '').trim()
+    || reconcileWindow.scanOffset > 0
+  let reconciled = true
+  if (versionChanged || needsTargetedRecovery) {
+    reconciled = await queueSnsRealtimeReconcile({
+      account,
+      snapshotVersion: version,
+      snapshotChanged: versionChanged,
+      changed: 0
+    })
+  }
+  if (
+    version
+    && (!versionChanged || reconciled)
+    && account === String(selectedAccount.value || '').trim()
+  ) {
+    snsSnapshotVersion = version
+  }
+  syncWarning.value = ''
+}
+
+const onSnsRealtimeChange = (event) => {
+  const payload = parseSnsRealtimeEvent(event)
+  if (!payload) return
+  const sequence = Number(payload?.sequence || 0)
+  if (sequence > 0 && sequence <= snsLastEventSequence) return
+  snsLastEventSequence = Math.max(snsLastEventSequence, sequence)
+  void queueSnsRealtimeReconcile(payload)
+}
+
+const onSnsRealtimeSyncError = (event) => {
+  const payload = parseSnsRealtimeEvent(event)
+  if (!payload) return
+  const sequence = Number(payload?.sequence || 0)
+  if (sequence > 0 && sequence <= snsLastEventSequence) return
+  snsLastEventSequence = Math.max(snsLastEventSequence, sequence)
+  syncWarning.value = String(payload?.message || '朋友圈实时同步失败，请使用手动刷新')
+}
+
+function connectSnsEventStream() {
+  if (!process.client || snsPageUnmounted || document.visibilityState !== 'visible') return
+  const account = String(selectedAccount.value || '').trim()
+  if (!account || typeof EventSource === 'undefined') {
+    if (account) syncWarning.value = '当前环境不支持实时事件连接，请使用手动刷新'
+    return
+  }
+  if (snsEventSource && snsEventAccount === account) return
+
+  closeSnsEventStream()
+  snsEventAccount = account
+  const source = new EventSource(
+    `${apiBase}/sns/realtime/events?account=${encodeURIComponent(account)}`
+  )
+  snsEventSource = source
+  source.addEventListener('ready', onSnsRealtimeReady)
+  source.addEventListener('change', onSnsRealtimeChange)
+  source.addEventListener('sync_error', onSnsRealtimeSyncError)
+  source.onerror = () => {
+    if (source !== snsEventSource) return
+    closeSnsEventStream()
+    if (document.visibilityState === 'visible' && account === String(selectedAccount.value || '').trim()) {
+      syncWarning.value = '朋友圈实时连接已中断，正在重新连接；当前仍可手动刷新'
+      scheduleSnsEventReconnect()
+    }
   }
 }
 
@@ -3031,6 +4124,12 @@ const pollSnsSnapshotVersion = async () => {
 watch(
     () => selectedAccount.value,
     async (v, oldV) => {
+      if (v !== oldV) {
+        closeSnsEventStream({ resetAttempt: true })
+        snsLastEventSequence = 0
+        snsQueuedRealtimeEvent = null
+        snsSnapshotVersion = ''
+      }
       if (v && v !== oldV) {
         stopSnsExportPolling()
         exportJob.value = null
@@ -3038,19 +4137,23 @@ watch(
         isExportCancelling.value = false
         exportModalOpen.value = false
         exportFileName.value = ''
+        exportResetBaseline.value = false
+        exportBaselineStatus.value = hasDesktopExportFolder.value ? 'auto' : 'unknown'
         exportSearchQuery.value = ''
         exportSelectedUsernames.value = []
         resetExportSaveFeedback({ resetAutoSavedFor: true })
         snsUserQuery.value = ''
+        resetSnsUserRenderWindow()
         selectedSnsUser.value = ''
         snsUsers.value = []
         syncWarning.value = ''
-        snsSnapshotVersion = ''
         snsAvatarErrors.value = {}
         activeLivePhotoKey.value = ''
         resetSnsMediaErrors()
         if (previewCtx.value) closeImagePreview()
-        await refreshSnsData()
+        await loadLocalSnsData()
+        // 首屏就绪后建立事件连接；后端启动同步或重连差异由 ready 事件补齐。
+        connectSnsEventStream()
       }
     },
     { immediate: true }
@@ -3093,6 +4196,7 @@ watch(
 
 
 onMounted(async () => {
+  isSnsPageMounted.value = true
   privacyStore.init()
   snsUseCache.value = readLocalBoolSetting(SNS_SETTING_USE_CACHE_KEY, true)
   await loadAccounts()
@@ -3114,58 +4218,62 @@ const onGlobalKeyDown = (e) => {
   }
 }
 
-const SNS_PASSIVE_REFRESH_THROTTLE_MS = 5000
 const SNS_PASSIVE_REFRESH_EVENT_DELAY_MS = 200
-let lastPassiveRefreshAt = 0
 let passiveRefreshTimer = null
 
-const runPassiveSnsRefresh = () => {
+const runPassiveSnsRefresh = async () => {
   passiveRefreshTimer = null
   if (!process.client) return
   if (document.visibilityState !== 'visible') return
   if (!String(selectedAccount.value || '').trim()) return
-  lastPassiveRefreshAt = Date.now()
-  void refreshSnsData()
+  // 窗口重新可见时只核对一次本地版本，然后恢复 SSE。
+  await reconcileSnsSnapshotOnce()
+  connectSnsEventStream()
 }
 
 const onSnsPassiveRefresh = () => {
   if (!process.client) return
-  if (document.visibilityState !== 'visible') return
+  if (document.visibilityState !== 'visible') {
+    if (passiveRefreshTimer !== null) {
+      window.clearTimeout(passiveRefreshTimer)
+      passiveRefreshTimer = null
+    }
+    closeSnsEventStream({ resetAttempt: true })
+    return
+  }
   if (!String(selectedAccount.value || '').trim()) return
 
-  const elapsed = Date.now() - lastPassiveRefreshAt
   if (passiveRefreshTimer !== null) return
   passiveRefreshTimer = window.setTimeout(
     runPassiveSnsRefresh,
-    Math.max(
-      SNS_PASSIVE_REFRESH_EVENT_DELAY_MS,
-      SNS_PASSIVE_REFRESH_THROTTLE_MS - elapsed
-    )
+    SNS_PASSIVE_REFRESH_EVENT_DELAY_MS
   )
 }
 
 onMounted(() => {
   if (!process.client) return
+  snsPageUnmounted = false
   document.addEventListener('click', onGlobalClick)
   document.addEventListener('keydown', onGlobalKeyDown)
   window.addEventListener('focus', onSnsPassiveRefresh)
   document.addEventListener('visibilitychange', onSnsPassiveRefresh)
-  snsSnapshotPollTimer = window.setInterval(
-    () => { void pollSnsSnapshotVersion() },
-    SNS_SNAPSHOT_POLL_INTERVAL_MS
-  )
+  connectSnsEventStream()
 })
 
 onUnmounted(() => {
   if (!process.client) return
+  snsPageUnmounted = true
   stopSnsExportPolling()
+  stopExportContactResizeObserver()
   if (passiveRefreshTimer !== null) {
     window.clearTimeout(passiveRefreshTimer)
     passiveRefreshTimer = null
   }
-  if (snsSnapshotPollTimer !== null) {
-    window.clearInterval(snsSnapshotPollTimer)
-    snsSnapshotPollTimer = null
+  closeSnsEventStream({ resetAttempt: true })
+  snsQueuedRealtimeEvent = null
+  if (snsVisibleWindowRaf !== null) {
+    window.cancelAnimationFrame(snsVisibleWindowRaf)
+    snsVisibleWindowRaf = null
   }
   document.removeEventListener('click', onGlobalClick)
   document.removeEventListener('keydown', onGlobalKeyDown)
