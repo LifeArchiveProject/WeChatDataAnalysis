@@ -11,6 +11,7 @@ import html
 import json
 import os
 import re
+import shutil
 import sqlite3
 import threading
 import time
@@ -22,6 +23,7 @@ from typing import Any, Callable, Literal, Optional
 import httpx
 
 from .chat_helpers import _load_contact_rows, _pick_display_name, _resolve_account_dir
+from .account_identity import resolve_account_self_username
 from .logging_config import get_logger
 from .media_helpers import _detect_image_media_type, _read_and_maybe_decrypt_media, _resolve_account_wxid_dir
 from .export_integrity import (
@@ -46,9 +48,15 @@ from .chat_export_service import (  # pylint: disable=protected-access
 
 # Reuse SNS timeline/local cache helpers.
 from .routers.sns import (  # pylint: disable=protected-access
+    _extract_mp_biz_from_url,
+    _extract_sns_video_key,
+    _get_biz_to_official_index,
     _image_size_from_bytes,
+    _parse_timeline_xml,
     _resolve_sns_cached_video_path,
-    list_sns_timeline,
+    _to_unsigned_i64_str,
+    list_sns_timeline,  # 保留兼容导入；导出主路已不再按联系人分页调用
+    sync_sns_realtime_timeline_latest,
 )
 
 # SNS remote download+decrypt helpers (shared with API endpoints).
@@ -65,6 +73,7 @@ logger = get_logger(__name__)
 ExportStatus = Literal["queued", "running", "done", "error", "cancelled"]
 ExportScope = Literal["selected", "all"]
 ExportFormat = Literal["html", "json", "txt", "excel"]
+ExportOutputMode = Literal["zip", "folder"]
 
 _INVALID_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _HEX_ONLY_RE = re.compile(r"[^0-9a-fA-F]+")
@@ -90,6 +99,7 @@ class SnsRemoteMediaPrefetchResult:
     failed: int = 0
     elapsed_seconds: float = 0.0
     results: dict[str, Any] = field(default_factory=dict)
+    missing: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -221,6 +231,7 @@ async def _prefetch_sns_remote_media(
                         fetched = None
                     if fetched is None:
                         result.failed += 1
+                        result.missing.append(task_id)
                     else:
                         result.succeeded += 1
                         cache_path = getattr(fetched, "cache_path", None)
@@ -235,6 +246,7 @@ async def _prefetch_sns_remote_media(
                 raise
             except Exception as exc:
                 result.failed += 1
+                result.missing.append(task_id)
                 logger.info("sns media prefetch failed: kind=%s url=%s error=%s", task.kind, task.url, exc)
             finally:
                 completed += 1
@@ -271,6 +283,214 @@ def _safe_name(s: str, max_len: int = 80) -> str:
     if len(t) > max_len:
         t = t[:max_len].rstrip()
     return t
+
+
+_SNS_INCREMENTAL_STATE_NAME = ".wechat-sns-export.json"
+_SNS_INCREMENTAL_SCHEMA_VERSION = 2
+
+
+def _safe_folder_component(value: Any, *, fallback: str) -> str:
+    name = (_safe_name(str(value or ""), max_len=100) or fallback).rstrip(". ")
+    if name.upper() in {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }:
+        name = f"_{name}"
+    return name or fallback
+
+
+def _sns_export_extension(export_format: str) -> str:
+    return {"html": "html", "json": "json", "txt": "txt", "excel": "xlsx"}.get(
+        str(export_format or "").lower(),
+        "html",
+    )
+
+
+def _account_display_name(account_dir: Path) -> str:
+    username = str(resolve_account_self_username(account_dir) or "").strip()
+    contact_db_path = account_dir / "contact.db"
+    if username and contact_db_path.exists():
+        rows = _load_contact_rows(contact_db_path, [username])
+        display = _clean_name(_pick_display_name(rows.get(username), username))
+        if display:
+            return display
+    return username or account_dir.name
+
+
+def _load_avatar_fingerprints(account_dir: Path, usernames: list[str]) -> dict[str, str]:
+    path = account_dir / "head_image.db"
+    names = list(dict.fromkeys(str(value or "").strip() for value in usernames if str(value or "").strip()))
+    if not path.exists() or not names:
+        return {}
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        columns = {str(row[1] or "").lower() for row in conn.execute("PRAGMA table_info(head_image)").fetchall()}
+        if "username" not in columns:
+            return {}
+        selected = ["username"]
+        selected.append("update_time" if "update_time" in columns else "0 AS update_time")
+        selected.append("md5" if "md5" in columns else "'' AS md5")
+        selected.append("image_buffer" if "image_buffer" in columns else "NULL AS image_buffer")
+        rows = conn.execute(
+            f"SELECT {', '.join(selected)} FROM head_image "
+            f"WHERE username IN ({','.join(['?'] * len(names))}) "
+            "ORDER BY username, update_time DESC",
+            names,
+        ).fetchall()
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+    result: dict[str, str] = {}
+    for row in rows:
+        username = str(row["username"] or "").strip()
+        if not username or username in result:
+            continue
+        md5_value = str(row["md5"] or "").strip()
+        buffer_value = row["image_buffer"]
+        if isinstance(buffer_value, memoryview):
+            buffer_value = buffer_value.tobytes()
+        if buffer_value and not isinstance(buffer_value, (bytes, bytearray)):
+            buffer_value = str(buffer_value).encode("utf-8", errors="replace")
+        buffer_hash = hashlib.sha256(bytes(buffer_value or b"")).hexdigest() if buffer_value else ""
+        result[username] = hashlib.sha256(
+            f"{row['update_time']}|{md5_value}|{buffer_hash}".encode("utf-8", errors="replace")
+        ).hexdigest()
+    return result
+
+
+def _prepare_incremental_baseline(
+    *,
+    account_dir: Path,
+    export_format: str,
+    users: list[dict[str, Any]],
+    requested_folder_name: str,
+    supplied_baseline: dict[str, Any],
+    reset_baseline: bool,
+    missing_files: Optional[list[str]] = None,
+) -> tuple[dict[str, Any], dict[str, Any], set[str], str, str]:
+    """生成本轮基线，并返回旧基线、变更联系人集合和警告。"""
+    old = supplied_baseline if isinstance(supplied_baseline, dict) else {}
+    warning = ""
+    compatible = (
+        not reset_baseline
+        and int(old.get("schemaVersion") or 0) == _SNS_INCREMENTAL_SCHEMA_VERSION
+        and str(old.get("account") or "") == account_dir.name
+        and str(old.get("format") or "") == export_format
+        and isinstance(old.get("users"), dict)
+        and isinstance(old.get("files"), dict)
+    )
+    if old and not compatible and not reset_baseline:
+        warning = "增量基线损坏或与当前账号/格式不匹配，本次将完整重建。"
+    if not compatible:
+        old = {}
+
+    ext = _sns_export_extension(export_format)
+    avatar_fingerprints = _load_avatar_fingerprints(
+        account_dir,
+        [str(item.get("username") or "") for item in users],
+    )
+    old_users = old.get("users") if isinstance(old.get("users"), dict) else {}
+    allocated: set[str] = set()
+    user_states: dict[str, Any] = {}
+    changed: set[str] = set()
+    missing_paths = {
+        str(value or "").replace("\\", "/").lstrip("/")
+        for value in (missing_files or [])
+        if str(value or "").strip()
+        and ".." not in Path(str(value or "").replace("\\", "/")).parts
+    }
+    claimed_missing_paths: set[str] = set()
+
+    for item in users:
+        username = str(item.get("username") or "").strip()
+        if not username:
+            continue
+        display = _clean_name(item.get("displayName")) or username
+        old_user = old_users.get(username) if isinstance(old_users.get(username), dict) else {}
+        old_output = str(old_user.get("output") or "").strip()
+        if (
+            old_output
+            and Path(old_output).name == old_output
+            and old_output.lower().endswith(f".{ext}")
+            and old_output.casefold() not in allocated
+        ):
+            output = old_output
+        else:
+            stem = _safe_folder_component(display, fallback="联系人")
+            output = f"{stem}.{ext}"
+            if output.casefold() in allocated:
+                suffix = hashlib.sha256(username.encode("utf-8", errors="replace")).hexdigest()[:8]
+                output = f"{stem}_{suffix}.{ext}"
+        allocated.add(output.casefold())
+
+        posts = item.get("posts") if isinstance(item.get("posts"), list) else []
+        post_fingerprints = {
+            str(post.get("id") or post.get("tid") or ""): str(post.get("_contentFingerprint") or "")
+            for post in posts
+            if isinstance(post, dict) and str(post.get("id") or post.get("tid") or "").strip()
+        }
+        cover = item.get("cover") if isinstance(item.get("cover"), dict) else {}
+        state = {
+            "displayName": display,
+            "output": output,
+            "profileFingerprint": hashlib.sha256(
+                json.dumps(
+                    {
+                        "username": username,
+                        "displayName": display,
+                        "avatar": avatar_fingerprints.get(username, ""),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest(),
+            "coverFingerprint": str(cover.get("_contentFingerprint") or ""),
+            "posts": post_fingerprints,
+            "managedFiles": list(old_user.get("managedFiles") or []),
+        }
+        user_states[username] = state
+        semantic_keys = {"displayName", "output", "profileFingerprint", "coverFingerprint", "posts"}
+        if any(state.get(key) != old_user.get(key) for key in semantic_keys):
+            changed.add(username)
+        managed_paths = {
+            str(value or "").replace("\\", "/").lstrip("/")
+            for value in (state.get("managedFiles") or [])
+            if str(value or "").strip()
+        }
+        if output:
+            managed_paths.add(output)
+        user_missing = missing_paths & managed_paths
+        if user_missing:
+            changed.add(username)
+            claimed_missing_paths.update(user_missing)
+
+    # 共享资源理论上会出现在至少一个联系人的 managedFiles 中。旧版基线若没有记录归属，
+    # 保守地重建本轮联系人，确保缺失文件仍有机会进入增量补丁。
+    if missing_paths - claimed_missing_paths:
+        changed.update(user_states)
+
+    account_display = _account_display_name(account_dir)
+    default_root = (
+        f"{_clean_name(users[0].get('displayName')) or str(users[0].get('username') or '')}_朋友圈"
+        if len(users) == 1
+        else f"{account_display}_朋友圈"
+    )
+    folder_name = _safe_folder_component(requested_folder_name or default_root, fallback="朋友圈")
+    state = {
+        "schemaVersion": _SNS_INCREMENTAL_SCHEMA_VERSION,
+        "account": account_dir.name,
+        "format": export_format,
+        "folderName": folder_name,
+        "updatedAt": datetime.now().isoformat(timespec="seconds"),
+        "users": user_states,
+        "files": {},
+        "pendingMedia": [],
+    }
+    return state, old, changed, folder_name, warning
 
 
 def _resolve_export_output_dir(account_dir: Path, output_dir_raw: Any) -> Path:
@@ -801,8 +1021,175 @@ def _load_sns_users(account_dir: Path, *, usernames: Optional[list[str]] = None)
     return items
 
 
+def _load_sns_export_snapshot(
+    account_dir: Path,
+    *,
+    usernames: Optional[list[str]] = None,
+) -> list[dict[str, Any]]:
+    """在一个 SQLite 读事务中扫描完整时间线，并按联系人分组。
+
+    这样可以保证同一轮导出中的正文、评论和点赞来自同一份快照，
+    也避免了按联系人反复分页打开数据库。
+    """
+    sns_db_path = account_dir / "sns.db"
+    if not sns_db_path.exists():
+        # 兼容旧插件/测试代理的无文件数据源；正常产品路径始终走下方单次快照扫描。
+        legacy_users = _load_sns_users(account_dir, usernames=usernames)
+        prepared: list[dict[str, Any]] = []
+        for item in legacy_users:
+            username = str(item.get("username") or "").strip()
+            response = list_sns_timeline(
+                account=account_dir.name,
+                limit=200,
+                offset=0,
+                usernames=username,
+                keyword=None,
+                source="decrypted",
+            )
+            posts = [post for post in (response.get("timeline") or []) if isinstance(post, dict)]
+            prepared.append({
+                **item,
+                "posts": posts,
+                "postCount": len(posts),
+                "cover": response.get("cover") if isinstance(response.get("cover"), dict) else None,
+            })
+        return prepared
+
+    wanted_order = [str(value or "").strip() for value in (usernames or []) if str(value or "").strip()]
+    wanted = set(wanted_order)
+    params: list[Any] = []
+    where_sql = ""
+    if wanted:
+        where_sql = f"WHERE user_name IN ({','.join(['?'] * len(wanted_order))})"
+        params.extend(wanted_order)
+
+    conn = sqlite3.connect(str(sns_db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("BEGIN")
+        rows = conn.execute(
+            f"""
+            SELECT tid, user_name, content
+            FROM SnsTimeLine
+            {where_sql}
+            WHERE content IS NOT NULL AND content != ''
+            ORDER BY tid DESC
+            """ if not where_sql else f"""
+            SELECT tid, user_name, content
+            FROM SnsTimeLine
+            {where_sql} AND content IS NOT NULL AND content != ''
+            ORDER BY tid DESC
+            """,
+            params,
+        ).fetchall()
+        conn.commit()
+    finally:
+        conn.close()
+
+    all_usernames = {
+        str(row["user_name"] or "").strip()
+        for row in rows
+        if str(row["user_name"] or "").strip()
+    }
+    contact_db_path = account_dir / "contact.db"
+    contact_rows = _load_contact_rows(contact_db_path, list(all_usernames)) if contact_db_path.exists() else {}
+    biz_index = _get_biz_to_official_index(contact_db_path) if contact_db_path.exists() else {}
+    official_usernames: set[str] = set()
+    grouped: dict[str, dict[str, Any]] = {}
+
+    for row in rows:
+        uname = str(row["user_name"] or "").strip()
+        if not uname:
+            continue
+        content_xml = str(row["content"] or "")
+        parsed = _parse_timeline_xml(content_xml, uname)
+        post_type = int(parsed.get("type", 1) or 1)
+        tid = row["tid"]
+        post_id = _to_unsigned_i64_str(tid) if tid is not None else (str(parsed.get("createTime") or "") or uname)
+
+        video_key = _extract_sns_video_key(content_xml)
+        if video_key:
+            for media in parsed.get("media") if isinstance(parsed.get("media"), list) else []:
+                if not isinstance(media, dict):
+                    continue
+                media.setdefault("videoKey", video_key)
+                live_photo = media.get("livePhoto")
+                if isinstance(live_photo, dict) and not str(live_photo.get("key") or "").strip():
+                    live_photo["key"] = video_key
+
+        official: dict[str, Any] = {}
+        if post_type == 3:
+            biz = _extract_mp_biz_from_url(str(parsed.get("contentUrl") or ""))
+            info = biz_index.get(biz) if biz else None
+            official_username = str(info.get("username") or "").strip() if isinstance(info, dict) else ""
+            official = {
+                "biz": biz,
+                "username": official_username,
+                "serviceType": info.get("serviceType") if isinstance(info, dict) else None,
+                "displayName": "",
+            }
+            if official_username:
+                official_usernames.add(official_username)
+
+        post = {
+            "id": post_id,
+            "tid": tid,
+            "username": uname or parsed.get("username") or "",
+            "displayName": _pick_display_name(contact_rows.get(uname), uname),
+            "createTime": int(parsed.get("createTime") or 0),
+            "contentDesc": str(parsed.get("contentDesc") or ""),
+            "location": str(parsed.get("location") or ""),
+            "sourceName": str(parsed.get("sourceName") or ""),
+            "media": parsed.get("media") or [],
+            "likes": parsed.get("likes") or [],
+            "comments": parsed.get("comments") or [],
+            "type": post_type,
+            "title": parsed.get("title", ""),
+            "contentUrl": parsed.get("contentUrl", ""),
+            "finderFeed": parsed.get("finderFeed", {}),
+            "official": official,
+            # 原始 XML 指纹会同时覆盖正文、评论、点赞和媒体变化。
+            "_contentFingerprint": hashlib.sha256(content_xml.encode("utf-8", errors="replace")).hexdigest(),
+        }
+        item = grouped.setdefault(
+            uname,
+            {
+                "username": uname,
+                "displayName": _clean_name(_pick_display_name(contact_rows.get(uname), uname)) or uname,
+                "posts": [],
+                "cover": None,
+            },
+        )
+        if post_type == 7:
+            if item.get("cover") is None:
+                item["cover"] = post
+            continue
+        item["posts"].append(post)
+
+    if official_usernames and contact_db_path.exists():
+        official_rows = _load_contact_rows(contact_db_path, list(official_usernames))
+        for item in grouped.values():
+            for post in item.get("posts") or []:
+                official = post.get("official") if isinstance(post.get("official"), dict) else None
+                official_username = str((official or {}).get("username") or "").strip()
+                if official is not None and official_username in official_rows:
+                    official["displayName"] = str(_pick_display_name(official_rows.get(official_username), official_username)).strip()
+
+    result = list(grouped.values())
+    for item in result:
+        item["postCount"] = len(item.get("posts") or [])
+    if wanted_order:
+        order = {value: index for index, value in enumerate(wanted_order)}
+        result.sort(key=lambda item: order.get(str(item.get("username") or ""), len(order)))
+    else:
+        result.sort(key=lambda item: (-int(item.get("postCount") or 0), str(item.get("username") or "")))
+    return result
+
+
 @dataclass
 class ExportProgress:
+    phase: str = "queued"
     users_total: int = 0
     users_done: int = 0
     current_username: str = ""
@@ -815,6 +1202,7 @@ class ExportProgress:
     media_prepared: int = 0
     media_copied: int = 0
     media_missing: int = 0
+    phase_elapsed_ms: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -826,13 +1214,25 @@ class ExportJob:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     error: str = ""
+    warning: str = ""
+    freshness: dict[str, Any] = field(default_factory=dict)
+    incremental: dict[str, int] = field(default_factory=dict)
     zip_path: Optional[Path] = None
+    folder_path: Optional[Path] = None
+    staging_dir: Optional[Path] = field(default=None, repr=False)
+    staged_files: dict[str, Path] = field(default_factory=dict, repr=False)
+    change_manifest: dict[str, Any] = field(default_factory=dict)
     options: dict[str, Any] = field(default_factory=dict)
     progress: ExportProgress = field(default_factory=ExportProgress)
     cancel_requested: bool = False
     content_key: Optional[bytearray] = field(default=None, repr=False)
 
     def to_public_dict(self) -> dict[str, Any]:
+        public_options = {
+            key: value
+            for key, value in self.options.items()
+            if key not in {"baseline", "missingFiles"}
+        }
         return {
             "exportId": self.export_id,
             "account": self.account,
@@ -841,10 +1241,17 @@ class ExportJob:
             "startedAt": int(self.started_at) if self.started_at else None,
             "finishedAt": int(self.finished_at) if self.finished_at else None,
             "error": self.error or "",
+            "warning": self.warning or "",
+            "freshness": self.freshness,
+            "incremental": self.incremental,
             "zipPath": str(self.zip_path) if self.zip_path else "",
             "zipReady": bool(self.zip_path and self.zip_path.exists()),
-            "options": self.options,
+            "folderPath": str(self.folder_path) if self.folder_path else "",
+            "filesReady": bool(self.staged_files),
+            "folderName": str(self.change_manifest.get("folderName") or ""),
+            "options": public_options,
             "progress": {
+                "phase": self.progress.phase,
                 "usersTotal": self.progress.users_total,
                 "usersDone": self.progress.users_done,
                 "currentUsername": self.progress.current_username,
@@ -857,6 +1264,7 @@ class ExportJob:
                 "mediaPrepared": self.progress.media_prepared,
                 "mediaCopied": self.progress.media_copied,
                 "mediaMissing": self.progress.media_missing,
+                "phaseElapsedMs": self.progress.phase_elapsed_ms,
             },
         }
 
@@ -889,6 +1297,257 @@ class SnsExportManager:
                 job.finished_at = time.time()
             return True
 
+    def get_staged_file(self, export_id: str, file_id: str) -> Optional[Path]:
+        with self._lock:
+            job = self._jobs.get(export_id)
+            path = job.staged_files.get(file_id) if job else None
+        if path is None or not path.exists() or not path.is_file():
+            return None
+        return path
+
+    def commit_staged_files(self, export_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(export_id)
+            if not job:
+                return False
+            staging_dir = job.staging_dir
+            job.staged_files = {}
+            job.staging_dir = None
+        if staging_dir and staging_dir.exists():
+            # 只清理当前任务创建的临时目录。
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        return True
+
+    def _materialize_folder_export(
+        self,
+        *,
+        job: ExportJob,
+        zip_path: Path,
+        exports_root: Path,
+        account_dir: Path,
+        export_format: str,
+        users: list[dict[str, Any]],
+        state: dict[str, Any],
+        old_state: dict[str, Any],
+        changed_users: set[str],
+        folder_name: str,
+        desktop_output: bool,
+        reset_baseline: bool,
+        missing_files: Optional[list[str]] = None,
+        desktop_target_root: Optional[Path] = None,
+    ) -> Path:
+        staging_dir = (exports_root / f".sns-folder-{job.export_id}").resolve()
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        job.staging_dir = staging_dir
+        target_root = (
+            Path(desktop_target_root).resolve()
+            if desktop_output and desktop_target_root is not None
+            else ((exports_root / folder_name).resolve() if desktop_output else None)
+        )
+        missing_paths = {
+            str(value or "").replace("\\", "/").lstrip("/")
+            for value in (missing_files or [])
+            if str(value or "").strip()
+            and ".." not in Path(str(value or "").replace("\\", "/")).parts
+        }
+
+        extension = _sns_export_extension(export_format)
+        original_user_paths: dict[str, str] = {}
+        desired_user_paths: dict[str, str] = {}
+        for item in users:
+            username = str(item.get("username") or "").strip()
+            if not username:
+                continue
+            safe_username = _safe_name(username, max_len=80) or hashlib.md5(
+                username.encode("utf-8", errors="ignore")
+            ).hexdigest()[:12]
+            original_user_paths[f"sns_{safe_username}.{extension}"] = username
+            user_state = state.get("users", {}).get(username, {})
+            desired_user_paths[username] = str(user_state.get("output") or "")
+            if desired_user_paths[username]:
+                original_user_paths[desired_user_paths[username]] = username
+
+        old_files = old_state.get("files") if isinstance(old_state.get("files"), dict) else {}
+        old_users = old_state.get("users") if isinstance(old_state.get("users"), dict) else {}
+        effective_changed_users = set(changed_users)
+        if old_state.get("pendingMedia"):
+            effective_changed_users.update(desired_user_paths)
+
+        current_files: dict[str, Any] = {}
+        staged: list[dict[str, Any]] = []
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            safe_infos: dict[str, zipfile.ZipInfo] = {}
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                source_path = str(info.filename or "").replace("\\", "/").lstrip("/")
+                parts = [part for part in source_path.split("/") if part not in {"", "."}]
+                if not parts or any(part == ".." for part in parts):
+                    continue
+                if source_path in {"manifest.json", "export_report.json"} or source_path.startswith("index."):
+                    continue
+                safe_infos[source_path] = info
+
+            # 先从联系人文件中收集实际引用的媒体/头像/完整性资源，
+            # 基线只管理这些可达文件，不会误删用户自行放入目录的内容。
+            for source_path, info in safe_infos.items():
+                username = original_user_paths.get(source_path)
+                if not username:
+                    continue
+                target_path = desired_user_paths.get(username, "")
+                if not target_path:
+                    continue
+                payload = archive.read(info)
+                managed = {target_path}
+                if export_format == "html":
+                    try:
+                        document = payload.decode("utf-8")
+                    except UnicodeDecodeError:
+                        document = ""
+                    for match in re.finditer(r'(?:src|href)=["\']([^"\']+)["\']', document, flags=re.I):
+                        reference = html.unescape(str(match.group(1) or "")).split("#", 1)[0].split("?", 1)[0]
+                        reference = reference.replace("\\", "/").lstrip("./")
+                        if reference in safe_infos:
+                            managed.add(reference)
+                user_state = state.get("users", {}).get(username)
+                if isinstance(user_state, dict):
+                    user_state["managedFiles"] = sorted(managed)
+
+            desired_paths: set[str] = set()
+            for username, user_state in (state.get("users") or {}).items():
+                if not isinstance(user_state, dict):
+                    continue
+                managed = {
+                    str(path or "").replace("\\", "/").lstrip("/")
+                    for path in (user_state.get("managedFiles") or [])
+                    if str(path or "").strip()
+                }
+                output = str(user_state.get("output") or "").strip()
+                if output:
+                    managed.add(output)
+                user_state["managedFiles"] = sorted(managed)
+                desired_paths.update(managed)
+
+            # 未变文件直接复用旧摘要；变更文件才从本轮临时包中提取。
+            for path in desired_paths:
+                previous = old_files.get(path)
+                if isinstance(previous, dict):
+                    current_files[path] = dict(previous)
+
+            for source_path, info in safe_infos.items():
+
+                username = original_user_paths.get(source_path)
+                if username:
+                    target_path = desired_user_paths.get(username, "")
+                    if not target_path:
+                        continue
+                    if username not in effective_changed_users:
+                        continue
+                else:
+                    target_path = source_path
+                    if target_path not in desired_paths:
+                        continue
+
+                payload = archive.read(info)
+                digest = hashlib.sha256(payload).hexdigest()
+                previous = current_files.get(target_path) if isinstance(current_files.get(target_path), dict) else {}
+                current_files[target_path] = {"sha256": digest, "size": len(payload)}
+                existing_target = (
+                    (target_root / Path(*target_path.split("/"))).resolve()
+                    if target_root is not None else None
+                )
+                if (
+                    not reset_baseline
+                    and str(previous.get("sha256") or "") == digest
+                    and int(previous.get("size") or -1) == len(payload)
+                    and target_path not in missing_paths
+                    and (existing_target is None or existing_target.is_file())
+                ):
+                    continue
+
+                staged_path = (staging_dir / Path(*target_path.split("/"))).resolve()
+                if staging_dir not in staged_path.parents:
+                    raise ValueError("Unsafe incremental export path.")
+                staged_path.parent.mkdir(parents=True, exist_ok=True)
+                staged_path.write_bytes(payload)
+                file_id = uuid.uuid4().hex
+                job.staged_files[file_id] = staged_path
+                staged.append({
+                    "fileId": file_id,
+                    "path": target_path,
+                    "size": len(payload),
+                    "sha256": digest,
+                })
+
+        state["files"] = current_files
+        if job.progress.media_missing > 0:
+            state["pendingMedia"] = sorted({
+                *(str(value) for value in (state.get("pendingMedia") or []) if str(value)),
+                f"missing:{job.progress.media_missing}",
+            })
+        old_managed = set(old_files)
+        stale = sorted(path for path in old_managed - set(current_files) if path)
+        state_bytes = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+        state_path = staging_dir / _SNS_INCREMENTAL_STATE_NAME
+        state_path.write_bytes(state_bytes)
+        state_file_id = uuid.uuid4().hex
+        job.staged_files[state_file_id] = state_path
+
+        job.incremental = {
+            "usersChanged": len(effective_changed_users),
+            "usersReused": max(0, len(users) - len(effective_changed_users)),
+            "filesChanged": len(staged),
+            "filesReused": max(0, len(current_files) - len(staged)),
+            "filesRemoved": len(stale),
+        }
+        job.change_manifest = {
+            "folderName": folder_name,
+            "files": staged,
+            "stale": stale,
+            "state": {
+                "fileId": state_file_id,
+                "path": _SNS_INCREMENTAL_STATE_NAME,
+                "size": len(state_bytes),
+                "sha256": hashlib.sha256(state_bytes).hexdigest(),
+            },
+            "stats": dict(job.incremental),
+        }
+
+        if not desktop_output:
+            job.staging_dir = staging_dir
+            return staging_dir
+
+        assert target_root is not None
+        target_root.mkdir(parents=True, exist_ok=True)
+        for entry in staged:
+            source = job.staged_files[str(entry["fileId"])]
+            destination = (target_root / Path(*str(entry["path"]).split("/"))).resolve()
+            if target_root not in destination.parents:
+                raise ValueError("Unsafe desktop incremental export path.")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temp_destination = destination.with_name(f".{destination.name}.{job.export_id}.tmp")
+            shutil.copyfile(source, temp_destination)
+            os.replace(temp_destination, destination)
+
+        # 新文件全部落盘后，只清理旧基线明确管理的失效文件。
+        for relative in stale:
+            destination = (target_root / Path(*relative.split("/"))).resolve()
+            if target_root not in destination.parents or not destination.is_file():
+                continue
+            destination.unlink(missing_ok=True)
+
+        baseline_destination = target_root / _SNS_INCREMENTAL_STATE_NAME
+        baseline_temp = target_root / f".{_SNS_INCREMENTAL_STATE_NAME}.{job.export_id}.tmp"
+        shutil.copyfile(state_path, baseline_temp)
+        os.replace(baseline_temp, baseline_destination)
+        job.folder_path = target_root
+        job.staged_files = {}
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        job.staging_dir = None
+        return target_root
+
     def create_job(
         self,
         *,
@@ -899,6 +1558,11 @@ class SnsExportManager:
         use_cache: bool,
         output_dir: Optional[str],
         file_name: Optional[str],
+        output_mode: ExportOutputMode = "zip",
+        folder_name: Optional[str] = None,
+        baseline: Optional[dict[str, Any]] = None,
+        missing_files: Optional[list[str]] = None,
+        reset_baseline: bool = False,
         encrypt: bool = False,
         content_key: bytearray | None = None,
     ) -> ExportJob:
@@ -918,6 +1582,15 @@ class SnsExportManager:
                 "useCache": bool(use_cache),
                 "outputDir": str(output_dir or "").strip(),
                 "fileName": str(file_name or "").strip(),
+                "outputMode": "folder" if str(output_mode or "zip") == "folder" else "zip",
+                "folderName": str(folder_name or "").strip(),
+                "baseline": _json_safe(baseline or {}),
+                "missingFiles": [
+                    str(value or "").replace("\\", "/").lstrip("/")
+                    for value in (missing_files or [])
+                    if str(value or "").strip()
+                ],
+                "resetBaseline": bool(reset_baseline),
                 "encrypted": bool(encrypt),
             },
             content_key=content_key,
@@ -956,6 +1629,7 @@ class SnsExportManager:
                     tmp_zip.unlink(missing_ok=True)
                 except Exception:
                     pass
+            self.commit_staged_files(job.export_id)
         except Exception as e:
             logger.exception("sns export job failed: %s: %s", job.export_id, e)
             with self._lock:
@@ -968,6 +1642,7 @@ class SnsExportManager:
                     tmp_zip.unlink(missing_ok=True)
                 except Exception:
                     pass
+            self.commit_staged_files(job.export_id)
         finally:
             erase_export_content_key(job.content_key)
             job.content_key = None
@@ -981,6 +1656,54 @@ class SnsExportManager:
             job.status = "running"
             job.started_at = time.time()
             job.error = ""
+            job.warning = ""
+            job.freshness = {}
+            job.progress.phase = "syncing"
+
+        phase_name = "syncing"
+        phase_started = time.perf_counter()
+
+        def set_phase(name: str) -> None:
+            nonlocal phase_name, phase_started
+            now = time.perf_counter()
+            with self._lock:
+                if phase_name:
+                    job.progress.phase_elapsed_ms[phase_name] = int((now - phase_started) * 1000)
+                job.progress.phase = name
+            logger.info(
+                "sns export phase: export=%s phase=%s elapsed_ms=%d",
+                job.export_id,
+                phase_name,
+                int((now - phase_started) * 1000),
+            )
+            phase_name = name
+            phase_started = now
+
+        # 每个导出任务在工作线程内先同步最新数据；实时源不可用时
+        # 继续导出本地历史快照，并把降级原因暴露给界面。
+        try:
+            sync_result = sync_sns_realtime_timeline_latest(
+                account=account_dir.name,
+                max_scan=2000,
+                force=1,
+            )
+            sync_status = str((sync_result or {}).get("status") or "").lower()
+            job.freshness = {
+                "status": sync_status or "unknown",
+                "synced": sync_status in {"ok", "noop"},
+                "details": _json_safe(sync_result or {}),
+            }
+            if sync_status not in {"ok", "noop"}:
+                job.warning = "实时同步未完成，已继续导出本地历史快照。"
+        except Exception as exc:  # 导出必须可在无 native broker 的环境中降级运行
+            logger.warning("sns realtime sync before export failed: export=%s error=%s", job.export_id, exc)
+            job.warning = "实时同步失败，已继续导出本地历史快照。"
+            job.freshness = {
+                "status": "warning",
+                "synced": False,
+                "error": str(exc),
+            }
+        set_phase("reading")
 
         opts = dict(job.options or {})
         scope_raw = str(opts.get("scope") or "selected").strip() or "selected"
@@ -994,6 +1717,18 @@ class SnsExportManager:
             raise ValueError("No target usernames to export.")
 
         use_cache = bool(opts.get("useCache"))
+        output_mode: ExportOutputMode = "folder" if str(opts.get("outputMode") or "zip") == "folder" else "zip"
+        if output_mode == "folder" and job.content_key is not None:
+            raise ValueError("增量目录模式不支持整包加密，请改用 ZIP 模式。")
+        requested_folder_name = str(opts.get("folderName") or "").strip()
+        supplied_baseline = opts.get("baseline") if isinstance(opts.get("baseline"), dict) else {}
+        supplied_missing_files = [
+            str(value or "").replace("\\", "/").lstrip("/")
+            for value in (opts.get("missingFiles") or [])
+            if str(value or "").strip()
+        ]
+        reset_baseline = bool(opts.get("resetBaseline"))
+        desktop_folder_output = output_mode == "folder" and bool(str(opts.get("outputDir") or "").strip())
         exports_root = _resolve_export_output_dir(account_dir, opts.get("outputDir"))
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -1016,6 +1751,11 @@ class SnsExportManager:
             pass
 
         report: dict[str, Any] = {"errors": []}
+        incremental_state: dict[str, Any] = {}
+        incremental_old_state: dict[str, Any] = {}
+        incremental_changed_users: set[str] = set()
+        incremental_folder_name = ""
+        incremental_desktop_target_root: Optional[Path] = None
         ui_public_dir = _resolve_ui_public_dir()
 
         emoji_table = _load_wechat_emoji_table()
@@ -1531,6 +2271,7 @@ class SnsExportManager:
         def _build_post_json_record(post: dict[str, Any]) -> dict[str, Any]:
             item = _json_safe(post)
             if isinstance(item, dict):
+                item.pop("_contentFingerprint", None)
                 item["momentTypeLabel"] = _format_moment_type_label(post)
                 item["createTimeText"] = _format_dt(post.get("createTime"))
             return item if isinstance(item, dict) else {"value": item}
@@ -2115,11 +2856,16 @@ class SnsExportManager:
                 html_assets: Optional[dict[str, str]] = None
                 if export_format == "html":
                     css_payload = export_css("sns")
-                    html_assets = prepare_html_zip_assets(job.export_id, css_payload)
-                    zf.writestr(html_assets["cssPath"], html_assets["cssPayload"])
-                    zf.writestr(html_assets["jsPath"], html_assets["jsPayload"])
-                    written.add(html_assets["cssPath"])
-                    written.add(html_assets["jsPath"])
+                    if output_mode == "folder":
+                        html_assets = {"cssPath": "assets/sns.css", "cssPayload": css_payload}
+                        zf.writestr(html_assets["cssPath"], html_assets["cssPayload"])
+                        written.add(html_assets["cssPath"])
+                    else:
+                        html_assets = prepare_html_zip_assets(job.export_id, css_payload)
+                        zf.writestr(html_assets["cssPath"], html_assets["cssPayload"])
+                        zf.writestr(html_assets["jsPath"], html_assets["jsPayload"])
+                        written.add(html_assets["cssPath"])
+                        written.add(html_assets["jsPath"])
 
                     repo_root = Path(__file__).resolve().parents[2]
                     wxemoji_src: Optional[Path] = None
@@ -2131,15 +2877,100 @@ class SnsExportManager:
                         cand = repo_root / "frontend" / "public" / "wxemoji"
                         if cand.is_dir():
                             wxemoji_src = cand
-                    if wxemoji_src is not None:
-                        _zip_write_tree(zf=zf, src_dir=wxemoji_src, dest_prefix="wxemoji", written=written)
 
-                if scope == "all":
-                    users = _load_sns_users(account_dir)
-                else:
-                    users = _load_sns_users(account_dir, usernames=target_usernames)
-                    order = {u: i for i, u in enumerate(target_usernames)}
-                    users.sort(key=lambda x: order.get(str(x.get("username") or ""), 10**9))
+                users = _load_sns_export_snapshot(
+                    account_dir,
+                    usernames=target_usernames if scope == "selected" else None,
+                )
+                if output_mode == "folder":
+                    (
+                        incremental_state,
+                        incremental_old_state,
+                        incremental_changed_users,
+                        incremental_folder_name,
+                        baseline_warning,
+                    ) = _prepare_incremental_baseline(
+                        account_dir=account_dir,
+                        export_format=export_format,
+                        users=users,
+                        requested_folder_name=requested_folder_name,
+                        supplied_baseline=supplied_baseline,
+                        reset_baseline=reset_baseline,
+                        missing_files=supplied_missing_files,
+                    )
+                    if desktop_folder_output:
+                        nested_target_root = (exports_root / incremental_folder_name).resolve()
+                        direct_baseline_path = exports_root / _SNS_INCREMENTAL_STATE_NAME
+                        # 允许用户直接选中已有的导出根目录；此前会再套一层同名目录，
+                        # 既读不到原基线，也无法补回用户手动删除的媒体文件。
+                        direct_baseline: dict[str, Any] = {}
+                        if direct_baseline_path.exists() and direct_baseline_path.is_file():
+                            try:
+                                loaded_direct = json.loads(direct_baseline_path.read_text(encoding="utf-8"))
+                                direct_baseline = loaded_direct if isinstance(loaded_direct, dict) else {}
+                            except Exception:
+                                direct_baseline = {}
+                        direct_matches = bool(
+                            exports_root.name == incremental_folder_name
+                            or (
+                                direct_baseline_path.is_file()
+                                and (
+                                    str(direct_baseline.get("account") or "") == account_dir.name
+                                    and str(direct_baseline.get("format") or "") == export_format
+                                    and str(direct_baseline.get("folderName") or "") == incremental_folder_name
+                                )
+                            )
+                        )
+                        if direct_matches:
+                            incremental_desktop_target_root = exports_root.resolve()
+                        else:
+                            incremental_desktop_target_root = nested_target_root
+                        disk_baseline_path = incremental_desktop_target_root / _SNS_INCREMENTAL_STATE_NAME
+                        if not reset_baseline and disk_baseline_path.exists() and disk_baseline_path.is_file():
+                            try:
+                                disk_baseline = (
+                                    direct_baseline
+                                    if disk_baseline_path == direct_baseline_path and direct_baseline
+                                    else json.loads(disk_baseline_path.read_text(encoding="utf-8"))
+                                )
+                            except Exception:
+                                disk_baseline = {"invalid": True}
+                            (
+                                incremental_state,
+                                incremental_old_state,
+                                incremental_changed_users,
+                                incremental_folder_name,
+                                baseline_warning,
+                            ) = _prepare_incremental_baseline(
+                                account_dir=account_dir,
+                                export_format=export_format,
+                                users=users,
+                                requested_folder_name=incremental_folder_name,
+                                supplied_baseline=disk_baseline,
+                                reset_baseline=False,
+                                missing_files=supplied_missing_files,
+                            )
+                    if baseline_warning:
+                        job.warning = " ".join(part for part in [job.warning, baseline_warning] if part)
+                    if desktop_folder_output and incremental_old_state:
+                        desktop_root = (
+                            incremental_desktop_target_root
+                            or (exports_root / incremental_folder_name).resolve()
+                        )
+                        for username, user_state in (incremental_state.get("users") or {}).items():
+                            if not isinstance(user_state, dict):
+                                continue
+                            managed_paths = list(user_state.get("managedFiles") or [])
+                            managed_paths.append(str(user_state.get("output") or ""))
+                            for relative in managed_paths:
+                                relative = str(relative or "").replace("\\", "/").lstrip("/")
+                                if not relative:
+                                    continue
+                                candidate = (desktop_root / Path(*relative.split("/"))).resolve()
+                                if desktop_root not in candidate.parents or not candidate.is_file():
+                                    incremental_changed_users.add(str(username))
+                                    break
+                set_phase("comparing")
 
                 total_posts_est = 0
                 for user_item in users:
@@ -2175,29 +3006,8 @@ class SnsExportManager:
                         job.progress.current_user_posts_total = post_count_est
                         job.progress.current_user_posts_done = 0
 
-                    posts_all: list[dict[str, Any]] = []
-                    cover_data: Optional[dict[str, Any]] = None
-                    off = 0
-                    while True:
-                        should_cancel()
-                        resp = list_sns_timeline(
-                            account=account_dir.name,
-                            limit=200,
-                            offset=off,
-                            usernames=uname,
-                            keyword=None,
-                            source="decrypted",
-                        )
-                        if off == 0 and cover_data is None and isinstance(resp, dict) and isinstance(resp.get("cover"), dict):
-                            cover_data = resp.get("cover")
-                        items = resp.get("timeline") if isinstance(resp, dict) else None
-                        items = items if isinstance(items, list) else []
-                        if not items:
-                            break
-                        posts_all.extend([p for p in items if isinstance(p, dict)])
-                        off += len(items)
-                        if not bool(resp.get("hasMore")):
-                            break
+                    posts_all = [p for p in (u.get("posts") or []) if isinstance(p, dict)]
+                    cover_data = u.get("cover") if isinstance(u.get("cover"), dict) else None
 
                     actual_post_count = len(posts_all)
                     if actual_post_count != post_count_est:
@@ -2221,7 +3031,12 @@ class SnsExportManager:
                             "cover": cover_data,
                         }
                     )
-                    if export_format == "html":
+                    needs_media_retry = bool(incremental_old_state.get("pendingMedia")) if output_mode == "folder" else False
+                    if export_format == "html" and (
+                        output_mode == "zip"
+                        or uname in incremental_changed_users
+                        or needs_media_retry
+                    ):
                         prefetch_posts.extend(posts_all)
                         if isinstance(cover_data, dict) and cover_data:
                             cover_post = dict(cover_data)
@@ -2229,6 +3044,40 @@ class SnsExportManager:
                             cover_post.setdefault("id", str(cover_data.get("id") or "").strip())
                             prefetch_posts.append(cover_post)
 
+                render_prepared_users = (
+                    prepared_users
+                    if output_mode == "zip" or bool(incremental_old_state.get("pendingMedia"))
+                    else [
+                        item for item in prepared_users
+                        if str(item.get("username") or "") in incremental_changed_users
+                    ]
+                )
+                if export_format == "html" and wxemoji_src is not None and (
+                    output_mode == "zip" or render_prepared_users
+                ):
+                    if output_mode == "zip":
+                        _zip_write_tree(zf=zf, src_dir=wxemoji_src, dest_prefix="wxemoji", written=written)
+                    elif emoji_table and emoji_regex is not None:
+                        emoji_source_root = wxemoji_src.resolve()
+                        serialized_posts = json.dumps(
+                            [item.get("posts") or [] for item in render_prepared_users],
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        emoji_values = {
+                            str(emoji_table.get(match.group(0)) or "").replace("\\", "/").lstrip("/")
+                            for match in emoji_regex.finditer(serialized_posts)
+                        }
+                        for relative in sorted(value for value in emoji_values if value):
+                            source = (emoji_source_root / Path(*relative.split("/"))).resolve()
+                            if emoji_source_root not in source.parents or not source.is_file():
+                                continue
+                            arcname = f"wxemoji/{relative}"
+                            if arcname in written:
+                                continue
+                            zf.write(source, arcname)
+                            written.add(arcname)
+                set_phase("media")
                 prefetched_media = {}
                 prefetch_attempted = set()
                 if export_format == "html":
@@ -2246,18 +3095,27 @@ class SnsExportManager:
                         with self._lock:
                             job.progress.media_prepared = done
 
-                    prefetch_result = run_async(
-                        _prefetch_sns_remote_media(
-                            account_dir=account_dir,
-                            tasks=media_tasks,
-                            use_cache=use_cache,
-                            concurrency=_SNS_EXPORT_DOWNLOAD_CONCURRENCY,
-                            client=remote_client,
-                            should_cancel=should_cancel,
-                            on_progress=update_media_prepare,
+                    async def prepare_media_and_avatars() -> SnsRemoteMediaPrefetchResult:
+                        media_result, _avatar_result = await asyncio.gather(
+                            _prefetch_sns_remote_media(
+                                account_dir=account_dir,
+                                tasks=media_tasks,
+                                use_cache=use_cache,
+                                concurrency=_SNS_EXPORT_DOWNLOAD_CONCURRENCY,
+                                client=remote_client,
+                                should_cancel=should_cancel,
+                                on_progress=update_media_prepare,
+                            ),
+                            prefetch_avatar_payloads(
+                                [str(item.get("username") or "") for item in render_prepared_users]
+                            ),
                         )
-                    )
+                        return media_result
+
+                    prefetch_result = run_async(prepare_media_and_avatars())
                     prefetched_media = prefetch_result.results
+                    if output_mode == "folder":
+                        incremental_state["pendingMedia"] = sorted(set(prefetch_result.missing))
                     logger.info(
                         "sns media prefetch: export=%s users=%d total=%d cached=%d downloaded=%d failed=%d elapsed=%.2fs concurrency=%d",
                         job.export_id,
@@ -2269,13 +3127,8 @@ class SnsExportManager:
                         prefetch_result.elapsed_seconds,
                         _SNS_EXPORT_DOWNLOAD_CONCURRENCY,
                     )
-                    run_async(
-                        prefetch_avatar_payloads(
-                            [str(item.get("username") or "") for item in prepared_users]
-                        )
-                    )
-
-                for i, prepared in enumerate(prepared_users):
+                set_phase("writing")
+                for i, prepared in enumerate(render_prepared_users):
                     should_cancel()
                     uname = str(prepared.get("username") or "").strip()
                     display = _clean_name(prepared.get("displayName")) or uname
@@ -2283,6 +3136,9 @@ class SnsExportManager:
                     posts_all = prepared.get("posts") if isinstance(prepared.get("posts"), list) else []
                     actual_post_count = int(prepared.get("postCount") or 0)
                     cover_data = prepared.get("cover") if isinstance(prepared.get("cover"), dict) else None
+                    desired_output_name = str(
+                        (incremental_state.get("users", {}).get(uname, {}) or {}).get("output") or ""
+                    ) if output_mode == "folder" else ""
                     with self._lock:
                         job.progress.current_username = uname
                         job.progress.current_display_name = display
@@ -2299,11 +3155,11 @@ class SnsExportManager:
                                 job.progress.posts_exported += 1
                                 job.progress.current_user_posts_done += 1
 
-                        output_name = f"sns_{safe_uname}.html"
+                        output_name = desired_output_name or f"sns_{safe_uname}.html"
                         title = f"朋友圈导出 - {display}"
                         back_link = (
                             '<a href="index.html" class="text-sm text-[#576b95] hover:underline">← 返回</a>'
-                            if scope == "all"
+                            if scope == "all" and output_mode == "zip"
                             else ""
                         )
                         cover_html = render_cover_header_html(zf=zf, username=uname, display_name=display, cover_data=cover_data)
@@ -2329,7 +3185,11 @@ class SnsExportManager:
                                 "",
                             ]
                         )
-                        page_html = protect_html_document_with_external_assets(page_html, html_assets or {})
+                        if output_mode == "folder":
+                            stylesheet = f'<link rel="stylesheet" href="{_esc_attr((html_assets or {}).get("cssPath") or "assets/sns.css")}" />'
+                            page_html = page_html.replace("</head>", stylesheet + "\n</head>", 1)
+                        else:
+                            page_html = protect_html_document_with_external_assets(page_html, html_assets or {})
                         zf.writestr(output_name, page_html)
                         written.add(output_name)
                     elif export_format == "json":
@@ -2341,7 +3201,7 @@ class SnsExportManager:
                                 job.progress.posts_exported += 1
                                 job.progress.current_user_posts_done += 1
 
-                        output_name = f"sns_{safe_uname}.json"
+                        output_name = desired_output_name or f"sns_{safe_uname}.json"
                         json_payload: dict[str, Any] = {
                             "exportedAt": exported_at,
                             "exportId": job.export_id,
@@ -2354,7 +3214,11 @@ class SnsExportManager:
                             "posts": exported_posts,
                         }
                         if isinstance(cover_data, dict) and cover_data:
-                            json_payload["cover"] = _json_safe(cover_data)
+                            json_payload["cover"] = {
+                                key: _json_safe(value)
+                                for key, value in cover_data.items()
+                                if key != "_contentFingerprint"
+                            }
                         zf.writestr(output_name, json.dumps(json_payload, ensure_ascii=False, indent=2))
                         written.add(output_name)
                     elif export_format == "excel":
@@ -2387,7 +3251,7 @@ class SnsExportManager:
                                     json.dumps(post, ensure_ascii=False, default=str, sort_keys=True),
                                 ]
                             )
-                        output_name = f"sns_{safe_uname}.xlsx"
+                        output_name = desired_output_name or f"sns_{safe_uname}.xlsx"
                         zf.writestr(
                             output_name,
                             build_xlsx_workbook(
@@ -2408,7 +3272,7 @@ class SnsExportManager:
                                 job.progress.posts_exported += 1
                                 job.progress.current_user_posts_done += 1
 
-                        output_name = f"sns_{safe_uname}.txt"
+                        output_name = desired_output_name or f"sns_{safe_uname}.txt"
                         zf.writestr(
                             output_name,
                             _render_user_text(
@@ -2433,7 +3297,7 @@ class SnsExportManager:
                         job.progress.users_done = i + 1
                         job.progress.current_user_posts_done = actual_post_count
 
-                if export_format == "html":
+                if output_mode == "zip" and export_format == "html":
                     if scope == "all":
                         rows: list[str] = []
                         for u in user_outputs:
@@ -2507,7 +3371,7 @@ class SnsExportManager:
                             index_html = protect_html_document_with_external_assets(index_html, html_assets or {})
                             zf.writestr("index.html", index_html)
                             written.add("index.html")
-                elif export_format == "json":
+                elif output_mode == "zip" and export_format == "json":
                     zf.writestr(
                         "index.json",
                         json.dumps(
@@ -2524,7 +3388,7 @@ class SnsExportManager:
                         ),
                     )
                     written.add("index.json")
-                elif export_format == "excel":
+                elif output_mode == "zip" and export_format == "excel":
                     zf.writestr(
                         "index.xlsx",
                         build_xlsx_workbook(
@@ -2546,7 +3410,7 @@ class SnsExportManager:
                         ),
                     )
                     written.add("index.xlsx")
-                else:
+                elif output_mode == "zip":
                     lines = [
                         "朋友圈导出",
                         f"导出时间: {exported_at}",
@@ -2563,6 +3427,7 @@ class SnsExportManager:
                     zf.writestr("index.txt", "\n".join(lines).rstrip() + "\n")
                     written.add("index.txt")
 
+                set_phase("finalizing")
                 zf.writestr(
                     "manifest.json",
                     json.dumps(
@@ -2595,9 +3460,9 @@ class SnsExportManager:
                     zf.writestr("export_report.json", json.dumps(report, ensure_ascii=False, indent=2))
                 except Exception:
                     pass
-                if export_format == "html":
+                if export_format == "html" and output_mode == "zip":
                     write_active_html_zip_integrity(zf, job.export_id, html_assets or {})
-                else:
+                elif export_format != "html" and output_mode == "zip":
                     write_zip_integrity_sidecars(zf, job.export_id)
         finally:
             try:
@@ -2634,12 +3499,42 @@ class SnsExportManager:
             except Exception:
                 final_out = tmp_zip
 
+        if output_mode == "folder":
+            try:
+                folder_result = self._materialize_folder_export(
+                    job=job,
+                    zip_path=final_out,
+                    exports_root=exports_root,
+                    account_dir=account_dir,
+                    export_format=export_format,
+                    users=users,
+                    state=incremental_state,
+                    old_state=incremental_old_state,
+                    changed_users=incremental_changed_users,
+                    folder_name=incremental_folder_name,
+                    desktop_output=desktop_folder_output,
+                    reset_baseline=reset_baseline,
+                    missing_files=supplied_missing_files,
+                    desktop_target_root=incremental_desktop_target_root,
+                )
+            finally:
+                try:
+                    final_out.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            final_out = folder_result
+
         with self._lock:
-            job.zip_path = final_out
+            job.zip_path = final_out if output_mode == "zip" else None
             if job.status != "cancelled":
                 job.status = "done"
             job.finished_at = time.time()
+            if output_mode == "folder":
+                job.progress.users_done = job.progress.users_total
+                job.progress.posts_exported = job.progress.posts_total
             job.progress.current_user_posts_done = job.progress.current_user_posts_total
+
+        set_phase("done")
 
         return final_out
 
