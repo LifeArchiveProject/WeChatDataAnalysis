@@ -650,7 +650,7 @@ export const useApi = () => {
     })
   }
 
-  // 聊天记录导出（离线zip）
+  // 聊天记录导出（ZIP 全量或增量目录）
   const createChatExport = async (data = {}) => {
     return await request('/chat/exports', {
       method: 'POST',
@@ -673,7 +673,14 @@ export const useApi = () => {
         html_page_size: data.html_page_size != null ? Number(data.html_page_size) : 1000,
         privacy_mode: !!data.privacy_mode,
         file_name: data.file_name || null,
-        transcribe_voice: !!data.transcribe_voice
+        transcribe_voice: !!data.transcribe_voice,
+        output_mode: data.output_mode === 'folder' ? 'folder' : 'zip',
+        folder_name: data.folder_name || null,
+        baseline: data.baseline && typeof data.baseline === 'object' ? data.baseline : null,
+        missing_files: Array.isArray(data.missing_files) ? data.missing_files : [],
+        reset_baseline: !!data.reset_baseline,
+        repair_usernames: Array.isArray(data.repair_usernames) ? data.repair_usernames : [],
+        recheck_media: !!data.recheck_media
       }
     })
   }
