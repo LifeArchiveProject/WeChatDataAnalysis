@@ -29,8 +29,8 @@
                 解密密钥 <span class="text-red-500">*</span>
               </label>
 
-              <div class="flex gap-3">
-                <div class="relative flex-1">
+              <div class="flex flex-wrap gap-3">
+                <div class="relative flex-1 min-w-[260px]">
                   <input
                       id="key"
                       v-model="formData.key"
@@ -61,6 +61,14 @@
                   </svg>
                   {{ !platformCapabilitiesLoaded ? '正在检测系统' : (isGettingDbKey ? '获取中...' : '一键获取数据库密钥') }}
                 </button>
+                <button
+                    v-if="isGettingDbKey"
+                    type="button"
+                    @click="cancelDbKeyAcquisition"
+                    class="flex-none inline-flex items-center px-4 py-3 border border-[#FA5151]/40 text-[#C93A3A] rounded-lg text-sm font-medium hover:bg-[#FFF1F1] transition-colors whitespace-nowrap"
+                >
+                  停止并恢复
+                </button>
               </div>
               <p v-if="formErrors.key" class="mt-1 text-sm text-red-600 flex items-center">
                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -73,7 +81,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 {{ isMacos
-                  ? '点击后将调用本地受控组件；显示“获取中”后，请完整退出微信程序，再立即重新打开并登录。WCDA 会自动跟随重启后的微信进程，密钥不会上传。'
+                  ? '优先调用本地受控组件；仅在明确失败且您再次确认后，才提供实验性 LLDB 兜底。密钥只在本机校验，不会上传。'
                   : '点击按钮将优先使用 V4 内存扫描获取【数据库解密密钥】；失败时会询问您是否改用 Hook。您也可以手动输入已知的64位密钥。' }}
               </p>
               <p v-if="!isMacos" class="mt-2 text-xs text-[#7F7F7F] flex items-start">
@@ -822,7 +830,21 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '~/composables/useApi'
 import { normalizeWechatInstallPath, readStoredWechatInstallPath } from '~/lib/wechat-install-path'
 
-const { decryptDatabase, saveMediaKeys, getSavedKeys, getKeys, getImageKey, getImageKeyMemory, getWxStatus, getPlatformCapabilities } = useApi()
+const {
+  decryptDatabase,
+  saveMediaKeys,
+  getSavedKeys,
+  getKeys,
+  getMacosKeyCaptureStatus,
+  prepareMacosKeyCapture,
+  preflightMacosKeyCapture,
+  captureMacosKey,
+  cancelMacosKeyCapture,
+  getImageKey,
+  getImageKeyMemory,
+  getWxStatus,
+  getPlatformCapabilities
+} = useApi()
 
 const loading = ref(false)
 const error = ref('')
@@ -834,6 +856,9 @@ const activeKeyAccount = ref('')
 const isGettingDbKey = ref(false)
 let dbKeyRequestRevision = 0
 let dbKeyRequestController = null
+const macosKeyCapturePrepared = ref(false)
+const macosKeyCaptureOwnedByPage = ref(false)
+const macosKeyCaptureCleanupInFlight = ref(false)
 const platformCapabilities = ref({ platform: '' })
 const platformCapabilitiesLoaded = ref(false)
 const isMacos = computed(() => platformCapabilities.value?.platform === 'macos')
@@ -1370,14 +1395,42 @@ const waitForDbKeyDelay = (milliseconds, signal) => new Promise((resolve, reject
   signal.addEventListener('abort', onAbort, { once: true })
 })
 
+const macosKeyCapturePayload = () => ({
+  wechat_install_path: String(formData.wechat_install_path || '').trim() || null,
+  db_storage_path: String(formData.db_storage_path || '').trim() || null,
+  timeout: 240
+})
+
+const cleanupMacosKeyCapture = async ({ silent = false } = {}) => {
+  if (!isMacos.value || macosKeyCaptureCleanupInFlight.value) return false
+  macosKeyCaptureCleanupInFlight.value = true
+  try {
+    const response = await cancelMacosKeyCapture(macosKeyCapturePayload())
+    if (response?.status === 0) {
+      macosKeyCapturePrepared.value = false
+      macosKeyCaptureOwnedByPage.value = false
+      if (!silent) warning.value = '实验性密钥获取已停止，并已校验恢复腾讯官方签名微信。'
+      return true
+    }
+    if (!silent) error.value = response?.errmsg || '停止实验性密钥获取失败，请不要启动微信并查看日志。'
+    return false
+  } catch (cleanupError) {
+    if (!silent) error.value = cleanupError?.message || '停止实验性密钥获取失败，请不要启动微信并查看日志。'
+    return false
+  } finally {
+    macosKeyCaptureCleanupInFlight.value = false
+  }
+}
+
 const cancelDbKeyAcquisition = () => {
-  if (!dbKeyRequestController && !isGettingDbKey.value) return
+  if (!dbKeyRequestController && !isGettingDbKey.value && !macosKeyCaptureOwnedByPage.value) return
 
   dbKeyRequestRevision += 1
   const controller = dbKeyRequestController
   dbKeyRequestController = null
   controller?.abort()
   isGettingDbKey.value = false
+  if (macosKeyCaptureOwnedByPage.value) void cleanupMacosKeyCapture({ silent: true })
 }
 
 const showDbKeyPersistenceWarning = (result) => {
@@ -1390,15 +1443,146 @@ const showDbKeyPersistenceWarning = (result) => {
   })
 }
 
+const runMacosLldbFallback = async ({ requestRevision, requestController, helperError }) => {
+  const riskAccepted = await requestGuideDialog({
+    eyebrow: '实验性兜底方式',
+    title: '受控组件失败，是否改用 LLDB 兜底？',
+    description: '该方式会在管理员授权后临时重签默认路径中的微信，并在成功、失败或停止时恢复已校验的腾讯官方版本。',
+    errorMessage: helperError ? `受控组件未能获取密钥：${helperError}` : '',
+    details: [
+      '仅支持 /Applications/WeChat.app 与 Apple Silicon Mac',
+      '操作前会在应用输出目录创建并校验官方微信备份',
+      '临时重签和调试可能触发微信安全提醒，无法承诺零风险或百分之百成功',
+      '不要强制退出 WCDA；需要停止时请使用“停止并恢复”或返回操作'
+    ],
+    note: '这是显式确认后的实验性兜底，不会在受控组件正常时自动启用。',
+    primaryLabel: '了解风险，继续',
+    secondaryLabel: '暂不使用',
+    tone: 'warning'
+  })
+  if (!isDbKeyRequestActive(requestRevision, requestController) || !riskAccepted) return false
+
+  warning.value = '正在备份并准备临时调试微信，期间可能出现管理员授权窗口。'
+  let response = await prepareMacosKeyCapture({
+    ...macosKeyCapturePayload(),
+    signal: requestController.signal
+  })
+  if (!isDbKeyRequestActive(requestRevision, requestController)) {
+    if (response?.status === 0) {
+      macosKeyCapturePrepared.value = true
+      macosKeyCaptureOwnedByPage.value = true
+      await cleanupMacosKeyCapture({ silent: true })
+    }
+    return false
+  }
+  if (response?.status !== 0) {
+    error.value = response?.errmsg || '无法准备临时调试微信。'
+    warning.value = ''
+    return false
+  }
+  macosKeyCapturePrepared.value = true
+  macosKeyCaptureOwnedByPage.value = true
+
+  const loggedIn = await requestGuideDialog({
+    eyebrow: '步骤 1 / 3',
+    title: '请先登录临时微信并进入聊天页',
+    description: '现在只完成登录，不要退出账号。进入任意聊天页面后再继续，系统会先检查断点是否适配当前微信版本。',
+    details: [
+      '如果微信要求手机确认或验证码，请先完整完成',
+      '确认桌面微信已进入主聊天界面',
+      '此阶段尚未开始读取登录密钥'
+    ],
+    note: '选择停止会立即尝试恢复腾讯官方版本。',
+    primaryLabel: '已进入聊天，开始预检',
+    secondaryLabel: '停止并恢复',
+    tone: 'guide'
+  })
+  if (!isDbKeyRequestActive(requestRevision, requestController) || !loggedIn) {
+    await cleanupMacosKeyCapture({ silent: !isDbKeyRequestActive(requestRevision, requestController) })
+    return false
+  }
+
+  warning.value = '正在短暂附加 LLDB 检查断点，完成后会立即脱离。'
+  response = await preflightMacosKeyCapture({
+    ...macosKeyCapturePayload(),
+    signal: requestController.signal
+  })
+  if (!isDbKeyRequestActive(requestRevision, requestController)) {
+    await cleanupMacosKeyCapture({ silent: true })
+    return false
+  }
+  if (response?.status !== 0) {
+    macosKeyCapturePrepared.value = response?.data?.needs_cleanup === true
+    macosKeyCaptureOwnedByPage.value = macosKeyCapturePrepared.value
+    error.value = response?.errmsg || '当前微信版本未通过 LLDB 断点预检，已停止并恢复。'
+    warning.value = ''
+    if (macosKeyCapturePrepared.value) await cleanupMacosKeyCapture({ silent: true })
+    return false
+  }
+
+  const loggedOut = await requestGuideDialog({
+    eyebrow: '步骤 2 / 3',
+    title: '请在临时微信中退出当前账号',
+    description: '退出到二维码登录界面后不要重新扫码；回到这里点击开始监测，再用手机确认登录。',
+    details: [
+      '必须使用微信菜单中的“退出登录”，不要关闭微信窗口',
+      '看到二维码后先回到 WCDA 点击“开始监测”',
+      '监测启动后再扫码或在手机上确认同一账号登录'
+    ],
+    note: '捕获只针对这次重新登录计算，并使用所选账号数据库实时校验结果。',
+    primaryLabel: '已看到二维码，开始监测',
+    secondaryLabel: '停止并恢复',
+    tone: 'warning'
+  })
+  if (!isDbKeyRequestActive(requestRevision, requestController) || !loggedOut) {
+    await cleanupMacosKeyCapture({ silent: !isDbKeyRequestActive(requestRevision, requestController) })
+    return false
+  }
+
+  warning.value = '监测已启动：现在请扫码或在手机上确认登录，完成前不要关闭微信或 WCDA。'
+  response = await captureMacosKey({
+    ...macosKeyCapturePayload(),
+    signal: requestController.signal
+  })
+  if (!isDbKeyRequestActive(requestRevision, requestController)) {
+    await cleanupMacosKeyCapture({ silent: true })
+    return false
+  }
+  macosKeyCapturePrepared.value = response?.data?.needs_cleanup === true
+  macosKeyCaptureOwnedByPage.value = macosKeyCapturePrepared.value
+  const key = String(response?.data?.db_key || '').trim().toLowerCase()
+  if (response?.status === 0 && /^[0-9a-f]{64}$/.test(key)) {
+    macosKeyCapturePrepared.value = false
+    macosKeyCaptureOwnedByPage.value = false
+    formData.key = key
+    warning.value = response?.data?.official_wechat_verified
+      ? '数据库密钥已通过完整数据库校验，腾讯官方签名微信已恢复。'
+      : '数据库密钥已获取并通过完整数据库校验。'
+    return true
+  }
+  error.value = response?.errmsg || '实验性 LLDB 未能获取可验证的数据库密钥。'
+  warning.value = ''
+  if (macosKeyCapturePrepared.value) await cleanupMacosKeyCapture({ silent: true })
+  return false
+}
+
 const handleGetDbKey = async () => {
   if (isGettingDbKey.value) return
 
   if (isMacos.value) {
+    if (macosKeyCapturePrepared.value && !macosKeyCaptureOwnedByPage.value) {
+      await recoverPendingMacosKeyCapture()
+      if (macosKeyCapturePrepared.value) return
+    }
     formData.key = ''
     formErrors.key = ''
 
-    if (platformCapabilities.value?.database_key_extraction !== true) {
-      error.value = platformCapabilities.value?.database_key_guidance || 'macOS 数据库密钥组件不可用，请更新或重新安装正式版本。'
+    const helperAvailable = platformCapabilities.value?.database_key_extraction === true
+    const lldbFallbackAvailable = platformCapabilities.value?.macos_lldb_fallback === true
+    if (!helperAvailable && !lldbFallbackAvailable) {
+      error.value = platformCapabilities.value?.database_key_guidance
+        || platformCapabilities.value?.macos_lldb_fallback_note
+        || '当前 Mac 没有可用的数据库密钥获取方式。'
       return
     }
 
@@ -1407,14 +1591,22 @@ const handleGetDbKey = async () => {
     dbKeyRequestController = requestController
     isGettingDbKey.value = true
     error.value = ''
-    warning.value = '捕获已开始：现在请完整退出微信程序，再立即重新打开并登录；WCDA 会自动挂接重启后的微信进程，请勿关闭 WCDA 或当前页面。'
+    warning.value = helperAvailable
+      ? '受控组件捕获已开始：现在请完整退出微信程序，再立即重新打开并登录；请勿关闭 WCDA 或当前页面。'
+      : ''
 
     try {
-      const res = await getKeys({
-        db_storage_path: String(formData.db_storage_path || '').trim(),
-        key_mode: 'macos_private_helper',
-        signal: requestController.signal
-      })
+      const res = helperAvailable
+        ? await getKeys({
+            db_storage_path: String(formData.db_storage_path || '').trim(),
+            key_mode: 'macos_private_helper',
+            signal: requestController.signal
+          })
+        : {
+            status: -1,
+            errmsg: platformCapabilities.value?.database_key_guidance || 'macOS 受控组件当前不可用。',
+            data: { can_fallback_to_macos_lldb: lldbFallbackAvailable }
+          }
       if (!isDbKeyRequestActive(requestRevision, requestController)) return
       const key = String(res?.data?.db_key || '').trim().toLowerCase()
       if (res?.status === 0 && /^[0-9a-f]{64}$/.test(key)) {
@@ -1426,12 +1618,26 @@ const handleGetDbKey = async () => {
             && warning.value.includes('获取成功')
           ) warning.value = ''
         }, 3000)
+      } else if (
+        lldbFallbackAvailable
+        && (res?.data?.can_fallback_to_macos_lldb === true || !helperAvailable)
+      ) {
+        warning.value = ''
+        await runMacosLldbFallback({
+          requestRevision,
+          requestController,
+          helperError: res?.errmsg || '受控组件当前不可用'
+        })
       } else {
         error.value = res?.errmsg || 'macOS 数据库密钥获取失败，请重新点击获取并按提示退出、重启微信。'
         warning.value = ''
       }
     } catch (e) {
-      if (!isDbKeyRequestActive(requestRevision, requestController) || e?.name === 'AbortError') return
+      if (!isDbKeyRequestActive(requestRevision, requestController) || e?.name === 'AbortError') {
+        if (macosKeyCapturePrepared.value) await cleanupMacosKeyCapture({ silent: true })
+        return
+      }
+      if (macosKeyCapturePrepared.value) await cleanupMacosKeyCapture({ silent: true })
       error.value = e?.message || 'macOS 数据库密钥获取失败，请稍后重试。'
       warning.value = ''
     } finally {
@@ -2272,8 +2478,12 @@ const confirmBackFromRunningStep = () => {
     : currentStep.value === 0 && isGettingDbKey.value
       ? {
           title: '数据库密钥仍在获取',
-          description: '返回账号选择会停止当前页面等待结果；如果 Hook 已经开始，微信重启或登录流程仍可能继续完成。',
-          details: ['页面将不再接收本次密钥结果', '已经启动的 Hook 操作无法保证立即停止']
+          description: isMacos.value
+            ? '返回账号选择会停止当前获取；如果已进入 LLDB 兜底，系统会同时尝试恢复腾讯官方签名微信。'
+            : '返回账号选择会停止当前页面等待结果；如果 Hook 已经开始，微信重启或登录流程仍可能继续完成。',
+          details: isMacos.value
+            ? ['页面将不再接收本次密钥结果', '恢复完成前请不要手动启动或更新微信']
+            : ['页面将不再接收本次密钥结果', '已经启动的 Hook 操作无法保证立即停止']
         }
     : currentStep.value === 2 && mediaDecrypting.value
       ? { title: '图片仍在解密', description: '返回填写图片密钥会停止当前图片解密，已经完成的图片会保留。' }
@@ -2425,6 +2635,37 @@ const skipToChat = async () => {
   navigateTo('/chat')
 }
 
+const recoverPendingMacosKeyCapture = async () => {
+  if (!isMacos.value) return
+  try {
+    const response = await getMacosKeyCaptureStatus()
+    if (response?.status !== 0 || response?.data?.pending !== true) return
+    macosKeyCapturePrepared.value = true
+    macosKeyCaptureOwnedByPage.value = false
+    const shouldRestore = await requestGuideDialog({
+      eyebrow: '安全恢复',
+      title: '检测到上次未完成的临时调试微信',
+      description: '恢复状态仍在本机。建议先校验并恢复腾讯官方签名微信，再开始新的密钥获取。',
+      details: [
+        `上次停止阶段：${String(response?.data?.stage || 'unknown')}`,
+        '恢复只使用上次已记录并校验的备份事务',
+        '恢复完成前不要启动或更新微信'
+      ],
+      note: 'WCDA 不会静默覆盖微信，需要您明确确认恢复。',
+      primaryLabel: '立即恢复官方版本',
+      secondaryLabel: '暂不处理',
+      tone: 'warning'
+    })
+    if (shouldRestore) {
+      await cleanupMacosKeyCapture()
+    } else {
+      warning.value = '仍有未完成的临时调试微信恢复状态；恢复前不会开始新的 LLDB 获取。'
+    }
+  } catch (statusError) {
+    logDecryptDebug('macos-key-capture:status-error', { error: formatLogError(statusError) })
+  }
+}
+
 // 页面加载时检查是否有选中的账户
 onMounted(async () => {
   if (process.client && typeof window !== 'undefined') {
@@ -2446,6 +2687,7 @@ onMounted(async () => {
     } finally {
       platformCapabilitiesLoaded.value = true
     }
+    await recoverPendingMacosKeyCapture()
     formData.wechat_install_path = readStoredWechatInstallPath()
     const selectedAccount = sessionStorage.getItem('selectedAccount')
     logDecryptDebug('mounted:selected-account-raw', { raw: selectedAccount || '' })

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -185,6 +186,7 @@ def runtime_capabilities() -> dict[str, Any]:
         and native_core_paths
         and _native_core_resources_ready(native_core_paths)
     )
+    macos_lldb_fallback = bool(apple_silicon and shutil.which("lldb"))
     mac_db_key_status: dict[str, Any] = {
         "available": False,
         "note": MAC_DB_KEY_GUIDANCE,
@@ -205,6 +207,12 @@ def runtime_capabilities() -> dict[str, Any]:
         "architecture": architecture,
         "apple_silicon": apple_silicon,
         "database_key_extraction": system == "windows" or bool(mac_db_key_status["available"]),
+        "macos_lldb_fallback": macos_lldb_fallback,
+        "macos_lldb_fallback_note": (
+            "实验性 LLDB 兜底仅支持 Apple Silicon Mac，并需要安装 Xcode Command Line Tools。"
+            if system == "macos" and not macos_lldb_fallback
+            else ""
+        ),
         "database_key_manual_input": True,
         "database_decryption": True,
         "image_key_memory_scan": system == "windows" or image_scan_ready,

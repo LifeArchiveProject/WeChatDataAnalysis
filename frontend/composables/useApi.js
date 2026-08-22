@@ -656,6 +656,39 @@ export const useApi = () => {
     return await request(url, params?.signal ? { signal: params.signal } : {})
   }
 
+  const getMacosKeyCaptureStatus = async () => {
+    return await request('/macos-key-capture/status')
+  }
+
+  const macosKeyCaptureRequest = async (action, params = {}) => {
+    const options = {
+      method: 'POST',
+      body: {
+        wechat_install_path: params.wechat_install_path || null,
+        db_storage_path: params.db_storage_path || null,
+        timeout: params.timeout || 240
+      }
+    }
+    if (params.signal) options.signal = params.signal
+    return await request(`/macos-key-capture/${action}`, options)
+  }
+
+  const prepareMacosKeyCapture = async (params = {}) => {
+    return await macosKeyCaptureRequest('prepare', params)
+  }
+
+  const preflightMacosKeyCapture = async (params = {}) => {
+    return await macosKeyCaptureRequest('preflight', params)
+  }
+
+  const captureMacosKey = async (params = {}) => {
+    return await macosKeyCaptureRequest('capture', params)
+  }
+
+  const cancelMacosKeyCapture = async (params = {}) => {
+    return await macosKeyCaptureRequest('cancel', params)
+  }
+
   // 获取图片密钥
   const getImageKey = async (params = {}) => {
     const query = new URLSearchParams()
@@ -884,6 +917,11 @@ export const useApi = () => {
     getWrappedAnnualMeta,
     getWrappedAnnualCard,
     getKeys,
+    getMacosKeyCaptureStatus,
+    prepareMacosKeyCapture,
+    preflightMacosKeyCapture,
+    captureMacosKey,
+    cancelMacosKeyCapture,
     getImageKey,
     getImageKeyMemory,
     getWxStatus,

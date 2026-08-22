@@ -4,7 +4,7 @@
 
 ## 本 Draft 的边界
 
-本次提交只增加可审查的 Python 后端状态机、数据库验真、恢复逻辑、测试和发布审计脚本。它暂不替换现有的 macOS 受限原生 helper，也不把 LLDB 路径接成默认 UI 流程。维护者确认接口和恢复边界后，再单独提交 API/UI 接线，避免一次 PR 同时改变两套获取方式。
+现有 macOS 受限原生 helper 仍是默认且优先的获取方式。只有 helper 返回经过允许的运行时、版本或进程附加失败，并且用户在前端再次阅读风险说明后，才会展示实验性 LLDB 兜底；组件完整性、签名或信任校验失败不会触发兜底。LLDB 不会静默运行，也不会替换默认路径。
 
 核心文件：
 
@@ -12,6 +12,10 @@
 - `macos_clone_capture.py`：APFS 写时复制隔离方案、断点预检、salt 匹配和兼容 UUID 表；
 - `macos_inplace_capture.py`：可恢复的原路径临时重签事务和重启恢复；
 - `macos_db_key_discovery.py`：只接受能通过所选数据库首页 HMAC 校验的本地候选。
+- `routers/keys.py`：提供 status、prepare、preflight、capture、cancel 五个分阶段 API，恢复目录由后端固定，前端不能传入任意恢复路径；
+- `frontend/pages/decrypt.vue`：helper 失败后的显式风险确认、分阶段操作提示、停止/切页恢复和遗留状态恢复入口。
+
+上述 LLDB API 强制只接受运行 WCDA 的 Mac 本机回环连接；即使聊天查看或总结开启了局域网/Tailscale 访问，远端设备也不能触发临时重签、调试或恢复操作。
 
 ## 安全状态机
 
@@ -21,9 +25,9 @@
 4. 只对一次捕获所需的临时实例进行调试签名。先登录进入聊天页，再短暂附加做断点预检并立即分离。
 5. 用户在未监测状态退出账号；正式监测开始后重新登录同一账号。
 6. 通用路径只接受两种经过验证的 WCDB 参数形状：`rounds=256000` 时 salt 必须等于目标数据库 salt；`rounds=2` 时 salt 必须等于目标数据库 salt 逐字节异或 `0x3A` 后的 HMAC salt。其他轮数一律拒绝。已知版本还可使用按模块 UUID 明确登记的内部返回点，未知 UUID 不猜偏移。
-7. 32 字节候选必须通过目标数据库首页 HMAC 校验才会保存，缓存目录和文件分别使用 `0700`、`0600`。
+7. 32 字节候选先通过目标数据库首页 HMAC 校验；API 还会校验同一账号的消息库与会话库，全部通过后才写入缓存。缓存目录和文件分别使用 `0700`、`0600`。
 8. LLDB 在 `process continue` 返回后记录隔离微信的 PID、进程状态、退出码和不超过 240 字符的退出原因；副本提前退出时立即返回专用诊断，不继续等待为普通超时。
-9. 成功、取消、超时或异常都进入同一恢复路径；恢复后再次执行腾讯签名和版本校验，最后才删除恢复状态。
+9. 成功、取消、超时或异常都进入同一恢复路径；恢复后再次执行腾讯签名和版本校验，最后才删除恢复状态。若桌面应用被强制结束，重新进入解密页时会先检测遗留状态，并由用户明确确认恢复。
 
 ## 源码复现
 
@@ -37,10 +41,12 @@ python -m pytest -q \
   tests/test_macos_clone_capture.py \
   tests/test_macos_inplace_capture.py \
   tests/test_macos_db_key_discovery.py \
-  tests/test_macos_key_capture_release_audit.py
+  tests/test_macos_key_capture_release_audit.py \
+  tests/test_macos_platform_support.py \
+  tests/test_decrypt_image_keys_frontend.py
 ```
 
-真实端到端验证采用显式的三阶段调用，便于 UI 在每一步向用户确认：
+真实端到端验证可采用下列显式三阶段调用；桌面前端使用等价的五个分阶段 API，并在每一步向用户确认：
 
 ```python
 from pathlib import Path

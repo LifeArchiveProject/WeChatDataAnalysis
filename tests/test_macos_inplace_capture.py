@@ -159,6 +159,47 @@ class TestMacOSInPlaceCapture(unittest.TestCase):
 
             self.assertTrue(capture.call_args.kwargs["enable_key_return_fallback"])
 
+    def test_capture_can_defer_cache_until_full_account_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            debug_root = Path(temp_dir)
+            probe = debug_root / "message_0.db"
+            probe.write_bytes(bytes(range(256)) * 16)
+            (debug_root / "breakpoint-preflight.json").write_text(
+                json.dumps({"pid": 321, "pbkdf_locations": 1, "key_return_locations": 0}),
+                encoding="utf-8",
+            )
+            with (
+                patch(
+                    "wechat_decrypt_tool.macos_inplace_capture.normalize_wechat_app_path",
+                    return_value=Path("/Applications/WeChat.app"),
+                ),
+                patch(
+                    "wechat_decrypt_tool.macos_inplace_capture._require_prepared_process",
+                    return_value=({}, 321),
+                ),
+                patch(
+                    "wechat_decrypt_tool.macos_inplace_capture.capture_salt_matched_passphrase",
+                    return_value="ab" * 32,
+                ),
+                patch("wechat_decrypt_tool.macos_inplace_capture._validate_captured_passphrase"),
+                patch("wechat_decrypt_tool.macos_inplace_capture.save_passphrase") as save,
+                patch(
+                    "wechat_decrypt_tool.macos_inplace_capture._restore_after_terminal_path",
+                    return_value={"official_wechat_verified": True, "official_wechat_restored": True},
+                ),
+            ):
+                result = capture_prepared_in_place(
+                    "/Applications/WeChat.app",
+                    backup_root=debug_root / "backups",
+                    probe_db_path=probe,
+                    save_result=False,
+                    debug_root=debug_root,
+                )
+
+            self.assertEqual(result["db_key"], "ab" * 32)
+            self.assertEqual(result["cache_path"], "")
+            save.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

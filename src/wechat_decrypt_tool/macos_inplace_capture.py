@@ -50,6 +50,29 @@ def has_pending_in_place_capture(*, debug_root: Path = DEFAULT_DEBUG_ROOT) -> bo
     return _state_path(debug_root).is_file()
 
 
+def get_in_place_capture_status(*, debug_root: Path = DEFAULT_DEBUG_ROOT) -> dict[str, Any]:
+    """Return the persisted recovery stage without exposing local paths."""
+
+    if not has_pending_in_place_capture(debug_root=debug_root):
+        return {
+            "pending": False,
+            "stage": "idle",
+            "needs_cleanup": False,
+        }
+    try:
+        state = _read_state(debug_root)
+        stage = str(state.get("stage") or "unknown").strip().lower()
+    except MacOSDBKeyCaptureFailure:
+        stage = "invalid"
+    if stage not in {"backup_verified", "resigned", "launched", "preflight_passed", "invalid"}:
+        stage = "unknown"
+    return {
+        "pending": True,
+        "stage": stage,
+        "needs_cleanup": True,
+    }
+
+
 def _write_state(debug_root: Path, payload: dict[str, Any]) -> Path:
     target = _state_path(debug_root)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -398,6 +421,7 @@ def capture_prepared_in_place(
     backup_root: Path,
     probe_db_path: str | Path | None,
     timeout: int = 240,
+    save_result: bool = True,
     debug_root: Path = DEFAULT_DEBUG_ROOT,
 ) -> dict[str, Any]:
     wechat_app = normalize_wechat_app_path(wechat_install_path)
@@ -449,7 +473,8 @@ def capture_prepared_in_place(
             enable_key_return_fallback=int(preflight.get("key_return_locations") or 0) > 0,
         )
         _validate_captured_passphrase(passphrase, probe_database)
-        cache_path = save_passphrase(passphrase)
+        if save_result:
+            cache_path = save_passphrase(passphrase)
     except Exception as exc:
         if has_pending_in_place_capture(debug_root=debug_root):
             _restore_after_terminal_path(
@@ -466,12 +491,12 @@ def capture_prepared_in_place(
             debug_root=debug_root,
         )
 
-    if cache_path is None:
+    if save_result and cache_path is None:
         raise MacOSDBKeyCaptureFailure("passphrase_not_saved", "passphrase 未能安全保存")
     return {
         "method": "macos_inplace_lldb_passphrase",
         "db_key": passphrase,
-        "cache_path": str(cache_path),
+        "cache_path": str(cache_path) if cache_path is not None else "",
         "wechat_modified": False,
         "wechat_resigned": True,
         "official_wechat_preserved": True,
@@ -490,6 +515,7 @@ def capture_prepared_in_place(
 __all__ = [
     "capture_prepared_in_place",
     "cleanup_in_place_capture",
+    "get_in_place_capture_status",
     "has_pending_in_place_capture",
     "preflight_prepared_in_place_capture",
     "prepare_in_place_capture",

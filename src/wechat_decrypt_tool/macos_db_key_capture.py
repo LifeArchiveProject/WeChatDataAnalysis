@@ -1097,6 +1097,7 @@ def capture_prepared_macos_passphrase(
     backup_root: Path,
     probe_db_path: str | Path | None = None,
     timeout: int = 240,
+    save_result: bool = True,
 ) -> dict[str, Any]:
     """Attach after logout, capture on re-login, then restore the official app."""
 
@@ -1107,6 +1108,7 @@ def capture_prepared_macos_passphrase(
         backup_root=backup_root,
         probe_db_path=probe_db_path,
         timeout=timeout,
+        save_result=save_result,
     )
 
 
