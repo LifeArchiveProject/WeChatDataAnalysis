@@ -6,6 +6,7 @@ import base64
 import hashlib
 import heapq
 import html
+import io
 import ipaddress
 import json
 import os
@@ -60,6 +61,17 @@ from .chat_helpers import (
 )
 from .chat_realtime_autosync import CHAT_REALTIME_AUTOSYNC
 from .chat_realtime_reader import count_realtime_message_rows_via_exec, iter_realtime_message_rows
+from .chat_incremental_export import (
+    ChatFolderContext,
+    ChatIncrementalError,
+    allocate_conversation_directory,
+    build_config as build_incremental_config,
+    conversation_key as incremental_conversation_key,
+    materialize_folder_archive,
+    missing_conversation_keys,
+    normalize_pending_media,
+    prepare_folder_context,
+)
 from .logging_config import get_logger
 from .media_helpers import (
     MediaPathIndex,
@@ -113,6 +125,7 @@ ExportFormat = Literal["json", "txt", "html", "excel"]
 ExportScope = Literal["selected", "all", "groups", "singles"]
 ChatSource = Literal["auto", "decrypted", "realtime"]
 ExportStatus = Literal["queued", "running", "done", "error", "cancelled"]
+ExportOutputMode = Literal["zip", "folder"]
 MediaKind = Literal["image", "emoji", "video", "video_thumb", "voice", "file"]
 
 _EXPORT_PROGRESS_LOG_INTERVAL = 1000
@@ -951,6 +964,188 @@ def _html_export_runtime_js(native_integrity: Any) -> str:
     return _native_text(native_integrity, "runtime_js")
 
 
+def _html_export_folder_runtime_js(native_integrity: Any) -> str:
+    """保留 HTML 交互能力，但关闭只适用于不可变 ZIP 的阻断式校验。"""
+
+    wrapped = _html_export_runtime_js(native_integrity)
+    match = re.search(
+        r"const _0=(\[.*?\]),_1=(\[[0-9,\s]+\]);let _2=atob",
+        wrapped,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise RuntimeError(_HTML_EXPORT_NATIVE_ERROR)
+    try:
+        chunks = json.loads(match.group(1))
+        key = bytes(int(value) & 0xFF for value in json.loads(match.group(2)))
+        encrypted = base64.b64decode("".join(str(value) for value in chunks), validate=True)
+        source = bytes(value ^ key[index % len(key)] for index, value in enumerate(encrypted)).decode("utf-8")
+    except Exception as exc:
+        raise RuntimeError(_HTML_EXPORT_NATIVE_ERROR) from exc
+
+    startup = "const integrityOk = await initExportIntegrity()"
+    if source.count(startup) != 1:
+        raise RuntimeError(_HTML_EXPORT_NATIVE_ERROR)
+    folder_startup = """const integrityOk = true
+    try {
+      document.documentElement.setAttribute('data-wce-folder-mode', '1')
+      document.documentElement.setAttribute('data-wce-integrity-ok', '1')
+      window.__WCE_VERIFY_FRAGMENT__ = () => true
+    } catch {}"""
+    source = source.replace(startup, folder_startup, 1)
+
+    # 增量目录中的每个会话页可能生成于不同批次。运行时统一读取公共会话清单，
+    # 避免点击会话后左侧目录退回到该页面生成时的旧快照。
+    listener_marker = "  document.addEventListener('DOMContentLoaded', async () => {"
+    search_marker = "    initSessionSearch()"
+    if source.count(listener_marker) != 1 or source.count(search_marker) != 1:
+        raise RuntimeError(_HTML_EXPORT_NATIVE_ERROR)
+    folder_sessions_runtime = r"""  const wceFolderRuntimeSrc = (() => {
+    try {
+      const currentSrc = String((document.currentScript && document.currentScript.src) || '')
+      if (currentSrc) return currentSrc
+      const scripts = Array.from(document.querySelectorAll('script[src]'))
+      const runtimeScript = scripts.find((element) => {
+        const src = String((element && element.src) || '')
+        return /(^|\/)chat-export\.js(?:[?#].*)?$/.test(src)
+      })
+      return String((runtimeScript && runtimeScript.src) || '')
+    } catch {
+      return ''
+    }
+  })()
+
+  async function loadFolderSessionCatalog() {
+    const ready = window.__WCE_FOLDER_SESSIONS__
+    if (ready && Array.isArray(ready.items)) return true
+    if (!wceFolderRuntimeSrc) return false
+
+    return await new Promise((resolve) => {
+      let settled = false
+      const finish = (value) => {
+        if (settled) return
+        settled = true
+        resolve(Boolean(value))
+      }
+      let script = document.querySelector('script[data-wce-folder-sessions="1"]')
+      if (!script) {
+        script = document.createElement('script')
+        script.defer = true
+        script.setAttribute('data-wce-folder-sessions', '1')
+        try {
+          script.src = new URL('chat-sessions.js', wceFolderRuntimeSrc).href
+        } catch {
+          finish(false)
+          return
+        }
+        document.head.appendChild(script)
+      }
+      if (window.__WCE_FOLDER_SESSIONS__ && Array.isArray(window.__WCE_FOLDER_SESSIONS__.items)) {
+        finish(true)
+        return
+      }
+      script.addEventListener('load', () => finish(
+        window.__WCE_FOLDER_SESSIONS__ && Array.isArray(window.__WCE_FOLDER_SESSIONS__.items)
+      ), { once: true })
+      script.addEventListener('error', () => finish(false), { once: true })
+      window.setTimeout(() => finish(false), 3000)
+    })
+  }
+
+  function syncFolderSessionCatalog() {
+    const catalog = window.__WCE_FOLDER_SESSIONS__
+    const container = document.querySelector('[data-wce-session-list="1"]')
+    if (!catalog || !Array.isArray(catalog.items) || !container || !wceFolderRuntimeSrc) return
+
+    let exportRoot
+    try {
+      exportRoot = new URL('../', wceFolderRuntimeSrc)
+    } catch {
+      return
+    }
+    const currentPath = (() => {
+      try { return decodeURIComponent(window.location.pathname || '').replace(/\\/g, '/') }
+      catch { return String(window.location.pathname || '').replace(/\\/g, '/') }
+    })()
+    const fragment = document.createDocumentFragment()
+
+    for (const rawItem of catalog.items) {
+      const convDir = String((rawItem && rawItem.convDir) || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+      if (!convDir) continue
+      const displayName = String((rawItem && rawItem.displayName) || '').trim() || '会话'
+      const username = String((rawItem && rawItem.username) || '').trim()
+      const avatarPath = String((rawItem && rawItem.avatarPath) || '').trim().replace(/\\/g, '/').replace(/^\/+/, '')
+      const lastTimeText = String((rawItem && rawItem.lastTimeText) || '').trim()
+      const previewText = String((rawItem && rawItem.previewText) || '').trim()
+      const messageSuffix = `/${convDir}/messages.html`
+      const active = currentPath.endsWith(messageSuffix)
+
+      const link = document.createElement('a')
+      link.href = new URL(`${convDir}/messages.html`, exportRoot).href
+      link.className = 'px-3 cursor-pointer transition-colors duration-150 border-b border-gray-100 h-[calc(80px/var(--dpr))] flex items-center '
+        + (active ? 'bg-[#DEDEDE]' : 'hover:bg-[#F5F5F5]')
+      link.setAttribute('data-wce-session-item', '1')
+      link.setAttribute('data-wce-session-name', displayName)
+      link.setAttribute('data-wce-session-username', username)
+      if (active) link.setAttribute('aria-current', 'page')
+
+      const avatarWrap = document.createElement('div')
+      avatarWrap.className = 'relative'
+      const avatarBox = document.createElement('div')
+      avatarBox.className = 'w-[calc(45px/var(--dpr))] h-[calc(45px/var(--dpr))] rounded-md overflow-hidden bg-gray-300'
+      if (avatarPath) {
+        const image = document.createElement('img')
+        image.src = new URL(avatarPath, exportRoot).href
+        image.alt = displayName
+        image.className = 'w-full h-full object-cover'
+        image.referrerPolicy = 'no-referrer'
+        avatarBox.appendChild(image)
+      } else {
+        const fallback = document.createElement('div')
+        fallback.className = 'w-full h-full flex items-center justify-center text-white text-xs font-bold'
+        fallback.style.backgroundColor = '#4B5563'
+        fallback.textContent = (displayName.slice(0, 1).trim() || '?')
+        avatarBox.appendChild(fallback)
+      }
+      avatarWrap.appendChild(avatarBox)
+      link.appendChild(avatarWrap)
+
+      const content = document.createElement('div')
+      content.className = 'flex-1 min-w-0 ml-3'
+      const heading = document.createElement('div')
+      heading.className = 'flex items-center justify-between'
+      const title = document.createElement('h3')
+      title.className = 'text-sm font-medium text-gray-900 truncate'
+      title.textContent = displayName
+      heading.appendChild(title)
+      const timeWrap = document.createElement('div')
+      timeWrap.className = 'flex items-center flex-shrink-0 ml-2'
+      const time = document.createElement('span')
+      time.className = 'text-xs text-gray-500'
+      time.textContent = lastTimeText
+      timeWrap.appendChild(time)
+      heading.appendChild(timeWrap)
+      content.appendChild(heading)
+      const preview = document.createElement('p')
+      preview.className = 'text-xs text-gray-500 truncate mt-0.5 leading-tight'
+      preview.textContent = previewText
+      content.appendChild(preview)
+      link.appendChild(content)
+      fragment.appendChild(link)
+    }
+
+    container.replaceChildren(fragment)
+    container.setAttribute('data-wce-session-catalog', '1')
+  }"""
+    source = source.replace(listener_marker, folder_sessions_runtime + "\n\n" + listener_marker, 1)
+    source = source.replace(
+        search_marker,
+        "    await loadFolderSessionCatalog()\n    syncFolderSessionCatalog()\n\n" + search_marker,
+        1,
+    )
+    return source
+
+
 def _html_export_asset_paths(export_id: str) -> tuple[str, str, str]:
     values = _native_json_list(
         _load_wce_integrity_native(),
@@ -1021,6 +1216,49 @@ def _zip_arcname(value: Any) -> str:
     while "//" in s:
         s = s.replace("//", "/")
     return s
+
+
+def _html_export_folder_sessions_js(session_items: list[dict[str, Any]]) -> str:
+    """生成增量 HTML 共用的会话目录；字段只取已经过隐私处理的会话摘要。"""
+
+    items: list[dict[str, Any]] = []
+    seen_directories: set[str] = set()
+    for value in session_items:
+        if not isinstance(value, dict):
+            continue
+        conv_dir = _zip_arcname(value.get("convDir")).rstrip("/")
+        conv_parts = [part for part in conv_dir.split("/") if part]
+        if (
+            len(conv_parts) < 2
+            or conv_parts[0] != "conversations"
+            or any(part in {".", ".."} for part in conv_parts)
+            or conv_dir in seen_directories
+        ):
+            continue
+        seen_directories.add(conv_dir)
+
+        avatar_path = _zip_arcname(value.get("avatarPath"))
+        if any(part in {".", ".."} for part in avatar_path.split("/") if part):
+            avatar_path = ""
+        items.append(
+            {
+                "username": str(value.get("username") or "").strip(),
+                "displayName": str(value.get("displayName") or "").strip() or "会话",
+                "isGroup": bool(value.get("isGroup")),
+                "convDir": conv_dir,
+                "avatarPath": avatar_path,
+                "lastTimeText": str(value.get("lastTimeText") or "").strip(),
+                "previewText": str(value.get("previewText") or "").strip(),
+            }
+        )
+
+    payload = json.dumps(
+        {"version": 1, "items": items},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    return f"window.__WCE_FOLDER_SESSIONS__={payload};\n"
 
 
 class _ZipIntegrityWriter:
@@ -1236,6 +1474,7 @@ class ExportProgress:
     messages_exported: int = 0
     media_copied: int = 0
     media_missing: int = 0
+    media_missing_references: int = 0
 
 
 @dataclass
@@ -1247,7 +1486,16 @@ class ExportJob:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     error: str = ""
+    warning: str = ""
+    incremental: dict[str, int] = field(default_factory=dict)
     zip_path: Optional[Path] = None
+    folder_path: Optional[Path] = None
+    staging_dir: Optional[Path] = field(default=None, repr=False)
+    staged_files: dict[str, Path] = field(default_factory=dict, repr=False)
+    change_manifest: dict[str, Any] = field(default_factory=dict)
+    repair_candidates: list[dict[str, Any]] = field(default_factory=list)
+    unresolved_media: dict[str, Any] = field(default_factory=dict)
+    missing_media_keys: set[tuple[str, str]] = field(default_factory=set, repr=False)
     options: dict[str, Any] = field(default_factory=dict)
     progress: ExportProgress = field(default_factory=ExportProgress)
     cancel_requested: bool = False
@@ -1255,6 +1503,11 @@ class ExportJob:
     voice_cache_generation: Optional[int] = field(default=None, repr=False)
 
     def to_public_dict(self) -> dict[str, Any]:
+        public_options = {
+            key: value
+            for key, value in self.options.items()
+            if key not in {"baseline", "missingFiles", "_folderContext", "_folderResourceOwners"}
+        }
         return {
             "exportId": self.export_id,
             "account": self.account,
@@ -1263,9 +1516,16 @@ class ExportJob:
             "startedAt": int(self.started_at) if self.started_at else None,
             "finishedAt": int(self.finished_at) if self.finished_at else None,
             "error": self.error or "",
+            "warning": self.warning or "",
             "zipPath": str(self.zip_path) if self.zip_path else "",
             "zipReady": bool(self.zip_path and self.zip_path.exists()),
-            "options": self.options,
+            "folderPath": str(self.folder_path) if self.folder_path else "",
+            "folderName": str(self.change_manifest.get("folderName") or ""),
+            "filesReady": bool(self.staged_files),
+            "incremental": self.incremental,
+            "repairCandidates": self.repair_candidates,
+            "unresolvedMedia": self.unresolved_media,
+            "options": public_options,
             "progress": {
                 "conversationsTotal": self.progress.conversations_total,
                 "conversationsDone": self.progress.conversations_done,
@@ -1277,6 +1537,7 @@ class ExportJob:
                 "messagesExported": self.progress.messages_exported,
                 "mediaCopied": self.progress.media_copied,
                 "mediaMissing": self.progress.media_missing,
+                "mediaMissingReferences": self.progress.media_missing_references,
             },
         }
 
@@ -1320,6 +1581,7 @@ class ChatExportManager:
                             "messagesExported": job.progress.messages_exported,
                             "mediaCopied": job.progress.media_copied,
                             "mediaMissing": job.progress.media_missing,
+                            "mediaMissingReferences": job.progress.media_missing_references,
                         },
                     }
                 ),
@@ -1329,6 +1591,31 @@ class ChatExportManager:
                 job.finished_at = time.time()
                 logger.info("chat export queued job cancelled export_id=%s", job.export_id)
             return True
+
+    def get_staged_file(self, export_id: str, file_id: str) -> Optional[Path]:
+        with self._lock:
+            job = self._jobs.get(str(export_id or "").strip())
+            if not job or job.status != "done":
+                return None
+            path = job.staged_files.get(str(file_id or "").strip())
+        if path is None or not path.is_file():
+            return None
+        return path
+
+    def commit_staged_files(self, export_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(str(export_id or "").strip())
+            if not job:
+                return False
+            staging_dir = job.staging_dir
+            job.staged_files = {}
+            job.staging_dir = None
+        if staging_dir and staging_dir.exists():
+            # 只清理当前聊天导出任务创建的临时目录。
+            import shutil
+
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        return True
 
     def create_job(
         self,
@@ -1354,9 +1641,19 @@ class ChatExportManager:
         encrypt: bool = False,
         content_key: bytearray | None = None,
         transcribe_voice: bool = False,
+        output_mode: ExportOutputMode = "zip",
+        folder_name: Optional[str] = None,
+        baseline: Optional[dict[str, Any]] = None,
+        missing_files: Optional[list[str]] = None,
+        reset_baseline: bool = False,
+        repair_usernames: Optional[list[str]] = None,
+        recheck_media: bool = False,
     ) -> ExportJob:
         if bool(encrypt) != (content_key is not None):
             raise ValueError("encrypted chat export requires one validated content key")
+        output_mode_norm: ExportOutputMode = "folder" if str(output_mode or "zip") == "folder" else "zip"
+        if output_mode_norm == "folder" and bool(encrypt):
+            raise ValueError("增量目录不支持整包加密，请使用 ZIP 全量导出。")
         account_dir = _resolve_account_dir(account)
         source_requested = _normalize_chat_source(source, default="auto")
         source_norm = source_requested
@@ -1385,6 +1682,72 @@ class ChatExportManager:
             retry_after_seconds=retry_after_seconds,
         )
         export_id = uuid.uuid4().hex[:12]
+
+        if output_mode_norm == "folder":
+            normalized_message_types = [
+                str(value or "").strip()
+                for value in (message_types or [])
+                if str(value or "").strip()
+            ]
+            normalized_want = {
+                key
+                for value in normalized_message_types
+                if (key := _normalize_render_type_key(value))
+            }
+            effective_include_media, effective_media_kinds = _resolve_effective_media_kinds(
+                include_media=bool(include_media),
+                media_kinds=list(media_kinds),
+                selected_render_types=normalized_want or None,
+                privacy_mode=bool(privacy_mode),
+            )
+            try:
+                preview_html_page_size = int(html_page_size or 1000)
+            except Exception:
+                preview_html_page_size = 1000
+            if preview_html_page_size < 0:
+                preview_html_page_size = 0
+            preview_config = build_incremental_config(
+                export_format=str(export_format),
+                start_time=int(start_time) if start_time else None,
+                end_time=int(end_time) if end_time else None,
+                message_types=sorted(normalized_want),
+                include_media=effective_include_media,
+                media_kinds=list(effective_media_kinds),
+                download_remote_media=bool(download_remote_media),
+                html_page_size=preview_html_page_size,
+                privacy_mode=bool(privacy_mode),
+                transcribe_voice=bool(transcribe_voice) and not bool(privacy_mode),
+            )
+            preview_folder_context = prepare_folder_context(
+                account=account_dir.name,
+                exports_root=_resolve_export_output_dir(account_dir, output_dir),
+                requested_folder_name=str(folder_name or ""),
+                config=preview_config,
+                privacy_mode=bool(privacy_mode),
+                desktop_output=bool(str(output_dir or "").strip()),
+                supplied_baseline=baseline if isinstance(baseline, dict) else {},
+                missing_files=list(missing_files or []),
+                reset_baseline=bool(reset_baseline),
+            )
+            if bool(reset_baseline) and str(scope or "") == "selected":
+                old_conversations = (
+                    preview_folder_context.old_state.get("conversations")
+                    if isinstance(preview_folder_context.old_state.get("conversations"), dict)
+                    else {}
+                )
+                selected_keys = {
+                    incremental_conversation_key(
+                        salt=preview_folder_context.salt,
+                        username=str(username or "").strip(),
+                    )
+                    for username in (usernames or [])
+                    if str(username or "").strip()
+                }
+                if set(old_conversations) - selected_keys:
+                    raise ChatIncrementalError(
+                        "incremental_reset_incomplete",
+                        "重置基线需要选择该目录内的全部既有会话；无法补齐时请改用新目录。",
+                    )
 
         voice_cache_generation = (
             capture_voice_transcript_cache_generation()
@@ -1416,6 +1779,27 @@ class ChatExportManager:
                 "fileName": str(file_name or "").strip(),
                 "encrypted": bool(encrypt),
                 "transcribeVoice": bool(transcribe_voice),
+                **(
+                    {
+                        "outputMode": "folder",
+                        "folderName": str(folder_name or "").strip(),
+                        "baseline": copy.deepcopy(baseline or {}),
+                        "missingFiles": list(dict.fromkeys([
+                            str(value or "").strip()
+                            for value in (missing_files or [])
+                            if str(value or "").strip()
+                        ])),
+                        "resetBaseline": bool(reset_baseline),
+                        "repairUsernames": list(dict.fromkeys([
+                            str(value or "").strip()
+                            for value in (repair_usernames or [])
+                            if str(value or "").strip()
+                        ])),
+                        "recheckMedia": bool(recheck_media),
+                    }
+                    if output_mode_norm == "folder"
+                    else {}
+                ),
             },
             content_key=content_key,
             voice_cache_generation=voice_cache_generation,
@@ -1647,6 +2031,9 @@ class ChatExportManager:
         if export_format_raw not in {"json", "txt", "html", "excel"}:
             raise ValueError(f"Unsupported export format: {export_format_raw}")
         export_format: ExportFormat = export_format_raw  # type: ignore[assignment]
+        output_mode: ExportOutputMode = "folder" if str(opts.get("outputMode") or "zip") == "folder" else "zip"
+        if output_mode == "folder" and job.content_key is not None:
+            raise ValueError("增量目录不支持整包加密，请使用 ZIP 全量导出。")
         include_hidden = bool(opts.get("includeHidden"))
         include_official = bool(opts.get("includeOfficial"))
         include_media = bool(opts.get("includeMedia"))
@@ -1706,6 +2093,7 @@ class ChatExportManager:
             downloadRemoteMedia=download_remote_media,
             privacyMode=privacy_mode,
             transcribeVoice=transcribe_voice,
+            outputMode=output_mode,
         )
         _raise_if_job_cancelled(job, "options_resolved", trace)
 
@@ -1737,8 +2125,120 @@ class ChatExportManager:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         _safe_trace(trace, "output_dir_resolved", durationMs=_elapsed_ms(phase_started), outputDir=str(exports_root))
 
+        folder_context: Optional[ChatFolderContext] = None
+        folder_missing_owner_keys: set[str] = set()
+        if output_mode == "folder":
+            incremental_config = build_incremental_config(
+                export_format=export_format,
+                start_time=st,
+                end_time=et,
+                message_types=sorted(want_types) if want_types else [],
+                include_media=include_media,
+                media_kinds=list(media_kinds),
+                download_remote_media=download_remote_media,
+                html_page_size=html_page_size,
+                privacy_mode=privacy_mode,
+                transcribe_voice=transcribe_voice,
+            )
+            folder_context = prepare_folder_context(
+                account=account_dir.name,
+                exports_root=exports_root,
+                requested_folder_name=str(opts.get("folderName") or ""),
+                config=incremental_config,
+                privacy_mode=privacy_mode,
+                desktop_output=bool(str(opts.get("outputDir") or "").strip()),
+                supplied_baseline=opts.get("baseline") if isinstance(opts.get("baseline"), dict) else {},
+                missing_files=list(opts.get("missingFiles") or []),
+                reset_baseline=bool(opts.get("resetBaseline")),
+            )
+            preferred_missing_owner_keys = {
+                incremental_conversation_key(salt=folder_context.salt, username=username)
+                for username in target_usernames
+            }
+            folder_missing_owner_keys = missing_conversation_keys(
+                folder_context,
+                preferred_keys=preferred_missing_owner_keys,
+            )
+            if folder_missing_owner_keys:
+                original_target_count = len(target_usernames)
+                username_by_key: dict[str, str] = {}
+                old_conversations = (
+                    folder_context.old_state.get("conversations")
+                    if isinstance(folder_context.old_state.get("conversations"), dict)
+                    else {}
+                )
+                for key, raw_state in old_conversations.items():
+                    if not isinstance(raw_state, dict):
+                        continue
+                    meta = raw_state.get("meta") if isinstance(raw_state.get("meta"), dict) else {}
+                    username = str(meta.get("username") or "").strip()
+                    if username and incremental_conversation_key(
+                        salt=folder_context.salt,
+                        username=username,
+                    ) == str(key or ""):
+                        username_by_key[str(key)] = username
+
+                unresolved_keys = folder_missing_owner_keys - set(username_by_key)
+                if unresolved_keys:
+                    if has_prepared_conversations:
+                        candidates = list(prepared_by_username)
+                    else:
+                        candidates = _resolve_export_targets(
+                            account_dir=account_dir,
+                            scope="all",
+                            usernames=[],
+                            include_hidden=True,
+                            include_official=True,
+                            source=source_norm,
+                            rt_conn=rt_conn,
+                        )
+                    for username in candidates:
+                        key = incremental_conversation_key(
+                            salt=folder_context.salt,
+                            username=username,
+                        )
+                        if key in unresolved_keys:
+                            username_by_key[key] = username
+
+                selected_usernames = set(target_usernames)
+                for key in sorted(folder_missing_owner_keys):
+                    username = username_by_key.get(key, "")
+                    if username and username not in selected_usernames:
+                        target_usernames.append(username)
+                        selected_usernames.add(username)
+                folder_context.unresolved_missing_owner_keys = (
+                    folder_missing_owner_keys - set(username_by_key)
+                )
+                _safe_trace(
+                    trace,
+                    "incremental_missing_files_resolved",
+                    missingFiles=len(folder_context.missing_files),
+                    ownerConversations=len(folder_missing_owner_keys),
+                    autoSelected=max(0, len(target_usernames) - original_target_count),
+                    unresolvedOwners=len(folder_context.unresolved_missing_owner_keys),
+                )
+            if folder_context.reset_baseline:
+                old_conversations = (
+                    folder_context.old_state.get("conversations")
+                    if isinstance(folder_context.old_state.get("conversations"), dict)
+                    else {}
+                )
+                selected_keys = {
+                    incremental_conversation_key(salt=folder_context.salt, username=username)
+                    for username in target_usernames
+                }
+                if set(old_conversations) - selected_keys:
+                    raise ChatIncrementalError(
+                        "incremental_reset_incomplete",
+                        "重置基线需要选择该目录内的全部既有会话；无法补齐时请改用新目录。",
+                    )
+            job.options["_folderRuntimeId"] = folder_context.export_runtime_id
+            job.options["folderName"] = folder_context.folder_name
+
         base_name = str(opts.get("fileName") or "").strip()
-        if not base_name:
+        if output_mode == "folder":
+            base_name = f".chat_incremental_{job.export_id}.zip"
+        elif not base_name:
             if privacy_mode:
                 base_name = f"wechat_chat_export_privacy_{ts}_{job.export_id}.zip"
             else:
@@ -1864,6 +2364,27 @@ class ChatExportManager:
                 return display_name, bool(prepared.get("isGroup")), avatar_username, messages
             row = contact_row_cache.get(username)
             return resolve_display_name(username), bool(username.endswith("@chatroom")), username, None
+
+        def conversation_directory(
+            idx: int,
+            username: str,
+            display_name: str,
+            is_group: bool,
+        ) -> tuple[str, str]:
+            if folder_context is None:
+                return (
+                    _conversation_dir_name(idx, display_name, username, is_group, privacy_mode),
+                    "",
+                )
+            key = incremental_conversation_key(salt=folder_context.salt, username=username)
+            folder_context.selected_keys.add(key)
+            directory = allocate_conversation_directory(
+                old_state=folder_context.old_state,
+                key=key,
+                display_name=display_name,
+                privacy_mode=privacy_mode,
+            )
+            return directory.removeprefix("conversations/"), key
         _safe_trace(
             trace,
             "contacts_preloaded",
@@ -1874,7 +2395,15 @@ class ChatExportManager:
         _raise_if_job_cancelled(job, "contacts_preloaded", trace)
 
         media_index: Optional[MediaPathIndex] = None
-        if include_media and any(kind in {"image", "emoji", "video", "video_thumb", "file"} for kind in media_kinds):
+        media_index_required = bool(
+            include_media
+            and any(kind in {"image", "emoji", "video", "video_thumb", "file"} for kind in media_kinds)
+        )
+
+        def ensure_media_index() -> Optional[MediaPathIndex]:
+            nonlocal media_index
+            if not media_index_required or media_index is not None:
+                return media_index
             phase_started = time.perf_counter()
             media_index = MediaPathIndex.build(
                 account_dir=account_dir,
@@ -1893,6 +2422,11 @@ class ChatExportManager:
                 hardlinkRows=int(media_index.stats.get("hardlinkRows") or 0),
             )
             _raise_if_job_cancelled(job, "media_index_built", trace)
+            return media_index
+
+        # ZIP 仍沿用原先的预构建时机；目录模式等确认确有新增或修复任务后再加载媒体索引。
+        if folder_context is None:
+            ensure_media_index()
 
         media_written: dict[str, str] = {}
         avatar_written: dict[str, str] = {}
@@ -1910,6 +2444,8 @@ class ChatExportManager:
             job.progress.messages_exported = 0
             job.progress.media_copied = 0
             job.progress.media_missing = 0
+            job.progress.media_missing_references = 0
+            job.missing_media_keys.clear()
         _safe_trace(trace, "progress_initialized", conversationCount=len(target_usernames))
 
         encrypted_output_path: Optional[Path] = None
@@ -1922,24 +2458,78 @@ class ChatExportManager:
 
             phase_started = time.perf_counter()
             _safe_trace(trace, "zip_open_start", tmpZip=str(tmp_zip))
-            native_integrity = _load_wce_integrity_native()
+            native_integrity = (
+                _load_wce_integrity_native()
+                if folder_context is None or export_format == "html"
+                else None
+            )
             with zipfile.ZipFile(tmp_zip, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as raw_zf:
-                zf = _ZipIntegrityWriter(raw_zf, native_integrity=native_integrity)
+                zf = _ZipIntegrityWriter(
+                    raw_zf,
+                    native_integrity=None if folder_context is not None else native_integrity,
+                )
                 _safe_trace(trace, "zip_opened", durationMs=_elapsed_ms(phase_started))
                 html_index_items: list[dict[str, Any]] = []
                 excel_index_items: list[dict[str, Any]] = []
                 self_avatar_path = ""
                 session_items: list[dict[str, Any]] = []
+                if folder_context is not None:
+                    old_conversations = (
+                        folder_context.old_state.get("conversations")
+                        if isinstance(folder_context.old_state.get("conversations"), dict)
+                        else {}
+                    )
+                    for old_value in old_conversations.values():
+                        if not isinstance(old_value, dict):
+                            continue
+                        old_session = old_value.get("session")
+                        has_old_session = False
+                        if isinstance(old_session, dict) and str(old_session.get("convDir") or "").strip():
+                            session_items.append(dict(old_session))
+                            has_old_session = True
+                        old_meta = old_value.get("meta")
+                        old_directory = str(old_value.get("directory") or "").strip()
+                        if old_directory and not has_old_session:
+                            meta_value = dict(old_meta) if isinstance(old_meta, dict) else {}
+                            session_items.append(
+                                {
+                                    "username": str(meta_value.get("username") or "").strip(),
+                                    "displayName": (
+                                        str(meta_value.get("displayName") or old_value.get("displayName") or "").strip()
+                                        or "会话"
+                                    ),
+                                    "isGroup": bool(meta_value.get("isGroup", old_value.get("isGroup"))),
+                                    "convDir": old_directory,
+                                    "avatarPath": str(meta_value.get("avatarPath") or "").strip(),
+                                    "lastTimeText": "",
+                                    "previewText": "",
+                                }
+                            )
+                        if isinstance(old_meta, dict) and old_directory:
+                            item = {"convDir": old_directory, "meta": dict(old_meta)}
+                            html_index_items.append(item)
+                            excel_index_items.append(item)
                 remote_written: dict[str, str] = {}
                 remote_download_enabled = bool(download_remote_media) and (export_format == "html") and include_media and (not privacy_mode)
                 if export_format == "html":
                     phase_started = time.perf_counter()
                     _safe_trace(trace, "html_assets_start")
                     ui_public_dir = _resolve_ui_public_dir()
-                    css_asset_path, js_asset_path, integrity_asset_path = _html_export_asset_paths(job.export_id)
-                    manifest_asset_path, signature_asset_path = _html_export_integrity_sidecar_paths(job.export_id)
+                    if folder_context is not None:
+                        css_asset_path = "assets/chat-export.css"
+                        js_asset_path = "assets/chat-export.js"
+                        integrity_asset_path = ""
+                        manifest_asset_path = ""
+                        signature_asset_path = ""
+                    else:
+                        css_asset_path, js_asset_path, integrity_asset_path = _html_export_asset_paths(job.export_id)
+                        manifest_asset_path, signature_asset_path = _html_export_integrity_sidecar_paths(job.export_id)
                     css_payload = _minify_css_for_export(_load_ui_css_bundle(ui_public_dir=ui_public_dir, report=report))
-                    js_payload = _html_export_runtime_js(native_integrity)
+                    js_payload = (
+                        _html_export_folder_runtime_js(native_integrity)
+                        if folder_context is not None
+                        else _html_export_runtime_js(native_integrity)
+                    )
                     job.options["_htmlAssets"] = {
                         "cssPath": css_asset_path,
                         "jsPath": js_asset_path,
@@ -1949,6 +2539,9 @@ class ChatExportManager:
                         "cssIntegrity": _sri_sha384(css_payload),
                         "jsIntegrity": _sri_sha384(js_payload),
                     }
+                    if folder_context is not None:
+                        job.options["_htmlAssets"]["folderMode"] = True
+                        job.options["_htmlAssets"]["sessionCatalogPath"] = "assets/chat-sessions.js"
                     zf.writestr(css_asset_path, css_payload)
                     zf.writestr(js_asset_path, js_payload)
 
@@ -2105,7 +2698,13 @@ class ChatExportManager:
                         prepared_name, prepared_is_group, conv_avatar_username, _prepared_messages = conversation_meta(conv_username)
                         conv_name = prepared_name if not privacy_mode else _pick_display_name(conv_row, conv_username)
                         conv_is_group = prepared_is_group
-                        conv_dir = f"conversations/{_conversation_dir_name(idx, conv_name, conv_username, conv_is_group, privacy_mode)}"
+                        conv_part, conv_key = conversation_directory(
+                            idx,
+                            conv_username,
+                            conv_name,
+                            conv_is_group,
+                        )
+                        conv_dir = f"conversations/{conv_part}"
 
                         conv_avatar_path = ""
                         if not privacy_mode and conv_avatar_username:
@@ -2116,23 +2715,31 @@ class ChatExportManager:
                                 avatar_written=avatar_written,
                             )
 
-                        session_items.append(
-                            {
-                                "username": "" if privacy_mode else conv_username,
-                                "displayName": (f"会话 {idx:04d}" if privacy_mode else conv_name),
-                                "isGroup": bool(conv_is_group),
-                                "convDir": conv_dir,
-                                "avatarPath": "" if privacy_mode else conv_avatar_path,
-                                "lastTimeText": ("" if privacy_mode else _format_session_time(last_ts_by_username.get(conv_username))),
-                                "previewText": ("" if privacy_mode else str(preview_by_username.get(conv_username) or "")),
-                            }
-                        )
+                        session_value = {
+                            "username": "" if privacy_mode else conv_username,
+                            "displayName": (f"会话 {idx:04d}" if privacy_mode else conv_name),
+                            "isGroup": bool(conv_is_group),
+                            "convDir": conv_dir,
+                            "avatarPath": "" if privacy_mode else conv_avatar_path,
+                            "lastTimeText": ("" if privacy_mode else _format_session_time(last_ts_by_username.get(conv_username))),
+                            "previewText": ("" if privacy_mode else str(preview_by_username.get(conv_username) or "")),
+                        }
+                        session_items = [
+                            item for item in session_items
+                            if str(item.get("convDir") or "") != conv_dir
+                        ]
+                        session_items.append(session_value)
                     _safe_trace(
                         trace,
                         "html_session_index_built",
                         durationMs=_elapsed_ms(phase_started),
                         sessionItems=len(session_items),
                     )
+                    if folder_context is not None:
+                        zf.writestr(
+                            "assets/chat-sessions.js",
+                            _html_export_folder_sessions_js(session_items),
+                        )
 
                 for idx, conv_username in enumerate(target_usernames, start=1):
                     _raise_if_job_cancelled(job, "conversation_loop_start", trace, index=idx)
@@ -2143,7 +2750,13 @@ class ChatExportManager:
                     conv_name = prepared_name if not privacy_mode else _pick_display_name(conv_row, conv_username)
                     conv_is_group = prepared_is_group
 
-                    conv_dir = f"conversations/{_conversation_dir_name(idx, conv_name, conv_username, conv_is_group, privacy_mode)}"
+                    conv_part, conv_key = conversation_directory(
+                        idx,
+                        conv_username,
+                        conv_name,
+                        conv_is_group,
+                    )
+                    conv_dir = f"conversations/{conv_part}"
 
                     with self._lock:
                         job.progress.current_conversation_index = idx
@@ -2156,11 +2769,41 @@ class ChatExportManager:
                     if prepared_messages is not None:
                         estimated_total = len(prepared_messages)
                     else:
+                        estimate_start_time = st
+                        if folder_context is not None and conv_key and export_format == "html" and html_page_size > 0:
+                            estimate_old_conversations = (
+                                folder_context.old_state.get("conversations")
+                                if isinstance(folder_context.old_state.get("conversations"), dict)
+                                else {}
+                            )
+                            estimate_old = (
+                                estimate_old_conversations.get(conv_key)
+                                if isinstance(estimate_old_conversations.get(conv_key), dict)
+                                else {}
+                            )
+                            estimate_watermark = _incremental_watermark(estimate_old.get("watermark"))
+                            estimate_repair_requested = bool(
+                                bool(opts.get("resetBaseline"))
+                                or conv_username in set(opts.get("repairUsernames") or [])
+                            )
+                            estimate_managed_missing = conv_key in folder_missing_owner_keys or any(
+                                str(path or "") in folder_context.missing_files
+                                for path in (estimate_old.get("managedFiles") or [])
+                            )
+                            # 正常追加时，进度估算也必须从旧水位开始，避免先统计整段历史。
+                            if (
+                                estimate_watermark is not None
+                                and not estimate_repair_requested
+                                and not estimate_managed_missing
+                            ):
+                                estimate_start_time = int(estimate_watermark[0] or 0)
+                                if st is not None:
+                                    estimate_start_time = max(int(st), estimate_start_time)
                         try:
                             estimated_total = _estimate_conversation_message_count(
                                 account_dir=account_dir,
                                 conv_username=conv_username,
-                                start_time=st,
+                                start_time=estimate_start_time,
                                 end_time=et,
                                 local_types=estimate_local_types,
                                 source=source_norm,
@@ -2199,6 +2842,283 @@ class ChatExportManager:
                     )
                     _raise_if_job_cancelled(job, "conversation_resource_lookup", trace, index=idx, conversation=conv_username)
 
+                    incremental_old: dict[str, Any] = {}
+                    incremental_probe: dict[str, Any] = {}
+                    incremental_should_render = True
+                    incremental_reasons: list[str] = []
+                    incremental_append_mode = False
+                    incremental_append_messages: list[dict[str, Any]] = []
+                    incremental_append_snapshot: Optional[dict[str, Any]] = None
+                    if folder_context is not None and conv_key:
+                        old_conversations = (
+                            folder_context.old_state.get("conversations")
+                            if isinstance(folder_context.old_state.get("conversations"), dict)
+                            else {}
+                        )
+                        incremental_old = (
+                            dict(old_conversations.get(conv_key))
+                            if isinstance(old_conversations.get(conv_key), dict)
+                            else {}
+                        )
+                        repair_requested = bool(
+                            bool(opts.get("resetBaseline"))
+                            or conv_username in set(opts.get("repairUsernames") or [])
+                            or bool(opts.get("recheckMedia"))
+                        )
+                        managed_missing = conv_key in folder_missing_owner_keys or any(
+                            str(path or "") in folder_context.missing_files
+                            for path in (incremental_old.get("managedFiles") or [])
+                        )
+                        append_html_path = (
+                            folder_context.target_root / Path(*f"{conv_dir}/messages.html".split("/"))
+                            if folder_context.target_root is not None
+                            else None
+                        )
+                        if append_html_path is not None and append_html_path.is_file():
+                            incremental_append_snapshot = _html_incremental_snapshot(append_html_path)
+                        append_probe_allowed = bool(
+                            export_format == "html"
+                            and html_page_size > 0
+                            and incremental_old
+                            and _incremental_watermark(incremental_old.get("watermark")) is not None
+                            and incremental_append_snapshot is not None
+                            and not repair_requested
+                            and not managed_missing
+                            and (
+                                privacy_mode
+                                or str(incremental_old.get("displayName") or "") == str(conv_name or "")
+                            )
+                            and (
+                                not transcribe_voice
+                                or incremental_old.get("voiceCacheGeneration") is None
+                                or int(incremental_old.get("voiceCacheGeneration") or 0)
+                                == int(job.voice_cache_generation or 0)
+                            )
+                        )
+                        _safe_trace(
+                            trace,
+                            "incremental_append_eligibility",
+                            conversation=conv_username,
+                            allowed=append_probe_allowed,
+                            format=export_format,
+                            pageSize=html_page_size,
+                            hasBaseline=bool(incremental_old),
+                            hasWatermark=_incremental_watermark(incremental_old.get("watermark")) is not None,
+                            hasHtmlSnapshot=incremental_append_snapshot is not None,
+                            repairRequested=repair_requested,
+                            managedMissing=managed_missing,
+                            profileStable=(
+                                privacy_mode
+                                or str(incremental_old.get("displayName") or "") == str(conv_name or "")
+                            ),
+                        )
+                        if prepared_messages is None:
+                            if append_probe_allowed:
+                                incremental_probe = _probe_incremental_append(
+                                    account_dir=account_dir,
+                                    conv_username=conv_username,
+                                    start_time=st,
+                                    end_time=et,
+                                    source=source_norm,
+                                    rt_conn=rt_conn,
+                                    old_state=incremental_old,
+                                    want_types=want_types,
+                                    is_group=conv_is_group,
+                                    checkpoint=lambda: _raise_if_job_cancelled(
+                                        job,
+                                        "incremental_append_probe",
+                                        trace,
+                                        conversation=conv_username,
+                                    ),
+                                )
+                                incremental_append_messages = list(
+                                    incremental_probe.get("preparedMessages") or []
+                                )
+                                if len(incremental_append_messages) > int(html_page_size):
+                                    incremental_probe = {}
+                                    incremental_append_messages = []
+                            if not incremental_probe:
+                                incremental_probe = _probe_incremental_conversation(
+                                    account_dir=account_dir,
+                                    conv_username=conv_username,
+                                    start_time=st,
+                                    end_time=et,
+                                    source=source_norm,
+                                    rt_conn=rt_conn,
+                                    old_state=incremental_old,
+                                    want_types=want_types,
+                                    is_group=conv_is_group,
+                                    privacy_mode=privacy_mode,
+                                    checkpoint=lambda: _raise_if_job_cancelled(
+                                        job,
+                                        "incremental_probe",
+                                        trace,
+                                        conversation=conv_username,
+                                    ),
+                                )
+                        else:
+                            incremental_probe = {
+                                "messageCount": len(prepared_messages),
+                                "newMessageCount": len(prepared_messages),
+                                "watermark": [],
+                                "historyFingerprint": hashlib.sha256(
+                                    json.dumps(prepared_messages, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+                                ).hexdigest(),
+                                "historyChanged": False,
+                            }
+
+                        has_new_messages = int(incremental_probe.get("newMessageCount") or 0) > 0
+                        content_history_changed = bool(incremental_probe.get("historyChanged"))
+                        history_changed = content_history_changed
+                        profile_changed = False
+                        transcript_changed = False
+                        if (
+                            incremental_old
+                            and not privacy_mode
+                            and str(incremental_old.get("displayName") or "") != str(conv_name or "")
+                        ):
+                            profile_changed = True
+                            history_changed = True
+                            incremental_reasons.append("profile_changed")
+                        if (
+                            transcribe_voice
+                            and incremental_old
+                            and incremental_old.get("voiceCacheGeneration") is not None
+                            and int(incremental_old.get("voiceCacheGeneration") or 0)
+                            != int(job.voice_cache_generation or 0)
+                        ):
+                            transcript_changed = True
+                            history_changed = True
+                            incremental_reasons.append("transcript_changed")
+                        pending_media = normalize_pending_media(incremental_old.get("pendingMedia") or [])
+                        repairable_pending: list[dict[str, Any]] = []
+                        if pending_media:
+                            pending_media, pending_changed = _classify_pending_media(
+                                account_dir=account_dir,
+                                conv_username=conv_username,
+                                values=pending_media,
+                                media_index=ensure_media_index(),
+                            )
+                            incremental_old["pendingMedia"] = pending_media
+                            folder_context.metadata_changed = bool(folder_context.metadata_changed or pending_changed)
+                            repairable_pending = [
+                                item for item in pending_media if bool(item.get("repairable"))
+                            ]
+                            unavailable_pending = [
+                                item for item in pending_media if not bool(item.get("repairable"))
+                            ]
+                            if repairable_pending:
+                                incremental_reasons.append("media_recoverable")
+                            if unavailable_pending:
+                                folder_context.unresolved_media_conversations.append(
+                                    {
+                                        "username": "" if privacy_mode else conv_username,
+                                        "conversationKey": conv_key,
+                                        "displayName": "" if privacy_mode else conv_name,
+                                        "uniqueCount": len(unavailable_pending),
+                                        "referenceCount": sum(
+                                            max(1, int(item.get("occurrenceCount") or 1))
+                                            for item in unavailable_pending
+                                        ),
+                                    }
+                                )
+
+                        if managed_missing:
+                            incremental_reasons.append("managed_file_missing")
+
+                        incremental_append_mode = bool(
+                            incremental_probe.get("appendProbe")
+                            and has_new_messages
+                            and not history_changed
+                            and incremental_append_snapshot is not None
+                            and incremental_append_messages
+                        )
+                        if incremental_probe.get("appendProbe"):
+                            with self._lock:
+                                append_total = int(incremental_probe.get("newMessageCount") or 0)
+                                job.progress.current_conversation_messages_total = append_total
+                                job.progress.current_conversation_messages_exported = 0
+
+                        if not incremental_old:
+                            incremental_should_render = True
+                        elif repair_requested or managed_missing:
+                            incremental_should_render = True
+                        elif profile_changed and not content_history_changed and not transcript_changed:
+                            # 资料变化可以直接同步，不需要用户再确认一次“修复”。
+                            incremental_should_render = True
+                        elif history_changed and not has_new_messages:
+                            incremental_should_render = False
+                            reasons = list(dict.fromkeys(["history_changed", *incremental_reasons]))
+                            folder_context.repair_candidates.append(
+                                {
+                                    "username": conv_username,
+                                    "conversationKey": conv_key,
+                                    "displayName": "" if privacy_mode else conv_name,
+                                    "reasons": reasons,
+                                    "newMessageCount": 0,
+                                }
+                            )
+                        elif repairable_pending and not has_new_messages:
+                            incremental_should_render = False
+                            folder_context.repair_candidates.append(
+                                {
+                                    "username": conv_username,
+                                    "conversationKey": conv_key,
+                                    "displayName": "" if privacy_mode else conv_name,
+                                    "reasons": ["media_recoverable"],
+                                    "newMessageCount": 0,
+                                }
+                            )
+                        else:
+                            incremental_should_render = has_new_messages or history_changed
+
+                        if history_changed and has_new_messages:
+                            folder_context.history_synced.append(
+                                {
+                                    "username": conv_username,
+                                    "conversationKey": conv_key,
+                                    "displayName": "" if privacy_mode else conv_name,
+                                    "reasons": list(dict.fromkeys(["history_changed", *incremental_reasons])),
+                                    "newMessageCount": int(incremental_probe.get("newMessageCount") or 0),
+                                }
+                            )
+                        elif repairable_pending and incremental_append_mode:
+                            # 新消息仍按真正增量追加；旧媒体确认可恢复后再由用户明确重建。
+                            folder_context.repair_candidates.append(
+                                {
+                                    "username": conv_username,
+                                    "conversationKey": conv_key,
+                                    "displayName": "" if privacy_mode else conv_name,
+                                    "reasons": ["media_recoverable"],
+                                    "newMessageCount": int(incremental_probe.get("newMessageCount") or 0),
+                                }
+                            )
+                        if incremental_old and not incremental_should_render:
+                            reused_count = int(incremental_old.get("messageCount") or 0)
+                            reused_state = dict(incremental_old)
+                            reused_state["rendered"] = False
+                            reused_state["newMessageCount"] = 0
+                            folder_context.current_conversations[conv_key] = reused_state
+                            with self._lock:
+                                reused_progress = (
+                                    0 if incremental_probe.get("appendProbe") else reused_count
+                                )
+                                job.progress.current_conversation_messages_exported = reused_progress
+                                job.progress.current_conversation_messages_total = reused_progress
+                                job.progress.conversations_done += 1
+                            _safe_trace(
+                                trace,
+                                "conversation_reused",
+                                index=idx,
+                                conversation=conv_username,
+                                durationMs=_elapsed_ms(conv_started),
+                                exportedCount=reused_count,
+                                conversationsDone=job.progress.conversations_done,
+                            )
+                            continue
+
+                    if folder_context is not None:
+                        ensure_media_index()
                     conv_avatar_path = ""
                     if not privacy_mode and conv_avatar_username:
                         phase_started = time.perf_counter()
@@ -2284,9 +3204,7 @@ class ChatExportManager:
                             prepared_messages=prepared_messages,
                         )
                     elif export_format == "html":
-                        exported_count = _write_conversation_html(
-                            zf=zf,
-                            conv_dir=conv_dir,
+                        html_writer_options = dict(
                             account_dir=account_dir,
                             conv_username=conv_username,
                             conv_name=conv_name,
@@ -2318,8 +3236,24 @@ class ChatExportManager:
                             media_index=media_index,
                             job=job,
                             lock=self._lock,
-                            prepared_messages=prepared_messages,
                         )
+                        if incremental_append_mode and incremental_append_snapshot is not None:
+                            exported_count = _write_conversation_html_append(
+                                zf=zf,
+                                conv_dir=conv_dir,
+                                existing_snapshot=incremental_append_snapshot,
+                                old_state=incremental_old,
+                                new_messages=incremental_append_messages,
+                                runtime_id=(folder_context.export_runtime_id if folder_context is not None else ""),
+                                writer_options=html_writer_options,
+                            )
+                        else:
+                            exported_count = _write_conversation_html(
+                                zf=zf,
+                                conv_dir=conv_dir,
+                                prepared_messages=prepared_messages,
+                                **html_writer_options,
+                            )
                     else:
                         exported_count = _write_conversation_json(
                             zf=zf,
@@ -2378,14 +3312,111 @@ class ChatExportManager:
                         "messageCount": int(exported_count),
                     }
                     zf.writestr(f"{conv_dir}/meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
+                    effective_meta = meta
+                    if folder_context is not None and not incremental_should_render:
+                        old_meta = incremental_old.get("meta")
+                        if isinstance(old_meta, dict):
+                            effective_meta = dict(old_meta)
                     if export_format == "html":
-                        html_index_items.append({"convDir": conv_dir, "meta": meta})
+                        html_index_items = [
+                            item for item in html_index_items
+                            if str(item.get("convDir") or "") != conv_dir
+                        ]
+                        html_index_items.append({"convDir": conv_dir, "meta": effective_meta})
                     elif export_format == "excel":
-                        excel_index_items.append({"convDir": conv_dir, "meta": meta})
+                        excel_index_items = [
+                            item for item in excel_index_items
+                            if str(item.get("convDir") or "") != conv_dir
+                        ]
+                        excel_index_items.append({"convDir": conv_dir, "meta": effective_meta})
+
+                    if folder_context is not None and conv_key:
+                        previous_state = dict(incremental_old)
+                        if incremental_should_render:
+                            session_value = next(
+                                (
+                                    dict(item)
+                                    for item in session_items
+                                    if str(item.get("convDir") or "") == conv_dir
+                                ),
+                                {},
+                            )
+                            pending_media = normalize_pending_media(
+                                [
+                                    {
+                                        "kind": str(item.get("kind") or ""),
+                                        "id": str(item.get("id") or ""),
+                                        "messageId": str(item.get("messageId") or ""),
+                                    }
+                                    for item in (report.get("missingMedia") or [])
+                                    if isinstance(item, dict)
+                                    and str(item.get("conversation") or "") == conv_username
+                                ],
+                                default_state="source_unavailable",
+                                default_reason="SOURCE_NOT_FOUND",
+                            )
+                            if incremental_append_mode:
+                                pending_media = normalize_pending_media(
+                                    [
+                                        *list(incremental_old.get("pendingMedia") or []),
+                                        *pending_media,
+                                    ],
+                                    default_state="source_unavailable",
+                                    default_reason="SOURCE_NOT_FOUND",
+                                )
+                            current_state = {
+                                "directory": conv_dir,
+                                "displayName": "" if privacy_mode else conv_name,
+                                "isGroup": bool(conv_is_group),
+                                "sourceRowCount": int(incremental_probe.get("messageCount") or 0),
+                                "messageCount": int(exported_count),
+                                "watermark": list(incremental_probe.get("watermark") or []),
+                                "historyFingerprint": str(incremental_probe.get("historyFingerprint") or ""),
+                                "voiceCacheGeneration": int(job.voice_cache_generation or 0) if transcribe_voice else None,
+                                "pendingMedia": pending_media,
+                                "session": session_value,
+                                "meta": effective_meta,
+                                "rendered": True,
+                                "appendOnly": bool(incremental_append_mode),
+                                "newMessageCount": int(incremental_probe.get("newMessageCount") or 0),
+                            }
+                        else:
+                            current_state = previous_state
+                            current_state["rendered"] = False
+                            current_state["newMessageCount"] = 0
+                        folder_context.current_conversations[conv_key] = current_state
+                        unresolved_items = [
+                            item
+                            for item in normalize_pending_media(current_state.get("pendingMedia") or [])
+                            if not bool(item.get("repairable"))
+                        ]
+                        folder_context.unresolved_media_conversations = [
+                            item
+                            for item in folder_context.unresolved_media_conversations
+                            if str(item.get("conversationKey") or "") != conv_key
+                        ]
+                        if unresolved_items:
+                            folder_context.unresolved_media_conversations.append(
+                                {
+                                    "username": "" if privacy_mode else conv_username,
+                                    "conversationKey": conv_key,
+                                    "displayName": "" if privacy_mode else conv_name,
+                                    "uniqueCount": len(unresolved_items),
+                                    "referenceCount": sum(
+                                        max(1, int(item.get("occurrenceCount") or 1))
+                                        for item in unresolved_items
+                                    ),
+                                }
+                            )
 
                     with self._lock:
-                        job.progress.current_conversation_messages_exported = int(exported_count)
-                        job.progress.current_conversation_messages_total = int(exported_count)
+                        progress_count = (
+                            int(incremental_probe.get("newMessageCount") or 0)
+                            if incremental_append_mode
+                            else int(exported_count)
+                        )
+                        job.progress.current_conversation_messages_exported = progress_count
+                        job.progress.current_conversation_messages_total = progress_count
                         job.progress.conversations_done += 1
                     _safe_trace(
                         trace,
@@ -2417,21 +3448,31 @@ class ChatExportManager:
                     html_assets = dict(job.options.get("_htmlAssets") or {})
                     css_asset_path = str(html_assets.get("cssPath") or _html_export_asset_paths(job.export_id)[0])
                     js_asset_path = str(html_assets.get("jsPath") or _html_export_asset_paths(job.export_id)[1])
+                    session_catalog_path = str(html_assets.get("sessionCatalogPath") or "assets/chat-sessions.js")
                     integrity_asset_path = str(html_assets.get("integrityPath") or _html_export_asset_paths(job.export_id)[2])
                     css_integrity = str(html_assets.get("cssIntegrity") or "")
                     js_integrity = str(html_assets.get("jsIntegrity") or "")
-                    parts.append(_html_export_gate_style())
-                    # Do not use native `integrity=` here: Chrome blocks SRI on file://
-                    # because it cannot enforce CORS. Keep hashes in inert data attrs
-                    # and let the export integrity checker verify them instead.
-                    parts.append(f'  <link id="wceStyle" rel="stylesheet" href="{esc_attr(css_asset_path)}" data-wce-sri="{esc_attr(css_integrity)}" />\n')
-                    parts.append(_html_export_integrity_script_tag(src=integrity_asset_path))
-                    parts.append(f'  <script defer src="{esc_attr(js_asset_path)}" data-wce-sri="{esc_attr(js_integrity)}"></script>\n')
+                    if folder_context is not None:
+                        parts.append(f'  <link id="wceStyle" rel="stylesheet" href="{esc_attr(css_asset_path)}" />\n')
+                        parts.append(
+                            f'  <script defer src="{esc_attr(session_catalog_path)}" data-wce-folder-sessions="1"></script>\n'
+                        )
+                        parts.append(f'  <script defer src="{esc_attr(js_asset_path)}"></script>\n')
+                    else:
+                        parts.append(_html_export_gate_style())
+                        # file:// 下由导出运行时核对 data-wce-sri，不能使用浏览器原生 SRI。
+                        parts.append(f'  <link id="wceStyle" rel="stylesheet" href="{esc_attr(css_asset_path)}" data-wce-sri="{esc_attr(css_integrity)}" />\n')
+                        parts.append(_html_export_integrity_script_tag(src=integrity_asset_path))
+                        parts.append(f'  <script defer src="{esc_attr(js_asset_path)}" data-wce-sri="{esc_attr(js_integrity)}"></script>\n')
                     parts.append("</head>\n")
                     parts.append("<body>\n")
                     parts.append(
                         '  <div id="wceJsMissing" style="position:fixed;top:0;left:0;right:0;z-index:9999;background:#FEF3C7;color:#92400E;border-bottom:1px solid #F59E0B;padding:8px 12px;font-size:12px;line-height:1.4">'
-                        "提示：此页面需要 JavaScript 才能使用“合并聊天记录”等交互功能。若该提示一直存在，请确认已完整解压导出目录，并检查 assets/_wce/ 下的运行时文件是否完整。</div>\n"
+                        + (
+                            "提示：此页面需要 JavaScript 才能使用“合并聊天记录”等交互功能。若该提示一直存在，请确认导出目录中的运行时文件完整。</div>\n"
+                            if folder_context is not None
+                            else "提示：此页面需要 JavaScript 才能使用“合并聊天记录”等交互功能。若该提示一直存在，请确认已完整解压导出目录，并检查 assets/_wce/ 下的运行时文件是否完整。</div>\n"
+                        )
                     )
                     parts.append('<div class="wce-index">\n')
                     parts.append('  <div class="wce-index-container">\n')
@@ -2545,7 +3586,10 @@ class ChatExportManager:
                 }
                 zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
                 zf.writestr("report.json", json.dumps(report, ensure_ascii=False, indent=2))
-                if export_format == "html":
+                if folder_context is not None:
+                    # 可持续目录由基线保存逐文件摘要；不可变 ZIP 的阻断式完整性链不适用于原地更新。
+                    pass
+                elif export_format == "html":
                     try:
                         html_assets = dict(job.options.get("_htmlAssets") or {})
                         write_active_html_zip_integrity(zf, job.export_id, html_assets)
@@ -2569,7 +3613,39 @@ class ChatExportManager:
             _raise_if_job_cancelled(job, "before_finalize", trace)
 
             phase_started = time.perf_counter()
-            if job.content_key is not None:
+            if folder_context is not None:
+                final_out = materialize_folder_archive(
+                    job=job,
+                    archive_path=tmp_zip,
+                    context=folder_context,
+                )
+                tmp_zip.unlink(missing_ok=True)
+                warning_parts: list[str] = []
+                if folder_context.reset_baseline:
+                    warning_parts.append("已重置基线并完整重建本次选择的会话。")
+                recovered_files = int(job.incremental.get("filesRecovered") or 0)
+                if recovered_files:
+                    warning_parts.append(f"已补回 {recovered_files} 个缺失或异常的受管理文件。")
+                if folder_context.repair_candidates:
+                    warning_parts.append(
+                        f"发现 {len(folder_context.repair_candidates)} 个会话存在可恢复差异。"
+                    )
+                unresolved_unique = int(job.unresolved_media.get("uniqueCount") or 0)
+                unresolved_references = int(job.unresolved_media.get("referenceCount") or 0)
+                if unresolved_unique:
+                    warning_parts.append(
+                        f"有 {unresolved_unique} 个媒体当前在源端不可用，影响 {unresolved_references} 条消息；重复修复不会产生变化。"
+                    )
+                if folder_context.history_synced:
+                    warning_parts.append(
+                        f"已在追加新消息时同步 {len(folder_context.history_synced)} 个会话的历史变化。"
+                    )
+                if folder_context.unresolved_missing_owner_keys:
+                    warning_parts.append(
+                        f"有 {len(folder_context.unresolved_missing_owner_keys)} 个缺失文件所属会话已不在当前数据源中，将在后续更新时继续尝试补回。"
+                    )
+                job.warning = " ".join(warning_parts)
+            elif job.content_key is not None:
                 final_out = final_zip.with_name(final_zip.name + ".wec")
                 if final_out.exists():
                     final_out = final_out.with_name(
@@ -2591,13 +3667,14 @@ class ChatExportManager:
 
             with self._lock:
                 job.status = "done"
-                job.zip_path = final_out
+                job.zip_path = final_out if folder_context is None else None
                 job.finished_at = time.time()
             _safe_trace(
                 trace,
                 "job_done",
                 durationMs=round(((job.finished_at or time.time()) - (job.started_at or job.created_at)) * 1000.0, 1),
-                finalZip=str(final_out),
+                finalZip=str(final_out) if folder_context is None else "",
+                folderPath=str(final_out) if folder_context is not None else "",
                 messagesExported=job.progress.messages_exported,
                 mediaCopied=job.progress.media_copied,
                 mediaMissing=job.progress.media_missing,
@@ -2622,10 +3699,16 @@ class ChatExportManager:
                 mediaMissing=job.progress.media_missing,
             )
         except Exception:
-            if job.content_key is not None:
+            if job.content_key is not None or folder_context is not None:
                 tmp_zip.unlink(missing_ok=True)
                 if encrypted_output_path is not None:
                     encrypted_output_path.unlink(missing_ok=True)
+                if job.staging_dir is not None and job.staging_dir.exists():
+                    import shutil
+
+                    shutil.rmtree(job.staging_dir, ignore_errors=True)
+                    job.staging_dir = None
+                    job.staged_files = {}
             raise
         finally:
             if realtime_paused:
@@ -3490,6 +4573,207 @@ def _iter_rows_for_conversation(
     return heapq.merge(*streams, key=sort_key)
 
 
+def _incremental_row_key(row: _Row) -> tuple[int, int, int, int, str, str]:
+    return (
+        int(row.create_time or 0),
+        int(row.sort_seq or 0),
+        int(row.local_id or 0),
+        int(row.server_id or 0),
+        str(row.db_stem or ""),
+        str(row.table_name or ""),
+    )
+
+
+def _incremental_row_payload(row: _Row, message: dict[str, Any]) -> bytes:
+    normalized_message = {
+        key: value
+        for key, value in message.items()
+        if key not in {"createTimeText", "conversationUsername", "_mediaUsername"}
+    }
+    value = {
+        "key": list(_incremental_row_key(row)),
+        "message": normalized_message,
+    }
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+
+
+def _incremental_watermark(value: Any) -> tuple[int, int, int, int, str, str] | None:
+    raw = value if isinstance(value, list) else []
+    if len(raw) < 6:
+        return None
+    try:
+        return (
+            int(raw[0] or 0),
+            int(raw[1] or 0),
+            int(raw[2] or 0),
+            int(raw[3] or 0),
+            str(raw[4] or ""),
+            str(raw[5] or ""),
+        )
+    except Exception:
+        return None
+
+
+def _probe_incremental_append(
+    *,
+    account_dir: Path,
+    conv_username: str,
+    start_time: Optional[int],
+    end_time: Optional[int],
+    source: str,
+    rt_conn: Any | None,
+    old_state: dict[str, Any],
+    want_types: Optional[set[str]] = None,
+    is_group: bool = False,
+    checkpoint: Optional[Callable[[], None]] = None,
+) -> dict[str, Any]:
+    """只读取旧水位之后的消息，供可分页格式执行真正的追加更新。"""
+
+    old_watermark = _incremental_watermark(old_state.get("watermark"))
+    if old_watermark is None:
+        raise ValueError("incremental append requires one valid watermark")
+
+    lower_bound = int(old_watermark[0] or 0)
+    if start_time is not None:
+        lower_bound = max(lower_bound, int(start_time))
+    prepared_messages: list[dict[str, Any]] = []
+    new_payloads: list[bytes] = []
+    watermark = old_watermark
+    rows = _iter_rows_for_conversation(
+        account_dir=account_dir,
+        conv_username=conv_username,
+        start_time=lower_bound,
+        end_time=end_time,
+        local_types=None,
+        source=source,
+        rt_conn=rt_conn,
+        checkpoint=checkpoint,
+    )
+    for row in rows:
+        key = _incremental_row_key(row)
+        if key <= old_watermark:
+            continue
+        watermark = max(watermark, key)
+        parsed = _parse_message_for_export(
+            row=row,
+            conv_username=conv_username,
+            is_group=is_group,
+            resource_conn=None,
+            resource_chat_id=None,
+        )
+        if not _is_render_type_selected(parsed.get("renderType"), want_types):
+            continue
+        prepared_messages.append(parsed)
+        new_payloads.append(_incremental_row_payload(row, parsed))
+
+    old_count = int(old_state.get("sourceRowCount") or old_state.get("messageCount") or 0)
+    chained_hash = hashlib.sha256()
+    chained_hash.update(b"wce-incremental-append-v1\0")
+    chained_hash.update(str(old_state.get("historyFingerprint") or "").encode("ascii", errors="ignore"))
+    for payload in new_payloads:
+        chained_hash.update(len(payload).to_bytes(4, "big"))
+        chained_hash.update(payload)
+    return {
+        "messageCount": old_count + len(prepared_messages),
+        "newMessageCount": len(prepared_messages),
+        "watermark": list(watermark),
+        "historyFingerprint": (
+            chained_hash.hexdigest()
+            if prepared_messages
+            else str(old_state.get("historyFingerprint") or "")
+        ),
+        "historyChanged": False,
+        "preparedMessages": prepared_messages,
+        "appendProbe": True,
+    }
+
+
+def _probe_incremental_conversation(
+    *,
+    account_dir: Path,
+    conv_username: str,
+    start_time: Optional[int],
+    end_time: Optional[int],
+    source: str,
+    rt_conn: Any | None,
+    old_state: dict[str, Any],
+    want_types: Optional[set[str]] = None,
+    is_group: bool = False,
+    privacy_mode: bool = False,
+    checkpoint: Optional[Callable[[], None]] = None,
+) -> dict[str, Any]:
+    """流式计算旧水位前的历史指纹和当前会话水位。"""
+
+    old_watermark = _incremental_watermark(old_state.get("watermark"))
+
+    full_hash = hashlib.sha256()
+    prefix_hash = hashlib.sha256()
+    count = 0
+    prefix_count = 0
+    new_count = 0
+    watermark: tuple[int, int, int, int, str, str] | None = None
+    privacy_sender_alias_map: dict[str, int] = {}
+    rows = _iter_rows_for_conversation(
+        account_dir=account_dir,
+        conv_username=conv_username,
+        start_time=start_time,
+        end_time=end_time,
+        local_types=None,
+        source=source,
+        rt_conn=rt_conn,
+        checkpoint=checkpoint,
+    )
+    for row in rows:
+        parsed = _parse_message_for_export(
+            row=row,
+            conv_username=conv_username,
+            is_group=is_group,
+            resource_conn=None,
+            resource_chat_id=None,
+        )
+        if not _is_render_type_selected(parsed.get("renderType"), want_types):
+            continue
+        if privacy_mode:
+            _privacy_scrub_message(
+                parsed,
+                conv_is_group=is_group,
+                sender_alias_map=privacy_sender_alias_map,
+            )
+        payload = _incremental_row_payload(row, parsed)
+        key = _incremental_row_key(row)
+        full_hash.update(len(payload).to_bytes(4, "big"))
+        full_hash.update(payload)
+        count += 1
+        watermark = key
+        if old_watermark is not None and key <= old_watermark:
+            prefix_hash.update(len(payload).to_bytes(4, "big"))
+            prefix_hash.update(payload)
+            prefix_count += 1
+        elif old_watermark is not None:
+            new_count += 1
+
+    old_exists = bool(old_state)
+    if not old_exists or old_watermark is None:
+        new_count = count
+    old_count = int(old_state.get("sourceRowCount") or old_state.get("messageCount") or 0)
+    old_fingerprint = str(old_state.get("historyFingerprint") or "")
+    history_changed = bool(
+        old_exists
+        and old_watermark is not None
+        and (
+            prefix_count != old_count
+            or prefix_hash.hexdigest() != old_fingerprint
+        )
+    )
+    return {
+        "messageCount": count,
+        "newMessageCount": max(0, new_count),
+        "watermark": list(watermark) if watermark is not None else [],
+        "historyFingerprint": full_hash.hexdigest(),
+        "historyChanged": history_changed,
+    }
+
+
 def _parse_message_for_export(
     *,
     row: _Row,
@@ -4189,6 +5473,7 @@ def _write_conversation_json(
                         zf=zf,
                         account_dir=account_dir,
                         conv_username=media_conv_username,
+                        owner_username=conv_username,
                         msg=msg,
                         media_written=media_written,
                         report=report,
@@ -4551,6 +5836,7 @@ def _write_conversation_txt(
                         zf=zf,
                         account_dir=account_dir,
                         conv_username=media_conv_username,
+                        owner_username=conv_username,
                         msg=msg,
                         media_written=media_written,
                         report=report,
@@ -4609,6 +5895,85 @@ def _write_conversation_txt(
 
     _safe_trace(trace, "writer_done", exported=exported)
     return exported
+
+
+def _html_incremental_snapshot_text(text: str) -> Optional[dict[str, Any]]:
+    """读取 HTML 的最后一页和分页元数据；结构不匹配时安全回退全量生成。"""
+
+    marker = '<div id="wceMessageList">\n'
+    marker_at = text.find(marker)
+    if marker_at < 0:
+        return None
+    content_start = marker_at + len(marker)
+    page_pattern = re.compile(
+        r'<script type="application/json" id="wcePageMeta">(.*?)</script>',
+        flags=re.DOTALL,
+    )
+    page_match = page_pattern.search(text, content_start)
+    brand_at = text.find('<div id="wceBrandAttribution"', content_start)
+    boundary = page_match.start() if page_match is not None else brand_at
+    if boundary < 0:
+        return None
+    close_marker = "\n          </div>\n        </div>\n"
+    content_end = text.rfind(close_marker, content_start, boundary)
+    if content_end < content_start:
+        return None
+
+    page_meta: dict[str, Any] = {}
+    page_span: tuple[int, int] | None = None
+    if page_match is not None:
+        try:
+            value = json.loads(page_match.group(1))
+            if not isinstance(value, dict):
+                return None
+            page_meta = value
+            page_span = (page_match.start(), page_match.end())
+        except Exception:
+            return None
+
+    media_pattern = re.compile(
+        r'<script type="application/json" id="wceMediaIndex">(.*?)</script>',
+        flags=re.DOTALL,
+    )
+    media_match = media_pattern.search(text, boundary)
+    media_index: dict[str, Any] = {}
+    if media_match is not None:
+        try:
+            value = json.loads(media_match.group(1))
+            if isinstance(value, dict):
+                media_index = value
+        except Exception:
+            media_index = {}
+
+    return {
+        "text": text,
+        "contentStart": content_start,
+        "contentEnd": content_end,
+        "closeMarker": close_marker,
+        "fragment": text[content_start:content_end],
+        "pageMeta": page_meta,
+        "pageSpan": page_span,
+        "mediaIndex": media_index,
+    }
+
+
+def _html_incremental_snapshot(path: Path) -> Optional[dict[str, Any]]:
+    try:
+        return _html_incremental_snapshot_text(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _merge_html_media_index(old_value: Any, new_value: Any) -> Any:
+    if not isinstance(old_value, dict) or not isinstance(new_value, dict):
+        return copy.deepcopy(new_value if new_value not in ({}, None) else old_value)
+    merged = copy.deepcopy(old_value)
+    for key, value in new_value.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _merge_html_media_index(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
 
 
 def _write_conversation_html(
@@ -4675,12 +6040,15 @@ def _write_conversation_html(
     html_assets = dict(getattr(job, "options", {}).get("_htmlAssets") or {})
     css_asset_path = str(html_assets.get("cssPath") or _html_export_asset_paths(job.export_id)[0])
     js_asset_path = str(html_assets.get("jsPath") or _html_export_asset_paths(job.export_id)[1])
+    session_catalog_path = str(html_assets.get("sessionCatalogPath") or "assets/chat-sessions.js")
     integrity_asset_path = str(html_assets.get("integrityPath") or _html_export_asset_paths(job.export_id)[2])
     css_integrity = str(html_assets.get("cssIntegrity") or "")
     js_integrity = str(html_assets.get("jsIntegrity") or "")
+    folder_mode = bool(html_assets.get("folderMode"))
     css_href = rel_root + css_asset_path
     integrity_src = rel_root + integrity_asset_path
     js_src = rel_root + js_asset_path
+    session_catalog_src = rel_root + session_catalog_path
 
     def esc_text(v: Any) -> str:
         return html.escape(str(v or ""), quote=False)
@@ -5114,17 +6482,27 @@ def _write_conversation_html(
             tw.write('  <meta charset="utf-8" />\n')
             tw.write('  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />\n')
             tw.write(f"  <title>{esc_text(page_title)}</title>\n")
-            tw.write(_html_export_gate_style())
-            # Do not use native `integrity=` for offline file:// exports; Chrome blocks
-            # those resources before our runtime can show the page.
-            tw.write(f'  <link id="wceStyle" rel="stylesheet" href="{esc_attr(css_href)}" data-wce-sri="{esc_attr(css_integrity)}" />\n')
-            tw.write(_html_export_integrity_script_tag(src=integrity_src))
-            tw.write(f'  <script defer src="{esc_attr(js_src)}" data-wce-sri="{esc_attr(js_integrity)}"></script>\n')
+            if folder_mode:
+                tw.write(f'  <link id="wceStyle" rel="stylesheet" href="{esc_attr(css_href)}" />\n')
+                tw.write(
+                    f'  <script defer src="{esc_attr(session_catalog_src)}" data-wce-folder-sessions="1"></script>\n'
+                )
+                tw.write(f'  <script defer src="{esc_attr(js_src)}"></script>\n')
+            else:
+                tw.write(_html_export_gate_style())
+                # file:// 下由导出运行时核对 data-wce-sri，不能使用浏览器原生 SRI。
+                tw.write(f'  <link id="wceStyle" rel="stylesheet" href="{esc_attr(css_href)}" data-wce-sri="{esc_attr(css_integrity)}" />\n')
+                tw.write(_html_export_integrity_script_tag(src=integrity_src))
+                tw.write(f'  <script defer src="{esc_attr(js_src)}" data-wce-sri="{esc_attr(js_integrity)}"></script>\n')
             tw.write("</head>\n")
             tw.write("<body>\n")
             tw.write(
                 '  <div id="wceJsMissing" style="position:fixed;top:0;left:0;right:0;z-index:9999;background:#FEF3C7;color:#92400E;border-bottom:1px solid #F59E0B;padding:8px 12px;font-size:12px;line-height:1.4">'
-                "提示：此页面需要 JavaScript 才能使用“合并聊天记录”等交互功能。若该提示一直存在，请确认已完整解压导出目录，并检查 assets/_wce/ 下的运行时文件是否完整。</div>\n"
+                + (
+                    "提示：此页面需要 JavaScript 才能使用“合并聊天记录”等交互功能。若该提示一直存在，请确认导出目录中的运行时文件完整。</div>\n"
+                    if folder_mode
+                    else "提示：此页面需要 JavaScript 才能使用“合并聊天记录”等交互功能。若该提示一直存在，请确认已完整解压导出目录，并检查 assets/_wce/ 下的运行时文件是否完整。</div>\n"
+                )
             )
 
             # Root
@@ -5468,6 +6846,7 @@ def _write_conversation_html(
                         zf=zf,
                         account_dir=account_dir,
                         conv_username=media_conv_username,
+                        owner_username=conv_username,
                         msg=msg,
                         media_written=media_written,
                         report=report,
@@ -5475,6 +6854,7 @@ def _write_conversation_html(
                         allow_process_key_extract=allow_process_key_extract,
                         media_db_path=media_db_path,
                         media_index=media_index,
+                        remote_written=remote_written,
                         lock=lock,
                         job=job,
                     )
@@ -6304,7 +7684,11 @@ def _write_conversation_html(
                 num = str(page_no).zfill(int(paged_pad_width or 4))
                 arc_js = f"{conv_dir}/pages/page-{num}.js"
                 js_payload = _html_export_page_fragment_js(
-                    export_id=str(getattr(job, "export_id", "") or ""),
+                    export_id=str(
+                        (getattr(job, "options", {}) or {}).get("_folderRuntimeId")
+                        or getattr(job, "export_id", "")
+                        or ""
+                    ),
                     arc_js=arc_js,
                     page_no=int(page_no),
                     fragment_html=frag_text,
@@ -6319,6 +7703,121 @@ def _write_conversation_html(
 
     _safe_trace(trace, "writer_done", exported=exported)
     return exported
+
+
+def _write_conversation_html_append(
+    *,
+    zf: _ZipIntegrityWriter,
+    conv_dir: str,
+    existing_snapshot: dict[str, Any],
+    old_state: dict[str, Any],
+    new_messages: list[dict[str, Any]],
+    runtime_id: str,
+    writer_options: dict[str, Any],
+) -> int:
+    """把旧内联末页转为历史分页，仅渲染并内联本轮新增消息。"""
+
+    old_count = int(old_state.get("messageCount") or 0)
+    if old_count <= 0 or not str(existing_snapshot.get("fragment") or "").strip():
+        return _write_conversation_html(
+            zf=zf,
+            conv_dir=conv_dir,
+            prepared_messages=new_messages,
+            **writer_options,
+        )
+
+    temp_buffer = io.BytesIO()
+    with zipfile.ZipFile(temp_buffer, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as temp_archive:
+        temp_writer = _ZipIntegrityWriter(temp_archive, native_integrity=None)
+        added_count = _write_conversation_html(
+            zf=temp_writer,
+            conv_dir=conv_dir,
+            prepared_messages=new_messages,
+            **writer_options,
+        )
+    if added_count <= 0:
+        return old_count
+
+    temp_buffer.seek(0)
+    with zipfile.ZipFile(temp_buffer, mode="r") as temp_archive:
+        temp_html = temp_archive.read(f"{conv_dir}/messages.html").decode("utf-8")
+        delta_snapshot = _html_incremental_snapshot_text(temp_html)
+        if delta_snapshot is None or not str(delta_snapshot.get("fragment") or "").strip():
+            raise RuntimeError("新增 HTML 分页生成失败，无法安全追加。")
+        for name in temp_archive.namelist():
+            normalized = _zip_arcname(name)
+            if not normalized or normalized.startswith(f"{conv_dir}/"):
+                continue
+            zf.writestr(normalized, temp_archive.read(name))
+
+    old_text = str(existing_snapshot.get("text") or "")
+    content_start = int(existing_snapshot.get("contentStart") or 0)
+    content_end = int(existing_snapshot.get("contentEnd") or 0)
+    close_marker = str(existing_snapshot.get("closeMarker") or "")
+    old_fragment = str(existing_snapshot.get("fragment") or "")
+    new_fragment = str(delta_snapshot.get("fragment") or "")
+    old_page_meta = dict(existing_snapshot.get("pageMeta") or {})
+    old_total_pages = max(1, int(old_page_meta.get("totalPages") or 1))
+    new_total_pages = old_total_pages + 1
+    pad_width = max(4, int(old_page_meta.get("padWidth") or 4), len(str(new_total_pages)))
+
+    old_page_number = str(old_total_pages).zfill(pad_width)
+    old_page_arc = f"{conv_dir}/pages/page-{old_page_number}.js"
+    zf.writestr(
+        old_page_arc,
+        _html_export_page_fragment_js(
+            export_id=str(runtime_id or ""),
+            arc_js=old_page_arc,
+            page_no=old_total_pages,
+            fragment_html=_minify_html_for_export(old_fragment),
+        ),
+    )
+
+    merged_html = old_text[:content_start] + new_fragment + old_text[content_end:]
+    page_meta = {
+        "schemaVersion": 1,
+        "pageSize": int(old_page_meta.get("pageSize") or writer_options.get("html_page_size") or 1000),
+        "totalPages": new_total_pages,
+        "initialPage": new_total_pages,
+        "totalMessages": old_count + added_count,
+        "padWidth": pad_width,
+        "pageFilePrefix": "pages/page-",
+        "pageFileSuffix": ".js",
+        "inlinedPages": [new_total_pages],
+    }
+    page_script = (
+        '<script type="application/json" id="wcePageMeta">'
+        + json.dumps(page_meta, ensure_ascii=False).replace("</", "<\\/")
+        + "</script>"
+    )
+    page_pattern = re.compile(
+        r'<script type="application/json" id="wcePageMeta">.*?</script>',
+        flags=re.DOTALL,
+    )
+    if page_pattern.search(merged_html):
+        merged_html = page_pattern.sub(lambda _match: page_script, merged_html, count=1)
+    else:
+        inserted_at = content_start + len(new_fragment) + len(close_marker)
+        merged_html = merged_html[:inserted_at] + page_script + "\n" + merged_html[inserted_at:]
+
+    merged_media = _merge_html_media_index(
+        existing_snapshot.get("mediaIndex") or {},
+        delta_snapshot.get("mediaIndex") or {},
+    )
+    media_script = (
+        '<script type="application/json" id="wceMediaIndex">'
+        + json.dumps(merged_media, ensure_ascii=False).replace("</", "<\\/")
+        + "</script>"
+    )
+    media_pattern = re.compile(
+        r'<script type="application/json" id="wceMediaIndex">.*?</script>',
+        flags=re.DOTALL,
+    )
+    if media_pattern.search(merged_html):
+        merged_html = media_pattern.sub(lambda _match: media_script, merged_html, count=1)
+
+    zf.writestr(f"{conv_dir}/messages.html", merged_html)
+    return old_count + added_count
 
 
 def _format_message_line_txt(*, msg: dict[str, Any]) -> str:
@@ -6552,11 +8051,109 @@ def _attach_voice_transcript(
         stats["failed"] = int(stats.get("failed") or 0) + 1
 
 
+def _pending_media_local_repairability(
+    *,
+    account_dir: Path,
+    conv_username: str,
+    item: dict[str, Any],
+    media_index: Optional[MediaPathIndex],
+) -> tuple[bool, str]:
+    """只在确认本地资源能生成有效产物时，才允许进入媒体修复流程。"""
+
+    kind = str(item.get("kind") or "").strip().lower()
+    ident = str(item.get("id") or "").strip()
+    if not kind or not ident:
+        return False, "SOURCE_ID_MISSING"
+    md5 = ident.lower() if _is_md5(ident.lower()) else ""
+    file_id = "" if md5 else ident
+    source: Optional[Path] = None
+    if md5:
+        try:
+            source = _try_find_decrypted_resource(account_dir, md5)
+        except Exception:
+            source = None
+    if source is None and media_index is not None:
+        try:
+            source = media_index.resolve(
+                kind=kind,
+                md5=md5,
+                file_id=file_id,
+                username=str(conv_username or "").strip(),
+            )
+        except Exception:
+            source = None
+    if source is None and md5:
+        try:
+            source = _resolve_media_path_for_kind(
+                account_dir,
+                kind=kind,
+                md5=md5,
+                username=conv_username,
+                allow_fallback_scan=False,
+            )
+        except Exception:
+            source = None
+    try:
+        if source is None or not source.is_file():
+            return False, "SOURCE_NOT_FOUND"
+    except Exception:
+        return False, "SOURCE_NOT_FOUND"
+
+    if kind == "file":
+        return True, "LOCAL_SOURCE_READY"
+    if kind == "voice":
+        # 语音需要按 server_id 从媒体库读取，不能只凭待补标识判断可恢复。
+        return False, "SOURCE_NOT_FOUND"
+    try:
+        data, media_type = _read_and_maybe_decrypt_media(source, account_dir=account_dir)
+    except Exception:
+        return False, "SOURCE_DECRYPT_FAILED"
+    media_type = str(media_type or "").strip().lower()
+    if kind in {"image", "emoji", "video_thumb"}:
+        return (
+            (True, "LOCAL_SOURCE_READY")
+            if media_type.startswith("image/") and bool(data)
+            else (False, "SOURCE_DECRYPT_FAILED")
+        )
+    if kind == "video":
+        return (
+            (True, "LOCAL_SOURCE_READY")
+            if media_type == "video/mp4" and bool(data)
+            else (False, "SOURCE_DECRYPT_FAILED")
+        )
+    return False, "SOURCE_FORMAT_UNSUPPORTED"
+
+
+def _classify_pending_media(
+    *,
+    account_dir: Path,
+    conv_username: str,
+    values: Any,
+    media_index: Optional[MediaPathIndex],
+) -> tuple[list[dict[str, Any]], bool]:
+    normalized = normalize_pending_media(values)
+    classified: list[dict[str, Any]] = []
+    for raw in normalized:
+        item = dict(raw)
+        repairable, reason_code = _pending_media_local_repairability(
+            account_dir=account_dir,
+            conv_username=conv_username,
+            item=item,
+            media_index=media_index,
+        )
+        item["repairable"] = repairable
+        item["state"] = "recoverable_local" if repairable else "source_unavailable"
+        item["reasonCode"] = reason_code
+        classified.append(item)
+    return classified, classified != normalized
+
+
 def _attach_offline_media(
     *,
     zf: zipfile.ZipFile,
     account_dir: Path,
     conv_username: str,
+    owner_username: str,
     msg: dict[str, Any],
     media_written: dict[str, str],
     report: dict[str, Any],
@@ -6564,6 +8161,7 @@ def _attach_offline_media(
     allow_process_key_extract: bool,
     media_db_path: Path,
     media_index: Optional[MediaPathIndex],
+    remote_written: Optional[dict[str, str]] = None,
     lock: threading.Lock,
     job: ExportJob,
 ) -> None:
@@ -6582,7 +8180,15 @@ def _attach_offline_media(
 
     def record_missing(kind: str, ident: str) -> None:
         with lock:
-            job.progress.media_missing += 1
+            job.progress.media_missing_references += 1
+            if str(job.options.get("outputMode") or "zip") == "folder":
+                key = (str(kind or ""), str(ident or ""))
+                if key not in job.missing_media_keys:
+                    job.missing_media_keys.add(key)
+                    job.progress.media_missing += 1
+            else:
+                # ZIP 全量保留原有按消息引用计数的行为。
+                job.progress.media_missing += 1
         try:
             report["missingMedia"].append(
                 {
@@ -6594,6 +8200,31 @@ def _attach_offline_media(
             )
         except Exception:
             pass
+
+    def try_remote_image(kind: str, ident: str, url: Any) -> tuple[str, bool]:
+        if (
+            str(job.options.get("outputMode") or "zip") != "folder"
+            or remote_written is None
+            or not bool(job.options.get("downloadRemoteMedia"))
+        ):
+            return "", False
+        raw = str(url or "").strip()
+        try:
+            parsed = urlparse(raw)
+        except Exception:
+            parsed = None
+        if parsed is None or parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return "", False
+        was_known = raw in remote_written
+        arc = _download_remote_image_to_zip(
+            zf=zf,
+            url=raw,
+            remote_written=remote_written,
+            report=report,
+        )
+        if arc and ident:
+            media_written[f"{kind}:{ident}"] = arc
+        return arc, bool(arc and not was_known)
 
     offline: list[dict[str, Any]] = []
 
@@ -6666,6 +8297,16 @@ def _attach_offline_media(
                     used_file_id = file_id
                     break
 
+        if not arc:
+            arc, is_new = try_remote_image(
+                "image",
+                primary_md5 or primary_file_id,
+                msg.get("imageUrl"),
+            )
+            if arc:
+                used_md5 = primary_md5
+                used_file_id = primary_file_id
+
         if arc:
             # Keep primary fields in sync with what actually resolved.
             try:
@@ -6697,6 +8338,8 @@ def _attach_offline_media(
             suggested_name="",
             media_index=media_index,
         )
+        if not arc:
+            arc, is_new = try_remote_image("emoji", md5 or file_id, msg.get("emojiUrl"))
         if arc:
             offline.append({"kind": "emoji", "path": arc, "md5": md5, "fileId": file_id})
             if is_new:
@@ -6792,6 +8435,17 @@ def _attach_offline_media(
 
     if offline:
         msg["offlineMedia"] = offline
+        if str(job.options.get("outputMode") or "") == "folder":
+            owners_by_path = job.options.setdefault("_folderResourceOwners", {})
+            owner = str(owner_username or "").strip()
+            if isinstance(owners_by_path, dict) and owner:
+                for item in offline:
+                    path = str(item.get("path") or "").strip()
+                    if not path:
+                        continue
+                    owners = owners_by_path.setdefault(path, [])
+                    if isinstance(owners, list) and owner not in owners:
+                        owners.append(owner)
 
 
 def _materialize_avatar(
