@@ -3,8 +3,8 @@
 The Tencent-signed application is never modified.  A disposable ad-hoc copy
 runs with a private HOME containing a copy-on-write clone of the real WeChat
 container.  LLDB is attached only to that disposable process and accepts a
-PBKDF2 password only when both the SQLCipher iteration count and database salt
-match databases in the cloned container.
+PBKDF2 password only when the KDF profile and salt match a cloned database and
+the candidate passes that database's page-one HMAC verification.
 """
 
 from __future__ import annotations
@@ -380,6 +380,13 @@ def build_lldb_salt_capture_script(
         raise MacOSDBKeyCaptureFailure("capture_salts_missing", "没有可用于过滤 PBKDF2 调用的数据库 salt")
     result_literal = json.dumps(str(result_path))
     salts_literal = json.dumps(salts)
+    hmac_salts_literal = json.dumps(
+        {
+            bytes(value ^ 0x3A for value in bytes.fromhex(salt)).hex(): salt
+            for salt in salts
+        },
+        sort_keys=True,
+    )
     page1_literal = json.dumps(bytes(probe_page1 or b"").hex())
     return f'''import hashlib
 import hmac
@@ -389,6 +396,7 @@ import os
 
 RESULT_PATH = {result_literal}
 EXPECTED_SALTS = frozenset({salts_literal})
+EXPECTED_HMAC_SALTS = {hmac_salts_literal}
 PROBE_PAGE1 = bytes.fromhex({page1_literal})
 KEY_RETURN_POINTS = {json.dumps(WECHAT_KEY_RETURN_POINTS)}
 ENABLE_KEY_RETURN_FALLBACK = {bool(enable_key_return_fallback)!r}
@@ -396,6 +404,8 @@ MODULE_NAME = __name__
 DIAGNOSTICS = {{
     "pbkdf_calls": 0,
     "pbkdf_shape_hits": 0,
+    "pbkdf_rounds_2_hits": 0,
+    "pbkdf_rounds_256000_hits": 0,
     "pbkdf_salt_hits": 0,
     "key_return_hits": 0,
     "candidate_rejections": 0,
@@ -476,21 +486,55 @@ def _pbkdf_callback(frame, bp_loc, _internal_dict):
     salt_len = _register(frame, "x4")
     prf = _register(frame, "x5")
     rounds = _register(frame, "x6")
-    if algorithm != 2 or password_len != 32 or salt_len != 16 or prf != 5 or rounds != 256000:
+    if algorithm != 2 or password_len != 32 or salt_len != 16 or prf != 5 or rounds not in (2, 256000):
         return False
     _record_diagnostic("pbkdf_shape_hits")
+    _record_diagnostic("pbkdf_rounds_2_hits" if rounds == 2 else "pbkdf_rounds_256000_hits")
 
     error = lldb.SBError()
     salt = process.ReadMemory(salt_ptr, salt_len, error)
-    if not error.Success() or len(salt) != 16 or salt.hex() not in EXPECTED_SALTS:
+    if not error.Success() or len(salt) != 16:
+        return False
+    salt_hex = salt.hex()
+    if rounds == 2:
+        database_salt = EXPECTED_HMAC_SALTS.get(salt_hex, "")
+        source = "pbkdf2_hmac_password"
+    else:
+        database_salt = salt_hex if salt_hex in EXPECTED_SALTS else ""
+        source = "pbkdf2_passphrase"
+    if not database_salt:
         return False
     _record_diagnostic("pbkdf_salt_hits")
     password = process.ReadMemory(password_ptr, password_len, error)
     if not error.Success() or len(password) != 32:
         return False
 
-    _save_valid_candidate(password, salt.hex(), "pbkdf2", process)
+    _save_valid_candidate(password, database_salt, source, process)
     return False
+
+def _report_process_exit(debugger, _command, _result, _internal_dict):
+    process = debugger.GetSelectedTarget().GetProcess()
+    state = process.GetState()
+    try:
+        state_name = lldb.SBDebugger.StateAsCString(state) or str(int(state))
+    except Exception:
+        state_name = str(int(state))
+    try:
+        exit_status = int(process.GetExitStatus())
+    except Exception:
+        exit_status = -1
+    try:
+        exit_description = " ".join(str(process.GetExitDescription() or "").split())[:240]
+    except Exception:
+        exit_description = ""
+    payload = {{
+        "pid": int(process.GetProcessID() or 0),
+        "state": state_name,
+        "exit_status": exit_status,
+        "exit_description": exit_description,
+    }}
+    _write_result({{"diagnostics": dict(DIAGNOSTICS), "process_exit": payload}})
+    print("WEDATA_DEBUG_PROCESS_EXIT " + json.dumps(payload, sort_keys=True), flush=True)
 
 def _read_libcxx_string(frame):
     process = frame.GetThread().GetProcess()
@@ -552,6 +596,7 @@ def _setup(debugger, _command, _result, _internal_dict):
 
 def __lldb_init_module(debugger, _internal_dict):
     debugger.HandleCommand(f"command script add -f {{MODULE_NAME}}._setup wedata_capture")
+    debugger.HandleCommand(f"command script add -f {{MODULE_NAME}}._report_process_exit wedata_capture_exit_report")
 '''
 
 
@@ -757,6 +802,7 @@ def capture_salt_matched_passphrase(
             f"command script import {callback_path}\n"
             "wedata_capture\n"
             "process continue\n"
+            "wedata_capture_exit_report\n"
             "quit\n",
             encoding="utf-8",
         )
@@ -785,14 +831,33 @@ def capture_salt_matched_passphrase(
         )
     pbkdf_calls = int(diagnostics.get("pbkdf_calls") or 0)
     pbkdf_shape_hits = int(diagnostics.get("pbkdf_shape_hits") or 0)
+    pbkdf_rounds_2_hits = int(diagnostics.get("pbkdf_rounds_2_hits") or 0)
+    pbkdf_rounds_256000_hits = int(diagnostics.get("pbkdf_rounds_256000_hits") or 0)
     pbkdf_salt_hits = int(diagnostics.get("pbkdf_salt_hits") or 0)
     key_return_hits = int(diagnostics.get("key_return_hits") or 0)
     candidate_rejections = int(diagnostics.get("candidate_rejections") or 0)
     detail = (
         f"断点统计：PBKDF2 调用 {pbkdf_calls}，参数匹配 {pbkdf_shape_hits}，"
+        f"rounds=2 命中 {pbkdf_rounds_2_hits}，rounds=256000 命中 {pbkdf_rounds_256000_hits}，"
         f"数据库 salt 匹配 {pbkdf_salt_hits}，微信内部断点 {key_return_hits}，"
         f"候选校验失败 {candidate_rejections}。"
     )
+    process_exit = payload.get("process_exit") if isinstance(payload.get("process_exit"), dict) else None
+    if process_exit is not None:
+        exit_pid = int(process_exit.get("pid") or pid)
+        exit_state = " ".join(str(process_exit.get("state") or "unknown").split())[:40]
+        exit_status = int(process_exit.get("exit_status") or 0)
+        exit_description = " ".join(str(process_exit.get("exit_description") or "").split())[:240]
+        exit_detail = f"PID {exit_pid}，状态 {exit_state}，退出码 {exit_status}"
+        if exit_description:
+            exit_detail += f"，原因 {exit_description}"
+        raise MacOSDBKeyCaptureFailure(
+            "debug_wechat_exited_during_capture",
+            f"独立调试微信在捕获阶段提前结束（{exit_detail}）。" + detail
+            + "未保存任何未经数据库校验的候选；"
+            + "请将这段非敏感诊断随微信版本和 build 一并反馈。",
+            process_attached=True,
+        )
     raise MacOSDBKeyCaptureFailure(
         "passphrase_not_captured",
         "没有捕获到与微信数据库 salt 匹配的 passphrase。" + detail
