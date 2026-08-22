@@ -1,10 +1,13 @@
 import ast
 import ctypes
 import errno
+import hashlib
+import hmac
 import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -21,6 +24,7 @@ from wechat_decrypt_tool.macos_clone_capture import (
     build_lldb_breakpoint_preflight_script,
     build_lldb_salt_capture_script,
     capture_prepared_clone,
+    capture_salt_matched_passphrase,
     preflight_capture_breakpoints,
     preflight_prepared_clone,
 )
@@ -277,9 +281,12 @@ class TestMacOSCloneCapture(unittest.TestCase):
         self.assertIn("password_len != 32", script)
         self.assertIn("salt_len != 16", script)
         self.assertIn("prf != 5", script)
-        self.assertIn("rounds != 256000", script)
+        self.assertIn("rounds not in (2, 256000)", script)
+        self.assertIn("EXPECTED_HMAC_SALTS", script)
+        self.assertIn('source = "pbkdf2_hmac_password"', script)
+        self.assertIn('source = "pbkdf2_passphrase"', script)
         self.assertIn(salt, script)
-        self.assertIn("salt.hex() not in EXPECTED_SALTS", script)
+        self.assertIn("database_salt = EXPECTED_HMAC_SALTS.get", script)
         self.assertIn("os.fsync", script)
         self.assertNotIn('print(password.hex()', script)
         self.assertLess(script.index("salt = process.ReadMemory"), script.index("password = process.ReadMemory"))
@@ -290,6 +297,129 @@ class TestMacOSCloneCapture(unittest.TestCase):
         self.assertIn("os._exit(24)", script)
         self.assertIn("lldb.ePermissionsExecutable", script)
         self.assertIn("lldb.LLDB_INVALID_ADDRESS", script)
+        self.assertIn("WEDATA_DEBUG_PROCESS_EXIT", script)
+        self.assertIn("process.GetExitStatus()", script)
+        self.assertIn("process.GetExitDescription()", script)
+
+    def test_rounds_two_hmac_profile_yields_only_database_verified_master_key(self) -> None:
+        salt = bytes(range(16))
+        passphrase = bytes(range(32))
+        encryption_key = hashlib.pbkdf2_hmac("sha512", passphrase, salt, 256000, dklen=32)
+        hmac_salt = bytes(value ^ 0x3A for value in salt)
+        hmac_key = hashlib.pbkdf2_hmac("sha512", encryption_key, hmac_salt, 2, dklen=32)
+        page = bytearray(4096)
+        page[:16] = salt
+        page[16:4032] = bytes([0x5A]) * (4032 - 16)
+        digest = hmac.new(hmac_key, digestmod=hashlib.sha512)
+        digest.update(page[16:4032])
+        digest.update((1).to_bytes(4, "little"))
+        page[4032:4096] = digest.digest()
+        script = build_lldb_salt_capture_script(
+            Path("/tmp/result.json"),
+            [salt],
+            probe_page1=bytes(page),
+        )
+
+        class FakeError:
+            def Success(self) -> bool:
+                return True
+
+        fake_lldb = types.SimpleNamespace(SBError=FakeError)
+        namespace = {"__name__": "test_wedata_capture"}
+        with patch.dict(sys.modules, {"lldb": fake_lldb}):
+            exec(compile(script, "<capture-script>", "exec"), namespace)
+
+        self.assertTrue(namespace["_candidate_matches_page1"](encryption_key))
+        self.assertFalse(namespace["_candidate_matches_page1"](b"x" * 32))
+
+        class FakeProcess:
+            def ReadMemory(self, address, length, _error):
+                values = {0x1000: encryption_key, 0x2000: hmac_salt}
+                return values[address][:length]
+
+        process = FakeProcess()
+        registers = {"x0": 2, "x1": 0x1000, "x2": 32, "x3": 0x2000, "x4": 16, "x5": 5, "x6": 2}
+
+        class FakeFrame:
+            def GetThread(self):
+                return types.SimpleNamespace(GetProcess=lambda: process)
+
+            def FindRegister(self, name):
+                return types.SimpleNamespace(GetValueAsUnsigned=lambda: registers[name])
+
+        captured = []
+        namespace["_record_diagnostic"] = lambda _name: None
+        namespace["_save_valid_candidate"] = lambda candidate, database_salt, source, _process: captured.append(
+            (candidate, database_salt, source)
+        )
+        namespace["_pbkdf_callback"](FakeFrame(), None, None)
+
+        self.assertEqual(captured, [(encryption_key, salt.hex(), "pbkdf2_hmac_password")])
+        registers["x6"] = 3
+        namespace["_pbkdf_callback"](FakeFrame(), None, None)
+        self.assertEqual(len(captured), 1)
+
+    def test_capture_reports_debug_process_exit_without_waiting_for_generic_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            probe = root / "message_0.db"
+            probe.write_bytes(bytes(range(256)) * 16)
+
+            class FixedTemporaryDirectory:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def __enter__(self):
+                    return str(root)
+
+                def __exit__(self, exc_type, exc, traceback):
+                    return False
+
+            def report_exit(_command, *, timeout):
+                self.assertEqual(timeout, 285.0)
+                (root / "result.json").write_text(
+                    json.dumps(
+                        {
+                            "diagnostics": {
+                                "pbkdf_calls": 18,
+                                "pbkdf_shape_hits": 4,
+                                "pbkdf_rounds_2_hits": 4,
+                            },
+                            "process_exit": {
+                                "pid": 321,
+                                "state": "exited",
+                                "exit_status": 0,
+                                "exit_description": "",
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return 'WEDATA_DEBUG_PROCESS_EXIT {"pid": 321, "state": "exited"}'
+
+            with (
+                patch("wechat_decrypt_tool.macos_clone_capture.platform.machine", return_value="arm64"),
+                patch("wechat_decrypt_tool.macos_clone_capture.shutil.which", return_value="/usr/bin/lldb"),
+                patch(
+                    "wechat_decrypt_tool.macos_clone_capture.tempfile.TemporaryDirectory",
+                    FixedTemporaryDirectory,
+                ),
+                patch(
+                    "wechat_decrypt_tool.macos_clone_capture._run_as_administrator",
+                    side_effect=report_exit,
+                ),
+            ):
+                with self.assertRaises(MacOSDBKeyCaptureFailure) as context:
+                    capture_salt_matched_passphrase(
+                        pid=321,
+                        expected_salts=[bytes(range(16))],
+                        probe_db_path=probe,
+                    )
+
+        self.assertEqual(context.exception.code, "debug_wechat_exited_during_capture")
+        self.assertIn("PID 321", str(context.exception))
+        self.assertIn("rounds=2 命中 4", str(context.exception))
+        self.assertIn("未保存任何未经数据库校验的候选", str(context.exception))
 
     def test_salt_normalization_rejects_non_database_values(self) -> None:
         self.assertEqual(_normalize_salts(["AB" * 16, bytes.fromhex("cd" * 16), "bad"]), ["ab" * 16, "cd" * 16])
