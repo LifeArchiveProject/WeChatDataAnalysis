@@ -1,4 +1,5 @@
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const {
@@ -12,6 +13,10 @@ const {
 const {
   resolveIntegrityNativeArtifact,
 } = require("./integrity-native-packaging.cjs");
+const {
+  assertWindowsNativeAsrCapability,
+  windowsNativeAsrManifestErrors,
+} = require("../src/windows-native-asr-capability.cjs");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
 const entry = path.join(repoRoot, "src", "wechat_decrypt_tool", "backend_entry.py");
@@ -41,6 +46,11 @@ const LEGACY_WCDB_FILE_NAMES = new Set([
   "WCDB.dll",
   "libwcdb_api.dylib",
   "libWCDB.dylib",
+]);
+const RETIRED_STANDALONE_ASR_FILE_NAMES = new Set([
+  "wechat_native_asr_manifest.json",
+  "wechat_native_asr_python_transport.py",
+  "wechat_native_asr_weixin_hook.dll",
 ]);
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["", "0", "false", "no", "off"]);
@@ -87,6 +97,9 @@ function nativeCoreManifestErrors(manifest) {
   }
   if (manifest.schemaVersion === 2 && Object.prototype.hasOwnProperty.call(manifest, "platform")) {
     errors.push("schemaVersion 2 must not declare platform");
+  }
+  if (manifest.schemaVersion === 2) {
+    errors.push(...windowsNativeAsrManifestErrors(manifest));
   }
   if (typeof manifest.buildId !== "string" || manifest.buildId.trim() === "") {
     errors.push("buildId must be a non-empty string");
@@ -288,6 +301,10 @@ function resolveNativeCoreArtifacts({ env = process.env, platform = process.plat
     );
   }
 
+  if (platform === "win32") {
+    assertWindowsNativeAsrCapability({ nativeDir: artifactDir, manifest });
+  }
+
   return { artifactDir, allowDevelopment, manifest, names, required };
 }
 
@@ -305,7 +322,19 @@ function prepareRuntimeNativeDir(sourceDir, destinationDir) {
         return false;
       }
       const name = path.basename(relative);
-      return !NATIVE_CORE_FILE_NAMES.has(name) && !LEGACY_WCDB_FILE_NAMES.has(name);
+      const pathSegments = normalizedRelative.split("/");
+      if (pathSegments.includes("__pycache__") || name.endsWith(".pyc")) {
+        return false;
+      }
+      if (
+        name.startsWith("wechat_native_asr_python_transport.") ||
+        name.startsWith("win32_native_voice_bridge.")
+      ) {
+        return false;
+      }
+      return !NATIVE_CORE_FILE_NAMES.has(name) &&
+        !LEGACY_WCDB_FILE_NAMES.has(name) &&
+        !RETIRED_STANDALONE_ASR_FILE_NAMES.has(name);
     },
   });
 }
@@ -442,6 +471,38 @@ function runPackagedOpenccSmoke(packagedBackend, env = process.env) {
   }
 }
 
+function runPackagedWatchfilesSmoke(packagedBackend, env = process.env) {
+  const smokeDir = fs.mkdtempSync(path.join(os.tmpdir(), "wda-watchfiles-smoke-"));
+  try {
+    const smokeEnv = { ...env, PYTHONPATH: "" };
+    delete smokeEnv.PYTHONHOME;
+    const smoke = spawnSync(packagedBackend, ["--smoke-watchfiles"], {
+      cwd: smokeDir,
+      env: smokeEnv,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    if ((smoke.status ?? 1) !== 0) {
+      throw new Error(smoke.stderr || smoke.stdout || "Packaged watchfiles smoke test failed.");
+    }
+    const outputLines = String(smoke.stdout || "").trim().split(/\r?\n/).filter(Boolean);
+    let payload;
+    try {
+      payload = JSON.parse(outputLines.at(-1) || "");
+    } catch {
+      throw new Error(`Packaged watchfiles smoke test returned invalid JSON: ${smoke.stdout || "<empty>"}`);
+    }
+    if (!payload.frozen || !payload.version || !payload.nativeModule) {
+      throw new Error(
+        `Packaged watchfiles smoke test returned an unexpected result: ${JSON.stringify(payload)}`
+      );
+    }
+    console.log(`Packaged watchfiles smoke test passed: ${JSON.stringify(payload)}`);
+  } finally {
+    fs.rmSync(smokeDir, { recursive: true, force: true });
+  }
+}
+
 function stageNativeCoreArtifacts({
   env = process.env,
   platform = process.platform,
@@ -571,6 +632,8 @@ function main() {
     "av",
     "--collect-all",
     "opencc",
+    "--collect-all",
+    "watchfiles",
     entry,
   ];
 
@@ -605,6 +668,7 @@ function main() {
     process.platform === "win32" ? "wechat-backend.exe" : "wechat-backend"
   );
   runPackagedOpenccSmoke(packagedBackend);
+  runPackagedWatchfilesSmoke(packagedBackend);
 
   // Keep native dependencies outside the onefile extraction directory so the
   // broker and client library have stable paths at runtime.
@@ -629,6 +693,7 @@ module.exports = {
   prepareRuntimeNativeDir,
   resolveNativeCoreArtifacts,
   runPackagedOpenccSmoke,
+  runPackagedWatchfilesSmoke,
   stageNativeCoreArtifacts,
 };
 

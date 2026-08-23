@@ -1,6 +1,6 @@
 [project]
 name = "wechat-decrypt-tool"
-version = "2.0.11"
+version = "2.1.5"
 description = "Modern WeChat database decryption tool with React frontend"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,6 +26,7 @@ dependencies = [
     "yara-python>=4.5.2; sys_platform == 'win32'",
     "packaging",
     "httpx",
+    "watchfiles>=1.1.0",
 ]
 
 [project.optional-dependencies]

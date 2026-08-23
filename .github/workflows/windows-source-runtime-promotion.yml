@@ -19,9 +19,12 @@ on:
         description: Exact native-core build ID
         required: true
         type: string
+      native_core_source_public_sha256:
+        description: SHA-256 of the exact private source-public Producer ZIP
+        required: true
+        type: string
 
 permissions:
-  actions: read
   contents: write
 
 concurrency:
@@ -56,6 +59,7 @@ jobs:
           NATIVE_RUN_ID: ${{ inputs.native_core_run_id }}
           NATIVE_REVISION: ${{ inputs.native_core_source_revision }}
           NATIVE_BUILD_ID: ${{ inputs.native_core_build_id }}
+          NATIVE_SOURCE_PUBLIC_SHA256: ${{ inputs.native_core_source_public_sha256 }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -71,6 +75,9 @@ jobs:
           if ($env:NATIVE_RUN_ID -cnotmatch '^[1-9][0-9]*$') { throw 'Invalid Producer run ID.' }
           if ($env:NATIVE_REVISION -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid Producer revision.' }
           if ($env:NATIVE_BUILD_ID -cnotmatch '^[A-Za-z0-9._-]{8,128}$') { throw 'Invalid build ID.' }
+          if ($env:NATIVE_SOURCE_PUBLIC_SHA256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw 'Invalid source-public Producer ZIP SHA-256.'
+          }
           if ($env:NATIVE_BUILD_ID -match '(^|[._-])(dev|debug|test|local|snapshot|staging)([._-]|$)') {
             throw 'Non-production build ID is forbidden.'
           }
@@ -84,31 +91,52 @@ jobs:
             if ($digest -cnotmatch '^[0-9A-Fa-f]{64}$') { throw 'Invalid signer pin.' }
           }
 
-      - name: Download exact private Producer artifact
+      - name: Download exact private Producer Release asset
         shell: powershell
         timeout-minutes: 10
         env:
           GH_TOKEN: ${{ secrets.WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN }}
           NATIVE_RUN_ID: ${{ inputs.native_core_run_id }}
+          NATIVE_BUILD_ID: ${{ inputs.native_core_build_id }}
+          NATIVE_SOURCE_PUBLIC_SHA256: ${{ inputs.native_core_source_public_sha256 }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           if (-not $env:GH_TOKEN) { throw 'Private Producer read token is required.' }
+          $releaseTag = "windows-native-$env:NATIVE_BUILD_ID"
+          $assetName = "wechatdb-native-windows-x64-source-public-$env:NATIVE_BUILD_ID.zip"
+          $archive = Join-Path $env:RUNNER_TEMP $assetName
           $destination = Join-Path $env:RUNNER_TEMP 'source-native-core'
           $downloaded = $false
           foreach ($attempt in 1..3) {
-            if (Test-Path -LiteralPath $destination) {
-              Remove-Item -LiteralPath $destination -Recurse -Force
-            }
-            New-Item -ItemType Directory -Path $destination | Out-Null
-            gh run download $env:NATIVE_RUN_ID `
+            Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+            gh release download $releaseTag `
               --repo $env:WCE_NATIVE_CORE_ARTIFACT_REPOSITORY `
-              --name wechatdb-native-windows-x64-source-public `
-              --dir $destination
-            if ($LASTEXITCODE -eq 0) { $downloaded = $true; break }
+              --pattern $assetName `
+              --output $archive
+            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $archive -PathType Leaf)) {
+              $downloaded = $true
+              break
+            }
             Start-Sleep -Seconds (10 * $attempt)
           }
-          if (-not $downloaded) { throw 'Unable to download exact source-public Producer artifact.' }
+          if (-not $downloaded) { throw 'Unable to download exact source-public Producer Release asset.' }
+          $actualArchiveSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualArchiveSha256 -cne $env:NATIVE_SOURCE_PUBLIC_SHA256) {
+            throw 'Source-public Producer Release asset SHA-256 does not match the pinned input.'
+          }
+          if (Test-Path -LiteralPath $destination) {
+            Remove-Item -LiteralPath $destination -Recurse -Force
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $provenancePath = Join-Path $destination 'provenance.json'
+          if (-not (Test-Path -LiteralPath $provenancePath -PathType Leaf)) {
+            throw 'Producer Release asset is missing provenance.json.'
+          }
+          $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json
+          if ([string]$provenance.build.workflowRunId -cne $env:NATIVE_RUN_ID) {
+            throw 'Producer provenance workflowRunId does not match the requested run ID.'
+          }
           "WCE_SOURCE_PUBLIC_NATIVE_CORE_DIR=$destination" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Verify source-public native-core Producer artifact

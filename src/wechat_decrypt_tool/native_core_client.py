@@ -57,6 +57,10 @@ _NATIVE_CORE_DISTRIBUTION_TICKET_PATTERN = re.compile(
 )
 _NATIVE_CORE_BUILD_LIFETIME_SECONDS = 45 * 24 * 60 * 60
 _MAX_ENCRYPTED_EXPORT_PLAINTEXT_SIZE = 256 * 1024 * 1024 * 1024
+_NATIVE_ASR_MAX_ACCOUNT_SIZE = 255
+_NATIVE_ASR_MAX_ACCOUNT_DIRECTORY_SIZE = 32 * 1024
+_NATIVE_ASR_MAX_CONVERSATION_SIZE = 255
+_NATIVE_ASR_MAX_TEXT_SIZE = 64 * 1024
 _ENV_NATIVE_CORE_BROKER = "WECHAT_TOOL_NATIVE_CORE_BROKER"
 _ENV_NATIVE_CORE_TRUST_KEY = "WECHAT_TOOL_NATIVE_CORE_TRUST_KEY_PATH"
 _LEGACY_WCDB_ENVIRONMENT = (
@@ -101,10 +105,50 @@ class NativeCoreFeature(IntFlag):
     DATABASE_READ = 1 << 0
     EXPORT = 1 << 1
     MEDIA_DECRYPT = 1 << 2
+    NATIVE_ASR = 1 << 4
+
+
+class NativeCoreAsrReason(IntEnum):
+    READY = 0
+    UNSUPPORTED_PLATFORM = 1
+    UNSUPPORTED_ARCHITECTURE = 2
+    RUNTIME_UNAVAILABLE = 3
+    WECHAT_NOT_RUNNING = 4
+    WECHAT_NOT_LOGGED_IN = 5
+    ACCOUNT_UNVERIFIED = 6
+    ACCOUNT_MISMATCH = 7
+    WECHAT_VERSION_MISMATCH = 8
+    WEIXIN_SHA256_MISMATCH = 9
+    BRIDGE_RESTART_REQUIRED = 10
+    BUSY = 11
+    MESSAGE_NOT_FOUND = 12
+    MESSAGE_AMBIGUOUS = 13
+    NOT_VOICE = 14
+    PROVIDER_UNAVAILABLE = 15
+    DISPATCH_FAILED = 16
+    CALLBACK_FAILED = 17
+    TIMEOUT = 18
+    CANCELLED = 19
+    INTERNAL = 20
+
+
+class NativeCoreAsrRequestState(IntEnum):
+    PENDING = 1
+    RUNNING = 2
+    SUCCEEDED = 3
+    FAILED = 4
+    CANCELLED = 5
 
 
 _NATIVE_CORE_OFFLINE_BOOTSTRAP_FEATURES = (
     NativeCoreFeature.DATABASE_READ | NativeCoreFeature.EXPORT
+)
+_NATIVE_CORE_WINDOWS_NATIVE_ASR_ABI_VERSION = 1
+_NATIVE_CORE_WINDOWS_NATIVE_ASR_FEATURE_BIT = int(NativeCoreFeature.NATIVE_ASR)
+_NATIVE_CORE_WINDOWS_NATIVE_ASR_AUTHORIZATION = "database-read"
+_NATIVE_CORE_WINDOWS_NATIVE_ASR_WECHAT_VERSION = "4.1.12.26"
+_NATIVE_CORE_WINDOWS_NATIVE_ASR_WEIXIN_SHA256 = (
+    "4914a621a810ecbc0a132b6ff8f612658cfce323d3989b3e5fe32d4ff343ba46"
 )
 
 
@@ -239,6 +283,74 @@ class _WceOwnedBuffer(ctypes.Structure):
     ]
 
 
+class _WceNativeAsrStatusOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+        ("account_utf8", ctypes.c_char_p),
+        ("account_directory_utf8", ctypes.c_char_p),
+    ]
+
+
+class _WceNativeAsrStatus(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("reason", ctypes.c_uint32),
+        ("platform_supported", ctypes.c_uint32),
+        ("ready", ctypes.c_uint32),
+        ("wechat_process_id", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+        ("expected_wechat_version", ctypes.c_char * 32),
+        ("actual_wechat_version", ctypes.c_char * 32),
+        ("expected_weixin_sha256", ctypes.c_uint8 * 32),
+        ("actual_weixin_sha256", ctypes.c_uint8 * 32),
+    ]
+
+
+class _WceNativeAsrBeginOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+        ("account_utf8", ctypes.c_char_p),
+        ("account_directory_utf8", ctypes.c_char_p),
+        ("conversation_utf8", ctypes.c_char_p),
+        ("server_id", ctypes.c_uint64),
+        ("local_id", ctypes.c_uint32),
+        ("reserved2", ctypes.c_uint32),
+        ("operation_nonce", ctypes.c_uint64),
+    ]
+
+
+class _WceNativeAsrPollOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+        ("request_handle", ctypes.c_uint64),
+        ("operation_nonce", ctypes.c_uint64),
+    ]
+
+
+class _WceNativeAsrPollResult(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("state", ctypes.c_uint32),
+        ("reason", ctypes.c_uint32),
+        ("terminal_status", ctypes.c_int32),
+        ("server_id", ctypes.c_uint64),
+        ("local_id", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
+class _WceNativeAsrCloseOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+        ("request_handle", ctypes.c_uint64),
+        ("operation_nonce", ctypes.c_uint64),
+    ]
+
+
 class _WceExportBeginOptions(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -367,6 +479,28 @@ class NativeCoreRuntimeStatus:
 
 
 @dataclass(frozen=True)
+class NativeCoreAsrStatus:
+    reason: NativeCoreAsrReason
+    platform_supported: bool
+    ready: bool
+    wechat_process_id: int
+    expected_wechat_version: str
+    actual_wechat_version: str
+    expected_weixin_sha256: bytes = field(repr=False)
+    actual_weixin_sha256: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
+class NativeCoreAsrPollResult:
+    state: NativeCoreAsrRequestState
+    reason: NativeCoreAsrReason
+    terminal_status: NativeCoreStatus
+    server_id: int
+    local_id: int
+    text: str
+
+
+@dataclass(frozen=True)
 class NativeCoreDeviceProof:
     device_assurance: NativeCoreDeviceAssurance
     requested_features: NativeCoreFeature
@@ -393,6 +527,11 @@ class NativeCoreBuildManifest:
     distribution_mode: str = "public"
     distribution_capsule: str | None = field(default=None, repr=False)
     platform: str = "windows"
+    native_asr_abi_version: int = 0
+    native_asr_feature_bit: int = 0
+    native_asr_authorization: str = ""
+    native_asr_target_wechat_version: str = ""
+    native_asr_target_weixin_sha256: str = ""
     macos_client_signer_sha256: bytes = field(default=b"\0" * 32, repr=False)
     macos_broker_signer_sha256: bytes = field(default=b"\0" * 32, repr=False)
     macos_host_signer_sha256: bytes = field(default=b"\0" * 32, repr=False)
@@ -814,6 +953,10 @@ def _load_native_core_build_manifest(
     offline_bootstrap_feature_bits_value = payload.get(
         "offlineBootstrapFeatureBits"
     )
+    native_asr_abi_version_value = payload.get("nativeAsrAbiVersion", 0)
+    native_asr_feature_bit_value = payload.get("nativeAsrFeatureBit", 0)
+    native_asr_authorization_value = payload.get("nativeAsrAuthorization", "")
+    native_asr_target_value = payload.get("nativeAsrTarget")
     offline_export_seal_format = payload.get("offlineExportSealFormat")
     distribution_mode_value = payload.get("distributionMode")
     distribution_capsule_value = payload.get("distributionCapsule")
@@ -1004,10 +1147,31 @@ def _load_native_core_build_manifest(
             raise NativeCoreProtocolError(
                 "wechatdb native build manifest contains an invalid macOS private-PKI policy."
             )
+    if native_asr_target_value is None:
+        native_asr_target_wechat_version = ""
+        native_asr_target_weixin_sha256 = ""
+    elif (
+        not isinstance(native_asr_target_value, dict)
+        or frozenset(native_asr_target_value)
+        != frozenset({"wechatVersion", "weixinSha256"})
+        or not isinstance(native_asr_target_value.get("wechatVersion"), str)
+        or not isinstance(native_asr_target_value.get("weixinSha256"), str)
+    ):
+        raise NativeCoreProtocolError(
+            "wechatdb native build manifest contains an invalid native ASR target."
+        )
+    else:
+        native_asr_target_wechat_version = native_asr_target_value["wechatVersion"]
+        native_asr_target_weixin_sha256 = native_asr_target_value["weixinSha256"]
     if (
         type(offline_bootstrap_feature_bits_value) is not int
         or offline_bootstrap_feature_bits_value < 0
         or not isinstance(offline_export_seal_format, str)
+        or type(native_asr_abi_version_value) is not int
+        or native_asr_abi_version_value < 0
+        or type(native_asr_feature_bit_value) is not int
+        or native_asr_feature_bit_value < 0
+        or not isinstance(native_asr_authorization_value, str)
     ):
         raise NativeCoreProtocolError(
             "wechatdb native build manifest contains invalid offline bootstrap fields."
@@ -1049,7 +1213,8 @@ def _load_native_core_build_manifest(
         build_expires_at_unix = build_expires_at_unix_value
         if int(time.time()) >= build_expires_at_unix:
             raise NativeCorePolicyError(
-                "This wechatdb native build has reached its fixed expiration time."
+                "This wechatdb native build has reached its fixed expiration time.",
+                status=int(NativeCoreStatus.BUILD_MISMATCH),
             )
     else:
         if build_issued_at_unix_value is None and build_expires_at_unix_value is None:
@@ -1119,6 +1284,11 @@ def _load_native_core_build_manifest(
         distribution_mode=distribution_mode,
         distribution_capsule=distribution_capsule,
         platform=manifest_platform,
+        native_asr_abi_version=native_asr_abi_version_value,
+        native_asr_feature_bit=native_asr_feature_bit_value,
+        native_asr_authorization=native_asr_authorization_value,
+        native_asr_target_wechat_version=native_asr_target_wechat_version,
+        native_asr_target_weixin_sha256=native_asr_target_weixin_sha256,
         macos_client_signer_sha256=macos_client_signer_digest,
         macos_broker_signer_sha256=macos_broker_signer_digest,
         macos_host_signer_sha256=macos_host_signer_digest,
@@ -1503,6 +1673,77 @@ def _operation_nonce() -> int:
     return nonce
 
 
+def _encode_native_asr_utf8(value: str, *, field_name: str, maximum_size: int) -> bytes:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field_name} must be valid UTF-8") from exc
+    if not encoded or len(encoded) > maximum_size or b"\0" in encoded:
+        raise ValueError(
+            f"{field_name} must be 1 to {maximum_size} UTF-8 bytes without NUL bytes"
+        )
+    return encoded
+
+
+def _encode_native_asr_account_directory(
+    value: str | os.PathLike[str],
+) -> bytes:
+    try:
+        path_value = os.fspath(value)
+    except TypeError as exc:
+        raise ValueError("account_directory must be a path string") from exc
+    if not isinstance(path_value, str):
+        raise ValueError("account_directory must be a path string")
+    if not Path(path_value).is_absolute():
+        raise ValueError("account_directory must be an absolute path")
+    return _encode_native_asr_utf8(
+        path_value,
+        field_name="account_directory",
+        maximum_size=_NATIVE_ASR_MAX_ACCOUNT_DIRECTORY_SIZE,
+    )
+
+
+def _decode_native_asr_fixed_utf8(
+    value: _WceNativeAsrStatus,
+    field_name: str,
+) -> str:
+    field = getattr(type(value), field_name)
+    raw = ctypes.string_at(ctypes.addressof(value) + field.offset, 32)
+    terminator = raw.find(b"\0")
+    if terminator < 0 or any(raw[terminator + 1 :]):
+        raise NativeCoreProtocolError(
+            f"wechatdb native ASR returned an invalid {field_name}."
+        )
+    try:
+        return raw[:terminator].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise NativeCoreProtocolError(
+            f"wechatdb native ASR returned a non-UTF-8 {field_name}."
+        ) from exc
+
+
+def _decode_native_asr_owned_text(output: _WceOwnedBuffer) -> str:
+    expected_size = ctypes.sizeof(_WceOwnedBuffer)
+    output_size = int(output.size)
+    if (
+        int(output.struct_size) != expected_size
+        or int(output.flags) != 0
+        or output_size > _NATIVE_ASR_MAX_TEXT_SIZE
+        or (output_size == 0 and bool(output.data))
+        or (output_size != 0 and not bool(output.data))
+    ):
+        raise NativeCoreProtocolError("wechatdb native ASR returned an invalid owned buffer.")
+    payload = ctypes.string_at(output.data, output_size) if output_size else b""
+    if b"\0" in payload:
+        raise NativeCoreProtocolError("wechatdb native ASR returned text containing a NUL byte.")
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise NativeCoreProtocolError("wechatdb native ASR returned non-UTF-8 text.") from exc
+
+
 class NativeCoreClient:
     def __init__(
         self,
@@ -1556,6 +1797,7 @@ class NativeCoreClient:
         self._export_handles: set[int] = set()
         self._encrypted_export_handles: set[int] = set()
         self._decrypted_export_handles: set[int] = set()
+        self._native_asr_handles: set[int] = set()
         try:
             runtime_status = self.get_status()
             _verify_native_core_component_build_ids(
@@ -1576,6 +1818,16 @@ class NativeCoreClient:
             manifest.distribution_mode != self._build_manifest.distribution_mode
             or manifest.distribution_capsule
             != self._build_manifest.distribution_capsule
+            or manifest.native_asr_authorization
+            != self._build_manifest.native_asr_authorization
+            or manifest.native_asr_abi_version
+            != self._build_manifest.native_asr_abi_version
+            or manifest.native_asr_feature_bit
+            != self._build_manifest.native_asr_feature_bit
+            or manifest.native_asr_target_wechat_version
+            != self._build_manifest.native_asr_target_wechat_version
+            or manifest.native_asr_target_weixin_sha256
+            != self._build_manifest.native_asr_target_weixin_sha256
         ):
             raise NativeCoreProtocolError(
                 "wechatdb native distribution identity changed after client initialization."
@@ -1590,6 +1842,10 @@ class NativeCoreClient:
     @property
     def build_manifest(self) -> NativeCoreBuildManifest:
         return self._build_manifest
+
+    @property
+    def supports_native_asr(self) -> bool:
+        return self._supports_native_asr
 
     def _configure_abi(self) -> None:
         lib = self._library
@@ -1644,6 +1900,95 @@ class NativeCoreClient:
                 + ", ".join(missing_decrypt_symbols)
             )
         self._supports_export_decryption = bool(available_decrypt_symbols)
+        native_asr_symbols = (
+            "wce_native_asr_get_status",
+            "wce_native_asr_begin",
+            "wce_native_asr_poll",
+            "wce_native_asr_close",
+        )
+        available_native_asr_symbols = tuple(
+            name for name in native_asr_symbols if hasattr(lib, name)
+        )
+        if available_native_asr_symbols and len(available_native_asr_symbols) != len(
+            native_asr_symbols
+        ):
+            missing_native_asr_symbols = (
+                name for name in native_asr_symbols if name not in available_native_asr_symbols
+            )
+            raise NativeCoreProtocolError(
+                "wechatdb native client has an incomplete native ASR ABI: "
+                + ", ".join(missing_native_asr_symbols)
+            )
+        formal_windows_build = (
+            self._build_manifest.platform == "windows"
+            and not self._build_manifest.development_build
+        )
+        disabled_native_asr_contract = (
+            self._build_manifest.native_asr_abi_version == 0
+            and self._build_manifest.native_asr_feature_bit == 0
+            and self._build_manifest.native_asr_authorization in {"", "none"}
+            and self._build_manifest.native_asr_target_wechat_version == ""
+            and self._build_manifest.native_asr_target_weixin_sha256 == ""
+        )
+        fused_native_asr_contract = (
+            formal_windows_build and not disabled_native_asr_contract
+        )
+        if fused_native_asr_contract:
+            native_asr_manifest_errors: list[str] = []
+            if (
+                self._build_manifest.native_asr_abi_version
+                != _NATIVE_CORE_WINDOWS_NATIVE_ASR_ABI_VERSION
+            ):
+                native_asr_manifest_errors.append(
+                    "nativeAsrAbiVersion must equal "
+                    f"{_NATIVE_CORE_WINDOWS_NATIVE_ASR_ABI_VERSION}"
+                )
+            if (
+                self._build_manifest.native_asr_feature_bit
+                != _NATIVE_CORE_WINDOWS_NATIVE_ASR_FEATURE_BIT
+            ):
+                native_asr_manifest_errors.append(
+                    "nativeAsrFeatureBit must equal "
+                    f"{_NATIVE_CORE_WINDOWS_NATIVE_ASR_FEATURE_BIT}"
+                )
+            if (
+                self._build_manifest.native_asr_authorization
+                != _NATIVE_CORE_WINDOWS_NATIVE_ASR_AUTHORIZATION
+            ):
+                native_asr_manifest_errors.append(
+                    "nativeAsrAuthorization must equal "
+                    f"{_NATIVE_CORE_WINDOWS_NATIVE_ASR_AUTHORIZATION}"
+                )
+            if (
+                self._build_manifest.native_asr_target_wechat_version
+                != _NATIVE_CORE_WINDOWS_NATIVE_ASR_WECHAT_VERSION
+            ):
+                native_asr_manifest_errors.append(
+                    "nativeAsrTarget.wechatVersion must equal "
+                    f"{_NATIVE_CORE_WINDOWS_NATIVE_ASR_WECHAT_VERSION}"
+                )
+            if (
+                self._build_manifest.native_asr_target_weixin_sha256
+                != _NATIVE_CORE_WINDOWS_NATIVE_ASR_WEIXIN_SHA256
+            ):
+                native_asr_manifest_errors.append(
+                    "nativeAsrTarget.weixinSha256 must equal "
+                    f"{_NATIVE_CORE_WINDOWS_NATIVE_ASR_WEIXIN_SHA256}"
+                )
+            if native_asr_manifest_errors:
+                raise NativeCoreProtocolError(
+                    "wechatdb native ASR manifest "
+                    + "; ".join(native_asr_manifest_errors)
+                    + "."
+                )
+            if not available_native_asr_symbols:
+                raise NativeCoreProtocolError(
+                    "wechatdb native ASR manifest declares fused support, but the "
+                    "client is missing all native ASR ABI symbols."
+                )
+        self._supports_native_asr = bool(available_native_asr_symbols) and (
+            fused_native_asr_contract
+        )
         self._supports_export_verification = hasattr(lib, "wce_export_verify_seal")
         if (
             self._build_manifest.root_public_key_compiled
@@ -1771,6 +2116,31 @@ class NativeCoreClient:
                 ctypes.c_uint64,
             ]
             lib.wce_export_decrypt_abort.restype = ctypes.c_int32
+        if self._supports_native_asr:
+            lib.wce_native_asr_get_status.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(_WceNativeAsrStatusOptions),
+                ctypes.POINTER(_WceNativeAsrStatus),
+            ]
+            lib.wce_native_asr_get_status.restype = ctypes.c_int32
+            lib.wce_native_asr_begin.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(_WceNativeAsrBeginOptions),
+                ctypes.POINTER(ctypes.c_uint64),
+            ]
+            lib.wce_native_asr_begin.restype = ctypes.c_int32
+            lib.wce_native_asr_poll.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(_WceNativeAsrPollOptions),
+                ctypes.POINTER(_WceNativeAsrPollResult),
+                ctypes.POINTER(_WceOwnedBuffer),
+            ]
+            lib.wce_native_asr_poll.restype = ctypes.c_int32
+            lib.wce_native_asr_close.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(_WceNativeAsrCloseOptions),
+            ]
+            lib.wce_native_asr_close.restype = ctypes.c_int32
         if self._supports_export_verification:
             lib.wce_export_verify_seal.argtypes = [
                 ctypes.POINTER(_WceExportVerifyOptions),
@@ -1818,6 +2188,17 @@ class NativeCoreClient:
                 return
             handle = self._handle
             if handle.value:
+                for request_handle in tuple(self._native_asr_handles):
+                    try:
+                        options = _WceNativeAsrCloseOptions(
+                            struct_size=ctypes.sizeof(_WceNativeAsrCloseOptions),
+                            reserved=0,
+                            request_handle=request_handle,
+                            operation_nonce=_operation_nonce(),
+                        )
+                        self._library.wce_native_asr_close(handle, ctypes.byref(options))
+                    except Exception:
+                        pass
                 for export_handle in tuple(self._decrypted_export_handles):
                     try:
                         self._library.wce_export_decrypt_abort(
@@ -1868,6 +2249,7 @@ class NativeCoreClient:
             self._export_handles.clear()
             self._encrypted_export_handles.clear()
             self._decrypted_export_handles.clear()
+            self._native_asr_handles.clear()
             self._closed = True
             self._handle = ctypes.c_void_p()
             if handle.value:
@@ -2000,6 +2382,257 @@ class NativeCoreClient:
                 )
             )
             self._raise_for_status(rc, "authorize operation")
+
+    def _require_native_asr(self) -> None:
+        if not self._supports_native_asr:
+            raise NativeCoreProtocolError(
+                "wechatdb native client does not implement the native ASR ABI."
+            )
+
+    def get_native_asr_status(
+        self,
+        account: str,
+        account_directory: str | os.PathLike[str],
+    ) -> NativeCoreAsrStatus:
+        self._require_native_asr()
+        encoded_account = _encode_native_asr_utf8(
+            account,
+            field_name="account",
+            maximum_size=_NATIVE_ASR_MAX_ACCOUNT_SIZE,
+        )
+        encoded_account_directory = _encode_native_asr_account_directory(
+            account_directory
+        )
+        options = _WceNativeAsrStatusOptions(
+            struct_size=ctypes.sizeof(_WceNativeAsrStatusOptions),
+            reserved=0,
+            account_utf8=encoded_account,
+            account_directory_utf8=encoded_account_directory,
+        )
+        status = _WceNativeAsrStatus(
+            struct_size=ctypes.sizeof(_WceNativeAsrStatus)
+        )
+        with self._lock:
+            rc = int(
+                self._library.wce_native_asr_get_status(
+                    self._open_handle(), ctypes.byref(options), ctypes.byref(status)
+                )
+            )
+            self._raise_for_status(rc, "get native ASR status")
+
+        if (
+            int(status.struct_size) != ctypes.sizeof(_WceNativeAsrStatus)
+            or int(status.reserved) != 0
+            or int(status.platform_supported) not in {0, 1}
+            or int(status.ready) not in {0, 1}
+        ):
+            raise NativeCoreProtocolError(
+                "wechatdb native ASR returned invalid status metadata."
+            )
+        try:
+            reason = NativeCoreAsrReason(int(status.reason))
+        except ValueError as exc:
+            raise NativeCoreProtocolError(
+                "wechatdb native ASR returned an unknown status reason."
+            ) from exc
+        platform_supported = bool(status.platform_supported)
+        ready = bool(status.ready)
+        process_id = int(status.wechat_process_id)
+        if (ready and (reason is not NativeCoreAsrReason.READY or not platform_supported or not process_id)) or (
+            not ready and reason is NativeCoreAsrReason.READY
+        ):
+            raise NativeCoreProtocolError(
+                "wechatdb native ASR returned an inconsistent readiness status."
+            )
+        return NativeCoreAsrStatus(
+            reason=reason,
+            platform_supported=platform_supported,
+            ready=ready,
+            wechat_process_id=process_id,
+            expected_wechat_version=_decode_native_asr_fixed_utf8(
+                status, "expected_wechat_version"
+            ),
+            actual_wechat_version=_decode_native_asr_fixed_utf8(
+                status, "actual_wechat_version"
+            ),
+            expected_weixin_sha256=bytes(status.expected_weixin_sha256),
+            actual_weixin_sha256=bytes(status.actual_weixin_sha256),
+        )
+
+    def begin_native_asr(
+        self,
+        account: str,
+        account_directory: str | os.PathLike[str],
+        conversation: str,
+        server_id: int,
+        local_id: int = 0,
+    ) -> int:
+        self._require_native_asr()
+        encoded_account = _encode_native_asr_utf8(
+            account,
+            field_name="account",
+            maximum_size=_NATIVE_ASR_MAX_ACCOUNT_SIZE,
+        )
+        encoded_account_directory = _encode_native_asr_account_directory(
+            account_directory
+        )
+        encoded_conversation = _encode_native_asr_utf8(
+            conversation,
+            field_name="conversation",
+            maximum_size=_NATIVE_ASR_MAX_CONVERSATION_SIZE,
+        )
+        server_id_value = int(server_id)
+        local_id_value = int(local_id)
+        if not 1 <= server_id_value <= 0xFFFF_FFFF_FFFF_FFFF:
+            raise ValueError("server_id must be between 1 and 18446744073709551615")
+        if not 0 <= local_id_value <= 0xFFFF_FFFF:
+            raise ValueError("local_id must be between 0 and 4294967295")
+        options = _WceNativeAsrBeginOptions(
+            struct_size=ctypes.sizeof(_WceNativeAsrBeginOptions),
+            reserved=0,
+            account_utf8=encoded_account,
+            account_directory_utf8=encoded_account_directory,
+            conversation_utf8=encoded_conversation,
+            server_id=server_id_value,
+            local_id=local_id_value,
+            reserved2=0,
+            operation_nonce=_operation_nonce(),
+        )
+        output = ctypes.c_uint64()
+        with self._lock:
+            rc = int(
+                self._library.wce_native_asr_begin(
+                    self._open_handle(), ctypes.byref(options), ctypes.byref(output)
+                )
+            )
+            self._raise_for_status(rc, "begin native ASR")
+            if not output.value:
+                raise NativeCoreProtocolError(
+                    "wechatdb native ASR returned an empty request handle."
+                )
+            request_handle = int(output.value)
+            self._native_asr_handles.add(request_handle)
+        return request_handle
+
+    def poll_native_asr(self, request_handle: int) -> NativeCoreAsrPollResult:
+        self._require_native_asr()
+        handle_value = int(request_handle)
+        if not 1 <= handle_value <= 0xFFFF_FFFF_FFFF_FFFF:
+            raise ValueError("request_handle must be between 1 and 18446744073709551615")
+        options = _WceNativeAsrPollOptions(
+            struct_size=ctypes.sizeof(_WceNativeAsrPollOptions),
+            reserved=0,
+            request_handle=handle_value,
+            operation_nonce=_operation_nonce(),
+        )
+        result = _WceNativeAsrPollResult(
+            struct_size=ctypes.sizeof(_WceNativeAsrPollResult)
+        )
+        output = _WceOwnedBuffer(struct_size=ctypes.sizeof(_WceOwnedBuffer))
+        with self._lock:
+            if handle_value not in self._native_asr_handles:
+                raise NativeCoreUnavailableError(
+                    "wechatdb native ASR request handle is closed."
+                )
+            try:
+                rc = int(
+                    self._library.wce_native_asr_poll(
+                        self._open_handle(),
+                        ctypes.byref(options),
+                        ctypes.byref(result),
+                        ctypes.byref(output),
+                    )
+                )
+                self._raise_for_status(rc, "poll native ASR")
+                text = _decode_native_asr_owned_text(output)
+            finally:
+                self._library.wce_buffer_release(ctypes.byref(output))
+
+        if (
+            int(result.struct_size) != ctypes.sizeof(_WceNativeAsrPollResult)
+            or int(result.reserved) != 0
+            or int(result.server_id) == 0
+        ):
+            raise NativeCoreProtocolError(
+                "wechatdb native ASR returned invalid poll metadata."
+            )
+        try:
+            state = NativeCoreAsrRequestState(int(result.state))
+            reason = NativeCoreAsrReason(int(result.reason))
+            terminal_status = NativeCoreStatus(int(result.terminal_status))
+        except ValueError as exc:
+            raise NativeCoreProtocolError(
+                "wechatdb native ASR returned an unknown poll state."
+            ) from exc
+        terminal = state in {
+            NativeCoreAsrRequestState.SUCCEEDED,
+            NativeCoreAsrRequestState.FAILED,
+            NativeCoreAsrRequestState.CANCELLED,
+        }
+        if (
+            (
+                state is NativeCoreAsrRequestState.SUCCEEDED
+                and (
+                    not text
+                    or reason is not NativeCoreAsrReason.READY
+                    or terminal_status is not NativeCoreStatus.OK
+                )
+            )
+            or (state is not NativeCoreAsrRequestState.SUCCEEDED and bool(text))
+            or (
+                not terminal
+                and (
+                    reason is not NativeCoreAsrReason.READY
+                    or terminal_status is not NativeCoreStatus.OK
+                )
+            )
+        ):
+            raise NativeCoreProtocolError(
+                "wechatdb native ASR returned an inconsistent poll result."
+            )
+        return NativeCoreAsrPollResult(
+            state=state,
+            reason=reason,
+            terminal_status=terminal_status,
+            server_id=int(result.server_id),
+            local_id=int(result.local_id),
+            text=text,
+        )
+
+    def close_native_asr(self, request_handle: int) -> None:
+        self._require_native_asr()
+        handle_value = int(request_handle)
+        if not 1 <= handle_value <= 0xFFFF_FFFF_FFFF_FFFF:
+            raise ValueError("request_handle must be between 1 and 18446744073709551615")
+        options = _WceNativeAsrCloseOptions(
+            struct_size=ctypes.sizeof(_WceNativeAsrCloseOptions),
+            reserved=0,
+            request_handle=handle_value,
+            operation_nonce=_operation_nonce(),
+        )
+        with self._lock:
+            if handle_value not in self._native_asr_handles:
+                return
+            rc = int(
+                self._library.wce_native_asr_close(
+                    self._open_handle(), ctypes.byref(options)
+                )
+            )
+            if rc in {
+                int(NativeCoreStatus.OK),
+                int(NativeCoreStatus.NOT_FOUND),
+                int(NativeCoreStatus.LICENSE_REQUIRED),
+                int(NativeCoreStatus.LEASE_INVALID),
+                int(NativeCoreStatus.LEASE_EXPIRED),
+                int(NativeCoreStatus.FEATURE_DENIED),
+                int(NativeCoreStatus.BUILD_MISMATCH),
+                int(NativeCoreStatus.DEVICE_MISMATCH),
+                int(NativeCoreStatus.TAMPER_DETECTED),
+                int(NativeCoreStatus.LIMIT),
+            }:
+                self._native_asr_handles.discard(handle_value)
+                return
+            self._raise_for_status(rc, "close native ASR")
 
     def open_database(
         self,

@@ -13,10 +13,12 @@ BACKEND_PORT_KEY = "backend_port"
 BACKEND_HOST_KEY = "backend_host"
 MCP_TOKEN_KEY = "mcp_token"
 VOICE_TRANSCRIPTION_DEVICE_KEY = "voice_transcription_device"
+VOICE_TRANSCRIPTION_MODEL_KEY = "voice_transcription_model"
 ENV_PORT_KEY = "WECHAT_TOOL_PORT"
 ENV_HOST_KEY = "WECHAT_TOOL_HOST"
 ENV_MCP_TOKEN_KEY = "WECHAT_TOOL_MCP_TOKEN"
 ENV_VOICE_TRANSCRIPTION_DEVICE_KEY = "WECHAT_TOOL_WHISPER_DEVICE"
+ENV_VOICE_TRANSCRIPTION_MODEL_KEY = "WECHAT_TOOL_WHISPER_MODEL"
 ENV_FILE_KEY = "WECHAT_TOOL_ENV_FILE"
 DEFAULT_ENV_FILENAME = ".env"
 LOOPBACK_BACKEND_HOST = "127.0.0.1"
@@ -75,6 +77,16 @@ def _normalize_voice_transcription_device(value: object) -> str | None:
     if raw in {VOICE_TRANSCRIPTION_DEVICE_CPU, VOICE_TRANSCRIPTION_DEVICE_CUDA}:
         return raw
     return None
+
+
+def _normalize_voice_transcription_model(value: object) -> str | None:
+    try:
+        raw = str(value or "").strip()
+    except Exception:
+        return None
+    if not raw or len(raw) > 512 or any(ord(ch) < 32 for ch in raw):
+        return None
+    return raw
 
 
 def generate_mcp_token() -> str:
@@ -260,6 +272,41 @@ def read_effective_voice_transcription_device(default: str = VOICE_TRANSCRIPTION
         return settings_device, "settings"
 
     return _normalize_voice_transcription_device(default) or VOICE_TRANSCRIPTION_DEVICE_CPU, "default"
+
+
+def read_voice_transcription_model_setting() -> str | None:
+    try:
+        data = _read_runtime_settings()
+        return _normalize_voice_transcription_model(data.get(VOICE_TRANSCRIPTION_MODEL_KEY))
+    except Exception:
+        return None
+
+
+def write_voice_transcription_model_setting(model: str | None) -> None:
+    safe_model = _normalize_voice_transcription_model(model)
+    try:
+        data = _read_runtime_settings()
+        if safe_model is None:
+            data.pop(VOICE_TRANSCRIPTION_MODEL_KEY, None)
+        else:
+            data[VOICE_TRANSCRIPTION_MODEL_KEY] = safe_model
+        _write_runtime_settings(data)
+    except Exception:
+        return
+
+
+def read_effective_voice_transcription_model(default: str = "medium") -> tuple[str, str]:
+    """Return the Whisper model preference and its source: env | settings | default."""
+
+    env_model = _normalize_voice_transcription_model(os.environ.get(ENV_VOICE_TRANSCRIPTION_MODEL_KEY, ""))
+    if env_model is not None:
+        return env_model, "env"
+
+    settings_model = read_voice_transcription_model_setting()
+    if settings_model is not None:
+        return settings_model, "settings"
+
+    return _normalize_voice_transcription_model(default) or "medium", "default"
 
 
 def ensure_mcp_token() -> tuple[str, str]:

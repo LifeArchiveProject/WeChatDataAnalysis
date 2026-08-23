@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 import sys
@@ -32,6 +31,14 @@ def _close_logging_handlers() -> None:
                 pass
 
 
+def _local_client(app: FastAPI) -> TestClient:
+    return TestClient(
+        app,
+        base_url="http://127.0.0.1:10392",
+        client=("127.0.0.1", 50000),
+    )
+
+
 class TestVoiceTranscriptionSettings(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = TemporaryDirectory()
@@ -40,17 +47,10 @@ class TestVoiceTranscriptionSettings(unittest.TestCase):
         os.environ["WECHAT_TOOL_DATA_DIR"] = self._tmp.name
         os.environ.pop("WECHAT_TOOL_WHISPER_DEVICE", None)
 
-        import wechat_decrypt_tool.app_paths as app_paths
         import wechat_decrypt_tool.runtime_settings as runtime_settings
         import wechat_decrypt_tool.voice_transcription as voice_transcription
         import wechat_decrypt_tool.routers.chat_export as chat_export
         import wechat_decrypt_tool.routers.chat_media as chat_media
-
-        importlib.reload(app_paths)
-        importlib.reload(runtime_settings)
-        importlib.reload(voice_transcription)
-        importlib.reload(chat_media)
-        importlib.reload(chat_export)
 
         self.runtime_settings = runtime_settings
         self.voice_transcription = voice_transcription
@@ -106,7 +106,7 @@ class TestVoiceTranscriptionSettings(unittest.TestCase):
             "cuda": {"available": True, "deviceCount": 1, "devices": [], "reason": ""},
         }
         with patch.object(self.chat_media, "set_voice_transcription_device", return_value=configuration) as setter:
-            client = TestClient(app)
+            client = _local_client(app)
             response = client.put("/api/chat/media/voice/transcription/settings", json={"device": "cuda"})
 
         self.assertEqual(response.status_code, 200)
@@ -121,7 +121,7 @@ class TestVoiceTranscriptionSettings(unittest.TestCase):
             "set_voice_transcription_device",
             side_effect=self.voice_transcription.VoiceTranscriptionError("device_locked", "设备已锁定"),
         ):
-            client = TestClient(app)
+            client = _local_client(app)
             response = client.put("/api/chat/media/voice/transcription/settings", json={"device": "cuda"})
 
         self.assertEqual(response.status_code, 409)
@@ -138,7 +138,7 @@ class TestVoiceTranscriptionSettings(unittest.TestCase):
         }
         service = SimpleNamespace(status=Mock(return_value=status))
         with patch.object(self.chat_media, "get_voice_transcription_service", return_value=service):
-            response = TestClient(app).get("/api/chat/media/voice/transcription/status")
+            response = _local_client(app).get("/api/chat/media/voice/transcription/status")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), status)
@@ -153,8 +153,13 @@ class TestVoiceTranscriptionSettings(unittest.TestCase):
             )),
             transcribe_voice=Mock(),
         )
-        with patch.object(self.chat_media, "get_voice_transcription_service", return_value=service):
-            response = TestClient(app).post(
+        service_lease = SimpleNamespace(service=service, release=Mock())
+        with patch.object(
+            self.chat_media,
+            "acquire_voice_transcription_service_lease",
+            return_value=service_lease,
+        ):
+            response = _local_client(app).post(
                 "/api/chat/media/voice/transcription",
                 json={"account": "test", "server_id": "123", "force": False},
             )
@@ -162,6 +167,7 @@ class TestVoiceTranscriptionSettings(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["detail"]["code"], "model_not_ready")
         service.transcribe_voice.assert_not_called()
+        service_lease.release.assert_called_once_with()
 
     def test_export_api_blocks_missing_model_before_creating_job(self):
         app = FastAPI()
@@ -174,7 +180,7 @@ class TestVoiceTranscriptionSettings(unittest.TestCase):
         with patch.object(self.chat_export, "get_voice_transcription_service", return_value=service), patch.object(
             self.chat_export.CHAT_EXPORT_MANAGER, "create_job"
         ) as create_job:
-            response = TestClient(app).post("/api/chat/exports", json={"transcribe_voice": True})
+            response = _local_client(app).post("/api/chat/exports", json={"transcribe_voice": True})
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["detail"]["code"], "model_not_ready")

@@ -387,6 +387,8 @@ async def _search_messages(args: dict[str, Any], ctx: McpToolContext) -> dict[st
         include_hidden=_bool(args, "include_hidden", False),
         include_official=_bool(args, "include_official", False),
         source=_chat_source(args),
+        # ponytail: MCP search uses snapshot metadata; use an async job if live enrichment becomes required.
+        allow_native_enrichment=False,
     )
     if isinstance(result, dict):
         result.setdefault("source", "realtime_index" if _chat_source(args) in {"auto", "realtime"} else "decrypted_index")

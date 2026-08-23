@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Mapping, Optional, TypeVar
 
 from . import native_core_realtime
 from .key_store import get_account_keys_from_store
@@ -46,11 +46,15 @@ def _normalize_native_account_name(dir_name: str) -> str:
     if not trimmed:
         return trimmed
 
+    # WeFlow appends a four-hex collision suffix to its output directory.
+    # Strip only that final segment; a native wxid may contain underscores.
+    # Requiring another segment before the suffix keeps values such as
+    # ``wxid_dead`` intact while normalizing ``wxid_real_user_a73c``.
     if trimmed.lower().startswith("wxid_"):
-        match = re.match(r"^(wxid_[^_]+)", trimmed, flags=re.IGNORECASE)
-        return match.group(1) if match else trimmed
+        suffix_match = re.match(r"^(wxid_.+)_([0-9a-fA-F]{4})$", trimmed, flags=re.IGNORECASE)
+        return suffix_match.group(1) if suffix_match else trimmed
 
-    suffix_match = re.match(r"^(.+)_([a-zA-Z0-9]{4})$", trimmed)
+    suffix_match = re.match(r"^(.+)_([0-9a-fA-F]{4})$", trimmed)
     return suffix_match.group(1) if suffix_match else trimmed
 
 
@@ -323,6 +327,35 @@ class WCDBRealtimeConnection:
     lock: threading.Lock
 
 
+def resolve_account_native_wxid(
+    account_dir: Path,
+    connection: Any | None = None,
+) -> str:
+    """Resolve the native WeChat username behind a possibly suffixed account directory."""
+    if isinstance(connection, Mapping):
+        native_value = connection.get("native_wxid") or connection.get("nativeWxid")
+        db_storage_dir = connection.get("db_storage_dir") or connection.get("dbStorageDir")
+    else:
+        native_value = getattr(connection, "native_wxid", "")
+        db_storage_dir = getattr(connection, "db_storage_dir", None)
+
+    native_wxid = str(native_value or "").strip()
+    if native_wxid:
+        return native_wxid
+
+    account_path = Path(account_dir)
+    if db_storage_dir is None:
+        try:
+            db_storage_dir = _resolve_account_db_storage_dir(account_path)
+        except Exception:
+            db_storage_dir = None
+    try:
+        storage_path = Path(db_storage_dir) if db_storage_dir is not None else None
+    except Exception:
+        storage_path = None
+    return _derive_native_wxid(account_path.name, storage_path)
+
+
 class WCDBRealtimeManager:
     _FAILED_TTL = 60.0
 
@@ -524,6 +557,10 @@ class WCDBRealtimeManager:
         _native_core_mode_value()
 
         while True:
+            stale_connection: WCDBRealtimeConnection | None = None
+            reused_connection: WCDBRealtimeConnection | None = None
+            waiter: threading.Event | None = None
+            connect_now = False
             with self._mu:
                 recent_failure = self._recent_failure_locked(account)
                 root_failure = self._recent_failure_locked(root_key)
@@ -544,21 +581,40 @@ class WCDBRealtimeManager:
                 existing = self._conns.get(account)
                 if existing is not None:
                     if existing.handle > 0 and _is_native_core_handle(existing.handle):
-                        return existing
-                    self._conns.pop(account, None)
+                        if self._database_root_key(existing.db_storage_dir) == root_key:
+                            return existing
+                        # The account name was reused for a new WeChat data
+                        # root. Do not return a valid handle for the old root.
+                        self._conns.pop(account, None)
+                        if not any(cached is existing for cached in self._conns.values()):
+                            stale_connection = existing
+                    else:
+                        self._conns.pop(account, None)
 
                 existing = self._connection_for_root_locked(root_key)
                 if existing is not None:
                     self._conns[account] = existing
                     self._failed.pop(account, None)
-                    return existing
+                    reused_connection = existing
 
-                waiter = self._connecting_roots.get(root_key)
-                if waiter is None:
+                if reused_connection is None:
+                    waiter = self._connecting_roots.get(root_key)
+                if reused_connection is None and waiter is None:
                     waiter = threading.Event()
                     self._connecting[account] = waiter
                     self._connecting_roots[root_key] = waiter
-                    break
+                    connect_now = True
+
+            if stale_connection is not None:
+                try:
+                    with stale_connection.lock:
+                        close_account(stale_connection.handle)
+                except Exception:
+                    pass
+            if reused_connection is not None:
+                return reused_connection
+            if connect_now:
+                break
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -781,5 +837,6 @@ __all__ = [
     "get_sns_timeline",
     "open_account",
     "open_message_cursor",
+    "resolve_account_native_wxid",
     "shutdown",
 ]

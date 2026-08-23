@@ -25,11 +25,11 @@
     <td align="center" colspan="2"><img src="frontend/public/style1.png" alt="年度总结 Modern" width="800"/></td>
   </tr>
   <tr>
-    <td><img src="frontend/public/AnnualSummary1.png" alt="AnnualSummary 1" width="400"/></td>
-    <td><img src="frontend/public/AnnualSummary2.png" alt="AnnualSummary 2" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary1.gif" alt="AnnualSummary 1" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary2.gif" alt="AnnualSummary 2" width="400"/></td>
   </tr>
   <tr>
-    <td><img src="frontend/public/AnnualSummary3.png" alt="AnnualSummary 3" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary3.gif" alt="AnnualSummary 3" width="400"/></td>
     <td><img src="frontend/public/AnnualSummary4.gif" alt="AnnualSummary 4" width="400"/></td>
   </tr>
   <tr>
@@ -112,35 +112,6 @@
 
 > Excel 格式生成 `.xlsx` 文件；聊天记录、朋友圈和收藏会将对应格式文件与必要资源一起打包为 ZIP。
 
-### 本地语音转文字（Whisper）
-
-聊天页可以在保留原语音播放的同时，按需将语音识别为中文；HTML、JSON、TXT 和 Excel 导出也可以选择把转写文字与原语音一起写入归档。转写结果按账号、消息 ID、音频内容和模型缓存在账号目录的 `_cache/voice_transcripts.sqlite3`，重复查看或导出不会再次识别。
-
-该能力是可选依赖，从源码运行时安装：
-
-```powershell
-uv sync --no-editable --extra voice-transcription
-```
-
-默认配置使用 CPU、`medium` 模型和中文识别，并且不会自动联网下载模型。推荐提前下载模型并指定本地目录：
-
-```powershell
-$env:WECHAT_TOOL_WHISPER_MODEL = 'D:\models\faster-whisper-medium'
-$env:WECHAT_TOOL_WHISPER_DEVICE = 'cpu'
-$env:WECHAT_TOOL_WHISPER_COMPUTE_TYPE = 'int8'
-```
-
-也可以明确允许首次识别时下载模型，此操作会访问 Hugging Face，模型文件较大：
-
-```powershell
-$env:WECHAT_TOOL_WHISPER_MODEL = 'medium'
-$env:WECHAT_TOOL_WHISPER_ALLOW_DOWNLOAD = '1'
-```
-
-使用 NVIDIA GPU 时可改为 `WECHAT_TOOL_WHISPER_DEVICE=cuda` 和 `WECHAT_TOOL_WHISPER_COMPUTE_TYPE=float16`。设置 `WECHAT_TOOL_WHISPER_ENABLED=0` 可以完全关闭该能力。隐私模式导出始终禁用语音转写，不会把语音内容写入归档。
-
-应用设置页也可以选择 CPU 或 NVIDIA GPU。GPU 探测、CUDA 初始化失败自动回退 CPU，以及 RTX 5060 验收步骤见 [RTX 5060 faster-whisper CUDA 验收说明](docs/rtx5060-faster-whisper-gpu.md)。
-
 ## 加入群聊
 
 也欢迎加入下方 QQ 群一起讨论。
@@ -204,12 +175,6 @@ Windows x64 与 Apple Silicon macOS 都应直接启动完整桌面开发模式�
 cd desktop
 npm run dev
 ```
-
-首次启动会通过公开 HTTPS 从本仓库固定 Release 下载对应平台的受限原生运行时，并在校验归档 SHA-256、内部文件清单、签名配置和 45 天有效期后缓存。macOS 缓存位于 `~/Library/Caches/WeChatDataAnalysis/source-native-core`，Windows 缓存位于 `%LOCALAPPDATA%\WeChatDataAnalysis\source-native-core`。这一过程不需要 GitHub CLI、GitHub 账号、Token 或私有 Producer 仓库权限。固定运行时过期后执行 `git pull` 获取新的公开固定版本；程序不会接受过期、被修改或平台不匹配的缓存。
-
-`src/wechat_decrypt_tool/native/` 下的 DLL、Broker 和 manifest 被 `.gitignore` 排除是预期设计：源码启动器会把经过固定摘要验证的制品放入用户缓存并通过受控环境变量交给后端，不会把私有 native-core 源码或可误提交的二进制直接放进 Git 工作树。
-
-仅开发不依赖实时数据库的 Web 界面时，也可以分别启动后端和前端。该方式不会执行桌面端原生运行时预检，不应用于验证实时聊天读取：
 
 #### 启动后端API服务
 ```bash

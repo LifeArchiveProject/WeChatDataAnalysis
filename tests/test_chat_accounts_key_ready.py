@@ -139,6 +139,71 @@ class TestChatAccountsKeyReady(unittest.TestCase):
                 else:
                     os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data_dir
 
+    def test_direct_key_store_source_replaces_stale_source_marker(self) -> None:
+        """A newly captured direct source must win over the prior account marker."""
+        with self._with_temp_data_dir() as td:
+            root = Path(td)
+            prev_data_dir = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+
+                import wechat_decrypt_tool.app_paths as app_paths
+                import wechat_decrypt_tool.key_store as key_store
+                import wechat_decrypt_tool.chat_accounts as chat_accounts
+                import wechat_decrypt_tool.media_helpers as media_helpers
+
+                importlib.reload(app_paths)
+                importlib.reload(key_store)
+                importlib.reload(chat_accounts)
+                importlib.reload(media_helpers)
+
+                account = "wxid_real_user"
+                account_dir = root / "output" / "databases" / account
+                account_dir.mkdir(parents=True, exist_ok=True)
+                old_source = root / "wechat" / "old" / "db_storage"
+                new_source = root / "wechat" / "new" / "db_storage"
+                old_source.mkdir(parents=True)
+                new_source.mkdir(parents=True)
+                marker = account_dir / "_source.json"
+                marker.write_text(
+                    json.dumps({"db_storage_path": str(old_source)}),
+                    encoding="utf-8",
+                )
+
+                key_store.upsert_account_keys_in_store(
+                    account,
+                    db_key="E" * 64,
+                    db_key_source_db_storage_path=str(new_source),
+                )
+
+                context = chat_accounts.resolve_chat_account_context(account)
+
+                self.assertEqual(context.db_storage_path, str(new_source.resolve()))
+                persisted = json.loads(marker.read_text(encoding="utf-8"))
+                self.assertEqual(persisted["db_storage_path"], str(new_source.resolve()))
+                self.assertEqual(
+                    media_helpers._resolve_account_db_storage_dir(account_dir),
+                    new_source.resolve(),
+                )
+            finally:
+                if prev_data_dir is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data_dir
+
+    def test_source_alias_with_internal_wxid_underscores_canonicalizes(self) -> None:
+        from wechat_decrypt_tool.account_identity import canonical_account_name
+        from wechat_decrypt_tool.media_helpers import _clean_weflow_account_dir_name
+
+        self.assertEqual(
+            canonical_account_name("wxid_real_user_a73c"),
+            "wxid_real_user",
+        )
+        self.assertEqual(
+            _clean_weflow_account_dir_name("wxid_real_user_a73c"),
+            "wxid_real_user",
+        )
+
     def test_imported_snapshot_hides_host_aliases_and_legacy_backup_directories(self) -> None:
         with self._with_temp_data_dir() as td:
             root = Path(td)

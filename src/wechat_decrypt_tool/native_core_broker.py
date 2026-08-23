@@ -174,7 +174,9 @@ def _new_endpoint() -> str:
 
 
 def _startup_timeout_seconds() -> float:
-    default_timeout_ms = "60000" if sys.platform == "darwin" else "5000"
+    default_timeout_ms = (
+        "60000" if sys.platform == "darwin" or sys.platform.startswith("win") else "5000"
+    )
     raw = str(
         os.environ.get(ENV_NATIVE_CORE_STARTUP_TIMEOUT_MS, default_timeout_ms) or ""
     ).strip()
@@ -282,16 +284,43 @@ def _database_roots_for_launch(
     return tuple(roots)
 
 
-def _broker_log_file():
+def _broker_log_path() -> Path | None:
     data_dir = str(os.environ.get("WECHAT_TOOL_DATA_DIR", "") or "").strip()
     if not data_dir:
+        return None
+    return Path(data_dir) / "logs" / "native-core-broker.log"
+
+
+def _broker_log_file():
+    log_path = _broker_log_path()
+    if log_path is None:
         return subprocess.DEVNULL
-    log_path = Path(data_dir) / "logs" / "native-core-broker.log"
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         return open(log_path, "ab", buffering=0)
     except OSError:
         return subprocess.DEVNULL
+
+
+def _broker_log_tail(path: Path, start_offset: int, *, limit: int = 4096) -> str:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as stream:
+            stream.seek(max(start_offset, size - limit))
+            lines = stream.read(limit).decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    tail: list[str] = []
+    for raw_line in lines[-8:]:
+        line = "".join(
+            character if character.isprintable() else " " for character in raw_line
+        ).strip()
+        if not line:
+            continue
+        if " endpoint=" in line:
+            line = line.split(" endpoint=", 1)[0] + " endpoint=<redacted>"
+        tail.append(line[:500])
+    return " | ".join(tail)[-2000:]
 
 
 def _wait_until_ready(
@@ -327,7 +356,10 @@ def _wait_until_ready(
         finally:
             if client is not None:
                 client.close()
-    raise NativeCoreUnavailableError("wechatdb native broker did not become ready in time.") from last_error
+    detail = f" Last native error: {last_error}" if last_error is not None else ""
+    raise NativeCoreUnavailableError(
+        f"wechatdb native broker did not become ready in time.{detail}"
+    ) from last_error
 
 
 def ensure_native_core_broker(
@@ -451,6 +483,11 @@ def ensure_native_core_broker(
                 command.extend(("--database-root", os.fspath(root)))
 
         child_env = _broker_child_environment()
+        log_path = _broker_log_path()
+        try:
+            log_start_offset = log_path.stat().st_size if log_path is not None else 0
+        except OSError:
+            log_start_offset = 0
         log_file = _broker_log_file()
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform.startswith("win") else 0
         try:
@@ -477,7 +514,7 @@ def ensure_native_core_broker(
                 endpoint=endpoint,
                 timeout=_startup_timeout_seconds(),
             )
-        except Exception:
+        except Exception as exc:
             process.terminate()
             try:
                 process.wait(timeout=2)
@@ -486,6 +523,16 @@ def ensure_native_core_broker(
                 process.wait(timeout=2)
             if sys.platform == "darwin":
                 Path(endpoint).unlink(missing_ok=True)
+            if isinstance(exc, NativeCoreUnavailableError) and log_path is not None:
+                tail = _broker_log_tail(log_path, log_start_offset)
+                detail = f" Broker log: {log_path}."
+                if tail:
+                    detail += f" Current broker log tail: {tail}"
+                else:
+                    detail += " The current broker run wrote no diagnostic output."
+                raise NativeCoreUnavailableError(
+                    f"{exc}{detail}", status=exc.status
+                ) from exc
             raise
 
         close_native_core_client()

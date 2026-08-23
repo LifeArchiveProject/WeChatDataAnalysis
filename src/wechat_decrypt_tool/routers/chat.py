@@ -37,6 +37,7 @@ from ..chat_helpers import (
     _extract_chatroom_top_message_metadata,
     _extract_image_group_info,
     _extract_md5_from_packed_info,
+    _extract_voice_transcript_from_packed_info,
     _extract_sender_from_group_xml,
     _extract_xml_attr,
     _extract_xml_tag_or_attr,
@@ -87,7 +88,7 @@ from ..chat_realtime_reader import (
 from ..database_filters import list_countable_database_names
 from ..key_store import remove_account_family_keys_from_store
 from ..path_fix import PathFixRoute
-from ..perf_trace import create_perf_trace
+from ..perf_trace import create_perf_trace, get_request_perf_context
 from ..session_last_message import (
     build_session_last_message_table,
     get_session_last_message_status,
@@ -102,12 +103,14 @@ from ..wcdb_realtime import (
     exec_query as _wcdb_exec_query,
     fetch_message_batch as _wcdb_fetch_message_batch,
     get_avatar_urls as _wcdb_get_avatar_urls,
+    get_contact as _wcdb_get_contact,
     get_display_names as _wcdb_get_display_names,
     get_group_members as _wcdb_get_group_members,
     get_group_nicknames as _wcdb_get_group_nicknames,
     get_messages as _wcdb_get_messages,
     get_sessions as _wcdb_get_sessions,
     open_message_cursor as _wcdb_open_message_cursor,
+    resolve_account_native_wxid as _wcdb_resolve_account_native_wxid,
 )
 
 logger = get_logger(__name__)
@@ -3083,8 +3086,11 @@ def _append_full_messages_from_rows(
     my_rowid: Optional[int],
     resource_conn: Optional[sqlite3.Connection],
     resource_chat_id: Optional[int],
+    self_username: str = "",
 ) -> None:
-    self_username = resolve_account_self_username(account_dir)
+    resolved_self_username = str(
+        self_username or resolve_account_self_username(account_dir) or account_dir.name or ""
+    ).strip()
     contact_conn: Optional[sqlite3.Connection] = None
     alias_cache: dict[str, str] = {}
     if is_group:
@@ -3122,6 +3128,11 @@ def _append_full_messages_from_rows(
         create_time = int(r["create_time"] or 0)
         sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
         local_type = int(r["local_type"] or 0)
+        native_voice_transcript = (
+            _extract_voice_transcript_from_packed_info(_row_get_value(r, "packed_info_data"))
+            if local_type == 34
+            else ""
+        )
         sender_username = _decode_sqlite_text(r["sender_username"]).strip()
 
         is_sent = False
@@ -3169,7 +3180,7 @@ def _append_full_messages_from_rows(
             if not is_sent:
                 try:
                     su = str(sender_username or "").strip().lower()
-                    me = str(self_username or "").strip().lower()
+                    me = resolved_self_username.lower()
                     if su and me and su == me:
                         is_sent = True
                 except Exception:
@@ -3203,7 +3214,7 @@ def _append_full_messages_from_rows(
                 sender_username = xml_sender
 
         if is_sent:
-            sender_username = self_username
+            sender_username = resolved_self_username
         elif (not is_group) and (not sender_username):
             sender_username = username
 
@@ -3607,6 +3618,11 @@ def _append_full_messages_from_rows(
                 "videoUrl": video_url,
                 "videoThumbUrl": video_thumb_url,
                 "voiceLength": voice_length,
+                "voiceTranscript": native_voice_transcript,
+                "voiceTranscriptStatus": "success" if native_voice_transcript else "idle",
+                "voiceTranscriptError": "",
+                "voiceTranscriptLanguage": "",
+                "voiceTranscriptModel": "wechat-native" if native_voice_transcript else "",
                 "voipType": voip_type,
                 "quoteUsername": str(quote_username).strip(),
                 "quoteServerId": str(quote_server_id).strip(),
@@ -4178,7 +4194,140 @@ async def list_chat_accounts():
     }
 
 
-def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
+_ACCOUNT_PROFILE_NAME_KEYS = (
+    "selfDisplayName",
+    "self_display_name",
+    "nickname",
+    "nickName",
+    "nick_name",
+    "nick",
+    "displayName",
+    "display_name",
+)
+_ACCOUNT_PROFILE_INVISIBLE_CHARS = ("\u3164", "\u200b", "\u200c", "\u200d", "\ufeff")
+
+
+def _clean_account_display_name(value: Any, fallback_username: str = "") -> str:
+    text = str(value or "")
+    for char in _ACCOUNT_PROFILE_INVISIBLE_CHARS:
+        text = text.replace(char, "")
+    text = text.strip()
+    fallback = str(fallback_username or "").strip()
+    if not text or (fallback and text.casefold() == fallback.casefold()):
+        return ""
+    return text
+
+
+def _read_account_profile_display_name(account_dir: Path, fallback_username: str) -> str:
+    """Read a persisted account nickname without probing/starting native WCDB."""
+    for filename in ("account.json", "_source.json"):
+        try:
+            value = json.loads((Path(account_dir) / filename).read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(value, dict):
+            continue
+        candidates: list[dict[str, Any]] = [value]
+        for nested_key in ("original_info", "profile"):
+            nested = value.get(nested_key)
+            if isinstance(nested, dict):
+                candidates.append(nested)
+        for candidate in candidates:
+            for key in _ACCOUNT_PROFILE_NAME_KEYS:
+                display_name = _clean_account_display_name(candidate.get(key), fallback_username)
+                if display_name:
+                    return display_name
+    return ""
+
+
+def _resolve_account_self_display_name(
+    account_dir: Path,
+    native_wxid: str,
+    *,
+    snapshot_preferred: bool = False,
+    allow_native_connection: bool = False,
+    expected_db_storage_dir: str = "",
+) -> str:
+    """Resolve the self nickname from cheap metadata or an existing WCDB handle.
+
+    `/api/chat/accounts` calls this with `allow_native_connection=False`, so
+    listing several accounts never opens one native handle per account.  The
+    account-info route may opt into a single lazy connection for the selected
+    account when no persisted/local name is available.
+    """
+    account_path = Path(account_dir)
+    username = str(native_wxid or account_path.name or "").strip()
+
+    def _from_contact_row(row: Any) -> str:
+        try:
+            return _clean_account_display_name(_pick_display_name(row, username), username)
+        except Exception:
+            return ""
+
+    def _from_connection(connection: Any) -> str:
+        if connection is None:
+            return ""
+        try:
+            expected_root = str(expected_db_storage_dir or "").strip()
+            actual_root = str(getattr(connection, "db_storage_dir", "") or "").strip()
+            if expected_root and actual_root:
+                if Path(expected_root).expanduser().resolve() != Path(actual_root).expanduser().resolve():
+                    return ""
+            with connection.lock:
+                names = _wcdb_get_display_names(connection.handle, [username])
+                display_name = _clean_account_display_name(
+                    (names or {}).get(username),
+                    username,
+                )
+                if display_name:
+                    return display_name
+                return _from_contact_row(_wcdb_get_contact(connection.handle, username))
+        except Exception:
+            return ""
+
+    # A direct account may already have been connected by chat/realtime or by
+    # the avatar endpoint.  Reuse that handle, but never start one here unless
+    # the caller explicitly requested the selected-account lazy path.
+    if not snapshot_preferred:
+        try:
+            display_name = _from_connection(WCDB_REALTIME.get_connection(account_path.name))
+            if display_name:
+                return display_name
+        except Exception:
+            pass
+
+    if allow_native_connection and not snapshot_preferred:
+        try:
+            connection = WCDB_REALTIME.ensure_connected(account_path, timeout=2.0)
+            display_name = _from_connection(connection)
+            if display_name:
+                return display_name
+        except Exception:
+            pass
+
+    display_name = _read_account_profile_display_name(account_path, username)
+    if display_name:
+        return display_name
+
+    # Imported snapshots expose contact.db but direct accounts may retain a
+    # stale decrypted copy from the prior source.  Never use that copy for a
+    # direct account; the native path above is the source of truth there.
+    if snapshot_preferred:
+        try:
+            rows = _load_contact_rows(account_path / "contact.db", [username])
+            display_name = _from_contact_row((rows or {}).get(username))
+            if display_name:
+                return display_name
+        except Exception:
+            pass
+    return ""
+
+
+def _chat_account_context_public(
+    ctx: Any,
+    *,
+    allow_native_display_name: bool = False,
+) -> dict[str, Any]:
     account_dir = Path(ctx.account_dir)
     db_files = list_countable_database_names(account_dir)
     snapshot_preferred = bool(
@@ -4196,12 +4345,29 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
     wxid_dir = "" if snapshot_preferred else str(getattr(ctx, "wxid_dir", "") or "").strip()
     realtime_db_storage = str(realtime_status.get("db_storage_dir") or "").strip()
     realtime_session_db = str(realtime_status.get("session_db_path") or "").strip()
+    identity_status = dict(realtime_status)
+    identity_status["db_storage_dir"] = realtime_db_storage or db_storage_path
+    native_wxid = _wcdb_resolve_account_native_wxid(account_dir, identity_status)
     data_source_path = realtime_db_storage or db_storage_path or wxid_dir or str(account_dir)
     realtime_available = bool(
         realtime_status.get("dll_present")
         and realtime_status.get("key_present")
         and realtime_db_storage
         and realtime_session_db
+    )
+    self_display_name = _resolve_account_self_display_name(
+        account_dir,
+        native_wxid,
+        snapshot_preferred=snapshot_preferred,
+        # Only make the selected-account lazy probe when the cheap status
+        # probe says the native components and source are usable. This avoids
+        # turning a missing broker into a cached connection failure.
+        allow_native_connection=(
+            allow_native_display_name
+            and realtime_available
+            and not bool(realtime_status.get("recent_failure"))
+        ),
+        expected_db_storage_dir=realtime_db_storage or db_storage_path,
     )
     has_decrypted_dbs = bool(getattr(ctx, "has_decrypted_dbs", False))
     realtime_preferred = bool(db_storage_path or wxid_dir or realtime_db_storage)
@@ -4235,6 +4401,14 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
     return {
         "account": ctx.name,
         "name": ctx.name,
+        # The output/account directory may carry a WeFlow collision suffix
+        # (for example SimpleChinese_a73c).  Avatar rows are keyed by the
+        # native WeChat username (SimpleChinese), so expose both identities.
+        "selfUsername": native_wxid,
+        "nativeWxid": native_wxid,
+        "selfDisplayName": self_display_name,
+        "nickname": self_display_name,
+        "displayName": self_display_name,
         "mode": getattr(ctx, "mode", "unknown"),
         "defaultSource": active_source,
         "path": data_source_path,
@@ -4257,6 +4431,7 @@ def _chat_account_context_public(ctx: Any) -> dict[str, Any]:
         "realtime": {
             "available": bool(realtime_available),
             "connected": bool(realtime_status.get("connected")),
+            "nativeWxid": native_wxid,
             "dllPresent": bool(realtime_status.get("dll_present")),
             "keyPresent": bool(realtime_status.get("key_present")),
             "dbStorageDir": realtime_db_storage,
@@ -4290,7 +4465,7 @@ def get_chat_account_info(account: Optional[str] = None):
     except Exception:
         session_updated_at = 0
 
-    info = _chat_account_context_public(ctx)
+    info = _chat_account_context_public(ctx, allow_native_display_name=True)
     if not session_updated_at:
         try:
             rt_session_db = Path(str((info.get("realtime") or {}).get("sessionDbPath") or ""))
@@ -4973,6 +5148,28 @@ def list_chat_sessions(
     }
 
 
+def _resolve_message_self_rowid(
+    conn: sqlite3.Connection,
+    account_dir: Path,
+) -> tuple[Optional[int], str]:
+    """Prefer persisted snapshot identity, then try the native WeFlow identity."""
+
+    rowid, matched_username = resolve_account_self_rowid(conn, account_dir)
+    if rowid is not None:
+        return rowid, matched_username
+    native_username = _wcdb_resolve_account_native_wxid(account_dir)
+    if not native_username:
+        return rowid, matched_username
+    native_rowid, native_match = resolve_account_self_rowid(
+        conn,
+        account_dir,
+        candidates=(native_username,),
+    )
+    if native_rowid is not None:
+        return native_rowid, native_match
+    return rowid, matched_username
+
+
 def _collect_chat_messages(
     *,
     username: str,
@@ -5015,10 +5212,11 @@ def _collect_chat_messages(
             if not table_name:
                 continue
 
-            my_rowid, _matched_self_username = resolve_account_self_rowid(
+            my_rowid, _matched_self_username = _resolve_message_self_rowid(
                 conn,
                 account_dir,
             )
+            db_self_username = _matched_self_username or self_username
 
             quoted_table = _quote_ident(table_name)
             has_packed_info_data = False
@@ -5077,6 +5275,11 @@ def _collect_chat_messages(
                 create_time = int(r["create_time"] or 0)
                 sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
                 local_type = int(r["local_type"] or 0)
+                native_voice_transcript = (
+                    _extract_voice_transcript_from_packed_info(_row_get_value(r, "packed_info_data"))
+                    if local_type == 34
+                    else ""
+                )
                 sender_username = _decode_sqlite_text(r["sender_username"]).strip()
 
                 is_sent = False
@@ -5114,7 +5317,7 @@ def _collect_chat_messages(
                         sender_username = xml_sender
 
                 if is_sent:
-                    sender_username = self_username
+                    sender_username = db_self_username
                 elif (not is_group) and (not sender_username):
                     sender_username = username
 
@@ -5512,6 +5715,11 @@ def _collect_chat_messages(
                         "videoUrl": video_url,
                         "videoThumbUrl": video_thumb_url,
                         "voiceLength": voice_length,
+                        "voiceTranscript": native_voice_transcript,
+                        "voiceTranscriptStatus": "success" if native_voice_transcript else "idle",
+                        "voiceTranscriptError": "",
+                        "voiceTranscriptLanguage": "",
+                        "voiceTranscriptModel": "wechat-native" if native_voice_transcript else "",
                         "voipType": voip_type,
                         "quoteUsername": str(quote_username).strip(),
                         "quoteServerId": str(quote_server_id).strip(),
@@ -6087,6 +6295,10 @@ def list_chat_messages(
     scan_limit: int = 320,
     source: Optional[str] = None,
 ):
+    handler_started_perf = time.perf_counter()
+    handler_started_epoch_ms = time.time_ns() / 1_000_000
+    request_perf = get_request_perf_context(request)
+
     if not username:
         raise HTTPException(status_code=400, detail="Missing username.")
     if limit <= 0:
@@ -6112,9 +6324,31 @@ def list_chat_messages(
     head_image_db_path = account_dir / "head_image.db"
     message_resource_db_path = account_dir / "message_resource.db"
     base_url = str(request.base_url).rstrip("/")
+    request_perf_fields: dict[str, Any] = {}
+    asgi_arrived_perf = request_perf.get("asgiArrivedPerf")
+    if isinstance(asgi_arrived_perf, (int, float)):
+        request_perf_fields = {
+            "clientTraceId": request_perf.get("clientTraceId"),
+            "clientSentEpochMs": request_perf.get("clientSentEpochMs"),
+            "asgiArrivedEpochMs": request_perf.get("asgiArrivedEpochMs"),
+            "handlerStartedEpochMs": round(handler_started_epoch_ms, 3),
+            "asgiQueueMs": round(
+                (handler_started_perf - float(asgi_arrived_perf)) * 1000.0,
+                1,
+            ),
+        }
+    request_trace_options = (
+        {
+            "trace_id": str(request_perf.get("traceId") or "") or None,
+            "started_at": handler_started_perf,
+        }
+        if request_perf
+        else {}
+    )
     _trace_id, trace = create_perf_trace(
         logger,
         "chat.messages",
+        **request_trace_options,
         account=account_dir.name,
         username=username,
         source=source_norm or "default",
@@ -6125,6 +6359,7 @@ def list_chat_messages(
         filterMode=str(filter_mode or ""),
         scanOffset=int(scan_offset),
         scanLimit=int(scan_limit),
+        **request_perf_fields,
     )
     trace("request:start")
 
@@ -6287,6 +6522,7 @@ def list_chat_messages(
                 my_rowid=my_rowid_realtime if used_exec_query else None,
                 resource_conn=resource_conn,
                 resource_chat_id=resource_chat_id,
+                self_username=_wcdb_resolve_account_native_wxid(account_dir, rt_conn),
             )
 
             if progressive_filter:
@@ -6495,6 +6731,11 @@ def list_chat_messages(
                 create_time = int(r["create_time"] or 0)
                 sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
                 local_type = int(r["local_type"] or 0)
+                native_voice_transcript = (
+                    _extract_voice_transcript_from_packed_info(_row_get_value(r, "packed_info_data"))
+                    if local_type == 34
+                    else ""
+                )
                 sender_username = _decode_sqlite_text(r["sender_username"]).strip()
 
                 is_sent = False
@@ -6878,6 +7119,11 @@ def list_chat_messages(
                         "videoUrl": video_url,
                         "videoThumbUrl": video_thumb_url,
                         "voiceLength": voice_length,
+                        "voiceTranscript": native_voice_transcript,
+                        "voiceTranscriptStatus": "success" if native_voice_transcript else "idle",
+                        "voiceTranscriptError": "",
+                        "voiceTranscriptLanguage": "",
+                        "voiceTranscriptModel": "wechat-native" if native_voice_transcript else "",
                         "voipType": voip_type,
                         "quoteUsername": str(quote_username).strip(),
                         "quoteServerId": str(quote_server_id).strip(),
@@ -7086,6 +7332,7 @@ def list_chat_messages(
         contact_db_path=contact_db_path,
         chatroom_id=username,
         sender_usernames=uniq_senders,
+        allow_native_fallback=False,
     )
     trace(
         "sender-fallbacks:loaded",
@@ -7354,6 +7601,7 @@ async def _search_chat_messages_via_fts(
     include_hidden: bool,
     include_official: bool,
     source: Optional[str] = None,
+    allow_native_enrichment: bool = True,
 ) -> dict[str, Any]:
     tokens = _make_search_tokens(q)
     if not tokens:
@@ -7676,6 +7924,7 @@ async def _search_chat_messages_via_fts(
         ordered_keys.append(key4)
 
     hit_by_key: dict[tuple[Path, str, str, int], dict[str, Any]] = {}
+    self_username = _wcdb_resolve_account_native_wxid(account_dir)
 
     for (db_path, table_name, conv_username), local_ids in groups.items():
         uniq_local_ids = list(dict.fromkeys([int(x) for x in local_ids if int(x) > 0]))
@@ -7686,10 +7935,11 @@ async def _search_chat_messages_via_fts(
         msg_conn.row_factory = sqlite3.Row
         msg_conn.text_factory = bytes
         try:
-            my_rowid, _matched_self_username = resolve_account_self_rowid(
+            my_rowid, _matched_self_username = _resolve_message_self_rowid(
                 msg_conn,
                 account_dir,
             )
+            db_self_username = _matched_self_username or self_username
 
             placeholders = ",".join(["?"] * len(uniq_local_ids))
             quoted_table = _quote_ident(table_name)
@@ -7732,6 +7982,7 @@ async def _search_chat_messages_via_fts(
                         account_dir=account_dir,
                         is_group=is_group,
                         my_rowid=my_rowid,
+                        self_username=db_self_username,
                     )
                 except Exception:
                     continue
@@ -7793,7 +8044,11 @@ async def _search_chat_messages_via_fts(
 
             need_display = list(dict.fromkeys(need_display))
             need_avatar = list(dict.fromkeys(need_avatar))
-            if (need_display or need_avatar) and not account_prefers_decrypted_snapshot(account_dir):
+            if (
+                allow_native_enrichment
+                and (need_display or need_avatar)
+                and not account_prefers_decrypted_snapshot(account_dir)
+            ):
                 wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
                 with wcdb_conn.lock:
                     if need_display:
@@ -7820,6 +8075,7 @@ async def _search_chat_messages_via_fts(
             contact_db_path=contact_db_path,
             chatroom_id=username,
             sender_usernames=[str(x.get("senderUsername") or "") for x in hits],
+            allow_native_fallback=allow_native_enrichment,
         )
 
         for h in hits:
@@ -7877,7 +8133,11 @@ async def _search_chat_messages_via_fts(
 
             need_display = list(dict.fromkeys(need_display))
             need_avatar = list(dict.fromkeys(need_avatar))
-            if (need_display or need_avatar) and not account_prefers_decrypted_snapshot(account_dir):
+            if (
+                allow_native_enrichment
+                and (need_display or need_avatar)
+                and not account_prefers_decrypted_snapshot(account_dir)
+            ):
                 wcdb_conn = WCDB_REALTIME.ensure_connected(account_dir)
                 with wcdb_conn.lock:
                     if need_display:
@@ -7903,6 +8163,7 @@ async def _search_chat_messages_via_fts(
                 contact_db_path=contact_db_path,
                 chatroom_id=cu,
                 sender_usernames=senders,
+                allow_native_fallback=allow_native_enrichment,
             )
 
         for h in hits:
@@ -7989,6 +8250,7 @@ async def search_chat_messages(
     include_hidden: bool = False,
     include_official: bool = False,
     source: Optional[str] = None,
+    allow_native_enrichment: bool = True,
     session_limit: int = 200,
     per_chat_scan: int = 200,
     scan_limit: int = 20000,
@@ -8010,6 +8272,7 @@ async def search_chat_messages(
         include_hidden=include_hidden,
         include_official=include_official,
         source=source_requested,
+        allow_native_enrichment=allow_native_enrichment,
     )
     if isinstance(response, dict):
         if source_requested in {"auto", "realtime", "decrypted"}:
@@ -8175,6 +8438,7 @@ async def get_chat_messages_around(
                     my_rowid=None,
                     resource_conn=resource_conn,
                     resource_chat_id=resource_chat_id,
+                    self_username=_wcdb_resolve_account_native_wxid(account_dir, rt_conn),
                 )
             finally:
                 if resource_conn is not None:
@@ -8367,6 +8631,7 @@ async def get_chat_messages_around(
     quote_usernames_all: list[str] = []
     pat_usernames_all: set[str] = set()
     is_group = bool(username.endswith("@chatroom"))
+    self_username = _wcdb_resolve_account_native_wxid(account_dir)
 
     for db_path in db_paths:
         conn: Optional[sqlite3.Connection] = None
@@ -8385,10 +8650,11 @@ async def get_chat_messages_around(
             if not table_name:
                 continue
 
-            my_rowid, _matched_self_username = resolve_account_self_rowid(
+            my_rowid, _matched_self_username = _resolve_message_self_rowid(
                 conn,
                 account_dir,
             )
+            db_self_username = _matched_self_username or self_username
 
             quoted_table = _quote_ident(table_name)
             has_packed_info_data = False
@@ -8560,6 +8826,7 @@ async def get_chat_messages_around(
                 my_rowid=my_rowid,
                 resource_conn=resource_conn,
                 resource_chat_id=resource_chat_id,
+                self_username=db_self_username,
             )
         except HTTPException:
             raise

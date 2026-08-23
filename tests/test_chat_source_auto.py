@@ -346,7 +346,7 @@ class TestChatSourceAuto(unittest.TestCase):
                 patch.object(chat_router, "_wcdb_get_display_names", return_value={}),
                 patch.object(chat_router, "_wcdb_get_avatar_urls", return_value={}),
                 patch.object(chat_router, "_load_usernames_by_display_names", return_value={}),
-                patch.object(chat_router, "_load_group_nickname_map", return_value={}),
+                patch.object(chat_router, "_load_group_nickname_map", return_value={}) as group_nickname_loader,
             ):
                 resp = chat_router.list_chat_messages(
                     _DummyRequest(),
@@ -361,6 +361,8 @@ class TestChatSourceAuto(unittest.TestCase):
         self.assertEqual(resp.get("status"), "success")
         self.assertEqual(resp.get("source"), "realtime")
         self.assertEqual((resp.get("messages") or [])[0].get("content"), "hello from live message db")
+        group_nickname_loader.assert_called_once()
+        self.assertFalse(group_nickname_loader.call_args.kwargs["allow_native_fallback"])
 
     def test_sessions_decrypted_sort_uses_session_last_message_when_session_table_is_stale(self):
         with TemporaryDirectory() as td:

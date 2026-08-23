@@ -16,7 +16,13 @@
           :title="avatarButtonTitle"
           @click="openAccountDialog"
         >
-          <img v-if="selfAvatarUrl" :src="selfAvatarUrl" alt="avatar" class="w-full h-full object-cover" />
+          <img
+            v-if="selfAvatarUrl && !isAvatarBroken(selfAvatarUrl)"
+            :src="selfAvatarUrl"
+            alt="avatar"
+            class="w-full h-full object-cover"
+            @error="markAvatarBroken(selfAvatarUrl)"
+          />
           <div
             v-else
             class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
@@ -368,12 +374,12 @@
             >
               <div class="h-[38px] w-[38px] shrink-0 overflow-hidden rounded-md bg-gray-300">
                 <img
-                  v-if="item.avatarUrl && !accountAvatarBroken[item.account]"
+                  v-if="item.avatarUrl && !isAvatarBroken(item.avatarUrl)"
                   :src="item.avatarUrl"
                   alt="avatar"
                   class="h-full w-full object-cover"
                   loading="lazy"
-                  @error="markAccountAvatarBroken(item.account)"
+                  @error="markAvatarBroken(item.avatarUrl)"
                 />
                 <div
                   v-else
@@ -384,7 +390,8 @@
                 </div>
               </div>
               <div class="min-w-0 flex-1">
-                <div class="truncate text-[13px] font-semibold text-[#222]">{{ item.account }}</div>
+                <div class="truncate text-[13px] font-semibold text-[#222]">{{ item.displayName || item.account }}</div>
+                <div v-if="item.displayName" class="truncate text-[10px] text-[#8a8a8a]">{{ item.account }}</div>
               </div>
               <div class="flex shrink-0 items-center gap-1">
                 <span class="rounded-full bg-[#eefbf4] px-1.5 py-0.5 text-[10px] font-medium text-[#07964c]">DB</span>
@@ -398,7 +405,13 @@
         <template v-else>
           <div class="flex items-center gap-3">
             <div class="w-[42px] h-[42px] rounded-md overflow-hidden bg-gray-300 flex-shrink-0">
-              <img v-if="selfAvatarUrl" :src="selfAvatarUrl" alt="avatar" class="w-full h-full object-cover" />
+              <img
+                v-if="selfAvatarUrl && !isAvatarBroken(selfAvatarUrl)"
+                :src="selfAvatarUrl"
+                alt="avatar"
+                class="w-full h-full object-cover"
+                @error="markAvatarBroken(selfAvatarUrl)"
+              />
               <div
                 v-else
                 class="w-full h-full flex items-center justify-center text-white text-xs font-bold"
@@ -408,8 +421,9 @@
               </div>
             </div>
             <div class="min-w-0 flex-1">
-              <div class="truncate text-[14px] font-semibold text-[#222]">{{ selectedAccount || '未选择账号' }}</div>
-              <div class="mt-0.5 text-[11px] text-[#8a8a8a]">账号标识（wxid）</div>
+              <div class="truncate text-[14px] font-semibold text-[#222]">{{ selectedAccountDisplayName || selectedAccount || '未选择账号' }}</div>
+              <div v-if="selectedAccountDisplayName" class="mt-0.5 truncate text-[11px] text-[#8a8a8a]">{{ selectedAccount }}</div>
+              <div v-else class="mt-0.5 text-[11px] text-[#8a8a8a]">账号标识（wxid）</div>
             </div>
           </div>
 
@@ -454,6 +468,7 @@
 
 <script setup>
 import { storeToRefs } from 'pinia'
+import { buildAccountAvatarUrl } from '~/lib/account-avatar'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
 import { useThemeStore } from '~/stores/theme'
@@ -464,6 +479,7 @@ const chatAccounts = useChatAccountsStore()
 const {
   selectedAccount,
   switchableAccounts,
+  accountInfoByName,
 } = storeToRefs(chatAccounts)
 
 const privacyStore = usePrivacyStore()
@@ -495,7 +511,7 @@ const accountDeleteLoading = ref(false)
 const accountDeleteError = ref('')
 const accountInfoApiUnsupported = ref(false)
 const deleteAccountApiUnsupported = ref(false)
-const accountAvatarBroken = ref({})
+const brokenAvatarUrls = ref({})
 const isMacosDesktop = ref(false)
 
 const normalizeAccountName = (value) => String(value || '').trim()
@@ -517,10 +533,26 @@ const avatarButtonTitle = computed(() => {
   return '账号信息'
 })
 
-const accountAvatarUrl = (account) => {
+const accountAvatarUrl = (account, info = null) => {
   const acc = normalizeAccountName(account)
   if (!acc) return ''
-  return `${apiBase}/chat/avatar?account=${encodeURIComponent(acc)}&username=${encodeURIComponent(acc)}`
+  const resolvedInfo = info || accountInfoByName.value?.[acc] || null
+  return buildAccountAvatarUrl(apiBase, acc, resolvedInfo)
+}
+
+const accountDisplayName = (account, info = null) => {
+  const acc = normalizeAccountName(account)
+  const source = info && typeof info === 'object' ? info : {}
+  const candidate = normalizeAccountName(
+    source.selfDisplayName
+    || source.self_display_name
+    || source.nickname
+    || source.nickName
+    || source.nick_name
+    || source.displayName
+    || source.display_name
+  )
+  return candidate && candidate.toLowerCase() !== acc.toLowerCase() ? candidate : ''
 }
 
 const accountFallbackText = (account) => {
@@ -535,18 +567,22 @@ const switchableAccountItems = computed(() => {
     .map((account) => normalizeAccountName(account))
     .filter(Boolean)
     .map((account) => {
+      const info = accountInfoByName.value?.[account] || null
       return {
         account,
         active: account === normalizeAccountName(selectedAccount.value),
-        avatarUrl: accountAvatarUrl(account),
+        displayName: accountDisplayName(account, info),
+        avatarUrl: accountAvatarUrl(account, info),
       }
     })
 })
 
-const markAccountAvatarBroken = (account) => {
-  const acc = normalizeAccountName(account)
-  if (!acc) return
-  accountAvatarBroken.value = { ...accountAvatarBroken.value, [acc]: true }
+const isAvatarBroken = (url) => !!brokenAvatarUrls.value[String(url || '')]
+
+const markAvatarBroken = (url) => {
+  const key = String(url || '').trim()
+  if (!key) return
+  brokenAvatarUrls.value = { ...brokenAvatarUrls.value, [key]: true }
 }
 
 const sessionUpdatedAtText = computed(() => {
@@ -678,7 +714,13 @@ const apiBase = useApiBase()
 const selfAvatarUrl = computed(() => {
   const acc = String(selectedAccount.value || '').trim()
   if (!acc) return ''
-  return accountAvatarUrl(acc)
+  return accountAvatarUrl(acc, accountInfo.value || accountInfoByName.value?.[acc] || null)
+})
+
+const selectedAccountDisplayName = computed(() => {
+  const acc = String(selectedAccount.value || '').trim()
+  if (!acc) return ''
+  return accountDisplayName(acc, accountInfo.value || accountInfoByName.value?.[acc] || null)
 })
 
 const refreshSwitchableAccounts = async () => {

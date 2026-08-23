@@ -43,9 +43,24 @@ def _run_opencc_smoke() -> None:
     print(json.dumps(payload, ensure_ascii=True))
 
 
+def _run_watchfiles_smoke() -> None:
+    import watchfiles
+    import watchfiles._rust_notify as rust_notify
+
+    payload = {
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "version": str(getattr(watchfiles, "__version__", "") or ""),
+        "nativeModule": str(getattr(rust_notify, "__file__", "") or ""),
+    }
+    print(json.dumps(payload, ensure_ascii=True))
+
+
 def main() -> None:
     if "--smoke-opencc" in sys.argv[1:]:
         _run_opencc_smoke()
+        return
+    if "--smoke-watchfiles" in sys.argv[1:]:
+        _run_watchfiles_smoke()
         return
 
     start_desktop_parent_watchdog_from_env()

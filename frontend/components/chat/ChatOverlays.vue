@@ -957,14 +957,28 @@
         定位引用消息
       </button>
       <button
-        v-if="contextMenu.message?.renderType === 'voice' && !privacyMode && voiceTranscriptionAvailable && typeof transcribeVoice === 'function'"
+        v-if="contextMenu.message?.renderType === 'voice'
+          && !privacyMode
+          && nativeVoiceTranscriptionAvailable
+          && typeof transcribeVoice === 'function'
+          && !(contextMenu.message?.voiceTranscriptStatus === 'success'
+            && contextMenu.message?.voiceTranscriptModel === 'wechat-native')"
         class="chat-context-menu__item block w-full text-left px-3 py-2"
         type="button"
         :disabled="contextMenu.message?.voiceTranscriptStatus === 'loading'"
+        :title="contextMenu.message?.voiceTranscriptStatus === 'error' ? '重试微信转文字' : '微信转文字'"
         :class="contextMenu.message?.voiceTranscriptStatus === 'loading' ? 'opacity-50 cursor-not-allowed' : ''"
         @click="onTranscribeVoiceClick"
       >
-        {{ ['success', 'error'].includes(contextMenu.message?.voiceTranscriptStatus) ? '重新转文字' : '转文字' }}
+        微信转文字
+      </button>
+      <button
+        v-if="canShowLocalVoiceContextAction(contextMenu.message)"
+        class="chat-context-menu__item block w-full text-left px-3 py-2"
+        type="button"
+        @click="onTranscribeVoiceLocallyClick"
+      >
+        本地转文字
       </button>
       <button
         class="chat-context-menu__item block w-full text-left px-3 py-2"
@@ -1087,9 +1101,32 @@ export default defineComponent({
       if (!message || typeof transcribe !== 'function') return
       const status = String(message?.voiceTranscriptStatus || '')
       if (status === 'loading') return
-      const hasResult = status === 'success' || status === 'error'
       if (typeof props.state?.closeContextMenu === 'function') props.state.closeContextMenu()
-      void transcribe(message, { force: hasResult })
+      void transcribe(message)
+    }
+
+    const canShowLocalVoiceContextAction = (message) => {
+      if (!message || String(message?.renderType || '').trim() !== 'voice' || readMaybeRef(props.state?.privacyMode)) {
+        return false
+      }
+      const status = String(message?.voiceTranscriptStatus || 'idle').trim().toLowerCase()
+      if (status === 'loading' || status === 'success' || String(message?.voiceTranscript || '').trim()) return false
+      if (typeof props.state?.transcribeVoiceLocally !== 'function') return false
+      if (readMaybeRef(props.state?.voiceTranscriptionStatusLoading) === true) return false
+      return true
+    }
+
+    const onTranscribeVoiceLocallyClick = () => {
+      const menuRef = props.state?.contextMenu
+      const menu = menuRef && typeof menuRef === 'object' && 'value' in menuRef ? menuRef.value : menuRef
+      const message = menu?.message
+      const transcribe = props.state?.transcribeVoiceLocally
+      if (!message || typeof transcribe !== 'function') return
+      const status = String(message?.voiceTranscriptStatus || '').trim().toLowerCase()
+      if (status === 'loading') return
+      if (typeof props.state?.closeContextMenu === 'function') props.state.closeContextMenu()
+      const options = { force: status === 'error' }
+      void transcribe(message, options)
     }
 
     watch(
@@ -1112,6 +1149,8 @@ export default defineComponent({
       rotatePreviewImageLeft,
       rotatePreviewImageRight,
       onTranscribeVoiceClick,
+      canShowLocalVoiceContextAction,
+      onTranscribeVoiceLocallyClick,
     }
   }
 })

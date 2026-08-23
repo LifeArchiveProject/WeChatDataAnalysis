@@ -22,6 +22,27 @@ from wechat_decrypt_tool.routers import chat_media as chat_media_router
 
 
 class TestSnsPageDecryptedSource(unittest.TestCase):
+    def test_snapshot_status_is_local_only_and_tracks_wal_changes(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "wxid_me"
+            account_dir.mkdir(parents=True)
+            (account_dir / "sns.db").write_bytes(b"snapshot")
+
+            with (
+                mock.patch.object(sns_router, "_resolve_account_dir", return_value=account_dir),
+                mock.patch.object(sns_router.WCDB_REALTIME, "get_status") as get_status,
+                mock.patch.object(sns_router.WCDB_REALTIME, "ensure_connected") as ensure_connected,
+            ):
+                before = sns_router.get_sns_snapshot_status(account=account_dir.name)
+                (account_dir / "sns.db-wal").write_bytes(b"wal-change")
+                after = sns_router.get_sns_snapshot_status(account=account_dir.name)
+
+        get_status.assert_not_called()
+        ensure_connected.assert_not_called()
+        self.assertEqual(before.get("status"), "ok")
+        self.assertTrue(before.get("available"))
+        self.assertNotEqual(before.get("version"), after.get("version"))
+
     def test_self_info_decrypted_sources_never_open_wcdb(self):
         with TemporaryDirectory() as td:
             account_dir = Path(td) / "wxid_me"
@@ -140,6 +161,176 @@ class TestSnsPageDecryptedSource(unittest.TestCase):
         )
         self.assertIn("const resetSnsMediaErrors", page)
         self.assertRegex(page, re.compile(r"if \(reset\) \{\s*resetSnsMediaErrors\(\)"))
+
+    def test_sns_page_loads_local_snapshot_before_event_connection(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+        api = (ROOT / "frontend" / "composables" / "useApi.js").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            api,
+            re.compile(
+                r"const syncSnsRealtimeLatest = async \(params = \{\}\) => \{"
+                r"[\s\S]{0,900}/sns/realtime/sync_latest"
+            ),
+        )
+        self.assertIn("query.set('scan_offset', String(params.scan_offset))", api)
+        self.assertIn("query.set('usernames', params.usernames.join(','))", api)
+        self.assertIn("syncSnsRealtimeLatest,", api)
+        self.assertIn("getSnsSnapshotStatus,", api)
+        self.assertRegex(
+            page,
+            re.compile(
+                r"const loadLocalSnsData = async \(\) => \{"
+                r"[\s\S]{0,500}Promise\.all\(\["
+                r"[\s\S]{0,300}loadSelfInfo\(\)"
+                r"[\s\S]{0,300}loadSnsUsers\(\)"
+                r"[\s\S]{0,300}loadPosts\(\{ reset: true \}\)"
+            ),
+        )
+        self.assertRegex(
+            page,
+            re.compile(
+                r"await loadLocalSnsData\(\)"
+                r"[\s\S]{0,300}connectSnsEventStream\(\)"
+            ),
+        )
+        account_watch = page.split("() => selectedAccount.value,", 1)[1].split(
+            "\n\nwatch(", 1
+        )[0]
+        self.assertNotIn("void refreshSnsData()", account_watch)
+        refresh = page.split("const refreshSnsData = async () => {", 1)[1].split(
+            "\n\nlet postsRequestGeneration", 1
+        )[0]
+        self.assertIn("await syncLatestSnsWithTimeout(account, {", refresh)
+        self.assertIn("maxScan: SNS_MANUAL_REFRESH_SCAN_LIMIT", refresh)
+        self.assertIn("scanOffset: reconcileWindow.scanOffset", refresh)
+        self.assertIn("waitForCurrent: true", refresh)
+        self.assertIn("await activeReconcile", refresh)
+        self.assertIn("mergeVisiblePostsWindow(reconcileWindow)", refresh)
+        self.assertIn("loadSnsUsers({ preserveExisting: true })", refresh)
+        self.assertIn("if (shouldMergeTimeline)", refresh)
+        self.assertNotIn("loadPosts({ reset: true })", refresh)
+        self.assertNotIn("posts.value = []", refresh)
+        self.assertIn('@click="refreshSnsData"', page)
+        self.assertIn("refreshQueued = true", page)
+        self.assertIn("syncStatus === 'ok' || syncStatus === 'noop'", page)
+        self.assertIn("实时同步失败，当前显示本地快照", page)
+        self.assertIn("const describeSnsSyncFailure = (failure) =>", page)
+        self.assertIn("实时同步响应超时，后台任务仍可能完成", page)
+        self.assertIn("实时数据已读取，但写入本地快照失败", page)
+
+    def test_sns_page_focus_performs_one_snapshot_check_and_restores_sse(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+
+        self.assertIn("const onSnsPassiveRefresh = () => {", page)
+        self.assertIn("document.visibilityState !== 'visible'", page)
+        self.assertIn("if (passiveRefreshTimer !== null) return", page)
+        passive = page.split("const runPassiveSnsRefresh = async () => {", 1)[1].split(
+            "\n\nconst onSnsPassiveRefresh", 1
+        )[0]
+        self.assertIn("await reconcileSnsSnapshotOnce()", passive)
+        self.assertIn("connectSnsEventStream()", passive)
+        self.assertNotIn("refreshSnsData()", passive)
+        self.assertIn("closeSnsEventStream({ resetAttempt: true })", page)
+        self.assertIn("window.addEventListener('focus', onSnsPassiveRefresh)", page)
+        self.assertIn("document.addEventListener('visibilitychange', onSnsPassiveRefresh)", page)
+        self.assertIn("window.removeEventListener('focus', onSnsPassiveRefresh)", page)
+        self.assertIn("document.removeEventListener('visibilitychange', onSnsPassiveRefresh)", page)
+
+    def test_sns_page_reconciles_floating_window_from_sse_without_periodic_polling(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+        api = (ROOT / "frontend" / "composables" / "useApi.js").read_text(encoding="utf-8")
+        reconcile = page.split("const queueSnsRealtimeReconcile = (eventPayload) => {", 1)[1].split(
+            "\n\nconst onSnsRealtimeReady", 1
+        )[0]
+
+        self.assertRegex(
+            api,
+            re.compile(
+                r"const getSnsSnapshotStatus = async \(params = \{\}\) => \{"
+                r"[\s\S]{0,400}/sns/snapshot/status"
+            ),
+        )
+        self.assertIn("document.visibilityState !== 'visible'", reconcile)
+        self.assertIn("syncLatestSnsWithTimeout(account, {", reconcile)
+        self.assertIn("const reconcileWindow = getSnsVisibleReconcileWindow()", reconcile)
+        self.assertIn("const needsTargetedSync = !!selectedUsername || reconcileWindow.scanOffset > 0", reconcile)
+        self.assertIn("maxScan: reconcileWindow.maxScan", reconcile)
+        self.assertIn("scanOffset: reconcileWindow.scanOffset", reconcile)
+        self.assertIn("usernames: selectedUsername ? [selectedUsername] : []", reconcile)
+        self.assertIn("syncResult?.snapshotChanged === true", reconcile)
+        self.assertIn("payload?.snapshotChanged === true", reconcile)
+        self.assertIn("mergeVisiblePostsWindow(reconcileWindow)", reconcile)
+        self.assertNotIn("loadPosts({ reset: true })", reconcile)
+        self.assertIn("new EventSource(", page)
+        self.assertIn("/sns/realtime/events?account=", page)
+        self.assertIn("source.addEventListener('change', onSnsRealtimeChange)", page)
+        self.assertIn("const versionChanged = !!(version && version !== snsSnapshotVersion)", page)
+        self.assertNotIn("SNS_VISIBLE_RECONCILE_INTERVAL_MS", page)
+        self.assertNotIn("scheduleSnsVisibleReconcile", page)
+        self.assertNotIn("pollSnsSnapshotVersion", page)
+        self.assertIn("SNS_VISIBLE_RECONCILE_BUFFER_MIN = 20", page)
+        self.assertIn("SNS_VISIBLE_RECONCILE_WINDOW_MAX = 200", page)
+        self.assertIn("data-sns-post-index", page)
+        self.assertIn("scheduleSnsVisibleWindowUpdate()", page)
+        self.assertIn("restoreSnsScrollAnchor(anchor)", page)
+        self.assertIn("SNS_EVENT_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 30000]", page)
+
+    def test_sns_reset_requests_supersede_stale_timeline_requests(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+        load_posts = page.split("const loadPosts = async ({ reset }) => {", 1)[1].split(
+            "\nwatch(", 1
+        )[0]
+
+        self.assertIn("let postsRequestGeneration = 0", page)
+        self.assertIn("const isCurrentPostsRequest = (generation, account) =>", page)
+        self.assertIn("const account = String(selectedAccount.value || '').trim()", load_posts)
+        self.assertIn("if (!reset && isLoading.value) return", load_posts)
+        self.assertIn("const generation = ++postsRequestGeneration", load_posts)
+        self.assertGreaterEqual(
+            load_posts.count("isCurrentPostsRequest(generation, account)"),
+            3,
+        )
+        self.assertRegex(
+            load_posts,
+            re.compile(
+                r"await api\.listSnsTimeline\([\s\S]+?"
+                r"if \(!isCurrentPostsRequest\(generation, account\)\) return"
+            ),
+        )
+        self.assertRegex(
+            load_posts,
+            re.compile(
+                r"catch \(e\) \{\s*"
+                r"if \(isCurrentPostsRequest\(generation, account\)\) \{[\s\S]+?"
+                r"error\.value"
+            ),
+        )
+        self.assertRegex(
+            load_posts,
+            re.compile(
+                r"finally \{\s*"
+                r"if \(isCurrentPostsRequest\(generation, account\)\) \{\s*"
+                r"isLoading\.value = false"
+            ),
+        )
+
+    def test_sns_realtime_sync_timeout_falls_back_to_snapshot(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+
+        self.assertIn("const SNS_REALTIME_SYNC_TIMEOUT_MS =", page)
+        self.assertIn("const syncLatestSnsWithTimeout = async (", page)
+        self.assertIn("Promise.race", page)
+        self.assertRegex(
+            page,
+            re.compile(
+                r"api\.syncSnsRealtimeLatest\(\{[\s\S]{0,160}"
+                r"account,[\s\S]{0,80}force: 1,[\s\S]{0,80}max_scan: maxScan"
+            ),
+        )
+        self.assertIn("await syncLatestSnsWithTimeout(account, {", page)
+        self.assertIn("waitForSnsRealtimeSyncIdle", page)
+        self.assertIn("朋友圈实时同步超时", page)
 
     def test_http_route_defaults_preserve_auto_contract(self):
         self.assertEqual(

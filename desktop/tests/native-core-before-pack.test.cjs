@@ -11,6 +11,14 @@ const {
   stageWindowsPrivatePkiEvidence,
   validatePackagedBackend,
 } = require("../scripts/native-core-before-pack.cjs");
+const {
+  WINDOWS_NATIVE_ASR_ABI_VERSION,
+  WINDOWS_NATIVE_ASR_AUTHORIZATION,
+  WINDOWS_NATIVE_ASR_EXPORTS,
+  WINDOWS_NATIVE_ASR_FEATURE_BIT,
+  WINDOWS_NATIVE_ASR_TARGET,
+} = require("../src/windows-native-asr-capability.cjs");
+const { buildWindowsPeWithExports } = require("./pe-export-fixture.cjs");
 
 const BUILD_ISSUED_AT_UNIX = Math.floor(Date.now() / 1000) - 60;
 const BUILD_LIFETIME_SECONDS = 45 * 24 * 60 * 60;
@@ -37,9 +45,17 @@ const PRODUCTION_MANIFEST = Object.freeze({
   securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
   securityCheckpointCount: 7,
   securityCheckpointSetSha256: "bb".repeat(32),
+  nativeAsrAbiVersion: WINDOWS_NATIVE_ASR_ABI_VERSION,
+  nativeAsrAuthorization: WINDOWS_NATIVE_ASR_AUTHORIZATION,
+  nativeAsrFeatureBit: WINDOWS_NATIVE_ASR_FEATURE_BIT,
+  nativeAsrTarget: WINDOWS_NATIVE_ASR_TARGET,
 });
 
-function makeBackend(platform, manifest = PRODUCTION_MANIFEST) {
+function makeBackend(
+  platform,
+  manifest = PRODUCTION_MANIFEST,
+  { clientExports = WINDOWS_NATIVE_ASR_EXPORTS } = {}
+) {
   const backendDir = fs.mkdtempSync(path.join(os.tmpdir(), "wda-before-pack-"));
   const nativeDir = path.join(backendDir, "native");
   fs.mkdirSync(nativeDir, { recursive: true });
@@ -49,7 +65,11 @@ function makeBackend(platform, manifest = PRODUCTION_MANIFEST) {
   );
   for (const name of nativeCoreArtifactNames(platform)) {
     if (name === "wechatdb_native_build.json") continue;
-    fs.writeFileSync(path.join(nativeDir, name), name);
+    const content =
+      platform === "win32" && name === "wechatdb_client.dll"
+        ? buildWindowsPeWithExports(clientExports)
+        : name;
+    fs.writeFileSync(path.join(nativeDir, name), content);
   }
   fs.writeFileSync(
     path.join(nativeDir, "wechatdb_native_build.json"),
@@ -67,6 +87,20 @@ test("beforePack accepts a complete production backend trio", () => {
     } finally {
       fs.rmSync(backendDir, { recursive: true, force: true });
     }
+  }
+});
+
+test("beforePack rejects a client that declares ASR but lacks the fused exports", () => {
+  const backendDir = makeBackend("win32", PRODUCTION_MANIFEST, {
+    clientExports: ["wce_client_abi_version"],
+  });
+  try {
+    assert.throws(
+      () => validatePackagedBackend({ backendDir, platform: "win32" }),
+      /missing fused ASR ABI exports: wce_native_asr_get_status, wce_native_asr_begin, wce_native_asr_poll, wce_native_asr_close/
+    );
+  } finally {
+    fs.rmSync(backendDir, { recursive: true, force: true });
   }
 });
 

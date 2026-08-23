@@ -11,6 +11,14 @@ const {
   resolveNativeCoreArtifacts,
   stageNativeCoreArtifacts,
 } = require("../scripts/build-backend.cjs");
+const {
+  WINDOWS_NATIVE_ASR_ABI_VERSION,
+  WINDOWS_NATIVE_ASR_AUTHORIZATION,
+  WINDOWS_NATIVE_ASR_EXPORTS,
+  WINDOWS_NATIVE_ASR_FEATURE_BIT,
+  WINDOWS_NATIVE_ASR_TARGET,
+} = require("../src/windows-native-asr-capability.cjs");
+const { buildWindowsPeWithExports } = require("./pe-export-fixture.cjs");
 
 const BUILD_ISSUED_AT_UNIX = Math.floor(Date.now() / 1000) - 60;
 const BUILD_LIFETIME_SECONDS = 45 * 24 * 60 * 60;
@@ -37,6 +45,10 @@ const PRODUCTION_MANIFEST = Object.freeze({
   securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
   securityCheckpointCount: 7,
   securityCheckpointSetSha256: "bb".repeat(32),
+  nativeAsrAbiVersion: WINDOWS_NATIVE_ASR_ABI_VERSION,
+  nativeAsrAuthorization: WINDOWS_NATIVE_ASR_AUTHORIZATION,
+  nativeAsrFeatureBit: WINDOWS_NATIVE_ASR_FEATURE_BIT,
+  nativeAsrTarget: WINDOWS_NATIVE_ASR_TARGET,
 });
 
 const DEVELOPMENT_MANIFEST = Object.freeze({
@@ -57,6 +69,10 @@ const DEVELOPMENT_MANIFEST = Object.freeze({
   securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
   securityCheckpointCount: 7,
   securityCheckpointSetSha256: "bb".repeat(32),
+  nativeAsrAbiVersion: 0,
+  nativeAsrAuthorization: "none",
+  nativeAsrFeatureBit: 0,
+  nativeAsrTarget: { wechatVersion: "", weixinSha256: "" },
 });
 
 const MACOS_DEVELOPMENT_MANIFEST = Object.freeze({
@@ -94,11 +110,20 @@ function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "wda-native-package-"));
 }
 
-function writeArtifactSet(root, platform, manifest, { omit = [] } = {}) {
+function writeArtifactSet(
+  root,
+  platform,
+  manifest,
+  { clientExports = WINDOWS_NATIVE_ASR_EXPORTS, omit = [] } = {}
+) {
   fs.mkdirSync(root, { recursive: true });
   for (const name of nativeCoreArtifactNames(platform)) {
     if (omit.includes(name) || name === "wechatdb_native_build.json") continue;
-    fs.writeFileSync(path.join(root, name), `fixture:${name}`);
+    const content =
+      platform === "win32" && name === "wechatdb_client.dll"
+        ? buildWindowsPeWithExports(clientExports)
+        : `fixture:${name}`;
+    fs.writeFileSync(path.join(root, name), content);
   }
   if (!omit.includes("wechatdb_native_build.json")) {
     fs.writeFileSync(path.join(root, "wechatdb_native_build.json"), JSON.stringify(manifest));
@@ -128,6 +153,7 @@ test("runtime staging filters checked-out native and legacy WCDB files", () => {
   const source = path.join(root, "source");
   const destination = path.join(root, "stage");
   fs.mkdirSync(path.join(source, "nested"), { recursive: true });
+  fs.mkdirSync(path.join(source, "__pycache__"), { recursive: true });
   fs.writeFileSync(path.join(source, "ordinary.dll"), "ordinary");
   fs.writeFileSync(path.join(source, "wechatdb_client.dll"), "unchecked");
   fs.writeFileSync(path.join(source, "wechatdb_broker.exe"), "unchecked");
@@ -136,6 +162,13 @@ test("runtime staging filters checked-out native and legacy WCDB files", () => {
   fs.writeFileSync(path.join(source, "WCDB.dll"), "legacy-dependency");
   fs.writeFileSync(path.join(source, "libwcdb_api.dylib"), "legacy-macos");
   fs.writeFileSync(path.join(source, "libWCDB.dylib"), "legacy-macos-dependency");
+  fs.writeFileSync(path.join(source, "wechat_native_asr_manifest.json"), "retired");
+  fs.writeFileSync(path.join(source, "wechat_native_asr_python_transport.py"), "retired");
+  fs.writeFileSync(path.join(source, "wechat_native_asr_weixin_hook.dll"), "retired");
+  fs.writeFileSync(
+    path.join(source, "__pycache__", "wechat_native_asr_python_transport.cpython-312.pyc"),
+    "retired-bytecode"
+  );
   fs.writeFileSync(path.join(source, "nested", "resource.bin"), "nested");
 
   try {
@@ -149,6 +182,10 @@ test("runtime staging filters checked-out native and legacy WCDB files", () => {
     assert.equal(fs.existsSync(path.join(destination, "WCDB.dll")), false);
     assert.equal(fs.existsSync(path.join(destination, "libwcdb_api.dylib")), false);
     assert.equal(fs.existsSync(path.join(destination, "libWCDB.dylib")), false);
+    assert.equal(fs.existsSync(path.join(destination, "wechat_native_asr_manifest.json")), false);
+    assert.equal(fs.existsSync(path.join(destination, "wechat_native_asr_python_transport.py")), false);
+    assert.equal(fs.existsSync(path.join(destination, "wechat_native_asr_weixin_hook.dll")), false);
+    assert.equal(fs.existsSync(path.join(destination, "__pycache__")), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -209,6 +246,73 @@ test("production staging copies the complete Windows trio", () => {
     for (const name of nativeCoreArtifactNames("win32")) {
       assert.ok(fs.statSync(path.join(destination, name)).isFile(), name);
     }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows staging rejects a manifest without the fused ASR contract", () => {
+  const root = makeTempDir();
+  const artifactDir = path.join(root, "artifacts");
+  const legacyManifest = { ...PRODUCTION_MANIFEST };
+  delete legacyManifest.nativeAsrAbiVersion;
+  delete legacyManifest.nativeAsrAuthorization;
+  delete legacyManifest.nativeAsrFeatureBit;
+  delete legacyManifest.nativeAsrTarget;
+  writeArtifactSet(artifactDir, "win32", legacyManifest);
+
+  try {
+    assert.throws(
+      () =>
+        resolveNativeCoreArtifacts({
+          env: { WCE_NATIVE_CORE_ARTIFACT_DIR: artifactDir },
+          platform: "win32",
+        }),
+      /nativeAsrAbiVersion must equal 1.*nativeAsrFeatureBit must equal 16.*nativeAsrAuthorization must equal database-read.*nativeAsrTarget must be an object/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows staging rejects a fused ASR runtime with a separate entitlement contract", () => {
+  const root = makeTempDir();
+  const artifactDir = path.join(root, "artifacts");
+  writeArtifactSet(artifactDir, "win32", {
+    ...PRODUCTION_MANIFEST,
+    nativeAsrAuthorization: "native-asr",
+  });
+
+  try {
+    assert.throws(
+      () =>
+        resolveNativeCoreArtifacts({
+          env: { WCE_NATIVE_CORE_ARTIFACT_DIR: artifactDir },
+          platform: "win32",
+        }),
+      /nativeAsrAuthorization must equal database-read/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows staging rejects an otherwise valid client without fused ASR exports", () => {
+  const root = makeTempDir();
+  const artifactDir = path.join(root, "artifacts");
+  writeArtifactSet(artifactDir, "win32", PRODUCTION_MANIFEST, {
+    clientExports: ["wce_client_abi_version"],
+  });
+
+  try {
+    assert.throws(
+      () =>
+        resolveNativeCoreArtifacts({
+          env: { WCE_NATIVE_CORE_ARTIFACT_DIR: artifactDir },
+          platform: "win32",
+        }),
+      /missing fused ASR ABI exports: wce_native_asr_get_status, wce_native_asr_begin, wce_native_asr_poll, wce_native_asr_close/
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -418,7 +522,9 @@ test("development artifacts require an explicit local override", () => {
   const artifactDir = path.join(root, "artifacts");
   const destination = path.join(root, "stage");
   fs.mkdirSync(destination, { recursive: true });
-  writeArtifactSet(artifactDir, "win32", DEVELOPMENT_MANIFEST);
+  writeArtifactSet(artifactDir, "win32", DEVELOPMENT_MANIFEST, {
+    clientExports: ["wce_client_abi_version"],
+  });
 
   try {
     assert.throws(
@@ -461,6 +567,7 @@ test("development artifacts require an explicit local override", () => {
     });
     assert.equal(result.staged, true);
     assert.equal(result.allowDevelopment, true);
+    assert.equal(result.manifest.nativeAsrAuthorization, "none");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

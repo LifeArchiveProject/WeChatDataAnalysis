@@ -458,9 +458,11 @@ class TestMcpRouter(unittest.TestCase):
 
     def test_mcp_chat_search_defaults_to_realtime_index(self):
         client = self._client()
+        calls = []
 
         class FakeChatRouter:
-            async def search_chat_messages(self, _request, **_kwargs):
+            async def search_chat_messages(self, _request, **kwargs):
+                calls.append(kwargs)
                 return {"status": "success", "hits": []}
 
         with patch("wechat_decrypt_tool.mcp.tools._chat_router", return_value=FakeChatRouter()):
@@ -476,6 +478,7 @@ class TestMcpRouter(unittest.TestCase):
         structured = resp.json()["result"]["structuredContent"]
         self.assertEqual(structured["source"], "realtime_index")
         self.assertNotIn("freshness", structured)
+        self.assertFalse(calls[0]["allow_native_enrichment"])
 
     def test_mcp_chat_search_decrypted_declares_snapshot_freshness(self):
         client = self._client()
