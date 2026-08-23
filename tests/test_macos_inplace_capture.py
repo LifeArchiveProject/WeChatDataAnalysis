@@ -16,6 +16,7 @@ from wechat_decrypt_tool.macos_inplace_capture import (
     _write_state,
     capture_prepared_in_place,
     cleanup_in_place_capture,
+    native_capture_monitor_ready,
     recover_stale_in_place_capture,
 )
 
@@ -110,7 +111,7 @@ class TestMacOSInPlaceCapture(unittest.TestCase):
             patch("wechat_decrypt_tool.macos_inplace_capture._restore_after_terminal_path") as restore,
         ):
             with self.assertRaises(MacOSDBKeyCaptureFailure):
-                capture_prepared_in_place(
+                result = capture_prepared_in_place(
                     official,
                     backup_root=Path("/Volumes/BackupVolume/backups"),
                     probe_db_path=Path("/tmp/message_0.db"),
@@ -118,13 +119,25 @@ class TestMacOSInPlaceCapture(unittest.TestCase):
                 )
         restore.assert_called_once()
 
-    def test_capture_arms_resolved_internal_return_fallback(self) -> None:
+    def test_native_monitor_ready_requires_valid_private_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            debug_root = Path(temp_dir)
+            ready = debug_root / "native-capture-ready.json"
+            ready.write_text(
+                json.dumps({"status": "ready", "method": "macos_native_mach", "pid": 321}),
+                encoding="utf-8",
+            )
+            self.assertTrue(native_capture_monitor_ready(debug_root=debug_root))
+            ready.write_text(json.dumps({"status": "ready", "pid": 321}), encoding="utf-8")
+            self.assertFalse(native_capture_monitor_ready(debug_root=debug_root))
+
+    def test_capture_uses_native_monitor_and_removes_probe_copy(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             debug_root = Path(temp_dir)
             probe = debug_root / "message_0.db"
             probe.write_bytes(bytes(range(256)) * 16)
             (debug_root / "breakpoint-preflight.json").write_text(
-                json.dumps({"pid": 321, "pbkdf_locations": 1, "key_return_locations": 1}),
+                json.dumps({"pid": 222, "stub_file_address": 4096}),
                 encoding="utf-8",
             )
             with (
@@ -136,9 +149,10 @@ class TestMacOSInPlaceCapture(unittest.TestCase):
                     "wechat_decrypt_tool.macos_inplace_capture._require_prepared_process",
                     return_value=({}, 321),
                 ),
+                patch("wechat_decrypt_tool.macos_inplace_capture._candidate_bundle_pids", return_value=[654, 321]),
                 patch(
-                    "wechat_decrypt_tool.macos_inplace_capture.capture_salt_matched_passphrase",
-                    return_value="ab" * 32,
+                    "wechat_decrypt_tool.macos_inplace_capture.capture_native_wcdb_key",
+                    return_value={"db_key": "ab" * 32, "method": "macos_native_mach", "validated": True},
                 ) as capture,
                 patch("wechat_decrypt_tool.macos_inplace_capture._validate_captured_passphrase"),
                 patch(
@@ -150,14 +164,17 @@ class TestMacOSInPlaceCapture(unittest.TestCase):
                     return_value={"official_wechat_verified": True, "official_wechat_restored": True},
                 ),
             ):
-                capture_prepared_in_place(
+                result = capture_prepared_in_place(
                     "/Applications/WeChat.app",
                     backup_root=debug_root / "backups",
                     probe_db_path=probe,
                     debug_root=debug_root,
                 )
 
-            self.assertTrue(capture.call_args.kwargs["enable_key_return_fallback"])
+            self.assertEqual(result["method"], "macos_native_mach")
+            self.assertEqual(capture.call_args.kwargs["pid"], 654)
+            self.assertFalse(capture.call_args.kwargs["probe_page1_path"].exists())
+            self.assertFalse((debug_root / "native-capture-ready.json").exists())
 
     def test_capture_can_defer_cache_until_full_account_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -165,7 +182,7 @@ class TestMacOSInPlaceCapture(unittest.TestCase):
             probe = debug_root / "message_0.db"
             probe.write_bytes(bytes(range(256)) * 16)
             (debug_root / "breakpoint-preflight.json").write_text(
-                json.dumps({"pid": 321, "pbkdf_locations": 1, "key_return_locations": 0}),
+                json.dumps({"pid": 321, "stub_file_address": 4096}),
                 encoding="utf-8",
             )
             with (
@@ -177,9 +194,10 @@ class TestMacOSInPlaceCapture(unittest.TestCase):
                     "wechat_decrypt_tool.macos_inplace_capture._require_prepared_process",
                     return_value=({}, 321),
                 ),
+                patch("wechat_decrypt_tool.macos_inplace_capture._candidate_bundle_pids", return_value=[321]),
                 patch(
-                    "wechat_decrypt_tool.macos_inplace_capture.capture_salt_matched_passphrase",
-                    return_value="ab" * 32,
+                    "wechat_decrypt_tool.macos_inplace_capture.capture_native_wcdb_key",
+                    return_value={"db_key": "ab" * 32, "method": "macos_native_mach", "validated": True},
                 ),
                 patch("wechat_decrypt_tool.macos_inplace_capture._validate_captured_passphrase"),
                 patch("wechat_decrypt_tool.macos_inplace_capture.save_passphrase") as save,

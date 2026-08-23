@@ -377,6 +377,8 @@ class TestMacOSCloneCapture(unittest.TestCase):
 
             def report_exit(_command, *, timeout):
                 self.assertEqual(timeout, 285.0)
+                command_source = (root / "capture.lldb").read_text(encoding="utf-8")
+                self.assertIn("process handle SIGTRAP -n false -p false -s false", command_source)
                 (root / "result.json").write_text(
                     json.dumps(
                         {

@@ -288,7 +288,7 @@ class TestMacosPlatformSupport(unittest.TestCase):
         self.assertNotIn("backup_path", result["data"])
         self.assertNotIn("state_path", result["data"])
 
-    def test_macos_lldb_capture_validates_before_caching_and_returning_key(self) -> None:
+    def test_macos_capture_validates_caches_and_returns_key_to_local_frontend(self) -> None:
         db_key = "ab" * 32
         with (
             patch.object(keys_router, "is_macos", return_value=True),
@@ -318,6 +318,8 @@ class TestMacosPlatformSupport(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], 0)
+        self.assertTrue(result["data"]["validated"])
+        self.assertTrue(result["data"]["key_saved"])
         self.assertEqual(result["data"]["db_key"], db_key)
         self.assertNotIn("cache_path", result["data"])
         self.assertNotIn("backup_path", result["data"])

@@ -112,6 +112,13 @@ def test_database_key_action_waits_for_platform_detection():
     assert "!platformCapabilitiesLoaded ? '正在检测系统'" in source
 
 
+def test_macos_database_path_hint_allows_custom_account_directory_names():
+    source = read_decrypt_page()
+
+    assert "<账号目录>/db_storage" in source
+    assert "账号目录可能是 wxid_... 或自定义名称" in source
+
+
 def test_macos_database_key_uses_helper_first_and_explicit_lldb_fallback():
     source = read_decrypt_page()
 
@@ -122,7 +129,7 @@ def test_macos_database_key_uses_helper_first_and_explicit_lldb_fallback():
     assert "完整退出微信程序" in source
     assert "仅退出当前账号" not in source
     assert "数据库解密密钥已通过 macOS 本地受控组件获取成功" in source
-    assert "受控组件失败，是否改用 LLDB 兜底" in source
+    assert "受控组件失败，是否改用本机调试兜底" in source
     assert "临时重签和调试可能触发微信安全提醒" in source
     assert "prepareMacosKeyCapture" in source
     assert "preflightMacosKeyCapture" in source
@@ -142,10 +149,27 @@ def test_macos_lldb_fallback_is_staged_and_recovers_pending_state():
     assert "步骤 2 / 3" in source
     assert "已看到二维码，开始监测" in source
     assert "getMacosKeyCaptureStatus" in source
+    assert "statusResponse?.data?.monitor_ready === true" in source
+    assert "captureOutcomePromise" in source
+    assert "显示“监测已就绪”前请不要登录微信" in source
     assert "检测到上次未完成的临时调试微信" in source
     assert "if (macosKeyCaptureOwnedByPage.value) void cleanupMacosKeyCapture" in source
     for action in ("prepare", "preflight", "capture", "cancel"):
         assert f"macosKeyCaptureRequest('{action}'" in api_source
+
+
+def test_macos_fallback_displays_only_a_validated_local_key() -> None:
+    source = read_decrypt_page()
+    handler = source.index("const runMacosLldbFallback = async")
+    end = source.index("const handleGetDbKey = async", handler)
+    fallback = source[handler:end]
+
+    assert "response?.data?.db_key" in fallback
+    assert "response?.data?.validated === true" in fallback
+    assert "response?.data?.key_saved === true" in fallback
+    assert "formData.key = key" in fallback
+    assert "/^[0-9a-f]{64}$/.test(key)" in fallback
+    assert "获取接口仅允许本机访问" in source
 
 
 def test_macos_database_key_clears_prefill_and_always_starts_real_capture():
