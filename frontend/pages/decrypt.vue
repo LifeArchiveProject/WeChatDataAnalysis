@@ -81,7 +81,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 {{ isMacos
-                  ? '优先调用本地受控组件；仅在明确失败且您再次确认后，才提供实验性 LLDB 兜底。密钥只在本机校验，不会上传。'
+                  ? '优先调用本地受控组件；仅在明确失败且您再次确认后，才提供实验性本机调试兜底。获取接口仅允许本机访问。'
                   : '点击按钮将优先使用 V4 内存扫描获取【数据库解密密钥】；失败时会询问您是否改用 Hook。您也可以手动输入已知的64位密钥。' }}
               </p>
               <p v-if="!isMacos" class="mt-2 text-xs text-[#7F7F7F] flex items-start">
@@ -119,7 +119,7 @@
                 id="dbPath"
                 v-model="formData.db_storage_path"
                 type="text"
-                :placeholder="isMacos ? '例如: /Users/你的用户名/.../wxid_xxx/db_storage' : '例如: D:\\wechatMSG\\xwechat_files\\wxid_xxx\\db_storage'"
+                :placeholder="isMacos ? '例如: /Users/你的用户名/.../<账号目录>/db_storage（账号目录可能是 wxid_... 或自定义名称）' : '例如: D:\\wechatMSG\\xwechat_files\\wxid_xxx\\db_storage'"
                 class="w-full px-4 py-3 bg-white border border-[#EDEDED] rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
                 :class="{ 'border-red-500': formErrors.db_storage_path }"
                 required
@@ -1446,7 +1446,7 @@ const showDbKeyPersistenceWarning = (result) => {
 const runMacosLldbFallback = async ({ requestRevision, requestController, helperError }) => {
   const riskAccepted = await requestGuideDialog({
     eyebrow: '实验性兜底方式',
-    title: '受控组件失败，是否改用 LLDB 兜底？',
+    title: '受控组件失败，是否改用本机调试兜底？',
     description: '该方式会在管理员授权后临时重签默认路径中的微信，并在成功、失败或停止时恢复已校验的腾讯官方版本。',
     errorMessage: helperError ? `受控组件未能获取密钥：${helperError}` : '',
     details: [
@@ -1502,7 +1502,7 @@ const runMacosLldbFallback = async ({ requestRevision, requestController, helper
     return false
   }
 
-  warning.value = '正在短暂附加 LLDB 检查断点，完成后会立即脱离。'
+  warning.value = '正在短暂检查本机捕获点，完成后会立即脱离。'
   response = await preflightMacosKeyCapture({
     ...macosKeyCapturePayload(),
     signal: requestController.signal
@@ -1514,7 +1514,7 @@ const runMacosLldbFallback = async ({ requestRevision, requestController, helper
   if (response?.status !== 0) {
     macosKeyCapturePrepared.value = response?.data?.needs_cleanup === true
     macosKeyCaptureOwnedByPage.value = macosKeyCapturePrepared.value
-    error.value = response?.errmsg || '当前微信版本未通过 LLDB 断点预检，已停止并恢复。'
+    error.value = response?.errmsg || '当前微信版本未通过本机捕获点预检，已停止并恢复。'
     warning.value = ''
     if (macosKeyCapturePrepared.value) await cleanupMacosKeyCapture({ silent: true })
     return false
@@ -1539,28 +1539,57 @@ const runMacosLldbFallback = async ({ requestRevision, requestController, helper
     return false
   }
 
-  warning.value = '监测已启动：现在请扫码或在手机上确认登录，完成前不要关闭微信或 WCDA。'
-  response = await captureMacosKey({
+  warning.value = '正在等待管理员授权并启动本机监测；显示“监测已就绪”前请不要登录微信。'
+  const captureOutcomePromise = captureMacosKey({
     ...macosKeyCapturePayload(),
     signal: requestController.signal
-  })
+  }).then(
+    captureResponse => ({ response: captureResponse, captureError: null }),
+    captureError => ({ response: null, captureError })
+  )
+  let captureOutcome = null
+  let monitorReady = false
+  while (isDbKeyRequestActive(requestRevision, requestController) && !captureOutcome && !monitorReady) {
+    captureOutcome = await Promise.race([
+      captureOutcomePromise,
+      waitForDbKeyDelay(350, requestController.signal).then(() => null)
+    ])
+    if (captureOutcome) break
+    try {
+      const statusResponse = await getMacosKeyCaptureStatus({ signal: requestController.signal })
+      monitorReady = statusResponse?.status === 0 && statusResponse?.data?.monitor_ready === true
+    } catch (statusError) {
+      if (statusError?.name === 'AbortError') throw statusError
+    }
+  }
   if (!isDbKeyRequestActive(requestRevision, requestController)) {
     await cleanupMacosKeyCapture({ silent: true })
     return false
   }
+  if (monitorReady) {
+    warning.value = '监测已就绪：现在请扫码或在手机上确认登录，完成前不要关闭微信或 WCDA。'
+  }
+  if (!captureOutcome) captureOutcome = await captureOutcomePromise
+  if (captureOutcome.captureError) throw captureOutcome.captureError
+  response = captureOutcome.response
   macosKeyCapturePrepared.value = response?.data?.needs_cleanup === true
   macosKeyCaptureOwnedByPage.value = macosKeyCapturePrepared.value
   const key = String(response?.data?.db_key || '').trim().toLowerCase()
-  if (response?.status === 0 && /^[0-9a-f]{64}$/.test(key)) {
+  if (
+    response?.status === 0
+    && response?.data?.validated === true
+    && response?.data?.key_saved === true
+    && /^[0-9a-f]{64}$/.test(key)
+  ) {
     macosKeyCapturePrepared.value = false
     macosKeyCaptureOwnedByPage.value = false
     formData.key = key
     warning.value = response?.data?.official_wechat_verified
-      ? '数据库密钥已通过完整数据库校验，腾讯官方签名微信已恢复。'
-      : '数据库密钥已获取并通过完整数据库校验。'
+      ? '数据库密钥已通过完整校验并显示在输入框中，腾讯官方签名微信已恢复。'
+      : '数据库密钥已获取、通过完整校验并显示在输入框中。'
     return true
   }
-  error.value = response?.errmsg || '实验性 LLDB 未能获取可验证的数据库密钥。'
+  error.value = response?.errmsg || '实验性本机调试未能获取可验证的数据库密钥。'
   warning.value = ''
   if (macosKeyCapturePrepared.value) await cleanupMacosKeyCapture({ silent: true })
   return false
@@ -2479,7 +2508,7 @@ const confirmBackFromRunningStep = () => {
       ? {
           title: '数据库密钥仍在获取',
           description: isMacos.value
-            ? '返回账号选择会停止当前获取；如果已进入 LLDB 兜底，系统会同时尝试恢复腾讯官方签名微信。'
+            ? '返回账号选择会停止当前获取；如果已进入本机调试兜底，系统会同时尝试恢复腾讯官方签名微信。'
             : '返回账号选择会停止当前页面等待结果；如果 Hook 已经开始，微信重启或登录流程仍可能继续完成。',
           details: isMacos.value
             ? ['页面将不再接收本次密钥结果', '恢复完成前请不要手动启动或更新微信']
@@ -2659,7 +2688,7 @@ const recoverPendingMacosKeyCapture = async () => {
     if (shouldRestore) {
       await cleanupMacosKeyCapture()
     } else {
-      warning.value = '仍有未完成的临时调试微信恢复状态；恢复前不会开始新的 LLDB 获取。'
+      warning.value = '仍有未完成的临时调试微信恢复状态；恢复前不会开始新的本机调试获取。'
     }
   } catch (statusError) {
     logDecryptDebug('macos-key-capture:status-error', { error: formatLogError(statusError) })

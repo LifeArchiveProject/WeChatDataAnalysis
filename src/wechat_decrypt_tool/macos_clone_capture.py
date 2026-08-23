@@ -716,6 +716,7 @@ def preflight_capture_breakpoints(*, pid: int, debug_root: Path = DEFAULT_DEBUG_
         command_path.write_text(
             "settings set target.preload-symbols false\n"
             f"process attach -p {int(pid)}\n"
+            "process handle SIGTRAP -n false -p false -s false\n"
             f"command script import {callback_path}\n"
             "wedata_preflight\n"
             "quit\n",
@@ -799,6 +800,7 @@ def capture_salt_matched_passphrase(
         command_path.write_text(
             "settings set target.preload-symbols false\n"
             f"process attach -p {int(pid)}\n"
+            "process handle SIGTRAP -n false -p false -s false\n"
             f"command script import {callback_path}\n"
             "wedata_capture\n"
             "process continue\n"

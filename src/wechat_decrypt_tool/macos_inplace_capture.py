@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -19,17 +20,17 @@ from typing import Any
 from .macos_clone_capture import (
     _breakpoint_preflight_path,
     _remove_breakpoint_preflight,
-    capture_salt_matched_passphrase,
-    preflight_capture_breakpoints,
 )
 from .macos_db_key_capture import (
     DEFAULT_DEBUG_ROOT,
     DEFAULT_WECHAT_APP,
     MacOSDBKeyCaptureFailure,
+    _find_wechat_bundle_pids,
     _find_wechat_main_pid,
     _has_compatible_in_place_signature,
     _is_tencent_official_signature,
     _launch_wechat,
+    _run_as_administrator,
     _validate_captured_passphrase,
     ensure_wechat_in_place_debuggable,
     inspect_wechat_signature,
@@ -37,13 +38,58 @@ from .macos_db_key_capture import (
     restore_official_wechat_if_needed,
     save_passphrase,
 )
+from .macos_native_capture import (
+    capture_native_wcdb_key,
+    preflight_native_wcdb_capture,
+)
 
 IN_PLACE_STATE_NAME = "prepared-in-place-capture.json"
+NATIVE_CAPTURE_READY_NAME = "native-capture-ready.json"
 STATE_SCHEMA_VERSION = 1
 
 
 def _state_path(debug_root: Path) -> Path:
     return debug_root.expanduser() / IN_PLACE_STATE_NAME
+
+
+def _native_capture_ready_path(debug_root: Path) -> Path:
+    return debug_root.expanduser() / NATIVE_CAPTURE_READY_NAME
+
+
+def _prepare_native_capture_ready(debug_root: Path) -> Path:
+    target = _native_capture_ready_path(debug_root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(target.parent, 0o700)
+    try:
+        target.unlink()
+    except FileNotFoundError:
+        pass
+    target.touch(mode=0o600, exist_ok=False)
+    os.chmod(target, 0o600)
+    return target
+
+
+def native_capture_monitor_ready(*, debug_root: Path = DEFAULT_DEBUG_ROOT) -> bool:
+    """Return true only after the native monitor has armed its breakpoint."""
+
+    target = _native_capture_ready_path(debug_root)
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return False
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("status") == "ready"
+        and payload.get("method") == "macos_native_mach"
+        and int(payload.get("pid") or 0) > 0
+    )
+
+
+def _remove_native_capture_ready(debug_root: Path) -> None:
+    try:
+        _native_capture_ready_path(debug_root).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def has_pending_in_place_capture(*, debug_root: Path = DEFAULT_DEBUG_ROOT) -> bool:
@@ -58,6 +104,7 @@ def get_in_place_capture_status(*, debug_root: Path = DEFAULT_DEBUG_ROOT) -> dic
             "pending": False,
             "stage": "idle",
             "needs_cleanup": False,
+            "monitor_ready": False,
         }
     try:
         state = _read_state(debug_root)
@@ -70,7 +117,68 @@ def get_in_place_capture_status(*, debug_root: Path = DEFAULT_DEBUG_ROOT) -> dic
         "pending": True,
         "stage": stage,
         "needs_cleanup": True,
+        "monitor_ready": native_capture_monitor_ready(debug_root=debug_root),
     }
+
+
+def _native_capture_process_targets(debug_root: Path) -> tuple[list[int], list[int]]:
+    helper_path = str(debug_root.expanduser() / "native" / "wcdb-native-capture")
+    result = subprocess.run(
+        ["/bin/ps", "-axo", "pid=,user=,command="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    osascript_pids: list[int] = []
+    helper_pids: list[int] = []
+    for raw_line in str(result.stdout or "").splitlines():
+        line = raw_line.strip()
+        if not line or helper_path not in line:
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        command = parts[2]
+        if command.startswith("/usr/bin/osascript ") and helper_path in command:
+            osascript_pids.append(pid)
+        elif command.startswith(helper_path):
+            helper_pids.append(pid)
+    return osascript_pids, helper_pids
+
+
+def _terminate_native_capture_processes(debug_root: Path) -> None:
+    osascript_pids, helper_pids = _native_capture_process_targets(debug_root)
+    if osascript_pids:
+        subprocess.run(
+            ["/bin/kill", "-TERM", *(str(pid) for pid in osascript_pids)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    if helper_pids:
+        try:
+            _run_as_administrator(
+                "/bin/kill -TERM "
+                + " ".join(str(pid) for pid in helper_pids)
+                + " 2>/dev/null || true; /bin/sleep 1; /bin/kill -KILL "
+                + " ".join(str(pid) for pid in helper_pids)
+                + " 2>/dev/null || true",
+                timeout=20,
+            )
+        except MacOSDBKeyCaptureFailure:
+            pass
+    lingering_osascript, _ = _native_capture_process_targets(debug_root)
+    if lingering_osascript:
+        subprocess.run(
+            ["/bin/kill", "-KILL", *(str(pid) for pid in lingering_osascript)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
 
 def _write_state(debug_root: Path, payload: dict[str, Any]) -> Path:
@@ -104,6 +212,51 @@ def _write_state(debug_root: Path, payload: dict[str, Any]) -> Path:
         # Some network-backed home directories reject directory fsync.  The
         # file itself is already fsynced and atomically renamed.
         pass
+    return target
+
+
+def _write_preflight_result(debug_root: Path, payload: dict[str, Any]) -> Path:
+    target = _breakpoint_preflight_path(debug_root)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(target.parent, 0o700)
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        view = memoryview(encoded)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short write")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    temporary.replace(target)
+    os.chmod(target, 0o600)
+    return target
+
+
+def _write_probe_page1(debug_root: Path, page1: bytes) -> Path:
+    target = debug_root.expanduser() / f"probe-page1-{os.getpid()}.bin"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(target.parent, 0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(target, flags, 0o600)
+    try:
+        view = memoryview(page1)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short write")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.chmod(target, 0o600)
     return target
 
 
@@ -172,6 +325,7 @@ def recover_stale_in_place_capture(
     """Restore a Tencent-signed bundle from a previously recorded transaction."""
 
     wechat_app = normalize_wechat_app_path(wechat_install_path)
+    _terminate_native_capture_processes(debug_root)
     if not has_pending_in_place_capture(debug_root=debug_root):
         signature = inspect_wechat_signature(wechat_app)
         if not _is_tencent_official_signature(signature):
@@ -205,6 +359,7 @@ def recover_stale_in_place_capture(
             wechat_modified=True,
         )
     _remove_breakpoint_preflight(debug_root)
+    _remove_native_capture_ready(debug_root)
     # Remove durable state last.  If the process dies after the atomic app
     # exchange but before this unlink, the next startup observes an official
     # installation, removes any displaced staging bundle, and finishes safely.
@@ -324,6 +479,7 @@ def cleanup_in_place_capture(
     debug_root: Path = DEFAULT_DEBUG_ROOT,
 ) -> dict[str, Any]:
     wechat_app = normalize_wechat_app_path(wechat_install_path)
+    _terminate_native_capture_processes(debug_root)
     if has_pending_in_place_capture(debug_root=debug_root):
         recovery = recover_stale_in_place_capture(
             wechat_app,
@@ -378,6 +534,44 @@ def _require_prepared_process(
     return state, current_pid
 
 
+def _candidate_bundle_pids(wechat_app: Path, main_pid: int) -> list[int]:
+    pids = [main_pid]
+    for value in _find_wechat_bundle_pids(wechat_app):
+        if value > 0 and value not in pids:
+            pids.append(value)
+
+    commands: dict[int, str] = {}
+    loaded_crypto_image: dict[int, bool] = {}
+    crypto_image = str(wechat_app / "Contents" / "Resources" / "wechat.dylib")
+    for value in pids:
+        result = subprocess.run(
+            ["/bin/ps", "-p", str(value), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        commands[value] = str(result.stdout or "").strip()
+        try:
+            vmmap = subprocess.run(
+                ["/usr/bin/vmmap", str(value)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=3,
+            )
+            loaded_crypto_image[value] = crypto_image in f"{vmmap.stdout}\n{vmmap.stderr}"
+        except (OSError, subprocess.TimeoutExpired):
+            loaded_crypto_image[value] = False
+    return sorted(
+        pids,
+        key=lambda value: (
+            0 if loaded_crypto_image.get(value, False) else 1,
+            0 if value == main_pid else 1,
+            0 if "/WeChatAppEx.app/Contents/MacOS/WeChatAppEx" in commands.get(value, "") else 1,
+        ),
+    )
+
+
 def preflight_prepared_in_place_capture(
     wechat_install_path: str | Path | None,
     *,
@@ -391,7 +585,29 @@ def preflight_prepared_in_place_capture(
             backup_root=backup_root,
             debug_root=debug_root,
         )
-        result = preflight_capture_breakpoints(pid=debug_pid, debug_root=debug_root)
+        result: dict[str, Any] | None = None
+        last_error: MacOSDBKeyCaptureFailure | None = None
+        for candidate_pid in _candidate_bundle_pids(wechat_app, debug_pid):
+            try:
+                result = preflight_native_wcdb_capture(
+                    pid=candidate_pid,
+                    wechat_app=wechat_app,
+                    debug_root=debug_root,
+                )
+                break
+            except MacOSDBKeyCaptureFailure as exc:
+                last_error = exc
+                if exc.code != "native_image_not_found":
+                    raise
+        if result is None:
+            if last_error is not None:
+                raise last_error
+            raise MacOSDBKeyCaptureFailure(
+                "native_image_not_found",
+                "临时微信进程中没有找到可用于原生预检的 wechat.dylib。",
+                process_attached=True,
+            )
+        _write_preflight_result(debug_root, result)
         state["stage"] = "preflight_passed"
         _write_state(debug_root, state)
     except Exception as exc:
@@ -405,7 +621,7 @@ def preflight_prepared_in_place_capture(
         raise
     result.update(
         {
-            "method": "macos_inplace_lldb_preflight",
+            "method": "macos_inplace_native_preflight",
             "debug_app_path": str(wechat_app),
             "official_wechat_preserved": False,
             "wechat_modified": True,
@@ -426,6 +642,8 @@ def capture_prepared_in_place(
 ) -> dict[str, Any]:
     wechat_app = normalize_wechat_app_path(wechat_install_path)
     cache_path: Path | None = None
+    probe_page1_path: Path | None = None
+    ready_path: Path | None = None
     state: dict[str, Any] = {}
     recovery: dict[str, Any] = {}
     try:
@@ -447,31 +665,29 @@ def capture_prepared_in_place(
             ) from exc
         if len(probe_page1) < 4096 or probe_page1.startswith(b"SQLite format 3"):
             raise MacOSDBKeyCaptureFailure("probe_database_invalid", f"目标数据库不是有效的加密 WCDB: {probe_database}")
+        probe_page1_path = _write_probe_page1(debug_root, probe_page1)
 
         preflight_path = _breakpoint_preflight_path(debug_root)
         try:
             preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, ValueError) as exc:
-            raise MacOSDBKeyCaptureFailure(
-                "capture_preflight_required",
-                "尚未完成断点预检；监测未启动，将恢复腾讯原版微信。",
-            ) from exc
-        if int(preflight.get("pid") or 0) != debug_pid or (
-            int(preflight.get("pbkdf_locations") or 0) <= 0
-            and int(preflight.get("key_return_locations") or 0) <= 0
-        ):
-            raise MacOSDBKeyCaptureFailure(
-                "capture_preflight_stale",
-                "断点预检结果与当前微信进程不匹配，将恢复腾讯原版微信。",
-            )
+        except (OSError, UnicodeError, ValueError):
+            preflight = {}
+        preflight_pid = int(preflight.get("pid") or debug_pid)
+        candidate_pids = _candidate_bundle_pids(wechat_app, debug_pid)
+        if preflight_pid not in candidate_pids:
+            preflight_pid = candidate_pids[0] if candidate_pids else debug_pid
 
-        passphrase = capture_salt_matched_passphrase(
-            pid=debug_pid,
-            expected_salts=[probe_page1[:16].hex()],
+        ready_path = _prepare_native_capture_ready(debug_root)
+        capture = capture_native_wcdb_key(
+            pid=preflight_pid,
+            wechat_app=wechat_app,
             probe_db_path=probe_database,
+            probe_page1_path=probe_page1_path,
+            ready_file=ready_path,
             timeout=timeout,
-            enable_key_return_fallback=int(preflight.get("key_return_locations") or 0) > 0,
+            debug_root=debug_root,
         )
+        passphrase = str(capture.get("db_key") or "")
         _validate_captured_passphrase(passphrase, probe_database)
         if save_result:
             cache_path = save_passphrase(passphrase)
@@ -490,11 +706,18 @@ def capture_prepared_in_place(
             backup_root=backup_root,
             debug_root=debug_root,
         )
+    finally:
+        _remove_native_capture_ready(debug_root)
+        if probe_page1_path is not None:
+            try:
+                probe_page1_path.unlink()
+            except FileNotFoundError:
+                pass
 
     if save_result and cache_path is None:
         raise MacOSDBKeyCaptureFailure("passphrase_not_saved", "passphrase 未能安全保存")
     return {
-        "method": "macos_inplace_lldb_passphrase",
+        "method": str(capture.get("method") or "macos_native_mach"),
         "db_key": passphrase,
         "cache_path": str(cache_path) if cache_path is not None else "",
         "wechat_modified": False,
@@ -517,6 +740,7 @@ __all__ = [
     "cleanup_in_place_capture",
     "get_in_place_capture_status",
     "has_pending_in_place_capture",
+    "native_capture_monitor_ready",
     "preflight_prepared_in_place_capture",
     "prepare_in_place_capture",
     "recover_stale_in_place_capture",

@@ -656,8 +656,8 @@ export const useApi = () => {
     return await request(url, params?.signal ? { signal: params.signal } : {})
   }
 
-  const getMacosKeyCaptureStatus = async () => {
-    return await request('/macos-key-capture/status')
+  const getMacosKeyCaptureStatus = async (params = {}) => {
+    return await request('/macos-key-capture/status', params?.signal ? { signal: params.signal } : {})
   }
 
   const macosKeyCaptureRequest = async (action, params = {}) => {

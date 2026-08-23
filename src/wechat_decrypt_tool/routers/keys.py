@@ -109,7 +109,7 @@ def _macos_capture_error_response(error: BaseException, *, stage: str) -> dict:
     known = isinstance(error, MacOSDBKeyCaptureFailure)
     code = str(getattr(error, "code", "INTERNAL_ERROR") or "INTERNAL_ERROR") if known else "INTERNAL_ERROR"
     logger.warning(
-        "[keys] experimental macOS LLDB capture failed: stage=%s error_code=%s classified=%s",
+        "[keys] experimental macOS local capture failed: stage=%s error_code=%s classified=%s",
         stage,
         code,
         known,
@@ -120,10 +120,10 @@ def _macos_capture_error_response(error: BaseException, *, stage: str) -> dict:
         needs_cleanup = bool(getattr(error, "wechat_modified", False)) if known else False
     return {
         "status": -1,
-        "errmsg": str(error).strip() if known else "实验性 LLDB 密钥获取失败，已停止本次操作。",
+        "errmsg": str(error).strip() if known else "实验性本机调试密钥获取失败，已停止本次操作。",
         "data": {
             "platform": "macos",
-            "method": "macos_inplace_lldb",
+            "method": "macos_inplace_native",
             "stage": stage,
             "error_code": code,
             "wechat_modified": bool(getattr(error, "wechat_modified", False)) if known else False,
@@ -138,7 +138,7 @@ def _macos_capture_busy_response() -> dict:
         "errmsg": "另一项 macOS 密钥操作仍在进行，请等待完成或先停止当前操作。",
         "data": {
             "platform": "macos",
-            "method": "macos_inplace_lldb",
+            "method": "macos_inplace_native",
             "stage": _current_macos_capture_operation() or "busy",
             "error_code": "CAPTURE_BUSY",
         },
@@ -164,10 +164,10 @@ def _macos_capture_local_request_error(request: Request) -> dict | None:
         return None
     return {
         "status": -1,
-        "errmsg": "实验性 LLDB 密钥捕获只能在运行 WCDA 的 Mac 本机界面操作。",
+        "errmsg": "实验性本机密钥捕获只能在运行 WCDA 的 Mac 本机界面操作。",
         "data": {
             "platform": current_platform(),
-            "method": "macos_inplace_lldb",
+            "method": "macos_inplace_native",
             "error_code": "REMOTE_CLIENT_FORBIDDEN",
         },
     }
@@ -630,14 +630,14 @@ async def get_wechat_db_key(
         }
 
 
-@router.get("/api/macos-key-capture/status", summary="查看实验性 macOS LLDB 密钥捕获状态")
+@router.get("/api/macos-key-capture/status", summary="查看实验性 macOS 本机密钥捕获状态")
 async def get_macos_key_capture_status(request: Request):
     if local_error := _macos_capture_local_request_error(request):
         return local_error
     if not is_macos():
         return {
             "status": -1,
-            "errmsg": "实验性 LLDB 密钥捕获仅支持 macOS。",
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
             "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
         }
     persisted = get_in_place_capture_status()
@@ -646,26 +646,26 @@ async def get_macos_key_capture_status(request: Request):
         "errmsg": "ok",
         "data": {
             **persisted,
-            "method": "macos_inplace_lldb",
+            "method": "macos_inplace_native",
             "active_operation": _current_macos_capture_operation(),
         },
     }
 
 
-@router.post("/api/macos-key-capture/prepare", summary="准备实验性 macOS LLDB 密钥捕获")
+@router.post("/api/macos-key-capture/prepare", summary="准备实验性 macOS 本机密钥捕获")
 async def prepare_macos_key_capture(request: Request, payload: MacosKeyCaptureRequest):
     if local_error := _macos_capture_local_request_error(request):
         return local_error
     if not is_macos():
         return {
             "status": -1,
-            "errmsg": "实验性 LLDB 密钥捕获仅支持 macOS。",
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
             "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
         }
     if not _macos_lldb_fallback_available():
         return {
             "status": -1,
-            "errmsg": "当前 Mac 不满足实验性 LLDB 兜底条件，请确认使用 Apple Silicon 并安装 Xcode Command Line Tools。",
+            "errmsg": "当前 Mac 不满足实验性本机调试兜底条件，请确认使用 Apple Silicon 并安装 Xcode Command Line Tools。",
             "data": {"platform": "macos", "error_code": "LLDB_FALLBACK_UNAVAILABLE"},
         }
     operation = "prepare"
@@ -681,7 +681,7 @@ async def prepare_macos_key_capture(request: Request, payload: MacosKeyCaptureRe
             "status": 0,
             "errmsg": "ok",
             "data": {
-                "method": "macos_inplace_lldb",
+                "method": "macos_inplace_native",
                 "stage": "prepared",
                 "wechat_modified": bool(result.get("wechat_modified", True)),
                 "ready_for_preflight": bool(result.get("ready_for_preflight", True)),
@@ -693,14 +693,14 @@ async def prepare_macos_key_capture(request: Request, payload: MacosKeyCaptureRe
         _end_macos_capture_operation(operation)
 
 
-@router.post("/api/macos-key-capture/preflight", summary="预检实验性 macOS LLDB 断点")
+@router.post("/api/macos-key-capture/preflight", summary="预检实验性 macOS 本机捕获点")
 async def preflight_macos_key_capture(request: Request, payload: MacosKeyCaptureRequest):
     if local_error := _macos_capture_local_request_error(request):
         return local_error
     if not is_macos():
         return {
             "status": -1,
-            "errmsg": "实验性 LLDB 密钥捕获仅支持 macOS。",
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
             "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
         }
     operation = "preflight"
@@ -716,7 +716,7 @@ async def preflight_macos_key_capture(request: Request, payload: MacosKeyCapture
             "status": 0,
             "errmsg": "ok",
             "data": {
-                "method": "macos_inplace_lldb",
+                "method": "macos_inplace_native",
                 "stage": "preflight_passed",
                 "wechat_modified": bool(result.get("wechat_modified", True)),
                 "process_attached": bool(result.get("process_attached", False)),
@@ -728,14 +728,14 @@ async def preflight_macos_key_capture(request: Request, payload: MacosKeyCapture
         _end_macos_capture_operation(operation)
 
 
-@router.post("/api/macos-key-capture/capture", summary="执行实验性 macOS LLDB 密钥捕获")
+@router.post("/api/macos-key-capture/capture", summary="执行实验性 macOS 本机密钥捕获")
 async def capture_macos_key(request: Request, payload: MacosKeyCaptureRequest):
     if local_error := _macos_capture_local_request_error(request):
         return local_error
     if not is_macos():
         return {
             "status": -1,
-            "errmsg": "实验性 LLDB 密钥捕获仅支持 macOS。",
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
             "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
         }
     operation = "capture"
@@ -779,8 +779,10 @@ async def capture_macos_key(request: Request, payload: MacosKeyCaptureRequest):
             "status": 0,
             "errmsg": "ok",
             "data": {
-                "method": "macos_inplace_lldb",
+                "method": "macos_inplace_native",
                 "stage": "completed",
+                "validated": True,
+                "key_saved": True,
                 "db_key": db_key,
                 "wechat_modified": False,
                 "official_wechat_verified": bool(result.get("official_wechat_verified")),
@@ -793,14 +795,14 @@ async def capture_macos_key(request: Request, payload: MacosKeyCaptureRequest):
         _end_macos_capture_operation(operation)
 
 
-@router.post("/api/macos-key-capture/cancel", summary="停止并清理实验性 macOS LLDB 密钥捕获")
+@router.post("/api/macos-key-capture/cancel", summary="停止并清理实验性 macOS 本机密钥捕获")
 async def cancel_macos_key_capture(request: Request, payload: MacosKeyCaptureRequest):
     if local_error := _macos_capture_local_request_error(request):
         return local_error
     if not is_macos():
         return {
             "status": -1,
-            "errmsg": "实验性 LLDB 密钥捕获仅支持 macOS。",
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
             "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
         }
     if not _macos_capture_cancel_lock.acquire(blocking=False):
@@ -826,7 +828,7 @@ async def cancel_macos_key_capture(request: Request, payload: MacosKeyCaptureReq
             "status": 0,
             "errmsg": "ok",
             "data": {
-                "method": "macos_inplace_lldb",
+                "method": "macos_inplace_native",
                 "stage": "cancelled",
                 "pending": False,
                 "wechat_modified": False,

@@ -29,8 +29,10 @@
 | 断点预检失败 | 模拟无 PBKDF2/内部返回断点 | 立即停止，不要求用户退出账号，cleanup 恢复 |
 | 捕获超时 | 模拟 LLDB 超时且无合格候选 | 不保存候选，`finally` 恢复官方微信 |
 | 隔离副本提前退出 | 模拟 LLDB 报告进程已退出及退出码 | 立即返回 `debug_wechat_exited_during_capture` 和非敏感断点计数，不继续等待普通超时 |
-| 微信 4.1.13 `rounds=2` | 模拟目标库 HMAC salt 与 32 字节主密钥候选 | 只接受精确 HMAC salt 映射且通过目标数据库首页 HMAC 的候选；拒绝其他轮数 |
+| WCDB `rounds=2` | 模拟目标库 HMAC salt 与 raw encryption key | 只接受精确 HMAC salt 映射且通过目标页 HMAC 的候选；前端 API 还要求通过 message + session 双角色校验后才缓存 |
 | 数据库不匹配 | 使用无法通过目标首页 HMAC 的 32 字节候选 | 返回 `passphrase_database_mismatch`，不写缓存，恢复官方微信 |
+| 本机密钥展示 | 捕获成功并进入数据库解密 | 仅回环接口在完整数据库校验和安全保存后返回 `db_key`，前端验证 64 位十六进制格式后显示；远端请求被拒绝 |
+| 监测启动时序 | 管理员授权期间轮询捕获状态 | 仅在 `monitor_ready=true` 后提示用户登录，避免授权前登录导致漏抓 |
 | 进程/应用异常退出 | 保留已 fsync 的事务状态后重新进入 | 下次启动优先调用 stale recovery，状态目标和备份路径校验后恢复 |
 | 备份路径篡改 | 将状态中的备份改到所选目录之外 | 拒绝覆盖微信并保留可诊断状态 |
 
