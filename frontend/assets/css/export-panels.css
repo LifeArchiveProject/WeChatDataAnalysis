@@ -315,6 +315,65 @@
   gap: 7px;
 }
 
+.app-export-option-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.app-export-option-group + .app-export-option-group {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--app-border);
+}
+
+.app-export-option-group__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.app-export-option-group__header > div {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.app-export-option-group__header strong {
+  color: var(--app-text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.app-export-option-group__header small {
+  overflow: hidden;
+  color: var(--app-text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-export-option-group__index {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--app-surface-muted);
+  color: var(--app-text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.app-export-output-mode-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .app-export-format-option {
   position: relative;
   display: grid;
@@ -360,6 +419,29 @@
   color: var(--export-accent-text);
 }
 
+.app-export-format-option__code--split {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.app-export-format-option__code--split small {
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: var(--app-surface-muted);
+  color: var(--app-text-secondary);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.app-export-format-option.is-active .app-export-format-option__code--split small {
+  background: color-mix(in srgb, var(--export-accent) 12%, transparent);
+  color: var(--export-accent-text);
+}
+
 .app-export-format-option__meta {
   grid-column: 1;
   overflow: hidden;
@@ -391,6 +473,104 @@
   border-color: var(--app-accent);
   background: var(--app-accent);
   color: #fff;
+}
+
+.app-export-format-option.is-disabled,
+.app-export-format-option.is-disabled:hover {
+  background: var(--app-surface-muted);
+  cursor: not-allowed;
+  opacity: 0.52;
+  transform: none;
+}
+
+.app-export-mode-details {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  background: var(--app-surface-bg);
+}
+
+.app-export-mode-details .app-export-field--plain {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.app-export-incremental-details {
+  display: grid;
+  gap: 11px;
+}
+
+.app-export-folder-preview {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-export-folder-preview > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.app-export-folder-preview > div > span {
+  color: var(--app-text-muted);
+  font-size: 10px;
+}
+
+.app-export-folder-preview strong {
+  overflow: hidden;
+  color: var(--app-text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-export-folder-preview__status {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--export-accent-border);
+  border-radius: 999px;
+  background: var(--export-accent-soft);
+  color: var(--export-accent-text);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.app-export-reset-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding-top: 10px;
+  border-top: 1px solid var(--app-border);
+  cursor: pointer;
+}
+
+.app-export-reset-option input {
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  accent-color: var(--app-accent);
+}
+
+.app-export-reset-option > span {
+  display: grid;
+  gap: 2px;
+}
+
+.app-export-reset-option strong {
+  color: var(--app-text-primary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.app-export-reset-option small {
+  color: var(--app-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .app-export-field {
@@ -797,6 +977,7 @@
 .app-export-contact {
   display: grid;
   width: 100%;
+  height: 53px;
   min-width: 0;
   grid-template-columns: 18px 36px minmax(0, 1fr);
   align-items: center;
@@ -811,8 +992,16 @@
   transition: background-color 150ms ease;
 }
 
-.app-export-contact:last-child {
-  border-bottom: 0;
+.app-export-contact-virtualizer {
+  position: relative;
+  width: 100%;
+}
+
+.app-export-contact-virtualizer__viewport {
+  position: absolute;
+  inset: 0 0 auto;
+  width: 100%;
+  will-change: transform;
 }
 
 .app-export-contact:hover {
@@ -1216,9 +1405,16 @@ html[data-theme='dark'] .app-export-embedded :is(input, select) {
 
 @media (max-width: 520px) {
   .app-export-format-grid,
+  .app-export-output-mode-grid,
   .app-export-choice-grid,
   .app-export-task-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .app-export-folder-preview {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
   }
 
   .app-export-task-stats > div:nth-child(2n) {

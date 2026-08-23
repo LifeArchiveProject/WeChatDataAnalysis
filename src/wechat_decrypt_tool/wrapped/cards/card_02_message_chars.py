@@ -142,6 +142,27 @@ _DEFAULT_PINYIN_FREQ = {
 }
 _AVG_PINYIN_LEN = 2.8
 
+# 输入法小剧场的素材：当年用户真实发出的纯中文短句（2-8 字）。
+_TYPED_PHRASE_RE = re.compile(r"^[一-鿿]{2,8}$")
+_TYPED_PHRASE_PY_RE = re.compile(r"^[a-z]+$")
+_TYPED_PHRASE_POOL_LIMIT = 4000
+
+
+def _collect_typed_phrase(
+    text: str,
+    *,
+    pool: list[str] | None,
+    seen: set[str] | None,
+) -> None:
+    """Collect one eligible IME phrase while another message scan is already running."""
+    if pool is None or seen is None or len(pool) >= _TYPED_PHRASE_POOL_LIMIT:
+        return
+    normalized = str(text or "").replace(" ", "").replace("　", "").strip()
+    if not normalized or normalized in seen or not _TYPED_PHRASE_RE.fullmatch(normalized):
+        return
+    seen.add(normalized)
+    pool.append(normalized)
+
 
 def _is_cjk_han(ch: str) -> bool:
     """是否为中文汉字（用于拼音估算）。"""
@@ -227,7 +248,13 @@ def _update_keyboard_counters(
     return nonspace, cjk, spaces
 
 
-def compute_keyboard_stats(*, account_dir: Path, year: int, sample_rate: float = 1.0) -> dict[str, Any]:
+def compute_keyboard_stats(
+    *,
+    account_dir: Path,
+    year: int,
+    sample_rate: float = 1.0,
+    typed_phrase_pool: list[str] | None = None,
+) -> dict[str, Any]:
     """
     统计键盘敲击数据。
 
@@ -250,6 +277,7 @@ def compute_keyboard_stats(*, account_dir: Path, year: int, sample_rate: float =
     total_messages = 0
     sampled_messages = 0
     used_index = False
+    typed_phrase_seen = set(typed_phrase_pool or ()) if typed_phrase_pool is not None else None
 
     # 优先使用搜索索引（更快）
     index_path = get_chat_search_index_db_path(account_dir)
@@ -286,6 +314,7 @@ def compute_keyboard_stats(*, account_dir: Path, year: int, sample_rate: float =
                         if not txt:
                             continue
                         total_messages += 1
+                        _collect_typed_phrase(txt, pool=typed_phrase_pool, seen=typed_phrase_seen)
 
                         if sample_rate >= 1.0:
                             do_sample = True
@@ -386,6 +415,7 @@ def compute_keyboard_stats(*, account_dir: Path, year: int, sample_rate: float =
                         if not txt:
                             continue
                         total_messages += 1
+                        _collect_typed_phrase(txt, pool=typed_phrase_pool, seen=typed_phrase_seen)
                         if sample_rate >= 1.0:
                             do_sample = True
                         elif sample_rate <= 0.0:
@@ -635,17 +665,45 @@ def _pick_a4_analogy(chars: int) -> Optional[dict[str, Any]]:
     }
 
 
-# 输入法小剧场的素材：当年用户真实发出的纯中文短句（2-8 字）。
-_TYPED_PHRASE_RE = re.compile(r"^[一-鿿]{2,8}$")
-_TYPED_PHRASE_PY_RE = re.compile(r"^[a-z]+$")
+def _build_typed_phrase_payload(*, pool: list[str], year: int, k: int) -> list[dict[str, str]]:
+    if not pool:
+        return []
+
+    # 种子取年份+池大小：同一年重复构建结果稳定，数据变了才换一批。
+    rng = random.Random(year * 1000003 + len(pool))
+    picked = rng.sample(pool, min(int(k), len(pool)))
+
+    out: list[dict[str, str]] = []
+    for text in picked:
+        try:
+            syllables = [str(s or "").strip().lower() for s in lazy_pinyin(text, style=Style.NORMAL)]
+        except Exception:
+            continue
+        if not syllables or any(not _TYPED_PHRASE_PY_RE.fullmatch(s) for s in syllables):
+            continue
+        pinyin = " ".join(syllables)
+        # 候选条一行放得下的长度（拼音过长的句子打起来也太拖沓）
+        if len(pinyin) > 26:
+            continue
+        out.append({"text": text, "pinyin": pinyin})
+    return out
 
 
-def sample_typed_phrases(*, account_dir: Path, year: int, k: int = 14) -> list[dict[str, str]]:
+def sample_typed_phrases(
+    *,
+    account_dir: Path,
+    year: int,
+    k: int = 14,
+    candidates: list[str] | None = None,
+) -> list[dict[str, str]]:
     """Sample short Chinese-only sentences the user actually sent this year, with pinyin.
 
-    Index-only (the fallback shard scan is not worth a third full pass); returns [] when
-    the search index is unavailable and the frontend simply skips the IME vignette.
+    Reuses candidates collected by the keyboard-stat scan when supplied. Direct callers
+    still use the search index and return [] when neither source is available.
     """
+    if candidates is not None:
+        return _build_typed_phrase_payload(pool=candidates, year=year, k=k)
+
     start_ts, end_ts = _year_range_epoch_seconds(year)
     my_username = str(account_dir.name or "").strip()
     if not my_username:
@@ -684,13 +742,7 @@ def sample_typed_phrases(*, account_dir: Path, year: int, k: int = 14) -> list[d
         )
         seen: set[str] = set()
         for row in conn.execute(sql, (start_ts, end_ts, my_username)):
-            txt = str(row[0] or "").replace(" ", "").replace("　", "").strip()
-            if not txt or txt in seen:
-                continue
-            if not _TYPED_PHRASE_RE.fullmatch(txt):
-                continue
-            seen.add(txt)
-            pool.append(txt)
+            _collect_typed_phrase(str(row[0] or ""), pool=pool, seen=seen)
     except Exception:
         return []
     finally:
@@ -699,27 +751,7 @@ def sample_typed_phrases(*, account_dir: Path, year: int, k: int = 14) -> list[d
         except Exception:
             pass
 
-    if not pool:
-        return []
-
-    # 种子取年份+池大小：同一年重复构建结果稳定，数据变了才换一批。
-    rng = random.Random(year * 1000003 + len(pool))
-    picked = rng.sample(pool, min(int(k), len(pool)))
-
-    out: list[dict[str, str]] = []
-    for text in picked:
-        try:
-            syllables = [str(s or "").strip().lower() for s in lazy_pinyin(text, style=Style.NORMAL)]
-        except Exception:
-            continue
-        if not syllables or any(not _TYPED_PHRASE_PY_RE.fullmatch(s) for s in syllables):
-            continue
-        pinyin = " ".join(syllables)
-        # 候选条一行放得下的长度（拼音过长的句子打起来也太拖沓）
-        if len(pinyin) > 26:
-            continue
-        out.append({"text": text, "pinyin": pinyin})
-    return out
+    return _build_typed_phrase_payload(pool=pool, year=year, k=k)
 
 
 def compute_text_message_char_counts(*, account_dir: Path, year: int) -> tuple[int, int]:
@@ -1243,10 +1275,20 @@ def build_card_02_message_chars(*, account_dir: Path, year: int) -> dict[str, An
     recv_a4 = _pick_a4_analogy(recv_chars)
 
     # 计算键盘敲击统计
-    keyboard_stats = compute_keyboard_stats(account_dir=account_dir, year=year, sample_rate=1.0)
+    typed_phrase_candidates: list[str] = []
+    keyboard_stats = compute_keyboard_stats(
+        account_dir=account_dir,
+        year=year,
+        sample_rate=1.0,
+        typed_phrase_pool=typed_phrase_candidates,
+    )
 
     # 输入法小剧场素材：当年真实发出的短句
-    typed_phrases = sample_typed_phrases(account_dir=account_dir, year=year)
+    typed_phrases = sample_typed_phrases(
+        account_dir=account_dir,
+        year=year,
+        candidates=typed_phrase_candidates,
+    )
 
     # 计算语音与通话统计
     voice_call_stats = compute_voice_call_stats(account_dir=account_dir, year=year)

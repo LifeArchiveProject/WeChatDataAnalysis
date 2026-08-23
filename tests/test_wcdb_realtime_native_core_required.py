@@ -35,6 +35,10 @@ def _manifest(*, development: bool) -> dict[str, object]:
             "developmentBuild": True,
             "offlineBootstrapFeatureBits": 0,
             "offlineExportSealFormat": "none",
+            "nativeAsrAbiVersion": 0,
+            "nativeAsrFeatureBit": 0,
+            "nativeAsrAuthorization": "none",
+            "nativeAsrTarget": {"wechatVersion": "", "weixinSha256": ""},
             "codeSignatureEnforced": False,
             "rootPublicKeyCompiled": False,
             "testHooksEnabled": True,
@@ -49,6 +53,15 @@ def _manifest(*, development: bool) -> dict[str, object]:
         "developmentBuild": False,
         "offlineBootstrapFeatureBits": 3,
         "offlineExportSealFormat": "WES2",
+        "nativeAsrAbiVersion": 1,
+        "nativeAsrFeatureBit": 16,
+        "nativeAsrAuthorization": "database-read",
+        "nativeAsrTarget": {
+            "wechatVersion": "4.1.12.26",
+            "weixinSha256": (
+                "4914a621a810ecbc0a132b6ff8f612658cfce323d3989b3e5fe32d4ff343ba46"
+            ),
+        },
         "codeSignatureEnforced": True,
         "rootPublicKeyCompiled": True,
         "testHooksEnabled": False,
@@ -509,6 +522,49 @@ class TestWCDBRealtimeNativeCoreRequired(unittest.TestCase):
                 native_close.assert_called_once_with(first.handle)
                 self.assertIsNone(manager.get_connection(first_dir.name))
                 self.assertIsNone(manager.get_connection(alias_dir.name))
+
+    def test_same_account_name_rebinds_when_database_root_changes(self) -> None:
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account_dir = root / "wxid_demo"
+            first_storage = root / "source-a" / "db_storage"
+            second_storage = root / "source-b" / "db_storage"
+            first_session = first_storage / "session" / "session.db"
+            second_session = second_storage / "session" / "session.db"
+            account_dir.mkdir()
+            first_session.parent.mkdir(parents=True)
+            second_session.parent.mkdir(parents=True)
+            first_session.write_bytes(b"synthetic-session-a")
+            second_session.write_bytes(b"synthetic-session-b")
+            manager = wcdb_realtime.WCDBRealtimeManager()
+
+            with (
+                patch.object(
+                    wcdb_realtime,
+                    "_resolve_account_db_storage_dir",
+                    side_effect=[first_storage, second_storage],
+                ),
+                patch.object(
+                    wcdb_realtime,
+                    "_resolve_session_db_path",
+                    side_effect=[first_session, second_session],
+                ),
+                patch.object(wcdb_realtime, "_derive_native_wxid", return_value="wxid_demo"),
+                patch.object(
+                    wcdb_realtime.native_core_realtime,
+                    "open_account",
+                    side_effect=[1 << 60, 1 << 61],
+                ) as native_open,
+                patch.object(wcdb_realtime, "_is_native_core_handle", return_value=True),
+                patch.object(wcdb_realtime, "close_account") as native_close,
+            ):
+                first = manager.ensure_connected(account_dir, key_hex="67" * 32)
+                second = manager.ensure_connected(account_dir, key_hex="67" * 32)
+
+            self.assertIsNot(first, second)
+            self.assertEqual(native_open.call_count, 2)
+            native_close.assert_called_once_with(first.handle)
+            manager.disconnect(account_dir.name)
 
     def test_background_prime_selects_direct_accounts_with_database_keys(self) -> None:
         manager = wcdb_realtime.WCDBRealtimeManager()

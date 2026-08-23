@@ -244,7 +244,7 @@
 
                       <div class="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-[#7F7F7F]">
                         <span class="rounded-md border border-[#E1EFE5] bg-[#F4FAF6]/82 px-2 py-1">{{ account.database_count }} 个库文件</span>
-                        <span v-if="isCurrentAccount(account.account_name)" class="rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2 py-1 font-medium text-[#07C160]">最近登录</span>
+                        <span v-if="isCurrentAccount(account.account_name)" class="rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2 py-1 font-medium text-[#07C160]">{{ currentAccountSourceLabel }}</span>
                         <span v-if="account.data_dir" class="rounded-md border border-[#CFEEDB] bg-[#F4FBF6]/86 px-2 py-1 text-[#07C160]">路径已确认</span>
                       </div>
                     </div>
@@ -476,7 +476,7 @@ const performPickWechatInstallDirectory = async () => {
 
 const pickWechatInstallDirectory = () => openGuide('installPath')
 
-// 计算属性：将当前登录账号排在第一位
+// 将检测到的账号排在第一位
 const sortedAccounts = computed(() => {
   if (!detectionResult.value?.data?.accounts) return []
   const accounts = [...detectionResult.value.data.accounts]
@@ -486,7 +486,7 @@ const sortedAccounts = computed(() => {
 
   if (!currentTargetName) return accounts
 
-  // 置顶最近登录账号
+  // 置顶检测到的账号
   return accounts.sort((a, b) => {
     if (a.account_name === currentTargetName) return -1
     if (b.account_name === currentTargetName) return 1
@@ -497,6 +497,15 @@ const sortedAccounts = computed(() => {
 
 const currentAccountInfo = computed(() => {
   return detectionResult.value?.data?.current_account || null
+})
+
+const currentAccountSourceLabel = computed(() => {
+  const labels = {
+    live_session: '当前登录',
+    key_info_mtime: '最近活动（推测）',
+    global_config: '已保存账号（推测）'
+  }
+  return labels[currentAccountInfo.value?.source] || '候选账号（推测）'
 })
 
 // 开始检测
@@ -585,7 +594,7 @@ const goToDecrypt = (account) => {
   navigateTo('/decrypt')
 }
 
-// 判断是否为当前登录账号
+// 判断是否为检测到的账号
 const isCurrentAccount = (accountName) => {
   if (!detectionResult.value?.data?.current_account) {
     return false

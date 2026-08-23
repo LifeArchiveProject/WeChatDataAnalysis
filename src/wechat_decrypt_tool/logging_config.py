@@ -4,12 +4,52 @@
 
 import logging
 import os
+import platform
+import re
+import struct
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from .request_logging import SensitiveQueryLogFilter
+
+
+_SAFE_RUNTIME_TOKEN_RE = re.compile(r"[^A-Za-z0-9._+-]+")
+
+
+def _runtime_token(value: object) -> str:
+    token = _SAFE_RUNTIME_TOKEN_RE.sub("_", str(value or "").strip()).strip("_")
+    return token[:64] or "unknown"
+
+
+def _runtime_summary() -> dict[str, object]:
+    from . import __version__
+
+    if sys.platform == "darwin":
+        system = "macos"
+        os_version = platform.mac_ver()[0]
+    elif sys.platform == "win32":
+        system = "windows"
+        windows_release, windows_version, _csd, _ptype = platform.win32_ver()
+        os_version = windows_version or windows_release
+    elif sys.platform.startswith("linux"):
+        system = "linux"
+        os_version = platform.release()
+    else:
+        system = sys.platform or "unknown"
+        os_version = platform.release()
+
+    return {
+        "app_version": _runtime_token(__version__),
+        "platform": _runtime_token(system),
+        "os_version": _runtime_token(os_version),
+        "kernel_release": _runtime_token(platform.release()),
+        "architecture": _runtime_token(platform.machine()).lower(),
+        "process_bits": struct.calcsize("P") * 8,
+        "python_version": _runtime_token(platform.python_version()),
+        "runtime_mode": "frozen" if getattr(sys, "frozen", False) else "source",
+    }
 
 
 class ColoredFormatter(logging.Formatter):
@@ -241,6 +281,28 @@ class WeChatLogger:
         logger.info("微信解密工具日志系统初始化完成")
         logger.info(f"日志文件: {self.log_file}")
         logger.info(f"日志级别: {logging.getLevelName(level)}")
+        try:
+            runtime = _runtime_summary()
+        except Exception as exc:
+            # Do not let optional diagnostics prevent the backend from starting,
+            # and do not log an exception message that could contain local data.
+            logger.warning("[runtime] unavailable error_type=%s", type(exc).__name__)
+        else:
+            logger.info(
+                (
+                    "[runtime] app_version=%s platform=%s os_version=%s "
+                    "kernel_release=%s architecture=%s process_bits=%s "
+                    "python_version=%s runtime_mode=%s"
+                ),
+                runtime["app_version"],
+                runtime["platform"],
+                runtime["os_version"],
+                runtime["kernel_release"],
+                runtime["architecture"],
+                runtime["process_bits"],
+                runtime["python_version"],
+                runtime["runtime_mode"],
+            )
         logger.info("=" * 60)
 
         WeChatLogger._initialized = True

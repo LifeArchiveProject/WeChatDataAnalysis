@@ -589,6 +589,131 @@ def _extract_md5_from_packed_info(packed_info: Any) -> str:
     return ""
 
 
+def _extract_voice_transcript_from_packed_info(packed_info: Any) -> str:
+    """Extract a completed WeChat-native voice transcript.
+
+    Voice messages store the result in ``packed_info_data`` as a protobuf-like
+    payload.  The transcript is top-level field 5, nested field 2, and nested
+    field 1 must be status 2 (completed).  Parsing only that exact path avoids
+    mistaking unrelated UTF-8 strings in packed metadata for a transcript.
+    """
+
+    if packed_info is None:
+        return ""
+
+    if isinstance(packed_info, memoryview):
+        data = packed_info.tobytes()
+    elif isinstance(packed_info, (bytes, bytearray)):
+        data = bytes(packed_info)
+    elif isinstance(packed_info, str):
+        value = packed_info.strip()
+        if value.lower().startswith("0x"):
+            value = value[2:]
+        if value and _PACKED_INFO_HEX_RE.fullmatch(value) and len(value) % 2 == 0:
+            try:
+                data = bytes.fromhex(value)
+            except ValueError:
+                return ""
+        else:
+            data = value.encode("utf-8", errors="ignore")
+    else:
+        if isinstance(packed_info, (int, float, bool)):
+            return ""
+        try:
+            data = bytes(packed_info)
+        except Exception:
+            return ""
+
+    # Message metadata is tiny in practice.  Bound parsing of untrusted blobs.
+    if not data or len(data) > 1024 * 1024:
+        return ""
+
+    def read_varint(raw: bytes, offset: int) -> tuple[Optional[int], int]:
+        value = 0
+        shift = 0
+        pos = offset
+        for _ in range(10):
+            if pos >= len(raw):
+                return None, offset
+            byte = raw[pos]
+            pos += 1
+            value |= (byte & 0x7F) << shift
+            if (byte & 0x80) == 0:
+                return value, pos
+            shift += 7
+        return None, offset
+
+    def parse_fields(raw: bytes) -> Optional[list[tuple[int, int, Any]]]:
+        fields: list[tuple[int, int, Any]] = []
+        pos = 0
+        while pos < len(raw):
+            tag, next_pos = read_varint(raw, pos)
+            if tag is None or next_pos <= pos:
+                return None
+            pos = next_pos
+            field_no = int(tag) >> 3
+            wire_type = int(tag) & 0x07
+            if field_no <= 0:
+                return None
+
+            if wire_type == 0:
+                value, next_pos = read_varint(raw, pos)
+                if value is None or next_pos <= pos:
+                    return None
+                fields.append((field_no, wire_type, value))
+                pos = next_pos
+            elif wire_type == 1:
+                if pos + 8 > len(raw):
+                    return None
+                fields.append((field_no, wire_type, raw[pos : pos + 8]))
+                pos += 8
+            elif wire_type == 2:
+                size, next_pos = read_varint(raw, pos)
+                if size is None or next_pos <= pos:
+                    return None
+                pos = next_pos
+                end = pos + int(size)
+                if end > len(raw):
+                    return None
+                fields.append((field_no, wire_type, raw[pos:end]))
+                pos = end
+            elif wire_type == 5:
+                if pos + 4 > len(raw):
+                    return None
+                fields.append((field_no, wire_type, raw[pos : pos + 4]))
+                pos += 4
+            else:
+                return None
+        return fields
+
+    top_fields = parse_fields(data)
+    if top_fields is None:
+        return ""
+
+    for field_no, wire_type, nested_blob in top_fields:
+        if field_no != 5 or wire_type != 2 or not isinstance(nested_blob, bytes):
+            continue
+        nested_fields = parse_fields(nested_blob)
+        if nested_fields is None:
+            continue
+        status: Optional[int] = None
+        text_blob: Optional[bytes] = None
+        for nested_no, nested_wire, nested_value in nested_fields:
+            if nested_no == 1 and nested_wire == 0:
+                status = int(nested_value)
+            elif nested_no == 2 and nested_wire == 2 and isinstance(nested_value, bytes):
+                text_blob = nested_value
+        if status != 2 or not text_blob:
+            continue
+        try:
+            transcript = text_blob.decode("utf-8", errors="strict").strip()
+        except UnicodeDecodeError:
+            continue
+        if transcript:
+            return transcript
+    return ""
+
+
 def _resource_lookup_chat_id(resource_conn: sqlite3.Connection, username: str) -> Optional[int]:
     if not username:
         return None
@@ -2560,7 +2685,11 @@ def _row_to_search_hit(
     account_dir: Path,
     is_group: bool,
     my_rowid: Optional[int],
+    self_username: str = "",
 ) -> dict[str, Any]:
+    resolved_self_username = str(
+        self_username or resolve_account_self_username(account_dir) or account_dir.name or ""
+    ).strip()
     local_id = int(r["local_id"] or 0)
     create_time = int(r["create_time"] or 0)
     sort_seq = int(r["sort_seq"] or 0) if r["sort_seq"] is not None else 0
@@ -2589,7 +2718,7 @@ def _row_to_search_hit(
             sender_username = xml_sender
 
     if is_sent:
-        sender_username = resolve_account_self_username(account_dir)
+        sender_username = resolved_self_username
     elif (not is_group) and (not sender_username):
         sender_username = username
 

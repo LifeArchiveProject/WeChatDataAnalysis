@@ -17,6 +17,7 @@ from .chat_helpers import (
     _iter_message_db_paths,
 )
 from .logging_config import get_logger
+from .wcdb_realtime import resolve_account_native_wxid
 
 logger = get_logger(__name__)
 
@@ -243,11 +244,16 @@ def get_chat_search_index_status(account_dir: Path, *, source: Optional[str] = N
         and index_mtime_ns > 0
         and source_latest_mtime_ns > index_mtime_ns
     )
+    # A completed, schema-compatible index remains usable when newer messages
+    # arrive.  Freshness is advisory: rebuilding a multi-GB index is expensive,
+    # and a live SQLite WAL will normally become newer again soon after a build.
+    # Consumers that require a complete snapshot can check `upToDate` and fall
+    # back to the source shards without destroying the usable index.
     ready = (
         bool(inspect.get("ready"))
         and actual_source == desired_source
-        and not stale_for_source_data
     )
+    up_to_date = bool(ready and not stale_for_source_data)
     with _BUILD_LOCK:
         state = dict(_BUILD_STATE.get(key) or {})
     return {
@@ -257,6 +263,7 @@ def get_chat_search_index_status(account_dir: Path, *, source: Optional[str] = N
             "path": str(index_path),
             "exists": bool(inspect.get("exists")),
             "ready": bool(ready),
+            "upToDate": up_to_date,
             "source": actual_source,
             "desiredSource": desired_source,
             "staleForSource": bool(inspect.get("ready")) and actual_source != desired_source,
@@ -271,33 +278,6 @@ def get_chat_search_index_status(account_dir: Path, *, source: Optional[str] = N
             "build": state,
         },
     }
-
-
-def discard_stale_chat_search_index(account_dir: Path) -> bool:
-    """Remove a derived index only when decrypted source databases are newer."""
-
-    status = get_chat_search_index_status(account_dir, source="decrypted")
-    index = dict(status.get("index") or {})
-    if not bool(index.get("staleForSourceData")):
-        return False
-
-    index_path = Path(str(index.get("path") or ""))
-    try:
-        index_path.unlink(missing_ok=True)
-        for suffix in ("-wal", "-shm"):
-            Path(f"{index_path}{suffix}").unlink(missing_ok=True)
-    except OSError:
-        logger.exception("Failed to discard stale chat search index: %s", index_path)
-        return False
-
-    logger.info(
-        "Discarded stale chat search index: account=%s index=%s source_latest=%s",
-        account_dir.name,
-        index_path,
-        str(index.get("sourceLatestPath") or ""),
-    )
-    return True
-
 
 def start_chat_search_index_build(account_dir: Path, *, rebuild: bool = False, source: Optional[str] = None) -> dict[str, Any]:
     source_norm = _normalize_index_source(source, default="decrypted")
@@ -440,6 +420,7 @@ def _load_name2id_usernames_for_index(conn: sqlite3.Connection) -> set[str]:
 
 def _load_message_backed_index_targets(*, account_dir: Path, seed_usernames: set[str]) -> set[str]:
     out: set[str] = set()
+    self_aliases = {account_dir.name, resolve_account_native_wxid(account_dir)}
     for db_path in _iter_message_db_paths(account_dir):
         conn: Optional[sqlite3.Connection] = None
         try:
@@ -455,7 +436,7 @@ def _load_message_backed_index_targets(*, account_dir: Path, seed_usernames: set
             candidates.update(_load_name2id_usernames_for_index(conn))
             for username in candidates:
                 u = str(username or "").strip()
-                if not u or u == account_dir.name:
+                if not u or u in self_aliases:
                     continue
                 if not _should_keep_session(u, include_official=True):
                     continue
@@ -706,6 +687,7 @@ def _build_worker(account_dir: Path, rebuild: bool, source: str = "decrypted") -
     tmp_path = _index_db_tmp_path(account_dir)
     final_path = _index_db_path(account_dir)
 
+    self_username = resolve_account_native_wxid(account_dir)
     try:
         try:
             if tmp_path.exists():
@@ -785,6 +767,15 @@ def _build_worker(account_dir: Path, rebuild: bool, source: str = "decrypted") -
                         msg_conn,
                         account_dir,
                     )
+                    if my_rowid is None:
+                        native_rowid, native_match = resolve_account_self_rowid(
+                            msg_conn,
+                            account_dir,
+                            candidates=(self_username,),
+                        )
+                        if native_rowid is not None:
+                            my_rowid, _matched_self_username = native_rowid, native_match
+                    db_self_username = _matched_self_username or self_username
 
                     for conv_username, sess_info in sessions.items():
                         _update_build_state(key, currentConversation=str(conv_username))
@@ -824,6 +815,7 @@ def _build_worker(account_dir: Path, rebuild: bool, source: str = "decrypted") -
                                     account_dir=account_dir,
                                     is_group=is_group,
                                     my_rowid=my_rowid,
+                                    self_username=db_self_username,
                                 )
                             except Exception:
                                 continue

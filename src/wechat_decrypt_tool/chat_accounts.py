@@ -15,7 +15,9 @@ from .key_store import get_account_keys_from_store, load_account_keys_store, nor
 from .sqlite_diagnostics import is_usable_sqlite_db
 
 
-_WXID_SOURCE_SUFFIX_RE = re.compile(r"^(wxid_[^_\s]+)_[0-9a-f]{4}$", re.IGNORECASE)
+# Source aliases append a four-character discriminator to the wxid.  Wxids
+# themselves may contain underscores, so the account part must be greedy.
+_WXID_SOURCE_SUFFIX_RE = re.compile(r"^(wxid_[^\s]+)_([0-9a-f]{4})$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -148,11 +150,17 @@ def _key_state_from_media_keys_file(account_dir: Path) -> dict[str, Any]:
     }
 
 
-def _merge_source_info(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+def _merge_source_info(
+    primary: dict[str, Any],
+    fallback: dict[str, Any],
+    *,
+    fallback_wins: bool = False,
+) -> dict[str, Any]:
     out = dict(primary or {})
     for k in ("db_storage_path", "wxid_dir"):
-        if not str(out.get(k) or "").strip() and str((fallback or {}).get(k) or "").strip():
-            out[k] = str(fallback.get(k) or "").strip()
+        fallback_value = str((fallback or {}).get(k) or "").strip()
+        if fallback_value and (fallback_wins or not str(out.get(k) or "").strip()):
+            out[k] = fallback_value
     return out
 
 
@@ -170,7 +178,10 @@ def _maybe_write_source_info(account_dir: Path, source_info: dict[str, Any]) -> 
         account_dir.mkdir(parents=True, exist_ok=True)
         p = account_dir / "_source.json"
         existing = _load_source_json(account_dir)
-        merged = _merge_source_info(existing, payload)
+        # A direct key-store source is authoritative once it is populated.
+        # This lets an account switch replace a stale marker left by the prior
+        # source while still preserving unrelated metadata in the marker.
+        merged = _merge_source_info(existing, payload, fallback_wins=True)
         if merged != existing:
             p.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
@@ -202,7 +213,10 @@ def _context_for_name(account: str) -> Optional[ChatAccountContext]:
     if has_dbs and source_metadata_prefers_decrypted_snapshot(source_from_dir):
         source_info = dict(source_from_dir)
     else:
-        source_info = _merge_source_info(source_from_dir, source_from_keys)
+        # For direct accounts, the key-store source is the latest capture and
+        # must supersede a stale `_source.json`.  Imported decrypted snapshots
+        # take the branch above and remain isolated from host key-store paths.
+        source_info = _merge_source_info(source_from_dir, source_from_keys, fallback_wins=True)
     if not has_dbs and not source_info and not key_present:
         return None
 

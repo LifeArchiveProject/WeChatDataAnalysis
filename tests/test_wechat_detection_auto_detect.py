@@ -1,5 +1,6 @@
 import asyncio
 import io
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -53,6 +54,80 @@ class TestWechatDetectionAutoDetect(unittest.TestCase):
                 result = wd.detect_current_logged_in_account(td)
 
         self.assertEqual(result["current_account"], "wxid_demo")
+
+    def test_recent_key_info_activity_wins_over_stale_global_config(self):
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            data_root = Path(td)
+            login_root = data_root / "all_users" / "login"
+            stale_dir = login_root / "wxid_stale"
+            active_dir = login_root / "wxid_active"
+            stale_dir.mkdir(parents=True)
+            active_dir.mkdir(parents=True)
+            stale_key = stale_dir / "key_info.db"
+            active_key = active_dir / "key_info.db"
+            stale_key.write_bytes(b"stale")
+            active_key.write_bytes(b"active")
+            os.utime(stale_key, (100, 100))
+            os.utime(active_key, (200, 200))
+
+            with patch.object(
+                wd,
+                "parse_global_config",
+                return_value={"wxid": "wxid_stale", "nickname": "旧账号", "avatar": "old.png"},
+            ):
+                result = wd.detect_current_logged_in_account(str(data_root))
+
+        self.assertEqual(result["current_account"], "wxid_active")
+        self.assertEqual(result["source"], "key_info_mtime")
+        self.assertEqual(result["confidence"], "medium")
+        self.assertEqual(result["global_config_account"], "wxid_stale")
+        self.assertIsNone(result.get("nickname"))
+        self.assertIsNone(result.get("avatar"))
+
+    def test_key_info_wal_counts_as_recent_account_activity(self):
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            login_root = Path(td) / "all_users" / "login"
+            first_dir = login_root / "wxid_first"
+            active_dir = login_root / "wxid_active"
+            first_dir.mkdir(parents=True)
+            active_dir.mkdir(parents=True)
+            first_key = first_dir / "key_info.db"
+            active_key = active_dir / "key_info.db"
+            active_wal = active_dir / "key_info.db-wal"
+            first_key.write_bytes(b"first")
+            active_key.write_bytes(b"active")
+            active_wal.write_bytes(b"wal")
+            os.utime(first_key, (300, 300))
+            os.utime(active_key, (100, 100))
+            os.utime(active_wal, (400, 400))
+
+            with patch.object(wd, "parse_global_config", return_value=None):
+                result = wd.detect_current_logged_in_account(td)
+
+        self.assertEqual(result["current_account"], "wxid_active")
+        self.assertEqual(result["latest_time"], 400)
+        self.assertEqual(result["source"], "key_info_mtime")
+        self.assertEqual(result["confidence"], "medium")
+        self.assertIsNone(result["global_config_account"])
+
+    def test_global_config_is_used_as_fallback_and_keeps_profile(self):
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            parsed = {"wxid": "wxid_saved", "nickname": "已保存", "avatar": "saved.png"}
+            with patch.object(wd, "parse_global_config", return_value=parsed):
+                result = wd.detect_current_logged_in_account(td)
+
+        self.assertEqual(result["current_account"], "wxid_saved")
+        self.assertEqual(result["source"], "global_config")
+        self.assertEqual(result["confidence"], "low")
+        self.assertEqual(result["global_config_account"], "wxid_saved")
+        self.assertEqual(result["nickname"], "已保存")
+        self.assertEqual(result["avatar"], "saved.png")
 
     def test_macos_process_probe_accepts_wechat_process_name(self):
         from wechat_decrypt_tool import wechat_detection as wd

@@ -31,6 +31,7 @@ from .chat_helpers import (
     _decode_message_content,
     _decode_sqlite_text,
     _extract_md5_from_packed_info,
+    _extract_voice_transcript_from_packed_info,
     _extract_sender_from_group_xml,
     _extract_xml_attr,
     _extract_xml_tag_or_attr,
@@ -58,7 +59,7 @@ from .chat_helpers import (
     _resolve_msg_table_name_by_map,
 )
 from .chat_realtime_autosync import CHAT_REALTIME_AUTOSYNC
-from .chat_realtime_reader import count_realtime_message_rows_via_exec, read_all_realtime_message_rows
+from .chat_realtime_reader import count_realtime_message_rows_via_exec, iter_realtime_message_rows
 from .logging_config import get_logger
 from .media_helpers import (
     MediaPathIndex,
@@ -95,8 +96,16 @@ from .wcdb_realtime import (
     get_messages as _wcdb_get_messages,
     get_sessions as _wcdb_get_sessions,
     open_message_cursor as _wcdb_open_message_cursor,
+    resolve_account_native_wxid as _wcdb_resolve_account_native_wxid,
 )
-from .voice_transcription import VoiceTranscriptionError, get_voice_transcription_service
+from .voice_transcription import (
+    VoiceTranscriptionConfig,
+    VoiceTranscriptionError,
+    acquire_voice_model_activity,
+    capture_voice_transcript_cache_generation,
+    get_voice_transcription_service,
+    release_voice_model_activity,
+)
 
 logger = get_logger(__name__)
 
@@ -333,9 +342,297 @@ _VOICE_TRANSCRIPT_EXPORT_CSS = """
 """.strip()
 
 
+_MOBILE_EXPORT_CSS = """
+/* 离线导出页的移动端布局：桌面端保留三栏结构，窄屏切换为微信式聊天界面。 */
+.wce-mobile-back,
+.wce-mobile-sessions-toggle,
+.wce-mobile-session-heading,
+.wce-mobile-tools-toggle,
+.wce-mobile-tools-button { display: none; }
+.wce-chat-heading { display: flex; align-items: center; min-width: 0; }
+
+@supports(height: 100dvh) {
+  .wce-root { height: 100dvh; }
+}
+
+@media(max-width: 767px) {
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body { background: #ededed; overscroll-behavior: none; }
+  .wce-root {
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .wce-rail { display: none !important; }
+  .wce-session-panel { display: none !important; }
+  .wce-mobile-sessions-toggle {
+    position: absolute;
+    top: env(safe-area-inset-top, 0px);
+    left: max(0px, env(safe-area-inset-left, 0px));
+    z-index: 60;
+    display: block;
+    width: 48px;
+    height: 48px;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .wce-mobile-sessions-toggle:checked ~ .wce-session-panel {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: flex !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: 100%;
+    border-right: 0;
+  }
+  .wce-mobile-session-heading {
+    position: relative;
+    box-sizing: content-box;
+    display: flex;
+    flex: 0 0 auto;
+    height: 48px;
+    align-items: center;
+    justify-content: center;
+    padding-top: env(safe-area-inset-top, 0px);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    background: #ededed;
+  }
+  .wce-mobile-session-close {
+    position: absolute;
+    bottom: 0;
+    left: max(0px, env(safe-area-inset-left, 0px));
+    display: flex;
+    width: 48px;
+    height: 48px;
+    align-items: center;
+    justify-content: center;
+    color: #181818;
+  }
+  .wce-mobile-session-title {
+    margin: 0;
+    color: #191919;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+  .wce-mobile-sessions-toggle:active ~ .wce-session-panel .wce-mobile-session-close,
+  .wce-mobile-sessions-toggle:not(:checked):active ~ .wce-chat-area .wce-mobile-back { opacity: 0.45; }
+  .wce-mobile-sessions-toggle:focus-visible ~ .wce-session-panel .wce-mobile-session-close,
+  .wce-mobile-sessions-toggle:not(:checked):focus-visible ~ .wce-chat-area .wce-mobile-back {
+    border-radius: 6px;
+    outline: 2px solid rgba(7, 193, 96, 0.75);
+    outline-offset: -5px;
+  }
+  .wce-chat-area,
+  .wce-chat-main,
+  .wce-chat-col { width: 100%; min-width: 0; }
+  .wce-chat-header {
+    position: relative;
+    z-index: 30;
+    flex: 0 0 auto;
+    justify-content: center;
+    box-sizing: content-box;
+    height: 48px;
+    min-height: 48px;
+    padding: env(safe-area-inset-top, 0px) 52px 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    background: #ededed;
+  }
+  .wce-chat-heading { width: 100%; justify-content: center; }
+  .wce-chat-title {
+    max-width: 100%;
+    overflow: hidden;
+    color: #191919;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wce-mobile-back,
+  .wce-mobile-tools-button {
+    position: absolute;
+    bottom: 0;
+    display: flex;
+    width: 48px;
+    height: 48px;
+    align-items: center;
+    justify-content: center;
+    color: #181818;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wce-mobile-back { left: max(0px, env(safe-area-inset-left, 0px)); }
+  .wce-mobile-tools-toggle {
+    position: absolute;
+    right: max(0px, env(safe-area-inset-right, 0px));
+    bottom: 0;
+    z-index: 2;
+    display: block;
+    width: 48px;
+    height: 48px;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .wce-mobile-tools-button {
+    right: max(0px, env(safe-area-inset-right, 0px));
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  .wce-mobile-tools-toggle:active + .wce-mobile-tools-button { opacity: 0.45; }
+  .wce-mobile-tools-toggle:focus-visible + .wce-mobile-tools-button {
+    border-radius: 6px;
+    outline: 2px solid rgba(7, 193, 96, 0.75);
+    outline-offset: -5px;
+  }
+  .wce-chat-tools {
+    position: absolute;
+    top: 100%;
+    margin-top: 6px;
+    right: max(8px, env(safe-area-inset-right, 0px));
+    left: max(8px, env(safe-area-inset-left, 0px));
+    z-index: 40;
+    display: none;
+    max-height: calc(100dvh - 72px - env(safe-area-inset-top, 0px));
+    overflow-y: auto;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  }
+  .wce-mobile-tools-toggle:checked ~ .wce-chat-tools { display: flex; }
+  .wce-tool-group { display: flex; width: 100%; gap: 6px; }
+  .wce-tool-input,
+  .wce-tool-btn,
+  .message-filter-select { min-height: 36px; font-size: 13px; }
+  .wce-tool-input { min-width: 0; flex: 1 1 auto; background: #f7f7f7; }
+  .wce-tool-search,
+  .wce-tool-date { width: auto; max-width: none; }
+  .wce-tool-status { max-width: 72px; flex: 0 1 auto; }
+  .message-filter-select {
+    width: 100%;
+    padding: 0 10px;
+    border: 1px solid #d1d5db;
+    background: #f7f7f7;
+  }
+  #messageContainer {
+    padding: 14px 10px max(34px, env(safe-area-inset-bottom, 0px));
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .wce-pager { padding: 2px 0 16px; }
+  .wce-msg-row { margin-bottom: 18px; }
+  .wce-msg { max-width: 100%; min-width: 0; }
+  .wce-avatar { width: 40px; height: 40px; border-radius: 5px; }
+  .wce-avatar-sent { margin-left: 8px; }
+  .wce-avatar-received { margin-right: 8px; }
+  .wce-msg-content {
+    min-width: 0;
+    max-width: calc(100vw - 68px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+  }
+  .msg-bubble,
+  .wce-bubble {
+    max-width: min(72vw, 320px);
+    padding: 9px 12px;
+    font-size: 16px;
+    line-height: 1.45;
+  }
+  .wechat-special-card,
+  .wechat-voice-wrapper,
+  .wechat-voice-transcript,
+  .wce-file,
+  .wce-audio,
+  .wce-media-img,
+  .wce-video-wrap,
+  .wce-video-thumb { max-width: 100%; }
+  .wce-msg-content > .absolute { display: none; }
+  .wce-system { margin: 12px 0; }
+  .wce-brand-attribution {
+    right: max(6px, env(safe-area-inset-right, 0px));
+    bottom: max(5px, env(safe-area-inset-bottom, 0px));
+    max-width: calc(100vw - 12px);
+    padding: 4px 8px;
+    font-size: 9px;
+  }
+
+  .wce-index { height: 100vh; height: 100dvh; overflow-y: auto; background: #f7f7f7; }
+  .wce-index-container { max-width: none; padding: 0 0 max(34px, env(safe-area-inset-bottom, 0px)); }
+  .wce-index-heading {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    box-sizing: content-box;
+    height: 48px;
+    align-items: center;
+    justify-content: center;
+    padding: env(safe-area-inset-top, 0px) 16px 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    background: #ededed;
+  }
+  .wce-index-title {
+    max-width: 100%;
+    margin: 0;
+    overflow: hidden;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wce-index-heading .wce-index-sub { display: none; }
+  .wce-index-card { border: 0; border-radius: 0; background: #fff; }
+  .wce-index-item {
+    min-height: 68px;
+    gap: 12px;
+    padding: 9px 12px;
+    border-bottom-color: #ededed;
+  }
+  .wce-session-avatar { width: 48px; height: 48px; border-radius: 5px; }
+  .wce-session-name { font-size: 16px; font-weight: 500; }
+  .wce-session-sub { margin-top: 3px; font-size: 13px; color: #999; }
+  .wce-index-container > .wce-index-sub { margin: 14px 16px 0 !important; line-height: 1.55; }
+}
+
+@media(max-width: 374px) {
+  .wce-tool-status { display: none; }
+  .msg-bubble,
+  .wce-bubble { max-width: 70vw; }
+  .wce-brand-attribution span:first-of-type,
+  .wce-brand-dot { display: none; }
+}
+
+@media(prefers-reduced-motion: reduce) {
+  .wce-mobile-back,
+  .wce-mobile-tools-toggle + .wce-mobile-tools-button { transition: none; }
+}
+""".strip()
+
+
 def _load_ui_css_bundle(*, ui_public_dir: Optional[Path], report: dict[str, Any]) -> str:
     del ui_public_dir, report
-    return f'{_native_export_css("chat").rstrip()}\n{_VOICE_TRANSCRIPT_EXPORT_CSS}\n'
+    return (
+        f'{_native_export_css("chat").rstrip()}\n'
+        f'{_VOICE_TRANSCRIPT_EXPORT_CSS}\n'
+        f'{_MOBILE_EXPORT_CSS}\n'
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -650,6 +947,7 @@ def _native_json_list(
 
 
 def _html_export_runtime_js(native_integrity: Any) -> str:
+    # 原生运行时会参与导出页的自校验，必须逐字节保持原样。
     return _native_text(native_integrity, "runtime_js")
 
 
@@ -954,6 +1252,7 @@ class ExportJob:
     progress: ExportProgress = field(default_factory=ExportProgress)
     cancel_requested: bool = False
     content_key: Optional[bytearray] = field(default=None, repr=False)
+    voice_cache_generation: Optional[int] = field(default=None, repr=False)
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -1087,6 +1386,11 @@ class ChatExportManager:
         )
         export_id = uuid.uuid4().hex[:12]
 
+        voice_cache_generation = (
+            capture_voice_transcript_cache_generation()
+            if bool(transcribe_voice) and not bool(privacy_mode)
+            else None
+        )
         job = ExportJob(
             export_id=export_id,
             account=account_dir.name,
@@ -1114,7 +1418,19 @@ class ChatExportManager:
                 "transcribeVoice": bool(transcribe_voice),
             },
             content_key=content_key,
+            voice_cache_generation=voice_cache_generation,
         )
+
+        voice_activity_key = ""
+        if bool(transcribe_voice) and not bool(privacy_mode):
+            service = get_voice_transcription_service()
+            model = str(
+                getattr(getattr(service, "config", None), "model", "")
+                or VoiceTranscriptionConfig.from_env().model
+            )
+            voice_activity_key = acquire_voice_model_activity(
+                model
+            )
 
         with self._lock:
             self._jobs[export_id] = job
@@ -1133,10 +1449,21 @@ class ChatExportManager:
         t = threading.Thread(
             target=self._run_job_safe,
             args=(job, account_dir),
+            kwargs={"voice_activity_key": voice_activity_key},
             name=f"chat-export-{export_id}",
             daemon=True,
         )
-        t.start()
+        try:
+            t.start()
+        except Exception:
+            release_voice_model_activity(voice_activity_key)
+            erase_export_content_key(job.content_key)
+            job.content_key = None
+            with self._lock:
+                job.status = "error"
+                job.error = "导出任务启动失败。"
+                job.finished_at = time.time()
+            raise
         return job
 
     def _run_job_safe(
@@ -1145,9 +1472,23 @@ class ChatExportManager:
         account_dir: Path,
         *,
         report_outcome: bool = True,
+        voice_activity_key: Optional[str] = None,
     ) -> None:
         outcome: str | None = None
         try:
+            if voice_activity_key is None and bool((job.options or {}).get("transcribeVoice")) and not bool(
+                (job.options or {}).get("privacyMode")
+            ):
+                service = get_voice_transcription_service()
+                model = str(
+                    getattr(getattr(service, "config", None), "model", "")
+                    or VoiceTranscriptionConfig.from_env().model
+                )
+                voice_activity_key = acquire_voice_model_activity(
+                    model
+                )
+            if bool((job.options or {}).get("transcribeVoice")) and job.voice_cache_generation is None:
+                job.voice_cache_generation = capture_voice_transcript_cache_generation()
             self._run_job(job, account_dir)
             if job.status == "done":
                 outcome = "export_completed"
@@ -1159,6 +1500,7 @@ class ChatExportManager:
                 job.finished_at = time.time()
             outcome = "export_failed"
         finally:
+            release_voice_model_activity(voice_activity_key or "")
             erase_export_content_key(job.content_key)
             job.content_key = None
             if report_outcome and outcome is not None:
@@ -1274,6 +1616,7 @@ class ChatExportManager:
                 )
             except WCDBRealtimeError as e:
                 raise RuntimeError(f"Realtime export requires WCDB/direct mode but connection failed: {e}") from e
+        self_username = _wcdb_resolve_account_native_wxid(account_dir, rt_conn)
 
         realtime_pause_reason = f"chat_export:{job.export_id}"
         realtime_paused = False
@@ -1665,7 +2008,7 @@ class ChatExportManager:
                         self_avatar_path = _materialize_avatar(
                             zf=zf,
                             head_image_conn=head_image_conn,
-                            username=account_dir.name,
+                            username=self_username,
                             avatar_written=avatar_written,
                         )
 
@@ -2069,7 +2412,7 @@ class ChatExportManager:
                     parts.append('<html lang="zh-CN">\n')
                     parts.append("<head>\n")
                     parts.append('  <meta charset="utf-8" />\n')
-                    parts.append('  <meta name="viewport" content="width=device-width, initial-scale=1" />\n')
+                    parts.append('  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />\n')
                     parts.append(f"  <title>{esc_text(archive_title)}导出</title>\n")
                     html_assets = dict(job.options.get("_htmlAssets") or {})
                     css_asset_path = str(html_assets.get("cssPath") or _html_export_asset_paths(job.export_id)[0])
@@ -2092,10 +2435,12 @@ class ChatExportManager:
                     )
                     parts.append('<div class="wce-index">\n')
                     parts.append('  <div class="wce-index-container">\n')
-                    parts.append(f'    <h1 class="wce-index-title">{esc_text(archive_title)}导出（HTML）</h1>\n')
+                    parts.append('    <div class="wce-index-heading">\n')
+                    parts.append(f'      <h1 class="wce-index-title">{esc_text(archive_title)}导出（HTML）</h1>\n')
                     parts.append(
-                        f'    <p class="wce-index-sub">账号: {esc_text("hidden" if privacy_mode else account_dir.name)} · 会话数: {len(html_index_items)} · 导出时间: {esc_text(_now_iso())}</p>\n'
+                        f'      <p class="wce-index-sub">账号: {esc_text("hidden" if privacy_mode else account_dir.name)} · 会话数: {len(html_index_items)} · 导出时间: {esc_text(_now_iso())}</p>\n'
                     )
+                    parts.append("    </div>\n")
                     parts.append('    <div class="wce-index-card">\n')
 
                     for item in html_index_items:
@@ -2330,13 +2675,14 @@ def _resolve_export_targets(
     if source == "realtime":
         if rt_conn is None:
             rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
+        self_aliases = {account_dir.name, _wcdb_resolve_account_native_wxid(account_dir, rt_conn)}
         with rt_conn.lock:
             raw_sessions = _wcdb_get_sessions(rt_conn.handle)
         rows = _normalize_realtime_session_rows(raw_sessions)
 
         def should_include_rt(item: dict[str, Any]) -> bool:
             u = str(item.get("username") or "").strip()
-            if not u or u == account_dir.name:
+            if not u or u in self_aliases:
                 return False
             if not include_hidden and int(item.get("is_hidden") or 0) == 1:
                 return False
@@ -2360,13 +2706,14 @@ def _resolve_export_targets(
 
     session_rows, session_hidden_by_username = _load_export_session_targets(account_dir)
     contact_usernames = _load_export_contact_usernames(account_dir)
+    self_aliases = {account_dir.name, _wcdb_resolve_account_native_wxid(account_dir)}
     discovered_message_targets = _load_message_backed_export_targets(
         account_dir=account_dir,
         seed_usernames=contact_usernames,
     )
 
     def should_include(u: str) -> bool:
-        if not u or u == account_dir.name:
+        if not u or u in self_aliases:
             return False
         if not include_hidden and int(session_hidden_by_username.get(u) or 0) == 1:
             return False
@@ -2581,6 +2928,7 @@ def _message_table_latest_timestamp(conn: sqlite3.Connection, table_name: str) -
 
 def _load_message_backed_export_targets(*, account_dir: Path, seed_usernames: set[str]) -> dict[str, int]:
     out: dict[str, int] = {}
+    self_aliases = {account_dir.name, _wcdb_resolve_account_native_wxid(account_dir)}
     for db_path in _iter_message_db_paths(account_dir):
         conn: Optional[sqlite3.Connection] = None
         try:
@@ -2596,7 +2944,7 @@ def _load_message_backed_export_targets(*, account_dir: Path, seed_usernames: se
             candidates.update(_load_name2id_usernames(conn))
             for username in candidates:
                 u = str(username or "").strip()
-                if not u or u == account_dir.name:
+                if not u or u in self_aliases:
                     continue
                 table_name = _resolve_msg_table_name_by_map(lower_to_actual, u)
                 if not table_name:
@@ -2759,8 +3107,29 @@ def _conversation_dir_name(
     return f"{idx:04d}_{base}_{user_part}_{h}"
 
 
-def _normalize_realtime_message_item_for_export(item: dict[str, Any], *, account_dir: Path, conv_username: str) -> _Row:
-    self_username = resolve_account_self_username(account_dir)
+def _normalize_realtime_message_item_for_export(
+    item: dict[str, Any],
+    *,
+    account_dir: Path,
+    conv_username: str,
+    self_username: str = "",
+) -> _Row:
+    resolved_self_username = str(
+        self_username
+        or _wcdb_resolve_account_native_wxid(account_dir)
+        or resolve_account_self_username(account_dir)
+        or account_dir.name
+        or ""
+    ).strip()
+    self_aliases = {
+        value.lower()
+        for value in (
+            account_dir.name,
+            resolve_account_self_username(account_dir),
+            resolved_self_username,
+        )
+        if value
+    }
     message_content = _pick_case_insensitive_value(item, "message_content", "messageContent", "MessageContent")
     compress_content = _pick_case_insensitive_value(item, "compress_content", "compressContent", "CompressContent")
     raw_text = _decode_message_content(compress_content, message_content).strip()
@@ -2777,14 +3146,14 @@ def _normalize_realtime_message_item_for_export(item: dict[str, Any], *, account
             is_sent = bool(sent_value)
     if not is_sent:
         try:
-            if sender_username and sender_username.lower() == self_username.lower():
+            if sender_username and sender_username.lower() in self_aliases:
                 is_sent = True
         except Exception:
             pass
 
     is_group = bool(str(conv_username or "").endswith("@chatroom"))
     if is_sent:
-        sender_username = self_username
+        sender_username = resolved_self_username
     elif (not is_group) and (not sender_username):
         sender_username = conv_username
 
@@ -2816,9 +3185,16 @@ def _iter_realtime_rows_for_conversation(
     start_time: Optional[int],
     end_time: Optional[int],
     local_types: Optional[set[int]] = None,
+    checkpoint: Optional[Callable[[], None]] = None,
 ) -> Iterable[_Row]:
     db_storage_dir = _resolve_account_db_storage_dir(account_dir)
-    result = read_all_realtime_message_rows(
+    logger.info(
+        "[chat-export] realtime message stream started account=%s conversation=%s page_size=%s",
+        account_dir.name,
+        conv_username,
+        1000,
+    )
+    source_rows = iter_realtime_message_rows(
         rt_conn=rt_conn,
         account_dir=account_dir,
         username=conv_username,
@@ -2832,26 +3208,30 @@ def _iter_realtime_rows_for_conversation(
         start_time=start_time,
         end_time=end_time,
         local_types=local_types,
+        page_size=1000,
+        checkpoint=checkpoint,
     )
+    yielded = 0
+    self_username = _wcdb_resolve_account_native_wxid(account_dir, rt_conn)
+    for item in source_rows:
+        if not isinstance(item, dict):
+            continue
+        row = _normalize_realtime_message_item_for_export(
+            item,
+            account_dir=account_dir,
+            conv_username=conv_username,
+            self_username=self_username,
+        )
+        if row.local_id <= 0:
+            continue
+        yielded += 1
+        yield row
     logger.info(
-        "[chat-export] realtime messages loaded account=%s conversation=%s strategy=%s rows=%s "
-        "tables=%s databases=%s authoritative=%s diagnostics=%s",
+        "[chat-export] realtime message stream completed account=%s conversation=%s rows=%s",
         account_dir.name,
         conv_username,
-        result.strategy,
-        len(result.rows),
-        result.tables_found,
-        result.databases_probed,
-        result.authoritative,
-        list(result.diagnostics),
+        yielded,
     )
-    rows = [
-        _normalize_realtime_message_item_for_export(item, account_dir=account_dir, conv_username=conv_username)
-        for item in result.rows
-        if isinstance(item, dict)
-    ]
-    rows = [row for row in rows if row.local_id > 0]
-    return rows
 
 
 def _estimate_conversation_message_count(
@@ -2949,6 +3329,7 @@ def _iter_rows_for_conversation(
     local_types: Optional[set[int]] = None,
     source: str = "decrypted",
     rt_conn: Any | None = None,
+    checkpoint: Optional[Callable[[], None]] = None,
 ) -> Iterable[_Row]:
     if source == "realtime":
         if rt_conn is None:
@@ -2960,6 +3341,7 @@ def _iter_rows_for_conversation(
             start_time=start_time,
             end_time=end_time,
             local_types=local_types,
+            checkpoint=checkpoint,
         )
 
     db_paths = _iter_message_db_paths(account_dir)
@@ -2984,6 +3366,17 @@ def _iter_rows_for_conversation(
                 conn,
                 account_dir,
             )
+            if my_rowid is None:
+                native_self_username = _wcdb_resolve_account_native_wxid(account_dir)
+                if native_self_username:
+                    native_rowid, native_match = resolve_account_self_rowid(
+                        conn,
+                        account_dir,
+                        candidates=(native_self_username,),
+                    )
+                    if native_rowid is not None:
+                        my_rowid, _matched_self_username = native_rowid, native_match
+            resolved_account_wxid = _matched_self_username or account_wxid
 
             quoted = _quote_ident(table_name)
             has_packed_info_data = False
@@ -3066,7 +3459,7 @@ def _iter_rows_for_conversation(
                     is_group = bool(conv_username.endswith("@chatroom"))
 
                     if is_sent:
-                        sender_username = account_wxid
+                        sender_username = resolved_account_wxid
                     elif (not is_group) and (not sender_username):
                         sender_username = conv_username
 
@@ -3121,6 +3514,11 @@ def _parse_message_for_export(
             sender_username = xml_sender
 
     local_type = int(row.local_type or 0)
+    native_voice_transcript = (
+        _extract_voice_transcript_from_packed_info(row.packed_info_data)
+        if local_type == 34
+        else ""
+    )
     is_sent = bool(row.is_sent)
 
     render_type = "text"
@@ -3525,6 +3923,11 @@ def _parse_message_for_export(
         "videoUrl": video_url,
         "videoThumbUrl": video_thumb_url,
         "voiceLength": voice_length,
+        "voiceTranscript": native_voice_transcript,
+        "voiceTranscriptStatus": "success" if native_voice_transcript else "idle",
+        "voiceTranscriptError": "",
+        "voiceTranscriptLanguage": "",
+        "voiceTranscriptModel": "wechat-native" if native_voice_transcript else "",
         "quoteUsername": quote_username,
         "quoteServerId": quote_server_id,
         "quoteType": quote_type,
@@ -3688,6 +4091,12 @@ def _write_conversation_json(
                 local_types=local_types,
                 source=source,
                 rt_conn=rt_conn,
+                checkpoint=lambda: _raise_if_job_cancelled(
+                    job,
+                    "json.realtime_fetch",
+                    trace,
+                    conversation=conv_username,
+                ),
             )
             for source_message in source_messages:
                 scanned += 1
@@ -4045,6 +4454,12 @@ def _write_conversation_txt(
                 local_types=local_types,
                 source=source,
                 rt_conn=rt_conn,
+                checkpoint=lambda: _raise_if_job_cancelled(
+                    job,
+                    "txt.realtime_fetch",
+                    trace,
+                    conversation=conv_username,
+                ),
             )
             for source_message in source_messages:
                 scanned += 1
@@ -4697,7 +5112,7 @@ def _write_conversation_html(
             tw.write('<html lang="zh-CN">\n')
             tw.write("<head>\n")
             tw.write('  <meta charset="utf-8" />\n')
-            tw.write('  <meta name="viewport" content="width=device-width, initial-scale=1" />\n')
+            tw.write('  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />\n')
             tw.write(f"  <title>{esc_text(page_title)}</title>\n")
             tw.write(_html_export_gate_style())
             # Do not use native `integrity=` for offline file:// exports; Chrome blocks
@@ -4714,6 +5129,7 @@ def _write_conversation_html(
 
             # Root
             tw.write('<div class="wce-root h-screen flex overflow-hidden" style="background-color:#EDEDED">\n')
+            tw.write('  <input id="wceMobileSessionsToggle" class="wce-mobile-sessions-toggle" type="checkbox" aria-controls="wceSessionPanel" aria-label="切换会话列表" autocomplete="off" />\n')
 
             # Left rail (avatar + chat icon)
             tw.write(
@@ -4753,8 +5169,16 @@ def _write_conversation_html(
 
             # Middle session list (all exported conversations)
             tw.write(
-                '<div class="wce-session-panel session-list-panel border-r border-gray-200 flex flex-col min-h-0 shrink-0 relative" style="background-color:#F7F7F7;--session-list-width:295px">\n'
+                '<div id="wceSessionPanel" class="wce-session-panel session-list-panel border-r border-gray-200 flex flex-col min-h-0 shrink-0 relative" style="background-color:#F7F7F7;--session-list-width:295px">\n'
             )
+            tw.write('  <div class="wce-mobile-session-heading">\n')
+            tw.write('    <label class="wce-mobile-session-close" for="wceMobileSessionsToggle" aria-hidden="true">\n')
+            tw.write('      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">\n')
+            tw.write('        <path d="M15 5L8 12L15 19" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />\n')
+            tw.write("      </svg>\n")
+            tw.write("    </label>\n")
+            tw.write('    <h2 class="wce-mobile-session-title">聊天</h2>\n')
+            tw.write("  </div>\n")
             tw.write('  <div class="p-3 border-b border-gray-200" style="background-color:#F7F7F7">\n')
             tw.write(
                 '    <div class="flex items-center gap-2">\n'
@@ -4863,11 +5287,22 @@ def _write_conversation_html(
             tw.write('    <div class="wce-chat-col flex-1 flex flex-col min-h-0 min-w-0">\n')
             tw.write('      <div class="flex-1 flex flex-col min-h-0 relative">\n')
 
-            tw.write('        <div class="chat-header">\n')
-            tw.write('          <div class="flex items-center gap-3 min-w-0">\n')
-            tw.write(f'            <h2 class="text-base font-medium text-gray-900">{esc_text(chat_title)}</h2>\n')
+            tw.write('        <div class="chat-header wce-chat-header">\n')
+            tw.write('          <label class="wce-mobile-back" for="wceMobileSessionsToggle" aria-hidden="true">\n')
+            tw.write('            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">\n')
+            tw.write('              <path d="M15 5L8 12L15 19" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />\n')
+            tw.write("            </svg>\n")
+            tw.write("          </label>\n")
+            tw.write('          <div class="wce-chat-heading">\n')
+            tw.write(f'            <h2 class="wce-chat-title text-base font-medium text-gray-900">{esc_text(chat_title)}</h2>\n')
             tw.write("          </div>\n")
-            tw.write('          <div class="ml-auto wce-chat-tools">\n')
+            tw.write('          <input id="wceMobileToolsToggle" class="wce-mobile-tools-toggle" type="checkbox" aria-controls="wceChatTools" aria-label="聊天工具" title="聊天工具" autocomplete="off" />\n')
+            tw.write('          <label class="wce-mobile-tools-button" for="wceMobileToolsToggle" aria-hidden="true">\n')
+            tw.write('            <svg width="25" height="25" viewBox="0 0 25 25" fill="currentColor" aria-hidden="true">\n')
+            tw.write('              <circle cx="5" cy="12.5" r="1.8" /><circle cx="12.5" cy="12.5" r="1.8" /><circle cx="20" cy="12.5" r="1.8" />\n')
+            tw.write("            </svg>\n")
+            tw.write("          </label>\n")
+            tw.write('          <div id="wceChatTools" class="ml-auto wce-chat-tools">\n')
             tw.write('            <div class="wce-tool-group" title="搜索当前聊天记录；分页导出会在首次搜索时加载全部分页">\n')
             tw.write('              <input id="wceMessageSearchInput" class="wce-tool-input wce-tool-search" type="search" placeholder="搜索聊天记录" autocomplete="off" />\n')
             tw.write('              <button id="wceMessageSearchBtn" class="wce-tool-btn" type="button">搜索</button>\n')
@@ -4949,6 +5384,12 @@ def _write_conversation_html(
                 local_types=local_types,
                 source=source,
                 rt_conn=rt_conn,
+                checkpoint=lambda: _raise_if_job_cancelled(
+                    job,
+                    "html.realtime_fetch",
+                    trace,
+                    conversation=conv_username,
+                ),
             )
             for source_message in source_messages:
                 scanned += 1
@@ -5116,7 +5557,7 @@ def _write_conversation_html(
                 tw.write("                " + build_avatar_html(src=avatar_src, fallback_text=fallback_char, extra_class=avatar_extra) + "\n")
 
                 align_cls = "items-end" if is_sent else "items-start"
-                tw.write(f'                <div class="flex flex-col relative group {esc_attr(align_cls)}" style="min-width:0">\n')
+                tw.write(f'                <div class="wce-msg-content flex flex-col relative group {esc_attr(align_cls)}" style="min-width:0">\n')
                 if conv_is_group and (not is_sent) and display_name:
                     tw.write(f'                  <div class="text-[11px] text-gray-500 mb-1 text-left">{esc_text(display_name)}</div>\n')
 
@@ -6066,6 +6507,16 @@ def _attach_voice_transcript(
     if str(msg.get("renderType") or "").strip() != "voice":
         return
 
+    native_transcript = str(msg.get("voiceTranscript") or "").strip()
+    if msg.get("voiceTranscriptStatus") == "success" and native_transcript:
+        stats = report.setdefault(
+            "voiceTranscription",
+            {"success": 0, "failed": 0, "cached": 0, "native": 0},
+        )
+        stats["success"] = int(stats.get("success") or 0) + 1
+        stats["native"] = int(stats.get("native") or 0) + 1
+        return
+
     server_id = int(msg.get("serverId") or 0)
     if server_id <= 0:
         return
@@ -6079,6 +6530,7 @@ def _attach_voice_transcript(
         result = get_voice_transcription_service().transcribe_voice(
             account_dir=account_dir,
             server_id=server_id,
+            cache_generation=job.voice_cache_generation,
         )
         msg["voiceTranscript"] = str(result.get("text") or "").strip()
         msg["voiceTranscriptStatus"] = "success"

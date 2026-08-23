@@ -13,7 +13,7 @@ from fastapi.responses import Response
 from ..chat_accounts import resolve_chat_account_context
 from ..chat_helpers import _resolve_msg_table_name_by_map
 from ..chat_realtime_reader import _account_username_candidates, _sql_literal
-from ..wcdb_realtime import WCDB_REALTIME
+from ..wcdb_realtime import WCDB_REALTIME, resolve_account_native_wxid
 from ..wcdb_realtime import exec_query as _wcdb_exec_query
 from .chat import _append_full_messages_from_rows, _postprocess_full_messages
 from .chat_media import _convert_silk_to_browser_audio
@@ -548,6 +548,7 @@ def _attach_original_messages(
                     my_rowid=None,
                     resource_conn=None,
                     resource_chat_id=None,
+                    self_username=resolve_account_native_wxid(ctx.account_dir, realtime),
                 )
                 _postprocess_full_messages(
                     merged=merged,

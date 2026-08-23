@@ -1162,9 +1162,13 @@ def _load_account_source_info(account_dir: Path) -> dict[str, Any]:
         if isinstance(keys, dict):
             db_storage_path = normalize_key_store_path(keys.get("db_key_source_db_storage_path"))
             wxid_dir = normalize_key_store_path(keys.get("db_key_source_wxid_dir"))
-            if db_storage_path and not str(data.get("db_storage_path") or "").strip():
+            # The key-store path is captured with the latest direct account
+            # session.  A stale `_source.json` marker must not keep media
+            # lookups pinned to the previous account/source.  Imported
+            # snapshots returned above remain isolated from host paths.
+            if db_storage_path:
                 data["db_storage_path"] = db_storage_path
-            if wxid_dir and not str(data.get("wxid_dir") or "").strip():
+            if wxid_dir:
                 data["wxid_dir"] = wxid_dir
     except Exception:
         pass
@@ -1183,7 +1187,9 @@ def _clean_weflow_account_dir_name(dir_name: str) -> str:
         return trimmed
 
     if trimmed.lower().startswith("wxid_"):
-        match = re.match(r"^(wxid_[^_]+)", trimmed, flags=re.IGNORECASE)
+        # Keep internal underscores; only strip the final four-hex collision
+        # suffix used by WeFlow account directories.
+        match = re.match(r"^(wxid_[^\s]+)_([0-9a-fA-F]{4})$", trimmed, flags=re.IGNORECASE)
         if match:
             return match.group(1)
         return trimmed

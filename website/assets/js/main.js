@@ -809,7 +809,20 @@ function buildFeatures() {
   const META = [
     { name: "聊天记录 1:1 复刻", meta: "全消息类型 · 时间轴跳转 · 高仿界面", desc: "文本、图片、视频、语音、表情、引用、合并转发……逐一还原，样式尽可能与微信保持一致。" },
     { name: "实时消息同步", meta: "WCDB 直读 · 侧栏闪电 · 零轮询", desc: "直连微信 4.x 的 WCDB——微信开着，新消息、联系人与朋友圈也会实时流进来。" },
-    { name: "修改消息 · 随时恢复", meta: "本地改写 · 一键恢复 · 原库零改动", desc: "本地改写任意一条消息，原文永远可以一键找回。" },
+    {
+      name: "修改与补录 · 随时恢复",
+      desc: "从普通消息、媒体到结构化卡片，完整补录与修改能力一次列清。",
+      groups: [
+        {
+          label: "新增 / 补录 17",
+          items: ["文字", "图片", "文件", "语音", "更多类型"],
+        },
+        {
+          label: "修改 / 恢复",
+          items: ["修改文字", "替换图片", "修改时间", "一键恢复", "更多操作"],
+        },
+      ],
+    },
     { name: "朋友圈时光机", meta: "删除仍可见 · 历史背景图 · 缓存可调", desc: "看过的朋友圈本地留存：对方改成三天可见、甚至删除动态，你依然能翻回当年的背景图。" },
     { name: "全文搜索", meta: "毫秒级 · 跨会话 · 类型过滤", desc: "多年记录毫秒级跨会话检索，按联系人、消息类型、时间范围任意过滤，一步跳回现场。" },
     { name: "导出万物", meta: "10 类内容 × 4 种格式 · ZIP", desc: "10 类内容 × HTML / JSON / TXT / Excel，从聊天记录到转账红包、全量归档，连资源打包 ZIP。" },
@@ -844,6 +857,33 @@ function buildFeatures() {
   }
 
   let cur = -1;
+  function renderMeta(entry) {
+    const groups = Array.isArray(entry.groups) ? entry.groups : [];
+    metaEl.classList.toggle("deck__meta--groups", groups.length > 0);
+    metaEl.replaceChildren();
+
+    if (!groups.length) {
+      metaEl.textContent = entry.meta || "";
+      return;
+    }
+
+    groups.forEach((group) => {
+      const row = document.createElement("div");
+      row.className = "deck__capability";
+
+      const labelEl = document.createElement("span");
+      labelEl.className = "deck__capability-label";
+      labelEl.textContent = group.label;
+
+      const itemsEl = document.createElement("span");
+      itemsEl.className = "deck__capability-items";
+      itemsEl.textContent = group.items.join(" · ");
+
+      row.append(labelEl, itemsEl);
+      metaEl.append(row);
+    });
+  }
+
   function label(idx, animate) {
     if (idx === cur) return;
     const dir = idx > cur ? 1 : -1;
@@ -851,7 +891,7 @@ function buildFeatures() {
     dots.forEach((dd, i) => dd.classList.toggle("on", i === idx));
     numEl.textContent = String(idx + 1).padStart(2, "0");
     nameEl.textContent = META[idx].name;
-    metaEl.textContent = META[idx].meta;
+    renderMeta(META[idx]);
     descEl.textContent = META[idx].desc;
     if (animate) gsap.fromTo(".deck__capmain", { opacity: 0.2, y: dir * 12 }, { opacity: 1, y: 0, duration: 0.5, ease: "flow", overwrite: true });
   }
