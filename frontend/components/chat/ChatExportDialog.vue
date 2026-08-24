@@ -243,12 +243,30 @@
             <header class="chat-export-panel__header">
               <div>
                 <h3 id="chat-export-output-title">时间与文件</h3>
-                <p>时间范围和文件名可留空，保存目录为必选项。</p>
+                <p>选择一次性 ZIP，或可以重复更新的增量目录。</p>
               </div>
               <span class="chat-export-count" :class="{ 'chat-export-count--warning': !exportHasFolder }">
                 {{ exportHasFolder ? '位置已设置' : '需要目录' }}
               </span>
             </header>
+
+            <fieldset class="chat-export-fieldset chat-export-output-mode">
+              <legend>输出方式</legend>
+              <div class="chat-export-format-grid chat-export-format-grid--two">
+                <label class="chat-export-format-option" :class="{ 'chat-export-format-option--selected': exportOutputMode === 'zip' }">
+                  <input v-model="exportOutputMode" type="radio" value="zip" class="sr-only" />
+                  <span class="chat-export-format-option__code">ZIP 全量</span>
+                  <span class="chat-export-format-option__meta">一次性归档</span>
+                  <span class="chat-export-format-option__check" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m4 10 4 4 8-8" /></svg></span>
+                </label>
+                <label class="chat-export-format-option" :class="{ 'chat-export-format-option--selected': exportOutputMode === 'folder' }">
+                  <input v-model="exportOutputMode" type="radio" value="folder" class="sr-only" />
+                  <span class="chat-export-format-option__code">增量目录</span>
+                  <span class="chat-export-format-option__meta">可持续更新</span>
+                  <span class="chat-export-format-option__check" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m4 10 4 4 8-8" /></svg></span>
+                </label>
+              </div>
+            </fieldset>
 
             <div class="chat-export-output-section">
               <div class="chat-export-compact-label">
@@ -268,7 +286,7 @@
               </div>
             </div>
 
-            <div class="chat-export-output-section">
+            <div v-if="exportOutputMode === 'zip'" class="chat-export-output-section">
               <div class="chat-export-compact-label">
                 <h4>ZIP 文件名</h4>
                 <span>可选，留空时自动生成</span>
@@ -282,6 +300,36 @@
               />
             </div>
 
+            <div v-else class="chat-export-output-section chat-export-incremental-card">
+              <div class="chat-export-incremental-card__summary">
+                <span class="chat-export-incremental-card__icon" aria-hidden="true">
+                  <i class="fa-solid fa-folder-tree"></i>
+                </span>
+                <div class="chat-export-incremental-card__copy">
+                  <div class="chat-export-incremental-card__heading">
+                    <h4>增量目录</h4>
+                    <span class="chat-export-baseline-status" :data-status="exportBaselineStatus">
+                      {{ exportBaselineStatusLabel }}
+                    </span>
+                  </div>
+                  <strong class="chat-export-incremental-card__folder" :title="exportFolderNamePreview">
+                    {{ exportFolderNamePreview }}
+                  </strong>
+                  <span class="chat-export-incremental-card__hint">未选中的既有会话会继续保留</span>
+                </div>
+              </div>
+              <label class="chat-export-reset-option" :class="{ 'chat-export-reset-option--selected': exportResetBaseline }">
+                <input v-model="exportResetBaseline" type="checkbox" class="sr-only" />
+                <span class="chat-export-checkbox" :class="{ 'chat-export-checkbox--checked': exportResetBaseline }" aria-hidden="true">
+                  <i class="fa-solid fa-check"></i>
+                </span>
+                <span class="chat-export-reset-option__copy">
+                  <strong>重置增量基线</strong>
+                  <small>仅配置发生变化时使用；会完整重建目录内的会话</small>
+                </span>
+              </label>
+            </div>
+
             <div class="chat-export-output-section chat-export-output-section--destination">
               <div class="chat-export-compact-label">
                 <h4>保存目录</h4>
@@ -293,7 +341,7 @@
                 </svg>
                 <div>
                   <strong>{{ exportFolder || '尚未选择保存目录' }}</strong>
-                  <small>{{ exportFolder ? '导出完成后会写入此目录' : '开始导出前需要先完成此项' }}</small>
+                  <small>{{ exportFolder ? (exportOutputMode === 'folder' ? '将创建或更新其中的增量目录' : '导出完成后会写入此目录') : '开始导出前需要先完成此项' }}</small>
                 </div>
                 <button type="button" class="chat-export-secondary-button" @click="chooseExportFolder">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
@@ -341,8 +389,12 @@
                 <strong>{{ exportJob.progress?.mediaCopied || 0 }}</strong>
               </div>
               <div>
-                <span>缺失媒体</span>
-                <strong>{{ exportJob.progress?.mediaMissing || 0 }}</strong>
+                <span>{{ exportJob.options?.outputMode === 'folder' ? '待补媒体（去重）' : '缺失媒体' }}</span>
+                <strong>
+                  {{ exportJob.options?.outputMode === 'folder' && exportJob.status === 'done'
+                    ? (exportJob.unresolvedMedia?.uniqueCount || 0)
+                    : (exportJob.progress?.mediaMissing || 0) }}
+                </strong>
               </div>
             </div>
 
@@ -371,7 +423,106 @@
               <p>{{ exportJob.progress?.currentConversationMessagesExported || 0 }} / {{ exportJob.progress?.currentConversationMessagesTotal || 0 }} 条消息</p>
             </div>
 
-            <div v-if="exportJob.status === 'done'" class="chat-export-result chat-export-result--success">
+            <div
+              v-if="exportJob.status === 'done' && exportJob.options?.outputMode === 'folder'"
+              class="chat-export-folder-result"
+            >
+              <div class="chat-export-folder-result__summary" role="status" aria-live="polite">
+                <span class="chat-export-folder-result__status-icon" aria-hidden="true">
+                  <i class="fa-solid fa-check"></i>
+                </span>
+                <div class="chat-export-folder-result__main">
+                  <strong>增量目录已更新</strong>
+                  <span class="chat-export-folder-result__path">
+                    {{ exportJob.folderPath || exportJob.folderName || exportFolderNamePreview }}
+                  </span>
+                  <div class="chat-export-folder-result__metrics" aria-label="本次增量更新统计">
+                    <span>新增 <strong>{{ exportJob.incremental?.messagesAdded || 0 }}</strong></span>
+                    <span>更新 <strong>{{ exportJob.incremental?.conversationsUpdated || 0 }}</strong></span>
+                    <span>复用 <strong>{{ exportJob.incremental?.conversationsReused || 0 }}</strong></span>
+                    <span v-if="exportJob.incremental?.filesRecovered">
+                      补回 <strong>{{ exportJob.incremental.filesRecovered }}</strong>
+                    </span>
+                    <span v-if="exportJob.incremental?.historyChangesSynced">
+                      同步历史 <strong>{{ exportJob.incremental.historyChangesSynced }}</strong>
+                    </span>
+                  </div>
+                  <span v-if="hasWebExportFolder" class="chat-export-folder-result__save-state">
+                    浏览器目录：{{ exportFolder || '未选择' }}
+                  </span>
+                  <span v-if="exportSaveState === 'saving'" class="chat-export-result__info">{{ exportSaveProgressText }}</span>
+                  <span v-else-if="exportSaveMsg" class="chat-export-result__success">{{ exportSaveMsg }}</span>
+                  <template v-else-if="exportSaveError">
+                    <ErrorNotice :message="exportSaveError" compact class="chat-export-result__error" />
+                    <button
+                      v-if="hasWebExportFolder"
+                      type="button"
+                      class="chat-export-secondary-button chat-export-repair-button"
+                      :disabled="exportSaveBusy"
+                      @click="saveExportToSelectedFolder"
+                    >
+                      重试写入目录
+                    </button>
+                  </template>
+                </div>
+              </div>
+
+              <div
+                v-if="exportJob.repairCandidates?.length || exportJob.unresolvedMedia?.conversations?.length"
+                class="chat-export-folder-result__followups"
+                aria-label="差异与媒体状态"
+              >
+                <div v-if="exportJob.repairCandidates?.length" class="chat-export-followup chat-export-followup--repairable">
+                  <span class="chat-export-followup__icon" aria-hidden="true">
+                    <i class="fa-solid fa-screwdriver-wrench"></i>
+                  </span>
+                  <div class="chat-export-followup__copy">
+                    <strong>{{ exportJob.repairCandidates.length }} 个会话存在可恢复差异</strong>
+                    <span>已确认修复会产生变化，仅重建对应会话。</span>
+                  </div>
+                  <button
+                    type="button"
+                    class="chat-export-followup__action chat-export-followup__action--primary"
+                    :disabled="isExportCreating"
+                    @click="repairIncrementalConversations"
+                  >
+                    修复可恢复差异
+                  </button>
+                </div>
+
+                <div
+                  v-if="exportJob.unresolvedMedia?.conversations?.length"
+                  class="chat-export-followup chat-export-followup--unavailable"
+                >
+                  <span class="chat-export-followup__icon" aria-hidden="true">
+                    <i class="fa-solid fa-photo-film"></i>
+                  </span>
+                  <div class="chat-export-followup__copy">
+                    <strong>{{ exportJob.unresolvedMedia?.uniqueCount || 0 }} 个媒体当前无法获取</strong>
+                    <span>
+                      影响 {{ exportJob.unresolvedMedia?.referenceCount || 0 }} 条消息；源端暂不可用，重复修复不会改变结果。
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    class="chat-export-followup__action"
+                    :disabled="isExportCreating"
+                    title="重新扫描这些会话并重试本地及已启用的远程媒体；源端仍不可用时会继续保留待补状态"
+                    @click="recheckIncrementalMedia"
+                  >
+                    <i class="fa-solid fa-rotate" aria-hidden="true"></i>
+                    重新探测缺失媒体
+                  </button>
+                </div>
+              </div>
+
+              <details v-if="exportJob.warning" class="chat-export-folder-result__details">
+                <summary>查看完整任务说明</summary>
+                <p>{{ exportJob.warning }}</p>
+              </details>
+            </div>
+
+            <div v-else-if="exportJob.status === 'done'" class="chat-export-result chat-export-result--success">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" />
                 <path d="m8 12 2.5 2.5L16 9" />
@@ -379,10 +530,22 @@
               <div>
                 <strong>导出已完成</strong>
                 <span>{{ exportBackendZipPath || 'ZIP 文件已生成' }}</span>
+                <span v-if="exportJob.warning" class="chat-export-result__warning">{{ exportJob.warning }}</span>
                 <span v-if="hasWebExportFolder">浏览器目录：{{ exportFolder || '未选择' }}</span>
                 <span v-if="exportSaveState === 'saving'" class="chat-export-result__info">{{ exportSaveProgressText }}</span>
                 <span v-else-if="exportSaveMsg" class="chat-export-result__success">{{ exportSaveMsg }}</span>
-                <ErrorNotice v-else-if="exportSaveError" :message="exportSaveError" compact class="chat-export-result__error" />
+                <template v-else-if="exportSaveError">
+                  <ErrorNotice :message="exportSaveError" compact class="chat-export-result__error" />
+                  <button
+                    v-if="hasWebExportFolder"
+                    type="button"
+                    class="chat-export-secondary-button chat-export-repair-button"
+                    :disabled="exportSaveBusy"
+                    @click="saveExportToSelectedFolder"
+                  >
+                    重试写入目录
+                  </button>
+                </template>
               </div>
               <a
                 v-if="!hasWebExportFolder"
@@ -413,7 +576,7 @@
         <div class="chat-export-summary" aria-live="polite">
           <span><strong>{{ exportSelectedCount }}</strong> 个会话</span>
           <span class="chat-export-summary__separator" aria-hidden="true"></span>
-          <span><strong>{{ exportFormatLabel }}</strong> · {{ exportMessageTypeCount }} 类消息</span>
+          <span><strong>{{ exportFormatLabel }}</strong> · {{ exportOutputModeLabel }} · {{ exportMessageTypeCount }} 类消息</span>
           <span class="chat-export-summary__separator" aria-hidden="true"></span>
           <button
             type="button"
@@ -441,7 +604,7 @@
               <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
               <path d="M4 19h16" />
             </svg>
-            {{ isExportCreating ? '正在创建' : '开始导出' }}
+            {{ isExportCreating ? '正在创建' : (exportOutputMode === 'folder' ? '开始更新' : '开始导出') }}
           </button>
           <button
             v-else
@@ -500,6 +663,17 @@ export default defineComponent({
       const value = String(stateValue('exportFormat') || 'html').toLowerCase()
       return FORMAT_OPTIONS.find((option) => option.value === value)?.label || value.toUpperCase()
     })
+    const exportOutputModeLabel = computed(() => {
+      return String(stateValue('exportOutputMode') || 'zip') === 'folder' ? '增量目录' : 'ZIP 全量'
+    })
+    const exportBaselineStatusLabel = computed(() => ({
+      ready: '基线已读取',
+      repair: '将补回缺失文件',
+      new: '首次生成',
+      invalid: '基线不可用',
+      auto: '自动检查基线',
+      unknown: '待检查基线',
+    }[String(stateValue('exportBaselineStatus') || 'unknown')] || '待检查基线'))
     const exportHasFolder = computed(() => Boolean(String(stateValue('exportFolder') || '').trim()))
     const exportTimeSummary = computed(() => {
       const start = String(stateValue('exportStartLocal') || '').trim()
@@ -525,6 +699,8 @@ export default defineComponent({
       exportSelectedCount,
       exportMessageTypeCount,
       exportFormatLabel,
+      exportOutputModeLabel,
+      exportBaselineStatusLabel,
       exportHasFolder,
       exportTimeSummary,
       exportJobStatusLabel,
@@ -1153,6 +1329,165 @@ export default defineComponent({
   gap: 6px;
 }
 
+.chat-export-format-grid--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.chat-export-output-mode {
+  padding: 0 0 10px;
+}
+
+.chat-export-incremental-card {
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  background: var(--app-surface-bg);
+}
+
+.chat-export-incremental-card__summary {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 11px;
+}
+
+.chat-export-incremental-card__icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--export-accent-soft);
+  color: var(--export-accent-text);
+  font-size: 13px;
+}
+
+.chat-export-incremental-card__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-export-incremental-card__heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chat-export-incremental-card__heading h4 {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.chat-export-baseline-status {
+  display: inline-flex;
+  min-height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 3px 7px;
+  border: 1px solid var(--export-accent-border);
+  border-radius: 4px;
+  background: var(--export-accent-soft);
+  color: var(--export-accent-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.chat-export-baseline-status[data-status='repair'],
+.chat-export-baseline-status[data-status='invalid'] {
+  border-color: var(--export-warning-border);
+  background: var(--export-warning-soft);
+  color: var(--export-warning-text);
+}
+
+.chat-export-incremental-card__folder {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-export-incremental-card__hint {
+  color: var(--app-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.chat-export-reset-option {
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px 11px;
+  border-top: 1px solid var(--app-border);
+  background: var(--app-surface-soft);
+  color: var(--app-text-primary);
+  cursor: pointer;
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.chat-export-reset-option:hover {
+  background: var(--app-neutral-btn-hover);
+}
+
+.chat-export-reset-option:focus-within {
+  box-shadow: inset 0 0 0 2px var(--app-accent);
+}
+
+.chat-export-reset-option--selected {
+  background: var(--export-warning-soft);
+}
+
+.chat-export-reset-option--selected:hover {
+  background: var(--export-warning-soft);
+}
+
+.chat-export-reset-option .chat-export-checkbox {
+  width: 17px;
+  height: 17px;
+}
+
+.chat-export-reset-option .chat-export-checkbox i {
+  display: none;
+  font-size: 9px;
+}
+
+.chat-export-reset-option .chat-export-checkbox--checked i {
+  display: block;
+}
+
+.chat-export-reset-option__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-export-reset-option__copy strong {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.chat-export-reset-option__copy small {
+  color: var(--app-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .chat-export-format-option {
   position: relative;
   display: flex;
@@ -1661,6 +1996,221 @@ export default defineComponent({
   color: var(--export-danger-text) !important;
 }
 
+.chat-export-result__warning {
+  color: var(--export-warning-text) !important;
+}
+
+.chat-export-repair-button {
+  width: fit-content;
+  margin-top: 4px;
+}
+
+.chat-export-folder-result {
+  margin-top: 20px;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 7px;
+  background: var(--app-surface-bg);
+}
+
+.chat-export-folder-result__summary {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 13px 14px 12px;
+}
+
+.chat-export-folder-result__status-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--export-accent-soft);
+  color: var(--export-accent-text);
+  font-size: 13px;
+}
+
+.chat-export-folder-result__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.chat-export-folder-result__main > strong {
+  color: var(--app-text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.chat-export-folder-result__path,
+.chat-export-folder-result__save-state {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--app-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-export-folder-result__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.chat-export-folder-result__metrics > span {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--app-surface-soft);
+  color: var(--app-text-secondary);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.chat-export-folder-result__metrics strong {
+  color: var(--app-text-primary);
+  font-size: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-export-folder-result__followups {
+  border-top: 1px solid var(--app-border);
+  background: var(--app-surface-soft);
+}
+
+.chat-export-followup {
+  display: grid;
+  min-height: 62px;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 14px;
+}
+
+.chat-export-followup + .chat-export-followup {
+  border-top: 1px solid var(--app-border);
+}
+
+.chat-export-followup__icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--app-surface-bg);
+  color: var(--app-text-muted);
+  font-size: 13px;
+}
+
+.chat-export-followup--repairable .chat-export-followup__icon {
+  background: var(--export-warning-soft);
+  color: var(--export-warning-text);
+}
+
+.chat-export-followup__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-export-followup__copy strong {
+  color: var(--app-text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.chat-export-followup__copy span {
+  color: var(--app-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.chat-export-followup__action {
+  display: inline-flex;
+  min-height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 5px;
+  background: var(--app-surface-bg);
+  color: var(--app-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease, opacity 160ms ease;
+}
+
+.chat-export-followup__action:hover:not(:disabled) {
+  background: var(--app-neutral-btn-hover);
+  color: var(--app-text-primary);
+}
+
+.chat-export-followup__action--primary {
+  border-color: var(--export-accent-border);
+  background: var(--export-accent-soft);
+  color: var(--export-accent-text);
+}
+
+.chat-export-followup__action--primary:hover:not(:disabled) {
+  border-color: var(--app-accent);
+  background: var(--app-accent);
+  color: #fff;
+}
+
+.chat-export-followup__action:active {
+  transform: translateY(1px);
+}
+
+.chat-export-followup__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.chat-export-folder-result__details {
+  border-top: 1px solid var(--app-border);
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+
+.chat-export-folder-result__details summary {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  width: fit-content;
+  padding: 7px 14px;
+  color: var(--app-text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.chat-export-folder-result__details summary:hover {
+  color: var(--app-text-primary);
+}
+
+.chat-export-folder-result__details p {
+  margin: -2px 14px 10px;
+  color: var(--app-text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .chat-export-footer {
   display: flex;
   min-height: 66px;
@@ -1885,6 +2435,16 @@ html[data-theme='dark'] .chat-export-modal :is(input, select) {
 
   .chat-export-result .chat-export-primary-button {
     grid-column: 2;
+    justify-self: start;
+  }
+
+  .chat-export-followup {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .chat-export-followup__action {
+    grid-column: 2;
+    width: fit-content;
     justify-self: start;
   }
 }

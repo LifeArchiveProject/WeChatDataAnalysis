@@ -1,13 +1,14 @@
 import asyncio
 import json
 import time
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, SecretStr
 
 from ..chat_export_service import CHAT_EXPORT_MANAGER, get_chat_export_targets_preview
+from ..chat_incremental_export import ChatIncrementalError
 from ..native_core_export import decode_export_content_key, erase_export_content_key
 from ..path_fix import PathFixRoute
 from ..voice_transcription import VoiceTranscriptionError, get_voice_transcription_service
@@ -16,6 +17,7 @@ router = APIRouter(route_class=PathFixRoute)
 
 ExportFormat = Literal["json", "txt", "html", "excel"]
 ExportScope = Literal["selected", "all", "groups", "singles"]
+ExportOutputMode = Literal["zip", "folder"]
 ChatSource = Literal["auto", "decrypted", "realtime"]
 MediaKind = Literal["image", "emoji", "video", "video_thumb", "voice", "file"]
 MessageType = Literal[
@@ -78,10 +80,25 @@ class ChatExportCreateRequest(BaseModel):
         description="WEC1 的 32 字节 Base64 内容密钥；仅 encrypt=true 时使用",
     )
     transcribe_voice: bool = Field(False, description="使用本地 Whisper 将语音消息转成中文并写入导出文件")
+    output_mode: ExportOutputMode = Field("zip", description="输出方式：zip=全量压缩包；folder=可持续更新目录")
+    folder_name: Optional[str] = Field(None, description="增量导出根目录名")
+    baseline: Optional[dict[str, Any]] = Field(None, description="浏览器端读取的上轮聊天增量基线")
+    missing_files: list[str] = Field(default_factory=list, description="浏览器端发现缺失的受管理文件")
+    reset_baseline: bool = Field(False, description="明确重置基线并完整重建")
+    repair_usernames: list[str] = Field(default_factory=list, description="需要重建的可恢复差异会话")
+    recheck_media: bool = Field(False, description="明确重新探测待补媒体；不会把源端不可用项当成可修复差异")
 
 
-@router.post("/api/chat/exports", summary="创建聊天记录导出任务（离线 zip）")
+@router.post("/api/chat/exports", summary="创建聊天记录导出任务（ZIP 全量或增量目录）")
 async def create_chat_export(req: ChatExportCreateRequest):
+    if req.baseline is not None:
+        baseline_size = len(json.dumps(req.baseline, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        if baseline_size > 128 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail={"code": "incremental_baseline_too_large", "message": "增量基线过大。"})
+    if len(req.missing_files) > 100_000:
+        raise HTTPException(status_code=413, detail={"code": "incremental_missing_files_too_many", "message": "缺失文件清单过大。"})
+    if req.output_mode == "folder" and req.encrypt:
+        raise HTTPException(status_code=400, detail={"code": "incremental_encryption_unsupported", "message": "增量目录不支持整包加密，请使用 ZIP 全量导出。"})
     if req.transcribe_voice and not req.privacy_mode:
         try:
             await asyncio.to_thread(get_voice_transcription_service().ensure_available)
@@ -120,7 +137,17 @@ async def create_chat_export(req: ChatExportCreateRequest):
             encrypt=bool(req.encrypt),
             content_key=content_key,
             transcribe_voice=req.transcribe_voice,
+            output_mode=req.output_mode,
+            folder_name=req.folder_name,
+            baseline=req.baseline,
+            missing_files=req.missing_files,
+            reset_baseline=bool(req.reset_baseline),
+            repair_usernames=req.repair_usernames,
+            recheck_media=bool(req.recheck_media),
         )
+    except ChatIncrementalError as e:
+        erase_export_content_key(content_key)
+        raise HTTPException(status_code=409, detail={"code": e.code, "message": str(e)}) from e
     except ValueError as e:
         erase_export_content_key(content_key)
         raise HTTPException(status_code=400, detail=str(e))
@@ -178,6 +205,34 @@ async def download_chat_export(export_id: str):
         media_type="application/octet-stream" if job.zip_path.suffix.lower() == ".wec" else "application/zip",
         filename=job.zip_path.name,
     )
+
+
+@router.get("/api/chat/exports/{export_id}/files", summary="获取聊天增量目录变化文件清单")
+async def list_chat_export_files(export_id: str):
+    job = CHAT_EXPORT_MANAGER.get_job(str(export_id or "").strip())
+    if not job:
+        raise HTTPException(status_code=404, detail="Export not found.")
+    if job.status != "done" or not job.change_manifest or not job.staged_files:
+        raise HTTPException(status_code=409, detail="Incremental export not ready.")
+    return {"status": "success", "manifest": job.change_manifest}
+
+
+@router.get("/api/chat/exports/{export_id}/files/{file_id}", summary="下载单个聊天增量变化文件")
+async def download_chat_export_file(export_id: str, file_id: str):
+    path = CHAT_EXPORT_MANAGER.get_staged_file(
+        str(export_id or "").strip(),
+        str(file_id or "").strip(),
+    )
+    if path is None:
+        raise HTTPException(status_code=404, detail="Export file not found.")
+    return FileResponse(str(path), media_type="application/octet-stream", filename=path.name)
+
+
+@router.post("/api/chat/exports/{export_id}/commit", summary="确认浏览器已完成聊天增量目录写入")
+async def commit_chat_export_files(export_id: str):
+    if not CHAT_EXPORT_MANAGER.commit_staged_files(str(export_id or "").strip()):
+        raise HTTPException(status_code=404, detail="Export not found.")
+    return {"status": "success"}
 
 
 @router.get("/api/chat/exports/{export_id}/events", summary="导出任务进度 SSE")
