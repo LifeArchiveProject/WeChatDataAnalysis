@@ -14,3 +14,14 @@ The optional local voice transcription feature uses the following Python package
 | `Hugging Face tokenizers` | https://github.com/huggingface/tokenizers | Apache-2.0 |
 
 Whisper model weights are not included in this repository or its pull request. Users provide or download model weights separately and must follow the selected model's license and usage terms.
+
+## Optional macOS WCDB passphrase capture
+
+The optional Apple Silicon LLDB capture workflow adapts the breakpoint and
+register-inspection approach from
+[`TANGandXUE/wcdb-key-tool`](https://github.com/TANGandXUE/wcdb-key-tool),
+which is distributed under the MIT License. The integration adds target
+database validation, transaction recovery, signature verification, and
+privacy-preserving diagnostics; it does not bundle user databases or keys.
+The complete upstream license text is included at
+`docs/licenses/wcdb-key-tool-MIT.txt`.

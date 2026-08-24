@@ -23,6 +23,10 @@ from wechat_decrypt_tool.path_fix import PathFixRequest
 from wechat_decrypt_tool.routers import keys as keys_router
 
 
+class LocalRequest:
+    client = SimpleNamespace(host="127.0.0.1")
+
+
 class TestMacosPlatformSupport(unittest.TestCase):
     def test_packaged_native_resources_prefer_stable_sibling_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -103,6 +107,7 @@ class TestMacosPlatformSupport(unittest.TestCase):
             with (
                 patch.object(platform_support, "current_platform", return_value="macos"),
                 patch.object(platform, "machine", return_value="arm64"),
+                patch.object(platform_support.shutil, "which", return_value="/usr/bin/lldb"),
                 patch.object(
                     platform_support,
                     "mac_native_core_paths",
@@ -123,6 +128,7 @@ class TestMacosPlatformSupport(unittest.TestCase):
                 capabilities = platform_support.runtime_capabilities()
 
         self.assertTrue(capabilities["database_key_extraction"])
+        self.assertTrue(capabilities["macos_lldb_fallback"])
         self.assertTrue(capabilities["database_key_manual_input"])
         self.assertTrue(capabilities["database_decryption"])
         self.assertTrue(capabilities["image_key_memory_scan"])
@@ -218,6 +224,171 @@ class TestMacosPlatformSupport(unittest.TestCase):
         self.assertTrue(result["data"]["retryable"])
         self.assertIn("完整退出微信程序", result["errmsg"])
         self.assertIn("重新打开微信并登录", result["errmsg"])
+
+    def test_database_key_endpoint_offers_explicit_lldb_fallback_for_runtime_failure(self) -> None:
+        class ConnectedRequest:
+            async def is_disconnected(self) -> bool:
+                return False
+
+        failure = MacosDbKeyUnavailableError(
+            "protected",
+            code="TARGET_PROCESS_PROTECTED",
+            retryable=False,
+        )
+        with (
+            patch.object(keys_router, "is_macos", return_value=True),
+            patch.object(keys_router, "get_db_key_workflow", side_effect=failure),
+            patch.object(keys_router, "_macos_lldb_fallback_available", return_value=True),
+        ):
+            result = asyncio.run(keys_router.get_wechat_db_key(ConnectedRequest()))
+
+        self.assertEqual(result["status"], -1)
+        self.assertTrue(result["data"]["can_fallback_to_macos_lldb"])
+
+    def test_database_key_endpoint_does_not_offer_lldb_after_integrity_failure(self) -> None:
+        class ConnectedRequest:
+            async def is_disconnected(self) -> bool:
+                return False
+
+        failure = MacosDbKeyUnavailableError(
+            "tampered",
+            code="HELPER_TAMPERED",
+            retryable=False,
+        )
+        with (
+            patch.object(keys_router, "is_macos", return_value=True),
+            patch.object(keys_router, "get_db_key_workflow", side_effect=failure),
+            patch.object(keys_router, "_macos_lldb_fallback_available", return_value=True),
+        ):
+            result = asyncio.run(keys_router.get_wechat_db_key(ConnectedRequest()))
+
+        self.assertFalse(result["data"]["can_fallback_to_macos_lldb"])
+
+    def test_macos_lldb_prepare_endpoint_returns_only_sanitized_stage(self) -> None:
+        with (
+            patch.object(keys_router, "is_macos", return_value=True),
+            patch.object(keys_router, "_macos_lldb_fallback_available", return_value=True),
+            patch.object(
+                keys_router,
+                "prepare_macos_passphrase_capture",
+                return_value={
+                    "wechat_modified": True,
+                    "ready_for_preflight": True,
+                    "backup_path": "/private/backup.zip",
+                    "state_path": "/private/state.json",
+                },
+            ),
+        ):
+            result = asyncio.run(
+                keys_router.prepare_macos_key_capture(LocalRequest(), keys_router.MacosKeyCaptureRequest())
+            )
+
+        self.assertEqual(result["status"], 0)
+        self.assertEqual(result["data"]["stage"], "prepared")
+        self.assertNotIn("backup_path", result["data"])
+        self.assertNotIn("state_path", result["data"])
+
+    def test_macos_capture_validates_caches_and_returns_key_to_local_frontend(self) -> None:
+        db_key = "ab" * 32
+        with (
+            patch.object(keys_router, "is_macos", return_value=True),
+            patch.object(keys_router, "_resolve_v4_probe_db_file", return_value=Path("/tmp/message_0.db")),
+            patch.object(
+                keys_router,
+                "capture_prepared_macos_passphrase",
+                return_value={
+                    "db_key": db_key,
+                    "cache_path": "/private/key.json",
+                    "backup_path": "/private/backup.zip",
+                    "official_wechat_verified": True,
+                    "official_wechat_restored": True,
+                },
+            ) as capture,
+            patch(
+                "wechat_decrypt_tool.wechat_decrypt.validate_realtime_database_key",
+                return_value={"valid": True, "verified_roles": ["message", "session"]},
+            ),
+            patch.object(keys_router, "save_passphrase") as save,
+        ):
+            result = asyncio.run(
+                keys_router.capture_macos_key(
+                    LocalRequest(),
+                    keys_router.MacosKeyCaptureRequest(db_storage_path="/tmp/db_storage")
+                )
+            )
+
+        self.assertEqual(result["status"], 0)
+        self.assertTrue(result["data"]["validated"])
+        self.assertTrue(result["data"]["key_saved"])
+        self.assertEqual(result["data"]["db_key"], db_key)
+        self.assertNotIn("cache_path", result["data"])
+        self.assertNotIn("backup_path", result["data"])
+        self.assertFalse(capture.call_args.kwargs["save_result"])
+        save.assert_called_once_with(db_key)
+
+    def test_macos_lldb_status_and_cancel_do_not_expose_recovery_paths(self) -> None:
+        with (
+            patch.object(keys_router, "is_macos", return_value=True),
+            patch.object(
+                keys_router,
+                "get_in_place_capture_status",
+                return_value={"pending": True, "stage": "launched", "needs_cleanup": True},
+            ),
+        ):
+            status = asyncio.run(keys_router.get_macos_key_capture_status(LocalRequest()))
+
+        self.assertEqual(status["status"], 0)
+        self.assertTrue(status["data"]["pending"])
+        self.assertNotIn("backup_path", status["data"])
+        self.assertNotIn("state_path", status["data"])
+
+        with (
+            patch.object(keys_router, "is_macos", return_value=True),
+            patch.object(
+                keys_router,
+                "cleanup_macos_passphrase_capture",
+                return_value={
+                    "official_wechat_verified": True,
+                    "official_wechat_restored": True,
+                    "backup_path": "/private/backup.zip",
+                },
+            ),
+        ):
+            cancelled = asyncio.run(
+                keys_router.cancel_macos_key_capture(LocalRequest(), keys_router.MacosKeyCaptureRequest())
+            )
+
+        self.assertEqual(cancelled["status"], 0)
+        self.assertTrue(cancelled["data"]["official_wechat_verified"])
+        self.assertNotIn("backup_path", cancelled["data"])
+
+    def test_macos_lldb_endpoints_reject_overlapping_mutations(self) -> None:
+        self.assertTrue(keys_router._begin_macos_capture_operation("prepare"))
+        try:
+            with patch.object(keys_router, "is_macos", return_value=True):
+                result = asyncio.run(
+                    keys_router.capture_macos_key(LocalRequest(), keys_router.MacosKeyCaptureRequest())
+                )
+            self.assertEqual(result["status"], -1)
+            self.assertEqual(result["data"]["error_code"], "CAPTURE_BUSY")
+        finally:
+            keys_router._end_macos_capture_operation("prepare")
+
+    def test_macos_lldb_endpoints_reject_remote_clients(self) -> None:
+        remote_request = SimpleNamespace(client=SimpleNamespace(host="100.64.0.8"))
+        with patch.object(keys_router, "is_macos", return_value=True), patch.object(
+            keys_router, "prepare_macos_passphrase_capture"
+        ) as prepare:
+            result = asyncio.run(
+                keys_router.prepare_macos_key_capture(
+                    remote_request,
+                    keys_router.MacosKeyCaptureRequest(),
+                )
+            )
+
+        self.assertEqual(result["status"], -1)
+        self.assertEqual(result["data"]["error_code"], "REMOTE_CLIENT_FORBIDDEN")
+        prepare.assert_not_called()
 
     def test_macos_database_key_endpoint_redacts_unknown_internal_errors(self) -> None:
         class ConnectedRequest:

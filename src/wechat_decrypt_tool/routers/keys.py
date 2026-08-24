@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import threading
 from pathlib import Path
 from typing import Optional
@@ -7,19 +8,169 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from ..logging_config import get_logger
+from ..app_paths import get_output_dir
+from ..macos_db_key_capture import (
+    MacOSDBKeyCaptureFailure,
+    capture_prepared_macos_passphrase,
+    cleanup_macos_passphrase_capture,
+    preflight_prepared_macos_passphrase,
+    prepare_macos_passphrase_capture,
+    save_passphrase,
+)
 from ..macos_db_key_helper import MacosDbKeyError
+from ..macos_inplace_capture import get_in_place_capture_status
 from ..key_store import get_account_keys_from_store, normalize_key_store_path
 from ..key_service import (
+    _resolve_v4_probe_db_file,
     get_db_key_workflow,
     get_image_key_integrated_workflow,
     get_image_key_memory_workflow,
 )
 from ..media_helpers import _load_media_keys, _resolve_account_dir
 from ..path_fix import PathFixRoute
-from ..platform_support import current_platform, is_macos
+from ..platform_support import current_platform, is_macos, runtime_capabilities
 
 router = APIRouter(route_class=PathFixRoute)
 logger = get_logger(__name__)
+
+_MACOS_LLDB_FALLBACK_CODES = frozenset(
+    {
+        "BUILD_EXPIRED",
+        "CAPTURE_ATTACH_NOT_SUPPORTED",
+        "CAPTURE_ATTACH_RUNTIME_ERROR",
+        "CAPTURE_FAILED",
+        "CAPTURE_KEY_MISMATCH",
+        "CAPTURE_RUNTIME_UNAVAILABLE",
+        "CAPTURE_SESSION_DETACHED",
+        "CONTRACT_MISMATCH",
+        "DEVELOPMENT_BUILD_REJECTED",
+        "HELPER_DEBUGGER_ENTITLEMENT_MISSING",
+        "HELPER_EXITED",
+        "HELPER_START_FAILED",
+        "MISSING_RESOURCE",
+        "PROCESS_ACCESS_DENIED",
+        "PROCESS_EXITED",
+        "PROCESS_NOT_FOUND",
+        "PROTOCOL_ERROR",
+        "TARGET_PROCESS_PROTECTED",
+        "TIMEOUT",
+        "UNSUPPORTED_WECHAT",
+        "WECHAT_RELOGIN_REQUIRED",
+    }
+)
+_macos_capture_state_lock = threading.Lock()
+_macos_capture_cancel_lock = threading.Lock()
+_macos_capture_active_operation = ""
+
+
+def _macos_capture_backup_root() -> Path:
+    return get_output_dir() / "macos-key-capture-backups"
+
+
+def _macos_lldb_fallback_available() -> bool:
+    try:
+        return bool(runtime_capabilities().get("macos_lldb_fallback"))
+    except Exception:
+        return False
+
+
+def _macos_lldb_fallback_allowed(error_code: str) -> bool:
+    return error_code in _MACOS_LLDB_FALLBACK_CODES and _macos_lldb_fallback_available()
+
+
+def _begin_macos_capture_operation(operation: str) -> bool:
+    global _macos_capture_active_operation
+    with _macos_capture_state_lock:
+        if _macos_capture_active_operation:
+            return False
+        _macos_capture_active_operation = operation
+        return True
+
+
+def _end_macos_capture_operation(operation: str) -> None:
+    global _macos_capture_active_operation
+    with _macos_capture_state_lock:
+        if _macos_capture_active_operation == operation:
+            _macos_capture_active_operation = ""
+
+
+def _current_macos_capture_operation() -> str:
+    with _macos_capture_state_lock:
+        return _macos_capture_active_operation
+
+
+class MacosKeyCaptureRequest(BaseModel):
+    wechat_install_path: Optional[str] = Field(None, description="微信安装路径")
+    db_storage_path: Optional[str] = Field(None, description="账号 db_storage 路径")
+    timeout: int = Field(240, ge=60, le=600, description="等待重新登录的秒数")
+
+
+def _macos_capture_error_response(error: BaseException, *, stage: str) -> dict:
+    known = isinstance(error, MacOSDBKeyCaptureFailure)
+    code = str(getattr(error, "code", "INTERNAL_ERROR") or "INTERNAL_ERROR") if known else "INTERNAL_ERROR"
+    logger.warning(
+        "[keys] experimental macOS local capture failed: stage=%s error_code=%s classified=%s",
+        stage,
+        code,
+        known,
+    )
+    try:
+        needs_cleanup = bool(get_in_place_capture_status().get("pending"))
+    except Exception:
+        needs_cleanup = bool(getattr(error, "wechat_modified", False)) if known else False
+    return {
+        "status": -1,
+        "errmsg": str(error).strip() if known else "实验性本机调试密钥获取失败，已停止本次操作。",
+        "data": {
+            "platform": "macos",
+            "method": "macos_inplace_native",
+            "stage": stage,
+            "error_code": code,
+            "wechat_modified": bool(getattr(error, "wechat_modified", False)) if known else False,
+            "needs_cleanup": needs_cleanup,
+        },
+    }
+
+
+def _macos_capture_busy_response() -> dict:
+    return {
+        "status": -1,
+        "errmsg": "另一项 macOS 密钥操作仍在进行，请等待完成或先停止当前操作。",
+        "data": {
+            "platform": "macos",
+            "method": "macos_inplace_native",
+            "stage": _current_macos_capture_operation() or "busy",
+            "error_code": "CAPTURE_BUSY",
+        },
+    }
+
+
+def _macos_capture_local_request_error(request: Request) -> dict | None:
+    client = request.client
+    host = str(getattr(client, "host", "") or "").strip()
+    try:
+        address = ipaddress.ip_address(host)
+        is_loopback = bool(
+            address.is_loopback
+            or (
+                isinstance(address, ipaddress.IPv6Address)
+                and address.ipv4_mapped is not None
+                and address.ipv4_mapped.is_loopback
+            )
+        )
+    except ValueError:
+        is_loopback = host.lower() == "localhost"
+    if is_loopback:
+        return None
+    return {
+        "status": -1,
+        "errmsg": "实验性本机密钥捕获只能在运行 WCDA 的 Mac 本机界面操作。",
+        "data": {
+            "platform": current_platform(),
+            "method": "macos_inplace_native",
+            "error_code": "REMOTE_CLIENT_FORBIDDEN",
+        },
+    }
 
 
 def _log_macos_db_key_failure(
@@ -418,6 +569,7 @@ async def get_wechat_db_key(
                     "error_code": error_code,
                     "retryable": retryable,
                     "manual_input_supported": True,
+                    "can_fallback_to_macos_lldb": _macos_lldb_fallback_allowed(error_code),
                 },
             }
         mode = str(key_mode or "auto").strip().lower()
@@ -457,6 +609,7 @@ async def get_wechat_db_key(
                     "error_code": error_code,
                     "retryable": retryable,
                     "manual_input_supported": True,
+                    "can_fallback_to_macos_lldb": _macos_lldb_fallback_allowed(error_code),
                 },
             }
         mode = str(key_mode or "auto").strip().lower()
@@ -475,6 +628,220 @@ async def get_wechat_db_key(
             "errmsg": f"获取失败: {str(e)}",
             "data": {}
         }
+
+
+@router.get("/api/macos-key-capture/status", summary="查看实验性 macOS 本机密钥捕获状态")
+async def get_macos_key_capture_status(request: Request):
+    if local_error := _macos_capture_local_request_error(request):
+        return local_error
+    if not is_macos():
+        return {
+            "status": -1,
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
+            "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
+        }
+    persisted = get_in_place_capture_status()
+    return {
+        "status": 0,
+        "errmsg": "ok",
+        "data": {
+            **persisted,
+            "method": "macos_inplace_native",
+            "active_operation": _current_macos_capture_operation(),
+        },
+    }
+
+
+@router.post("/api/macos-key-capture/prepare", summary="准备实验性 macOS 本机密钥捕获")
+async def prepare_macos_key_capture(request: Request, payload: MacosKeyCaptureRequest):
+    if local_error := _macos_capture_local_request_error(request):
+        return local_error
+    if not is_macos():
+        return {
+            "status": -1,
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
+            "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
+        }
+    if not _macos_lldb_fallback_available():
+        return {
+            "status": -1,
+            "errmsg": "当前 Mac 不满足实验性本机调试兜底条件，请确认使用 Apple Silicon 并安装 Xcode Command Line Tools。",
+            "data": {"platform": "macos", "error_code": "LLDB_FALLBACK_UNAVAILABLE"},
+        }
+    operation = "prepare"
+    if not _begin_macos_capture_operation(operation):
+        return _macos_capture_busy_response()
+    try:
+        result = await asyncio.to_thread(
+            prepare_macos_passphrase_capture,
+            payload.wechat_install_path,
+            backup_root=_macos_capture_backup_root(),
+        )
+        return {
+            "status": 0,
+            "errmsg": "ok",
+            "data": {
+                "method": "macos_inplace_native",
+                "stage": "prepared",
+                "wechat_modified": bool(result.get("wechat_modified", True)),
+                "ready_for_preflight": bool(result.get("ready_for_preflight", True)),
+            },
+        }
+    except Exception as error:
+        return _macos_capture_error_response(error, stage="prepare")
+    finally:
+        _end_macos_capture_operation(operation)
+
+
+@router.post("/api/macos-key-capture/preflight", summary="预检实验性 macOS 本机捕获点")
+async def preflight_macos_key_capture(request: Request, payload: MacosKeyCaptureRequest):
+    if local_error := _macos_capture_local_request_error(request):
+        return local_error
+    if not is_macos():
+        return {
+            "status": -1,
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
+            "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
+        }
+    operation = "preflight"
+    if not _begin_macos_capture_operation(operation):
+        return _macos_capture_busy_response()
+    try:
+        result = await asyncio.to_thread(
+            preflight_prepared_macos_passphrase,
+            payload.wechat_install_path,
+            backup_root=_macos_capture_backup_root(),
+        )
+        return {
+            "status": 0,
+            "errmsg": "ok",
+            "data": {
+                "method": "macos_inplace_native",
+                "stage": "preflight_passed",
+                "wechat_modified": bool(result.get("wechat_modified", True)),
+                "process_attached": bool(result.get("process_attached", False)),
+            },
+        }
+    except Exception as error:
+        return _macos_capture_error_response(error, stage="preflight")
+    finally:
+        _end_macos_capture_operation(operation)
+
+
+@router.post("/api/macos-key-capture/capture", summary="执行实验性 macOS 本机密钥捕获")
+async def capture_macos_key(request: Request, payload: MacosKeyCaptureRequest):
+    if local_error := _macos_capture_local_request_error(request):
+        return local_error
+    if not is_macos():
+        return {
+            "status": -1,
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
+            "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
+        }
+    operation = "capture"
+    if not _begin_macos_capture_operation(operation):
+        return _macos_capture_busy_response()
+    try:
+        try:
+            probe_db_path = await asyncio.to_thread(
+                _resolve_v4_probe_db_file,
+                payload.db_storage_path,
+            )
+        except Exception as error:
+            raise MacOSDBKeyCaptureFailure(
+                "probe_database_invalid",
+                "所选账号路径中没有可用于实时校验的加密 WCDB 数据库，请重新选择该账号的 db_storage 目录。",
+                wechat_modified=True,
+            ) from error
+        result = await asyncio.to_thread(
+            capture_prepared_macos_passphrase,
+            payload.wechat_install_path,
+            backup_root=_macos_capture_backup_root(),
+            probe_db_path=probe_db_path,
+            timeout=payload.timeout,
+            save_result=False,
+        )
+        db_key = str(result.get("db_key") or "").strip().lower()
+        from ..wechat_decrypt import validate_realtime_database_key
+
+        validation = await asyncio.to_thread(
+            validate_realtime_database_key,
+            str(payload.db_storage_path or ""),
+            db_key,
+        )
+        if validation.get("valid") is not True:
+            raise MacOSDBKeyCaptureFailure(
+                "passphrase_database_mismatch",
+                "已捕获登录密钥，但未通过当前账号的完整消息与会话数据库校验。请确认选择了同一账号的数据目录。",
+            )
+        await asyncio.to_thread(save_passphrase, db_key)
+        return {
+            "status": 0,
+            "errmsg": "ok",
+            "data": {
+                "method": "macos_inplace_native",
+                "stage": "completed",
+                "validated": True,
+                "key_saved": True,
+                "db_key": db_key,
+                "wechat_modified": False,
+                "official_wechat_verified": bool(result.get("official_wechat_verified")),
+                "official_wechat_restored": bool(result.get("official_wechat_restored")),
+            },
+        }
+    except Exception as error:
+        return _macos_capture_error_response(error, stage="capture")
+    finally:
+        _end_macos_capture_operation(operation)
+
+
+@router.post("/api/macos-key-capture/cancel", summary="停止并清理实验性 macOS 本机密钥捕获")
+async def cancel_macos_key_capture(request: Request, payload: MacosKeyCaptureRequest):
+    if local_error := _macos_capture_local_request_error(request):
+        return local_error
+    if not is_macos():
+        return {
+            "status": -1,
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
+            "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
+        }
+    if not _macos_capture_cancel_lock.acquire(blocking=False):
+        return _macos_capture_busy_response()
+    operation = "cancel"
+    active_operation = _current_macos_capture_operation()
+    if active_operation and active_operation != "capture":
+        _macos_capture_cancel_lock.release()
+        return _macos_capture_busy_response()
+    claimed = False
+    if not active_operation:
+        claimed = _begin_macos_capture_operation(operation)
+        if not claimed:
+            _macos_capture_cancel_lock.release()
+            return _macos_capture_busy_response()
+    try:
+        result = await asyncio.to_thread(
+            cleanup_macos_passphrase_capture,
+            payload.wechat_install_path,
+            backup_root=_macos_capture_backup_root(),
+        )
+        return {
+            "status": 0,
+            "errmsg": "ok",
+            "data": {
+                "method": "macos_inplace_native",
+                "stage": "cancelled",
+                "pending": False,
+                "wechat_modified": False,
+                "official_wechat_verified": bool(result.get("official_wechat_verified")),
+                "official_wechat_restored": bool(result.get("official_wechat_restored")),
+            },
+        }
+    except Exception as error:
+        return _macos_capture_error_response(error, stage="cancel")
+    finally:
+        if claimed:
+            _end_macos_capture_operation(operation)
+        _macos_capture_cancel_lock.release()
 
 
 
