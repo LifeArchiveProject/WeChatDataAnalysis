@@ -9,16 +9,29 @@
         <section
           ref="dialogPanel"
           class="guide-dialog-panel theme-scope"
+          :class="{ 'guide-dialog-panel--wide': wide }"
           role="dialog"
           aria-modal="true"
           :aria-labelledby="titleId"
-          :aria-describedby="descriptionId"
+          :aria-describedby="description ? descriptionId : undefined"
           tabindex="-1"
         >
+          <button
+            v-if="showCloseIcon"
+            type="button"
+            class="guide-dialog-close"
+            aria-label="关闭"
+            @click="requestClose"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+
           <div class="guide-dialog-body">
             <p v-if="eyebrow" class="guide-dialog-eyebrow" :data-tone="tone">{{ eyebrow }}</p>
             <h2 :id="titleId" class="guide-dialog-title">{{ title }}</h2>
-            <p :id="descriptionId" class="guide-dialog-description">{{ description }}</p>
+            <p v-if="description" :id="descriptionId" class="guide-dialog-description">{{ description }}</p>
 
             <!-- 要点用编号 + 发丝分隔，读起来像规格说明，不再是彩框里的绿勾清单 -->
             <ol v-if="details.length" class="guide-dialog-details">
@@ -28,12 +41,14 @@
               </li>
             </ol>
 
+            <slot />
+
             <p v-if="note" class="guide-dialog-note">{{ note }}</p>
 
             <ErrorNotice v-if="errorMessage" :message="errorMessage" compact class="guide-dialog-error" />
           </div>
 
-          <footer class="guide-dialog-actions" :data-actions="secondaryLabel ? 'two' : 'one'">
+          <footer v-if="primaryLabel || secondaryLabel" class="guide-dialog-actions" :data-actions="secondaryLabel ? 'two' : 'one'">
             <button
               v-if="secondaryLabel"
               type="button"
@@ -78,7 +93,9 @@ const props = defineProps({
   secondaryLabel: { type: String, default: '' },
   tone: { type: String, default: 'guide' },
   busy: { type: Boolean, default: false },
-  dismissible: { type: Boolean, default: true }
+  dismissible: { type: Boolean, default: true },
+  wide: { type: Boolean, default: false },
+  showCloseIcon: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['primary', 'secondary', 'close'])
@@ -157,6 +174,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
 
 /* 一整块连续表面：不分头/身/脚色带，层级交给字号、留白和发丝线 */
 .guide-dialog-panel {
+  position: relative;
   display: flex;
   width: min(460px, 100%);
   max-height: min(760px, calc(100vh - 48px));
@@ -167,6 +185,55 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
   background: #ffffff;
   color: #16201a;
   outline: none;
+}
+
+.guide-dialog-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 1;
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: #8a948e;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.guide-dialog-close:hover {
+  color: #26312b;
+  background: rgba(16, 32, 24, 0.05);
+}
+
+.guide-dialog-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.guide-dialog-panel--wide {
+  width: min(1000px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+}
+
+.guide-dialog-panel--wide .guide-dialog-body {
+  padding: 24px 24px 18px;
+}
+
+.guide-dialog-panel--wide .guide-dialog-title {
+  font-size: 18px;
+}
+
+.guide-dialog-panel--wide .guide-dialog-description {
+  margin-top: 6px;
+  font-size: 12.5px;
+}
+
+.guide-dialog-panel--wide .guide-dialog-actions[data-actions='one'] {
+  grid-template-columns: 96px;
+  justify-content: end;
+  padding: 14px 24px 20px;
 }
 
 .guide-dialog-body {
@@ -376,6 +443,15 @@ html[data-theme='dark'] .guide-dialog-button--secondary {
 
 html[data-theme='dark'] .guide-dialog-button--secondary:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.06);
+}
+
+html[data-theme='dark'] .guide-dialog-close {
+  color: var(--setup-text-muted);
+}
+
+html[data-theme='dark'] .guide-dialog-close:hover {
+  color: var(--app-text-primary);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 @media (max-width: 520px) {
