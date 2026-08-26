@@ -1326,80 +1326,60 @@ function buildStack() {
   });
 }
 
-/* ─────────────────────────── act 07 · friends（同路人 · 解密一张名片）─────────────────────────── */
+/* ─────────────────────────── act 07 · friends（同路人 · 巨字名录）─────────────────────────── */
 
 function buildFriends() {
   if (REDUCED) return;
 
-  const card = $(".fr-card");
-  const decs = $$(".fr-dec, .fr-bubble__t");
+  const hexStrOf = (n) => { let h = ""; for (let i = 0; i < n; i++) h += HEXC[(Math.random() * 16) | 0]; return h; };
+  const names = $$(".ro-dec");
 
-  // 名片以密文态送达：文字先置为等长十六进制乱码，等扫描光带来解
-  decs.forEach((el) => {
+  // 名录以密文态待命：真名先置为等长乱码,进场时逐字落定
+  names.forEach((el) => {
     el.dataset.final = el.dataset.final || el.textContent;
-    const n = Math.max(4, Math.round(el.dataset.final.length * 1.6));
-    let hex = "";
-    for (let i = 0; i < n; i++) hex += HEXC[(Math.random() * 16) | 0];
-    el.textContent = hex;
+    el.textContent = hexStrOf(Math.max(6, Math.round(el.dataset.final.length * 1.4)));
     el.classList.add("is-hex");
   });
 
   const introChars = new SplitText(".friends__title", { type: "chars" }).chars;
   gsap.set(introChars, { opacity: 0, yPercent: 62, rotateX: -52, transformPerspective: 820, transformOrigin: "50% 100%" });
   gsap.set(".friends__top .sec-tag, .friends__sub", { opacity: 0, y: 18 });
-  gsap.set(".fr-avatar", { opacity: 0, scale: 0.6, transformOrigin: "50% 50%" });
-  gsap.set(".fr-bubble, .fr-card", { opacity: 0, y: 12, scale: 0.94, transformOrigin: "0% 0%" });
-  gsap.set(".fr-hint", { opacity: 0 });
-
-  const solve = (sel, dur, at, tl) => {
-    const el = typeof sel === "string" ? $(sel) : sel;
-    tl.to(el, {
-      duration: dur, scrambleText: { text: el.dataset.final, chars: HEXC, speed: 0.7 },
-      onComplete: () => el.classList.remove("is-hex"),
-    }, at);
-  };
-
-  // 落定后的待机态：边缘流光恒转 + 指针 3D 倾斜与反光追手
-  const startIdle = () => {
-    const ring = { a: 0 };
-    gsap.set(".fr-card__ring", { opacity: 0.5 });
-    gsap.to(ring, { a: 360, duration: 6, ease: "none", repeat: -1, onUpdate: () => card.style.setProperty("--ang", ring.a + "deg") });
-    if (TOUCH) return;
-    gsap.set(card, { transformOrigin: "50% 50%" });
-    const rx = gsap.quickTo(card, "rotationX", { duration: 0.55, ease: "power2.out" });
-    const ry = gsap.quickTo(card, "rotationY", { duration: 0.55, ease: "power2.out" });
-    card.addEventListener("pointermove", (e) => {
-      const r = card.getBoundingClientRect();
-      const px = (e.clientX - r.left) / r.width - 0.5;
-      const py = (e.clientY - r.top) / r.height - 0.5;
-      rx(-py * 10); ry(px * 13);
-      card.style.setProperty("--gx", ((px + 0.5) * 100).toFixed(1) + "%");
-      card.style.setProperty("--gy", ((py + 0.5) * 100).toFixed(1) + "%");
-    }, { passive: true });
-    card.addEventListener("pointerleave", () => { rx(0); ry(0); });
-  };
+  gsap.set(".ro-rule, .ro-rule--end", { scaleX: 0 });
+  gsap.set(".ro-idx, .ro-meta", { opacity: 0 });
+  gsap.set(".ro-name", { opacity: 0, y: 20 });
 
   ScrollTrigger.create({
     trigger: "#friends", start: "top 62%", once: true,
     onEnter: () => {
       const tl = gsap.timeline();
-      // 标题 → 头像 → 气泡解密 → 名片密文态弹入 → 扫描光带掠过、逐字落定、霓虹边点亮 → 待机
+      // 标题逐字立起 → 细线逐条抽出 → 编号/meta 亮起 → 巨字名以密文升起、逐字解密落定 → ghost 位开始翻滚
       tl.to(".friends__top .sec-tag", { opacity: 1, y: 0, duration: 0.5, ease: "flow" }, 0)
         .to(introChars, { opacity: 1, yPercent: 0, rotateX: 0, duration: 0.85, stagger: 0.04, ease: "cine" }, 0.1)
         .to(".friends__sub", { opacity: 1, y: 0, duration: 0.6, ease: "flow" }, 0.55)
-        .to(".fr-avatar", { opacity: 1, scale: 1, duration: 0.45, ease: "back.out(2)" }, 0.5)
-        .to(".fr-bubble", { opacity: 1, y: 0, scale: 1, duration: 0.45, ease: "back.out(1.6)" }, 0.68);
-      solve(".fr-bubble__t", 0.5, 0.8, tl);
-      tl.to(".fr-card", { opacity: 1, y: 0, scale: 1, duration: 0.5, ease: "back.out(1.5)" }, 1.15)
-        .to(".fr-card__scan i", { x: "440%", duration: 0.85, ease: "power2.inOut" }, 1.45);
-      $$(".fr-card .fr-dec").forEach((el, i) => solve(el, 0.55 + i * 0.1, 1.5 + i * 0.12, tl));
-      tl.fromTo(card,
-        { borderColor: "rgba(255,255,255,0.07)", boxShadow: "0 0 0 rgba(61,242,141,0)" },
-        { borderColor: "rgba(61,242,141,0.65)", boxShadow: "0 14px 44px rgba(0,0,0,0.5), 0 0 44px rgba(61,242,141,0.22)", duration: 0.5, ease: "power2.out" }, 1.95)
-        .to(card, { borderColor: "rgba(61,242,141,0.28)", boxShadow: "0 10px 34px rgba(0,0,0,0.45), 0 0 22px rgba(61,242,141,0.1)", duration: 0.9, ease: "silk" }, 2.5)
-        .to(".fr-hint", { opacity: 1, duration: 0.5 }, 2.4)
-        .call(startIdle, [], 2.5);
-      // 粒子舞台退成远景，别糊住名片（用户真机反馈：这里看不清）
+        .to(".ro-rule, .ro-rule--end", { scaleX: 1, duration: 0.9, stagger: 0.14, ease: "cine" }, 0.7)
+        .to(".ro-idx, .ro-meta", { opacity: 1, stagger: 0.08, duration: 0.5 }, 1.0)
+        .to(".ro-name", { opacity: 1, y: 0, stagger: 0.12, duration: 0.6, ease: "flow" }, 1.05);
+      names.forEach((el, i) => tl.to(el, {
+        duration: 0.8, scrambleText: { text: el.dataset.final, chars: HEXC, speed: 0.6 },
+        onComplete: () => el.classList.remove("is-hex"),
+      }, 1.25 + i * 0.15));
+      // ghost 位：一串永远解不开的密文,慢速翻滚
+      tl.call(() => {
+        const ghost = $("#ro-ghost");
+        gsap.to(ghost, {
+          duration: 2.2, repeat: -1, repeatDelay: 0.6, repeatRefresh: true, ease: "none",
+          scrambleText: { text: () => hexStrOf(12), chars: HEXC, speed: 0.3 },
+        });
+      }, [], 2.1);
+      // hover = 快速重解密一次(解密闪回)
+      names.forEach((el) => {
+        const row = el.closest("a.ro-row");
+        if (!row || TOUCH) return;
+        row.addEventListener("pointerenter", () => gsap.to(el, {
+          duration: 0.45, scrambleText: { text: el.dataset.final, chars: HEXC, speed: 1 }, overwrite: true,
+        }));
+      });
+      // 粒子舞台退成远景,别糊住名录（用户真机反馈：这里看不清）
       stage.setOpacity(0.22, 1.2);
       stage.setTint(0x0e4d33, 1.4);
     },
