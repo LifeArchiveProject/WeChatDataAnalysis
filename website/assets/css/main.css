@@ -846,7 +846,7 @@ main { position: relative; z-index: 1; }
 }
 .friends__top { display: flex; flex-direction: column; gap: 14px; max-width: 1020px; }
 .friends__title { margin-top: 10px; font-size: clamp(1.9rem, 4.2vw, 3.7rem); font-weight: 900; line-height: 1.14; letter-spacing: -0.01em; }
-.friends__title em { color: var(--neon); text-shadow: 0 0 42px rgba(61, 242, 141, 0.4); }
+.friends__title em { color: var(--amber); text-shadow: 0 0 42px rgba(255, 194, 75, 0.4); }
 .friends__sub { font-size: clamp(12.5px, 1.15vw, 15px); color: var(--ink-dim); letter-spacing: 0.06em; }
 
 /* 名录：无容器巨字花名册，细线分隔；02 号 ghost 位 = 永远在翻滚的密文空档 */
@@ -868,16 +868,16 @@ main { position: relative; z-index: 1; }
   font-size: clamp(2rem, 5vw, 4.3rem); font-weight: 900; line-height: 1.05; letter-spacing: -0.01em;
   color: var(--ink); transition: color 0.3s, transform 0.45s, text-shadow 0.3s; will-change: transform;
 }
-.ro-name.is-hex { font-family: inherit; color: rgba(94, 210, 146, 0.5); }
+.ro-name.is-hex { font-family: inherit; color: rgba(255, 194, 75, 0.55); }
 .ro-meta { font-size: 10.5px; letter-spacing: 0.18em; color: var(--ink-dim); display: inline-flex; align-items: baseline; gap: 10px; }
 .ro-arw { font-style: normal; transition: transform 0.3s, color 0.3s; }
-a.ro-row:hover .ro-name { color: var(--neon); transform: translateX(8px); text-shadow: 0 0 46px rgba(61, 242, 141, 0.45); }
-a.ro-row:hover .ro-rule { background: var(--neon); box-shadow: 0 0 12px var(--glow); }
-a.ro-row:hover .ro-arw { color: var(--neon); transform: translate(3px, -3px); }
+a.ro-row:hover .ro-name { color: var(--amber); transform: translateX(8px); text-shadow: 0 0 46px rgba(255, 194, 75, 0.45); }
+a.ro-row:hover .ro-rule { background: var(--amber); box-shadow: 0 0 12px rgba(255, 194, 75, 0.5); }
+a.ro-row:hover .ro-arw { color: var(--amber); transform: translate(3px, -3px); }
 a.ro-row:hover .ro-meta { color: var(--ink); }
 .ro-row--ghost .ro-name {
   font-size: clamp(1.5rem, 3.8vw, 3.2rem); font-weight: 600; letter-spacing: 0.08em;
-  color: rgba(94, 210, 146, 0.26);
+  color: rgba(255, 194, 75, 0.32);
 }
 .ro-row--ghost .ro-idx, .ro-row--ghost .ro-meta { opacity: 0.55; }
 
