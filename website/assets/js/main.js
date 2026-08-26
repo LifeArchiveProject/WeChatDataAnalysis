@@ -245,6 +245,7 @@ function boot() {
     buildFeatures();
     buildWrapped();
     buildMachine();
+    buildFriends();
     buildCTA();
     buildRail();
     exitLoader();
@@ -927,12 +928,18 @@ function buildFeatures() {
 /* ─────────────────────────── act 05 · wrapped ─────────────────────────── */
 
 function buildWrapped() {
-  const slides = $$("#v-slides img");
+  const slides = $$("#v-slides > *");
   const N = slides.length;
   const idxEl = $("#v-idx");
   const ticks = $$("#v-ticks i");
   const scene = $("#viewer");
   let activeIdx = -1;
+
+  // 前 5 帧是产品实录影片：进入放映室才开播（静音循环），离场即暂停
+  const vids = slides.filter((el) => el.tagName === "VIDEO");
+  let filmOn = false;
+  const playFilm = () => { filmOn = true; vids.forEach((v) => { v.muted = true; const pr = v.play(); if (pr && pr.catch) pr.catch(() => {}); }); };
+  const pauseFilm = () => { filmOn = false; vids.forEach((v) => v.pause()); };
 
   // 放映室：固定取景框内定向擦除转场，当前帧被推走、下一帧从右侧扫入
   function setFlow(f) {
@@ -954,6 +961,10 @@ function buildWrapped() {
         img.style.opacity = "0"; img.style.zIndex = "0";
         img.style.clipPath = i < c ? "inset(0 100% 0 0)" : "inset(0 0 0 100%)";
       }
+    });
+    if (filmOn) [c, c + 1].forEach((i) => {
+      const el = slides[i];
+      if (el && el.tagName === "VIDEO" && el.paused) { const pr = el.play(); if (pr && pr.catch) pr.catch(() => {}); }
     });
     const idx = Math.round(fc);
     if (idx !== activeIdx) {
@@ -978,8 +989,10 @@ function buildWrapped() {
     scrollTrigger: {
       trigger: "#wrapped", pin: true, scrub: 0.7,
       start: "top top", end: "+=430%",
-      onEnter: () => { stage.morphTo("year", { duration: 1.7 }); stage.setTint(0x6b4a12, 1.6); stage.setOpacity(0.4, 1); },
-      onLeaveBack: () => { stage.morphTo("bubble", { duration: 1.4 }); stage.setTint(0x0b3d24, 1.4); stage.setOpacity(0.9, 1); },
+      onEnter: () => { playFilm(); stage.morphTo("year", { duration: 1.7 }); stage.setTint(0x6b4a12, 1.6); stage.setOpacity(0.4, 1); },
+      onEnterBack: playFilm,
+      onLeave: pauseFilm,
+      onLeaveBack: () => { pauseFilm(); stage.morphTo("bubble", { duration: 1.4 }); stage.setTint(0x0b3d24, 1.4); stage.setOpacity(0.9, 1); },
     },
   });
 
@@ -1313,6 +1326,34 @@ function buildStack() {
   });
 }
 
+/* ─────────────────────────── act 07 · friends（同路人 · 递名片）─────────────────────────── */
+
+function buildFriends() {
+  if (REDUCED) return;
+
+  gsap.set(".friends__top > *", { opacity: 0, y: 26 });
+  gsap.set(".fr-avatar", { opacity: 0, scale: 0.6, transformOrigin: "50% 50%" });
+  gsap.set(".fr-bubble, .fr-card", { opacity: 0, y: 12, scale: 0.94, transformOrigin: "0% 0%" });
+  gsap.set(".fr-hint", { opacity: 0 });
+
+  ScrollTrigger.create({
+    trigger: "#friends", start: "top 62%", once: true,
+    onEnter: () => {
+      const tl = gsap.timeline();
+      // 标题 → 头像上线 → 问候气泡、名片卡像微信一样先后弹入 → 名片夹提示
+      tl.to(".friends__top > *", { opacity: 1, y: 0, stagger: 0.12, duration: 0.7, ease: "flow" }, 0)
+        .to(".fr-avatar", { opacity: 1, scale: 1, duration: 0.45, ease: "back.out(2)" }, 0.55)
+        .to(".fr-bubble", { opacity: 1, y: 0, scale: 1, duration: 0.5, ease: "back.out(1.6)" }, 0.75)
+        .to(".fr-card", { opacity: 1, y: 0, scale: 1, duration: 0.55, ease: "back.out(1.6)" }, 1.15)
+        .to(".fr-hint", { opacity: 1, duration: 0.5 }, 1.75);
+      // 粒子舞台退成远景，别糊住名片（用户真机反馈：这里看不清）
+      stage.setOpacity(0.22, 1.2);
+      stage.setTint(0x0e4d33, 1.4);
+    },
+    onLeaveBack: () => { stage.setOpacity(0.9, 1); },
+  });
+}
+
 /* ─────────────────────────── act 07 · cta（终幕 · 归档落款）─────────────────────────── */
 
 function buildCTA() {
@@ -1415,7 +1456,8 @@ function setupCursor() {
     "04": (x, y) => "0x" + hx(x) + "·" + hx(y),
     "05": () => "WRAPPED 2025",
     "06": () => "0 B · EGRESS",
-    "07": () => "GET LATEST ↓",
+    "07": () => "SAY HI ↗",
+    "08": () => "GET LATEST ↓",
   };
   let act = "01";
   window.__cursorAct = (id) => {

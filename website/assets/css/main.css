@@ -579,7 +579,7 @@ main { position: relative; z-index: 1; }
 
 /* 年度总结 = 居中宽银幕影厅：大幅影格 + 上下细胶片条（HUD / 进度轴），底部给滚动数字留位 */
 .viewer {
-  --film: min(88vw, calc(56vh * 2.216), 1480px);
+  --film: min(88vw, calc(56vh * 1.888), 1480px); /* 1.888 = 影片幅面 1916/1015，与 .viewer__slides 的 aspect-ratio 互锁 */
   position: absolute; inset: 0; z-index: 3;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: clamp(12px, 1.8vh, 20px);
@@ -603,15 +603,16 @@ main { position: relative; z-index: 1; }
     repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.05) 0 1px, transparent 1px 3px),
     radial-gradient(135% 115% at 50% 48%, transparent 58%, rgba(5, 8, 7, 0.55) 100%);
 }
-.viewer__slides { position: relative; aspect-ratio: 1000 / 452; background: #0d130f; border-radius: 10px; overflow: hidden; }
+.viewer__slides { position: relative; aspect-ratio: 1916 / 1015; background: #0d130f; border-radius: 10px; overflow: hidden; }
 .cinema__foot { width: var(--film); display: flex; align-items: center; gap: clamp(16px, 2vw, 34px); }
 .viewer__ticks { display: flex; gap: 6px; flex: 1; }
 .viewer__ticks i { height: 2px; flex: 1; background: var(--line-strong); transition: background 0.35s, box-shadow 0.35s; }
 .viewer__ticks i.on { background: var(--neon); box-shadow: 0 0 10px var(--glow); }
 
-.viewer__slides img {
+.viewer__slides img,
+.viewer__slides video {
   position: absolute; inset: 0; width: 100%; height: 100%;
-  object-fit: cover; object-position: top; display: block;
+  object-fit: contain; object-position: center; display: block; background: #0d130f;
   will-change: clip-path, transform, opacity, filter;
 }
 
@@ -835,6 +836,81 @@ main { position: relative; z-index: 1; }
 .mac__compat li b { display: inline-block; min-width: 32px; color: var(--neon); letter-spacing: 0.12em; }
 .mac__legal { text-align: center; font-size: 11px; letter-spacing: 0.16em; color: var(--ink-faint); }
 
+/* ─────────────────────────── act 07 · friends（同路人 · 递名片）─────────────────────────── */
+
+.friends__pin {
+  min-height: 100vh; position: relative;
+  display: flex; flex-direction: column; justify-content: center;
+  gap: clamp(34px, 6.5vh, 70px);
+  padding: clamp(84px, 12vh, 140px) clamp(20px, 6vw, 90px) clamp(40px, 7vh, 80px);
+}
+.friends__top { display: flex; flex-direction: column; gap: 14px; max-width: 1020px; }
+.friends__title { margin-top: 10px; font-size: clamp(1.9rem, 4.2vw, 3.7rem); font-weight: 900; line-height: 1.14; letter-spacing: -0.01em; }
+.friends__title em { color: var(--neon); text-shadow: 0 0 42px rgba(61, 242, 141, 0.4); }
+.friends__sub { font-size: clamp(12.5px, 1.15vw, 15px); color: var(--ink-dim); letter-spacing: 0.06em; }
+
+/* 名片消息：产品暗色聊天面板同款形制（act03 先例），一条问候 + 一张名片卡 */
+.fr-chat {
+  position: relative; width: min(620px, 92vw); margin: 0 auto;
+  display: flex; flex-direction: column; gap: clamp(20px, 3.5vh, 32px);
+}
+.fr-chat::before {
+  content: ""; position: absolute; inset: -12% -18%; z-index: -1; pointer-events: none;
+  background: radial-gradient(60% 58% at 50% 46%, rgba(4, 7, 5, 0.88) 30%, transparent 100%);
+}
+.fr-row { display: flex; align-items: flex-start; gap: 12px; }
+.fr-avatar {
+  flex: none; width: 40px; height: 40px; border-radius: 4px;
+  background: #3eb575; color: #fff; font-style: normal;
+  display: grid; place-items: center; font-size: 19px; font-weight: 600;
+}
+.fr-msgs { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.fr-bubble {
+  position: relative; max-width: 420px;
+  background: #2e2e2e; color: rgba(255, 255, 255, 0.92);
+  border-radius: 4px; padding: 10px 13px;
+  font-size: clamp(13.5px, 1.15vw, 15px); line-height: 1.55; letter-spacing: 0.02em;
+}
+.fr-bubble::before {
+  content: ""; position: absolute; left: -5px; top: 14px;
+  width: 10px; height: 10px; background: #2e2e2e; transform: rotate(45deg); border-radius: 2px;
+}
+.fr-card {
+  display: flex; flex-direction: column; width: min(300px, 78vw);
+  background: #262626; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 4px;
+  transition: border-color 0.35s, box-shadow 0.35s, transform 0.35s;
+}
+.fr-card__main { display: flex; align-items: center; gap: 12px; padding: 14px 14px 12px; }
+.fr-card__avatar {
+  flex: none; width: 42px; height: 42px; border-radius: 4px;
+  background: #3eb575; color: #fff; font-style: normal;
+  display: grid; place-items: center; font-size: 20px; font-weight: 600;
+}
+.fr-card__names { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fr-card__names b { font-size: 15px; font-weight: 600; color: rgba(255, 255, 255, 0.94); }
+.fr-card__names span { font-size: 11.5px; color: rgba(255, 255, 255, 0.44); letter-spacing: 0.02em; }
+.fr-card__foot {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 14px; padding: 8px 0 9px; border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 9.5px; letter-spacing: 0.14em; color: rgba(255, 255, 255, 0.38);
+  transition: color 0.35s;
+}
+.fr-card__arw { font-style: normal; margin-left: auto; transition: color 0.35s, transform 0.35s; }
+.fr-card:hover {
+  border-color: rgba(61, 242, 141, 0.55);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.5), 0 0 34px rgba(61, 242, 141, 0.12);
+  transform: translateY(-3px);
+}
+.fr-card:hover .fr-card__foot { color: rgba(61, 242, 141, 0.75); }
+.fr-card:hover .fr-card__arw { color: var(--neon); transform: translate(2px, -2px); }
+.fr-hint {
+  display: flex; align-items: center; gap: 10px; padding-left: 52px;
+  font-size: 10.5px; letter-spacing: 0.22em; color: var(--ink-faint);
+}
+.fr-hint i { width: 5px; height: 5px; border-radius: 50%; background: var(--neon); box-shadow: 0 0 8px var(--glow); animation: frpulse 2.4s ease-in-out infinite; }
+@keyframes frpulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .fr-hint i { animation: none; } }
+
 /* ─────────────────────────── act 07 · cta（终幕 · 归档落款）─────────────────────────── */
 
 /* 一屏严格容纳：slug / 巨字（弹性行）/ 下载闸 / 索引 / 版权 */
@@ -976,6 +1052,17 @@ main { position: relative; z-index: 1; }
 .cta__colophon-row .cc-a { display: flex; align-items: center; gap: 9px; color: var(--ink-dim); }
 .cta__colophon-row .cc-a i { width: 5px; height: 5px; background: var(--neon); box-shadow: 0 0 8px var(--glow); flex: none; }
 
+/* 矮屏(≤920px 高)：压缩 machine 幕垂直预算，保住底部 ENGINE / PLATFORM 行（用户真机曾被裁） */
+@media (max-height: 920px) {
+  .mac__pin { padding-top: clamp(52px, 8.5vh, 92px); padding-bottom: clamp(16px, 2.6vh, 34px); row-gap: clamp(8px, 1.6vh, 18px); }
+  .mac__title { margin-top: 8px; }
+  .mac__trace { height: clamp(60px, 10vh, 96px); }
+  .mac__zero { font-size: min(clamp(4rem, 12vw, 11rem), 20vh); }
+  .mac__guards { padding-top: clamp(12px, 2vh, 20px); }
+  .mac__guards span { margin-top: 6px; }
+  .mac__foot { padding-top: clamp(10px, 1.6vh, 16px); }
+}
+
 /* ─────────────────────────── responsive ─────────────────────────── */
 
 @media (max-width: 960px) {
@@ -1006,7 +1093,8 @@ main { position: relative; z-index: 1; }
   .fwchips { width: min(92vw, 560px); display: grid; grid-template-columns: 1fr 1fr; gap: 14px 26px; }
   .fwchips--l { align-items: start; text-align: left; }
   .fw__stage { --fwr: min(24vw, 132px); width: min(54vw, 300px); }
-  .viewer { --film: min(94vw, calc(46vh * 2.216)); }
+  .viewer { --film: min(94vw, calc(46vh * 1.888)); }
+  .fr-hint { padding-left: 0; }
   .cta__title { white-space: normal; font-size: min(13.5vw, 11vh); line-height: 1.08; margin-bottom: clamp(10px, 3vh, 30px); }
   .cta__index { grid-template-columns: 1fr 1fr; gap: clamp(12px, 3vh, 22px) 26px; }
   .ix:nth-child(2), .ix:nth-child(3), .ix:nth-child(4) { margin-top: 0; }
