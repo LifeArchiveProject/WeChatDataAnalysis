@@ -566,7 +566,7 @@ def has_wxid_directories(directory):
 
 def _is_wechat_account_dir(path: Path) -> bool:
     try:
-        return path.is_dir() and (
+        return path.is_dir() and path.parent.name.casefold() != "keyvalue" and (
             (path / "db_storage").is_dir()
             or (path / "FileStorage" / "Image").is_dir()
             or (path / "FileStorage" / "Image2").is_dir()
