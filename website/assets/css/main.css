@@ -864,7 +864,7 @@ main { position: relative; z-index: 1; }
   background: #3eb575; color: #fff; font-style: normal;
   display: grid; place-items: center; font-size: 19px; font-weight: 600;
 }
-.fr-msgs { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.fr-msgs { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; perspective: 720px; }
 .fr-bubble {
   position: relative; max-width: 420px;
   background: #2e2e2e; color: rgba(255, 255, 255, 0.92);
@@ -876,9 +876,33 @@ main { position: relative; z-index: 1; }
   width: 10px; height: 10px; background: #2e2e2e; transform: rotate(45deg); border-radius: 2px;
 }
 .fr-card {
-  display: flex; flex-direction: column; width: min(300px, 78vw);
-  background: #262626; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 4px;
-  transition: border-color 0.35s, box-shadow 0.35s, transform 0.35s;
+  position: relative; display: flex; flex-direction: column; width: min(300px, 78vw);
+  background: linear-gradient(160deg, #2b2b2b, #212121);
+  border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 4px;
+  transform-style: preserve-3d; will-change: transform;
+  transition: border-color 0.35s, box-shadow 0.35s;
+}
+/* 解密演出：JS 把 .fr-dec 预置成十六进制乱码，扫描光带掠过时 scramble 落定 */
+.fr-dec.is-hex { font-family: var(--font-mono, ui-monospace, monospace); color: rgba(94, 210, 146, 0.55) !important; letter-spacing: 0.04em; }
+.fr-card__scan { position: absolute; inset: 0; border-radius: 4px; overflow: hidden; pointer-events: none; }
+.fr-card__scan i {
+  position: absolute; top: -24%; bottom: -24%; left: 0; width: 36%;
+  background: linear-gradient(100deg, transparent, rgba(61, 242, 141, 0.22) 42%, rgba(255, 255, 255, 0.34) 50%, rgba(61, 242, 141, 0.22) 58%, transparent);
+  transform: translateX(-140%) skewX(-12deg);
+}
+/* 指针反光：--gx/--gy 由 JS 喂 */
+.fr-card__glare {
+  position: absolute; inset: 0; border-radius: 4px; pointer-events: none; opacity: 0;
+  background: radial-gradient(58% 70% at var(--gx, 50%) var(--gy, 40%), rgba(255, 255, 255, 0.13), transparent 68%);
+  transition: opacity 0.35s;
+}
+.fr-card:hover .fr-card__glare { opacity: 1; }
+/* 边缘流光：conic 高亮弧沿描边转圈，--ang 由 JS 恒转 */
+.fr-card__ring {
+  position: absolute; inset: -1px; border-radius: 5px; padding: 1px; pointer-events: none; opacity: 0;
+  background: conic-gradient(from var(--ang, 0deg), transparent 0 82%, rgba(61, 242, 141, 0.85) 91%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
 }
 .fr-card__main { display: flex; align-items: center; gap: 12px; padding: 14px 14px 12px; }
 .fr-card__avatar {
@@ -899,7 +923,6 @@ main { position: relative; z-index: 1; }
 .fr-card:hover {
   border-color: rgba(61, 242, 141, 0.55);
   box-shadow: 0 14px 44px rgba(0, 0, 0, 0.5), 0 0 34px rgba(61, 242, 141, 0.12);
-  transform: translateY(-3px);
 }
 .fr-card:hover .fr-card__foot { color: rgba(61, 242, 141, 0.75); }
 .fr-card:hover .fr-card__arw { color: var(--neon); transform: translate(2px, -2px); }
