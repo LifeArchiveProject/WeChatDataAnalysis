@@ -1371,14 +1371,25 @@ function buildFriends() {
           scrambleText: { text: () => hexStrOf(12), chars: HEXC, speed: 0.3 },
         });
       }, [], 2.1);
-      // hover = 快速重解密一次(解密闪回)
-      names.forEach((el) => {
-        const row = el.closest("a.ro-row");
-        if (!row || TOUCH) return;
-        row.addEventListener("pointerenter", () => gsap.to(el, {
-          duration: 0.45, scrambleText: { text: el.dataset.final, chars: HEXC, speed: 1 }, overwrite: true,
-        }));
-      });
+      // 入场收尾兜底：无论中途发生什么,巨字名必须以终态站定
+      // (曾因 hover 补间 overwrite:true 在入场期杀掉显形补间,名字永久卡在 opacity 0 —— 用户真机截图实证)
+      tl.call(() => {
+        names.forEach((el) => {
+          gsap.set(el, { opacity: 1, y: 0 });
+          el.textContent = el.dataset.final;
+          el.classList.remove("is-hex");
+        });
+        // hover = 快速重解密一次(解密闪回)。入场完成后才绑,且只杀自己上一次的 hover 补间
+        if (!TOUCH) names.forEach((el) => {
+          const row = el.closest("a.ro-row");
+          if (!row) return;
+          let hv = null;
+          row.addEventListener("pointerenter", () => {
+            if (hv) hv.kill();
+            hv = gsap.to(el, { duration: 0.45, scrambleText: { text: el.dataset.final, chars: HEXC, speed: 1 } });
+          });
+        });
+      }, [], ">");
     },
   });
 
