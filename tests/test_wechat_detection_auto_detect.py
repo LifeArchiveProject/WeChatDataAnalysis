@@ -185,6 +185,9 @@ class TestWechatDetectionAutoDetect(unittest.TestCase):
 
         with TemporaryDirectory() as td:
             version_root = Path(td) / "2.0b4.0.9"
+            key_value_dir = version_root / "KeyValue" / "account_hash"
+            key_value_dir.mkdir(parents=True)
+            (key_value_dir / "KeyValue.db").write_bytes(b"demo")
             account_dir = version_root / "xwechat_files" / "wxid_demo_abcd"
             db_storage = account_dir / "db_storage"
             db_storage.mkdir(parents=True)
