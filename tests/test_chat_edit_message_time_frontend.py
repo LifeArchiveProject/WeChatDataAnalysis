@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UNAVAILABLE_MESSAGE = "当前环境无法完成此操作，请联系开发者协助处理。"
+UNAVAILABLE_MESSAGE = "当前版本仅展示该功能入口，暂时无法执行。请加入 QQ 交流群，并在群内联系开发者获取支持。"
 
 
 class TestChatEditSurfaceFrontend(unittest.TestCase):
@@ -42,18 +42,20 @@ class TestChatEditSurfaceFrontend(unittest.TestCase):
         )[0]
 
         self.assertIn("if (!isLikelyTextMessage(message)) return", handler)
-        self.assertIn("modifyTextUnavailableDialogOpen.value = true", handler)
+        self.assertIn("openFeatureUnavailableDialog()", handler)
         self.assertNotIn("showErrorAlert", handler)
         self.assertNotIn("window.alert", handler)
         self.assertNotIn("api.", handler)
-        self.assertLess(handler.index("closeContextMenu()"), handler.index("modifyTextUnavailableDialogOpen.value = true"))
+        self.assertLess(handler.index("closeContextMenu()"), handler.index("openFeatureUnavailableDialog()"))
         self.assertIn("modifyTextUnavailableDialogOpen.value = false", close_handler)
-        self.assertIn(f"const MODIFY_TEXT_UNAVAILABLE_MESSAGE = '{UNAVAILABLE_MESSAGE}'", editing)
-        self.assertIn(UNAVAILABLE_MESSAGE, editing)
+        support = (ROOT / "frontend" / "lib" / "developer-support.js").read_text(encoding="utf-8")
+        self.assertIn(f"export const FEATURE_UNAVAILABLE_MESSAGE = '{UNAVAILABLE_MESSAGE}'", support)
         self.assertIn("<GuideDialog", overlays)
         self.assertIn(':open="modifyTextUnavailableDialogOpen"', overlays)
         self.assertIn(':description="modifyTextUnavailableMessage"', overlays)
-        self.assertIn('@primary="closeModifyTextUnavailableDialog"', overlays)
+        self.assertIn('primary-label="加入 QQ 交流群"', overlays)
+        self.assertIn('@primary="joinDeveloperGroup"', overlays)
+        self.assertIn('@secondary="closeModifyTextUnavailableDialog"', overlays)
         self.assertIn('@close="closeModifyTextUnavailableDialog"', overlays)
 
         for symbol in (

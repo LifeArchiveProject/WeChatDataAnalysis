@@ -1,8 +1,9 @@
 import { nextTick, ref, toRaw } from 'vue'
 import { showErrorAlert } from '~/composables/useErrorNotice'
+import { FEATURE_UNAVAILABLE_MESSAGE, openDeveloperGroup } from '~/lib/developer-support'
 
 const CONTEXT_MENU_MARGIN = 8
-const MODIFY_TEXT_UNAVAILABLE_MESSAGE = '当前环境无法完成此操作，请联系开发者协助处理。'
+const MODIFY_TEXT_UNAVAILABLE_MESSAGE = FEATURE_UNAVAILABLE_MESSAGE
 
 const initialContextMenu = () => ({
   visible: false,
@@ -25,6 +26,10 @@ export const useChatEditing = ({
 
   const closeContextMenu = () => {
     contextMenu.value = initialContextMenu()
+  }
+
+  const openFeatureUnavailableDialog = () => {
+    modifyTextUnavailableDialogOpen.value = true
   }
 
   const repositionContextMenu = () => {
@@ -218,11 +223,16 @@ export const useChatEditing = ({
     const message = contextMenu.value.message
     closeContextMenu()
     if (!isLikelyTextMessage(message)) return
-    modifyTextUnavailableDialogOpen.value = true
+    openFeatureUnavailableDialog()
   }
 
   const closeModifyTextUnavailableDialog = () => {
     modifyTextUnavailableDialogOpen.value = false
+  }
+
+  const joinDeveloperGroup = () => {
+    closeModifyTextUnavailableDialog()
+    void openDeveloperGroup()
   }
 
   const onLocateQuotedMessageClick = async () => {
@@ -241,7 +251,9 @@ export const useChatEditing = ({
     modifyTextUnavailableDialogOpen,
     modifyTextUnavailableMessage: MODIFY_TEXT_UNAVAILABLE_MESSAGE,
     closeContextMenu,
+    openFeatureUnavailableDialog,
     closeModifyTextUnavailableDialog,
+    joinDeveloperGroup,
     openMediaContextMenu,
     isLikelyTextMessage,
     copyTextToClipboard,

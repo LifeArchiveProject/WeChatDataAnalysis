@@ -938,6 +938,40 @@
     @apply text-xs px-2 py-1.5 rounded-lg bg-transparent border-0 text-gray-700 focus:outline-none focus:ring-0 transition-all disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
+  .chat-composer {
+    @apply flex flex-shrink-0 flex-col border;
+    height: 102px;
+    margin: 8px;
+    padding: 10px 14px 8px;
+    border-radius: 10px;
+    background-color: var(--chat-bubble-received);
+    border-color: var(--chat-header-border);
+  }
+
+  .chat-composer-input {
+    @apply block min-h-0 w-full flex-1 resize-none border-0 bg-transparent p-0 text-sm outline-none;
+    line-height: 1.5;
+    color: var(--chat-bubble-received-text);
+  }
+
+  .chat-composer-input:focus {
+    outline: none;
+    box-shadow: none;
+  }
+
+  .chat-composer-toolbar {
+    @apply flex h-8 flex-shrink-0 items-center gap-3;
+  }
+
+  .chat-composer-send {
+    @apply ml-auto h-8 w-[60px] flex-shrink-0 rounded-md text-sm font-medium text-white transition-colors;
+    background-color: var(--wechat-green);
+  }
+
+  .chat-composer-send:hover {
+    filter: brightness(0.94);
+  }
+
   /* 搜索侧边栏样式 */
   .search-sidebar {
     @apply w-[420px] h-full flex flex-col bg-white border-l border-gray-200 flex-shrink-0;

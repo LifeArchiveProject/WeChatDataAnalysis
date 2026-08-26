@@ -11,6 +11,17 @@
           <button
             type="button"
             class="header-btn-icon"
+            title="添加消息"
+            aria-label="添加消息"
+            @click="openFeatureUnavailableDialog"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="header-btn-icon"
             :disabled="isLoadingMessages || isJumpingToFirst"
             :aria-busy="isJumpingToFirst"
             aria-label="从第一条消息开始阅读"
@@ -98,10 +109,21 @@
 
       <MessageList :state="state" />
 
+      <form class="chat-composer" @submit.prevent="openFeatureUnavailableDialog">
+        <textarea
+          class="chat-composer-input"
+          rows="2"
+          aria-label="输入要发送的微信消息"
+        />
+        <div class="chat-composer-toolbar">
+          <button type="submit" class="chat-composer-send">发送</button>
+        </div>
+      </form>
+
       <button
         v-if="showJumpToBottom"
         type="button"
-        class="jump-to-bottom-btn absolute bottom-6 right-6 z-20 w-10 h-10 rounded-full border shadow flex items-center justify-center"
+        class="jump-to-bottom-btn absolute bottom-32 right-6 z-20 w-10 h-10 rounded-full border shadow flex items-center justify-center"
         title="回到最新"
         @click="scrollToBottom"
       >

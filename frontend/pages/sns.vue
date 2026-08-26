@@ -28,6 +28,13 @@
         <div class="mt-3">
           <button
               type="button"
+              class="mb-2 w-full px-3 py-2.5 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors"
+              @click="openPublishUnavailableDialog"
+          >
+            发布朋友圈
+          </button>
+          <button
+              type="button"
               class="w-full px-3 py-2.5 rounded-md text-sm border border-gray-200 bg-white hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               :disabled="!isSnsPageMounted || !selectedAccount"
               @click="openExportModal"
@@ -1095,11 +1102,25 @@
 	        </svg>
 	      </button>
 	    </div>
+
+    <GuideDialog
+      :open="publishUnavailableDialogOpen"
+      eyebrow="功能暂未开放"
+      title="请进群联系开发者"
+      :description="FEATURE_UNAVAILABLE_MESSAGE"
+      primary-label="加入 QQ 交流群"
+      secondary-label="关闭"
+      tone="warning"
+      @primary="joinDeveloperGroup"
+      @secondary="closePublishUnavailableDialog"
+      @close="closePublishUnavailableDialog"
+    />
 	  </div>
-	</template>
+</template>
 
 <script setup>
 import { storeToRefs } from 'pinia'
+import { FEATURE_UNAVAILABLE_MESSAGE, openDeveloperGroup } from '~/lib/developer-support'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
 import { parseTextWithEmoji } from '~/lib/wechat-emojis'
@@ -1135,6 +1156,14 @@ const isSnsPageMounted = ref(false)
 const error = ref('')
 const syncWarning = ref('')
 const snsUseCache = ref(true)
+const publishUnavailableDialogOpen = ref(false)
+
+const openPublishUnavailableDialog = () => { publishUnavailableDialogOpen.value = true }
+const closePublishUnavailableDialog = () => { publishUnavailableDialogOpen.value = false }
+const joinDeveloperGroup = () => {
+  closePublishUnavailableDialog()
+  void openDeveloperGroup()
+}
 
 const coverData = ref(null)
 const covers = ref([])

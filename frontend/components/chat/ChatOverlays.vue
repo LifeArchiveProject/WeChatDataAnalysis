@@ -1004,12 +1004,14 @@
 
     <GuideDialog
       :open="modifyTextUnavailableDialogOpen"
-      eyebrow=""
-      title="操作失败"
+      eyebrow="功能暂未开放"
+      title="请进群联系开发者"
       :description="modifyTextUnavailableMessage"
-      primary-label="关闭"
+      primary-label="加入 QQ 交流群"
+      secondary-label="关闭"
       tone="warning"
-      @primary="closeModifyTextUnavailableDialog"
+      @primary="joinDeveloperGroup"
+      @secondary="closeModifyTextUnavailableDialog"
       @close="closeModifyTextUnavailableDialog"
     />
 
