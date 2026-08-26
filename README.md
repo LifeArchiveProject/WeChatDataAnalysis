@@ -5,7 +5,6 @@
 <div align="center">
     <h1>WeChatDataAnalysis - 微信数据库解密与分析工具</h1>
     <p>微信4.x数据解密并生成年度总结，高仿微信，支持实时更新，导出聊天记录，朋友圈等大量便捷功能</p>
-    <p><b>特别致谢</b>：<a href="https://github.com/H3CoF6">H3CoF6</a>（密钥与朋友圈等核心内容的技术支持）、<a href="https://github.com/ycccccccy/echotrace">echotrace</a>、<a href="https://github.com/hicccc77/WeFlow">WeFlow</a>（本项目大量功能参考其实现）</p>
     <p>如需定制功能，请联系 QQ：2977094657。</p>
     <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
@@ -268,15 +267,16 @@ npm run dist:mac
 
 ## 致谢
 
-1. **[echotrace](https://github.com/ycccccccy/echotrace)**
-2. **[WeFlow](https://github.com/hicccc77/WeFlow)**
-3. **[wx_key](https://github.com/ycccccccy/wx_key)** 
-4. **[wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs)** 
-5. **[oh-my-wechat](https://github.com/chclt/oh-my-wechat)** 
-6. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)** 
-7. **[wx-dat](https://github.com/waaaaashi/wx-dat)**
-8. **[Ritsu](https://xhslink.com/m/7YJUsd1sgyF)**
-9. **[recarto404](https://github.com/recarto404)**
+1. **[H3CoF6](https://github.com/H3CoF6)**
+2. **[echotrace](https://github.com/ycccccccy/echotrace)**
+3. **[WeFlow](https://github.com/hicccc77/WeFlow)**
+4. **[wx_key](https://github.com/ycccccccy/wx_key)**
+5. **[wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs)**
+6. **[oh-my-wechat](https://github.com/chclt/oh-my-wechat)**
+7. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)**
+8. **[wx-dat](https://github.com/waaaaashi/wx-dat)**
+9. **[Ritsu](https://xhslink.com/m/7YJUsd1sgyF)**
+10. **[recarto404](https://github.com/recarto404)**
 
 ## Star History
 
