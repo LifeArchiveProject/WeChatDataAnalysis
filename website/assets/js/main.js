@@ -1379,11 +1379,17 @@ function buildFriends() {
           duration: 0.45, scrambleText: { text: el.dataset.final, chars: HEXC, speed: 1 }, overwrite: true,
         }));
       });
-      // 粒子舞台退成远景,别糊住名录（用户真机反馈：这里看不清）
-      stage.setOpacity(0.22, 1.2);
-      stage.setTint(0x0e4d33, 1.4);
     },
-    onLeaveBack: () => { stage.setOpacity(0.9, 1); },
+  });
+
+  // 粒子明暗独立管理（入场触发器是 once,挂它身上的话 onLeaveBack 永远不会执行）：
+  // 在幕内压成远景别糊字,离场按邻幕期望恢复（machine 0.5 / cta 0.9）
+  ScrollTrigger.create({
+    trigger: "#friends", start: "top 62%", end: "bottom 40%",
+    onEnter: () => { stage.setOpacity(0.22, 1.2); stage.setTint(0x0e4d33, 1.4); },
+    onEnterBack: () => { stage.setOpacity(0.22, 1); stage.setTint(0x0e4d33, 1.2); },
+    onLeave: () => { stage.setOpacity(0.9, 1); },
+    onLeaveBack: () => { stage.setOpacity(0.5, 1); },
   });
 }
 
