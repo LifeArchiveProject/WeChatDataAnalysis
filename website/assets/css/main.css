@@ -849,90 +849,37 @@ main { position: relative; z-index: 1; }
 .friends__title em { color: var(--neon); text-shadow: 0 0 42px rgba(61, 242, 141, 0.4); }
 .friends__sub { font-size: clamp(12.5px, 1.15vw, 15px); color: var(--ink-dim); letter-spacing: 0.06em; }
 
-/* 名片消息：产品暗色聊天面板同款形制（act03 先例），一条问候 + 一张名片卡 */
-.fr-chat {
-  position: relative; width: min(620px, 92vw); margin: 0 auto;
-  display: flex; flex-direction: column; gap: clamp(20px, 3.5vh, 32px);
+/* 名录：无容器巨字花名册，细线分隔；02 号 ghost 位 = 永远在翻滚的密文空档 */
+.roster { display: flex; flex-direction: column; margin-top: clamp(6px, 1.5vh, 18px); }
+.ro-row {
+  position: relative; display: grid;
+  grid-template-columns: clamp(44px, 6vw, 96px) 1fr auto;
+  align-items: baseline; column-gap: clamp(14px, 2.5vw, 40px);
+  padding: clamp(22px, 3.8vh, 40px) 0 clamp(18px, 3.2vh, 34px);
 }
-.fr-chat::before {
-  content: ""; position: absolute; inset: -12% -18%; z-index: -1; pointer-events: none;
-  background: radial-gradient(60% 58% at 50% 46%, rgba(4, 7, 5, 0.88) 30%, transparent 100%);
+.ro-rule {
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: var(--line); transform-origin: left;
+  transition: background 0.35s, box-shadow 0.35s;
 }
-.fr-row { display: flex; align-items: flex-start; gap: 12px; }
-.fr-avatar {
-  flex: none; width: 40px; height: 40px; border-radius: 4px;
-  background: #3eb575; color: #fff; font-style: normal;
-  display: grid; place-items: center; font-size: 19px; font-weight: 600;
+.ro-rule--end { position: static; display: block; height: 1px; background: var(--line); transform-origin: left; }
+.ro-idx { font-size: 11px; letter-spacing: 0.24em; color: var(--ink-faint); }
+.ro-name {
+  font-size: clamp(2rem, 5vw, 4.3rem); font-weight: 900; line-height: 1.05; letter-spacing: -0.01em;
+  color: var(--ink); transition: color 0.3s, transform 0.45s, text-shadow 0.3s; will-change: transform;
 }
-.fr-msgs { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; perspective: 720px; }
-.fr-bubble {
-  position: relative; max-width: 420px;
-  background: #2e2e2e; color: rgba(255, 255, 255, 0.92);
-  border-radius: 4px; padding: 10px 13px;
-  font-size: clamp(13.5px, 1.15vw, 15px); line-height: 1.55; letter-spacing: 0.02em;
+.ro-name.is-hex { font-family: inherit; color: rgba(94, 210, 146, 0.5); }
+.ro-meta { font-size: 10.5px; letter-spacing: 0.18em; color: var(--ink-dim); display: inline-flex; align-items: baseline; gap: 10px; }
+.ro-arw { font-style: normal; transition: transform 0.3s, color 0.3s; }
+a.ro-row:hover .ro-name { color: var(--neon); transform: translateX(8px); text-shadow: 0 0 46px rgba(61, 242, 141, 0.45); }
+a.ro-row:hover .ro-rule { background: var(--neon); box-shadow: 0 0 12px var(--glow); }
+a.ro-row:hover .ro-arw { color: var(--neon); transform: translate(3px, -3px); }
+a.ro-row:hover .ro-meta { color: var(--ink); }
+.ro-row--ghost .ro-name {
+  font-size: clamp(1.5rem, 3.8vw, 3.2rem); font-weight: 600; letter-spacing: 0.08em;
+  color: rgba(94, 210, 146, 0.26);
 }
-.fr-bubble::before {
-  content: ""; position: absolute; left: -5px; top: 14px;
-  width: 10px; height: 10px; background: #2e2e2e; transform: rotate(45deg); border-radius: 2px;
-}
-.fr-card {
-  position: relative; display: flex; flex-direction: column; width: min(300px, 78vw);
-  background: linear-gradient(160deg, #2b2b2b, #212121);
-  border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 4px;
-  transform-style: preserve-3d; will-change: transform;
-  transition: border-color 0.35s, box-shadow 0.35s;
-}
-/* 解密演出：JS 把 .fr-dec 预置成十六进制乱码，扫描光带掠过时 scramble 落定 */
-.fr-dec.is-hex { font-family: var(--font-mono, ui-monospace, monospace); color: rgba(94, 210, 146, 0.55) !important; letter-spacing: 0.04em; }
-.fr-card__scan { position: absolute; inset: 0; border-radius: 4px; overflow: hidden; pointer-events: none; }
-.fr-card__scan i {
-  position: absolute; top: -24%; bottom: -24%; left: 0; width: 36%;
-  background: linear-gradient(100deg, transparent, rgba(61, 242, 141, 0.22) 42%, rgba(255, 255, 255, 0.34) 50%, rgba(61, 242, 141, 0.22) 58%, transparent);
-  transform: translateX(-140%) skewX(-12deg);
-}
-/* 指针反光：--gx/--gy 由 JS 喂 */
-.fr-card__glare {
-  position: absolute; inset: 0; border-radius: 4px; pointer-events: none; opacity: 0;
-  background: radial-gradient(58% 70% at var(--gx, 50%) var(--gy, 40%), rgba(255, 255, 255, 0.13), transparent 68%);
-  transition: opacity 0.35s;
-}
-.fr-card:hover .fr-card__glare { opacity: 1; }
-/* 边缘流光：conic 高亮弧沿描边转圈，--ang 由 JS 恒转 */
-.fr-card__ring {
-  position: absolute; inset: -1px; border-radius: 5px; padding: 1px; pointer-events: none; opacity: 0;
-  background: conic-gradient(from var(--ang, 0deg), transparent 0 82%, rgba(61, 242, 141, 0.85) 91%, transparent 100%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor; mask-composite: exclude;
-}
-.fr-card__main { display: flex; align-items: center; gap: 12px; padding: 14px 14px 12px; }
-.fr-card__avatar {
-  flex: none; width: 42px; height: 42px; border-radius: 4px;
-  background: #3eb575; color: #fff; font-style: normal;
-  display: grid; place-items: center; font-size: 20px; font-weight: 600;
-}
-.fr-card__names { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.fr-card__names b { font-size: 15px; font-weight: 600; color: rgba(255, 255, 255, 0.94); }
-.fr-card__names span { font-size: 11.5px; color: rgba(255, 255, 255, 0.44); letter-spacing: 0.02em; }
-.fr-card__foot {
-  display: flex; align-items: center; gap: 8px;
-  margin: 0 14px; padding: 8px 0 9px; border-top: 1px solid rgba(255, 255, 255, 0.08);
-  font-size: 9.5px; letter-spacing: 0.14em; color: rgba(255, 255, 255, 0.38);
-  transition: color 0.35s;
-}
-.fr-card__arw { font-style: normal; margin-left: auto; transition: color 0.35s, transform 0.35s; }
-.fr-card:hover {
-  border-color: rgba(61, 242, 141, 0.55);
-  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.5), 0 0 34px rgba(61, 242, 141, 0.12);
-}
-.fr-card:hover .fr-card__foot { color: rgba(61, 242, 141, 0.75); }
-.fr-card:hover .fr-card__arw { color: var(--neon); transform: translate(2px, -2px); }
-.fr-hint {
-  display: flex; align-items: center; gap: 10px; padding-left: 52px;
-  font-size: 10.5px; letter-spacing: 0.22em; color: var(--ink-faint);
-}
-.fr-hint i { width: 5px; height: 5px; border-radius: 50%; background: var(--neon); box-shadow: 0 0 8px var(--glow); animation: frpulse 2.4s ease-in-out infinite; }
-@keyframes frpulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-@media (prefers-reduced-motion: reduce) { .fr-hint i { animation: none; } }
+.ro-row--ghost .ro-idx, .ro-row--ghost .ro-meta { opacity: 0.55; }
 
 /* ─────────────────────────── act 07 · cta（终幕 · 归档落款）─────────────────────────── */
 
@@ -1117,7 +1064,8 @@ main { position: relative; z-index: 1; }
   .fwchips--l { align-items: start; text-align: left; }
   .fw__stage { --fwr: min(24vw, 132px); width: min(54vw, 300px); }
   .viewer { --film: min(94vw, calc(46vh * 1.888)); }
-  .fr-hint { padding-left: 0; }
+  .ro-row { grid-template-columns: auto 1fr; }
+  .ro-meta { grid-column: 1 / -1; margin-top: 10px; }
   .cta__title { white-space: normal; font-size: min(13.5vw, 11vh); line-height: 1.08; margin-bottom: clamp(10px, 3vh, 30px); }
   .cta__index { grid-template-columns: 1fr 1fr; gap: clamp(12px, 3vh, 22px) 26px; }
   .ix:nth-child(2), .ix:nth-child(3), .ix:nth-child(4) { margin-top: 0; }
