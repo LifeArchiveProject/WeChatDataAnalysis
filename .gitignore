@@ -12,7 +12,7 @@ wheels/
 /output/
 /.native-core-cache-v1/
 /.native-core-license-v1/
-/.playwright-cli/
+.playwright-cli/
 /.pnpm-store/
 /.pytest-tmp-*/
 /.testdeps/
@@ -63,6 +63,19 @@ pnpm-lock.yaml
 /desktop/resources/signing/*
 !/desktop/resources/signing/.gitkeep
 /desktop/resources/icon.ico
+/desktop/.operation-auth-*/
+
+# Local dependency, diagnostic, and scratch artifacts
+/node_modules/
+/logs/
+/WeQ/
+*.obj
+/cdn_image_quota.json
+/agreement-ready.yml
+/app-home.yml
+/chat-home.yml
+/group-before.yml
+/nul`r`ncl.exe
 
 # Native-core developer artifacts are supplied by the producer workflow.
 # Source mode downloads and verifies these native-core files into the per-user
