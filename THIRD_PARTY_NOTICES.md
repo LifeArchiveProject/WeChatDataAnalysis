@@ -25,3 +25,4 @@ database validation, transaction recovery, signature verification, and
 privacy-preserving diagnostics; it does not bundle user databases or keys.
 The complete upstream license text is included at
 `docs/licenses/wcdb-key-tool-MIT.txt`.
+
