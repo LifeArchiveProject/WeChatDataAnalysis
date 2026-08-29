@@ -11,6 +11,17 @@ from .errors import JSONRPC_METHOD_NOT_FOUND, McpError
 
 
 ToolHandler = Callable[[dict[str, Any], "McpToolContext"], Any | Awaitable[Any]]
+_MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
+
+
+def _stringify_unsafe_integers(value: Any) -> Any:
+    if isinstance(value, int) and abs(value) > _MAX_SAFE_JSON_INTEGER:
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _stringify_unsafe_integers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_stringify_unsafe_integers(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -105,7 +116,7 @@ class McpToolRegistry:
         result = tool.handler(args, context)
         if inspect.isawaitable(result):
             result = await result
-        encoded = jsonable_encoder(result)
+        encoded = _stringify_unsafe_integers(jsonable_encoder(result))
         text = json.dumps(encoded, ensure_ascii=False, indent=2)
         is_error = isinstance(encoded, dict) and str(encoded.get("status") or "").lower() == "error"
         return {

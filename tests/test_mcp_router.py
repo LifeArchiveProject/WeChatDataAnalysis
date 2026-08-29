@@ -480,6 +480,35 @@ class TestMcpRouter(unittest.TestCase):
         self.assertNotIn("freshness", structured)
         self.assertFalse(calls[0]["allow_native_enrichment"])
 
+    def test_mcp_stringifies_integers_outside_javascript_safe_range(self):
+        client = self._client()
+
+        class FakeChatRouter:
+            async def search_chat_messages(self, _request, **_kwargs):
+                return {
+                    "status": "success",
+                    "index": {"indexMtimeNs": 9007199254740993},
+                    "hits": [{"serverId": 9007199254740993}],
+                    "limit": 20,
+                }
+
+        with patch("wechat_decrypt_tool.mcp.tools._chat_router", return_value=FakeChatRouter()):
+            resp = client.post(
+                "/mcp",
+                json=self._rpc(
+                    "tools/call",
+                    {"name": "wechat.chat.search_messages", "arguments": {"query": "xlsx"}},
+                ),
+            )
+
+        structured = resp.json()["result"]["structuredContent"]
+        self.assertEqual(structured["index"]["indexMtimeNs"], "9007199254740993")
+        self.assertEqual(structured["hits"][0]["serverId"], "9007199254740993")
+        self.assertEqual(structured["limit"], 20)
+        self.assertIn('"serverId": "9007199254740993"', resp.json()["result"]["content"][0]["text"])
+        tools = {tool["name"]: tool for tool in client.post("/mcp", json=self._rpc("tools/list")).json()["result"]["tools"]}
+        self.assertEqual(tools["wechat.chat.resolve_app_message"]["inputSchema"]["properties"]["server_id"]["type"], "string")
+
     def test_mcp_chat_search_decrypted_declares_snapshot_freshness(self):
         client = self._client()
 
