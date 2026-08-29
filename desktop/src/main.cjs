@@ -52,6 +52,7 @@ const {
   ensureSourceNativeCore,
 } = require("./source-native-core-bootstrap.cjs");
 const { resolveNativeCoreRuntimeDir } = require("./native-core-path.cjs");
+const { createQqFeedbackService } = require("./qq-feedback.cjs");
 const {
   configurePrivatePkiUpdateVerification,
   ensurePrivatePkiIssuerCached,
@@ -75,6 +76,22 @@ let backendPortChangeInProgress = false;
 let outputDirChangeInProgress = false;
 let accountDataChangeInProgress = false;
 let outputDirChangeProgressState = null;
+let qqFeedbackService = null;
+
+function getQqFeedbackService() {
+  if (!qqFeedbackService) {
+    qqFeedbackService = createQqFeedbackService({
+      appVersion: app.getVersion(),
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      repoRoot: path.resolve(__dirname, "..", ".."),
+      logPath: path.join(app.getPath("userData"), "output", "logs", "qq-feedback", "nt_helper.log"),
+      userDataDir: app.getPath("userData"),
+      getOutputDir: () => resolveOutputDir({ ensureExists: true }),
+    });
+  }
+  return qqFeedbackService;
+}
 
 function normalizeTitleBarTheme(value) {
   return String(value || "").trim().toLowerCase() === "dark" ? "dark" : "light";
@@ -3018,6 +3035,22 @@ function registerWindowIpc() {
       logMain(`[main] getVersion failed: ${err?.message || err}`);
       return "";
     }
+  });
+
+  ipcMain.handle("qq-feedback:getInfo", (event) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+      throw new Error("仅允许主窗口读取 QQ 反馈状态。");
+    }
+    return getQqFeedbackService().getInfo();
+  });
+
+  ipcMain.handle("qq-feedback:send", async (event, input) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+      throw new Error("仅允许主窗口发送 QQ 反馈。");
+    }
+    const result = await getQqFeedbackService().send(input);
+    logMain(`[qq-feedback] group=${result.groupId} status=${result.status}`);
+    return result;
   });
 
   ipcMain.handle("app:getOutputDirInfo", () => {

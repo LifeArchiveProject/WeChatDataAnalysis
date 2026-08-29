@@ -84,6 +84,13 @@
         ]
       },
       {
+        "from": "resources/qq-feedback",
+        "to": "qq-feedback",
+        "filter": [
+          "win32-x64/nt_helper.node"
+        ]
+      },
+      {
         "from": "node_modules/ffmpeg-static",
         "to": "ffmpeg",
         "filter": [

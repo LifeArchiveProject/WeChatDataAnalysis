@@ -146,6 +146,31 @@ contextBridge.exposeInMainWorld("wechatDesktop", {
 
   // Auto update
   getVersion: () => ipcRenderer.invoke("app:getVersion"),
+  getQqFeedbackInfo: () => ipcRenderer.invoke("qq-feedback:getInfo"),
+  sendQqBugReport: (input = {}) => {
+    const screenshotFiles = Array.isArray(input?.screenshotFiles) ? input.screenshotFiles : [];
+    if (screenshotFiles.length > 5) return Promise.reject(new Error("最多粘贴 5 张截图。"));
+    return ipcRenderer.invoke("qq-feedback:send", {
+      title: String(input?.title || ""),
+      wechatVersion: String(input?.wechatVersion || ""),
+      module: String(input?.module || ""),
+      occurredAt: String(input?.occurredAt || ""),
+      description: String(input?.description || ""),
+      steps: String(input?.steps || ""),
+      expected: String(input?.expected || ""),
+      actual: String(input?.actual || ""),
+      screenshots: String(input?.screenshots || ""),
+      screenshotFiles: screenshotFiles.map((item) => ({
+        mimeType: String(item?.mimeType || ""),
+        bytes: item?.bytes instanceof Uint8Array ? new Uint8Array(item.bytes) : new Uint8Array(),
+      })),
+      confirmations: {
+        duplicateSearch: input?.confirmations?.duplicateSearch === true,
+        logsAttached: input?.confirmations?.logsAttached === true,
+        sensitiveDataRemoved: input?.confirmations?.sensitiveDataRemoved === true,
+      },
+    });
+  },
   checkForUpdates: () => ipcRenderer.invoke("app:checkForUpdates"),
   downloadAndInstall: () => ipcRenderer.invoke("app:downloadAndInstall"),
   installUpdate: () => ipcRenderer.invoke("app:installUpdate"),

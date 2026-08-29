@@ -81,17 +81,24 @@
       <button
         type="button"
         class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        title="问题反馈"
+        aria-label="问题反馈"
+        @click="openBugReportDialog"
+      >
+        <span class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <i class="fa-solid fa-bug sidebar-rail-icon text-[17px]" aria-hidden="true"></i>
+        </span>
+      </button>
+
+      <button
+        type="button"
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
         title="高级功能"
         aria-label="高级功能"
         @click="openAdvancedFeaturesDialog"
       >
-        <span class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
-          <svg class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M4 6h8M16 6h4M4 12h3M11 12h9M4 18h10M18 18h2" />
-            <circle cx="14" cy="6" r="2" />
-            <circle cx="9" cy="12" r="2" />
-            <circle cx="16" cy="18" r="2" />
-          </svg>
+        <span class="sidebar-rail-plate advanced-features-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center">
+          <i class="fa-solid fa-toolbox advanced-features-icon" aria-hidden="true"></i>
         </span>
       </button>
 
@@ -481,75 +488,81 @@
   </div>
 
   <GlobalExportDialog v-if="showGlobalExportEntry" :open="exportDialogOpen" @close="closeExportDialog" />
+  <BugReportDialog :open="bugReportDialogOpen" @close="closeBugReportDialog" />
 
   <GuideDialog
     :open="advancedFeaturesDialogOpen"
     wide
+    export-style
     show-close-icon
     eyebrow=""
     title="高级功能"
-    description=""
+    badge="暂时不可用"
+    :description="FEATURE_UNAVAILABLE_MESSAGE"
     primary-label=""
     @close="closeAdvancedFeaturesDialog"
   >
-    <div class="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="筛选高级功能">
-      <button
-        v-for="filter in ADVANCED_FEATURE_FILTERS"
-        :key="filter.key"
-        type="button"
-        class="inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[10.5px] transition-colors"
-        :class="advancedFeatureFilter === filter.key ? 'bg-[#03C160] text-white' : 'text-[var(--setup-text-secondary)] bg-[var(--setup-surface-soft)] hover:text-[var(--app-text-primary)]'"
-        :aria-pressed="advancedFeatureFilter === filter.key"
-        @click="advancedFeatureFilter = filter.key"
-      >
-        <i :class="['fa-solid', filter.icon, 'text-[10px]']" aria-hidden="true"></i>
-        {{ filter.label }}
-      </button>
-    </div>
+    <section class="app-export-panel">
+      <div class="flex flex-wrap gap-1.5" role="group" aria-label="筛选高级功能">
+        <button
+          v-for="filter in ADVANCED_FEATURE_FILTERS"
+          :key="filter.key"
+          type="button"
+          class="advanced-feature-filter"
+          :class="{ 'is-active': advancedFeatureFilter === filter.key }"
+          :aria-pressed="advancedFeatureFilter === filter.key"
+          @click="advancedFeatureFilter = filter.key"
+        >
+          <i :class="['fa-solid', filter.icon, 'text-[10px]']" aria-hidden="true"></i>
+          {{ filter.label }}
+        </button>
+      </div>
 
-    <div class="mt-2 grid grid-cols-1 gap-3" :class="advancedFeatureGridClass">
-      <table
-        v-for="(features, columnIndex) in advancedFeatureColumns"
-        :key="columnIndex"
-        class="w-full table-fixed border-separate border-spacing-y-0.5 text-[10.5px]"
-      >
-        <colgroup>
-          <col />
-          <col class="w-[44px]" />
-          <col class="w-[44px]" />
-        </colgroup>
-        <thead>
-          <tr>
-            <th scope="col" class="px-2.5 py-1.5 text-left text-[10px] font-medium" style="color: var(--setup-text-secondary)">功能名称</th>
-            <th scope="col" class="px-1 py-1.5 text-center text-[10px] font-medium" style="color: var(--setup-text-secondary)">常规</th>
-            <th scope="col" class="px-1 py-1.5 text-center text-[10px] font-semibold text-[#03C160]">高级</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="feature in features" :key="`${feature.group}-${feature.name}`">
-            <th scope="row" class="rounded-l-md px-2.5 py-1.5 text-left font-normal leading-tight" style="background-color: var(--setup-surface-soft); color: var(--app-text-primary)">
-              <i :class="['fa-solid', feature.icon, 'mr-1.5 w-3 text-center text-[9px] text-[#03C160]']" aria-hidden="true"></i>
-              <span>{{ feature.name }}</span>
-              <span class="ml-1.5 text-[8.5px] font-normal" style="color: var(--setup-text-muted)">{{ feature.group }}</span>
-            </th>
-            <td class="px-1 py-1.5 text-center text-xs" style="background-color: var(--setup-surface-soft); color: var(--setup-text-muted)" aria-label="常规分类不包含">—</td>
-            <td class="rounded-r-md px-1 py-1.5 text-center" style="background-color: var(--setup-surface-soft)">
-              <span class="mx-auto inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#03C160]/10 text-[#03C160]" aria-label="归入高级功能">
-                <svg class="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="m5 12 4 4L19 6" />
-                </svg>
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+      <div class="mt-2 grid grid-cols-1 gap-3" :class="advancedFeatureGridClass">
+        <table
+          v-for="(features, columnIndex) in advancedFeatureColumns"
+          :key="columnIndex"
+          class="w-full table-fixed border-separate border-spacing-y-0.5 text-[10.5px]"
+        >
+          <colgroup>
+            <col />
+            <col class="w-[44px]" />
+            <col class="w-[44px]" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th scope="col" class="px-2.5 py-1.5 text-left text-[10px] font-medium" style="color: var(--setup-text-secondary)">功能名称</th>
+              <th scope="col" class="px-1 py-1.5 text-center text-[10px] font-medium" style="color: var(--setup-text-secondary)">常规</th>
+              <th scope="col" class="px-1 py-1.5 text-center text-[10px] font-semibold text-[#03C160]">高级</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="feature in features" :key="`${feature.group}-${feature.name}`">
+              <th scope="row" class="rounded-l-md px-2.5 py-1.5 text-left font-normal leading-tight" style="background-color: var(--setup-surface-soft); color: var(--app-text-primary)">
+                <i :class="['fa-solid', feature.icon, 'mr-1.5 w-3 text-center text-[9px] text-[#03C160]']" aria-hidden="true"></i>
+                <span>{{ feature.name }}</span>
+                <span class="ml-1.5 text-[8.5px] font-normal" style="color: var(--setup-text-muted)">{{ feature.group }}</span>
+              </th>
+              <td class="px-1 py-1.5 text-center text-xs" style="background-color: var(--setup-surface-soft); color: var(--setup-text-muted)" aria-label="常规分类不包含">—</td>
+              <td class="rounded-r-md px-1 py-1.5 text-center" style="background-color: var(--setup-surface-soft)">
+                <span class="mx-auto inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#03C160]/10 text-[#03C160]" aria-label="归入高级功能">
+                  <svg class="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m5 12 4 4L19 6" />
+                  </svg>
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </GuideDialog>
 </template>
 
 <script setup>
 import { storeToRefs } from 'pinia'
 import { buildAccountAvatarUrl } from '~/lib/account-avatar'
+import { FEATURE_UNAVAILABLE_MESSAGE } from '~/lib/developer-support'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
 import { useThemeStore } from '~/stores/theme'
@@ -567,7 +580,7 @@ const ADVANCED_FEATURE_GROUPS = [
     icon: 'fa-plus',
     features: ['文字', '图片', '文件', '语音', '视频', '表情', '转账记录', '红包记录', '位置', '链接卡片', '小程序卡片', '视频号卡片', '引用消息', '合并聊天记录', '通话记录', '系统消息', '拍一拍记录'],
   },
-  { key: 'action', label: '微信动作', icon: 'fa-paper-plane', features: ['发送文字消息', '发送拍一拍'] },
+  { key: 'action', label: '微信动作', icon: 'fa-paper-plane', features: ['发送文字消息', '发送群聊 @ 消息', '发送图片消息', '发送视频消息', '发送表情消息', '发送语音消息', '发送拍一拍'] },
   { key: 'moments', label: '朋友圈', icon: 'fa-camera', features: ['自动后台刷新朋友圈', '朋友圈点赞', '朋友圈图片评论', '发布朋友圈'] },
   { key: 'group', label: '群聊', icon: 'fa-users', features: ['修改本人群昵称', '发布群公告'] },
 ]
@@ -640,9 +653,12 @@ const deleteAccountApiUnsupported = ref(false)
 const brokenAvatarUrls = ref({})
 const isMacosDesktop = ref(false)
 const advancedFeaturesDialogOpen = ref(false)
+const bugReportDialogOpen = ref(false)
 
 const openAdvancedFeaturesDialog = () => { advancedFeaturesDialogOpen.value = true }
 const closeAdvancedFeaturesDialog = () => { advancedFeaturesDialogOpen.value = false }
+const openBugReportDialog = () => { bugReportDialogOpen.value = true }
+const closeBugReportDialog = () => { bugReportDialogOpen.value = false }
 
 const normalizeAccountName = (value) => String(value || '').trim()
 
@@ -983,6 +999,60 @@ const deleteCurrentAccountData = async () => {
 
 .sidebar-rail-action:hover .sidebar-rail-plate {
   background-color: var(--sidebar-rail-hover);
+}
+
+.advanced-features-plate {
+  --advanced-features-bg: var(--sidebar-rail-bg);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--advanced-features-bg), var(--advanced-features-bg)) padding-box,
+    linear-gradient(110deg, rgba(7, 183, 91, 0.16) 42%, #07b75b 47%, #b9f6d3 50%, #07b75b 53%, rgba(7, 183, 91, 0.16) 58%) border-box;
+  background-repeat: no-repeat;
+  background-size: 100% 100%, 300% 100%;
+  animation: advanced-features-border-flow 2.4s linear infinite;
+}
+
+.sidebar-rail-action:hover .advanced-features-plate {
+  --advanced-features-bg: var(--sidebar-rail-hover);
+}
+
+.advanced-feature-filter {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-surface-bg);
+  color: var(--app-text-secondary);
+  font-size: 10.5px;
+  transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
+}
+
+.advanced-feature-filter:hover {
+  background: var(--app-neutral-btn-hover);
+  color: var(--app-text-primary);
+}
+
+.advanced-feature-filter.is-active {
+  border-color: var(--export-accent-border);
+  background: var(--export-accent-soft);
+  color: var(--export-accent-text);
+}
+
+.advanced-features-icon {
+  color: var(--sidebar-rail-icon-color);
+  font-size: 17px;
+}
+
+@keyframes advanced-features-border-flow {
+  from { background-position: 0 0, 100% 0; }
+  to { background-position: 0 0, 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .advanced-features-plate { animation: none; }
 }
 
 .sidebar-rail-icon {

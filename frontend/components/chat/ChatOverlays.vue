@@ -1004,8 +1004,10 @@
 
     <GuideDialog
       :open="modifyTextUnavailableDialogOpen"
+      export-style
       eyebrow="功能暂未开放"
       title="请进群联系开发者"
+      badge="暂时不可用"
       :description="modifyTextUnavailableMessage"
       primary-label="加入 QQ 交流群"
       secondary-label="关闭"

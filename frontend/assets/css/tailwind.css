@@ -939,13 +939,11 @@
   }
 
   .chat-composer {
-    @apply flex flex-shrink-0 flex-col border;
+    @apply flex flex-shrink-0 flex-col border-t;
     height: 102px;
-    margin: 8px;
     padding: 10px 14px 8px;
-    border-radius: 10px;
-    background-color: var(--chat-bubble-received);
-    border-color: var(--chat-header-border);
+    background-color: var(--chat-page-bg);
+    border-color: var(--session-list-resizer);
   }
 
   .chat-composer-input {

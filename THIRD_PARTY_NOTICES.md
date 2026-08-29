@@ -25,3 +25,9 @@ database validation, transaction recovery, signature verification, and
 privacy-preserving diagnostics; it does not bundle user databases or keys.
 The complete upstream license text is included at
 `docs/licenses/wcdb-key-tool-MIT.txt`.
+
+## QQ feedback bridge
+
+The optional Windows QQ feedback bridge reuses WeQ's `nt_helper.node` and QQ
+flash-transfer protocol implementation. WeQ is copyright H3CoF6 and licensed under
+CC BY-NC-SA 4.0: https://github.com/H3CoF6/WeQ

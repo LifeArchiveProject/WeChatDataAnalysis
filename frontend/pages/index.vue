@@ -3,7 +3,7 @@
     <div class="pointer-events-none absolute inset-0 bg-grid-pattern opacity-5"></div>
     <div class="pointer-events-none absolute left-20 top-20 h-72 w-72 rounded-full bg-[#07C160] opacity-5 blur-3xl"></div>
     <div class="pointer-events-none absolute right-20 top-40 h-96 w-96 rounded-full bg-[#10AEEF] opacity-5 blur-3xl"></div>
-    <div class="pointer-events-none absolute -bottom-8 left-40 h-80 w-80 rounded-full bg-[#91D300] opacity-5 blur-3xl"></div>
+    <div class="pointer-events-none absolute bottom-0 left-40 h-80 w-80 rounded-full bg-[#91D300] opacity-5 blur-3xl"></div>
 
     <main class="relative z-10 mx-auto flex min-h-full w-full max-w-6xl flex-col justify-start lg:justify-center">
       <section class="space-y-5">
