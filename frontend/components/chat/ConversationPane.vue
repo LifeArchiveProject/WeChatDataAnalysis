@@ -6,6 +6,20 @@
           <h2 class="chat-header-title text-base font-medium" :class="{ 'privacy-blur': privacyMode }">
             {{ selectedContact ? selectedContact.name : '' }}
           </h2>
+          <button
+            v-if="groupAnnouncement"
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-[#07C160] hover:bg-[#07C160]/10"
+            aria-haspopup="dialog"
+            title="查看群公告"
+            @click="openGroupAnnouncement"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 13V7l12-3v12L4 13Z" />
+              <path d="M8 13v6h3l1-5M19 8v4" />
+            </svg>
+            <span>群公告</span>
+          </button>
         </div>
         <div class="ml-auto flex items-center gap-2">
           <button
@@ -146,6 +160,22 @@
         </p>
       </div>
     </div>
+
+    <GuideDialog
+      :open="groupAnnouncementOpen"
+      eyebrow=""
+      title="群公告"
+      description=""
+      primary-label="关闭"
+      tone="info"
+      @primary="closeGroupAnnouncement"
+      @close="closeGroupAnnouncement"
+    >
+      <p
+        class="whitespace-pre-wrap break-words text-sm leading-7 text-[#3f4a44]"
+        :class="{ 'privacy-blur': privacyMode }"
+      >{{ groupAnnouncement }}</p>
+    </GuideDialog>
   </div>
 </template>
 
