@@ -94,6 +94,7 @@ from ..session_last_message import (
     get_session_last_message_status,
     load_session_last_messages,
 )
+from ..sns_realtime_autosync import SNS_REALTIME_AUTOSYNC
 from ..sqlite_diagnostics import collect_sqlite_diagnostics, format_sqlite_diagnostics
 from ..source_fallback import build_source_fallback_meta
 from ..wcdb_realtime import (
@@ -4156,6 +4157,9 @@ def _postprocess_full_messages(
 async def list_chat_accounts():
     """列出可用于聊天预览的账号（direct WCDB + legacy decrypted 兼容）。"""
     contexts = list_chat_account_contexts()
+    for ctx in contexts:
+        if ctx.mode == "direct" and ctx.db_key_present:
+            SNS_REALTIME_AUTOSYNC.ensure_account(ctx.name, schedule_startup=True)
     accounts = [ctx.name for ctx in contexts]
     account_infos = [_chat_account_context_public(ctx) for ctx in contexts]
     switchable_accounts = [ctx.name for ctx in contexts if bool(getattr(ctx, "keys_ready", False))]

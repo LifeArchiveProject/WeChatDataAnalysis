@@ -108,6 +108,46 @@ class NativeCoreFeature(IntFlag):
     EXPORT = 1 << 1
     MEDIA_DECRYPT = 1 << 2
     NATIVE_ASR = 1 << 4
+    WECHAT_MESSAGE_SEND = 1 << 5
+    WECHAT_MOMENTS_REFRESH = 1 << 6
+    WECHAT_MOMENTS_INTERACT = 1 << 7
+    WECHAT_MOMENTS_PUBLISH = 1 << 8
+    WECHAT_PAT = 1 << 9
+    WECHAT_GROUP_MANAGE = 1 << 10
+
+
+class NativeCoreWechatAction(IntEnum):
+    MESSAGE_SEND_TEXT = 1
+    MOMENTS_LIKE = 3
+    MOMENTS_COMMENT_IMAGE = 4
+    MOMENTS_PUBLISH = 5
+    MESSAGE_PAT = 6
+    GROUP_SET_SELF_NICKNAME = 7
+    GROUP_PUBLISH_ANNOUNCEMENT = 8
+    MESSAGE_SEND_AT = 9
+    MESSAGE_SEND_IMAGE = 10
+    MESSAGE_SEND_VIDEO = 11
+    MESSAGE_SEND_EMOJI = 12
+    MESSAGE_SEND_VOICE = 13
+
+
+_NATIVE_CORE_WECHAT_ACTION_NAMES = frozenset(
+    {
+        "message.send_text",
+        "message.send_at",
+        "message.send_image",
+        "message.send_video",
+        "message.send_emoji",
+        "message.send_voice",
+        "message.pat",
+        "moments.refresh",
+        "moments.like",
+        "moments.comment_image",
+        "moments.publish",
+        "group.set_self_nickname",
+        "group.publish_announcement",
+    }
+)
 
 
 class NativeCoreAsrReason(IntEnum):
@@ -353,6 +393,29 @@ class _WceNativeAsrCloseOptions(ctypes.Structure):
     ]
 
 
+class _WceWechatMomentsRefreshOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+        ("account_utf8", ctypes.c_char_p),
+        ("account_directory_utf8", ctypes.c_char_p),
+        ("operation_nonce", ctypes.c_uint64),
+        ("target_username_utf8", ctypes.c_char_p),
+    ]
+
+
+class _WceWechatActionOptions(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("action_id", ctypes.c_uint32),
+        ("account_utf8", ctypes.c_char_p),
+        ("account_directory_utf8", ctypes.c_char_p),
+        ("recipient_utf8", ctypes.c_char_p),
+        ("payload_utf8", ctypes.c_char_p),
+        ("operation_nonce", ctypes.c_uint64),
+    ]
+
+
 class _WceExportBeginOptions(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -541,6 +604,7 @@ class NativeCoreBuildManifest:
     macos_client_signing_identifier: str = ""
     macos_broker_signing_identifier: str = ""
     macos_host_signing_identifier: str = ""
+    wechat_actions: tuple[str, ...] = ()
     source_runtime: bool = False
     windows_host_verification: str = ""
     macos_host_verification: str = ""
@@ -959,6 +1023,7 @@ def _load_native_core_build_manifest(
     native_asr_feature_bit_value = payload.get("nativeAsrFeatureBit", 0)
     native_asr_authorization_value = payload.get("nativeAsrAuthorization", "")
     native_asr_target_value = payload.get("nativeAsrTarget")
+    wechat_actions_value = payload.get("wechatActions", [])
     offline_export_seal_format = payload.get("offlineExportSealFormat")
     distribution_mode_value = payload.get("distributionMode")
     distribution_capsule_value = payload.get("distributionCapsule")
@@ -974,6 +1039,20 @@ def _load_native_core_build_manifest(
         raise NativeCoreProtocolError(
             "wechatdb native schemaVersion 2 must not declare a platform."
         )
+    if (
+        not isinstance(wechat_actions_value, list)
+        or any(
+            not isinstance(value, str)
+            or value not in _NATIVE_CORE_WECHAT_ACTION_NAMES
+            for value in wechat_actions_value
+        )
+        or len(set(wechat_actions_value)) != len(wechat_actions_value)
+        or (schema_version == 3 and "wechatActions" in payload)
+    ):
+        raise NativeCoreProtocolError(
+            "wechatdb native build manifest contains an invalid WeChat action list."
+        )
+    wechat_actions = tuple(wechat_actions_value)
     source_runtime = False
     windows_host_verification = ""
     macos_host_verification = ""
@@ -1291,6 +1370,7 @@ def _load_native_core_build_manifest(
         native_asr_authorization=native_asr_authorization_value,
         native_asr_target_wechat_version=native_asr_target_wechat_version,
         native_asr_target_weixin_sha256=native_asr_target_weixin_sha256,
+        wechat_actions=wechat_actions,
         macos_client_signer_sha256=macos_client_signer_digest,
         macos_broker_signer_sha256=macos_broker_signer_digest,
         macos_host_signer_sha256=macos_host_signer_digest,
@@ -1993,6 +2073,12 @@ class NativeCoreClient:
         self._supports_native_asr = bool(available_native_asr_symbols) and (
             fused_native_asr_contract
         )
+        self._supports_wechat_moments_refresh = hasattr(
+            lib, "wce_wechat_action_moments_refresh"
+        )
+        self._supports_wechat_action_execute = hasattr(
+            lib, "wce_wechat_action_execute"
+        )
         self._supports_export_verification = hasattr(lib, "wce_export_verify_seal")
         if (
             self._build_manifest.root_public_key_compiled
@@ -2145,6 +2231,18 @@ class NativeCoreClient:
                 ctypes.POINTER(_WceNativeAsrCloseOptions),
             ]
             lib.wce_native_asr_close.restype = ctypes.c_int32
+        if self._supports_wechat_moments_refresh:
+            lib.wce_wechat_action_moments_refresh.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(_WceWechatMomentsRefreshOptions),
+            ]
+            lib.wce_wechat_action_moments_refresh.restype = ctypes.c_int32
+        if self._supports_wechat_action_execute:
+            lib.wce_wechat_action_execute.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(_WceWechatActionOptions),
+            ]
+            lib.wce_wechat_action_execute.restype = ctypes.c_int32
         if self._supports_export_verification:
             lib.wce_export_verify_seal.argtypes = [
                 ctypes.POINTER(_WceExportVerifyOptions),
@@ -2637,6 +2735,239 @@ class NativeCoreClient:
                 self._native_asr_handles.discard(handle_value)
                 return
             self._raise_for_status(rc, "close native ASR")
+
+    def refresh_wechat_moments(
+        self,
+        account: str,
+        account_directory: str | os.PathLike[str],
+        target_username: str = "",
+    ) -> None:
+        if not self._supports_wechat_moments_refresh:
+            raise NativeCoreProtocolError(
+                "wechatdb native client does not implement the Moments refresh ABI."
+            )
+        options = _WceWechatMomentsRefreshOptions(
+            struct_size=ctypes.sizeof(_WceWechatMomentsRefreshOptions),
+            reserved=0,
+            account_utf8=_encode_native_asr_utf8(
+                account,
+                field_name="account",
+                maximum_size=_NATIVE_ASR_MAX_ACCOUNT_SIZE,
+            ),
+            account_directory_utf8=_encode_native_asr_account_directory(
+                account_directory
+            ),
+            operation_nonce=_operation_nonce(),
+            target_username_utf8=(
+                None
+                if target_username == ""
+                else _encode_native_asr_utf8(
+                    target_username,
+                    field_name="target_username",
+                    maximum_size=_NATIVE_ASR_MAX_ACCOUNT_SIZE,
+                )
+            ),
+        )
+        with self._lock:
+            rc = int(
+                self._library.wce_wechat_action_moments_refresh(
+                    self._open_handle(), ctypes.byref(options)
+                )
+            )
+            self._raise_for_status(rc, "refresh WeChat Moments")
+
+    def execute_wechat_action(
+        self,
+        action: NativeCoreWechatAction | int,
+        account: str,
+        account_directory: str | os.PathLike[str],
+        recipient: str,
+        payload: str,
+    ) -> None:
+        if not self._supports_wechat_action_execute:
+            raise NativeCoreProtocolError(
+                "wechatdb native client does not implement the generic WeChat action ABI."
+            )
+        action_id = int(action)
+        if action_id <= 0:
+            raise ValueError("action must be a positive action id")
+        options = _WceWechatActionOptions(
+            struct_size=ctypes.sizeof(_WceWechatActionOptions),
+            action_id=action_id,
+            account_utf8=_encode_native_asr_utf8(
+                account,
+                field_name="account",
+                maximum_size=_NATIVE_ASR_MAX_ACCOUNT_SIZE,
+            ),
+            account_directory_utf8=_encode_native_asr_account_directory(
+                account_directory
+            ),
+            recipient_utf8=_encode_native_asr_utf8(
+                recipient,
+                field_name="recipient",
+                maximum_size=511,
+            ),
+            payload_utf8=_encode_native_asr_utf8(
+                payload,
+                field_name="payload",
+                maximum_size=256 * 1024,
+            ),
+            operation_nonce=_operation_nonce(),
+        )
+        with self._lock:
+            rc = int(
+                self._library.wce_wechat_action_execute(
+                    self._open_handle(), ctypes.byref(options)
+                )
+            )
+            self._raise_for_status(rc, "execute WeChat action")
+
+    def send_wechat_text(
+        self,
+        account: str,
+        account_directory: str | os.PathLike[str],
+        recipient_wxid: str,
+        text: str,
+    ) -> None:
+        self.execute_wechat_action(
+            NativeCoreWechatAction.MESSAGE_SEND_TEXT,
+            account,
+            account_directory,
+            str(recipient_wxid).strip(),
+            str(text),
+        )
+
+    def like_wechat_moment(
+        self,
+        account: str,
+        account_directory: str | os.PathLike[str],
+        feed_id: int | str,
+        target_username: str,
+        *,
+        liked: bool,
+    ) -> None:
+        feed = str(feed_id).strip()
+        target = str(target_username).strip()
+        if not feed.isdecimal() or not 0 < int(feed) <= 0xFFFF_FFFF_FFFF_FFFF:
+            raise ValueError("feed_id must be an unsigned 64-bit decimal value")
+        if not target or "\x1f" in target:
+            raise ValueError("target_username is invalid")
+        self.execute_wechat_action(
+            NativeCoreWechatAction.MOMENTS_LIKE,
+            account,
+            account_directory,
+            feed,
+            ("1" if liked else "0") + "\x1f" + target,
+        )
+
+    def comment_wechat_moment_with_image(
+        self,
+        account: str,
+        account_directory: str | os.PathLike[str],
+        feed_id: int | str,
+        target_username: str,
+        image_path: str | os.PathLike[str],
+    ) -> None:
+        feed = str(feed_id).strip()
+        target = str(target_username).strip()
+        image = str(Path(image_path).expanduser().resolve())
+        if not feed.isdecimal() or not 0 < int(feed) <= 0xFFFF_FFFF_FFFF_FFFF:
+            raise ValueError("feed_id must be an unsigned 64-bit decimal value")
+        if not target or "\x1f" in target or "\x1f" in image:
+            raise ValueError("Moments image comment values are invalid")
+        self.execute_wechat_action(
+            NativeCoreWechatAction.MOMENTS_COMMENT_IMAGE,
+            account,
+            account_directory,
+            feed,
+            target + "\x1f" + image,
+        )
+
+    def publish_wechat_moments(
+        self,
+        account: str,
+        account_directory: str | os.PathLike[str],
+        wxid_directory: str | os.PathLike[str],
+        content: str,
+        image_paths: list[str | os.PathLike[str]] | tuple[str | os.PathLike[str], ...] = (),
+        *,
+        privacy: int = 2,
+        remind_usernames: list[str] | tuple[str, ...] = (),
+        privacy_usernames: list[str] | tuple[str, ...] = (),
+    ) -> None:
+        if privacy not in {1, 2, 3, 4}:
+            raise ValueError("privacy must be 1, 2, 3, or 4")
+        images = [str(Path(path).expanduser().resolve()) for path in image_paths]
+        reminders = [str(value).strip() for value in remind_usernames]
+        privacy_users = [str(value).strip() for value in privacy_usernames]
+        if len(images) > 9:
+            raise ValueError("image_paths must contain at most 9 images")
+        if not str(content) and not images:
+            raise ValueError("Moments content and image_paths cannot both be empty")
+        if privacy in {3, 4} and not privacy_users:
+            raise ValueError("privacy_usernames is required for privacy 3 or 4")
+        if privacy in {1, 2} and privacy_users:
+            raise ValueError("privacy_usernames must be empty for public or private posts")
+        fields = [str(privacy), str(content), "\x1e".join(images), "\x1e".join(reminders), "\x1e".join(privacy_users)]
+        if any("\x1f" in value for value in fields) or any(
+            "\x1e" in value for value in [*images, *reminders, *privacy_users]
+        ):
+            raise ValueError("Moments action values contain a reserved separator")
+        wxid_root = Path(wxid_directory).expanduser()
+        if not wxid_root.is_absolute():
+            raise ValueError("wxid_directory must be an absolute path")
+        self.execute_wechat_action(
+            NativeCoreWechatAction.MOMENTS_PUBLISH,
+            account,
+            account_directory,
+            str(wxid_root.resolve()),
+            "\x1f".join(fields),
+        )
+
+    def pat_wechat_friend(
+        self,
+        account: str,
+        account_directory: str | os.PathLike[str],
+        target_username: str,
+    ) -> None:
+        target = str(target_username).strip()
+        self.execute_wechat_action(
+            NativeCoreWechatAction.MESSAGE_PAT,
+            account,
+            account_directory,
+            target,
+            target,
+        )
+
+    def set_wechat_group_self_nickname(
+        self,
+        account: str,
+        account_directory: str | os.PathLike[str],
+        room_username: str,
+        nickname: str,
+    ) -> None:
+        self.execute_wechat_action(
+            NativeCoreWechatAction.GROUP_SET_SELF_NICKNAME,
+            account,
+            account_directory,
+            str(room_username).strip(),
+            str(nickname),
+        )
+
+    def publish_wechat_group_announcement(
+        self,
+        account: str,
+        account_directory: str | os.PathLike[str],
+        room_username: str,
+        content: str,
+    ) -> None:
+        self.execute_wechat_action(
+            NativeCoreWechatAction.GROUP_PUBLISH_ANNOUNCEMENT,
+            account,
+            account_directory,
+            str(room_username).strip(),
+            str(content),
+        )
 
     def open_database(
         self,
@@ -3680,6 +4011,7 @@ __all__ = [
     "NativeCoreEncryptedExportSession",
     "NativeCoreExportSession",
     "NativeCoreFeature",
+    "NativeCoreWechatAction",
     "NativeCoreLicenseState",
     "NativeCoreMode",
     "NativeCorePolicyError",

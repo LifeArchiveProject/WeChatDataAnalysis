@@ -307,6 +307,23 @@ jobs:
           $provenancePath = Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'provenance.json'
           $checksumsPath = Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'SHA256SUMS.txt'
           $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json
+          $knownWechatActions = @(
+            'message.send_text', 'message.pat', 'moments.refresh', 'moments.like',
+            'moments.comment_image', 'moments.publish',
+            'group.set_self_nickname', 'group.publish_announcement'
+          )
+          $manifestWechatActions = @($manifest.wechatActions)
+          $provenanceWechatActions = @($provenance.build.wechatActions)
+          if ($manifestWechatActions.Count -eq 0 -or
+              $manifestWechatActions.Count -ne
+                @($manifestWechatActions | Select-Object -Unique).Count -or
+              @($manifestWechatActions | Where-Object {
+                  $_ -isnot [string] -or $knownWechatActions -cnotcontains $_
+                }).Count -ne 0 -or
+              ($manifestWechatActions -join "`n") -cne
+                ($provenanceWechatActions -join "`n")) {
+            throw "Native manifest and provenance contain invalid or mismatched WeChat actions."
+          }
           if ($provenance.schemaVersion -ne 1 -or
               $provenance.artifactName -cne 'wechatdb-native-windows-x64-production' -or
               $provenance.source.repository -cne $env:WCE_NATIVE_CORE_ARTIFACT_REPOSITORY -or

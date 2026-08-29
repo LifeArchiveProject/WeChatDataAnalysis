@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import sqlite3
 import json
@@ -15,10 +16,31 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 from wechat_decrypt_tool import sns_realtime_autosync
+from wechat_decrypt_tool.routers import chat as chat_router
 from wechat_decrypt_tool.routers import sns as sns_router
 
 
 class TestSnsRealtimeAutosyncWiring(unittest.TestCase):
+    def test_chat_account_listing_registers_direct_db_key_accounts(self):
+        contexts = [
+            SimpleNamespace(name="wxid_direct", mode="direct", db_key_present=True, keys_ready=False),
+            SimpleNamespace(name="wxid_no_key", mode="direct", db_key_present=False, keys_ready=False),
+            SimpleNamespace(name="wxid_snapshot", mode="decrypted", db_key_present=True, keys_ready=False),
+        ]
+        with (
+            mock.patch.object(chat_router, "list_chat_account_contexts", return_value=contexts),
+            mock.patch.object(
+                chat_router,
+                "_chat_account_context_public",
+                side_effect=lambda ctx: {"account": ctx.name},
+            ),
+            mock.patch.object(chat_router.SNS_REALTIME_AUTOSYNC, "ensure_account") as ensure_account,
+        ):
+            response = asyncio.run(chat_router.list_chat_accounts())
+
+        self.assertEqual(response.get("accounts"), [ctx.name for ctx in contexts])
+        ensure_account.assert_called_once_with("wxid_direct", schedule_startup=True)
+
     def test_api_starts_and_stops_sns_autosync(self):
         api = (ROOT / "src" / "wechat_decrypt_tool" / "api.py").read_text(encoding="utf-8")
 
