@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import sys
 import threading
 import time
 import uuid
@@ -15,6 +16,7 @@ from typing import Any, Optional
 from fastapi import HTTPException
 from watchfiles import watch
 
+from .chat_accounts import resolve_chat_account_context
 from .chat_helpers import _list_decrypted_accounts, _resolve_account_dir
 from .logging_config import get_logger
 from .wcdb_realtime import WCDB_REALTIME
@@ -80,6 +82,7 @@ class _AccountState:
     watcher_available: bool = False
     watcher_error: str = ""
     startup_scheduled: bool = False
+    native_refresh_attempted: bool = False
     ignore_shm_until: float = 0.0
     subscribers: dict[str, _Subscriber] = field(default_factory=dict)
 
@@ -380,6 +383,8 @@ class SnsRealtimeAutoSyncService:
     def _sync_account_runner(self, account: str, reason: str, revision: int) -> None:
         current_thread = threading.current_thread()
         try:
+            if reason == "startup":
+                self._refresh_native_moments_once(account)
             while not self._stop.is_set():
                 result, superseded = self._sync_with_bounded_retries(account, revision)
                 # WCDB 读取可能刷新共享内存文件；短暂忽略纯 -shm 事件，防止读取自身形成事件环。
@@ -413,6 +418,57 @@ class SnsRealtimeAutoSyncService:
                 if state is not None and state.worker is current_thread:
                     state.sync_running = False
                     state.worker = None
+
+    def _refresh_native_moments_once(self, account: str) -> None:
+        try:
+            context = resolve_chat_account_context(account)
+        except Exception:
+            return
+        if (
+            context.mode != "direct"
+            or not context.db_key_present
+            or not sys.platform.startswith("win")
+        ):
+            return
+
+        with self._mu:
+            state = self._states.setdefault(account, _AccountState())
+            if state.native_refresh_attempted:
+                return
+            state.native_refresh_attempted = True
+
+        try:
+            from .native_core_broker import managed_native_core_operation
+            from .native_core_client import (
+                NativeCoreFeature,
+                NativeCorePolicyError,
+                NativeCoreStatus,
+                get_native_core_client,
+            )
+            from .native_core_lease import refresh_native_core_lease
+
+            with managed_native_core_operation():
+                client = get_native_core_client()
+                try:
+                    client.refresh_wechat_moments(context.name, context.account_dir)
+                except NativeCorePolicyError as policy_error:
+                    if policy_error.status not in {
+                        int(NativeCoreStatus.LICENSE_REQUIRED),
+                        int(NativeCoreStatus.LEASE_EXPIRED),
+                        int(NativeCoreStatus.FEATURE_DENIED),
+                    }:
+                        raise
+                    refresh_native_core_lease(
+                        client, NativeCoreFeature.WECHAT_MOMENTS_REFRESH
+                    )
+                    client.refresh_wechat_moments(context.name, context.account_dir)
+            logger.info("[sns-autosync] native refresh 调用完成 account=%s", account)
+        except Exception as exc:
+            logger.warning(
+                "[sns-autosync] native refresh 调用失败 account=%s error=%s；保留手动刷新",
+                account,
+                exc,
+            )
 
     def _sync_with_bounded_retries(self, account: str, revision: int) -> tuple[dict[str, Any], bool]:
         last_result: dict[str, Any] = {"status": "error", "error": "sns_sync_failed"}
