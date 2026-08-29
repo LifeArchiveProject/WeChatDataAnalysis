@@ -258,6 +258,37 @@ const {
   toggleReverseMessageSides
 } = messageState
 
+const groupAnnouncement = ref('')
+const groupAnnouncementOpen = ref(false)
+let groupAnnouncementRequestSeq = 0
+
+const loadGroupAnnouncement = async (username) => {
+  const seq = ++groupAnnouncementRequestSeq
+  const account = String(selectedAccount.value || '').trim()
+  const target = String(username || '').trim()
+  groupAnnouncement.value = ''
+  groupAnnouncementOpen.value = false
+  if (!account || !target.endsWith('@chatroom')) return
+
+  try {
+    const response = await api.getChatContactProfile({ account, username: target, source: 'auto' })
+    if (
+      seq !== groupAnnouncementRequestSeq
+      || account !== String(selectedAccount.value || '').trim()
+      || target !== String(selectedContact.value?.username || '').trim()
+    ) return
+    groupAnnouncement.value = String(response?.contact?.announcement || '').trim()
+  } catch {}
+}
+
+const openGroupAnnouncement = () => {
+  if (groupAnnouncement.value) groupAnnouncementOpen.value = true
+}
+
+const closeGroupAnnouncement = () => {
+  groupAnnouncementOpen.value = false
+}
+
 let exitSearchContext = async () => {}
 
 const runMessageLoad = async ({ username, reset = true, deferUntilPaint = false, reason = '', token = nextMessageLoadToken() } = {}) => {
@@ -1095,6 +1126,7 @@ watch(
   () => selectedContact.value?.username,
   (username) => {
     realtimeStore.setPriorityUsername(username || '')
+    void loadGroupAnnouncement(username)
   }
 )
 
@@ -1165,6 +1197,10 @@ const chatState = {
   ...exportState,
   ...editingState,
   ...historyState,
+  groupAnnouncement,
+  groupAnnouncementOpen,
+  openGroupAnnouncement,
+  closeGroupAnnouncement,
   voiceSidebarOpen,
   voicePanelBusy,
   voicePanelError,

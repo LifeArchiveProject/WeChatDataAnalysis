@@ -1526,6 +1526,48 @@ def _query_realtime_contact_row(handle: int, username: str) -> Optional[dict[str
     return None
 
 
+def _query_realtime_group_announcement(handle: int, username: str) -> str:
+    u = _normalize_text(username)
+    if not u.endswith("@chatroom"):
+        return ""
+    try:
+        rows = _wcdb_exec_query(
+            handle,
+            kind="contact",
+            path=None,
+            sql=(
+                "SELECT announcement_ FROM chat_room_info_detail "
+                f"WHERE username_={_sql_literal(u)} LIMIT 1"
+            ),
+        )
+    except Exception:
+        return ""
+    return _normalize_text(
+        _pick_case_insensitive_value(rows[0], "announcement_", "announcement")
+        if rows and isinstance(rows[0], dict)
+        else ""
+    )
+
+
+def _query_decrypted_group_announcement(contact_db_path: Path, username: str) -> str:
+    u = _normalize_text(username)
+    if not u.endswith("@chatroom") or not contact_db_path.exists():
+        return ""
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = sqlite3.connect(str(contact_db_path))
+        row = conn.execute(
+            "SELECT announcement_ FROM chat_room_info_detail WHERE username_ = ? LIMIT 1",
+            (u,),
+        ).fetchone()
+        return _normalize_text(row[0] if row else "")
+    except sqlite3.Error:
+        return ""
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _query_realtime_common_chatrooms(handle: int, username: str) -> list[dict[str, Any]]:
     u = _normalize_text(username)
     if not u or u.endswith("@chatroom"):
@@ -1584,9 +1626,11 @@ def _get_contact_profile_realtime(
     common_chatrooms: list[dict[str, Any]] = []
     common_chatroom_names: dict[str, str] = {}
     common_chatroom_avatar_links: dict[str, str] = {}
+    announcement = ""
     try:
         with rt_conn.lock:
             row = _query_realtime_contact_row(rt_conn.handle, username)
+            announcement = _query_realtime_group_announcement(rt_conn.handle, username)
             common_chatrooms = _query_realtime_common_chatrooms(rt_conn.handle, username)
             room_usernames = [
                 _normalize_text(item.get("username"))
@@ -1631,6 +1675,7 @@ def _get_contact_profile_realtime(
         room["avatarLink"] = _normalize_text(common_chatroom_avatar_links.get(room_username))
     contact["commonChatroomCount"] = len(common_chatrooms)
     contact["commonChatrooms"] = common_chatrooms[:20]
+    contact["announcement"] = announcement
     return (contact, row is not None)
 
 
@@ -1642,13 +1687,15 @@ def _get_contact_profile_decrypted(
 ) -> tuple[dict[str, Any], bool]:
     contact_rows = _load_contact_rows_map(account_dir / "contact.db", include_stranger=True)
     row = contact_rows.get(username)
+    contact = _contact_item_from_profile_row(
+        account_dir=account_dir,
+        base_url=base_url,
+        username=username,
+        row=row,
+    )
+    contact["announcement"] = _query_decrypted_group_announcement(account_dir / "contact.db", username)
     return (
-        _contact_item_from_profile_row(
-            account_dir=account_dir,
-            base_url=base_url,
-            username=username,
-            row=row,
-        ),
+        contact,
         row is not None,
     )
 
