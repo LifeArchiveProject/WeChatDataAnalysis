@@ -10,6 +10,26 @@ from wechat_decrypt_tool.chat_helpers import _parse_app_message
 
 
 class TestParseAppMessage(unittest.TestCase):
+    def test_music_type_3_parses_as_link(self):
+        raw_text = (
+            "wxid_sender:\n<msg><appmsg appid='wx5aa333606550dfd5'>"
+            "<title>娃娃丢</title>"
+            "<des>来自二次的张叠叠</des>"
+            "<type>3</type>"
+            "<url>http://c.y.qq.com/v8/playsong.html?songmid=004EeeYp1xP6kL</url>"
+            "<songalbumurl>https://y.gtimg.cn/music/cover.jpg</songalbumurl>"
+            "</appmsg><appinfo><appname>QQ音乐</appname></appinfo></msg>"
+        )
+
+        parsed = _parse_app_message(raw_text)
+
+        self.assertEqual(parsed.get("renderType"), "link")
+        self.assertEqual(parsed.get("linkType"), "music")
+        self.assertEqual(parsed.get("title"), "娃娃丢")
+        self.assertEqual(parsed.get("content"), "来自二次的张叠叠")
+        self.assertEqual(parsed.get("thumbUrl"), "https://y.gtimg.cn/music/cover.jpg")
+        self.assertEqual(parsed.get("from"), "QQ音乐")
+
     def test_mini_program_type_33_parses_as_link(self):
         # 小程序分享是 appmsg type=33/36。部分 payload 会在 <weappinfo> 内嵌一个 <type>0</type>，
         # 并且出现在外层 <type>33</type> 之前，因此解析必须避免被嵌套 <type> 误导。
