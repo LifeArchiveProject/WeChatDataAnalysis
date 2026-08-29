@@ -1408,6 +1408,26 @@ def _parse_app_message(text: str) -> dict[str, Any]:
 
     lower = text.lower()
 
+    if app_type == 3:
+        thumb_url = _normalize_xml_url(
+            _extract_xml_tag_or_attr(text, "songalbumurl")
+            or _extract_xml_tag_or_attr(text, "mvCoverUrl")
+            or _extract_xml_tag_or_attr(text, "thumburl")
+            or _extract_xml_tag_or_attr(text, "cdnthumburl")
+        )
+        music_url = url or _normalize_xml_url(_extract_xml_tag_text(text, "dataurl"))
+        return {
+            "renderType": "link",
+            "content": des or title or "[音乐]",
+            "title": title or des or "[音乐]",
+            "url": music_url,
+            "thumbUrl": thumb_url,
+            "from": str(source_display_name or "").strip(),
+            "fromUsername": str(source_username or "").strip(),
+            "linkType": "music",
+            "linkStyle": "default",
+        }
+
     if app_type == 19:
         # 合并转发聊天记录（Chat History）
         # 注意：recorditem 的 CDATA 内部可能包含 <refermsg> 等标签，不能据此把整条消息误判为引用消息。
