@@ -76,6 +76,7 @@ from ..chat_helpers import (
 )
 from ..path_fix import PathFixRoute
 from ..perf_trace import create_perf_trace
+from ..runtime_settings import remote_calls_enabled
 from ..wcdb_realtime import WCDB_REALTIME, exec_query as _wcdb_exec_query, get_avatar_urls as _wcdb_get_avatar_urls
 from ..voice_transcription import (
     VOICE_MODEL_DOWNLOAD_MANAGER,
@@ -184,6 +185,9 @@ def _is_loopback_host(host: str) -> bool:
 
 def _require_local_voice_mutation(request: Request) -> None:
     """Block cross-origin/LAN callers from expensive or destructive voice operations."""
+
+    if remote_calls_enabled():
+        return
 
     client_host = str(getattr(request.client, "host", "") or "").strip()
     if not _is_loopback_host(client_host):

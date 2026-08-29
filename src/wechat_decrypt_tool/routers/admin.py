@@ -19,9 +19,11 @@ from ..path_fix import PathFixRoute
 from ..runtime_settings import (
     LAN_BACKEND_HOST,
     LOOPBACK_BACKEND_HOST,
+    default_backend_host,
     read_effective_backend_host,
     read_effective_mcp_token,
     read_effective_backend_port,
+    remote_calls_enabled,
     reset_mcp_token,
     write_backend_host_env_file,
     write_backend_host_setting,
@@ -46,7 +48,7 @@ def _format_host_for_url(host: str) -> str:
 
 
 def _get_backend_bind_host() -> str:
-    host, _ = read_effective_backend_host(default=LOOPBACK_BACKEND_HOST)
+    host, _ = read_effective_backend_host(default=default_backend_host())
     return host
 
 
@@ -80,6 +82,8 @@ def _get_mcp_access_urls(port: int, bind_host: str | None = None) -> dict:
 
 
 def _is_loopback_client(request: Request) -> bool:
+    if remote_calls_enabled():
+        return True
     client = request.client
     host = str(getattr(client, "host", "") or "").strip()
     if not host:
@@ -234,7 +238,7 @@ async def get_backend_log_file() -> dict:
     return {"path": str(log_file), "exists": log_file.exists()}
 
 
-@router.post("/api/admin/log-file/open", summary="打开当前后端日志文件（仅允许本机访问）")
+@router.post("/api/admin/log-file/open", summary="打开当前后端日志文件（默认仅本机；远程模式可用）")
 async def open_backend_log_file(request: Request) -> dict:
     if not _is_loopback_client(request):
         raise HTTPException(status_code=403, detail="仅允许本机访问该接口")
@@ -284,7 +288,7 @@ async def get_backend_port() -> dict:
 
 @router.get("/api/admin/mcp-access", summary="获取 MCP 局域网接入状态")
 async def get_mcp_access() -> dict:
-    host, source = read_effective_backend_host(default=LOOPBACK_BACKEND_HOST)
+    host, source = read_effective_backend_host(default=default_backend_host())
     port, port_source = read_effective_backend_port(default=DEFAULT_BACKEND_PORT)
     return {
         "enabled": host == LAN_BACKEND_HOST,
@@ -299,7 +303,7 @@ async def get_mcp_access() -> dict:
     }
 
 
-@router.get("/api/admin/mcp-token", summary="获取 MCP token（仅允许本机访问）")
+@router.get("/api/admin/mcp-token", summary="获取 MCP token（默认仅本机；远程模式可用）")
 async def get_mcp_token(request: Request) -> dict:
     if not _is_loopback_client(request):
         raise HTTPException(status_code=403, detail="仅允许本机访问该接口")
@@ -316,7 +320,7 @@ async def get_mcp_token(request: Request) -> dict:
     }
 
 
-@router.post("/api/admin/mcp-token/reset", summary="重置 MCP token（仅允许本机访问）")
+@router.post("/api/admin/mcp-token/reset", summary="重置 MCP token（默认仅本机；远程模式可用）")
 async def reset_mcp_token_endpoint(request: Request) -> dict:
     if not _is_loopback_client(request):
         raise HTTPException(status_code=403, detail="仅允许本机访问该接口")
@@ -335,7 +339,7 @@ async def reset_mcp_token_endpoint(request: Request) -> dict:
     }
 
 
-@router.post("/api/admin/port", summary="修改后端端口并重启（仅允许本机访问）")
+@router.post("/api/admin/port", summary="修改后端端口并重启（默认仅本机；远程模式可用）")
 async def set_backend_port(payload: dict, request: Request, background_tasks: BackgroundTasks) -> dict:
     if not _is_loopback_client(request):
         raise HTTPException(status_code=403, detail="仅允许本机访问该接口")
@@ -406,7 +410,7 @@ async def set_backend_port(payload: dict, request: Request, background_tasks: Ba
         _PORT_CHANGE_IN_PROGRESS = False
 
 
-@router.post("/api/admin/mcp-access", summary="开启或关闭 MCP 局域网接入并重启后端（仅允许本机访问）")
+@router.post("/api/admin/mcp-access", summary="开启或关闭 MCP 局域网接入并重启后端（默认仅本机；远程模式可用）")
 async def set_mcp_access(payload: dict, request: Request, background_tasks: BackgroundTasks) -> dict:
     if not _is_loopback_client(request):
         raise HTTPException(status_code=403, detail="仅允许本机访问该接口")

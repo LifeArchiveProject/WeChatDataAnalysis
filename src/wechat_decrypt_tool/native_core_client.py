@@ -20,6 +20,8 @@ from enum import Enum, IntEnum, IntFlag
 from pathlib import Path
 from typing import Any, Callable
 
+from .runtime_settings import remote_calls_enabled
+
 
 WCE_CLIENT_ABI_VERSION = 1
 WCE_PROTOCOL_VERSION = 2
@@ -1349,7 +1351,9 @@ def _required_native_core_build_manifest(
 
         validate_native_core_authorization_policy(manifest)
         return manifest
-    if not frozen and _is_source_public_native_core_build_manifest(manifest):
+    if _is_source_public_native_core_build_manifest(manifest) and (
+        not frozen or remote_calls_enabled()
+    ):
         from .native_core_lease import validate_native_core_authorization_policy
 
         validate_native_core_authorization_policy(manifest)

@@ -16,6 +16,7 @@ VOICE_TRANSCRIPTION_DEVICE_KEY = "voice_transcription_device"
 VOICE_TRANSCRIPTION_MODEL_KEY = "voice_transcription_model"
 ENV_PORT_KEY = "WECHAT_TOOL_PORT"
 ENV_HOST_KEY = "WECHAT_TOOL_HOST"
+ENV_ALLOW_REMOTE_CALLS_KEY = "WECHAT_TOOL_ALLOW_REMOTE_CALLS"
 ENV_MCP_TOKEN_KEY = "WECHAT_TOOL_MCP_TOKEN"
 ENV_VOICE_TRANSCRIPTION_DEVICE_KEY = "WECHAT_TOOL_WHISPER_DEVICE"
 ENV_VOICE_TRANSCRIPTION_MODEL_KEY = "WECHAT_TOOL_WHISPER_MODEL"
@@ -25,6 +26,25 @@ LOOPBACK_BACKEND_HOST = "127.0.0.1"
 LAN_BACKEND_HOST = "0.0.0.0"
 VOICE_TRANSCRIPTION_DEVICE_CPU = "cpu"
 VOICE_TRANSCRIPTION_DEVICE_CUDA = "cuda"
+
+
+def remote_calls_enabled(default: bool = False) -> bool:
+    """Return whether caller-location checks are explicitly relaxed.
+
+    This is deliberately opt-in.  It does not disable MCP token checks, native
+    leases/build expiry, feature bits, path validation, or resource limits.
+    """
+
+    raw = str(os.environ.get(ENV_ALLOW_REMOTE_CALLS_KEY, "") or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
+def default_backend_host() -> str:
+    """Choose the bind default without overriding explicit host settings."""
+
+    return LAN_BACKEND_HOST if remote_calls_enabled() else LOOPBACK_BACKEND_HOST
 
 
 def _parse_port(value: object) -> int | None:
