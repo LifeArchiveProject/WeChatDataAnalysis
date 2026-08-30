@@ -8,6 +8,7 @@ import logging
 import os
 import plistlib
 import re
+import struct
 import psutil
 import ctypes
 import hashlib
@@ -149,97 +150,105 @@ class PROCESSENTRY32W(ctypes.Structure):
 # 删除了WeChatDecryptor类，解密功能已移至独立的wechat_decrypt.py脚本
 
 
+# AES-128-CFB 解密 key（与 Rust 端 xwechat_crypt_ke 一致）
+_GLOBAL_CONFIG_CRYPT_KEY = b"xwechat_crypt_ke"
+
+
+def _decode_mmkv_varint(data: bytes, offset: int):
+    """读取 MMKV 的 varint，返回（值, 新偏移）。"""
+    shift = value = 0
+    while offset < len(data):
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if byte < 0x80:
+            return value, offset
+        shift += 7
+    return value, offset
+
+
+def _decode_mmkv_value(payload: bytes):
+    """按 MMKV 存储格式解码单条 value（字符串/数字/hex）。"""
+    value_len, offset = _decode_mmkv_varint(payload, 0)
+    if offset + value_len == len(payload):
+        try:
+            return payload[offset:].decode("utf-8")
+        except UnicodeDecodeError:
+            return payload[offset:].hex()
+    if len(payload) == 1:
+        return payload[0]
+    value_len, offset = _decode_mmkv_varint(payload, 0)
+    return value_len if offset == len(payload) else payload.hex()
+
+
+def _parse_mmkv_kv(data: bytes) -> dict:
+    """解析解密后的 MMKV 明文为 KV 字典（vlen == 0 表示删除标记）。"""
+    kv = {}
+    pos = 4  # 跳过明文头部的 4 字节
+    while pos < len(data):
+        key_len, pos = _decode_mmkv_varint(data, pos)
+        key = data[pos:pos + key_len].decode("utf-8", errors="replace")
+        pos += key_len
+        value_len, pos = _decode_mmkv_varint(data, pos)
+        payload = data[pos:pos + value_len]
+        pos += value_len
+        if value_len == 0:
+            kv.pop(key, None)
+        else:
+            kv[key] = _decode_mmkv_value(payload)
+    return kv
+
+
 def parse_global_config(base_path: str) -> dict:
     """
-    解析 all_users/config/global_config 获取最近登录用户信息
-    基于 AES-128-CFB 解密，并解析 MMKV 的 Varint 格式
+    解析 all_users/config/global_config 获取最近登录用户信息。
+
+    使用 global_config.crc 中偏移 12..28 的 m_vector 作为 AES-128-CFB IV，
+    数据长度取文件头 4 字节小端 uint32，解密后按 MMKV varint 逐条解析 KV。
     """
     try:
-        import os
-        config_path = os.path.join(base_path, 'all_users', 'config', 'global_config')
-        if not os.path.exists(config_path):
+        config_path = os.path.join(base_path, "all_users", "config", "global_config")
+        meta_path = config_path + ".crc"
+        if not os.path.isfile(config_path) or not os.path.isfile(meta_path):
             return None
 
-        with open(config_path, 'rb') as f:
-            full_data = f.read()
-
-        if len(full_data) <= 4:
+        raw = Path(config_path).read_bytes()
+        if len(raw) < 8:
+            return None
+        data_len = struct.unpack("<I", raw[:4])[0]
+        if data_len <= 0 or 4 + data_len > len(raw):
             return None
 
-        encrypted_data = full_data[4:]
+        meta = Path(meta_path).read_bytes()
+        if len(meta) < 28:
+            return None
+        iv = meta[12:28]
 
-        # 核心修复 1：强制截断取前 16 字节，等同于 Rust 中的 b"xwechat_crypt_ke"
-        key = b'xwechat_crypt_key'[:16]
-        iv = b'\0' * 16
-
-        # 尝试主流的两种密码库
+        encrypted = raw[4:4 + data_len]
         try:
             from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-            from cryptography.hazmat.backends import default_backend
-            cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())
-            decryptor = cipher.decryptor()
-            decrypted = decryptor.update(encrypted_data) + decryptor.finalize()
+            decryptor = Cipher(algorithms.AES(_GLOBAL_CONFIG_CRYPT_KEY), modes.CFB(iv)).decryptor()
+            plaintext = decryptor.update(encrypted) + decryptor.finalize()
         except ImportError:
             from Crypto.Cipher import AES
             # PyCryptodome 中 CFB 模式默认 segment_size 是 8，需要指定为 128
-            cipher = AES.new(key, AES.MODE_CFB, iv=iv, segment_size=128)
-            decrypted = cipher.decrypt(encrypted_data)
+            plaintext = AES.new(
+                _GLOBAL_CONFIG_CRYPT_KEY, AES.MODE_CFB, iv=iv, segment_size=128
+            ).decrypt(encrypted)
 
-        # MMKV Varint 长度解码
-        def decode_varint(data, offset):
-            result = 0
-            shift = 0
-            while offset < len(data):
-                byte = data[offset]
-                offset += 1
-                result |= (byte & 0x7f) << shift
-                if not (byte & 0x80):
-                    break
-                shift += 7
-            return result, offset
-
-        def extract_mmkv_string(data: bytes, key_str: str) -> str:
-            key_bytes = key_str.encode('utf-8')
-            idx = data.find(key_bytes)
-            if idx == -1: return None
-
-            offset = idx + len(key_bytes)
-            try:
-                value_len, offset = decode_varint(data, offset)
-                if value_len <= 0 or offset >= len(data):
-                    return None
-
-                str_len, offset = decode_varint(data, offset)
-
-                if str_len > 0 and offset + str_len <= len(data):
-                    return data[offset:offset + str_len].decode('utf-8', errors='ignore')
-            except Exception:
-                pass
-            return None
-
-
-        wxid = extract_mmkv_string(decrypted, 'mmkv_key_user_name')
-        nickname = extract_mmkv_string(decrypted, 'mmkv_key_nick_name')
-        avatar_url = extract_mmkv_string(decrypted, 'mmkv_key_head_img_url')
-
-        # 核心修复 2：参考 Rust 逻辑，头像链接往往以 "/0" 结尾（微信头像的尺寸标识）
-        if not avatar_url and b'http' in decrypted:
-            http_idx = decrypted.find(b'http')
-            slash_zero_idx = decrypted.find(b'/0', http_idx)
-            if slash_zero_idx != -1:
-                # 包含 "/0" 这两个字符本身，所以是 +2
-                avatar_url = decrypted[http_idx:slash_zero_idx + 2].decode('utf-8', errors='ignore')
-
-        if wxid or nickname:
-            return {
-                "wxid": wxid,
-                "nickname": nickname,
-                "avatar": avatar_url
-            }
+        kv = _parse_mmkv_kv(plaintext)
+        result = {
+            "wxid": kv.get("mmkv_key_user_name"),
+            "nickname": kv.get("mmkv_key_nick_name"),
+            "avatar": kv.get("mmkv_key_head_img_url"),
+        }
+        if result["wxid"] or result["nickname"]:
+            return result
         return None
     except Exception as e:
         logger.debug("解析 global_config 失败: %s", e)
         return None
+
 
 def find_wechat_databases() -> List[str]:
     """在新的xwechat_files目录中查找微信数据库文件

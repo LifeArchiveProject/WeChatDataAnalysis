@@ -306,5 +306,67 @@ class TestWechatDetectionAutoDetect(unittest.TestCase):
         self.assertEqual(result, [str(data_root)])
 
 
+    def test_parse_global_config_uses_iv_from_crc_meta(self):
+        import struct
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        def varint(n):
+            out = bytearray()
+            while True:
+                b = n & 0x7F
+                n >>= 7
+                if n:
+                    out.append(b | 0x80)
+                else:
+                    out.append(b)
+                    return bytes(out)
+
+        key = wd._GLOBAL_CONFIG_CRYPT_KEY
+        entries = [
+            ("mmkv_key_user_name", "wxid_demo"),
+            ("mmkv_key_nick_name", "DemoNick"),
+            ("mmkv_key_head_img_url", "http://example.com/avatar/0"),
+            ("some_other", "value"),
+        ]
+        body = bytearray()
+        for key_name, value in entries:
+            key_bytes = key_name.encode("utf-8")
+            value_bytes = value.encode("utf-8")
+            # 字符串 value 内部还有一层 varint 长度前缀
+            value_payload = varint(len(value_bytes)) + value_bytes
+            body += varint(len(key_bytes)) + key_bytes + varint(len(value_payload)) + value_payload
+        plaintext = b"\x00\x00\x00\x00" + bytes(body)
+        iv = b"\x11" * 16
+        encryptor = Cipher(algorithms.AES(key), modes.CFB(iv)).encryptor()
+        encrypted = encryptor.update(plaintext) + encryptor.finalize()
+
+        with TemporaryDirectory() as td:
+            config_dir = Path(td) / "all_users" / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "global_config").write_bytes(struct.pack("<I", len(plaintext)) + encrypted)
+            (config_dir / "global_config.crc").write_bytes(b"\x00" * 12 + iv + b"\x00" * 16)
+
+            result = wd.parse_global_config(td)
+
+        self.assertEqual(result, {
+            "wxid": "wxid_demo",
+            "nickname": "DemoNick",
+            "avatar": "http://example.com/avatar/0",
+        })
+
+    def test_parse_global_config_missing_crc_returns_none(self):
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            config_dir = Path(td) / "all_users" / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "global_config").write_bytes(b"\x00" * 8)
+
+            result = wd.parse_global_config(td)
+
+        self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()
