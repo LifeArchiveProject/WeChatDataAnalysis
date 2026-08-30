@@ -10,6 +10,7 @@ import plistlib
 import re
 import psutil
 import ctypes
+import hashlib
 import sys
 from pathlib import Path
 from typing import List, Dict, Any, Union
@@ -460,12 +461,110 @@ def _build_auto_detect_scan_paths() -> List[str]:
     return scan_paths
 
 
+# 微信 4.x（Windows）通过 %APPDATA%\Tencent\xwechat\config 下的配置文件记录数据目录。
+# 文件名是配置键名的 MD5 而非随机 hex：MD5("KEY_LAST_XWEACHAT_FILE_DIR")。
+XWECHAT_CONFIG_KEY_NAME = "KEY_LAST_XWEACHAT_FILE_DIR"
+
+# CSIDL_PERSONAL（我的文档）：微信默认数据目录位于“我的文档”下。
+CSIDL_PERSONAL = 0x0005
+
+
+def _resolve_known_folder(csidl: int) -> str | None:
+    """将 Windows 已知文件夹 CSIDL 解析为真实目录（仅 Windows）。"""
+    if os.name != "nt":
+        return None
+    try:
+        buffer = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+        result = ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buffer)
+        if result == 0:
+            folder_path = buffer.value
+            if folder_path and os.path.isdir(folder_path):
+                return folder_path
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_wechat_base_dir(value: str) -> str | None:
+    """解析微信配置里的数据目录父路径。
+
+    支持两种格式：
+    - 真实绝对路径，如 C:\\Users\\xxx
+    - 系统 token，如 MyDocument / MyDocument: / MyDocument:<CSIDL>，
+      需用已知文件夹 API 解析为真实目录
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    # 真实绝对路径
+    if re.match(r"^[A-Za-z]:[\\/]", raw):
+        return raw
+
+    # 系统 token：MyDocument[:<CSIDL>]
+    token_match = re.match(r"^mydocument(?::(\d+))?$", raw, flags=re.IGNORECASE)
+    if not token_match:
+        return None
+
+    csidl = int(token_match.group(1)) if token_match.group(1) else CSIDL_PERSONAL
+    # 微信写入的 CSIDL 可能带高位标志位，只保留低 16 位的 CSIDL 值
+    csidl &= 0x0000FFFF
+    return _resolve_known_folder(csidl)
+
+
+def _get_xwechat_data_dir_from_config() -> str | None:
+    """从微信 4.x 配置文件读取数据根目录（仅 Windows）。
+
+    配置路径：%APPDATA%\\Tencent\\xwechat\\config\\MD5("KEY_LAST_XWEACHAT_FILE_DIR").ini
+    配置内容是数据目录的父路径（真实路径或系统 token），
+    实际数据根目录 = 父路径 + xwechat_files。
+    任何一步失败都返回 None，不阻塞后续的目录/进程扫描。
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            return None
+        ini_name = hashlib.md5(XWECHAT_CONFIG_KEY_NAME.encode("utf-8")).hexdigest() + ".ini"
+        ini_path = Path(appdata) / "Tencent" / "xwechat" / "config" / ini_name
+        if not ini_path.is_file():
+            return None
+
+        raw_bytes = ini_path.read_bytes()
+        if raw_bytes.startswith(b"\xff\xfe") or raw_bytes.startswith(b"\xfe\xff"):
+            raw = raw_bytes.decode("utf-16", errors="ignore")
+        else:
+            raw = raw_bytes.decode("utf-8", errors="ignore")
+
+        base_dir = _resolve_wechat_base_dir(raw)
+        if not base_dir:
+            return None
+
+        data_root = os.path.join(base_dir, "xwechat_files")
+        if not os.path.isdir(data_root):
+            return None
+        return data_root
+    except Exception:
+        return None
+
+
 def auto_detect_wechat_data_dirs():
     """
     自动检测微信数据目录 - 多策略组合检测
     :return: 检测到的微信数据目录列表
     """
     detected_dirs = []
+
+    # 策略0（仅 Windows）：微信 4.x 配置文件记录的数据根目录，优先级最高。
+    # 自定义数据目录名可能不匹配 COMMON_WECHAT_PATTERNS，只有配置来源能拿到真实路径；
+    # 读取失败（token 无法解析、目录不存在等）时静默跳过，不阻塞后续策略。
+    if sys.platform == "win32":
+        config_data_dir = _get_xwechat_data_dir_from_config()
+        if config_data_dir:
+            _append_detected_dir(detected_dirs, config_data_dir)
+            logger.debug("配置文件检测成功: %s", config_data_dir)
+
 
     # 策略1：常见驱动器 / 用户目录 / 自定义目录的浅层扫描。
     # 这里既检查扫描根目录本身，也检查其直接子目录，兼容：

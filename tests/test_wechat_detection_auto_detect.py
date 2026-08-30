@@ -170,6 +170,7 @@ class TestWechatDetectionAutoDetect(unittest.TestCase):
             with (
                 patch.object(wd, "_build_auto_detect_scan_paths", return_value=[str(nested_scan_root)]),
                 patch.object(wd, "get_process_list", return_value=[]),
+                patch.object(wd, "_get_xwechat_data_dir_from_config", return_value=None),
             ):
                 detected_dirs = wd.auto_detect_wechat_data_dirs()
                 result = wd.detect_wechat_installation()
@@ -205,6 +206,104 @@ class TestWechatDetectionAutoDetect(unittest.TestCase):
             self.assertEqual([item["account_name"] for item in accounts], ["wxid_demo_abcd"])
             self.assertEqual(accounts[0]["data_dir"], str(account_dir))
             self.assertEqual(accounts[0]["database_count"], 1)
+
+
+    def test_xwechat_config_ini_real_path_returns_data_root(self):
+        import hashlib
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            root = Path(td) / "root"
+            data_root = root / "xwechat_files"
+            data_root.mkdir(parents=True)
+            appdata = Path(td) / "appdata"
+            config_dir = appdata / "Tencent" / "xwechat" / "config"
+            config_dir.mkdir(parents=True)
+            ini_name = hashlib.md5(wd.XWECHAT_CONFIG_KEY_NAME.encode("utf-8")).hexdigest() + ".ini"
+            (config_dir / ini_name).write_text(str(root), encoding="utf-8")
+
+            with (
+                patch.object(wd.sys, "platform", "win32"),
+                patch.dict(os.environ, {"APPDATA": str(appdata)}),
+            ):
+                result = wd._get_xwechat_data_dir_from_config()
+
+        self.assertEqual(result, str(data_root))
+
+    def test_xwechat_config_ini_my_document_token(self):
+        import hashlib
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            root = Path(td) / "root"
+            data_root = root / "xwechat_files"
+            data_root.mkdir(parents=True)
+            appdata = Path(td) / "appdata"
+            config_dir = appdata / "Tencent" / "xwechat" / "config"
+            config_dir.mkdir(parents=True)
+            ini_name = hashlib.md5(wd.XWECHAT_CONFIG_KEY_NAME.encode("utf-8")).hexdigest() + ".ini"
+            (config_dir / ini_name).write_text("MyDocument:1073741829", encoding="utf-8")
+
+            with (
+                patch.object(wd.sys, "platform", "win32"),
+                patch.dict(os.environ, {"APPDATA": str(appdata)}),
+                patch.object(wd, "_resolve_known_folder", return_value=str(root)),
+            ):
+                result = wd._get_xwechat_data_dir_from_config()
+
+        self.assertEqual(result, str(data_root))
+
+    def test_xwechat_config_ini_missing_returns_none(self):
+        import hashlib
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            appdata = Path(td) / "appdata"
+            appdata.mkdir()
+            with (
+                patch.object(wd.sys, "platform", "win32"),
+                patch.dict(os.environ, {"APPDATA": str(appdata)}),
+            ):
+                result = wd._get_xwechat_data_dir_from_config()
+
+        self.assertIsNone(result)
+
+    def test_xwechat_config_ini_data_root_not_exists_returns_none(self):
+        import hashlib
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            root = Path(td) / "root"
+            root.mkdir()
+            appdata = Path(td) / "appdata"
+            config_dir = appdata / "Tencent" / "xwechat" / "config"
+            config_dir.mkdir(parents=True)
+            ini_name = hashlib.md5(wd.XWECHAT_CONFIG_KEY_NAME.encode("utf-8")).hexdigest() + ".ini"
+            (config_dir / ini_name).write_text(str(root), encoding="utf-8")
+
+            with (
+                patch.object(wd.sys, "platform", "win32"),
+                patch.dict(os.environ, {"APPDATA": str(appdata)}),
+            ):
+                result = wd._get_xwechat_data_dir_from_config()
+
+        self.assertIsNone(result)
+
+    def test_auto_detect_injects_xwechat_config_dir_first(self):
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            data_root = Path(td) / "xwechat_files"
+            data_root.mkdir()
+            with (
+                patch.object(wd.sys, "platform", "win32"),
+                patch.object(wd, "_get_xwechat_data_dir_from_config", return_value=str(data_root)),
+                patch.object(wd, "_build_auto_detect_scan_paths", return_value=[]),
+                patch.object(wd, "get_process_list", return_value=[]),
+            ):
+                result = wd.auto_detect_wechat_data_dirs()
+
+        self.assertEqual(result, [str(data_root)])
 
 
 if __name__ == "__main__":
