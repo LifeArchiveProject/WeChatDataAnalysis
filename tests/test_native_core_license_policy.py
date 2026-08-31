@@ -230,6 +230,8 @@ def _write_component(
                 "buildId": manifest.build_id,
                 "buildIssuedAtUnix": manifest.build_issued_at_unix,
                 "buildExpiresAtUnix": manifest.build_expires_at_unix,
+                "readOnlyBuild": True,
+                "wechatActions": [],
                 "developmentBuild": manifest.development_build,
                 "offlineBootstrapFeatureBits": int(
                     manifest.offline_bootstrap_feature_bits

@@ -40,6 +40,8 @@ const NATIVE_MANIFEST = Object.freeze({
   buildId: "wcdb-windows-source-fixture-abcd1234",
   buildIssuedAtUnix: ISSUED_AT_UNIX,
   buildExpiresAtUnix: EXPIRES_AT_UNIX,
+  readOnlyBuild: true,
+  wechatActions: [],
   developmentBuild: false,
   offlineBootstrapFeatureBits: 3,
   offlineExportSealFormat: "WES2",

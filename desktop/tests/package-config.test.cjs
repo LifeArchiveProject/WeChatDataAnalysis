@@ -182,7 +182,7 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
   assert.match(windowsJob, /gh release download \$releaseTag/);
   assert.match(
     windowsJob,
-    /wechatdb-native-windows-x64-production-\$env:NATIVE_BUILD_ID\.zip/
+    /wechatdb-native-windows-x64-source-public-\$env:NATIVE_BUILD_ID\.zip/
   );
   assert.match(windowsJob, /Get-FileHash -LiteralPath \$archivePath -Algorithm SHA256/);
   assert.match(windowsJob, /Expand-Archive -LiteralPath \$archivePath/);
@@ -248,7 +248,7 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
   const archiveHashIndex = windowsJob.indexOf("Get-FileHash -LiteralPath $archivePath");
   const expandIndex = windowsJob.indexOf("Expand-Archive -LiteralPath $archivePath");
   const importIndex = windowsJob.indexOf("Import-WindowsCloudSigningIdentity.ps1");
-  const validateIndex = windowsJob.indexOf("Validate native production artifact");
+  const validateIndex = windowsJob.indexOf("Validate native source-public artifact");
   const pythonDependenciesIndex = windowsJob.indexOf("Install Python dependencies");
   const pythonTestsIndex = windowsJob.indexOf("Run focused Python release tests");
   const buildIndex = windowsJob.indexOf("Build Windows installer");

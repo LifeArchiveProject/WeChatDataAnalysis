@@ -22,6 +22,8 @@ def windows_manifest(*, source_runtime: bool = False) -> dict[str, object]:
         "buildId": "wcdb-windows-20260808-abcd1234",
         "buildIssuedAtUnix": issued,
         "buildExpiresAtUnix": issued + 45 * 24 * 60 * 60,
+        "readOnlyBuild": True,
+        "wechatActions": [],
         "developmentBuild": False,
         "offlineBootstrapFeatureBits": 3,
         "offlineExportSealFormat": "WES2",
@@ -99,11 +101,8 @@ def test_windows_runtime_profile_is_bound_to_frozen_state(
     assert selected.source_runtime is True
 
     monkeypatch.setattr(native_core_client.sys, "frozen", True, raising=False)
-    with pytest.raises(
-        native_core_client.NativeCoreProtocolError,
-        match="rejects the source-public Windows native core",
-    ):
-        native_core_client._required_native_core_build_manifest(component)
+    selected = native_core_client._required_native_core_build_manifest(component)
+    assert selected.source_runtime is True
 
     monkeypatch.setenv("WECHAT_TOOL_ALLOW_REMOTE_CALLS", "1")
     selected = native_core_client._required_native_core_build_manifest(component)

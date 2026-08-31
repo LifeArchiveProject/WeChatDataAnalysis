@@ -28,6 +28,8 @@ const PRODUCTION_MANIFEST = Object.freeze({
   buildId: "release-2026.07.27",
   buildIssuedAtUnix: BUILD_ISSUED_AT_UNIX,
   buildExpiresAtUnix: BUILD_ISSUED_AT_UNIX + BUILD_LIFETIME_SECONDS,
+  readOnlyBuild: true,
+  wechatActions: [],
   developmentBuild: false,
   offlineBootstrapFeatureBits: 3,
   offlineExportSealFormat: "WES2",

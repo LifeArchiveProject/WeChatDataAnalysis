@@ -102,6 +102,9 @@ function validateSourcePublicCore(coreDir, nowUnix) {
     manifest.distributionMode !== "public" ||
     manifest.sourceRuntime !== true ||
     manifest.windowsHostVerification !== "same-user-direct-parent" ||
+    manifest.readOnlyBuild !== true ||
+    !Array.isArray(manifest.wechatActions) ||
+    manifest.wechatActions.length !== 0 ||
     manifest.developmentBuild !== false ||
     manifest.codeSignatureEnforced !== true ||
     manifest.rootPublicKeyCompiled !== true ||

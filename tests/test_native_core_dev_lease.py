@@ -59,6 +59,8 @@ def _write_component(
         manifest = {
             "schemaVersion": 2,
             "buildId": build_id or "dev-local",
+            "readOnlyBuild": True,
+            "wechatActions": [],
             "developmentBuild": True,
             "offlineBootstrapFeatureBits": 0,
             "offlineExportSealFormat": "none",
@@ -78,6 +80,8 @@ def _write_component(
             "buildId": "release-2026.07.27",
             "buildIssuedAtUnix": build_issued_at,
             "buildExpiresAtUnix": build_issued_at + 45 * 24 * 60 * 60,
+            "readOnlyBuild": True,
+            "wechatActions": [],
             "developmentBuild": False,
             "offlineBootstrapFeatureBits": 3,
             "offlineExportSealFormat": "WES2",

@@ -32,6 +32,8 @@ def _manifest(*, development: bool) -> dict[str, object]:
         return {
             "schemaVersion": 2,
             "buildId": "dev-local",
+            "readOnlyBuild": True,
+            "wechatActions": [],
             "developmentBuild": True,
             "offlineBootstrapFeatureBits": 0,
             "offlineExportSealFormat": "none",
@@ -50,6 +52,8 @@ def _manifest(*, development: bool) -> dict[str, object]:
         "buildId": "release-2026.07.27",
         "buildIssuedAtUnix": build_issued_at,
         "buildExpiresAtUnix": build_issued_at + 45 * 24 * 60 * 60,
+        "readOnlyBuild": True,
+        "wechatActions": [],
         "developmentBuild": False,
         "offlineBootstrapFeatureBits": 3,
         "offlineExportSealFormat": "WES2",

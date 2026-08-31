@@ -98,6 +98,13 @@ function nativeCoreManifestErrors(manifest) {
   if (manifest.schemaVersion === 2 && Object.prototype.hasOwnProperty.call(manifest, "platform")) {
     errors.push("schemaVersion 2 must not declare platform");
   }
+  if (manifest.schemaVersion === 2 && manifest.readOnlyBuild !== true) {
+    errors.push("readOnlyBuild must equal true");
+  }
+  if (manifest.schemaVersion === 2 &&
+      (!Array.isArray(manifest.wechatActions) || manifest.wechatActions.length !== 0)) {
+    errors.push("wechatActions must be an empty array");
+  }
   if (manifest.schemaVersion === 2) {
     errors.push(...windowsNativeAsrManifestErrors(manifest));
   }

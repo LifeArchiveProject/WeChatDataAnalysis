@@ -47,6 +47,8 @@ function fixture({ clientExports = WINDOWS_NATIVE_ASR_EXPORTS } = {}) {
     buildId: BUILD_ID,
     buildIssuedAtUnix: ISSUED,
     buildExpiresAtUnix: EXPIRES,
+    readOnlyBuild: true,
+    wechatActions: [],
     sourceRuntime: true,
     windowsHostVerification: "same-user-direct-parent",
     developmentBuild: false,

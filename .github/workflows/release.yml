@@ -188,7 +188,7 @@ jobs:
             frontend/package-lock.json
             desktop/package-lock.json
 
-      - name: Download pinned native production release asset
+      - name: Download pinned native source-public release asset
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN }}
@@ -200,9 +200,9 @@ jobs:
             throw "WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN is required to download the private native Release."
           }
           $releaseTag = "windows-native-$env:NATIVE_BUILD_ID"
-          $assetName = "wechatdb-native-windows-x64-production-$env:NATIVE_BUILD_ID.zip"
+          $assetName = "wechatdb-native-windows-x64-source-public-$env:NATIVE_BUILD_ID.zip"
           $archivePath = Join-Path $env:RUNNER_TEMP $assetName
-          $artifactPath = Join-Path $env:RUNNER_TEMP 'wechatdb-native-windows-x64-production'
+          $artifactPath = Join-Path $env:RUNNER_TEMP 'wechatdb-native-windows-x64-source-public'
           if ((Test-Path -LiteralPath $archivePath) -or
               (Test-Path -LiteralPath $artifactPath)) {
             throw "Native Release destination already exists on the clean runner."
@@ -214,12 +214,12 @@ jobs:
             --dir $env:RUNNER_TEMP
           if ($LASTEXITCODE -ne 0 -or
               -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
-            throw "Failed to download the exact native production Release asset."
+            throw "Failed to download the exact native source-public Release asset."
           }
 
           $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actualSha256 -cne $env:NATIVE_ARTIFACT_SHA256) {
-            throw "Native production Release asset SHA-256 does not match the pinned digest."
+            throw "Native source-public Release asset SHA-256 does not match the pinned digest."
           }
           New-Item -ItemType Directory -Path $artifactPath | Out-Null
           Expand-Archive -LiteralPath $archivePath -DestinationPath $artifactPath
@@ -240,12 +240,12 @@ jobs:
             -Mode Client `
             -GitHubOutputPath $env:GITHUB_OUTPUT
 
-      - name: Validate native production artifact
+      - name: Validate native source-public artifact
         working-directory: desktop
         shell: pwsh
         env:
           CI: "true"
-          WCE_NATIVE_CORE_ARTIFACT_DIR: ${{ runner.temp }}/wechatdb-native-windows-x64-production
+          WCE_NATIVE_CORE_ARTIFACT_DIR: ${{ runner.temp }}/wechatdb-native-windows-x64-source-public
           WCE_NATIVE_CORE_REQUIRED: "1"
           WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
           WCE_NATIVE_CORE_BROKER_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.broker-signer-sha256 }}
@@ -273,7 +273,7 @@ jobs:
           if ([uint64]$manifest.offlineBootstrapFeatureBits -ne 3 -or
               $manifest.nativeAsrAuthorization -cne 'database-read' -or
               $manifest.offlineExportSealFormat -cne 'WES2') {
-            throw "Native production artifact does not provide the required offline 3/WES2 and database-read ASR contract."
+            throw "Native source-public artifact does not provide the required offline 3/WES2 and database-read ASR contract."
           }
           if ($manifest.securityNoticeId -cne
                 'WCE-AUTOMATED-ANALYSIS-NOTICE-V2' -or
@@ -283,10 +283,10 @@ jobs:
               [uint32]$manifest.securityCheckpointCount -ne 7 -or
               $manifest.securityCheckpointSetSha256 -cnotmatch
                 '^[0-9a-f]{64}$') {
-            throw "Native production artifact does not satisfy the V2/V3 security metadata contract."
+            throw "Native source-public artifact does not satisfy the V2/V3 security metadata contract."
           }
           if ($manifest.stagingPinnedSignerTrust -ne $false) {
-            throw "Native production artifact enables staging pinned-signer trust: $manifestPath"
+            throw "Native source-public artifact enables staging pinned-signer trust: $manifestPath"
           }
           if ($manifest.windowsClientSignerSha256 -cne
               $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256) {
@@ -307,25 +307,14 @@ jobs:
           $provenancePath = Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'provenance.json'
           $checksumsPath = Join-Path $env:WCE_NATIVE_CORE_ARTIFACT_DIR 'SHA256SUMS.txt'
           $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json
-          $knownWechatActions = @(
-            'message.send_text', 'message.pat', 'moments.refresh', 'moments.like',
-            'moments.comment_image', 'moments.publish',
-            'group.set_self_nickname', 'group.publish_announcement'
-          )
-          $manifestWechatActions = @($manifest.wechatActions)
-          $provenanceWechatActions = @($provenance.build.wechatActions)
-          if ($manifestWechatActions.Count -eq 0 -or
-              $manifestWechatActions.Count -ne
-                @($manifestWechatActions | Select-Object -Unique).Count -or
-              @($manifestWechatActions | Where-Object {
-                  $_ -isnot [string] -or $knownWechatActions -cnotcontains $_
-                }).Count -ne 0 -or
-              ($manifestWechatActions -join "`n") -cne
-                ($provenanceWechatActions -join "`n")) {
-            throw "Native manifest and provenance contain invalid or mismatched WeChat actions."
+          if ($manifest.readOnlyBuild -ne $true -or
+              $manifest.PSObject.Properties.Name -notcontains 'wechatActions' -or
+              @($manifest.wechatActions).Count -ne 0 -or
+              @($provenance.build.wechatActions).Count -ne 0) {
+            throw "Native source-public artifact must be a read-only build with no WeChat actions."
           }
           if ($provenance.schemaVersion -ne 1 -or
-              $provenance.artifactName -cne 'wechatdb-native-windows-x64-production' -or
+              $provenance.artifactName -cne 'wechatdb-native-windows-x64-source-public' -or
               $provenance.source.repository -cne $env:WCE_NATIVE_CORE_ARTIFACT_REPOSITORY -or
               $provenance.source.revision -cne $env:WCE_NATIVE_CORE_SOURCE_REVISION -or
               $provenance.build.id -cne $env:WCE_NATIVE_CORE_BUILD_ID -or
@@ -407,7 +396,7 @@ jobs:
             --root-certificate $env:WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH
           node -e "require('./scripts/build-backend.cjs').resolveNativeCoreArtifacts({ platform: 'win32' })"
           if ($LASTEXITCODE -ne 0) {
-            throw "Downloaded native artifact failed the production policy."
+            throw "Downloaded native source-public artifact failed the read-only policy."
           }
           "WCE_NATIVE_CORE_ARTIFACT_DIR=$env:WCE_NATIVE_CORE_ARTIFACT_DIR" |
             Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -484,7 +473,7 @@ jobs:
       - name: Verify signed unpacked Windows runtime
         shell: pwsh
         env:
-          WCE_NATIVE_CORE_ARTIFACT_DIR: ${{ runner.temp }}/wechatdb-native-windows-x64-production
+          WCE_NATIVE_CORE_ARTIFACT_DIR: ${{ runner.temp }}/wechatdb-native-windows-x64-source-public
           WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.client-signer-sha256 }}
           WCE_NATIVE_CORE_BROKER_SIGNER_SHA256: ${{ steps.native-artifact-source.outputs.broker-signer-sha256 }}
           WCE_WINDOWS_PRIVATE_ROOT_SHA256: ${{ steps.native-artifact-source.outputs.private-root-sha256 }}

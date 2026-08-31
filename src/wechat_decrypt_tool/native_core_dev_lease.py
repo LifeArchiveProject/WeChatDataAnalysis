@@ -31,12 +31,6 @@ _ALLOWED_FEATURES = int(
     NativeCoreFeature.DATABASE_READ
     | NativeCoreFeature.EXPORT
     | NativeCoreFeature.MEDIA_DECRYPT
-    | NativeCoreFeature.WECHAT_MESSAGE_SEND
-    | NativeCoreFeature.WECHAT_MOMENTS_REFRESH
-    | NativeCoreFeature.WECHAT_MOMENTS_INTERACT
-    | NativeCoreFeature.WECHAT_MOMENTS_PUBLISH
-    | NativeCoreFeature.WECHAT_PAT
-    | NativeCoreFeature.WECHAT_GROUP_MANAGE
 )
 _lock = threading.RLock()
 _private_key: ec.EllipticCurvePrivateKey | None = None
