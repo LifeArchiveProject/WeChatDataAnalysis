@@ -46,6 +46,8 @@ body {
   text-rendering: optimizeLegibility;
 }
 body.is-loading { overflow: hidden; }
+/* 开屏门闸：首幕入场全部演完之前锁滚动，由 JS 摘除 */
+body.is-gated { overflow: hidden; }
 body.is-loading #page, body.is-loading .nav, body.is-loading .rail { visibility: hidden; }
 
 ::selection { background: rgba(61, 242, 141, 0.28); color: #fff; }
@@ -241,8 +243,9 @@ main { position: relative; z-index: 1; }
 }
 .hero__coord span { display: block; white-space: nowrap; }
 .hero__coord #hc-1.is-live { color: var(--neon); }
+.hero__coord #hc-5.is-pro { color: var(--amber); }
 .hero__title {
-  position: absolute; z-index: 2; left: 50%; top: 41%;
+  position: absolute; z-index: 2; left: 50%; top: 33%;
   transform: translate(-50%, -50%);
   width: min(88vw, 1520px);
   font-weight: 900; line-height: 1.02; letter-spacing: -0.015em;
@@ -251,8 +254,9 @@ main { position: relative; z-index: 1; }
 }
 .ht-line { display: block; overflow: hidden; padding-block: 0.08em; margin-block: -0.08em; }
 .ht-mask { display: inline-block; will-change: transform; }
-.ht-line--1 { text-align: left; font-size: clamp(2.2rem, 6.4vw, 6rem); }
-.ht-line--2 { text-align: right; font-size: clamp(3.4rem, 12.8vw, 12.4rem); margin-top: 0.02em; }
+/* 双区构图：巨字与 38 项清单同屏共存，字号随视口高收缩，谁也不压谁 */
+.ht-line--1 { text-align: left; font-size: min(clamp(1.7rem, 4.4vw, 4.2rem), 9vh); }
+.ht-line--2 { text-align: right; font-size: min(clamp(2.6rem, 8.8vw, 8.6rem), 19vh); margin-top: 0.02em; }
 /* 实心霓虹（描边中文在这个字号下会显乱），与终幕统一 */
 .hero__title em { color: var(--neon); text-shadow: 0 0 52px rgba(61, 242, 141, 0.5), 0 2px 26px rgba(4, 8, 6, 0.8); }
 
@@ -280,9 +284,104 @@ main { position: relative; z-index: 1; }
   0% { color: #eafff2; text-shadow: 0 0 46px rgba(61, 242, 141, 0.95); transform: scale(1.09); }
   100% { color: inherit; transform: none; }
 }
-.hero__sub {
-  position: absolute; z-index: 2; left: clamp(20px, 6vw, 92px); bottom: 20vh;
-  font-size: clamp(12px, 1.35vw, 15px); letter-spacing: 0.14em; color: var(--ink-dim);
+/* 开屏「权限清单」下半场：与巨字同屏共存，右侧给 CTA 竖列让出通道 */
+.hero__manifest {
+  position: absolute; z-index: 3; left: clamp(20px, 6vw, 92px);
+  right: calc(clamp(20px, 6vw, 92px) + 236px);
+  bottom: calc(42px + 2.6vh);
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: clamp(9px, 1.4vh, 13px);
+}
+.hm__read {
+  display: flex; align-items: center; gap: 10px;
+  font-size: clamp(11px, 1.2vw, 13px); letter-spacing: 0.14em; color: var(--ink-dim);
+}
+.hm__read b {
+  flex: none; font-weight: 700; font-size: 9.5px; letter-spacing: 0.3em; padding: 2px 5px 2px 8px;
+  color: #04140b; background: var(--neon); opacity: 0.82;
+}
+.hm__rule {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 10px; letter-spacing: 0.24em;
+}
+.hm__rule b {
+  flex: none; font-weight: 700; letter-spacing: 0.3em; padding: 3px 6px 2px 9px;
+  color: #140d01; background: var(--amber);
+  box-shadow: 0 0 22px rgba(255, 194, 75, 0.4);
+}
+.hm__rule span { flex: none; color: var(--amber); letter-spacing: 0.22em; }
+.hero__pro-rule { flex: 1; position: relative; height: 1px; background: rgba(255, 194, 75, 0.28); }
+.hero__pro-rule em {
+  position: absolute; top: -1px; left: 0; width: 30px; height: 3px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--amber));
+  box-shadow: 0 0 10px rgba(255, 194, 75, 0.8);
+  animation: hpSpark 3.2s ease-in-out infinite;
+}
+@keyframes hpSpark {
+  0% { left: 0; opacity: 0; }
+  12% { opacity: 1; }
+  86% { opacity: 1; }
+  100% { left: calc(100% - 30px); opacity: 0; }
+}
+.hm__headrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+.hm__head { display: block; }
+/* 标题行尾的执行读数：38 项逐条切换，与清单里的对应项、刊头计数器三者联动 */
+.hm__exec {
+  display: inline-flex; align-items: baseline; gap: 8px;
+  font-size: clamp(0.95rem, 1.15vw, 1.15rem); letter-spacing: 0.1em;
+  color: var(--amber); text-shadow: 0 0 20px rgba(255, 194, 75, 0.35), 0 1px 12px rgba(4, 8, 6, 0.9);
+}
+.hm__exec i { font-style: normal; font-size: 0.72em; opacity: 0.75; }
+.hm__exec em::after { content: "_"; margin-left: 2px; opacity: 0.65; animation: peBlink 1.1s steps(2) infinite; }
+@keyframes peBlink { 50% { opacity: 0; } }
+.hm__exec b {
+  font-weight: 700; font-size: 0.82em; color: var(--neon); opacity: 0;
+  text-shadow: 0 0 14px rgba(61, 242, 141, 0.6);
+}
+.hm__title {
+  display: block; white-space: nowrap;
+  font-size: clamp(1.4rem, 2.3vw, 2.05rem); font-weight: 900; line-height: 1.2; letter-spacing: 0.01em;
+  color: var(--ink); text-shadow: 0 2px 24px rgba(4, 8, 6, 0.9);
+}
+.hm__title em {
+  color: var(--amber);
+  text-shadow: 0 0 42px rgba(255, 194, 75, 0.5), 0 2px 20px rgba(4, 8, 6, 0.8);
+  transition: text-shadow 0.35s;
+}
+.hm__head:hover .hm__title em { text-shadow: 0 0 52px rgba(255, 194, 75, 0.8), 0 2px 20px rgba(4, 8, 6, 0.8); }
+/* 六栏权限清单：五大模块 38 项一次性全部摊开（补录 17 项占双栏对分），纯排版无框 */
+.hm__grid {
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: 10px clamp(14px, 2vw, 32px); align-items: start;
+  padding-top: clamp(4px, 0.8vh, 10px);
+}
+.hm__col--wide { grid-column: span 2; }
+.hm__col--wide .hm__list { columns: 2; column-gap: clamp(14px, 2vw, 32px); }
+.hm__mod {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.2em;
+  color: var(--amber); margin-bottom: 9px; white-space: nowrap;
+}
+.hm__mod::before { content: "▮ "; }
+.hm__mod i { font-style: normal; margin-left: 8px; opacity: 0.65; }
+.hm__list { list-style: none; }
+.hm__item {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.1em; line-height: 2.05;
+  color: var(--ink-dim); white-space: nowrap;
+  transition: color 0.25s, text-shadow 0.25s;
+}
+.hm__item:hover { color: var(--amber); text-shadow: 0 0 14px rgba(255, 194, 75, 0.4); }
+.hm__item.is-live { color: var(--amber); text-shadow: 0 0 16px rgba(255, 194, 75, 0.5); }
+.hm__get {
+  display: inline-flex; align-self: flex-start; align-items: center; gap: 8px;
+  font-size: 11px; letter-spacing: 0.18em; color: var(--amber); opacity: 0.92;
+  border-bottom: 1px dashed rgba(255, 194, 75, 0.45); padding-bottom: 5px;
+  transition: opacity 0.3s, border-color 0.3s, text-shadow 0.3s;
+}
+.hm__get i { font-style: normal; transition: transform 0.3s; }
+.hm__get:hover { opacity: 1; border-color: var(--amber); text-shadow: 0 0 18px rgba(255, 194, 75, 0.55); }
+.hm__get:hover i { transform: translate(3px, -3px); }
+@media (prefers-reduced-motion: reduce) {
+  .hero__pro-rule em, .hm__exec em::after { animation: none; }
 }
 .hero__cta {
   position: absolute; z-index: 3; right: clamp(20px, 6vw, 92px); bottom: 14vh;
@@ -330,6 +429,7 @@ main { position: relative; z-index: 1; }
   will-change: transform;
 }
 .hero__ticker-row i { font-style: normal; color: var(--neon); opacity: 0.6; }
+.hero__ticker-row .tk-pro { color: var(--amber); }
 
 /* ─────────────────────────── act 02 · manifesto ─────────────────────────── */
 
@@ -1024,6 +1124,16 @@ a.ro-row:hover .ro-meta { color: var(--ink); }
 
 /* 矮屏(≤920px 高)：压缩 machine 幕垂直预算，保住底部 ENGINE / PLATFORM 行（用户真机曾被裁） */
 @media (max-height: 920px) {
+  /* 开屏双区过矮屏预算：巨字上提收缩、HUD 上提、清单压行距，两区互不侵占 */
+  .hero__coord { top: 12.5vh; }
+  .hero__title { top: 29%; }
+  .ht-line--1 { font-size: min(clamp(1.7rem, 4.4vw, 4.2rem), 6.2vh); }
+  .ht-line--2 { font-size: min(clamp(2.6rem, 8.8vw, 8.6rem), 14.5vh); }
+  .hero__manifest { bottom: calc(42px + 1.8vh); gap: 8px; }
+  .hm__title { font-size: clamp(1.25rem, 2vw, 1.75rem); }
+  .hm__exec { font-size: clamp(0.9rem, 1.05vw, 1.05rem); }
+  .hm__item { font-size: 11px; line-height: 1.7; }
+  .hm__mod { margin-bottom: 6px; }
   .mac__pin { padding-top: clamp(52px, 8.5vh, 92px); padding-bottom: clamp(16px, 2.6vh, 34px); row-gap: clamp(8px, 1.6vh, 18px); }
   .mac__title { margin-top: 8px; }
   .mac__trace { height: clamp(60px, 10vh, 96px); }
@@ -1033,18 +1143,43 @@ a.ro-row:hover .ro-meta { color: var(--ink); }
   .mac__foot { padding-top: clamp(10px, 1.6vh, 16px); }
 }
 
+/* 极矮视口(≤700px 高，书签栏/横幅挤压后的笔记本窗口)：双区再收一级，杜绝巨字与清单相交 */
+@media (max-height: 700px) {
+  .hero__title { top: 26%; }
+  .ht-line--1 { font-size: min(clamp(1.7rem, 4.4vw, 4.2rem), 5vh); }
+  .ht-line--2 { font-size: min(clamp(2.6rem, 8.8vw, 8.6rem), 12vh); }
+  .hero__manifest { bottom: calc(42px + 1.2vh); gap: 6px; }
+  .hm__read { font-size: 11px; }
+  .hm__title { font-size: clamp(1.1rem, 1.8vw, 1.5rem); }
+  .hm__exec { font-size: 0.9rem; }
+  .hm__grid { padding-top: 2px; }
+  .hm__item { font-size: 10.5px; line-height: 1.6; }
+  .hm__mod { margin-bottom: 4px; }
+  .hm__get { padding-bottom: 3px; }
+}
+
 /* ─────────────────────────── responsive ─────────────────────────── */
 
 @media (max-width: 960px) {
   .rail { display: none; }
   .nav__word { display: none; }
   .hero__vert, .hero__coord { display: none; }
-  .hero__title { top: 34%; }
-  .ht-line--1 { font-size: clamp(2rem, 8.4vw, 3.4rem); }
-  .ht-line--2 { text-align: left; font-size: clamp(3rem, 15vw, 6rem); }
-  .hero__sub { bottom: 26vh; }
+  .hero__title { top: 22%; }
+  .ht-line--1 { font-size: min(clamp(1.5rem, 6.4vw, 2.4rem), 4.6vh); }
+  .ht-line--2 { text-align: left; font-size: min(clamp(2.2rem, 11vw, 4.2rem), 8.4vh); }
   .hero__cta { left: 20px; right: auto; bottom: 9vh; flex-direction: row; align-items: center; gap: 26px; }
   .hero__plat { display: none; }
+  /* 窄屏：清单改为分组流式排版（仍是 38 项全量），CTA 彻底让路（导航栏保留下载入口） */
+  .hero__cta { opacity: 0 !important; pointer-events: none; }
+  .hero__manifest { left: 20px; right: 20px; bottom: calc(42px + 2vh); gap: 8px; }
+  .hm__title { white-space: normal; font-size: clamp(1.1rem, 5vw, 1.45rem); }
+  .hm__grid { display: block; padding-top: 2px; }
+  .hm__col { margin-bottom: 7px; }
+  .hm__col--wide .hm__list { columns: auto; }
+  .hm__mod { margin-bottom: 2px; font-size: 10px; }
+  .hm__list li { display: inline; white-space: normal; }
+  .hm__item { font-size: 10px; line-height: 1.75; }
+  .hm__list li + li::before { content: " · "; color: rgba(255, 194, 75, 0.45); }
   .deck { grid-template-columns: 1fr; gap: clamp(18px, 3vh, 30px); align-content: center; }
   .deck__num { font-size: clamp(3rem, 12vw, 4.4rem); margin: 12px 0; }
   .deck__desc { display: none; }
