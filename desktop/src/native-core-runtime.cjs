@@ -119,6 +119,10 @@ function isProductionNativeCoreManifestBase(manifest, options = {}) {
     manifest.distributionMode === "public" &&
     hasNoDistributionCapsule(manifest) &&
     !NON_PRODUCTION_BUILD_ID_PATTERN.test(manifest.buildId) &&
+    (manifest.schemaVersion !== 2 ||
+      (manifest.readOnlyBuild === true &&
+        Array.isArray(manifest.wechatActions) &&
+        manifest.wechatActions.length === 0)) &&
     manifest.developmentBuild === false &&
     manifest.offlineBootstrapFeatureBits === 3 &&
     manifest.offlineExportSealFormat === "WES2" &&
@@ -203,6 +207,10 @@ function isDevelopmentNativeCoreManifest(manifest) {
     manifest.distributionMode === "public" &&
     hasNoDistributionCapsule(manifest) &&
     manifest.buildId === "dev-local" &&
+    (manifest.schemaVersion !== 2 ||
+      (manifest.readOnlyBuild === true &&
+        Array.isArray(manifest.wechatActions) &&
+        manifest.wechatActions.length === 0)) &&
     manifest.developmentBuild === true &&
     manifest.offlineBootstrapFeatureBits === 0 &&
     manifest.offlineExportSealFormat === "none" &&
@@ -262,7 +270,11 @@ function resolveNativeCoreRuntimePolicy({
   const complete = hasCompleteNativeCore(directory, platform, fsImpl);
   const manifest = complete ? readNativeCoreManifest(directory, fsImpl) : null;
   const platformMatch = complete && manifestMatchesPlatform(manifest, platform);
-  const production = platformMatch && isProductionNativeCoreManifest(manifest, { nowUnix });
+  const production = platformMatch && (
+    isProductionNativeCoreManifest(manifest, { nowUnix }) ||
+    (isPackaged && manifest?.schemaVersion === 2 &&
+      isSourcePublicNativeCoreManifest(manifest, { nowUnix }))
+  );
   const sourcePublic =
     platformMatch && isSourcePublicNativeCoreManifest(manifest, { nowUnix });
   const development = platformMatch && isDevelopmentNativeCoreManifest(manifest);

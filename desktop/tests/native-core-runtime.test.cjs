@@ -22,6 +22,8 @@ const PRODUCTION_MANIFEST = Object.freeze({
   buildId: "release-2026.07.27",
   buildIssuedAtUnix: BUILD_ISSUED_AT_UNIX,
   buildExpiresAtUnix: BUILD_ISSUED_AT_UNIX + BUILD_LIFETIME_SECONDS,
+  readOnlyBuild: true,
+  wechatActions: [],
   developmentBuild: false,
   offlineBootstrapFeatureBits: 3,
   offlineExportSealFormat: "WES2",
@@ -45,6 +47,8 @@ const DEVELOPMENT_MANIFEST = Object.freeze({
   schemaVersion: 2,
   distributionMode: "public",
   buildId: "dev-local",
+  readOnlyBuild: true,
+  wechatActions: [],
   developmentBuild: true,
   offlineBootstrapFeatureBits: 0,
   offlineExportSealFormat: "none",
@@ -394,7 +398,7 @@ test("source and packaged artifact profiles cannot be swapped", () => {
   }
 });
 
-test("Windows source-public artifacts are accepted only by source checkouts", () => {
+test("Windows source-public artifacts are accepted for the read-only packaged runtime", () => {
   const sourceDir = makeArtifacts("win32", WINDOWS_SOURCE_PUBLIC_MANIFEST);
   try {
     const policy = applyNativeCoreRuntimePolicy({}, {
@@ -407,15 +411,13 @@ test("Windows source-public artifacts are accepted only by source checkouts", ()
     assert.equal(policy.enableDevelopmentOverride, false);
     assert.equal(isSourcePublicNativeCoreManifest(WINDOWS_SOURCE_PUBLIC_MANIFEST), true);
     assert.equal(isProductionNativeCoreManifest(WINDOWS_SOURCE_PUBLIC_MANIFEST), false);
-    assert.throws(
-      () => resolveNativeCoreRuntimePolicy({
-        env: {},
-        isPackaged: true,
-        nativeDir: sourceDir,
-        platform: "win32",
-      }),
-      /requires an approved production/
-    );
+    const packagedPolicy = resolveNativeCoreRuntimePolicy({
+      env: {},
+      isPackaged: true,
+      nativeDir: sourceDir,
+      platform: "win32",
+    });
+    assert.equal(packagedPolicy.artifactState, "production");
   } finally {
     cleanup(sourceDir);
   }
