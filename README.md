@@ -17,6 +17,22 @@
     <p>如果你需要 QQ 侧的数据解密、分析或年度总结类工具，欢迎体验 <a href="https://github.com/H3CoF6/WeQ">H3CoF6/WeQ</a>；WeQ 作者也是本项目开发成员之一</p>
 </div>
 
+## 高级版
+
+常规版聚焦于**解密、读取、导出与年度总结**等只读能力；**高级版**在此基础上解锁一整套**写入与动作**能力，覆盖消息修改、消息补录、微信动作、朋友圈互动与群聊管理。当前公开版本仅展示这些功能入口，实际执行需要高级版。
+
+> **获取方式**：请联系 QQ **2977094657**（备注「高级版」）即可获取。
+
+| 模块 | 高级版功能 |
+| --- | --- |
+| 消息修改 | 修改文字消息、编辑消息源码、修改时间、字段编辑、恢复原消息、修复为我发送、反转微信气泡位置、删除系统消息 |
+| 消息补录 | 文字、图片、文件、语音、视频、表情、转账记录、红包记录、位置、链接卡片、小程序卡片、视频号卡片、引用消息、合并聊天记录、通话记录、系统消息、拍一拍记录 |
+| 微信动作 | 发送文字消息、发送群聊 @ 消息、发送图片消息、发送视频消息、发送表情消息、发送语音消息、发送拍一拍 |
+| 朋友圈 | 自动后台刷新朋友圈、朋友圈点赞、朋友圈图片评论、发布朋友圈 |
+| 群聊 | 修改本人群昵称、发布群公告 |
+
+> 应用内点击侧边栏「高级功能」可查看常规版与高级版的完整功能对比。
+
 ## 年度总结
 
 <table>
@@ -129,7 +145,6 @@
 2. Windows 下载 `Setup.exe`；macOS 15+ 的 Apple Silicon Mac 下载 `.dmg` 或 `mac.zip`
 3. 安装完成后启动 `WeChatDataAnalysis`
 
-> 如果 Windows 弹出“未知发布者/更多信息”等提示，请确认下载来源为本仓库 Release 后再选择“仍要运行”。
 >
 > macOS 首次打开若提示来源限制，请在“系统设置 → 隐私与安全性”中确认来自本仓库的应用。图片密钥扫描还可能需要授予终端或应用辅助功能权限。
 
@@ -277,10 +292,6 @@ npm run dist:mac
 8. **[wx-dat](https://github.com/waaaaashi/wx-dat)**
 9. **[Ritsu](https://xhslink.com/m/7YJUsd1sgyF)**
 10. **[recarto404](https://github.com/recarto404)**
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=LifeArchiveProject/WeChatDataAnalysis&type=Date)](https://www.star-history.com/#LifeArchiveProject/WeChatDataAnalysis&Date)
 
 ## 贡献
 
