@@ -12,7 +12,9 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const exportOutputMode = ref('zip')
   const exportResetBaseline = ref(false)
   const exportBaselineStatus = ref('unknown')
-  const exportDownloadRemoteMedia = ref(true)
+  // Remote thumbnails require one network request per link/quote. Keep the
+  // fast, offline-friendly path as the default and let HTML users opt in.
+  const exportDownloadRemoteMedia = ref(false)
   const exportHtmlPageSize = ref(1000)
   const exportTranscribeVoice = ref(false)
   const exportMessageTypeOptions = [
@@ -779,7 +781,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportOutputMode.value = 'zip'
     exportResetBaseline.value = false
     exportBaselineStatus.value = exportFolder.value ? 'auto' : 'unknown'
-    exportDownloadRemoteMedia.value = true
+    exportDownloadRemoteMedia.value = false
     exportHtmlPageSize.value = 1000
     exportTranscribeVoice.value = false
     const defaultListTab = selectedContact.value?.username ? 'current' : 'all'

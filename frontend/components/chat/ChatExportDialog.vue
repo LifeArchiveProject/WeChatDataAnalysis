@@ -208,6 +208,35 @@
             </div>
 
             <label
+              v-if="exportFormat === 'html'"
+              class="chat-export-remote-media-option"
+              :class="{
+                'chat-export-remote-media-option--selected': exportDownloadRemoteMedia && !privacyMode,
+                'chat-export-remote-media-option--disabled': privacyMode
+              }"
+            >
+              <input
+                v-model="exportDownloadRemoteMedia"
+                type="checkbox"
+                class="sr-only"
+                :disabled="privacyMode"
+                aria-label="下载远程缩略图"
+              />
+              <span class="chat-export-checkbox" :class="{ 'chat-export-checkbox--checked': exportDownloadRemoteMedia && !privacyMode }" aria-hidden="true">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m4 10 4 4 8-8" />
+                </svg>
+              </span>
+              <span class="chat-export-remote-media-option__icon" aria-hidden="true">
+                <i class="fa-solid fa-cloud-arrow-down"></i>
+              </span>
+              <span class="chat-export-remote-media-option__copy">
+                <strong>下载远程缩略图</strong>
+                <small>需联网；关闭可显著加快导出，HTML 会保留原始链接</small>
+              </span>
+            </label>
+
+            <label
               class="chat-export-transcription-option"
               :class="{
                 'chat-export-transcription-option--selected': exportTranscribeVoice && !privacyMode && exportMessageTypes.includes('voice'),
@@ -1646,6 +1675,66 @@ export default defineComponent({
   border-color: var(--export-accent-border);
   background: var(--export-accent-soft);
   color: var(--export-accent-text);
+}
+
+.chat-export-remote-media-option {
+  display: grid;
+  grid-template-columns: 18px 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-surface-bg);
+  color: var(--app-text-secondary);
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.chat-export-remote-media-option:hover {
+  background: var(--app-neutral-btn-hover);
+}
+
+.chat-export-remote-media-option:focus-within {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
+}
+
+.chat-export-remote-media-option--selected {
+  border-color: var(--export-accent-border);
+  background: var(--export-accent-soft);
+}
+
+.chat-export-remote-media-option--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.chat-export-remote-media-option__icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  color: var(--export-accent-text);
+}
+
+.chat-export-remote-media-option__copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.chat-export-remote-media-option__copy strong {
+  color: var(--app-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-export-remote-media-option__copy small {
+  color: var(--app-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .chat-export-transcription-option {
