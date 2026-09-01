@@ -17,13 +17,20 @@ class TestChatExportPanelFrontend(unittest.TestCase):
         self.assertNotIn("exportPanelTab", dialog)
         self.assertNotIn('role="tablist"', dialog)
 
-    def test_advanced_html_defaults_are_hidden_and_reset(self):
+    def test_remote_thumbnail_download_is_opt_in_and_visible_for_html(self):
         dialog = (ROOT / "frontend" / "components" / "chat" / "ChatExportDialog.vue").read_text(encoding="utf-8")
         export_state = (ROOT / "frontend" / "composables" / "chat" / "useChatExport.js").read_text(encoding="utf-8")
 
+        self.assertIn('v-if="exportFormat === \'html\'"', dialog)
+        self.assertIn('v-model="exportDownloadRemoteMedia"', dialog)
+        self.assertIn(':disabled="privacyMode"', dialog)
+        self.assertIn("下载远程缩略图", dialog)
+        self.assertIn("关闭可显著加快导出", dialog)
         self.assertNotIn("引用缩略图", dialog)
         self.assertNotIn("每页消息", dialog)
-        self.assertIn("exportDownloadRemoteMedia.value = true", export_state)
+        self.assertIn("const exportDownloadRemoteMedia = ref(false)", export_state)
+        self.assertIn("exportDownloadRemoteMedia.value = false", export_state)
+        self.assertIn("download_remote_media: exportFormat.value === 'html' && !!exportDownloadRemoteMedia.value", export_state)
         self.assertIn("exportHtmlPageSize.value = 1000", export_state)
 
     def test_scope_bulk_selection_button_never_wraps(self):
