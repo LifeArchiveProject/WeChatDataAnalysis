@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -31,6 +32,7 @@ from ..media_helpers import _read_and_maybe_decrypt_media, _resolve_account_wxid
 from ..path_fix import PathFixRoute
 from ..perf_trace import create_perf_trace
 from ..sns_realtime_autosync import SNS_REALTIME_AUTOSYNC
+from ..sns_full_sync import SNS_FULL_SYNC
 from .. import sns_media as _sns_media
 from ..wcdb_realtime import (
     WCDBRealtimeError,
@@ -527,11 +529,9 @@ def _upsert_sns_timeline_rows_to_decrypted_db(
                 "unchanged": unchanged,
             }
         except Exception as e:
-            raw_error_text = f"{type(e).__name__}: {e}"
-            error_text = raw_error_text.encode("ascii", errors="backslashreplace").decode("ascii")
+            error_text = type(e).__name__
             logger.warning(
-                "[sns] decrypted sns.db upsert failed source=%s prepared=%s err=%s",
-                source,
+                "[sns.incremental-sync] status=error phase=writing prepared=%s error_type=%s",
                 len(rows),
                 error_text,
             )
@@ -1571,7 +1571,7 @@ def _get_sns_covers(
                 # 利用 exec_query 强行查
                 rows = _wcdb_exec_query(conn.handle, kind="media", path=str(sns_db_path), sql=cover_sql) or []
     except Exception as e:
-        logger.warning("[sns] WCDB cover fetch failed: %s", e)
+        logger.warning("[sns.cover] status=error phase=source-read error_type=%s", type(e).__name__)
 
     # 2) Fallback to local decrypted snapshot sns.db.
     if not rows:
@@ -1585,7 +1585,7 @@ def _get_sns_covers(
                 conn_sq.close()
                 rows = [{"tid": r["tid"], "content": r["content"]} for r in (rows_sq or [])]
             except Exception as e:
-                logger.warning("[sns] SQLite cover fetch failed: %s", e)
+                logger.warning("[sns.cover] status=error phase=snapshot-read error_type=%s", type(e).__name__)
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1643,7 +1643,7 @@ def api_sns_self_info(account: Optional[str] = None, source: str = "auto"):
     if requested_source == "auto" and account_prefers_decrypted_snapshot(account_dir):
         requested_source = "decrypted"
 
-    logger.info(f"[self_info] 开始获取账号信息, 预设 wxid: {wxid}")
+    logger.info("[sns.self-info] status=running phase=lookup")
 
     nickname = wxid
     result_source = "wxid_dir"
@@ -1658,10 +1658,10 @@ def api_sns_self_info(account: Optional[str] = None, source: str = "auto"):
                     if names_map and names_map.get(wxid):
                         nickname = names_map[wxid]
                         result_source = "wcdb_realtime"
-                        logger.info(f"[self_info] 从 WCDB 实时连接获取成功: {nickname}")
+                        logger.info("[sns.self-info] status=done phase=wcdb")
                         return {"wxid": wxid, "nickname": nickname, "source": result_source}
         except Exception as e:
-            logger.debug(f"[self_info] WCDB 路径跳过或失败: {e}")
+            logger.debug("[sns.self-info] status=skipped phase=wcdb error_type=%s", type(e).__name__)
 
     contact_db_path = account_dir / "contact.db"
     if contact_db_path.exists():
@@ -1673,7 +1673,7 @@ def api_sns_self_info(account: Optional[str] = None, source: str = "auto"):
 
             cursor = conn.execute("PRAGMA table_info(contact)")
             cols = {row["name"].lower() for row in cursor.fetchall()}
-            logger.debug(f"[self_info] contact 表现有字段: {cols}")
+            logger.debug("[sns.self-info] status=running phase=snapshot-schema")
 
             target_nick_col = "nick_name" if "nick_name" in cols else ("nickname" if "nickname" in cols else None)
 
@@ -1697,18 +1697,18 @@ def api_sns_self_info(account: Optional[str] = None, source: str = "auto"):
                         nickname = raw_alias
                         result_source = "contact_db_alias"
 
-                    logger.info(f"[self_info] 从数据库提取成功: {nickname} (src: {result_source})")
+                    logger.info("[sns.self-info] status=done phase=snapshot")
             else:
-                logger.warning("[self_info] contact 表中找不到任何昵称相关字段")
+                logger.warning("[sns.self-info] status=skipped phase=snapshot-schema code=nickname_column_missing")
 
         except sqlite3.OperationalError as e:
-            logger.error(f"[self_info] 数据库繁忙或锁定: {e}")
+            logger.error("[sns.self-info] status=error phase=snapshot-read error_type=%s", type(e).__name__)
         except Exception as e:
-            logger.exception(f"[self_info] 查询异常: {e}")
+            logger.error("[sns.self-info] status=error phase=snapshot-read error_type=%s", type(e).__name__)
         finally:
             if conn: conn.close()
     else:
-        logger.warning(f"[self_info] 找不到 contact.db: {contact_db_path}")
+        logger.warning("[sns.self-info] status=skipped phase=snapshot-read code=contact_db_missing")
 
     return {
         "wxid": wxid,
@@ -1796,6 +1796,28 @@ async def stream_sns_realtime_events(request: Request, account: Optional[str] = 
     )
 
 
+@router.post("/api/sns/realtime/full_sync", summary="启动朋友圈全量缓存同步")
+def start_sns_realtime_full_sync(account: Optional[str] = None):
+    account_dir = _resolve_account_dir(account)
+    job, reused = SNS_FULL_SYNC.start(account_dir)
+    return {"status": "ok", "reused": reused, "job": job}
+
+
+@router.get("/api/sns/realtime/full_sync/status", summary="获取朋友圈全量同步状态")
+def get_sns_realtime_full_sync_status(account: Optional[str] = None):
+    account_dir = _resolve_account_dir(account)
+    return {"status": "ok", "job": SNS_FULL_SYNC.get(account_dir)}
+
+
+@router.delete("/api/sns/realtime/full_sync", summary="取消朋友圈全量缓存同步")
+def cancel_sns_realtime_full_sync(account: Optional[str] = None, sync_id: str = ""):
+    account_dir = _resolve_account_dir(account)
+    job, accepted = SNS_FULL_SYNC.cancel(account_dir, sync_id)
+    if not accepted:
+        raise HTTPException(status_code=409, detail="同步任务已结束或任务标识不匹配")
+    return {"status": "ok", "cancelled": True, "job": job}
+
+
 @router.post("/api/sns/realtime/sync_latest", summary="实时朋友圈同步到解密库（增量）")
 def sync_sns_realtime_timeline_latest(
     account: Optional[str] = None,
@@ -1809,6 +1831,12 @@ def sync_sns_realtime_timeline_latest(
     This is best-effort and intentionally **append-only**: we never delete rows from the decrypted snapshot
     even if the post is deleted/hidden later, so users can still browse/export historical cached content.
     """
+    sync_request_id = uuid.uuid4().hex
+    sync_started = time.perf_counter()
+    logger.info(
+        "[sns.incremental-sync] status=running request_id=%s phase=connecting",
+        sync_request_id,
+    )
     try:
         lim = int(max_scan or 200)
     except Exception:
@@ -1855,6 +1883,21 @@ def sync_sns_realtime_timeline_latest(
         result["highwaterAdvanced"] = bool(highwater_advanced)
         result["scanOffset"] = int(requested_scan_offset)
         result["scanLimit"] = int(lim)
+        status = str(result.get("status") or "error").strip().lower()
+        raw_code = str(result.get("error") or result.get("reason") or "").strip().lower()
+        code = raw_code if re.fullmatch(r"[a-z0-9_.-]{1,80}", raw_code) else ""
+        log_method = logger.error if status == "error" else logger.info
+        log_method(
+            "[sns.incremental-sync] status=%s request_id=%s phase=finalizing code=%s scanned=%s prepared=%s changed=%s unchanged=%s elapsed_ms=%s",
+            status,
+            sync_request_id,
+            code,
+            int(result.get("scanned") or 0),
+            int(prepared),
+            int(changed),
+            int(unchanged),
+            int((time.perf_counter() - sync_started) * 1000),
+        )
         return result
 
     # If there is no local decrypted sns.db yet, force a first-time materialization.
@@ -1867,6 +1910,11 @@ def sync_sns_realtime_timeline_latest(
     info = WCDB_REALTIME.get_status(account_dir)
     available = bool(info.get("dll_present") and info.get("key_present") and info.get("db_storage_dir"))
     if not available:
+        logger.error(
+            "[sns.incremental-sync] status=error request_id=%s phase=connecting code=realtime_not_available error_type=AvailabilityError elapsed_ms=%s",
+            sync_request_id,
+            int((time.perf_counter() - sync_started) * 1000),
+        )
         raise HTTPException(status_code=404, detail="WCDB realtime not available.")
 
     st = _read_sns_realtime_sync_state(account_dir)
@@ -1879,9 +1927,18 @@ def sync_sns_realtime_timeline_latest(
     if last_max_id_u <= 0:
         last_max_id_u = _max_sns_timeline_tid_unsigned_in_decrypted_sqlite(account_dir / "sns.db")
 
-    conn = WCDB_REALTIME.ensure_connected(account_dir)
+    try:
+        conn = WCDB_REALTIME.ensure_connected(account_dir)
+    except Exception as exc:
+        logger.error(
+            "[sns.incremental-sync] status=error request_id=%s phase=connecting code=connection_failed error_type=%s elapsed_ms=%s",
+            sync_request_id,
+            type(exc).__name__,
+            int((time.perf_counter() - sync_started) * 1000),
+        )
+        raise
 
-    t0 = time.perf_counter()
+    t0 = sync_started
     rows: list[dict[str, Any]] = []
     max_id_u = 0
     upsert_rows: list[tuple[int, str, str, Optional[Any]]] = []
@@ -2107,6 +2164,16 @@ def sync_sns_realtime_timeline_latest(
         write_success = changed_count == prepared_count
         write_error = ""
 
+    logger.info(
+        "[sns.incremental-sync] status=running request_id=%s phase=scanning batches=1 scanned=%s prepared=%s changed=%s unchanged=%s elapsed_ms=%s",
+        sync_request_id,
+        len(rows),
+        prepared_count,
+        changed_count,
+        unchanged_count,
+        int((time.perf_counter() - sync_started) * 1000),
+    )
+
     prepared_tids = {int(row[0]) for row in upsert_rows}
     missing_required_tids = required_tids - prepared_tids
     snapshot_complete = bool(upsert_rows) and all((
@@ -2117,8 +2184,8 @@ def sync_sns_realtime_timeline_latest(
     ))
     if not snapshot_complete:
         logger.warning(
-            "[sns-sync] snapshot write incomplete account=%s scanned=%s prepared=%s changed=%s unchanged=%s missing_required=%s",
-            account_dir.name,
+            "[sns.incremental-sync] status=error request_id=%s phase=writing code=snapshot_write_incomplete scanned=%s prepared=%s changed=%s unchanged=%s skipped=%s",
+            sync_request_id,
             len(rows),
             prepared_count,
             changed_count,
@@ -2138,10 +2205,9 @@ def sync_sns_realtime_timeline_latest(
 
     if backlog_truncated:
         logger.warning(
-            "[sns-sync] backlog exceeds scan cap account=%s scanned=%s last_max_id=%s",
-            account_dir.name,
+            "[sns.incremental-sync] status=skipped request_id=%s phase=scanning code=scan_cap_reached scanned=%s",
+            sync_request_id,
             len(rows),
-            last_max_id_u,
         )
         return _sync_response({
             "status": "skipped",
@@ -2160,7 +2226,10 @@ def sync_sns_realtime_timeline_latest(
         st2["maxId"] = str(committed_max_id_u)
         st2["updatedAt"] = int(time.time())
         if _write_sns_realtime_sync_state(account_dir, st2) is False:
-            logger.warning("[sns-sync] state write failed account=%s", account_dir.name)
+            logger.warning(
+                "[sns.incremental-sync] status=error request_id=%s phase=finalizing code=sync_state_write_failed",
+                sync_request_id,
+            )
             return _sync_response({
                 "status": "error",
                 "error": "sync_state_write_failed",
@@ -2258,8 +2327,8 @@ def list_sns_timeline(
         try:
             rows2 = conn2.execute(sql, params_with_page).fetchall()
         except sqlite3.OperationalError as e:
-            logger.warning("[sns] query failed: %s", e)
-            raise HTTPException(status_code=500, detail=f"sns.db query failed: {e}")
+            logger.warning("[sns.timeline] status=error phase=snapshot-read error_type=%s", type(e).__name__)
+            raise HTTPException(status_code=500, detail="sns.db query failed")
         finally:
             conn2.close()
 
@@ -2925,10 +2994,10 @@ def list_sns_timeline(
 
         return wcdb_resp
     except WCDBRealtimeError as e:
-        logger.info("[sns] wcdb realtime unavailable: %s", e)
+        logger.info("[sns.timeline] status=skipped phase=source-read error_type=%s", type(e).__name__)
         fallback_reason = str(e)
     except Exception as e:
-        logger.warning("[sns] wcdb realtime failed: %s", e)
+        logger.warning("[sns.timeline] status=error phase=source-read error_type=%s", type(e).__name__)
         fallback_reason = str(e)
 
     fallback = _list_from_decrypted_sqlite()
@@ -2981,7 +3050,7 @@ def _schedule_sns_user_tid_index(sns_db_path: Path) -> None:
             finally:
                 conn.close()
         except Exception as exc:
-            logger.info("[sns] background index creation deferred: %s", exc)
+            logger.info("[sns.timeline] status=skipped phase=index error_type=%s", type(exc).__name__)
             with _SNS_INDEX_SCHEDULE_LOCK:
                 _SNS_INDEX_SCHEDULED.discard(key)
 
@@ -3522,35 +3591,25 @@ async def get_sns_media(
     media_type_i = int(media_type or 2)
     md5_norm = _normalize_hex32(md5)
     request_id = f"sns-media-{time.time_ns()}-{threading.get_ident()}"
-    _trace_id, trace = create_perf_trace(
+    _trace_id, raw_trace = create_perf_trace(
         logger,
         "sns.media",
         requestId=request_id,
-        account=str(account_dir.name),
-        accountDir=str(account_dir),
-        wxidDir=str(wxid_dir or ""),
-        postId=str(post_id or ""),
-        mediaId=str(media_id or ""),
-        postType=post_type_i,
-        mediaType=media_type_i,
-        createTime=int(create_time or 0),
-        width=int(width or 0),
-        height=int(height or 0),
-        totalSize=int(total_size or 0),
-        idx=max(0, int(idx or 0)),
-        md5=md5_norm,
-        variant=variant_norm,
-        preferRemoteOriginal=prefer_remote_original,
-        useCacheRequested=str(use_cache),
-        useCacheEffective=use_cache_flag,
-        tokenPresent=bool(str(token or "")),
-        tokenLength=len(str(token or "")),
-        tokenHash=_sns_media_value_hash(token),
-        keyPresent=bool(str(key or "")),
-        keyLength=len(str(key or "")),
-        keyHash=_sns_media_value_hash(key),
-        **_sns_media_url_trace_fields(url),
     )
+
+    def trace(phase: str, **fields: Any) -> None:
+        """严格筛选媒体诊断字段，避免后续调用误把用户数据写入日志。"""
+        safe_fields: dict[str, Any] = {}
+        for field_name in ("result", "statusCode", "elapsedMs"):
+            if field_name in fields:
+                safe_fields[field_name] = fields[field_name]
+        error_type = str(fields.get("errorType") or "")
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", error_type):
+            safe_fields["errorType"] = error_type
+        safe_phase = str(phase or "unknown")
+        if not re.fullmatch(r"[a-z0-9:_-]{1,80}", safe_phase, flags=re.I):
+            safe_phase = "unknown"
+        raw_trace(safe_phase, **safe_fields)
     trace("request:start")
 
     # 点击预览需要高清原图：本地 sns 缓存有时只命中缩略图，所以 full/original 请求先按
@@ -3799,7 +3858,7 @@ async def proxy_article_thumb(url: str):
             )
 
     except Exception as e:
-        logger.warning(f"[sns] 提取公众号封面失败 url={u[:50]}... : {e}")
+        logger.warning("[sns.article-thumb] status=error phase=fetch error_type=%s", type(e).__name__)
         raise HTTPException(status_code=404, detail="无法获取文章封面")
 
 
