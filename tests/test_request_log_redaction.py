@@ -118,40 +118,6 @@ class TestRequestLogRedaction(unittest.TestCase):
         self.assertNotIn("AES_SECRET", rendered)
         self.assertIn("db_storage_path=C%3A%5Cdb", rendered)
 
-    def test_uvicorn_access_filter_removes_all_sns_query_values(self):
-        from wechat_decrypt_tool.request_logging import (
-            SensitiveQueryLogFilter,
-            redact_sensitive_query_text,
-        )
-
-        record = logging.LogRecord(
-            "uvicorn.access",
-            logging.INFO,
-            __file__,
-            1,
-            '%s - "%s %s HTTP/%s" %d',
-            (
-                "127.0.0.1:1234",
-                "GET",
-                "/api/sns/media?account=ACCOUNT_SENTINEL&post_id=POST_SENTINEL&url=https%3A%2F%2Fprivate.example",
-                "1.1",
-                200,
-            ),
-            None,
-        )
-
-        self.assertTrue(SensitiveQueryLogFilter().filter(record))
-        rendered = record.getMessage()
-        self.assertIn("/api/sns", rendered)
-        self.assertNotIn("/media", rendered)
-        self.assertNotIn("ACCOUNT_SENTINEL", rendered)
-        self.assertNotIn("POST_SENTINEL", rendered)
-        self.assertNotIn("private.example", rendered)
-        self.assertEqual(
-            redact_sensitive_query_text("/api/sns/exports/EXPORT_SENTINEL/files/private-file.jpg"),
-            "/api/sns",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -247,10 +247,7 @@ async def _prefetch_sns_remote_media(
             except Exception as exc:
                 result.failed += 1
                 result.missing.append(task_id)
-                logger.info(
-                    "[sns.export] status=error phase=media-prefetch error_type=%s",
-                    type(exc).__name__,
-                )
+                logger.info("sns media prefetch failed: kind=%s url=%s error=%s", task.kind, task.url, exc)
             finally:
                 completed += 1
                 if on_progress is not None:
@@ -1634,12 +1631,7 @@ class SnsExportManager:
                     pass
             self.commit_staged_files(job.export_id)
         except Exception as e:
-            logger.error(
-                "[sns.export] status=error export_id=%s phase=%s error_type=%s",
-                job.export_id,
-                str(job.progress.phase or "unknown"),
-                type(e).__name__,
-            )
+            logger.exception("sns export job failed: %s: %s", job.export_id, e)
             with self._lock:
                 job.status = "error"
                 job.error = str(e)
@@ -1704,11 +1696,7 @@ class SnsExportManager:
             if sync_status not in {"ok", "noop"}:
                 job.warning = "实时同步未完成，已继续导出本地历史快照。"
         except Exception as exc:  # 导出必须可在无 native broker 的环境中降级运行
-            logger.warning(
-                "[sns.export] status=error export_id=%s phase=syncing error_type=%s",
-                job.export_id,
-                type(exc).__name__,
-            )
+            logger.warning("sns realtime sync before export failed: export=%s error=%s", job.export_id, exc)
             job.warning = "实时同步失败，已继续导出本地历史快照。"
             job.freshness = {
                 "status": "warning",

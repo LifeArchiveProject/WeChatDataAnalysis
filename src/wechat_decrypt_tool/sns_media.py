@@ -91,20 +91,33 @@ def _sns_remote_diagnostic_log(
     error: Optional[BaseException] = None,
     **fields: object,
 ) -> None:
-    # 朋友圈日志只保留诊断阶段和受控结果，不记录 URL、Host、密钥摘要或响应尺寸。
+    raw_url = str(url or "").strip()
+    try:
+        host = str(urlparse(raw_url).hostname or "").strip().lower()
+    except Exception:
+        host = ""
+
+    stable_url = normalize_sns_cache_url(raw_url)
     payload: dict[str, object] = {
         "diagnosticId": str(diagnostic_id or ""),
         "event": str(event or ""),
+        "urlHost": host,
+        "urlIdentity": (
+            hashlib.sha256(stable_url.encode("utf-8", errors="ignore")).hexdigest()[:16]
+            if stable_url
+            else ""
+        ),
+        **fields,
     }
-    for field_name in ("stage", "result", "statusCode", "elapsedMs", "attempt"):
-        if field_name in fields:
-            payload[field_name] = fields[field_name]
 
     if error is not None:
-        error_type = type(error).__name__
-        payload["errorType"] = (
-            error_type if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", error_type) else "Exception"
-        )
+        error_text = str(error).strip() or repr(error)
+        for sensitive in (raw_url, str(key or ""), str(token or "")):
+            if sensitive:
+                error_text = error_text.replace(sensitive, "<redacted>")
+        error_text = re.sub(r"https?://[^\s\"']+", "<url-redacted>", error_text, flags=re.I)
+        payload["errorType"] = type(error).__name__
+        payload["errorText"] = error_text[:500]
 
         response = getattr(error, "response", None)
         status_code = getattr(response, "status_code", None)
@@ -112,7 +125,7 @@ def _sns_remote_diagnostic_log(
             try:
                 payload["statusCode"] = int(status_code)
             except Exception:
-                payload["statusCode"] = 0
+                payload["statusCode"] = str(status_code)
 
     logger.info(
         "[sns_media] %s",
