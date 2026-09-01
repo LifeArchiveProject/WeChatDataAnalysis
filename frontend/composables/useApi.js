@@ -425,6 +425,28 @@ export const useApi = () => {
     return await request(url)
   }
 
+  const startSnsFullSync = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/sns/realtime/full_sync' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'POST' })
+  }
+
+  const getSnsFullSyncStatus = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/sns/realtime/full_sync/status' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const cancelSnsFullSync = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.sync_id) query.set('sync_id', String(params.sync_id))
+    const url = '/sns/realtime/full_sync' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'DELETE' })
+  }
+
   const openChatMediaFolder = async (params = {}) => {
     const query = new URLSearchParams()
     if (params && params.account) query.set('account', params.account)
@@ -1117,6 +1139,9 @@ export const useApi = () => {
     listSnsUsers,
     syncSnsRealtimeLatest,
     getSnsSnapshotStatus,
+    startSnsFullSync,
+    getSnsFullSyncStatus,
+    cancelSnsFullSync,
     openChatMediaFolder,
     downloadChatEmoji,
     saveMediaKeys,

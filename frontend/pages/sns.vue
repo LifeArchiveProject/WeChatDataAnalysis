@@ -13,9 +13,24 @@
                 :disabled="!selectedAccount || isRefreshing || isLoading"
                 @click="refreshSnsData"
             >
-              {{ isRefreshing ? '刷新中…' : '刷新' }}
+              {{ snsFullSyncButtonLabel }}
             </button>
           </div>
+        </div>
+        <div
+            v-if="snsFullSyncJob"
+            class="mt-1 flex min-h-5 items-center justify-end gap-2 text-[11px] text-gray-500"
+        >
+          <span>{{ snsFullSyncStatusText }}</span>
+          <button
+              v-if="isSnsFullSyncActive"
+              type="button"
+              class="text-gray-500 hover:text-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="isSnsFullSyncCancelling || snsFullSyncJob?.cancelRequested"
+              @click="cancelSnsFullSync"
+          >
+            {{ isSnsFullSyncCancelling || snsFullSyncJob?.cancelRequested ? '取消中…' : '取消' }}
+          </button>
         </div>
         <input
             v-model="snsUserQuery"
@@ -1125,7 +1140,6 @@ import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
 import { parseTextWithEmoji } from '~/lib/wechat-emojis'
 import { SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting } from '~/lib/desktop-settings'
-import { reportServerErrorFromError, reportServerErrorFromResponse } from '~/lib/server-error-logging'
 
 useHead({ title: '朋友圈 - 微信数据分析助手' })
 
@@ -1151,6 +1165,29 @@ const timelineScrollEl = ref(null)
 const snsUserScrollEl = ref(null)
 const isLoading = ref(false)
 const isRefreshing = ref(false)
+const snsFullSyncJob = ref(null)
+const isSnsFullSyncCancelling = ref(false)
+const isSnsFullSyncActive = computed(() => {
+  const status = String(snsFullSyncJob.value?.status || '')
+  return status === 'queued' || status === 'running'
+})
+const snsFullSyncButtonLabel = computed(() => {
+  if (isRefreshing.value) return '启动中…'
+  return isSnsFullSyncActive.value ? '同步中' : '刷新'
+})
+const snsFullSyncStatusText = computed(() => {
+  const job = snsFullSyncJob.value
+  const status = String(job?.status || '')
+  const progress = job?.progress || {}
+  const changed = Math.max(0, Number(progress?.changed || 0))
+  const percent = Math.max(0, Math.min(100, Number(progress?.percent || 0)))
+  if (status === 'queued') return `等待同步 · 已变化 ${changed}`
+  if (status === 'running') return `${percent}% · 已变化 ${changed}`
+  if (status === 'done') return `同步完成 · 已变化 ${changed}`
+  if (status === 'cancelled') return `已取消 · 已保留变化 ${changed}`
+  if (status === 'error') return `同步失败 · 已保留变化 ${changed}`
+  return ''
+})
 // 首次水合时保持按钮禁用，挂载后再按账号状态启用，避免服务端 disabled 残留。
 const isSnsPageMounted = ref(false)
 const error = ref('')
@@ -2013,12 +2050,6 @@ const saveSnsExportToSelectedFolder = async (options = {}) => {
     }
     const response = await fetch(getSnsExportDownloadUrl(exportId))
     if (!response.ok) {
-      await reportServerErrorFromResponse(response, {
-        method: 'GET',
-        requestUrl: getSnsExportDownloadUrl(exportId),
-        message: `\u4e0b\u8f7d\u5bfc\u51fa\u6587\u4ef6\u5931\u8d25\uff08${response.status}\uff09`,
-        source: 'sns.exportDownload'
-      })
       throw new Error(`\u4e0b\u8f7d\u5bfc\u51fa\u6587\u4ef6\u5931\u8d25\uff08${response.status}\uff09`)
     }
     exportSaveBytesTotal.value = asNumber(response.headers.get('Content-Length'))
@@ -2261,14 +2292,8 @@ const loadSelfInfo = async () => {
       const unchanged = Object.keys(resp).every((key) => resp[key] === selfInfo.value?.[key])
       if (!unchanged) selfInfo.value = resp
     }
-  } catch (e) {
-    await reportServerErrorFromError(e, {
-      method: 'GET',
-      requestUrl,
-      source: 'sns.loadSelfInfo',
-      apiBase,
-    })
-    console.error('获取个人信息失败', e)
+  } catch {
+    console.error('[sns.self-info] status=error phase=load')
   }
 }
 
@@ -2302,7 +2327,7 @@ const loadSnsUsers = async ({ preserveExisting = false } = {}) => {
     for (const item of nextByUsername.values()) merged.push(item)
     snsUsers.value = merged
   } catch (e) {
-    console.error('加载朋友圈联系人失败', e)
+    console.error('[sns.users] status=error phase=load')
     // 后台刷新失败时保留已显示的联系人，避免侧边栏闪空。
   }
 }
@@ -2578,7 +2603,7 @@ const onCopyPostTextClick = async () => {
     const ok = await copyTextToClipboard(text)
     if (!ok) showErrorAlert('复制失败：无法写入剪贴板')
   } catch (e) {
-    console.error('复制失败:', e)
+    console.error('[sns.copy] status=error phase=clipboard-write')
     showErrorAlert('复制失败')
   } finally {
     closeContextMenu()
@@ -2596,7 +2621,7 @@ const onCopyPostJsonClick = async () => {
     const ok = await copyTextToClipboard(json)
     if (!ok) showErrorAlert('复制失败：无法写入剪贴板')
   } catch (e) {
-    console.error('复制失败:', e)
+    console.error('[sns.copy] status=error phase=clipboard-write')
     showErrorAlert('复制失败')
   } finally {
     closeContextMenu()
@@ -3369,11 +3394,12 @@ const loadAccounts = async () => {
   }
 }
 
-let refreshQueued = false
 const SNS_REALTIME_SYNC_TIMEOUT_MS = 10000
 const SNS_VISIBLE_RECONCILE_BUFFER_MIN = 20
 const SNS_VISIBLE_RECONCILE_WINDOW_MAX = 200
-const SNS_MANUAL_REFRESH_SCAN_LIMIT = 200
+const SNS_INCREMENTAL_DEFAULT_SCAN_LIMIT = 200
+const SNS_FULL_SYNC_MERGE_THROTTLE_MS = 400
+const SNS_FULL_SYNC_USER_REFRESH_BATCHES = 5
 const SNS_EVENT_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 30000]
 let snsSnapshotVersion = ''
 let snsRealtimeSyncInFlight = null
@@ -3384,6 +3410,10 @@ let snsEventReconnectTimer = null
 let snsEventReconnectAttempt = 0
 let snsLastEventSequence = 0
 let snsQueuedRealtimeEvent = null
+let snsQueuedFullSyncMerge = null
+let snsFullSyncMergePromise = null
+let snsFullSyncMergeTimer = null
+let snsFullSyncLastUserRefreshBatch = 0
 let snsPageUnmounted = false
 let snsVisiblePostStart = 0
 let snsVisiblePostEnd = -1
@@ -3438,7 +3468,7 @@ const beginSnsRealtimeSync = (
 const syncLatestSnsWithTimeout = async (
   account,
   {
-    maxScan = SNS_MANUAL_REFRESH_SCAN_LIMIT,
+    maxScan = SNS_INCREMENTAL_DEFAULT_SCAN_LIMIT,
     scanOffset = null,
     usernames = [],
     waitForCurrent = false
@@ -3515,77 +3545,55 @@ const describeSnsSyncFailure = (failure) => {
 }
 
 const refreshSnsData = async () => {
-  if (!String(selectedAccount.value || '').trim()) return
-  if (isRefreshing.value) {
-    refreshQueued = true
-    return
-  }
-
+  const account = String(selectedAccount.value || '').trim()
+  if (!account || isRefreshing.value) return
   isRefreshing.value = true
+  syncWarning.value = ''
   try {
-    do {
-      refreshQueued = false
-      const account = String(selectedAccount.value || '').trim()
-      if (!account) break
-      const reconcileWindow = getSnsVisibleReconcileWindow()
-      const selectedUsername = String(selectedSnsUser.value || '').trim()
-      let shouldMergeTimeline = false
-
-      // 按钮本身显示刷新状态，避免插入提示行导致联系人列表上下跳动。
-      syncWarning.value = ''
-      const activeReconcile = snsVisibleReconcilePromise
-      if (activeReconcile) {
-        try {
-          await activeReconcile
-        } catch {}
+    const response = await api.startSnsFullSync({ account })
+    if (account !== String(selectedAccount.value || '').trim()) return
+    const job = response?.job || null
+    applySnsFullSyncJob(job)
+    isSnsFullSyncCancelling.value = false
+    if (job) {
+      const status = String(job?.status || '')
+      const final = status === 'done' || status === 'error' || status === 'cancelled'
+      const version = String(job?.snapshotVersion || '').trim()
+      if (final || (version && version !== snsSnapshotVersion)) {
+        queueSnsFullSyncMerge(job, { final })
       }
-      try {
-        const syncResult = await syncLatestSnsWithTimeout(account, {
-          maxScan: SNS_MANUAL_REFRESH_SCAN_LIMIT,
-          scanOffset: reconcileWindow.scanOffset,
-          usernames: selectedUsername ? [selectedUsername] : [],
-          waitForCurrent: true
-        })
-        const syncStatus = String(syncResult?.status || '').trim().toLowerCase()
-        if (syncStatus === 'ok' || syncStatus === 'noop') {
-          syncWarning.value = ''
-          const responseVersion = String(syncResult?.snapshotVersion || '').trim()
-          shouldMergeTimeline = !!(
-            Number(syncResult?.changed ?? syncResult?.upserted ?? 0) > 0
-            || syncResult?.snapshotChanged === true
-            || (responseVersion && snsSnapshotVersion && responseVersion !== snsSnapshotVersion)
-          )
-        } else {
-          syncWarning.value = describeSnsSyncFailure(syncResult)
-          console.warn('同步最新朋友圈未成功，继续读取已解密快照', syncResult)
-        }
-      } catch (e) {
-        syncWarning.value = describeSnsSyncFailure(e)
-        console.warn('同步最新朋友圈失败，继续读取已解密快照', e)
-      }
-      if (!shouldMergeTimeline) {
-        try {
-          const localVersion = await readSnsSnapshotVersion(account)
-          shouldMergeTimeline = !!(
-            localVersion
-            && snsSnapshotVersion
-            && localVersion !== snsSnapshotVersion
-          )
-        } catch {}
-      }
-      if (account !== String(selectedAccount.value || '').trim()) break
-      const refreshTasks = [loadSelfInfo()]
-      if (shouldMergeTimeline) {
-        refreshTasks.push(
-          loadSnsUsers({ preserveExisting: true }),
-          mergeVisiblePostsWindow(reconcileWindow)
-        )
-      }
-      await Promise.all(refreshTasks)
-      await updateSnsSnapshotBaseline(account)
-    } while (refreshQueued)
+    }
+  } catch (e) {
+    if (account === String(selectedAccount.value || '').trim()) {
+      syncWarning.value = describeSnsSyncFailure(e)
+    }
   } finally {
     isRefreshing.value = false
+  }
+}
+
+const cancelSnsFullSync = async () => {
+  const account = String(selectedAccount.value || '').trim()
+  const syncId = String(snsFullSyncJob.value?.syncId || '').trim()
+  if (!account || !syncId || !isSnsFullSyncActive.value || isSnsFullSyncCancelling.value) return
+  isSnsFullSyncCancelling.value = true
+  try {
+    const response = await api.cancelSnsFullSync({ account, sync_id: syncId })
+    if (
+      account === String(selectedAccount.value || '').trim()
+      && syncId === String(snsFullSyncJob.value?.syncId || '')
+      && response?.job
+    ) {
+      snsFullSyncJob.value = response.job
+    }
+  } catch (e) {
+    if (account === String(selectedAccount.value || '').trim()) {
+      syncWarning.value = describeSnsSyncFailure(e)
+    }
+  } finally {
+    if (account === String(selectedAccount.value || '').trim()) {
+      isSnsFullSyncCancelling.value = false
+    }
   }
 }
 
@@ -3887,12 +3895,151 @@ const mergeVisiblePostsWindow = async (windowRange = getSnsVisibleReconcileWindo
     scheduleSnsVisibleWindowUpdate()
     return true
   } catch (e) {
-    console.warn('合并朋友圈浮动窗口失败', e)
+    console.warn('[sns.timeline] status=error phase=viewport-merge')
     return false
   }
 }
 
 const mergeLatestPosts = async () => mergeVisiblePostsWindow(getSnsVisibleReconcileWindow())
+
+const clearSnsFullSyncMergeTimer = () => {
+  if (!process.client || snsFullSyncMergeTimer === null) return
+  window.clearTimeout(snsFullSyncMergeTimer)
+  snsFullSyncMergeTimer = null
+}
+
+const drainSnsFullSyncMerge = () => {
+  clearSnsFullSyncMergeTimer()
+  if (snsFullSyncMergePromise) return snsFullSyncMergePromise
+
+  let trackedPromise = null
+  const task = (async () => {
+    let merged = false
+    while (snsQueuedFullSyncMerge) {
+      const pending = snsQueuedFullSyncMerge
+      snsQueuedFullSyncMerge = null
+      const account = String(pending?.account || '')
+      if (
+        !process.client
+        || snsPageUnmounted
+        || document.visibilityState !== 'visible'
+        || !account
+        || account !== String(selectedAccount.value || '').trim()
+      ) continue
+
+      const job = pending?.job || {}
+      const progress = job?.progress || {}
+      const snapshotVersion = String(job?.snapshotVersion || pending?.snapshotVersion || '').trim()
+      const changed = Math.max(0, Number(progress?.changed || 0))
+      const batch = Math.max(0, Number(progress?.batchesCompleted || 0))
+      const finalMerge = !!pending?.final
+      const snapshotChanged = !!(
+        snapshotVersion
+        && snapshotVersion !== snsSnapshotVersion
+        && (changed > 0 || finalMerge)
+      )
+      if (!snapshotChanged && !finalMerge) continue
+
+      const activeReconcile = snsVisibleReconcilePromise
+      if (activeReconcile) {
+        try {
+          await activeReconcile
+        } catch {}
+      }
+
+      const shouldRefreshUsers = finalMerge
+        || batch - snsFullSyncLastUserRefreshBatch >= SNS_FULL_SYNC_USER_REFRESH_BATCHES
+      const tasks = [mergeVisiblePostsWindow(getSnsVisibleReconcileWindow())]
+      if (shouldRefreshUsers) tasks.push(loadSnsUsers({ preserveExisting: true }))
+      const results = await Promise.all(tasks)
+      const timelineMerged = results[0] === true
+      if (!timelineMerged) continue
+
+      merged = true
+      if (shouldRefreshUsers) snsFullSyncLastUserRefreshBatch = batch
+      if (snapshotVersion) {
+        snsSnapshotVersion = snapshotVersion
+      } else {
+        await updateSnsSnapshotBaseline(account)
+      }
+    }
+    return merged
+  })()
+
+  trackedPromise = task.finally(() => {
+    if (snsFullSyncMergePromise === trackedPromise) snsFullSyncMergePromise = null
+    if (snsQueuedFullSyncMerge) void drainSnsFullSyncMerge()
+  })
+  snsFullSyncMergePromise = trackedPromise
+  return trackedPromise
+}
+
+// 全量同步事件使用累计进度；中间事件即使被合并，下一次事件仍能恢复正确状态。
+const queueSnsFullSyncMerge = (job, { final = false } = {}) => {
+  const account = String(selectedAccount.value || '').trim()
+  if (!account || !job) return null
+  const previous = snsQueuedFullSyncMerge
+  snsQueuedFullSyncMerge = {
+    account,
+    job,
+    snapshotVersion: String(job?.snapshotVersion || ''),
+    final: !!(final || previous?.final)
+  }
+
+  if (final) {
+    clearSnsFullSyncMergeTimer()
+    return drainSnsFullSyncMerge()
+  }
+  if (!process.client || snsFullSyncMergePromise || snsFullSyncMergeTimer !== null) {
+    return snsFullSyncMergePromise
+  }
+  snsFullSyncMergeTimer = window.setTimeout(() => {
+    snsFullSyncMergeTimer = null
+    void drainSnsFullSyncMerge()
+  }, SNS_FULL_SYNC_MERGE_THROTTLE_MS)
+  return null
+}
+
+const applySnsFullSyncJob = (job) => {
+  const previousSyncId = String(snsFullSyncJob.value?.syncId || '')
+  const nextSyncId = String(job?.syncId || '')
+  if (nextSyncId && nextSyncId !== previousSyncId) {
+    snsFullSyncLastUserRefreshBatch = 0
+  }
+  snsFullSyncJob.value = job || null
+  const status = String(job?.status || '')
+  if (status !== 'queued' && status !== 'running') {
+    isSnsFullSyncCancelling.value = false
+  }
+  if (status === 'error') {
+    syncWarning.value = String(job?.error?.message || '朋友圈全量同步失败，请稍后重试')
+  } else if (status === 'done' || status === 'cancelled') {
+    syncWarning.value = ''
+  }
+}
+
+const restoreSnsFullSyncStatus = async (account) => {
+  const requestedAccount = String(account || '').trim()
+  if (!requestedAccount) return null
+  try {
+    const response = await api.getSnsFullSyncStatus({ account: requestedAccount })
+    if (requestedAccount !== String(selectedAccount.value || '').trim()) return null
+    const job = response?.job || null
+    applySnsFullSyncJob(job)
+    if (job) {
+      const status = String(job?.status || '')
+      const final = status === 'done' || status === 'error' || status === 'cancelled'
+      const version = String(job?.snapshotVersion || '').trim()
+      if (final || (version && version !== snsSnapshotVersion)) {
+        queueSnsFullSyncMerge(job, { final })
+      }
+    }
+    return job
+  } catch {
+    // 状态恢复失败不影响本地快照浏览，SSE 重连后还会再次核对。
+    return null
+  }
+}
 
 // 首屏三路并行读取本地快照，不等待实时同步。
 const loadLocalSnsData = async () => {
@@ -4051,7 +4198,7 @@ const queueSnsRealtimeReconcile = (eventPayload) => {
         if (account === String(selectedAccount.value || '').trim()) {
           syncWarning.value = describeSnsSyncFailure(e)
         }
-        console.warn('朋友圈事件对账失败，继续使用本地快照', e)
+        console.warn('[sns.incremental-sync] status=error phase=viewport-reconcile')
       }
     }
     return changed
@@ -4074,6 +4221,7 @@ const onSnsRealtimeReady = async (event) => {
 
   snsEventReconnectAttempt = 0
   snsLastEventSequence = Math.max(snsLastEventSequence, Number(payload?.sequence || 0))
+  await restoreSnsFullSyncStatus(account)
   if (payload?.watcherAvailable === false) {
     syncWarning.value = String(payload?.message || '系统文件通知不可用，请使用手动刷新')
     return
@@ -4121,6 +4269,24 @@ const onSnsRealtimeSyncError = (event) => {
   syncWarning.value = String(payload?.message || '朋友圈实时同步失败，请使用手动刷新')
 }
 
+const onSnsFullSyncEvent = (event) => {
+  const payload = parseSnsRealtimeEvent(event)
+  const account = String(selectedAccount.value || '').trim()
+  if (!payload?.job || String(payload?.account || '') !== account) return
+  const sequence = Number(payload?.sequence || 0)
+  if (sequence > 0 && sequence <= snsLastEventSequence) return
+  snsLastEventSequence = Math.max(snsLastEventSequence, sequence)
+
+  const job = payload.job
+  applySnsFullSyncJob(job)
+  const status = String(job?.status || '')
+  const final = status === 'done' || status === 'error' || status === 'cancelled'
+  const snapshotVersion = String(job?.snapshotVersion || payload?.snapshotVersion || '').trim()
+  if (final || (snapshotVersion && snapshotVersion !== snsSnapshotVersion)) {
+    queueSnsFullSyncMerge(job, { final })
+  }
+}
+
 function connectSnsEventStream() {
   if (!process.client || snsPageUnmounted || document.visibilityState !== 'visible') return
   const account = String(selectedAccount.value || '').trim()
@@ -4139,6 +4305,10 @@ function connectSnsEventStream() {
   source.addEventListener('ready', onSnsRealtimeReady)
   source.addEventListener('change', onSnsRealtimeChange)
   source.addEventListener('sync_error', onSnsRealtimeSyncError)
+  source.addEventListener('full_sync_progress', onSnsFullSyncEvent)
+  source.addEventListener('full_sync_done', onSnsFullSyncEvent)
+  source.addEventListener('full_sync_error', onSnsFullSyncEvent)
+  source.addEventListener('full_sync_cancelled', onSnsFullSyncEvent)
   source.onerror = () => {
     if (source !== snsEventSource) return
     closeSnsEventStream()
@@ -4155,8 +4325,13 @@ watch(
     async (v, oldV) => {
       if (v !== oldV) {
         closeSnsEventStream({ resetAttempt: true })
+        clearSnsFullSyncMergeTimer()
         snsLastEventSequence = 0
         snsQueuedRealtimeEvent = null
+        snsQueuedFullSyncMerge = null
+        snsFullSyncJob.value = null
+        isSnsFullSyncCancelling.value = false
+        snsFullSyncLastUserRefreshBatch = 0
         snsSnapshotVersion = ''
       }
       if (v && v !== oldV) {
@@ -4181,6 +4356,7 @@ watch(
         resetSnsMediaErrors()
         if (previewCtx.value) closeImagePreview()
         await loadLocalSnsData()
+        await restoreSnsFullSyncStatus(String(v || ''))
         // 首屏就绪后建立事件连接；后端启动同步或重连差异由 ready 事件补齐。
         connectSnsEventStream()
       }
@@ -4257,6 +4433,7 @@ const runPassiveSnsRefresh = async () => {
   if (!String(selectedAccount.value || '').trim()) return
   // 窗口重新可见时只核对一次本地版本，然后恢复 SSE。
   await reconcileSnsSnapshotOnce()
+  await restoreSnsFullSyncStatus(String(selectedAccount.value || ''))
   connectSnsEventStream()
 }
 
@@ -4299,7 +4476,9 @@ onUnmounted(() => {
     passiveRefreshTimer = null
   }
   closeSnsEventStream({ resetAttempt: true })
+  clearSnsFullSyncMergeTimer()
   snsQueuedRealtimeEvent = null
+  snsQueuedFullSyncMerge = null
   if (snsVisibleWindowRaf !== null) {
     window.cancelAnimationFrame(snsVisibleWindowRaf)
     snsVisibleWindowRaf = null
