@@ -529,11 +529,18 @@ def _upsert_sns_timeline_rows_to_decrypted_db(
                 "unchanged": unchanged,
             }
         except Exception as e:
-            error_text = type(e).__name__
+            raw_error_text = f"{type(e).__name__}: {e}"
+            error_text = raw_error_text.encode("ascii", errors="backslashreplace").decode("ascii")
+            logger.warning(
+                "[sns] decrypted sns.db upsert failed source=%s prepared=%s err=%s",
+                source,
+                len(rows),
+                error_text,
+            )
             logger.warning(
                 "[sns.incremental-sync] status=error phase=writing prepared=%s error_type=%s",
                 len(rows),
-                error_text,
+                type(e).__name__,
             )
             try:
                 conn.rollback()
@@ -1571,7 +1578,7 @@ def _get_sns_covers(
                 # 利用 exec_query 强行查
                 rows = _wcdb_exec_query(conn.handle, kind="media", path=str(sns_db_path), sql=cover_sql) or []
     except Exception as e:
-        logger.warning("[sns.cover] status=error phase=source-read error_type=%s", type(e).__name__)
+        logger.warning("[sns] WCDB cover fetch failed: %s", e)
 
     # 2) Fallback to local decrypted snapshot sns.db.
     if not rows:
@@ -1585,7 +1592,7 @@ def _get_sns_covers(
                 conn_sq.close()
                 rows = [{"tid": r["tid"], "content": r["content"]} for r in (rows_sq or [])]
             except Exception as e:
-                logger.warning("[sns.cover] status=error phase=snapshot-read error_type=%s", type(e).__name__)
+                logger.warning("[sns] SQLite cover fetch failed: %s", e)
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1643,7 +1650,7 @@ def api_sns_self_info(account: Optional[str] = None, source: str = "auto"):
     if requested_source == "auto" and account_prefers_decrypted_snapshot(account_dir):
         requested_source = "decrypted"
 
-    logger.info("[sns.self-info] status=running phase=lookup")
+    logger.info(f"[self_info] 开始获取账号信息, 预设 wxid: {wxid}")
 
     nickname = wxid
     result_source = "wxid_dir"
@@ -1658,10 +1665,10 @@ def api_sns_self_info(account: Optional[str] = None, source: str = "auto"):
                     if names_map and names_map.get(wxid):
                         nickname = names_map[wxid]
                         result_source = "wcdb_realtime"
-                        logger.info("[sns.self-info] status=done phase=wcdb")
+                        logger.info(f"[self_info] 从 WCDB 实时连接获取成功: {nickname}")
                         return {"wxid": wxid, "nickname": nickname, "source": result_source}
         except Exception as e:
-            logger.debug("[sns.self-info] status=skipped phase=wcdb error_type=%s", type(e).__name__)
+            logger.debug(f"[self_info] WCDB 路径跳过或失败: {e}")
 
     contact_db_path = account_dir / "contact.db"
     if contact_db_path.exists():
@@ -1673,7 +1680,7 @@ def api_sns_self_info(account: Optional[str] = None, source: str = "auto"):
 
             cursor = conn.execute("PRAGMA table_info(contact)")
             cols = {row["name"].lower() for row in cursor.fetchall()}
-            logger.debug("[sns.self-info] status=running phase=snapshot-schema")
+            logger.debug(f"[self_info] contact 表现有字段: {cols}")
 
             target_nick_col = "nick_name" if "nick_name" in cols else ("nickname" if "nickname" in cols else None)
 
@@ -1697,18 +1704,18 @@ def api_sns_self_info(account: Optional[str] = None, source: str = "auto"):
                         nickname = raw_alias
                         result_source = "contact_db_alias"
 
-                    logger.info("[sns.self-info] status=done phase=snapshot")
+                    logger.info(f"[self_info] 从数据库提取成功: {nickname} (src: {result_source})")
             else:
-                logger.warning("[sns.self-info] status=skipped phase=snapshot-schema code=nickname_column_missing")
+                logger.warning("[self_info] contact 表中找不到任何昵称相关字段")
 
         except sqlite3.OperationalError as e:
-            logger.error("[sns.self-info] status=error phase=snapshot-read error_type=%s", type(e).__name__)
+            logger.error(f"[self_info] 数据库繁忙或锁定: {e}")
         except Exception as e:
-            logger.error("[sns.self-info] status=error phase=snapshot-read error_type=%s", type(e).__name__)
+            logger.exception(f"[self_info] 查询异常: {e}")
         finally:
             if conn: conn.close()
     else:
-        logger.warning("[sns.self-info] status=skipped phase=snapshot-read code=contact_db_missing")
+        logger.warning(f"[self_info] 找不到 contact.db: {contact_db_path}")
 
     return {
         "wxid": wxid,
@@ -2184,6 +2191,15 @@ def sync_sns_realtime_timeline_latest(
     ))
     if not snapshot_complete:
         logger.warning(
+            "[sns-sync] snapshot write incomplete account=%s scanned=%s prepared=%s changed=%s unchanged=%s missing_required=%s",
+            account_dir.name,
+            len(rows),
+            prepared_count,
+            changed_count,
+            unchanged_count,
+            len(missing_required_tids),
+        )
+        logger.warning(
             "[sns.incremental-sync] status=error request_id=%s phase=writing code=snapshot_write_incomplete scanned=%s prepared=%s changed=%s unchanged=%s skipped=%s",
             sync_request_id,
             len(rows),
@@ -2204,6 +2220,12 @@ def sync_sns_realtime_timeline_latest(
         }, prepared=prepared_count, changed=changed_count, unchanged=unchanged_count)
 
     if backlog_truncated:
+        logger.warning(
+            "[sns-sync] backlog exceeds scan cap account=%s scanned=%s last_max_id=%s",
+            account_dir.name,
+            len(rows),
+            last_max_id_u,
+        )
         logger.warning(
             "[sns.incremental-sync] status=skipped request_id=%s phase=scanning code=scan_cap_reached scanned=%s",
             sync_request_id,
@@ -2226,6 +2248,7 @@ def sync_sns_realtime_timeline_latest(
         st2["maxId"] = str(committed_max_id_u)
         st2["updatedAt"] = int(time.time())
         if _write_sns_realtime_sync_state(account_dir, st2) is False:
+            logger.warning("[sns-sync] state write failed account=%s", account_dir.name)
             logger.warning(
                 "[sns.incremental-sync] status=error request_id=%s phase=finalizing code=sync_state_write_failed",
                 sync_request_id,
@@ -2327,8 +2350,8 @@ def list_sns_timeline(
         try:
             rows2 = conn2.execute(sql, params_with_page).fetchall()
         except sqlite3.OperationalError as e:
-            logger.warning("[sns.timeline] status=error phase=snapshot-read error_type=%s", type(e).__name__)
-            raise HTTPException(status_code=500, detail="sns.db query failed")
+            logger.warning("[sns] query failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"sns.db query failed: {e}")
         finally:
             conn2.close()
 
@@ -2994,10 +3017,10 @@ def list_sns_timeline(
 
         return wcdb_resp
     except WCDBRealtimeError as e:
-        logger.info("[sns.timeline] status=skipped phase=source-read error_type=%s", type(e).__name__)
+        logger.info("[sns] wcdb realtime unavailable: %s", e)
         fallback_reason = str(e)
     except Exception as e:
-        logger.warning("[sns.timeline] status=error phase=source-read error_type=%s", type(e).__name__)
+        logger.warning("[sns] wcdb realtime failed: %s", e)
         fallback_reason = str(e)
 
     fallback = _list_from_decrypted_sqlite()
@@ -3050,7 +3073,7 @@ def _schedule_sns_user_tid_index(sns_db_path: Path) -> None:
             finally:
                 conn.close()
         except Exception as exc:
-            logger.info("[sns.timeline] status=skipped phase=index error_type=%s", type(exc).__name__)
+            logger.info("[sns] background index creation deferred: %s", exc)
             with _SNS_INDEX_SCHEDULE_LOCK:
                 _SNS_INDEX_SCHEDULED.discard(key)
 
@@ -3591,25 +3614,35 @@ async def get_sns_media(
     media_type_i = int(media_type or 2)
     md5_norm = _normalize_hex32(md5)
     request_id = f"sns-media-{time.time_ns()}-{threading.get_ident()}"
-    _trace_id, raw_trace = create_perf_trace(
+    _trace_id, trace = create_perf_trace(
         logger,
         "sns.media",
         requestId=request_id,
+        account=str(account_dir.name),
+        accountDir=str(account_dir),
+        wxidDir=str(wxid_dir or ""),
+        postId=str(post_id or ""),
+        mediaId=str(media_id or ""),
+        postType=post_type_i,
+        mediaType=media_type_i,
+        createTime=int(create_time or 0),
+        width=int(width or 0),
+        height=int(height or 0),
+        totalSize=int(total_size or 0),
+        idx=max(0, int(idx or 0)),
+        md5=md5_norm,
+        variant=variant_norm,
+        preferRemoteOriginal=prefer_remote_original,
+        useCacheRequested=str(use_cache),
+        useCacheEffective=use_cache_flag,
+        tokenPresent=bool(str(token or "")),
+        tokenLength=len(str(token or "")),
+        tokenHash=_sns_media_value_hash(token),
+        keyPresent=bool(str(key or "")),
+        keyLength=len(str(key or "")),
+        keyHash=_sns_media_value_hash(key),
+        **_sns_media_url_trace_fields(url),
     )
-
-    def trace(phase: str, **fields: Any) -> None:
-        """严格筛选媒体诊断字段，避免后续调用误把用户数据写入日志。"""
-        safe_fields: dict[str, Any] = {}
-        for field_name in ("result", "statusCode", "elapsedMs"):
-            if field_name in fields:
-                safe_fields[field_name] = fields[field_name]
-        error_type = str(fields.get("errorType") or "")
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", error_type):
-            safe_fields["errorType"] = error_type
-        safe_phase = str(phase or "unknown")
-        if not re.fullmatch(r"[a-z0-9:_-]{1,80}", safe_phase, flags=re.I):
-            safe_phase = "unknown"
-        raw_trace(safe_phase, **safe_fields)
     trace("request:start")
 
     # 点击预览需要高清原图：本地 sns 缓存有时只命中缩略图，所以 full/original 请求先按
@@ -3858,7 +3891,7 @@ async def proxy_article_thumb(url: str):
             )
 
     except Exception as e:
-        logger.warning("[sns.article-thumb] status=error phase=fetch error_type=%s", type(e).__name__)
+        logger.warning(f"[sns] 提取公众号封面失败 url={u[:50]}... : {e}")
         raise HTTPException(status_code=404, detail="无法获取文章封面")
 
 

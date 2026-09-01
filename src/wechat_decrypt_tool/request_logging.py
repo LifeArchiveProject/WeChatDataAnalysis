@@ -94,14 +94,10 @@ def redact_sensitive_log_data(value: Any, *, _depth: int = 0) -> Any:
 def redact_sensitive_query_text(value: Any) -> str:
     """Redact sensitive query values without decoding or rewriting unrelated values."""
     text = str(value or "")
-    prefix, separator, query = text.partition("?")
-    normalized_path = prefix.lower().rstrip("/")
-    if normalized_path == "/sns" or "/sns/" in f"{normalized_path}/":
-        # 朋友圈查询参数可能包含账号、联系人、动态/媒体 ID、URL、路径、时间和尺寸；
-        # 路径段也可能包含导出或文件 ID，因此统一压缩为固定命名空间。
-        return "/api/sns" if "/api/sns" in normalized_path else "/sns"
-    if not separator:
+    if "?" not in text:
         return text
+
+    prefix, query = text.split("?", 1)
     redacted_parts: list[str] = []
     for part in query.split("&"):
         raw_key, separator, raw_value = part.partition("=")
@@ -236,31 +232,20 @@ def _extract_response_detail_from_body(response: Response, body: bytes) -> str:
 async def log_server_errors_middleware(logger, request: Request, call_next):
     method = str(request.method or "").upper() or "GET"
     path = str(request.url.path or "").strip() or "/"
-    normalized_path = path.lower().rstrip("/")
-    is_sns_request = normalized_path == "/sns" or "/sns/" in f"{normalized_path}/"
-    safe_path = "/api/sns" if is_sns_request else path
 
     try:
         response = await call_next(request)
     except Exception as exc:
-        if is_sns_request:
-            logger.error(
-                "[server-exception] method=%s path=%s code=sns_request_failed error_type=%s",
-                method,
-                safe_path,
-                type(exc).__name__,
-            )
-        else:
-            logger.exception("[server-exception] method=%s path=%s error=%s", method, path, exc)
+        logger.exception("[server-exception] method=%s path=%s error=%s", method, path, exc)
         raise
 
     status = int(getattr(response, "status_code", 0) or 0)
     if status >= 500:
         response, body = await _buffer_response_body(response)
         detail = _extract_response_detail_from_body(response, body) or _extract_response_detail(response)
-        if detail and not is_sns_request:
-            logger.error("[server-5xx] status=%s method=%s path=%s detail=%s", status, method, safe_path, detail)
+        if detail:
+            logger.error("[server-5xx] status=%s method=%s path=%s detail=%s", status, method, path, detail)
         else:
-            logger.error("[server-5xx] status=%s method=%s path=%s", status, method, safe_path)
+            logger.error("[server-5xx] status=%s method=%s path=%s", status, method, path)
 
     return response

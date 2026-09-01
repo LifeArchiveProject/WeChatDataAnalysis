@@ -282,6 +282,7 @@ async def _startup_background_jobs() -> None:
     try:
         SNS_REALTIME_AUTOSYNC.start()
     except Exception as exc:
+        logger.exception("Failed to start SNS realtime autosync service")
         logger.error(
             "[sns.incremental-sync] status=error phase=service-start error_type=%s",
             type(exc).__name__,

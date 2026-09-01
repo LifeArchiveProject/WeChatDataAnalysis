@@ -177,6 +177,7 @@ class SnsRealtimeAutoSyncService:
         try:
             accounts = list(_list_decrypted_accounts() or [])
         except Exception as exc:
+            logger.exception("[sns-autosync] 初始账号枚举失败")
             logger.error("[sns.incremental-sync] status=error phase=account-scan error_type=%s", type(exc).__name__)
             return
         for account in accounts:
@@ -316,6 +317,7 @@ class SnsRealtimeAutoSyncService:
                 self._mark_watcher_failed(watch_key, "sns_file_watch_unavailable")
         except Exception as exc:
             if not self._stop.is_set():
+                logger.exception("[sns-autosync] 系统文件监听失败")
                 logger.error("[sns.incremental-sync] status=error phase=file-watch error_type=%s", type(exc).__name__)
                 self._mark_watcher_failed(watch_key, "sns_file_watch_unavailable")
 
@@ -358,7 +360,7 @@ class SnsRealtimeAutoSyncService:
             worker = threading.Thread(
                 target=self._sync_account_runner,
                 args=(account, reason, revision),
-                name="sns-incremental-sync",
+                name=f"sns-event-sync-{account}",
                 daemon=True,
             )
             state.worker = worker
@@ -371,6 +373,7 @@ class SnsRealtimeAutoSyncService:
                 if state is not None and state.worker is worker:
                     state.sync_running = False
                     state.worker = None
+            logger.exception("[sns-autosync] 启动同步线程失败 account=%s", account)
             logger.error(
                 "[sns.incremental-sync] status=error phase=worker-start error_type=%s",
                 type(exc).__name__,
@@ -480,8 +483,14 @@ class SnsRealtimeAutoSyncService:
                         client, NativeCoreFeature.WECHAT_MOMENTS_REFRESH
                     )
                     client.refresh_wechat_moments(context.name, context.account_dir)
+            logger.info("[sns-autosync] native refresh 调用完成 account=%s", account)
             logger.info("[sns.incremental-sync] status=done phase=native-refresh")
         except Exception as exc:
+            logger.warning(
+                "[sns-autosync] native refresh 调用失败 account=%s error=%s；保留手动刷新",
+                account,
+                exc,
+            )
             logger.warning(
                 "[sns.incremental-sync] status=error phase=native-refresh error_type=%s",
                 type(exc).__name__,
@@ -498,6 +507,7 @@ class SnsRealtimeAutoSyncService:
                         return {"status": "skipped", "reason": "service_stopping"}, False
                     last_result = dict(self._sync_account(account) or {})
             except Exception as exc:
+                logger.exception("[sns-autosync] 同步失败 account=%s", account)
                 logger.error(
                     "[sns.incremental-sync] status=error phase=scanning error_type=%s attempt=%s",
                     type(exc).__name__,
@@ -556,6 +566,7 @@ class SnsRealtimeAutoSyncService:
         except HTTPException as exc:
             return {"status": "error", "error": str(exc.detail or "sns_sync_failed")}
         except Exception as exc:
+            logger.exception("[sns-autosync] 增量同步调用失败 account=%s", account)
             logger.error(
                 "[sns.incremental-sync] status=error phase=scanning error_type=%s",
                 type(exc).__name__,
@@ -623,6 +634,14 @@ class SnsRealtimeAutoSyncService:
                 "timestamp": int(time.time() * 1000),
             }
             self._publish_event(account, event)
+            logger.info(
+                "[sns-autosync] 事件同步完成 account=%s reason=%s revision=%s status=%s changed=%s",
+                account,
+                reason,
+                revision,
+                status,
+                event["changed"],
+            )
             return
 
         raw_code = str((result or {}).get("error") or (result or {}).get("reason") or "sns_sync_failed").strip()

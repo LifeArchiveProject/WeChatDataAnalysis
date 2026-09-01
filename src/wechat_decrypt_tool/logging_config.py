@@ -274,10 +274,6 @@ class WeChatLogger:
         if console_handler is not None:
             fastapi_logger.addHandler(console_handler)
         fastapi_logger.setLevel(level)
-
-        # httpx 的 INFO 请求日志会展开完整远程 URL；朋友圈媒体 URL 可能含 token 和用户标识。
-        logging.getLogger("httpx").setLevel(logging.WARNING)
-        logging.getLogger("httpcore").setLevel(logging.WARNING)
         
         # 记录初始化信息
         logger = logging.getLogger(__name__)
