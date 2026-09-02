@@ -177,6 +177,9 @@ class TestSnsPageDecryptedSource(unittest.TestCase):
         self.assertIn("query.set('usernames', params.usernames.join(','))", api)
         self.assertIn("syncSnsRealtimeLatest,", api)
         self.assertIn("getSnsSnapshotStatus,", api)
+        self.assertIn("startSnsFullSync,", api)
+        self.assertIn("getSnsFullSyncStatus,", api)
+        self.assertIn("cancelSnsFullSync,", api)
         self.assertRegex(
             page,
             re.compile(
@@ -201,19 +204,19 @@ class TestSnsPageDecryptedSource(unittest.TestCase):
         refresh = page.split("const refreshSnsData = async () => {", 1)[1].split(
             "\n\nlet postsRequestGeneration", 1
         )[0]
-        self.assertIn("await syncLatestSnsWithTimeout(account, {", refresh)
-        self.assertIn("maxScan: SNS_MANUAL_REFRESH_SCAN_LIMIT", refresh)
-        self.assertIn("scanOffset: reconcileWindow.scanOffset", refresh)
-        self.assertIn("waitForCurrent: true", refresh)
-        self.assertIn("await activeReconcile", refresh)
-        self.assertIn("mergeVisiblePostsWindow(reconcileWindow)", refresh)
-        self.assertIn("loadSnsUsers({ preserveExisting: true })", refresh)
-        self.assertIn("if (shouldMergeTimeline)", refresh)
+        self.assertIn("await api.startSnsFullSync({ account })", refresh)
+        self.assertNotIn("syncLatestSnsWithTimeout", refresh)
+        self.assertNotIn("selectedSnsUser", refresh)
+        self.assertNotIn("scanOffset", refresh)
+        self.assertNotIn("usernames", refresh)
         self.assertNotIn("loadPosts({ reset: true })", refresh)
         self.assertNotIn("posts.value = []", refresh)
         self.assertIn('@click="refreshSnsData"', page)
-        self.assertIn("refreshQueued = true", page)
-        self.assertIn("syncStatus === 'ok' || syncStatus === 'noop'", page)
+        self.assertIn("const cancelSnsFullSync = async () =>", page)
+        self.assertIn("await api.cancelSnsFullSync({ account, sync_id: syncId })", page)
+        self.assertIn("await restoreSnsFullSyncStatus(String(v || ''))", page)
+        self.assertIn("source.addEventListener('full_sync_progress', onSnsFullSyncEvent)", page)
+        self.assertIn("queueSnsFullSyncMerge(job, { final })", page)
         self.assertIn("实时同步失败，当前显示本地快照", page)
         self.assertIn("const describeSnsSyncFailure = (failure) =>", page)
         self.assertIn("实时同步响应超时，后台任务仍可能完成", page)

@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -31,6 +32,7 @@ from ..media_helpers import _read_and_maybe_decrypt_media, _resolve_account_wxid
 from ..path_fix import PathFixRoute
 from ..perf_trace import create_perf_trace
 from ..sns_realtime_autosync import SNS_REALTIME_AUTOSYNC
+from ..sns_full_sync import SNS_FULL_SYNC
 from .. import sns_media as _sns_media
 from ..wcdb_realtime import (
     WCDBRealtimeError,
@@ -534,6 +536,11 @@ def _upsert_sns_timeline_rows_to_decrypted_db(
                 source,
                 len(rows),
                 error_text,
+            )
+            logger.warning(
+                "[sns.incremental-sync] status=error phase=writing prepared=%s error_type=%s",
+                len(rows),
+                type(e).__name__,
             )
             try:
                 conn.rollback()
@@ -1796,6 +1803,28 @@ async def stream_sns_realtime_events(request: Request, account: Optional[str] = 
     )
 
 
+@router.post("/api/sns/realtime/full_sync", summary="启动朋友圈全量缓存同步")
+def start_sns_realtime_full_sync(account: Optional[str] = None):
+    account_dir = _resolve_account_dir(account)
+    job, reused = SNS_FULL_SYNC.start(account_dir)
+    return {"status": "ok", "reused": reused, "job": job}
+
+
+@router.get("/api/sns/realtime/full_sync/status", summary="获取朋友圈全量同步状态")
+def get_sns_realtime_full_sync_status(account: Optional[str] = None):
+    account_dir = _resolve_account_dir(account)
+    return {"status": "ok", "job": SNS_FULL_SYNC.get(account_dir)}
+
+
+@router.delete("/api/sns/realtime/full_sync", summary="取消朋友圈全量缓存同步")
+def cancel_sns_realtime_full_sync(account: Optional[str] = None, sync_id: str = ""):
+    account_dir = _resolve_account_dir(account)
+    job, accepted = SNS_FULL_SYNC.cancel(account_dir, sync_id)
+    if not accepted:
+        raise HTTPException(status_code=409, detail="同步任务已结束或任务标识不匹配")
+    return {"status": "ok", "cancelled": True, "job": job}
+
+
 @router.post("/api/sns/realtime/sync_latest", summary="实时朋友圈同步到解密库（增量）")
 def sync_sns_realtime_timeline_latest(
     account: Optional[str] = None,
@@ -1809,6 +1838,12 @@ def sync_sns_realtime_timeline_latest(
     This is best-effort and intentionally **append-only**: we never delete rows from the decrypted snapshot
     even if the post is deleted/hidden later, so users can still browse/export historical cached content.
     """
+    sync_request_id = uuid.uuid4().hex
+    sync_started = time.perf_counter()
+    logger.info(
+        "[sns.incremental-sync] status=running request_id=%s phase=connecting",
+        sync_request_id,
+    )
     try:
         lim = int(max_scan or 200)
     except Exception:
@@ -1855,6 +1890,21 @@ def sync_sns_realtime_timeline_latest(
         result["highwaterAdvanced"] = bool(highwater_advanced)
         result["scanOffset"] = int(requested_scan_offset)
         result["scanLimit"] = int(lim)
+        status = str(result.get("status") or "error").strip().lower()
+        raw_code = str(result.get("error") or result.get("reason") or "").strip().lower()
+        code = raw_code if re.fullmatch(r"[a-z0-9_.-]{1,80}", raw_code) else ""
+        log_method = logger.error if status == "error" else logger.info
+        log_method(
+            "[sns.incremental-sync] status=%s request_id=%s phase=finalizing code=%s scanned=%s prepared=%s changed=%s unchanged=%s elapsed_ms=%s",
+            status,
+            sync_request_id,
+            code,
+            int(result.get("scanned") or 0),
+            int(prepared),
+            int(changed),
+            int(unchanged),
+            int((time.perf_counter() - sync_started) * 1000),
+        )
         return result
 
     # If there is no local decrypted sns.db yet, force a first-time materialization.
@@ -1867,6 +1917,11 @@ def sync_sns_realtime_timeline_latest(
     info = WCDB_REALTIME.get_status(account_dir)
     available = bool(info.get("dll_present") and info.get("key_present") and info.get("db_storage_dir"))
     if not available:
+        logger.error(
+            "[sns.incremental-sync] status=error request_id=%s phase=connecting code=realtime_not_available error_type=AvailabilityError elapsed_ms=%s",
+            sync_request_id,
+            int((time.perf_counter() - sync_started) * 1000),
+        )
         raise HTTPException(status_code=404, detail="WCDB realtime not available.")
 
     st = _read_sns_realtime_sync_state(account_dir)
@@ -1879,9 +1934,18 @@ def sync_sns_realtime_timeline_latest(
     if last_max_id_u <= 0:
         last_max_id_u = _max_sns_timeline_tid_unsigned_in_decrypted_sqlite(account_dir / "sns.db")
 
-    conn = WCDB_REALTIME.ensure_connected(account_dir)
+    try:
+        conn = WCDB_REALTIME.ensure_connected(account_dir)
+    except Exception as exc:
+        logger.error(
+            "[sns.incremental-sync] status=error request_id=%s phase=connecting code=connection_failed error_type=%s elapsed_ms=%s",
+            sync_request_id,
+            type(exc).__name__,
+            int((time.perf_counter() - sync_started) * 1000),
+        )
+        raise
 
-    t0 = time.perf_counter()
+    t0 = sync_started
     rows: list[dict[str, Any]] = []
     max_id_u = 0
     upsert_rows: list[tuple[int, str, str, Optional[Any]]] = []
@@ -2107,6 +2171,16 @@ def sync_sns_realtime_timeline_latest(
         write_success = changed_count == prepared_count
         write_error = ""
 
+    logger.info(
+        "[sns.incremental-sync] status=running request_id=%s phase=scanning batches=1 scanned=%s prepared=%s changed=%s unchanged=%s elapsed_ms=%s",
+        sync_request_id,
+        len(rows),
+        prepared_count,
+        changed_count,
+        unchanged_count,
+        int((time.perf_counter() - sync_started) * 1000),
+    )
+
     prepared_tids = {int(row[0]) for row in upsert_rows}
     missing_required_tids = required_tids - prepared_tids
     snapshot_complete = bool(upsert_rows) and all((
@@ -2119,6 +2193,15 @@ def sync_sns_realtime_timeline_latest(
         logger.warning(
             "[sns-sync] snapshot write incomplete account=%s scanned=%s prepared=%s changed=%s unchanged=%s missing_required=%s",
             account_dir.name,
+            len(rows),
+            prepared_count,
+            changed_count,
+            unchanged_count,
+            len(missing_required_tids),
+        )
+        logger.warning(
+            "[sns.incremental-sync] status=error request_id=%s phase=writing code=snapshot_write_incomplete scanned=%s prepared=%s changed=%s unchanged=%s skipped=%s",
+            sync_request_id,
             len(rows),
             prepared_count,
             changed_count,
@@ -2143,6 +2226,11 @@ def sync_sns_realtime_timeline_latest(
             len(rows),
             last_max_id_u,
         )
+        logger.warning(
+            "[sns.incremental-sync] status=skipped request_id=%s phase=scanning code=scan_cap_reached scanned=%s",
+            sync_request_id,
+            len(rows),
+        )
         return _sync_response({
             "status": "skipped",
             "reason": "backlog exceeds scan cap",
@@ -2161,6 +2249,10 @@ def sync_sns_realtime_timeline_latest(
         st2["updatedAt"] = int(time.time())
         if _write_sns_realtime_sync_state(account_dir, st2) is False:
             logger.warning("[sns-sync] state write failed account=%s", account_dir.name)
+            logger.warning(
+                "[sns.incremental-sync] status=error request_id=%s phase=finalizing code=sync_state_write_failed",
+                sync_request_id,
+            )
             return _sync_response({
                 "status": "error",
                 "error": "sync_state_write_failed",
