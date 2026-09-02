@@ -1064,8 +1064,8 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
             token = _direct_child_text(img, "token")
             key = _direct_child_text(img, "key")
             enc_idx = _direct_child_text(img, "enc_idx", "encidx")
-            thumb_token = _direct_child_text(img, "thumb_url_token", "thumb_token", "thumburltoken") or token
-            thumb_key = _direct_child_text(img, "thumb_key", "thumbkey") or key
+            thumb_token = _direct_child_text(img, "thumb_url_token", "thumb_token", "thumburltoken")
+            thumb_key = _direct_child_text(img, "thumb_key", "thumbkey")
             thumb_enc_idx = _direct_child_text(img, "thumb_enc_idx", "thumbencidx")
             media_id = _direct_child_text(img, "media_id", "mediaid", "id")
             md5 = _direct_child_text(img, "md5")
@@ -3098,8 +3098,19 @@ def _is_allowed_sns_media_host(host: str) -> bool:
     return _sns_media.is_allowed_sns_media_host(host)
 
 
-def _fix_sns_cdn_url(url: str, *, token: str = "", is_video: bool = False) -> str:
-    return _sns_media.fix_sns_cdn_url(url, token=token, is_video=is_video)
+def _fix_sns_cdn_url(
+    url: str,
+    *,
+    token: str = "",
+    is_video: bool = False,
+    force_original: bool = False,
+) -> str:
+    return _sns_media.fix_sns_cdn_url(
+        url,
+        token=token,
+        is_video=is_video,
+        force_original=force_original,
+    )
 
 
 def _detect_mp4_ftyp(head: bytes) -> bool:
@@ -3229,6 +3240,7 @@ async def _materialize_sns_remote_video(
     key: str,
     token: str,
     use_cache: bool,
+    diagnostic_id: str = "",
 ) -> Optional[Path]:
     return await _sns_media.materialize_sns_remote_video(
         account_dir=account_dir,
@@ -3236,6 +3248,7 @@ async def _materialize_sns_remote_video(
         key=key,
         token=token,
         use_cache=use_cache,
+        diagnostic_id=diagnostic_id,
     )
 
 
@@ -3382,6 +3395,7 @@ async def _try_fetch_and_decrypt_sns_remote(
     trace: Optional[Any] = None,
     diagnostic_id: str = "",
     stage: str = "remote",
+    force_original: bool = False,
 ) -> Optional[Response]:
     """Try remote download+decrypt first (accurate when keys are present)."""
     if trace is not None:
@@ -3394,6 +3408,7 @@ async def _try_fetch_and_decrypt_sns_remote(
         token=str(token or ""),
         use_cache=bool(use_cache),
         diagnostic_id=str(diagnostic_id or ""),
+        force_original=bool(force_original),
     )
     if res is None:
         if trace is not None:
@@ -3419,6 +3434,38 @@ async def _try_fetch_and_decrypt_sns_remote(
             cachePath=str(res.cache_path or ""),
         )
     return resp
+
+
+def _sns_remote_http_exception(
+    exc: BaseException,
+    *,
+    diagnostic_id: str,
+) -> HTTPException:
+    headers = {"X-SNS-Diagnostic-Id": str(diagnostic_id or "")}
+    if isinstance(exc, _sns_media.SnsWasmRuntimeUnavailable):
+        return HTTPException(
+            status_code=503,
+            detail="SNS media decryption runtime is unavailable.",
+            headers=headers,
+        )
+    if isinstance(
+        exc,
+        (_sns_media.SnsRemoteMediaDecodeError, _sns_media.SnsRemoteMediaUpstreamError),
+    ):
+        return HTTPException(
+            status_code=502,
+            detail="SNS CDN media could not be downloaded or decoded.",
+            headers=headers,
+        )
+    if isinstance(exc, HTTPException):
+        if exc.headers:
+            headers.update(exc.headers)
+        return HTTPException(status_code=exc.status_code, detail=exc.detail, headers=headers)
+    return HTTPException(
+        status_code=502,
+        detail="SNS CDN media processing failed.",
+        headers=headers,
+    )
 
 
 def _sns_media_value_hash(value: object) -> str:
@@ -3454,6 +3501,8 @@ def _sns_media_url_trace_fields(url: object) -> dict[str, Any]:
         "urlHost": host,
         "urlIdentity": _sns_media_value_hash(stable_url),
         "urlHasQuery": bool(has_query),
+        "sizeSuffix": _sns_media._sns_cdn_size_suffix(raw),
+        "mediaSource": _sns_media._sns_cdn_media_source(raw),
     }
 
 
@@ -3512,12 +3561,14 @@ async def get_sns_media(
     wxid_dir = _resolve_account_wxid_dir(account_dir)
 
     try:
-        use_cache_flag = bool(int(use_cache or 1))
+        use_cache_flag = bool(int(1 if use_cache is None else use_cache))
     except Exception:
         use_cache_flag = True
 
     variant_norm = str(variant or "").strip().lower()
-    prefer_remote_original = variant_norm in {"full", "origin", "original", "large"}
+    # `/0` is credential-bound and must never be inferred from a loose alias.
+    # Only the documented `variant=full` contract may request the original path.
+    prefer_remote_original = variant_norm == "full"
     post_type_i = int(post_type or 1)
     media_type_i = int(media_type or 2)
     md5_norm = _normalize_hex32(md5)
@@ -3553,19 +3604,30 @@ async def get_sns_media(
     )
     trace("request:start")
 
-    # 点击预览需要高清原图：本地 sns 缓存有时只命中缩略图，所以 full/original 请求先按
-    # WeFlow 的 CDN URL 修正 + token/key 解密链路取原图；失败后再回退本地缓存。
+    # 点击预览需要高清原图：本地 SNS 缓存有时只命中缩略图，所以 full/original 请求先按
+    # 原图 URL/token/key 链路取图；只有真实 404 才回退本地缓存，runtime/解密错误保持可诊断。
     if prefer_remote_original and str(url or "").strip():
-        remote_resp = await _try_fetch_and_decrypt_sns_remote(
-            account_dir=account_dir,
-            url=str(url or ""),
-            key=str(key or ""),
-            token=str(token or ""),
-            use_cache=use_cache_flag,
-            trace=trace,
-            diagnostic_id=request_id,
-            stage="remote-original",
-        )
+        try:
+            remote_resp = await _try_fetch_and_decrypt_sns_remote(
+                account_dir=account_dir,
+                url=str(url or ""),
+                key=str(key or ""),
+                token=str(token or ""),
+                use_cache=use_cache_flag,
+                trace=trace,
+                diagnostic_id=request_id,
+                stage="remote-original",
+                force_original=True,
+            )
+        except Exception as exc:
+            http_exc = _sns_remote_http_exception(exc, diagnostic_id=request_id)
+            trace(
+                "response:error",
+                result="remote-original-error",
+                statusCode=int(http_exc.status_code),
+                errorType=type(exc).__name__,
+            )
+            raise http_exc from exc
         if remote_resp is not None:
             remote_resp.headers["X-SNS-Variant"] = "full"
             remote_resp.headers["X-SNS-Diagnostic-Id"] = request_id
@@ -3738,16 +3800,26 @@ async def get_sns_media(
         trace("local-cache:skip", reason="use-cache-disabled")
 
     # 4) 最后再走远程：WeFlow 风格下载、解密和远程缓存。
-    remote_resp = await _try_fetch_and_decrypt_sns_remote(
-        account_dir=account_dir,
-        url=str(url or ""),
-        key=str(key or ""),
-        token=str(token or ""),
-        use_cache=use_cache_flag,
-        trace=trace,
-        diagnostic_id=request_id,
-        stage="remote-fallback",
-    )
+    try:
+        remote_resp = await _try_fetch_and_decrypt_sns_remote(
+            account_dir=account_dir,
+            url=str(url or ""),
+            key=str(key or ""),
+            token=str(token or ""),
+            use_cache=use_cache_flag,
+            trace=trace,
+            diagnostic_id=request_id,
+            stage="remote-fallback",
+        )
+    except Exception as exc:
+        http_exc = _sns_remote_http_exception(exc, diagnostic_id=request_id)
+        trace(
+            "response:error",
+            result="remote-fallback-error",
+            statusCode=int(http_exc.status_code),
+            errorType=type(exc).__name__,
+        )
+        raise http_exc from exc
     if remote_resp is not None:
         remote_resp.headers["X-SNS-Diagnostic-Id"] = request_id
         trace(
@@ -3799,7 +3871,11 @@ async def proxy_article_thumb(url: str):
             )
 
     except Exception as e:
-        logger.warning(f"[sns] 提取公众号封面失败 url={u[:50]}... : {e}")
+        logger.warning(
+            "[sns] article thumbnail failed urlIdentity=%s errorType=%s",
+            _sns_media_value_hash(u),
+            type(e).__name__,
+        )
         raise HTTPException(status_code=404, detail="无法获取文章封面")
 
 
@@ -3812,23 +3888,35 @@ async def get_sns_video_remote(
         use_cache: int = 1,
 ):
     account_dir = _resolve_account_dir(account)
+    request_id = f"sns-video-{time.time_ns()}-{threading.get_ident()}"
 
     try:
-        use_cache_flag = bool(int(use_cache or 1))
+        use_cache_flag = bool(int(1 if use_cache is None else use_cache))
     except Exception:
         use_cache_flag = True
 
-    path = await _materialize_sns_remote_video(
-        account_dir=account_dir,
-        url=str(url or ""),
-        key=str(key or ""),
-        token=str(token or ""),
-        use_cache=use_cache_flag,
-    )
+    try:
+        path = await _materialize_sns_remote_video(
+            account_dir=account_dir,
+            url=str(url or ""),
+            key=str(key or ""),
+            token=str(token or ""),
+            use_cache=use_cache_flag,
+            diagnostic_id=request_id,
+        )
+    except Exception as exc:
+        raise _sns_remote_http_exception(exc, diagnostic_id=request_id) from exc
     if path is None:
-        raise HTTPException(status_code=404, detail="SNS remote video not found.")
+        raise HTTPException(
+            status_code=404,
+            detail="SNS remote video not found.",
+            headers={"X-SNS-Diagnostic-Id": request_id},
+        )
 
-    headers = {"Cache-Control": "public, max-age=86400" if use_cache_flag else "no-store"}
+    headers = {
+        "Cache-Control": "public, max-age=86400" if use_cache_flag else "no-store",
+        "X-SNS-Diagnostic-Id": request_id,
+    }
 
     if use_cache_flag:
         return FileResponse(str(path), media_type="video/mp4", headers=headers)

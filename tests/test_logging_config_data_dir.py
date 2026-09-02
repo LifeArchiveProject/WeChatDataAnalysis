@@ -121,7 +121,21 @@ class TestLoggingConfigDataDir(unittest.TestCase):
         self.assertNotIn("private path", text)
         self.assertNotIn("/Users/alice", text)
 
+    def test_http_client_dependency_url_is_not_written(self):
+        import logging
+
+        log_file = self.logging_config.setup_logging()
+        sentinel = "https://mmsns.qpic.cn/sns/private/150?token=PRIVATE_TOKEN&key=PRIVATE_KEY"
+        logging.getLogger("httpx").warning("HTTP Request: GET %s", sentinel)
+        logging.getLogger("httpcore.connection").error("connect failed url=%s", sentinel)
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+
+        text = log_file.read_text(encoding="utf-8")
+        self.assertNotIn("mmsns.qpic.cn", text)
+        self.assertNotIn("PRIVATE_TOKEN", text)
+        self.assertNotIn("PRIVATE_KEY", text)
+
 
 if __name__ == "__main__":
     unittest.main()
-
