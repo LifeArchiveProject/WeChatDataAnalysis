@@ -5,8 +5,11 @@ cannot detect reliably.
 """
 
 import json
+import base64
+import hashlib
 import multiprocessing
 import sys
+from pathlib import Path
 
 # PyInstaller/frozen Windows builds re-launch this executable for
 # multiprocessing workers.  The memory/DLL key scanners use process pools; if
@@ -56,12 +59,42 @@ def _run_watchfiles_smoke() -> None:
     print(json.dumps(payload, ensure_ascii=True))
 
 
+def _run_sns_wasm_smoke() -> None:
+    from wechat_decrypt_tool import sns_media
+
+    fixture_path = (
+        Path(sns_media._weflow_wxisaac64_script_path()).resolve().parent
+        / "sns_image_fixture.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    encrypted = base64.b64decode(str(fixture["encryptedBase64"]), validate=False)
+    decoded = sns_media.weflow_decrypt_sns_image_bytes(encrypted, str(fixture["key"]))
+    executable, mode, provider = sns_media._resolve_weflow_node_runtime()
+    del executable
+    keystream = sns_media.weflow_wxisaac64_keystream(
+        str(fixture["key"]),
+        int(fixture["size"]),
+    )
+    payload = {
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "runtimeMode": mode,
+        "keystreamProvider": provider,
+        "keystreamSha256": hashlib.sha256(keystream).hexdigest(),
+        "plaintextSha256": hashlib.sha256(decoded).hexdigest(),
+        "mediaType": sns_media.detect_image_mime(decoded),
+    }
+    print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+
+
 def main() -> None:
     if "--smoke-opencc" in sys.argv[1:]:
         _run_opencc_smoke()
         return
     if "--smoke-watchfiles" in sys.argv[1:]:
         _run_watchfiles_smoke()
+        return
+    if "--smoke-sns-wasm" in sys.argv[1:]:
+        _run_sns_wasm_smoke()
         return
 
     start_desktop_parent_watchdog_from_env()

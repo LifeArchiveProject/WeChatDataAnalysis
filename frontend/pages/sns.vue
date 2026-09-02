@@ -1126,6 +1126,7 @@ import { usePrivacyStore } from '~/stores/privacy'
 import { parseTextWithEmoji } from '~/lib/wechat-emojis'
 import { SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting } from '~/lib/desktop-settings'
 import { reportServerErrorFromError, reportServerErrorFromResponse } from '~/lib/server-error-logging'
+import { selectSnsImageSource } from '~/lib/sns-media-source'
 
 useHead({ title: '朋友圈 - 微信数据分析助手' })
 
@@ -2682,10 +2683,11 @@ const mediaSizeGroupIndex = (post, m, idx) => {
 }
 
 const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
-  const raw = upgradeTencentHttps(String(rawUrl || '').trim())
+  const preferFull = !!options?.preferFull
+  const selectedSource = selectSnsImageSource(m, rawUrl, { preferFull })
+  const raw = upgradeTencentHttps(String(selectedSource.url || '').trim())
   if (!raw) return ''
   const rawLower = raw.toLowerCase()
-  const preferFull = !!options?.preferFull
 
   // If backend already provides a local media endpoint, rewrite it to the effective API base
   // (so web builds with a custom API port still work).
@@ -2696,8 +2698,7 @@ const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
   if (/^https?:\/\//i.test(raw)) {
     try {
       const host = new URL(raw).hostname.toLowerCase()
-      const thumbCandidate = String(m?.thumb || m?.thumbUrl || '').trim()
-      const isThumbRequest = (!preferFull) && !!thumbCandidate && raw === upgradeTencentHttps(thumbCandidate)
+      const isThumbRequest = selectedSource.kind === 'thumbnail'
       if (
         host.endsWith('.qpic.cn')
         || host.endsWith('.qlogo.cn')
@@ -2737,32 +2738,19 @@ const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
         const mediaType = String(m?.type || '2').trim()
         if (mediaType) parts.set('media_type', mediaType)
 
-        const token = String(
-          isThumbRequest
-            ? (m?.thumbToken || m?.thumbUrlToken || m?.thumbAttrs?.token || m?.token || m?.urlAttrs?.token || '')
-            : (m?.token || m?.urlAttrs?.token || m?.thumbToken || m?.thumbUrlToken || m?.thumbAttrs?.token || '')
-        ).trim()
+        const token = String(selectedSource.token || '').trim()
         if (token) parts.set('token', token)
 
-        // 视频封面与视频本体共用 `<enc key="...">` 里的 videoKey；
-        // thumbAttrs.key 常见值为 "0"，不能用于解密加密封面。
-        const videoKey = Number(m?.type || 0) === 6
-          ? String(m?.videoKey || '').trim()
-          : ''
-        const key = String(
-          isThumbRequest
-            ? (videoKey || m?.thumbKey || m?.thumbAttrs?.key || m?.key || m?.urlAttrs?.key || '')
-            : (videoKey || m?.key || m?.urlAttrs?.key || m?.thumbKey || m?.thumbAttrs?.key || '')
-        ).trim()
+        const key = String(selectedSource.key || '').trim()
         if (key) parts.set('key', key)
 
         parts.set('use_cache', snsUseCache.value ? '1' : '0')
         // When cache is disabled, bust browser caching so backend really downloads+decrypts each time.
         if (!snsUseCache.value) parts.set('_t', String(Date.now()))
         if (md5) parts.set('md5', md5)
-        if (preferFull) parts.set('variant', 'full')
+        if (selectedSource.variant === 'full') parts.set('variant', 'full')
         // 修改后端媒体匹配逻辑时递增版本号，避免浏览器复用旧的错误缓存。
-        parts.set('v', '14')
+        parts.set('v', '15')
         parts.set('url', raw)
         return `${apiBase}/sns/media?${parts.toString()}`
       }
@@ -2773,11 +2761,14 @@ const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
 }
 
 const getMediaThumbSrc = (post, m, idx = 0) => {
-  return getSnsMediaUrl(post, m, idx, m?.thumb || m?.url)
+  const source = selectSnsImageSource(m, '', { preferFull: false })
+  return getSnsMediaUrl(post, m, idx, source.url)
 }
 
 const getMediaPreviewSrc = (post, m, idx = 0) => {
-  return getSnsMediaUrl(post, m, idx, m?.url || m?.originUrl || m?.originalUrl || m?.thumb || m?.thumbUrl, { preferFull: true })
+  const source = selectSnsImageSource(m, '', { preferFull: true })
+  if (!source.url) return getMediaThumbSrc(post, m, idx)
+  return getSnsMediaUrl(post, m, idx, source.url, { preferFull: source.variant === 'full' })
 }
 
 const inferSnsDownloadExt = (blob, url, isVideo = false) => {
@@ -2875,14 +2866,14 @@ const getCommentImages = (comment) => {
 
 const toCommentImageMedia = (img) => {
   if (!img || typeof img !== 'object') return null
-  const thumb = String(img.thumb || img.thumbUrl || img.thumb_url || img.url || '').trim()
-  const url = String(img.url || img.originUrl || img.origin_url || thumb || '').trim()
+  const thumb = String(img.thumb || img.thumbUrl || img.thumb_url || '').trim()
+  const url = String(img.url || img.originUrl || img.origin_url || '').trim()
   const mediaId = String(img.id || img.mediaId || img.media_id || '').trim()
   const md5 = String(img.md5 || '').trim()
   const token = String(img.token || img.urlToken || img.url_token || '').trim()
   const key = String(img.key || '').trim()
-  const thumbToken = String(img.thumbToken || img.thumbUrlToken || img.thumb_url_token || token || '').trim()
-  const thumbKey = String(img.thumbKey || img.thumb_key || key || '').trim()
+  const thumbToken = String(img.thumbToken || img.thumbUrlToken || img.thumb_url_token || '').trim()
+  const thumbKey = String(img.thumbKey || img.thumb_key || '').trim()
   const width = Number(img.width || img.size?.width || 0) || 0
   const height = Number(img.height || img.size?.height || 0) || 0
   const totalSize = Number(img.fileSize || img.file_size || img.size?.totalSize || img.size?.total_size || 0) || 0

@@ -18,6 +18,10 @@ const {
   applyNativeCoreRuntimePolicy,
 } = require("../src/native-core-runtime.cjs");
 const { resolveMacosPrivatePkiRuntime } = require("../src/macos-private-pki-runtime.cjs");
+const {
+  smokeElectronNodeWasm,
+  smokePackagedBackendWasm,
+} = require("./sns-wasm-smoke.cjs");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const SUPPORTED_ARCHITECTURE = "arm64";
@@ -402,6 +406,17 @@ async function runPackagedRuntimeSmoke(appPath) {
   assert.equal(nativeCorePolicy.manifest.buildId, packagedNative.manifest.buildId);
   assert.equal(nativeCoreEnv[ENV_NATIVE_CORE_MODE], "required");
   assert.equal(nativeCoreEnv[ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD], undefined);
+
+  const snsKeystreamSha256 = smokeElectronNodeWasm({
+    electronExecutable,
+    nativeRoot,
+  });
+  const snsBackendSmoke = smokePackagedBackendWasm({
+    backendExecutable: backend,
+    electronExecutable,
+    nativeRoot,
+  });
+  assert.equal(snsBackendSmoke.keystreamSha256, snsKeystreamSha256);
 
   assertArchitecture(electronExecutable, "arm64");
   assertArchitecture(backend, "arm64");

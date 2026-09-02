@@ -386,6 +386,17 @@ function buildIntegrityNativeBinary({ env = process.env, platform = process.plat
 }
 
 function validateRuntimeNativeHelpers(destinationDir, platform = process.platform) {
+  for (const name of [
+    "weflow_wasm_keystream.js",
+    "wasm_video_decode.js",
+    "wasm_video_decode.wasm",
+    "sns_image_fixture.json",
+  ]) {
+    const resource = path.join(destinationDir, "weflow_wasm", name);
+    if (!fs.existsSync(resource) || !fs.statSync(resource).isFile()) {
+      throw new Error(`Missing SNS WASM runtime resource: ${resource}`);
+    }
+  }
   if (platform !== "darwin") return;
   const imageScanHelper = path.join(destinationDir, "macos", "universal", "image_scan_helper");
   if (!fs.existsSync(imageScanHelper)) {

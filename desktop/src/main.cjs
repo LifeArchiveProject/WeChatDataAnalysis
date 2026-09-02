@@ -2130,10 +2130,17 @@ function startBackend() {
     WECHAT_TOOL_PORT: String(getBackendPort()),
     WECHAT_TOOL_DATA_DIR: resolvedDataPath,
     WECHAT_TOOL_OUTPUT_DIR: resolvedOutputPath,
+    // The packaged backend cannot rely on Finder/Explorer inheriting a shell PATH.
+    // Reuse this exact Electron executable as Node only for the SNS WASM child.
+    WECHAT_TOOL_NODE_EXECUTABLE: process.execPath,
+    WECHAT_TOOL_NODE_MODE: "electron-run-as-node",
     // Electron decodes the backend pipe as UTF-8. Do not inherit an ambient
     // Windows code page such as cp950, which cannot encode Simplified Chinese.
     PYTHONIOENCODING: "utf-8",
   };
+  // Never turn the backend (or the Electron main process) globally into Node.
+  // Python scopes this flag to the single WASM helper subprocess.
+  delete env.ELECTRON_RUN_AS_NODE;
   configureNativeCoreRuntime(env);
   clearLegacyWcdbEnvironment(env);
   logMain(

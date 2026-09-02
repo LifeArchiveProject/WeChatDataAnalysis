@@ -13,6 +13,10 @@ const { isBackendHealthResponse } = require("../src/backend-startup.cjs");
 const {
   ensurePrivatePkiIssuerCached,
 } = require("../src/windows-private-pki-runtime.cjs");
+const {
+  smokeElectronNodeWasm,
+  smokePackagedBackendWasm,
+} = require("./sns-wasm-smoke.cjs");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const defaultPackageRoot = path.join(desktopRoot, "dist", "win-unpacked");
@@ -119,6 +123,16 @@ async function smokeRuntime(packageRoot, tempRoot) {
   assert.equal(manifest.codeSignatureEnforced, true);
   assert.equal(manifest.stagingPinnedSignerTrust, false);
   assert.equal(manifest.windowsSignerTrustMode, "private-pki");
+  const snsKeystreamSha256 = smokeElectronNodeWasm({
+    electronExecutable: runtime.application,
+    nativeRoot: path.join(runtime.root, "resources", "backend", "native"),
+  });
+  const snsBackendSmoke = smokePackagedBackendWasm({
+    backendExecutable: runtime.backend,
+    electronExecutable: runtime.application,
+    nativeRoot: path.join(runtime.root, "resources", "backend", "native"),
+  });
+  assert.equal(snsBackendSmoke.keystreamSha256, snsKeystreamSha256);
 
   const stdoutPath = path.join(tempRoot, "backend.out.log");
   const stderrPath = path.join(tempRoot, "backend.err.log");

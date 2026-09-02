@@ -93,6 +93,95 @@ class TestSnsMediaRouteWeFlowDefault(unittest.TestCase):
         self.assertEqual(resp.body, b"remote")
         self.assertEqual(resp.headers.get("X-SNS-Source"), "remote-decrypt")
 
+    def test_route_honors_zero_to_disable_media_cache(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            remote_resp = sns.Response(content=b"remote", media_type="image/jpeg")
+            with ExitStack() as stack:
+                stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._resolve_account_dir",
+                        return_value=account_dir,
+                    )
+                )
+                stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._resolve_account_wxid_dir",
+                        return_value=None,
+                    )
+                )
+                remote = stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._try_fetch_and_decrypt_sns_remote",
+                        return_value=remote_resp,
+                    )
+                )
+                response = asyncio.run(
+                    sns.get_sns_media(
+                        account="acc",
+                        url="https://mmsns.qpic.cn/sns/test/150",
+                        key="thumb-key",
+                        token="thumb-token",
+                        use_cache=0,
+                    )
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(remote.await_args.kwargs["use_cache"])
+
+    def test_only_full_variant_can_force_original_cdn_path(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            with ExitStack() as stack:
+                stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._resolve_account_dir",
+                        return_value=account_dir,
+                    )
+                )
+                stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._resolve_account_wxid_dir",
+                        return_value=None,
+                    )
+                )
+                remote = stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._try_fetch_and_decrypt_sns_remote",
+                        side_effect=[
+                            sns.Response(content=b"full", media_type="image/jpeg"),
+                            sns.Response(content=b"alias", media_type="image/jpeg"),
+                        ],
+                    )
+                )
+                full_response = asyncio.run(
+                    sns.get_sns_media(
+                        account="acc",
+                        url="https://mmsns.qpic.cn/sns/test/150",
+                        key="origin-key",
+                        token="origin-token",
+                        use_cache=0,
+                        variant="full",
+                    )
+                )
+                alias_response = asyncio.run(
+                    sns.get_sns_media(
+                        account="acc",
+                        url="https://mmsns.qpic.cn/sns/test/150",
+                        key="thumb-key",
+                        token="thumb-token",
+                        use_cache=0,
+                        variant="original",
+                    )
+                )
+
+        self.assertEqual(full_response.body, b"full")
+        self.assertTrue(remote.await_args_list[0].kwargs["force_original"])
+        self.assertEqual(alias_response.body, b"alias")
+        self.assertFalse(remote.await_args_list[1].kwargs.get("force_original", False))
+
     def test_heuristic_rejects_cache_files_far_from_post_time(self):
         with TemporaryDirectory() as td:
             account_dir = Path(td) / "acc"
@@ -394,6 +483,88 @@ class TestSnsMediaRouteWeFlowDefault(unittest.TestCase):
         self.assertIn("sns.media response:error", logs)
         self.assertIn('"result": "not-found"', logs)
         self.assertIn(f'"requestId": "{diagnostic_id}"', logs)
+
+    def test_route_reports_missing_wasm_runtime_as_503(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            with ExitStack() as stack:
+                stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._resolve_account_dir",
+                        return_value=account_dir,
+                    )
+                )
+                stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._resolve_account_wxid_dir",
+                        return_value=None,
+                    )
+                )
+                stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._try_fetch_and_decrypt_sns_remote",
+                        side_effect=sns._sns_media.SnsWasmRuntimeUnavailable("runtime unavailable"),
+                    )
+                )
+                with self.assertRaises(sns.HTTPException) as caught:
+                    asyncio.run(
+                        sns.get_sns_media(
+                            account="acc",
+                            url="https://mmsns.qpic.cn/sns/encrypted/150",
+                            key="image-key",
+                            token="thumb-token",
+                            use_cache=0,
+                        )
+                    )
+
+        self.assertEqual(caught.exception.status_code, 503)
+        self.assertTrue(
+            str((caught.exception.headers or {}).get("X-SNS-Diagnostic-Id") or "").startswith(
+                "sns-media-"
+            )
+        )
+
+    def test_route_reports_invalid_cdn_content_as_502(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "acc"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            with ExitStack() as stack:
+                stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._resolve_account_dir",
+                        return_value=account_dir,
+                    )
+                )
+                stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._resolve_account_wxid_dir",
+                        return_value=None,
+                    )
+                )
+                stack.enter_context(
+                    mock.patch(
+                        "wechat_decrypt_tool.routers.sns._try_fetch_and_decrypt_sns_remote",
+                        side_effect=sns._sns_media.SnsRemoteMediaDecodeError("invalid image"),
+                    )
+                )
+                with self.assertRaises(sns.HTTPException) as caught:
+                    asyncio.run(
+                        sns.get_sns_media(
+                            account="acc",
+                            url="https://mmsns.qpic.cn/sns/invalid/150",
+                            key="image-key",
+                            token="thumb-token",
+                            use_cache=0,
+                        )
+                    )
+
+        self.assertEqual(caught.exception.status_code, 502)
+        self.assertTrue(
+            str((caught.exception.headers or {}).get("X-SNS-Diagnostic-Id") or "").startswith(
+                "sns-media-"
+            )
+        )
 
 
 if __name__ == "__main__":
