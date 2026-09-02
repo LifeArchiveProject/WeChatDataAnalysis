@@ -118,6 +118,62 @@ class TestRequestLogRedaction(unittest.TestCase):
         self.assertNotIn("AES_SECRET", rendered)
         self.assertIn("db_storage_path=C%3A%5Cdb", rendered)
 
+    def test_uvicorn_access_filter_redacts_nested_remote_url(self):
+        from wechat_decrypt_tool.request_logging import SensitiveQueryLogFilter
+
+        record = logging.LogRecord(
+            "uvicorn.access",
+            logging.INFO,
+            __file__,
+            1,
+            '%s - "%s %s HTTP/%s" %d',
+            (
+                "127.0.0.1:1234",
+                "GET",
+                (
+                    "/api/sns/media?url=https%3A%2F%2Fmmsns.qpic.cn%2Fsns%2Fprivate%2F150%3Ftoken%3D"
+                    "NESTED_TOKEN&token=TOP_LEVEL_TOKEN&key=IMAGE_KEY"
+                ),
+                "1.1",
+                200,
+            ),
+            None,
+        )
+
+        self.assertTrue(SensitiveQueryLogFilter().filter(record))
+        rendered = record.getMessage()
+        self.assertNotIn("mmsns.qpic.cn", rendered)
+        self.assertNotIn("NESTED_TOKEN", rendered)
+        self.assertNotIn("TOP_LEVEL_TOKEN", rendered)
+        self.assertNotIn("IMAGE_KEY", rendered)
+        self.assertIn("url=<redacted>", rendered)
+
+    def test_http_client_dependency_request_logs_are_dropped(self):
+        from wechat_decrypt_tool.request_logging import SensitiveHttpClientLogFilter
+
+        dependency_record = logging.LogRecord(
+            "httpx",
+            logging.INFO,
+            __file__,
+            1,
+            "HTTP Request: GET https://mmsns.qpic.cn/sns/private/150?token=PRIVATE_TOKEN",
+            (),
+            None,
+        )
+        application_record = logging.LogRecord(
+            "wechat_decrypt_tool.sns_media",
+            logging.INFO,
+            __file__,
+            1,
+            "redacted diagnostic",
+            (),
+            None,
+        )
+
+        log_filter = SensitiveHttpClientLogFilter()
+        self.assertFalse(log_filter.filter(dependency_record))
+        self.assertTrue(log_filter.filter(application_record))
+
 
 if __name__ == "__main__":
     unittest.main()

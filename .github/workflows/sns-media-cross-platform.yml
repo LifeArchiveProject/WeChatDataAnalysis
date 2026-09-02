@@ -17,7 +17,9 @@ on:
       - "frontend/tests/sns-media-source.test.mjs"
       - "pyproject.toml"
       - "src/wechat_decrypt_tool/backend_entry.py"
+      - "src/wechat_decrypt_tool/logging_config.py"
       - "src/wechat_decrypt_tool/native/weflow_wasm/**"
+      - "src/wechat_decrypt_tool/request_logging.py"
       - "src/wechat_decrypt_tool/routers/sns.py"
       - "src/wechat_decrypt_tool/sns_export_service.py"
       - "src/wechat_decrypt_tool/sns_media.py"
@@ -25,6 +27,8 @@ on:
       - "tests/test_sns_media_route_weflow_default.py"
       - "tests/test_sns_media_url.py"
       - "tests/test_sns_video_thumbnail_proxy.py"
+      - "tests/test_request_log_redaction.py"
+      - "tests/test_logging_config_data_dir.py"
 
 permissions:
   contents: read
@@ -90,7 +94,9 @@ jobs:
           tests/test_sns_media_route_weflow_default.py
           tests/test_sns_media_url.py
           tests/test_sns_video_thumbnail_proxy.py
-          -k "not html_export"
+          tests/test_request_log_redaction.py
+          tests/test_logging_config_data_dir.py
+          -k "not html_export and not contacts_export_seal_request_logs_only_redacted_metadata"
 
       - name: Run frontend media source tests
         working-directory: frontend
