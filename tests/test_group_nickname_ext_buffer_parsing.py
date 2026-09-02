@@ -93,6 +93,50 @@ class TestGroupNicknameExtBufferParsing(unittest.TestCase):
             out = _load_group_nickname_map_from_contact_db(contact_db_path, chatroom, [username])
             self.assertEqual(out.get(username), display)
 
+    def test_field4_reference_does_not_steal_another_members_nickname(self):
+        chatroom = "demo3@chatroom"
+        first_username = "wxid_first_123456"
+        second_username = "wxid_second_123456"
+        first_display = "第一位群昵称"
+        second_display = "第二位群昵称"
+
+        first_inner = (
+            _enc_len(1, first_username.encode("utf-8"))
+            + _enc_len(2, first_display.encode("utf-8"))
+            + _enc_len(4, second_username.encode("utf-8"))
+        )
+        second_inner = _enc_len(1, second_username.encode("utf-8")) + _enc_len(
+            2, second_display.encode("utf-8")
+        )
+        ext_buffer = _member_entry(inner=first_inner) + _member_entry(inner=second_inner)
+
+        with TemporaryDirectory() as td:
+            contact_db_path = Path(td) / "contact.db"
+            conn = sqlite3.connect(str(contact_db_path))
+            try:
+                conn.execute(
+                    "CREATE TABLE chat_room(id INTEGER PRIMARY KEY, username TEXT, owner TEXT, ext_buffer BLOB)"
+                )
+                conn.execute(
+                    "INSERT INTO chat_room(id, username, owner, ext_buffer) VALUES (?, ?, ?, ?)",
+                    (1, chatroom, "", ext_buffer),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            out = _load_group_nickname_map_from_contact_db(
+                contact_db_path,
+                chatroom,
+                [second_username],
+            )
+            self.assertEqual(
+                out,
+                {
+                    second_username: second_display,
+                },
+            )
+
     def test_non_chatroom_returns_empty(self):
         with TemporaryDirectory() as td:
             contact_db_path = Path(td) / "contact.db"
