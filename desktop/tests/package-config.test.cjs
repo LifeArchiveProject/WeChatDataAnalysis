@@ -21,6 +21,28 @@ test("desktop package excludes the retired Koffi and WCDB sidecar runtime", () =
   assert.ok(packageJson.build.files.includes("!src/wcdb-sidecar.cjs"));
 });
 
+test("desktop package keeps Electron run-as-node enabled for the SNS WASM helper", () => {
+  assert.equal(packageJson.build.electronFuses?.runAsNode, true);
+  assert.equal(packageJson.build.electronFuses?.resetAdHocDarwinSignature, true);
+});
+
+test("SNS media CI covers Windows x64 and macOS arm64 without release secrets", () => {
+  const workflow = fs.readFileSync(
+    path.join(repoRoot, ".github", "workflows", "sns-media-cross-platform.yml"),
+    "utf8",
+  );
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /pull_request:/);
+  assert.match(workflow, /os:\s*windows-2022/);
+  assert.match(workflow, /arch:\s*x64/);
+  assert.match(workflow, /os:\s*macos-14/);
+  assert.match(workflow, /arch:\s*arm64/);
+  assert.match(workflow, /tests\/sns-wasm-runtime\.test\.cjs/);
+  assert.match(workflow, /tests\/sns-media-source\.test\.mjs/);
+  assert.match(workflow, /tests\/test_sns_media\.py/);
+  assert.doesNotMatch(workflow, /secrets\.|environment:\s*windows-private-pki-production/);
+});
+
 test("development launcher owns the Electron process tree directly", () => {
   const source = fs.readFileSync(path.join(desktopRoot, "scripts", "dev.cjs"), "utf8");
   assert.match(source, /const electronCommand = require\("electron"\);/);
@@ -108,6 +130,8 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
   assert.match(smokeSource, /wechatdb_broker\.exe/);
   assert.match(smokeSource, /\/api\/health/);
   assert.match(smokeSource, /smokeElectronApp/);
+  assert.match(smokeSource, /smokeElectronNodeWasm/);
+  assert.match(smokeSource, /smokePackagedBackendWasm/);
   assert.match(smokeSource, /AUTO_UPDATE_ENABLED:\s*"0"/);
 
   const workflow = fs

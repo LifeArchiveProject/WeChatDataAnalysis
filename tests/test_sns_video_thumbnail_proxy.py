@@ -18,23 +18,24 @@ class TestSnsVideoThumbnailProxy(unittest.TestCase):
         self.assertIn("return `${apiBase}/sns/media?${parts.toString()}`", media_url_block)
 
     def test_video_thumbnail_prefers_video_decryption_key(self):
+        source = (ROOT / "frontend" / "lib" / "sns-media-source.js").read_text(encoding="utf-8")
         page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
         media_url_block = page.split("const getSnsMediaUrl =", 1)[1].split(
             "const getMediaThumbSrc =", 1
         )[0]
 
-        self.assertRegex(
-            media_url_block,
-            re.compile(
-                r"const videoKey = Number\(m\?\.type \|\| 0\) === 6"
-                r"[\s\S]{0,160}String\(m\?\.videoKey \|\| ''\)\.trim\(\)"
-            ),
-        )
-        self.assertRegex(
-            media_url_block,
-            re.compile(r"isThumbRequest[\s\S]{0,100}\? \(videoKey \|\| m\?\.thumbKey"),
-        )
-        self.assertIn("parts.set('v', '14')", media_url_block)
+        self.assertIn("const isVideo = Number(value.type || 0) === 6", source)
+        self.assertRegex(source, re.compile(r"key: isVideo[\s\S]{0,120}value\.videoKey"))
+        self.assertIn("const key = String(selectedSource.key || '').trim()", media_url_block)
+        self.assertIn("parts.set('v', '15')", media_url_block)
+
+    def test_video_without_thumbnail_uses_placeholder_instead_of_image_route(self):
+        page = (ROOT / "frontend" / "pages" / "sns.vue").read_text(encoding="utf-8")
+        source = (ROOT / "frontend" / "lib" / "sns-media-source.js").read_text(encoding="utf-8")
+
+        self.assertIn("if (isVideo && !thumbnail.url)", source)
+        self.assertIn("kind: 'placeholder'", source)
+        self.assertIn("const selectedSource = selectSnsImageSource", page)
 
 
 if __name__ == "__main__":
