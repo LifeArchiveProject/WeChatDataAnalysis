@@ -79,7 +79,7 @@ test('朋友圈手动刷新启动全账号任务并可恢复、取消和无感�
   const source = await readFile(new URL('../pages/sns.vue', import.meta.url), 'utf8')
   const apiSource = await readFile(new URL('../composables/useApi.js', import.meta.url), 'utf8')
   const refresh = source.split('const refreshSnsData = async () => {', 2)[1]
-    .split('\n\nconst cancelSnsFullSync', 1)[0]
+    .split(/\r?\n\r?\nconst cancelSnsFullSync/, 1)[0]
 
   assert.match(apiSource, /const startSnsFullSync = async \(params = \{\}\) => \{[\s\S]*?\/sns\/realtime\/full_sync/)
   assert.match(apiSource, /const getSnsFullSyncStatus = async/)

@@ -1,9 +1,13 @@
 import asyncio
+import base64
 import hashlib
+import json
+import os
 import sys
 import threading
 import unittest
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -247,7 +251,9 @@ class TestSnsMedia(unittest.TestCase):
             account_dir = Path(td) / "acc"
             account_dir.mkdir(parents=True, exist_ok=True)
             with mock.patch.object(sns_media.logger, "info") as log_info:
-                result = asyncio.run(run(account_dir))
+                with self.assertRaises(sns_media.SnsRemoteMediaUpstreamError) as caught:
+                    asyncio.run(run(account_dir))
+                result = caught.exception
 
         rendered: list[str] = []
         for item in log_info.call_args_list:
@@ -260,7 +266,7 @@ class TestSnsMedia(unittest.TestCase):
                 rendered.append(" ".join(str(value) for value in args))
         logs = "\n".join(rendered)
 
-        self.assertIsNone(result)
+        self.assertIsInstance(result, sns_media.SnsRemoteMediaUpstreamError)
         self.assertIn("remote:download-error", logs)
         self.assertIn('"diagnosticId": "diag-http-400"', logs)
         self.assertIn('"errorType": "HTTPStatusError"', logs)
@@ -801,14 +807,34 @@ class TestSnsMedia(unittest.TestCase):
         finally:
             sns_media._WEFLOW_WASM_PROCESS.close()
 
-    def test_fix_sns_cdn_url_image_rewrites_150_and_appends_token(self):
+    def test_fix_sns_cdn_url_image_preserves_150_and_appends_token(self):
         u = "http://mmsns.qpic.cn/sns/abc/150"
         out = sns_media.fix_sns_cdn_url(u, token="tkn", is_video=False)
-        self.assertEqual(out, "https://mmsns.qpic.cn/sns/abc/0?token=tkn&idx=1")
+        self.assertEqual(out, "https://mmsns.qpic.cn/sns/abc/150?token=tkn&idx=1")
 
         u2 = "https://mmsns.qpic.cn/sns/abc/150?foo=bar"
         out2 = sns_media.fix_sns_cdn_url(u2, token="tkn", is_video=False)
-        self.assertEqual(out2, "https://mmsns.qpic.cn/sns/abc/0?foo=bar&token=tkn&idx=1")
+        self.assertEqual(out2, "https://mmsns.qpic.cn/sns/abc/150?foo=bar&token=tkn&idx=1")
+
+        out3 = sns_media.fix_sns_cdn_url(
+            u2,
+            token="origin-token",
+            is_video=False,
+            force_original=True,
+        )
+        self.assertEqual(out3, "https://mmsns.qpic.cn/sns/abc/0?foo=bar&token=origin-token&idx=1")
+
+    def test_fix_sns_cdn_url_preserves_all_thumbnail_size_variants(self):
+        for suffix in ("60", "150", "200", "480"):
+            with self.subTest(suffix=suffix):
+                out = sns_media.fix_sns_cdn_url(
+                    f"https://wxapp.tc.qq.com/sns/comment/{suffix}?foo=bar&idx=9",
+                    token="thumb-token",
+                )
+                self.assertEqual(
+                    out,
+                    f"https://wxapp.tc.qq.com/sns/comment/{suffix}?foo=bar&token=thumb-token&idx=1",
+                )
 
     def test_fix_sns_cdn_url_replaces_stale_token_and_idx(self):
         out = sns_media.fix_sns_cdn_url(
@@ -837,6 +863,89 @@ class TestSnsMedia(unittest.TestCase):
         u = "http://example.com/a/150?x=1"
         out = sns_media.fix_sns_cdn_url(u, token="tkn", is_video=False)
         self.assertEqual(out, u)
+
+    def test_cdn_capture_keeps_thumbnail_and_original_credentials_paired(self):
+        requests: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url))
+            return httpx.Response(200, content=b"\xff\xd8\xff\x00jpeg", request=request)
+
+        async def run(account_dir: Path) -> None:
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                await sns_media.try_fetch_and_decrypt_sns_image_remote(
+                    account_dir=account_dir,
+                    url="http://mmsns.qpic.cn/sns/pair/150?token=stale&idx=9&foo=bar",
+                    key="thumb-key",
+                    token="thumb-token",
+                    use_cache=False,
+                    client=client,
+                )
+                await sns_media.try_fetch_and_decrypt_sns_image_remote(
+                    account_dir=account_dir,
+                    url="https://mmsns.qpic.cn/sns/pair/150?foo=bar",
+                    key="origin-key",
+                    token="origin-token",
+                    use_cache=False,
+                    client=client,
+                    force_original=True,
+                )
+
+        with TemporaryDirectory() as td:
+            asyncio.run(run(Path(td)))
+
+        self.assertEqual(
+            requests,
+            [
+                "https://mmsns.qpic.cn/sns/pair/150?foo=bar&token=thumb-token&idx=1",
+                "https://mmsns.qpic.cn/sns/pair/0?foo=bar&token=origin-token&idx=1",
+            ],
+        )
+
+    def test_true_cdn_not_found_remains_a_miss(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, request=request)
+
+        async def run(account_dir: Path):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                return await sns_media.try_fetch_and_decrypt_sns_image_remote(
+                    account_dir=account_dir,
+                    url="https://mmsns.qpic.cn/sns/missing/150",
+                    key="thumb-key",
+                    token="thumb-token",
+                    use_cache=False,
+                    client=client,
+                )
+
+        with TemporaryDirectory() as td:
+            result = asyncio.run(run(Path(td)))
+        self.assertIsNone(result)
+
+    def test_export_source_selection_never_crosses_thumbnail_and_origin_credentials(self):
+        media = {
+            "url": "https://mmsns.qpic.cn/sns/pair/0",
+            "thumb": "https://mmsns.qpic.cn/sns/pair/150",
+            "urlAttrs": {"token": "origin-token", "key": "origin-key"},
+            "thumbAttrs": {"token": "thumb-token", "key": "thumb-key"},
+        }
+        self.assertEqual(
+            sns_export_service._sns_image_source(media, prefer_thumb=True),
+            (
+                "https://mmsns.qpic.cn/sns/pair/150",
+                "thumb-key",
+                "thumb-token",
+                False,
+            ),
+        )
+        self.assertEqual(
+            sns_export_service._sns_image_source(media, prefer_thumb=False),
+            (
+                "https://mmsns.qpic.cn/sns/pair/0",
+                "origin-key",
+                "origin-token",
+                True,
+            ),
+        )
 
     def test_maybe_decrypt_sns_video_file_xors_inplace(self):
         # Build a fake MP4 header (ftyp at offset 4) and encrypt it by XORing with a keystream.
@@ -1005,7 +1114,7 @@ class TestSnsMedia(unittest.TestCase):
         self.assertEqual(res.x_enc, "1")
         self.assertEqual(res.payload, decoded)
 
-    def test_try_fetch_and_decrypt_sns_image_remote_decrypt_failure_returns_none(self):
+    def test_try_fetch_and_decrypt_sns_image_remote_decrypt_failure_is_502_class(self):
         raw = b"\x01\x02\x03\x04not_an_image"
         decoded_bad = b"\x00\x00\x00\x00still_bad"
 
@@ -1018,17 +1127,87 @@ class TestSnsMedia(unittest.TestCase):
 
             with mock.patch("wechat_decrypt_tool.sns_media._download_sns_remote_bytes", side_effect=fake_download):
                 with mock.patch("wechat_decrypt_tool.sns_media.weflow_decrypt_sns_image_bytes", return_value=decoded_bad):
-                    res = asyncio.run(
-                        sns_media.try_fetch_and_decrypt_sns_image_remote(
-                            account_dir=account_dir,
-                            url="https://mmsns.qpic.cn/sns/test/0",
-                            key="123",
-                            token="tkn",
-                            use_cache=False,
+                    with self.assertRaises(sns_media.SnsRemoteMediaDecodeError):
+                        asyncio.run(
+                            sns_media.try_fetch_and_decrypt_sns_image_remote(
+                                account_dir=account_dir,
+                                url="https://mmsns.qpic.cn/sns/test/0",
+                                key="123",
+                                token="tkn",
+                                use_cache=False,
+                            )
                         )
-                    )
 
-        self.assertIsNone(res)
+    def test_fixed_encrypted_jpeg_fixture_uses_real_wasm_helper(self):
+        fixture_path = (
+            ROOT
+            / "src"
+            / "wechat_decrypt_tool"
+            / "native"
+            / "weflow_wasm"
+            / "sns_image_fixture.json"
+        )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        encrypted = base64.b64decode(fixture["encryptedBase64"])
+        sns_media.weflow_wxisaac64_keystream.cache_clear()
+        sns_media._resolve_weflow_node_runtime.cache_clear()
+        sns_media._WEFLOW_WASM_PROCESS.close()
+        try:
+            decoded = sns_media.weflow_decrypt_sns_image_bytes(encrypted, fixture["key"])
+            keystream = sns_media.weflow_wxisaac64_keystream(
+                fixture["key"], fixture["size"]
+            )
+        finally:
+            sns_media._WEFLOW_WASM_PROCESS.close()
+        self.assertEqual(decoded[:4].hex(), fixture["plaintextMagicHex"])
+        self.assertEqual(sns_media.detect_image_mime(decoded), "image/jpeg")
+        self.assertEqual(hashlib.sha256(decoded).hexdigest(), fixture["plaintextSha256"])
+        self.assertEqual(hashlib.sha256(keystream).hexdigest(), fixture["keystreamSha256"])
+
+    def test_explicit_electron_runtime_has_priority_and_is_scoped_to_helper(self):
+        sns_media._resolve_weflow_node_runtime.cache_clear()
+        executable = str(Path(sys.executable).resolve())
+        with mock.patch.dict(
+            os.environ,
+            {
+                "WECHAT_TOOL_NODE_EXECUTABLE": executable,
+                "WECHAT_TOOL_NODE_MODE": "electron-run-as-node",
+            },
+            clear=False,
+        ):
+            with mock.patch.object(sns_media.shutil, "which") as which:
+                resolved = sns_media._resolve_weflow_node_runtime()
+        which.assert_not_called()
+        self.assertEqual(resolved, (executable, "electron-run-as-node", "electron-node-wasm"))
+
+    def test_missing_runtime_raises_without_python_isaac64_fallback(self):
+        sns_media.weflow_wxisaac64_keystream.cache_clear()
+        sns_media._resolve_weflow_node_runtime.cache_clear()
+        sns_media._WEFLOW_WASM_PROCESS.close()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(sns_media.shutil, "which", return_value=None):
+                with self.assertRaises(sns_media.SnsWasmRuntimeUnavailable):
+                    sns_media.weflow_wxisaac64_keystream("123", 16)
+
+    def test_real_wasm_helper_concurrent_requests_do_not_cross_response_ids(self):
+        sns_media.weflow_wxisaac64_keystream.cache_clear()
+        sns_media._resolve_weflow_node_runtime.cache_clear()
+        sns_media._WEFLOW_WASM_PROCESS.close()
+        requests = [(str(10_000 + index), 37 + index) for index in range(8)]
+        try:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                results = list(
+                    pool.map(
+                        lambda item: sns_media.weflow_wxisaac64_keystream(*item),
+                        requests,
+                    )
+                )
+            process = sns_media._WEFLOW_WASM_PROCESS._process
+            self.assertIsNotNone(process)
+        finally:
+            sns_media._WEFLOW_WASM_PROCESS.close()
+        self.assertEqual([len(value) for value in results], [size for _, size in requests])
+        self.assertEqual(len({hashlib.sha256(value).hexdigest() for value in results}), len(results))
 
 
 if __name__ == "__main__":

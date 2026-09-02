@@ -110,7 +110,12 @@ class SnsPrefetchedImage:
 
 def _sns_remote_media_task_id(task: SnsRemoteMediaTask) -> str:
     is_video = task.kind == "video"
-    fixed = _fix_sns_cdn_url(task.url, token=task.token, is_video=is_video)
+    fixed = _fix_sns_cdn_url(
+        task.url,
+        token=task.token,
+        is_video=is_video,
+        force_original=bool(task.require_original and not is_video),
+    )
     return f"{task.kind}|{_normalize_sns_cache_url(fixed)}"
 
 
@@ -192,6 +197,7 @@ async def _prefetch_sns_remote_media(
                             url=task.url,
                             key=task.key,
                             token=task.token,
+                            force_original=task.require_original,
                         )
 
                 if task.kind == "image" and cached is not None and not _sns_cached_image_meets_task_size(cached, task):
@@ -226,6 +232,7 @@ async def _prefetch_sns_remote_media(
                             token=task.token,
                             use_cache=use_cache and not force_refresh,
                             client=http_client,
+                            force_original=task.require_original,
                         )
                     if task.kind == "image" and fetched is not None and not _sns_cached_image_meets_task_size(fetched, task):
                         fetched = None
@@ -247,7 +254,15 @@ async def _prefetch_sns_remote_media(
             except Exception as exc:
                 result.failed += 1
                 result.missing.append(task_id)
-                logger.info("sns media prefetch failed: kind=%s url=%s error=%s", task.kind, task.url, exc)
+                url_identity = hashlib.sha256(
+                    _normalize_sns_cache_url(task.url).encode("utf-8", errors="ignore")
+                ).hexdigest()[:16]
+                logger.info(
+                    "sns media prefetch failed: kind=%s urlIdentity=%s errorType=%s",
+                    task.kind,
+                    url_identity,
+                    type(exc).__name__,
+                )
             finally:
                 completed += 1
                 if on_progress is not None:
@@ -680,30 +695,24 @@ def _sns_image_source(
                 media.get("thumbKey"),
                 media.get("thumb_key"),
                 thumb_attrs.get("key"),
-                media.get("key"),
-                url_attrs.get("key"),
             ),
             _pick_sns_media_str(
                 media.get("thumbToken"),
                 media.get("thumbUrlToken"),
                 media.get("thumb_url_token"),
                 thumb_attrs.get("token"),
-                media.get("token"),
-                url_attrs.get("token"),
             ),
             False,
         )
 
     return (
         original_url,
-        _pick_sns_media_str(media.get("key"), url_attrs.get("key"), media.get("thumbKey"), thumb_attrs.get("key")),
+        _pick_sns_media_str(media.get("key"), url_attrs.get("key")),
         _pick_sns_media_str(
             media.get("token"),
             media.get("urlToken"),
             media.get("url_token"),
             url_attrs.get("token"),
-            media.get("thumbToken"),
-            thumb_attrs.get("token"),
         ),
         True,
     )
@@ -2047,7 +2056,12 @@ class SnsExportManager:
             if not raw_url:
                 return ""
 
-            fixed = _fix_sns_cdn_url(raw_url, token=token, is_video=False)
+            fixed = _fix_sns_cdn_url(
+                raw_url,
+                token=token,
+                is_video=False,
+                force_original=source_is_original,
+            )
 
             post_id = str(post.get("id") or post.get("tid") or "").strip()
             media_id = str(m.get("id") or "").strip()
@@ -2108,6 +2122,7 @@ class SnsExportManager:
                     url=fixed,
                     key=str(key or ""),
                     token=str(token or ""),
+                    force_original=source_is_original,
                 )
                 if cached_remote is not None and _sns_cached_image_meets_task_size(cached_remote, task):
                     payload = bytes(cached_remote.payload or b"")
@@ -2125,6 +2140,7 @@ class SnsExportManager:
                         key=str(key or ""),
                         token=str(token or ""),
                         use_cache=use_cache,
+                        force_original=source_is_original,
                     )
                 )
                 if res is not None and _sns_cached_image_meets_task_size(res, task):

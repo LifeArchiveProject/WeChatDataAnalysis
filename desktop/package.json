@@ -38,6 +38,10 @@
     },
     "afterPack": "scripts/after-pack.cjs",
     "afterSign": "scripts/after-sign.cjs",
+    "electronFuses": {
+      "runAsNode": true,
+      "resetAdHocDarwinSignature": true
+    },
     "files": [
       "src/**/*",
       "!src/wcdb-sidecar.cjs",

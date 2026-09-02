@@ -1140,6 +1140,8 @@ import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
 import { parseTextWithEmoji } from '~/lib/wechat-emojis'
 import { SNS_SETTING_USE_CACHE_KEY, readLocalBoolSetting } from '~/lib/desktop-settings'
+import { reportServerErrorFromError, reportServerErrorFromResponse } from '~/lib/server-error-logging'
+import { selectSnsImageSource } from '~/lib/sns-media-source'
 
 useHead({ title: '朋友圈 - 微信数据分析助手' })
 
@@ -2050,6 +2052,12 @@ const saveSnsExportToSelectedFolder = async (options = {}) => {
     }
     const response = await fetch(getSnsExportDownloadUrl(exportId))
     if (!response.ok) {
+      await reportServerErrorFromResponse(response, {
+        method: 'GET',
+        requestUrl: getSnsExportDownloadUrl(exportId),
+        message: `\u4e0b\u8f7d\u5bfc\u51fa\u6587\u4ef6\u5931\u8d25\uff08${response.status}\uff09`,
+        source: 'sns.exportDownload'
+      })
       throw new Error(`\u4e0b\u8f7d\u5bfc\u51fa\u6587\u4ef6\u5931\u8d25\uff08${response.status}\uff09`)
     }
     exportSaveBytesTotal.value = asNumber(response.headers.get('Content-Length'))
@@ -2292,8 +2300,14 @@ const loadSelfInfo = async () => {
       const unchanged = Object.keys(resp).every((key) => resp[key] === selfInfo.value?.[key])
       if (!unchanged) selfInfo.value = resp
     }
-  } catch {
-    console.error('[sns.self-info] status=error phase=load')
+  } catch (e) {
+    await reportServerErrorFromError(e, {
+      method: 'GET',
+      requestUrl,
+      source: 'sns.loadSelfInfo',
+      apiBase,
+    })
+    console.error('获取个人信息失败', e)
   }
 }
 
@@ -2327,7 +2341,7 @@ const loadSnsUsers = async ({ preserveExisting = false } = {}) => {
     for (const item of nextByUsername.values()) merged.push(item)
     snsUsers.value = merged
   } catch (e) {
-    console.error('[sns.users] status=error phase=load')
+    console.error('加载朋友圈联系人失败', e)
     // 后台刷新失败时保留已显示的联系人，避免侧边栏闪空。
   }
 }
@@ -2603,7 +2617,7 @@ const onCopyPostTextClick = async () => {
     const ok = await copyTextToClipboard(text)
     if (!ok) showErrorAlert('复制失败：无法写入剪贴板')
   } catch (e) {
-    console.error('[sns.copy] status=error phase=clipboard-write')
+    console.error('复制失败:', e)
     showErrorAlert('复制失败')
   } finally {
     closeContextMenu()
@@ -2621,7 +2635,7 @@ const onCopyPostJsonClick = async () => {
     const ok = await copyTextToClipboard(json)
     if (!ok) showErrorAlert('复制失败：无法写入剪贴板')
   } catch (e) {
-    console.error('[sns.copy] status=error phase=clipboard-write')
+    console.error('复制失败:', e)
     showErrorAlert('复制失败')
   } finally {
     closeContextMenu()
@@ -2707,10 +2721,11 @@ const mediaSizeGroupIndex = (post, m, idx) => {
 }
 
 const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
-  const raw = upgradeTencentHttps(String(rawUrl || '').trim())
+  const preferFull = !!options?.preferFull
+  const selectedSource = selectSnsImageSource(m, rawUrl, { preferFull })
+  const raw = upgradeTencentHttps(String(selectedSource.url || '').trim())
   if (!raw) return ''
   const rawLower = raw.toLowerCase()
-  const preferFull = !!options?.preferFull
 
   // If backend already provides a local media endpoint, rewrite it to the effective API base
   // (so web builds with a custom API port still work).
@@ -2721,8 +2736,7 @@ const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
   if (/^https?:\/\//i.test(raw)) {
     try {
       const host = new URL(raw).hostname.toLowerCase()
-      const thumbCandidate = String(m?.thumb || m?.thumbUrl || '').trim()
-      const isThumbRequest = (!preferFull) && !!thumbCandidate && raw === upgradeTencentHttps(thumbCandidate)
+      const isThumbRequest = selectedSource.kind === 'thumbnail'
       if (
         host.endsWith('.qpic.cn')
         || host.endsWith('.qlogo.cn')
@@ -2762,32 +2776,19 @@ const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
         const mediaType = String(m?.type || '2').trim()
         if (mediaType) parts.set('media_type', mediaType)
 
-        const token = String(
-          isThumbRequest
-            ? (m?.thumbToken || m?.thumbUrlToken || m?.thumbAttrs?.token || m?.token || m?.urlAttrs?.token || '')
-            : (m?.token || m?.urlAttrs?.token || m?.thumbToken || m?.thumbUrlToken || m?.thumbAttrs?.token || '')
-        ).trim()
+        const token = String(selectedSource.token || '').trim()
         if (token) parts.set('token', token)
 
-        // 视频封面与视频本体共用 `<enc key="...">` 里的 videoKey；
-        // thumbAttrs.key 常见值为 "0"，不能用于解密加密封面。
-        const videoKey = Number(m?.type || 0) === 6
-          ? String(m?.videoKey || '').trim()
-          : ''
-        const key = String(
-          isThumbRequest
-            ? (videoKey || m?.thumbKey || m?.thumbAttrs?.key || m?.key || m?.urlAttrs?.key || '')
-            : (videoKey || m?.key || m?.urlAttrs?.key || m?.thumbKey || m?.thumbAttrs?.key || '')
-        ).trim()
+        const key = String(selectedSource.key || '').trim()
         if (key) parts.set('key', key)
 
         parts.set('use_cache', snsUseCache.value ? '1' : '0')
         // When cache is disabled, bust browser caching so backend really downloads+decrypts each time.
         if (!snsUseCache.value) parts.set('_t', String(Date.now()))
         if (md5) parts.set('md5', md5)
-        if (preferFull) parts.set('variant', 'full')
+        if (selectedSource.variant === 'full') parts.set('variant', 'full')
         // 修改后端媒体匹配逻辑时递增版本号，避免浏览器复用旧的错误缓存。
-        parts.set('v', '14')
+        parts.set('v', '15')
         parts.set('url', raw)
         return `${apiBase}/sns/media?${parts.toString()}`
       }
@@ -2798,11 +2799,14 @@ const getSnsMediaUrl = (post, m, idx, rawUrl, options = {}) => {
 }
 
 const getMediaThumbSrc = (post, m, idx = 0) => {
-  return getSnsMediaUrl(post, m, idx, m?.thumb || m?.url)
+  const source = selectSnsImageSource(m, '', { preferFull: false })
+  return getSnsMediaUrl(post, m, idx, source.url)
 }
 
 const getMediaPreviewSrc = (post, m, idx = 0) => {
-  return getSnsMediaUrl(post, m, idx, m?.url || m?.originUrl || m?.originalUrl || m?.thumb || m?.thumbUrl, { preferFull: true })
+  const source = selectSnsImageSource(m, '', { preferFull: true })
+  if (!source.url) return getMediaThumbSrc(post, m, idx)
+  return getSnsMediaUrl(post, m, idx, source.url, { preferFull: source.variant === 'full' })
 }
 
 const inferSnsDownloadExt = (blob, url, isVideo = false) => {
@@ -2900,14 +2904,14 @@ const getCommentImages = (comment) => {
 
 const toCommentImageMedia = (img) => {
   if (!img || typeof img !== 'object') return null
-  const thumb = String(img.thumb || img.thumbUrl || img.thumb_url || img.url || '').trim()
-  const url = String(img.url || img.originUrl || img.origin_url || thumb || '').trim()
+  const thumb = String(img.thumb || img.thumbUrl || img.thumb_url || '').trim()
+  const url = String(img.url || img.originUrl || img.origin_url || '').trim()
   const mediaId = String(img.id || img.mediaId || img.media_id || '').trim()
   const md5 = String(img.md5 || '').trim()
   const token = String(img.token || img.urlToken || img.url_token || '').trim()
   const key = String(img.key || '').trim()
-  const thumbToken = String(img.thumbToken || img.thumbUrlToken || img.thumb_url_token || token || '').trim()
-  const thumbKey = String(img.thumbKey || img.thumb_key || key || '').trim()
+  const thumbToken = String(img.thumbToken || img.thumbUrlToken || img.thumb_url_token || '').trim()
+  const thumbKey = String(img.thumbKey || img.thumb_key || '').trim()
   const width = Number(img.width || img.size?.width || 0) || 0
   const height = Number(img.height || img.size?.height || 0) || 0
   const totalSize = Number(img.fileSize || img.file_size || img.size?.totalSize || img.size?.total_size || 0) || 0
@@ -3895,7 +3899,7 @@ const mergeVisiblePostsWindow = async (windowRange = getSnsVisibleReconcileWindo
     scheduleSnsVisibleWindowUpdate()
     return true
   } catch (e) {
-    console.warn('[sns.timeline] status=error phase=viewport-merge')
+    console.warn('合并朋友圈浮动窗口失败', e)
     return false
   }
 }
@@ -4198,7 +4202,7 @@ const queueSnsRealtimeReconcile = (eventPayload) => {
         if (account === String(selectedAccount.value || '').trim()) {
           syncWarning.value = describeSnsSyncFailure(e)
         }
-        console.warn('[sns.incremental-sync] status=error phase=viewport-reconcile')
+        console.warn('朋友圈事件对账失败，继续使用本地快照', e)
       }
     }
     return changed
