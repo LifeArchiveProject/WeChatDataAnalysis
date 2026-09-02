@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .request_logging import SensitiveQueryLogFilter
+from .request_logging import SensitiveHttpClientLogFilter, SensitiveQueryLogFilter
 
 
 _SAFE_RUNTIME_TOKEN_RE = re.compile(r"[^A-Za-z0-9._+-]+")
@@ -211,6 +211,7 @@ class WeChatLogger:
         file_handler = RecreatingFileHandler(self.log_file, encoding='utf-8')
         file_handler.setFormatter(file_formatter)
         file_handler.setLevel(level)
+        file_handler.addFilter(SensitiveHttpClientLogFilter())
 
         # 控制台处理器
         console_handler = None
@@ -218,6 +219,13 @@ class WeChatLogger:
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setFormatter(console_formatter)
             console_handler.setLevel(level)
+            console_handler.addFilter(SensitiveHttpClientLogFilter())
+
+        # httpx/httpcore INFO and DEBUG messages include complete request URLs.
+        # SNS code emits its own redacted diagnostics, so dependency request
+        # logging is both redundant and unsafe even when debug logging is enabled.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
         
         # 配置根日志器
         root_logger.setLevel(level)

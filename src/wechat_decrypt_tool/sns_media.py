@@ -28,6 +28,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -41,6 +42,22 @@ logger = get_logger(__name__)
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _NATIVE_DIR = _PACKAGE_DIR / "native"
 _WEFLOW_WASM_DIR = _NATIVE_DIR / "weflow_wasm"
+
+
+class SnsWasmRuntimeUnavailable(RuntimeError):
+    """Raised when the authoritative WxIsaac64 WASM runtime cannot be started."""
+
+
+class SnsRemoteMediaUpstreamError(RuntimeError):
+    """Raised when Tencent CDN fails for a request that is not a real 404."""
+
+    def __init__(self, message: str, *, status_code: int = 0) -> None:
+        super().__init__(message)
+        self.status_code = int(status_code or 0)
+
+
+class SnsRemoteMediaDecodeError(RuntimeError):
+    """Raised when the CDN returned bytes but they cannot be decoded as requested media."""
 
 
 def is_allowed_sns_media_host(host: str) -> bool:
@@ -107,6 +124,18 @@ def _sns_remote_diagnostic_log(
             if stable_url
             else ""
         ),
+        "sizeSuffix": _sns_cdn_size_suffix(raw_url),
+        "mediaSource": _sns_cdn_media_source(raw_url),
+        "tokenHash": (
+            hashlib.sha256(str(token).encode("utf-8", errors="ignore")).hexdigest()[:16]
+            if str(token or "")
+            else ""
+        ),
+        "keyHash": (
+            hashlib.sha256(str(key).encode("utf-8", errors="ignore")).hexdigest()[:16]
+            if str(key or "")
+            else ""
+        ),
         **fields,
     }
 
@@ -133,11 +162,36 @@ def _sns_remote_diagnostic_log(
     )
 
 
-def fix_sns_cdn_url(url: str, *, token: str = "", is_video: bool = False) -> str:
+def _sns_cdn_size_suffix(url: str) -> str:
+    try:
+        match = re.search(r"/(0|60|150|200|480)$", str(urlparse(str(url or "")).path or ""))
+        return str(match.group(1) or "") if match else ""
+    except Exception:
+        return ""
+
+
+def _sns_cdn_media_source(url: str) -> str:
+    suffix = _sns_cdn_size_suffix(url)
+    if suffix == "0":
+        return "origin"
+    if suffix in {"60", "150", "200", "480"}:
+        return "thumbnail"
+    return "video-or-unknown"
+
+
+def fix_sns_cdn_url(
+    url: str,
+    *,
+    token: str = "",
+    is_video: bool = False,
+    force_original: bool = False,
+) -> str:
     """WeFlow-compatible SNS CDN URL normalization.
 
     - Force https for Tencent CDNs.
-    - For images, replace `/150`, `/200`, `/480` with `/0` to request the original.
+    - Preserve image size variants by default because Tencent binds `/60`, `/150`,
+      `/200`, `/480`, and `/0` to their matching credentials.
+    - Only an explicit original-image request may replace a size suffix with `/0`.
     - If token is provided, replace stale token/idx parameters with the current values.
     """
     u = html.unescape(str(url or "")).strip()
@@ -156,9 +210,8 @@ def fix_sns_cdn_url(url: str, *, token: str = "", is_video: bool = False) -> str
     # http -> https
     u = re.sub(r"^http://", "https://", u, flags=re.I)
 
-    # /150|/200|/480 -> /0 (image only; matches WeFlow's original-image request behavior).
-    if not is_video:
-        u = re.sub(r"/(?:150|200|480)(?=($|\?))", "/0", u)
+    if force_original and not is_video:
+        u = re.sub(r"/(?:60|150|200|480)(?=($|\?))", "/0", u)
 
     tok = str(token or "").strip()
     if tok:
@@ -209,19 +262,37 @@ class _WeflowWasmProcess:
         self._process: Optional[subprocess.Popen[str]] = None
         self._responses: queue.Queue[Optional[dict[str, object]]] = queue.Queue()
         self._request_id = 0
+        self._runtime_signature: tuple[str, str, str] | None = None
 
-    def _start_locked(self, script: str) -> subprocess.Popen[str]:
+    def _start_locked(
+        self,
+        script: str,
+        executable: str,
+        mode: str,
+        provider: str,
+    ) -> subprocess.Popen[str]:
         process = self._process
-        if process is not None and process.poll() is None:
+        signature = (executable, mode, script)
+        if process is not None and process.poll() is None and self._runtime_signature == signature:
             return process
+        if process is not None:
+            self._stop_locked()
 
         responses: queue.Queue[Optional[dict[str, object]]] = queue.Queue()
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        helper_env = os.environ.copy()
+        if mode == "electron-run-as-node":
+            helper_env["ELECTRON_RUN_AS_NODE"] = "1"
+        else:
+            # This variable is scoped to the Electron helper only. A global value
+            # would turn the desktop main process itself into a Node process.
+            helper_env.pop("ELECTRON_RUN_AS_NODE", None)
         process = subprocess.Popen(
-            ["node", script, "--stdio"],
+            [executable, script, "--stdio"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            env=helper_env,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -251,11 +322,36 @@ class _WeflowWasmProcess:
         ).start()
         self._responses = responses
         self._process = process
+        self._runtime_signature = signature
+        logger.info(
+            "[sns_media] %s",
+            json.dumps(
+                {
+                    "event": "keystream:helper-started",
+                    "keystreamProvider": provider,
+                    "runtimeMode": mode,
+                    "runtimeIdentity": hashlib.sha256(
+                        executable.encode("utf-8", errors="ignore")
+                    ).hexdigest()[:16],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
         return process
 
-    def generate(self, script: str, key: str, size: int) -> bytes:
+    def generate(
+        self,
+        script: str,
+        key: str,
+        size: int,
+        *,
+        executable: str,
+        mode: str,
+        provider: str,
+    ) -> bytes:
         with self._lock:
-            process = self._start_locked(script)
+            process = self._start_locked(script, executable, mode, provider)
             assert process.stdin is not None
             self._request_id += 1
             request_id = self._request_id
@@ -286,6 +382,7 @@ class _WeflowWasmProcess:
     def _stop_locked(self) -> None:
         process = self._process
         self._process = None
+        self._runtime_signature = None
         if process is None:
             return
         try:
@@ -316,28 +413,57 @@ _WEFLOW_WASM_PROCESS = _WeflowWasmProcess()
 atexit.register(_WEFLOW_WASM_PROCESS.close)
 
 
+@lru_cache(maxsize=1)
+def _resolve_weflow_node_runtime() -> tuple[str, str, str]:
+    """Resolve the helper runtime without depending on a desktop user's shell PATH."""
+    configured = str(os.environ.get("WECHAT_TOOL_NODE_EXECUTABLE") or "").strip()
+    configured_mode = str(os.environ.get("WECHAT_TOOL_NODE_MODE") or "").strip().lower()
+    if configured:
+        executable = Path(configured)
+        if not executable.is_absolute() or not executable.exists() or not executable.is_file():
+            raise SnsWasmRuntimeUnavailable(
+                "Configured Electron/Node runtime is unavailable."
+            )
+        mode = configured_mode or "node"
+        if mode not in {"node", "electron-run-as-node"}:
+            raise SnsWasmRuntimeUnavailable("Configured Electron/Node runtime mode is invalid.")
+        provider = "electron-node-wasm" if mode == "electron-run-as-node" else "node-wasm"
+        return str(executable), mode, provider
+
+    # Source/dev mode is the only path allowed to consult PATH. Packaged desktop
+    # launches always provide the absolute Electron executable above.
+    executable = str(shutil.which("node") or "").strip()
+    if not executable:
+        raise SnsWasmRuntimeUnavailable(
+            "WxIsaac64 requires the bundled Electron runtime or a source-mode Node executable."
+        )
+    return executable, "node", "node-wasm"
+
+
 @lru_cache(maxsize=64)
 def weflow_wxisaac64_keystream(key: str, size: int) -> bytes:
-    """Generate keystream via WeFlow's WASM (preferred; matches real video decryption)."""
+    """Generate the authoritative WxIsaac64 keystream through the vendored WASM."""
     key_text = str(key or "").strip()
     if not key_text or size <= 0:
         return b""
 
-    # WeFlow is the source-of-truth; use its WASM first, then fall back to our pure-python ISAAC64.
     script = _weflow_wxisaac64_script_path()
-    if script:
-        try:
-            return _WEFLOW_WASM_PROCESS.generate(script, key_text, int(size))
-        except Exception:
-            pass
-
-    # Fallback: pure python ISAAC64 (best-effort; may not match WxIsaac64 for all versions).
-    from .isaac64 import Isaac64  # pylint: disable=import-outside-toplevel
-
-    want = int(size)
-    # ISAAC64 generates 8-byte words; generate enough and slice.
-    size8 = ((want + 7) // 8) * 8
-    return Isaac64(key_text).generate_keystream(size8)[:want]
+    if not script:
+        raise SnsWasmRuntimeUnavailable("Vendored WxIsaac64 WASM helper is unavailable.")
+    executable, mode, provider = _resolve_weflow_node_runtime()
+    try:
+        return _WEFLOW_WASM_PROCESS.generate(
+            script,
+            key_text,
+            int(size),
+            executable=executable,
+            mode=mode,
+            provider=provider,
+        )
+    except SnsWasmRuntimeUnavailable:
+        raise
+    except Exception as exc:
+        raise SnsWasmRuntimeUnavailable("WxIsaac64 WASM helper failed.") from exc
 
 
 _SNS_REMOTE_VIDEO_CACHE_EXTS = [
@@ -432,6 +558,7 @@ async def _download_sns_remote_to_file(
     *,
     max_bytes: int,
     client: Optional[httpx.AsyncClient] = None,
+    response_meta: Optional[dict[str, object]] = None,
 ) -> tuple[str, str]:
     """Download SNS media to file (streaming) from Tencent CDN.
 
@@ -480,6 +607,15 @@ async def _download_sns_remote_to_file(
                     if total > max_bytes:
                         raise HTTPException(status_code=400, detail="SNS video too large.")
                     f.write(chunk)
+            if response_meta is not None:
+                response_meta.update(
+                    {
+                        "upstreamStatus": int(resp.status_code),
+                        "responseBytes": int(total),
+                        "contentType": content_type,
+                        "xEnc": x_enc,
+                    }
+                )
         return content_type, x_enc
 
     if client is not None:
@@ -509,34 +645,32 @@ def maybe_decrypt_sns_video_file(path: Path, key: str) -> bool:
     if decrypt_size <= 0:
         return False
 
-    try:
-        with path.open("r+b") as f:
-            head = f.read(8)
-            if _detect_mp4_ftyp(head):
-                return False
+    with path.open("r+b") as f:
+        head = f.read(8)
+        if _detect_mp4_ftyp(head):
+            return False
 
-            f.seek(0)
-            buf = bytearray(f.read(decrypt_size))
-            if not buf:
-                return False
+        f.seek(0)
+        buf = bytearray(f.read(decrypt_size))
+        if not buf:
+            return False
 
-            ks = weflow_wxisaac64_keystream(key_text, decrypt_size)
-            n = min(len(buf), len(ks))
-            for i in range(n):
-                buf[i] ^= ks[i]
+        ks = weflow_wxisaac64_keystream(key_text, decrypt_size)
+        n = min(len(buf), len(ks))
+        for i in range(n):
+            buf[i] ^= ks[i]
 
-            f.seek(0)
-            f.write(buf)
-            f.flush()
+        f.seek(0)
+        f.write(buf)
+        f.flush()
 
-            f.seek(0)
-            head2 = f.read(8)
-            if _detect_mp4_ftyp(head2):
-                return True
-            # Still return True to indicate we mutated bytes; caller may treat as failure if desired.
+        f.seek(0)
+        head2 = f.read(8)
+        if _detect_mp4_ftyp(head2):
             return True
-    except Exception:
-        return False
+        raise SnsRemoteMediaDecodeError(
+            "SNS video bytes are invalid after WASM decryption."
+        )
 
 
 async def materialize_sns_remote_video(
@@ -547,6 +681,7 @@ async def materialize_sns_remote_video(
     token: str,
     use_cache: bool,
     client: Optional[httpx.AsyncClient] = None,
+    diagnostic_id: str = "",
 ) -> Optional[Path]:
     """Download SNS video from CDN, decrypt (if needed), and return a local mp4 path."""
     fixed_url = fix_sns_cdn_url(str(url or ""), token=str(token or ""), is_video=True)
@@ -568,22 +703,70 @@ async def materialize_sns_remote_video(
     # Download to a temp file first.
     cache_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = cache_dir / f"{cache_stem}.mp4.{time.time_ns()}.tmp"
+    response_meta: dict[str, object] = {}
     try:
         await _download_sns_remote_to_file(
             fixed_url,
             tmp_path,
             max_bytes=200 * 1024 * 1024,
             client=client,
+            response_meta=response_meta,
         )
-    except Exception:
+    except Exception as exc:
         try:
             tmp_path.unlink(missing_ok=True)
         except Exception:
             pass
-        return None
+        response = getattr(exc, "response", None)
+        upstream_status = int(getattr(response, "status_code", 0) or 0)
+        _sns_remote_diagnostic_log(
+            "video:download-error",
+            url=fixed_url,
+            diagnostic_id=diagnostic_id,
+            key=key,
+            token=token,
+            error=exc,
+            upstreamStatus=upstream_status,
+            responseBytes=0,
+        )
+        if upstream_status == 404:
+            return None
+        if isinstance(exc, HTTPException):
+            raise
+        raise SnsRemoteMediaUpstreamError(
+            "SNS video CDN request failed.",
+            status_code=upstream_status,
+        ) from exc
 
     # Decrypt in-place if the file isn't already a mp4.
-    await asyncio.to_thread(maybe_decrypt_sns_video_file, tmp_path, str(key or ""))
+    try:
+        await asyncio.to_thread(maybe_decrypt_sns_video_file, tmp_path, str(key or ""))
+    except Exception as exc:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        _sns_remote_diagnostic_log(
+            "video:decrypt-error",
+            url=fixed_url,
+            diagnostic_id=diagnostic_id,
+            key=key,
+            token=token,
+            error=exc,
+            upstreamStatus=int(response_meta.get("upstreamStatus") or 200),
+            responseBytes=int(response_meta.get("responseBytes") or 0),
+            keystreamProvider=(
+                "unavailable"
+                if isinstance(exc, SnsWasmRuntimeUnavailable)
+                else (
+                    "electron-node-wasm"
+                    if str(os.environ.get("WECHAT_TOOL_NODE_MODE") or "").strip().lower()
+                    == "electron-run-as-node"
+                    else "node-wasm"
+                )
+            ),
+        )
+        raise
 
     # Validate: mp4 must have `ftyp` at offset 4.
     ok_mp4 = False
@@ -599,7 +782,17 @@ async def materialize_sns_remote_video(
             tmp_path.unlink(missing_ok=True)
         except Exception:
             pass
-        return None
+        _sns_remote_diagnostic_log(
+            "video:decode-rejected",
+            url=fixed_url,
+            diagnostic_id=diagnostic_id,
+            key=key,
+            token=token,
+            reason="bytes-not-mp4",
+            upstreamStatus=int(response_meta.get("upstreamStatus") or 200),
+            responseBytes=int(response_meta.get("responseBytes") or 0),
+        )
+        raise SnsRemoteMediaDecodeError("SNS CDN returned invalid video bytes.")
 
     final_path = cache_dir / f"{cache_stem}.mp4"
     try:
@@ -757,6 +950,7 @@ async def _download_sns_remote_bytes(
     url: str,
     *,
     client: Optional[httpx.AsyncClient] = None,
+    response_meta: Optional[dict[str, object]] = None,
 ) -> tuple[bytes, str, str]:
     """Download SNS media bytes from Tencent CDN with a few safe header variants."""
     u = str(url or "").strip()
@@ -785,6 +979,15 @@ async def _download_sns_remote_bytes(
             raise HTTPException(status_code=400, detail="SNS media too large (>25MB).")
         content_type = str(resp.headers.get("Content-Type") or "").strip()
         x_enc = str(resp.headers.get("x-enc") or "").strip()
+        if response_meta is not None:
+            response_meta.update(
+                {
+                    "upstreamStatus": int(resp.status_code),
+                    "responseBytes": len(payload),
+                    "contentType": content_type,
+                    "xEnc": x_enc,
+                }
+            )
         return payload, content_type, x_enc
 
     if client is not None:
@@ -808,9 +1011,15 @@ def get_cached_sns_remote_image(
     url: str,
     key: str,
     token: str,
+    force_original: bool = False,
 ) -> Optional[SnsRemoteImageResult]:
     """Return a validated remote-image cache entry without doing network I/O."""
-    u_fixed = fix_sns_cdn_url(url, token=token, is_video=False)
+    u_fixed = fix_sns_cdn_url(
+        url,
+        token=token,
+        is_video=False,
+        force_original=force_original,
+    )
     if not u_fixed:
         return None
 
@@ -889,13 +1098,21 @@ async def try_fetch_and_decrypt_sns_image_remote(
     use_cache: bool,
     client: Optional[httpx.AsyncClient] = None,
     diagnostic_id: str = "",
+    force_original: bool = False,
 ) -> Optional[SnsRemoteImageResult]:
     """Try WeFlow-style: download from CDN -> WxIsaac64 full-file XOR -> return bytes.
 
-    Returns a SnsRemoteImageResult on success, or None on failure so caller can fall back to
-    local cache matching logic.
+    Returns None only for a true miss (invalid/unsupported URL or upstream 404).
+    Runtime, upstream, and invalid-content failures remain distinguishable to API callers.
     """
-    u_fixed = fix_sns_cdn_url(url, token=token, is_video=False)
+    raw_input_url = str(url or "")
+    u_fixed = fix_sns_cdn_url(
+        raw_input_url,
+        token=token,
+        is_video=False,
+        force_original=force_original,
+    )
+    url_rewritten = u_fixed != html.unescape(raw_input_url).strip()
     if not u_fixed:
         if str(url or "").strip():
             _sns_remote_diagnostic_log(
@@ -905,6 +1122,7 @@ async def try_fetch_and_decrypt_sns_image_remote(
                 key=key,
                 token=token,
                 reason="url-normalization-empty",
+                urlRewritten=url_rewritten,
             )
         return None
 
@@ -919,6 +1137,7 @@ async def try_fetch_and_decrypt_sns_image_remote(
             key=key,
             token=token,
             reason="url-parse-error",
+            urlRewritten=url_rewritten,
             error=exc,
         )
         return None
@@ -930,6 +1149,7 @@ async def try_fetch_and_decrypt_sns_image_remote(
             key=key,
             token=token,
             reason="host-not-allowed",
+            urlRewritten=url_rewritten,
         )
         return None
 
@@ -941,15 +1161,23 @@ async def try_fetch_and_decrypt_sns_image_remote(
             url=u_fixed,
             key=key,
             token=token,
+            force_original=force_original,
         )
         if cached is not None:
             return cached
 
     cache_path: Optional[Path] = None
 
+    response_meta: dict[str, object] = {}
     try:
-        raw, _content_type, x_enc = await _download_sns_remote_bytes(u_fixed, client=client)
+        raw, _content_type, x_enc = await _download_sns_remote_bytes(
+            u_fixed,
+            client=client,
+            response_meta=response_meta,
+        )
     except Exception as e:
+        response = getattr(e, "response", None)
+        upstream_status = int(getattr(response, "status_code", 0) or 0)
         _sns_remote_diagnostic_log(
             "remote:download-error",
             url=u_fixed,
@@ -957,8 +1185,29 @@ async def try_fetch_and_decrypt_sns_image_remote(
             key=key,
             token=token,
             error=e,
+            upstreamStatus=upstream_status,
+            responseBytes=0,
+            urlRewritten=url_rewritten,
         )
-        return None
+        if upstream_status == 404:
+            return None
+        if isinstance(e, HTTPException):
+            raise
+        raise SnsRemoteMediaUpstreamError(
+            "SNS CDN request failed.",
+            status_code=upstream_status,
+        ) from e
+
+    _sns_remote_diagnostic_log(
+        "remote:downloaded",
+        url=u_fixed,
+        diagnostic_id=diagnostic_id,
+        key=key,
+        token=token,
+        upstreamStatus=int(response_meta.get("upstreamStatus") or 200),
+        responseBytes=len(raw),
+        urlRewritten=url_rewritten,
+    )
 
     if not raw:
         _sns_remote_diagnostic_log(
@@ -968,8 +1217,11 @@ async def try_fetch_and_decrypt_sns_image_remote(
             key=key,
             token=token,
             reason="empty-download",
+            upstreamStatus=int(response_meta.get("upstreamStatus") or 200),
+            responseBytes=0,
+            urlRewritten=url_rewritten,
         )
-        return None
+        raise SnsRemoteMediaDecodeError("SNS CDN returned an empty media payload.")
 
     # First, validate whether the CDN already returned a real image.
     mt_raw = detect_image_mime(raw)
@@ -1011,8 +1263,37 @@ async def try_fetch_and_decrypt_sns_image_remote(
                         rawBytes=len(raw),
                         rawMediaType=str(mt_raw or ""),
                         xEnc=str(x_enc or ""),
+                        upstreamStatus=int(response_meta.get("upstreamStatus") or 200),
+                        responseBytes=len(raw),
+                        urlRewritten=url_rewritten,
+                        keystreamProvider=(
+                            "electron-node-wasm"
+                            if str(os.environ.get("WECHAT_TOOL_NODE_MODE") or "").strip().lower()
+                            == "electron-run-as-node"
+                            else "node-wasm"
+                        ),
                     )
-                    return None
+                    raise SnsRemoteMediaDecodeError(
+                        "SNS CDN media could not be decoded as an image."
+                    )
+        except SnsWasmRuntimeUnavailable as e:
+            _sns_remote_diagnostic_log(
+                "remote:runtime-unavailable",
+                url=u_fixed,
+                diagnostic_id=diagnostic_id,
+                key=key,
+                token=token,
+                error=e,
+                rawBytes=len(raw),
+                xEnc=str(x_enc or ""),
+                upstreamStatus=int(response_meta.get("upstreamStatus") or 200),
+                responseBytes=len(raw),
+                urlRewritten=url_rewritten,
+                keystreamProvider="unavailable",
+            )
+            raise
+        except SnsRemoteMediaDecodeError:
+            raise
         except Exception as e:
             _sns_remote_diagnostic_log(
                 "remote:decrypt-error",
@@ -1024,9 +1305,14 @@ async def try_fetch_and_decrypt_sns_image_remote(
                 rawBytes=len(raw),
                 rawMediaType=str(mt_raw or ""),
                 xEnc=str(x_enc or ""),
+                upstreamStatus=int(response_meta.get("upstreamStatus") or 200),
+                responseBytes=len(raw),
+                urlRewritten=url_rewritten,
             )
             if not mt_raw:
-                return None
+                raise SnsRemoteMediaDecodeError(
+                    "SNS CDN media decryption failed."
+                ) from e
             decoded = raw
             mt = mt_raw
             decrypted = False
@@ -1041,8 +1327,11 @@ async def try_fetch_and_decrypt_sns_image_remote(
             reason="unsupported-image-bytes",
             rawBytes=len(raw),
             xEnc=str(x_enc or ""),
+            upstreamStatus=int(response_meta.get("upstreamStatus") or 200),
+            responseBytes=len(raw),
+            urlRewritten=url_rewritten,
         )
-        return None
+        raise SnsRemoteMediaDecodeError("SNS CDN returned unsupported image bytes.")
 
     try:
         ext = _mime_to_ext(mt)
@@ -1074,6 +1363,29 @@ async def try_fetch_and_decrypt_sns_image_remote(
             mediaType=str(mt or ""),
         )
         cache_path = None
+
+    _sns_remote_diagnostic_log(
+        "remote:ready",
+        url=u_fixed,
+        diagnostic_id=diagnostic_id,
+        key=key,
+        token=token,
+        upstreamStatus=int(response_meta.get("upstreamStatus") or 200),
+        responseBytes=len(raw),
+        decodedBytes=len(decoded),
+        mediaType=str(mt or ""),
+        urlRewritten=url_rewritten,
+        keystreamProvider=(
+            (
+                "electron-node-wasm"
+                if str(os.environ.get("WECHAT_TOOL_NODE_MODE") or "").strip().lower()
+                == "electron-run-as-node"
+                else "node-wasm"
+            )
+            if decrypted
+            else "not-required"
+        ),
+    )
 
     return SnsRemoteImageResult(
         payload=decoded,
