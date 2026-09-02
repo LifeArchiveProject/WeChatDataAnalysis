@@ -2473,10 +2473,17 @@ def _load_group_nickname_map_from_contact_db(
             return False
         return True
 
-    def pick_display(strings: list[tuple[int, str]], target: str) -> str:
+    def pick_display(
+        strings: list[tuple[int, str]],
+        target: str,
+        *,
+        allowed_fields: set[int],
+    ) -> str:
         best_score = -1
         best = ""
         for i, (fno, value) in enumerate(strings):
+            if int(fno) not in allowed_fields:
+                continue
             v = str(value or "").strip()
             if (not v) or v == target:
                 continue
@@ -2525,7 +2532,7 @@ def _load_group_nickname_map_from_contact_db(
         if not ext_buf:
             return {}
 
-        out: dict[str, str] = {}
+        member_records: list[list[tuple[int, str]]] = []
         for _, wire_type, chunk in iter_fields(ext_buf):
             if wire_type != 2 or (not chunk):
                 continue
@@ -2553,17 +2560,45 @@ def _load_group_nickname_map_from_contact_db(
 
             if not strings:
                 continue
+            member_records.append(strings)
 
-            present = [v for _, v in strings if v in target_set and v not in out]
-            if not present:
+        # Layout A stores the member username in field 1 and its group nickname
+        # in field 2. Field 4 can reference another member, so once field 2 is
+        # present anywhere in this chatroom it must never identify a record.
+        uses_current_layout = any(
+            field_no == 2
+            for strings in member_records
+            for field_no, _ in strings
+        )
+
+        out: dict[str, str] = {}
+        for strings in member_records:
+            if not uses_current_layout:
+                legacy_targets = [
+                    value
+                    for field_no, value in strings
+                    if field_no == 4 and value in target_set and value not in out
+                ]
+                for target in legacy_targets:
+                    disp = pick_display(strings, target, allowed_fields={1})
+                    if disp:
+                        out[target] = disp
+                if len(out) >= len(target_set):
+                    break
                 continue
 
-            for target in present:
-                disp = pick_display(strings, target)
-                if disp:
-                    out[target] = disp
-            if len(out) >= len(target_set):
-                break
+            primary_targets = [
+                value
+                for field_no, value in strings
+                if field_no == 1 and value in target_set and value not in out
+            ]
+            if primary_targets:
+                for target in primary_targets:
+                    disp = pick_display(strings, target, allowed_fields={2})
+                    if disp:
+                        out[target] = disp
+                if len(out) >= len(target_set):
+                    break
 
         return out
     except Exception:
