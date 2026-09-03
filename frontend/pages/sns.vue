@@ -1121,12 +1121,12 @@
     <GuideDialog
       :open="publishUnavailableDialogOpen"
       eyebrow="功能暂未开放"
-      title="请进群联系开发者"
+      title="请添加 QQ 联系开发者"
       :description="FEATURE_UNAVAILABLE_MESSAGE"
-      primary-label="加入 QQ 交流群"
+      primary-label="添加 QQ 3434549571"
       secondary-label="关闭"
       tone="warning"
-      @primary="joinDeveloperGroup"
+      @primary="contactDeveloper"
       @secondary="closePublishUnavailableDialog"
       @close="closePublishUnavailableDialog"
     />
@@ -1135,7 +1135,7 @@
 
 <script setup>
 import { storeToRefs } from 'pinia'
-import { FEATURE_UNAVAILABLE_MESSAGE, openDeveloperGroup } from '~/lib/developer-support'
+import { FEATURE_UNAVAILABLE_MESSAGE, openDeveloperContact } from '~/lib/developer-support'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
 import { parseTextWithEmoji } from '~/lib/wechat-emojis'
@@ -1199,9 +1199,9 @@ const publishUnavailableDialogOpen = ref(false)
 
 const openPublishUnavailableDialog = () => { publishUnavailableDialogOpen.value = true }
 const closePublishUnavailableDialog = () => { publishUnavailableDialogOpen.value = false }
-const joinDeveloperGroup = () => {
+const contactDeveloper = () => {
   closePublishUnavailableDialog()
-  void openDeveloperGroup()
+  void openDeveloperContact()
 }
 
 const coverData = ref(null)

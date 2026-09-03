@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UNAVAILABLE_MESSAGE = "当前版本仅展示该功能入口，暂时无法执行。请加入 QQ 交流群，并在群内联系开发者获取支持。"
+UNAVAILABLE_MESSAGE = "当前版本仅展示该功能入口，暂时无法执行。请添加 QQ 3434549571（备注「高级版」）联系开发者获取支持。"
 
 
 class TestChatEditSurfaceFrontend(unittest.TestCase):
@@ -53,8 +53,8 @@ class TestChatEditSurfaceFrontend(unittest.TestCase):
         self.assertIn("<GuideDialog", overlays)
         self.assertIn(':open="modifyTextUnavailableDialogOpen"', overlays)
         self.assertIn(':description="modifyTextUnavailableMessage"', overlays)
-        self.assertIn('primary-label="加入 QQ 交流群"', overlays)
-        self.assertIn('@primary="joinDeveloperGroup"', overlays)
+        self.assertIn('primary-label="添加 QQ 3434549571"', overlays)
+        self.assertIn('@primary="contactDeveloper"', overlays)
         self.assertIn('@secondary="closeModifyTextUnavailableDialog"', overlays)
         self.assertIn('@close="closeModifyTextUnavailableDialog"', overlays)
 

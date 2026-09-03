@@ -1,6 +1,6 @@
 import { nextTick, ref, toRaw } from 'vue'
 import { showErrorAlert } from '~/composables/useErrorNotice'
-import { FEATURE_UNAVAILABLE_MESSAGE, openDeveloperGroup } from '~/lib/developer-support'
+import { FEATURE_UNAVAILABLE_MESSAGE, openDeveloperContact } from '~/lib/developer-support'
 
 const CONTEXT_MENU_MARGIN = 8
 const MODIFY_TEXT_UNAVAILABLE_MESSAGE = FEATURE_UNAVAILABLE_MESSAGE
@@ -230,9 +230,9 @@ export const useChatEditing = ({
     modifyTextUnavailableDialogOpen.value = false
   }
 
-  const joinDeveloperGroup = () => {
+  const contactDeveloper = () => {
     closeModifyTextUnavailableDialog()
-    void openDeveloperGroup()
+    void openDeveloperContact()
   }
 
   const onLocateQuotedMessageClick = async () => {
@@ -253,7 +253,7 @@ export const useChatEditing = ({
     closeContextMenu,
     openFeatureUnavailableDialog,
     closeModifyTextUnavailableDialog,
-    joinDeveloperGroup,
+    contactDeveloper,
     openMediaContextMenu,
     isLikelyTextMessage,
     copyTextToClipboard,
