@@ -15,7 +15,7 @@ from typing import Any, Callable, Iterator
 
 from . import native_core_raw_key_cache
 from .logging_config import get_logger
-from .native_core_broker import managed_native_core_operation
+from .native_core_broker import managed_native_core_operation, stop_native_core_broker
 from .native_core_client import (
     NativeCoreClient,
     NativeCoreDatabase,
@@ -137,6 +137,8 @@ _read_database_cache_generation = 0
 _read_database_handle_count = 0
 _read_database_pending_opens = 0
 _read_database_pending_keys: set[tuple[int, str]] = set()
+_limit_recycle_lock = threading.Lock()
+_last_limit_recycled_client: NativeCoreClient | None = None
 
 
 def _read_database_cache_key(context: _AccountContext, database_path: Path) -> tuple[int, str]:
@@ -202,6 +204,16 @@ def _close_cached_read_databases(
         _read_database_cache_condition.notify_all()
     for database in stale:
         _close_database_quietly(database)
+
+
+def _recycle_native_core_generation_after_limit(client: NativeCoreClient) -> None:
+    global _last_limit_recycled_client
+    with _limit_recycle_lock:
+        if _last_limit_recycled_client is client:
+            return
+        _close_cached_read_databases(client=client)
+        stop_native_core_broker(_force=True)
+        _last_limit_recycled_client = client
 
 
 def _release_read_database_entry(entry: _ReadDatabaseEntry) -> None:
@@ -674,6 +686,8 @@ def _query_once(
     database_path: Path,
     sql: str,
 ) -> list[dict[str, Any]]:
+    limited_client: NativeCoreClient | None = None
+
     def read_all(database: NativeCoreDatabase) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         with database.open_query(sql) as query:
@@ -689,20 +703,35 @@ def _query_once(
                     return rows
         raise NativeCoreRealtimeError("Native-core query exceeded the application page limit.")
 
-    with managed_native_core_operation(database_root=context.db_storage_dir):
-        for attempt in range(2):
-            client = get_native_core_client()
-            try:
-                with _borrow_cached_read_database(client, context, database_path) as database:
-                    return read_all(database)
-            except NativeCoreError as exc:
-                stale_handle = isinstance(exc, NativeCoreUnavailableError) or int(
-                    getattr(exc, "status", 0) or 0
-                ) == int(NativeCoreStatus.NOT_FOUND)
-                if not stale_handle or attempt > 0:
-                    raise
-                _close_cached_read_databases(client=client)
-    raise NativeCoreRealtimeError("Native-core query retry loop ended unexpectedly.")
+    def query_generation() -> list[dict[str, Any]]:
+        nonlocal limited_client
+        with managed_native_core_operation(database_root=context.db_storage_dir):
+            for attempt in range(2):
+                client = get_native_core_client()
+                try:
+                    with _borrow_cached_read_database(client, context, database_path) as database:
+                        return read_all(database)
+                except NativeCoreError as exc:
+                    status = int(getattr(exc, "status", 0) or 0)
+                    if status == int(NativeCoreStatus.LIMIT):
+                        limited_client = client
+                    stale_handle = isinstance(exc, NativeCoreUnavailableError) or status == int(
+                        NativeCoreStatus.NOT_FOUND
+                    )
+                    if not stale_handle or attempt > 0:
+                        raise
+                    _close_cached_read_databases(client=client)
+        raise NativeCoreRealtimeError("Native-core query retry loop ended unexpectedly.")
+
+    try:
+        return query_generation()
+    except NativeCoreError as exc:
+        if int(getattr(exc, "status", 0) or 0) != int(NativeCoreStatus.LIMIT):
+            raise
+        if limited_client is None:
+            raise
+        _recycle_native_core_generation_after_limit(limited_client)
+        return query_generation()
 
 
 def _query(context: _AccountContext, database_path: Path, sql: str) -> list[dict[str, Any]]:
