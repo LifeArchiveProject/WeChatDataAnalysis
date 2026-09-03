@@ -157,7 +157,9 @@ const {
   enabled: realtimeEnabled,
   toggleSeq: realtimeToggleSeq,
   lastToggleAction: realtimeLastToggleAction,
-  changeSeq: realtimeChangeSeq
+  changeSeq: realtimeChangeSeq,
+  messageEvent: realtimeMessageEvent,
+  messageEventSeq: realtimeMessageEventSeq
 } = storeToRefs(realtimeStore)
 
 const searchContext = ref(createEmptySearchContext())
@@ -232,6 +234,7 @@ const {
   loadMoreMessages,
   refreshSelectedMessages,
   refreshCurrentMessageMedia,
+  applyRealtimeMessage,
   queueRealtimeRefresh,
   resetMessageState,
   onAvatarError,
@@ -1097,10 +1100,27 @@ onUnmounted(() => {
   stopExportPolling()
 })
 
-watch(realtimeChangeSeq, () => {
+watch(realtimeMessageEventSeq, (next, previous) => {
   if (!process.client || document.visibilityState === 'hidden') return
+  if (next === previous) return
   if (accountBootstrapInProgress || accountChangeInProgress) return
-  queueRealtimeRefresh()
+  const event = realtimeMessageEvent.value
+  const username = String(
+    event?.username
+    || event?.message?.username
+    || event?.message?.chatUsername
+    || event?.message?.sessionId
+    || ''
+  ).trim()
+  const selectedUsername = String(selectedContact.value?.username || '').trim()
+  if (username && username === selectedUsername) void applyRealtimeMessage(event)
+  queueRealtimeSessionsRefresh()
+})
+
+watch(realtimeChangeSeq, (next, previous) => {
+  if (!process.client || document.visibilityState === 'hidden') return
+  if (next === previous || realtimeMessageEvent.value?.type !== 'conversation_updated') return
+  if (accountBootstrapInProgress || accountChangeInProgress) return
   queueRealtimeSessionsRefresh()
 })
 

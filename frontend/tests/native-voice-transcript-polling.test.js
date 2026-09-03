@@ -184,6 +184,34 @@ describe('微信原生转写定向轮询', () => {
     wrapper.unmount()
   })
 
+  it('SSE 消息直接追加当前会话，不再二次读取消息接口', async () => {
+    const api = { listChatMessages: vi.fn() }
+    const { state, wrapper } = mountChatMessagesState(api, { realtime: true })
+    state.allMessages.value = {
+      wxid_friend: [{ id: 'message-old', renderType: 'text', content: '旧消息' }]
+    }
+
+    await state.applyRealtimeMessage({
+      type: 'message',
+      account: 'account-a',
+      username: 'wxid_friend',
+      message: {
+        id: 'message-new',
+        localId: 2,
+        createTime: 1700000000,
+        renderType: 'text',
+        content: '新消息'
+      }
+    })
+
+    expect(api.listChatMessages).not.toHaveBeenCalled()
+    expect(state.allMessages.value.wxid_friend.map((message) => message.id)).toEqual([
+      'message-old',
+      'message-new'
+    ])
+    wrapper.unmount()
+  })
+
   it('页面重载后从项目 native cache 恢复 callback-only 结果', async () => {
     const api = {
       lookupNativeVoiceTranscriptionCache: vi.fn().mockResolvedValue({

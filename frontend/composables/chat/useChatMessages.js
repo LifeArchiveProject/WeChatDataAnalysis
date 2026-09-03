@@ -2357,6 +2357,100 @@ export const useChatMessages = ({
     trace.log('refreshCurrentMessageMedia:end')
   }
 
+  const mergeRealtimeMessages = (existing, rawMessages) => {
+    const input = (Array.isArray(rawMessages) ? rawMessages : [rawMessages])
+      .filter((message) => message && typeof message === 'object')
+    if (!input.length) return { changed: false, messages: existing, addedCount: 0 }
+
+    loadLargeImagePreferences()
+    const latest = hydrateQuoteImageUrls(dedupeMessagesById(input.map(normalizeMessage)), existing)
+    const latestById = new Map(
+      latest
+        .map((message) => [String(message?.id || ''), message])
+        .filter(([id]) => !!id)
+    )
+    const latestByServerId = new Map(
+      latest
+        .map((message) => [String(message?.serverIdStr || message?.serverId || '').trim(), message])
+        .filter(([serverId]) => !!serverId && serverId !== '0')
+    )
+    let existingChanged = false
+    const updatedExisting = existing.map((message) => {
+      const incoming = latestById.get(String(message?.id || ''))
+        || latestByServerId.get(String(message?.serverIdStr || message?.serverId || '').trim())
+      if (!incoming) return message
+      const updated = mergeWechatNativeVoiceTranscript(message, incoming)
+      if (updated !== message) existingChanged = true
+      return updated
+    })
+
+    const seenIds = new Set(updatedExisting.map((message) => String(message?.id || '')))
+    const seenServerIds = new Set(
+      updatedExisting
+        .map((message) => String(message?.serverIdStr || message?.serverId || '').trim())
+        .filter((serverId) => !!serverId && serverId !== '0')
+    )
+    const newOnes = []
+    for (const message of latest) {
+      const id = String(message?.id || '')
+      const serverId = String(message?.serverIdStr || message?.serverId || '').trim()
+      if (!id || seenIds.has(id) || (serverId && serverId !== '0' && seenServerIds.has(serverId))) continue
+      seenIds.add(id)
+      if (serverId && serverId !== '0') seenServerIds.add(serverId)
+      newOnes.push(message)
+    }
+
+    return {
+      changed: newOnes.length > 0 || existingChanged,
+      messages: hydrateQuoteImageUrls([...updatedExisting, ...newOnes]),
+      addedCount: newOnes.length
+    }
+  }
+
+  const applyRealtimeMessage = async (event) => {
+    if (!realtimeEnabled.value || !selectedAccount.value || !selectedContact.value?.username) return false
+
+    const eventAccount = String(event?.account || '').trim()
+    if (eventAccount && eventAccount !== String(selectedAccount.value || '').trim()) return false
+
+    const rawMessage = event?.message && typeof event.message === 'object'
+      ? event.message
+      : event?.data && typeof event.data === 'object' && !Array.isArray(event.data)
+        ? event.data
+        : event && typeof event === 'object' && event.id
+          ? event
+          : null
+    if (!rawMessage) return false
+
+    const username = String(
+      event?.username
+      || rawMessage.username
+      || rawMessage.chatUsername
+      || rawMessage.sessionId
+      || ''
+    ).trim()
+    const selectedUsername = String(selectedContact.value.username || '').trim()
+    if (!username || username !== selectedUsername) return false
+
+    const message = rawMessage.username ? rawMessage : { ...rawMessage, username }
+    const existing = allMessages.value[username] || []
+    const container = messageContainerRef.value
+    const atBottom = !!container && (container.scrollHeight - container.scrollTop - container.clientHeight) < 80
+    const merged = mergeRealtimeMessages(existing, message)
+    if (!merged.changed) return false
+
+    allMessages.value = {
+      ...allMessages.value,
+      [username]: merged.messages
+    }
+
+    await nextTick()
+    const nextContainer = messageContainerRef.value
+    if (nextContainer && atBottom) nextContainer.scrollTop = nextContainer.scrollHeight
+    updateJumpToBottomState()
+    return true
+  }
+
   const refreshRealtimeIncremental = async () => {
     if (!realtimeEnabled.value || !selectedAccount.value || !selectedContact.value?.username) return
     if (searchContext.value?.active || isLoadingMessages.value) return
@@ -2389,50 +2483,11 @@ export const useChatMessages = ({
       const response = await api.listChatMessages(params)
       if (selectedContact.value?.username !== username) return
 
-      const rawMessages = response?.messages || []
-      loadLargeImagePreferences()
-      const latest = hydrateQuoteImageUrls(dedupeMessagesById(rawMessages.map(normalizeMessage)), existing)
-
-      const latestById = new Map(
-        latest
-          .map((message) => [String(message?.id || ''), message])
-          .filter(([id]) => !!id)
-      )
-      const latestByServerId = new Map(
-        latest
-          .map((message) => [String(message?.serverIdStr || message?.serverId || '').trim(), message])
-          .filter(([serverId]) => !!serverId && serverId !== '0')
-      )
-      let existingChanged = false
-      const updatedExisting = existing.map((message) => {
-        const incoming = latestById.get(String(message?.id || ''))
-          || latestByServerId.get(String(message?.serverIdStr || message?.serverId || '').trim())
-        if (!incoming) return message
-        const updated = mergeWechatNativeVoiceTranscript(message, incoming)
-        if (updated !== message) existingChanged = true
-        return updated
-      })
-
-      const seenIds = new Set(updatedExisting.map((message) => String(message?.id || '')))
-      const seenServerIds = new Set(
-        updatedExisting
-          .map((message) => String(message?.serverIdStr || message?.serverId || '').trim())
-          .filter((serverId) => !!serverId && serverId !== '0')
-      )
-      const newOnes = []
-      for (const message of latest) {
-        const id = String(message?.id || '')
-        const serverId = String(message?.serverIdStr || message?.serverId || '').trim()
-        if (!id || seenIds.has(id) || (serverId && serverId !== '0' && seenServerIds.has(serverId))) continue
-        seenIds.add(id)
-        if (serverId && serverId !== '0') seenServerIds.add(serverId)
-        newOnes.push(message)
-      }
-      if (!newOnes.length && !existingChanged) return
-
+      const merged = mergeRealtimeMessages(existing, response?.messages || [])
+      if (!merged.changed) return
       allMessages.value = {
         ...allMessages.value,
-        [username]: hydrateQuoteImageUrls([...updatedExisting, ...newOnes])
+        [username]: merged.messages
       }
 
       await nextTick()
@@ -3303,6 +3358,7 @@ export const useChatMessages = ({
     loadMoreMessages,
     refreshSelectedMessages,
     refreshCurrentMessageMedia,
+    applyRealtimeMessage,
     refreshRealtimeIncremental,
     queueRealtimeRefresh,
     resetMessageState,
