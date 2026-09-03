@@ -583,6 +583,7 @@ const ADVANCED_FEATURE_GROUPS = [
   { key: 'action', label: '微信动作', icon: 'fa-paper-plane', features: ['发送文字消息', '发送群聊 @ 消息', '发送图片消息', '发送视频消息', '发送表情消息', '发送语音消息', '发送拍一拍'] },
   { key: 'moments', label: '朋友圈', icon: 'fa-camera', features: ['自动后台刷新朋友圈', '朋友圈点赞', '朋友圈图片评论', '发布朋友圈'] },
   { key: 'group', label: '群聊', icon: 'fa-users', features: ['修改本人群昵称', '发布群公告'] },
+  { key: 'alert', label: '提醒', icon: 'fa-bell', features: ['群聊/单聊关键词提醒'] },
 ]
 
 const ADVANCED_FEATURE_FILTERS = [

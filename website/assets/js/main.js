@@ -359,17 +359,19 @@ function heroReveal(q) {
   }
 }
 
-/* ---------- 高级版装置：38 项写入与动作能力（与 README 高级版表逐项对应） ---------- */
+/* ---------- 高级版装置：39 项高级能力（与 README 高级版表逐项对应） ---------- */
 
 const PRO_MODULES = [
   { name: "消息修改", items: ["修改文字消息", "编辑消息源码", "修改时间", "字段编辑", "恢复原消息", "修复为我发送", "反转微信气泡位置", "删除系统消息"] },
   { name: "消息补录", items: ["文字", "图片", "文件", "语音", "视频", "表情", "转账记录", "红包记录", "位置", "链接卡片", "小程序卡片", "视频号卡片", "引用消息", "合并聊天记录", "通话记录", "系统消息", "拍一拍记录"] },
   { name: "微信动作", items: ["发送文字消息", "群聊 @ 消息", "发送图片消息", "发送视频消息", "发送表情消息", "发送语音消息", "发送拍一拍"] },
   { name: "朋友圈", items: ["自动后台刷新", "朋友圈点赞", "图片评论", "发布朋友圈"] },
-  { name: "群聊", items: ["修改本人群昵称", "发布群公告"] },
+  { name: "群聊与提醒", items: ["修改本人群昵称", "发布群公告", "群聊/单聊关键词提醒"] },
 ];
 
-// 六栏权限清单：五大模块 38 项一次性全部摊开（补录 17 项占双栏，CSS columns 对分）
+const PRO_TOTAL = PRO_MODULES.reduce((total, module) => total + module.items.length, 0);
+
+// 六栏权限清单：五大模块 39 项一次性全部摊开（补录 17 项占双栏，CSS columns 对分）
 function buildManifestGrid() {
   const grid = $("#hm-grid");
   if (!grid) return;
@@ -389,7 +391,7 @@ function unlockHeroGate() {
   lenis.start();
 }
 
-// 标题行尾执行读数：按模块顺序扫过 38 项，清单对应项同步点亮、刊头计数器跟随
+// 标题行尾执行读数：按模块顺序扫过全部能力，清单对应项同步点亮、刊头计数器跟随
 let proExecOn = false;
 function startProExec() {
   if (proExecOn) return;
@@ -403,7 +405,7 @@ function startProExec() {
     // 页面在后台或已滚离首幕时静默待机，不空转
     if (document.hidden || scrollY > innerHeight * 0.9) { gsap.delayedCall(1, step); return; }
     const n = i % items.length;
-    idx.textContent = "WRITE — " + String(n + 1).padStart(2, "0") + " / 38";
+    idx.textContent = "PRO — " + String(n + 1).padStart(2, "0") + " / " + PRO_TOTAL;
     if (prev) prev.classList.remove("is-live");
     prev = cells[n] || null;
     if (prev) prev.classList.add("is-live");
@@ -463,9 +465,9 @@ function buildHero() {
 
   if (REDUCED) {
     gsap.set([".nav", ".rail", ".hero .ht-mask", ".hero__vert", ".hero__coord", ".hero__orb", ".hero__gh", ".hero__plat", ".hero__ticker", ".hero__manifest", ".hm__rule", ".hm__get", ".hm__exec"], { clearProps: "all" });
-    // 无动效时直接落在双区终态：巨字与 38 项清单同屏全显
+    // 无动效时直接落在双区终态：巨字与全部能力清单同屏全显
     const rOps = $("#hero-pro-ops"), rHc5 = $("#hc-5");
-    if (rOps) rOps.textContent = "WRITE — 38 / 38";
+    if (rOps) rOps.textContent = `PRO — ${PRO_TOTAL} / ${PRO_TOTAL}`;
     if (rHc5) { rHc5.textContent = "ACCESS — READ / WRITE · PRO"; rHc5.classList.add("is-pro"); }
     return;
   }
@@ -523,7 +525,7 @@ function heroIntro() {
       $$(".hero .ht-line").forEach((l) => (l.style.overflow = "visible")); // 交还霓虹辉光的外溢空间
     }, [], SCAN_AT + SCAN_DUR);
 
-  // ── 权限清单下半场：巨字保持完整亮相，38 项在其下方全量摊开，两块内容同屏共存
+  // ── 权限清单下半场：巨字保持完整亮相，全部能力在其下方全量摊开，两块内容同屏共存
   const PRO_AT = SCAN_AT + SCAN_DUR + 0.15;
   tl.call(() => stage.setOpacity(0.6, 1.2), [], PRO_AT)
     .to(".hero__manifest", { opacity: 1, duration: 0.5 }, PRO_AT + 0.1)
@@ -539,14 +541,14 @@ function heroIntro() {
     }, [], PRO_AT + 0.45)
     .to(".hm__rule", { opacity: 1, duration: 0.6 }, PRO_AT + 0.55)
     .fromTo("#hm-grid .hm__mod", { opacity: 0, y: -10 }, { opacity: 1, y: 0, duration: 0.5, ease: "flow", stagger: 0.07 }, PRO_AT + 0.7)
-    // 38 项从四面八方飞入各自格位：散乱 → 秩序
+    // 全部能力从四面八方飞入各自格位：散乱 → 秩序
     .fromTo("#hm-grid .hm__item",
       { opacity: 0, x: () => gsap.utils.random(-280, 280), y: () => gsap.utils.random(-200, 150), scale: 1.14 },
       { opacity: 1, x: 0, y: 0, scale: 1, duration: 0.75, ease: "power3.out", stagger: { each: 0.022, from: "random" } },
       PRO_AT + 0.8)
     .call(() => {
       const ops = { v: 0 }, opsEl = $("#hero-pro-ops");
-      gsap.to(ops, { v: 38, duration: 1.5, ease: "power1.out", onUpdate: () => (opsEl.textContent = "WRITE — " + String(Math.round(ops.v)).padStart(2, "0") + " / 38") });
+      gsap.to(ops, { v: PRO_TOTAL, duration: 1.5, ease: "power1.out", onUpdate: () => (opsEl.textContent = "PRO — " + String(Math.round(ops.v)).padStart(2, "0") + " / " + PRO_TOTAL) });
     }, [], PRO_AT + 0.8)
     .to(".hm__get", { opacity: 1, duration: 0.6 }, PRO_AT + 2.3)
     .to(".hm__exec", { opacity: 1, duration: 0.5 }, PRO_AT + 2.45)
@@ -918,7 +920,7 @@ function buildFeatures() {
   const N = cards.length;
   const META = [
     { name: "聊天记录 1:1 复刻", meta: "全消息类型 · 时间轴跳转 · 高仿界面", desc: "文本、图片、视频、语音、表情、引用、合并转发……逐一还原，样式尽可能与微信保持一致。" },
-    { name: "实时消息同步", meta: "WCDB 直读 · 侧栏闪电 · 零轮询", desc: "直连微信 4.x 的 WCDB——微信开着，新消息、联系人与朋友圈也会实时流进来。" },
+    { name: "实时消息同步", meta: "WCDB 直读 · SSE 推送 · 关键词提醒", desc: "直连微信 4.x 的 WCDB；高级版可动态添加关键词，群聊或单聊的新消息命中后立即提醒。" },
     {
       name: "修改与补录 · 随时恢复",
       desc: "从普通消息、媒体到结构化卡片，完整补录与修改能力一次列清。",
