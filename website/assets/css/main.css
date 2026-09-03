@@ -254,7 +254,7 @@ main { position: relative; z-index: 1; }
 }
 .ht-line { display: block; overflow: hidden; padding-block: 0.08em; margin-block: -0.08em; }
 .ht-mask { display: inline-block; will-change: transform; }
-/* 双区构图：巨字与 38 项清单同屏共存，字号随视口高收缩，谁也不压谁 */
+/* 双区构图：巨字与 39 项清单同屏共存，字号随视口高收缩，谁也不压谁 */
 .ht-line--1 { text-align: left; font-size: min(clamp(1.7rem, 4.4vw, 4.2rem), 9vh); }
 .ht-line--2 { text-align: right; font-size: min(clamp(2.6rem, 8.8vw, 8.6rem), 19vh); margin-top: 0.02em; }
 /* 实心霓虹（描边中文在这个字号下会显乱），与终幕统一 */
@@ -325,7 +325,7 @@ main { position: relative; z-index: 1; }
 }
 .hm__headrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
 .hm__head { display: block; }
-/* 标题行尾的执行读数：38 项逐条切换，与清单里的对应项、刊头计数器三者联动 */
+/* 标题行尾的执行读数：39 项逐条切换，与清单里的对应项、刊头计数器三者联动 */
 .hm__exec {
   display: inline-flex; align-items: baseline; gap: 8px;
   font-size: clamp(0.95rem, 1.15vw, 1.15rem); letter-spacing: 0.1em;
@@ -349,7 +349,7 @@ main { position: relative; z-index: 1; }
   transition: text-shadow 0.35s;
 }
 .hm__head:hover .hm__title em { text-shadow: 0 0 52px rgba(255, 194, 75, 0.8), 0 2px 20px rgba(4, 8, 6, 0.8); }
-/* 六栏权限清单：五大模块 38 项一次性全部摊开（补录 17 项占双栏对分），纯排版无框 */
+/* 六栏权限清单：五大模块 39 项一次性全部摊开（补录 17 项占双栏对分），纯排版无框 */
 .hm__grid {
   display: grid; grid-template-columns: repeat(6, 1fr);
   gap: 10px clamp(14px, 2vw, 32px); align-items: start;
@@ -1169,7 +1169,7 @@ a.ro-row:hover .ro-meta { color: var(--ink); }
   .ht-line--2 { text-align: left; font-size: min(clamp(2.2rem, 11vw, 4.2rem), 8.4vh); }
   .hero__cta { left: 20px; right: auto; bottom: 9vh; flex-direction: row; align-items: center; gap: 26px; }
   .hero__plat { display: none; }
-  /* 窄屏：清单改为分组流式排版（仍是 38 项全量），CTA 彻底让路（导航栏保留下载入口） */
+  /* 窄屏：清单改为分组流式排版（仍是 39 项全量），CTA 彻底让路（导航栏保留下载入口） */
   .hero__cta { opacity: 0 !important; pointer-events: none; }
   .hero__manifest { left: 20px; right: 20px; bottom: calc(42px + 2vh); gap: 8px; }
   .hm__title { white-space: normal; font-size: clamp(1.1rem, 5vw, 1.45rem); }
