@@ -67,10 +67,10 @@ class TestGroupNicknameExtBufferParsing(unittest.TestCase):
             out = _load_group_nickname_map_from_contact_db(contact_db_path, chatroom, [username])
             self.assertEqual(out.get(username), display)
 
-    def test_parse_pattern_b_field4_username_field1_display(self):
+    def test_parse_pattern_b_requires_unambiguous_field1_display(self):
         chatroom = "demo2@chatroom"
         username = "wxid_demo_abcdef"
-        display = "hjlbingo"
+        display = "旧版群昵称"
 
         inner = _enc_len(4, username.encode("utf-8")) + _enc_len(1, display.encode("utf-8"))
         ext_buffer = _member_entry(inner=inner)
@@ -92,6 +92,71 @@ class TestGroupNicknameExtBufferParsing(unittest.TestCase):
 
             out = _load_group_nickname_map_from_contact_db(contact_db_path, chatroom, [username])
             self.assertEqual(out.get(username), display)
+
+    def test_no_field2_field4_cross_reference_fails_closed(self):
+        chatroom = "demo-no-field2@chatroom"
+        member_alias = "member_alias_123"
+        target_username = "wxid_target_123456"
+
+        first_inner = _enc_len(1, member_alias.encode("utf-8")) + _enc_len(
+            4, target_username.encode("utf-8")
+        )
+        second_inner = _enc_len(1, target_username.encode("utf-8"))
+        ext_buffer = _member_entry(inner=first_inner) + _member_entry(inner=second_inner)
+
+        with TemporaryDirectory() as td:
+            contact_db_path = Path(td) / "contact.db"
+            conn = sqlite3.connect(str(contact_db_path))
+            try:
+                conn.execute(
+                    "CREATE TABLE chat_room(id INTEGER PRIMARY KEY, username TEXT, owner TEXT, ext_buffer BLOB)"
+                )
+                conn.execute(
+                    "INSERT INTO chat_room(id, username, owner, ext_buffer) VALUES (?, ?, ?, ?)",
+                    (1, chatroom, "", ext_buffer),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            out = _load_group_nickname_map_from_contact_db(
+                contact_db_path,
+                chatroom,
+                [target_username],
+            )
+            self.assertEqual(out, {})
+
+    def test_ambiguous_ascii_field1_does_not_confirm_legacy_layout(self):
+        chatroom = "demo-ambiguous-legacy@chatroom"
+        username = "wxid_demo_abcdef"
+        ambiguous_display = "hjlbingo"
+
+        inner = _enc_len(4, username.encode("utf-8")) + _enc_len(
+            1, ambiguous_display.encode("utf-8")
+        )
+        ext_buffer = _member_entry(inner=inner)
+
+        with TemporaryDirectory() as td:
+            contact_db_path = Path(td) / "contact.db"
+            conn = sqlite3.connect(str(contact_db_path))
+            try:
+                conn.execute(
+                    "CREATE TABLE chat_room(id INTEGER PRIMARY KEY, username TEXT, owner TEXT, ext_buffer BLOB)"
+                )
+                conn.execute(
+                    "INSERT INTO chat_room(id, username, owner, ext_buffer) VALUES (?, ?, ?, ?)",
+                    (1, chatroom, "", ext_buffer),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            out = _load_group_nickname_map_from_contact_db(
+                contact_db_path,
+                chatroom,
+                [username],
+            )
+            self.assertEqual(out, {})
 
     def test_field4_reference_does_not_steal_another_members_nickname(self):
         chatroom = "demo3@chatroom"
