@@ -55,7 +55,7 @@ const { resolveNativeCoreRuntimeDir } = require("./native-core-path.cjs");
 const { createQqFeedbackService } = require("./qq-feedback.cjs");
 const {
   configurePrivatePkiUpdateVerification,
-  ensurePrivatePkiIssuerCached,
+  resolvePrivatePkiRuntime,
 } = require("./windows-private-pki-runtime.cjs");
 const { ensureMacosPrivatePkiTrust } = require("./macos-private-pki-runtime.cjs");
 
@@ -3476,12 +3476,7 @@ async function ensureMainWindowReady() {
 async function main() {
   await app.whenReady();
   if (app.isPackaged && process.platform === "win32") {
-    const evidence = ensurePrivatePkiIssuerCached({
-      resourcesPath: process.resourcesPath,
-    });
-    logMain(
-      `[private-pki] issuer=${evidence.issuerStore} root=${evidence.rootSha256.slice(0, 12)} newlyAdded=${evidence.newlyAdded === true}`
-    );
+    resolvePrivatePkiRuntime(process.resourcesPath);
   }
   if (app.isPackaged && process.platform === "darwin") {
     const evidence = ensureMacosPrivatePkiTrust({
