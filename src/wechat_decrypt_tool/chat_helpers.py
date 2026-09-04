@@ -2473,10 +2473,17 @@ def _load_group_nickname_map_from_contact_db(
             return False
         return True
 
-    def pick_display(strings: list[tuple[int, str]], target: str) -> str:
+    def pick_display(
+        strings: list[tuple[int, str]],
+        target: str,
+        *,
+        allowed_fields: set[int],
+    ) -> str:
         best_score = -1
         best = ""
         for i, (fno, value) in enumerate(strings):
+            if int(fno) not in allowed_fields:
+                continue
             v = str(value or "").strip()
             if (not v) or v == target:
                 continue
@@ -2525,7 +2532,7 @@ def _load_group_nickname_map_from_contact_db(
         if not ext_buf:
             return {}
 
-        out: dict[str, str] = {}
+        member_records: list[list[tuple[int, str]]] = []
         for _, wire_type, chunk in iter_fields(ext_buf):
             if wire_type != 2 or (not chunk):
                 continue
@@ -2553,13 +2560,64 @@ def _load_group_nickname_map_from_contact_db(
 
             if not strings:
                 continue
+            member_records.append(strings)
 
-            present = [v for _, v in strings if v in target_set and v not in out]
-            if not present:
-                continue
+        # Layout A stores the member username in field 1 and its optional group
+        # nickname in field 2. A chatroom with no group nicknames can therefore
+        # omit field 2 entirely, while field 4 may still reference another
+        # member. Treat a requested username in field 1 as positive evidence of
+        # the current layout; do not infer the legacy layout merely because the
+        # whole chatroom lacks field 2.
+        uses_current_layout = any(
+            field_no == 2 or (field_no == 1 and value in target_set)
+            for strings in member_records
+            for field_no, value in strings
+        )
 
-            for target in present:
-                disp = pick_display(strings, target)
+        out: dict[str, str] = {}
+        if uses_current_layout:
+            for strings in member_records:
+                primary_targets = [
+                    value
+                    for field_no, value in strings
+                    if field_no == 1 and value in target_set and value not in out
+                ]
+                for target in primary_targets:
+                    disp = pick_display(strings, target, allowed_fields={2})
+                    if disp:
+                        out[target] = disp
+                if len(out) >= len(target_set):
+                    break
+            return out
+
+        # Legacy field 4 -> field 1 mapping is allowed only with positive
+        # evidence that every relevant field-1 value is display text rather
+        # than an alias-style username. Ambiguous ASCII values fail closed and
+        # let the existing caller fallback resolve the display name.
+        legacy_records = [
+            strings
+            for strings in member_records
+            if any(field_no == 4 and value in target_set for field_no, value in strings)
+        ]
+        if not legacy_records:
+            return {}
+        for strings in legacy_records:
+            field1_values = [
+                str(value or "").strip()
+                for field_no, value in strings
+                if field_no == 1 and str(value or "").strip()
+            ]
+            if not field1_values or any(looks_like_username(value) for value in field1_values):
+                return {}
+
+        for strings in legacy_records:
+            legacy_targets = [
+                value
+                for field_no, value in strings
+                if field_no == 4 and value in target_set and value not in out
+            ]
+            for target in legacy_targets:
+                disp = pick_display(strings, target, allowed_fields={1})
                 if disp:
                     out[target] = disp
             if len(out) >= len(target_set):
