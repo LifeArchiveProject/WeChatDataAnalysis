@@ -16,6 +16,8 @@ wheels/
 /.pnpm-store/
 /.pytest-tmp-*/
 /.testdeps/
+/private/
+/work/
 /.idea
 /.history/
 /.augment/

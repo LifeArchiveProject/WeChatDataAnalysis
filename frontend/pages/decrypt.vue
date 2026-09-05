@@ -1085,6 +1085,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useApi } from '~/composables/useApi'
 import { normalizeWechatInstallPath, readStoredWechatInstallPath } from '~/lib/wechat-install-path'
+import { followMacosCapture, macosCaptureProgressMessage } from '~/lib/macos-capture-progress'
 
 const {
   decryptDatabase,
@@ -2097,14 +2098,16 @@ const runMacosLldbFallback = async ({ requestRevision, requestController, helper
     return false
   }
 
+  const captureTransactionId = String(response?.data?.transaction_id || '')
   const loggedOut = await requestGuideDialog({
     eyebrow: '步骤 2 / 3',
     title: '请在临时微信中退出当前账号',
-    description: '退出到二维码登录界面后不要重新扫码；回到这里点击开始监测，再用手机确认登录。',
+    description: '退出到二维码登录界面后不要重新扫码；点击开始监测并完成管理员授权，等页面明确显示“监测已就绪”后再登录。',
     details: [
       '必须使用微信菜单中的“退出登录”，不要关闭微信窗口',
       '看到二维码后先回到 WCDA 点击“开始监测”',
-      '监测启动后再扫码或在手机上确认同一账号登录'
+      '监测已就绪后再扫码或在手机上确认同一账号登录',
+      '捕获后临时微信窗口会关闭，随后恢复腾讯原签名微信；不要再次登录'
     ],
     note: '捕获只针对这次重新登录计算，并使用所选账号数据库实时校验结果。',
     primaryLabel: '已看到二维码，开始监测',
@@ -2117,38 +2120,25 @@ const runMacosLldbFallback = async ({ requestRevision, requestController, helper
   }
 
   warning.value = '正在等待管理员授权并启动本机监测；显示“监测已就绪”前请不要登录微信。'
-  const captureOutcomePromise = captureMacosKey({
-    ...macosKeyCapturePayload(),
-    signal: requestController.signal
-  }).then(
-    captureResponse => ({ response: captureResponse, captureError: null }),
-    captureError => ({ response: null, captureError })
-  )
-  let captureOutcome = null
-  let monitorReady = false
-  while (isDbKeyRequestActive(requestRevision, requestController) && !captureOutcome && !monitorReady) {
-    captureOutcome = await Promise.race([
-      captureOutcomePromise,
-      waitForDbKeyDelay(350, requestController.signal).then(() => null)
-    ])
-    if (captureOutcome) break
-    try {
-      const statusResponse = await getMacosKeyCaptureStatus({ signal: requestController.signal })
-      monitorReady = statusResponse?.status === 0 && statusResponse?.data?.monitor_ready === true
-    } catch (statusError) {
-      if (statusError?.name === 'AbortError') throw statusError
+  response = await followMacosCapture({
+    transactionId: captureTransactionId,
+    isActive: () => isDbKeyRequestActive(requestRevision, requestController),
+    start: () => captureMacosKey({
+      ...macosKeyCapturePayload(),
+      signal: requestController.signal
+    }),
+    getStatus: async ({ signal }) => {
+      const statusResponse = await getMacosKeyCaptureStatus({ signal })
+      return statusResponse?.status === 0 ? statusResponse.data : null
+    },
+    onProgress: (ready, phase) => {
+      warning.value = macosCaptureProgressMessage(ready, phase)
     }
-  }
+  })
   if (!isDbKeyRequestActive(requestRevision, requestController)) {
     await cleanupMacosKeyCapture({ silent: true })
     return false
   }
-  if (monitorReady) {
-    warning.value = '监测已就绪：现在请扫码或在手机上确认登录，完成前不要关闭微信或 WCDA。'
-  }
-  if (!captureOutcome) captureOutcome = await captureOutcomePromise
-  if (captureOutcome.captureError) throw captureOutcome.captureError
-  response = captureOutcome.response
   macosKeyCapturePrepared.value = response?.data?.needs_cleanup === true
   macosKeyCaptureOwnedByPage.value = macosKeyCapturePrepared.value
   const key = String(response?.data?.db_key || '').trim().toLowerCase()

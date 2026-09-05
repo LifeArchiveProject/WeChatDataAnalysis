@@ -904,12 +904,13 @@ export const useApi = () => {
   }
 
   const getMacosKeyCaptureStatus = async (params = {}) => {
-    return await request('/macos-key-capture/status', params?.signal ? { signal: params.signal } : {})
+    return await request('/macos-key-capture/status', { retry: 0, timeout: 3000, ...(params?.signal ? { signal: params.signal } : {}) })
   }
 
   const macosKeyCaptureRequest = async (action, params = {}) => {
     const options = {
       method: 'POST',
+      retry: 0,
       body: {
         wechat_install_path: params.wechat_install_path || null,
         db_storage_path: params.db_storage_path || null,

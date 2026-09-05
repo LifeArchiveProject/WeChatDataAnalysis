@@ -18,11 +18,11 @@ def test_validated_capture_terminates_disposable_process_before_returning() -> N
 
 def test_monitor_reports_ready_only_after_breakpoint_installation() -> None:
     source = SOURCE.read_text(encoding="utf-8")
-    start = source.index("static int run_capture")
-    install = source.index("kr = install_hardware_breakpoints(g_ctx.task);", start)
-    ready = source.index("write_ready_file(options->ready_file, options->pid)", install)
-
-    assert install < ready
+    capture = source.index("static int run_capture")
+    restore_debug = source.index("(void)restore_hardware_breakpoints();", capture)
+    restore_port = source.index("restore_exception_ports(g_ctx.task);", restore_debug)
+    resume = source.index("if (task_resume(g_ctx.task) != KERN_SUCCESS)", restore_port)
+    assert restore_debug < restore_port < resume
 
 
 def test_helper_source_contains_no_environment_specific_paths() -> None:

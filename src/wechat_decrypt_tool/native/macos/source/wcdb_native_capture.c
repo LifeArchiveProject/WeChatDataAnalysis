@@ -43,6 +43,7 @@ typedef struct {
     char database_path[PATH_MAX];
     char page1_path[PATH_MAX];
     char ready_file[PATH_MAX];
+    char transaction_id[129];
     int timeout_seconds;
 } options_t;
 
@@ -60,17 +61,43 @@ typedef struct {
     thread_act_array_t debug_threads;
     mach_msg_type_number_t debug_thread_count;
     arm_debug_state64_t *saved_debug_states;
+    bool *saved_debug_valid;
+    bool *debug_state_modified;
     bool hw_breakpoints_installed;
+    bool cleanup_failed;
     uint8_t page1[PAGE_SIZE_BYTES];
     bool page1_loaded;
     bool captured;
     bool validated;
     char db_key_hex[65];
     uint64_t pbkdf_calls;
+    uint64_t wcdb_profile_hits;
+    uint64_t rounds2_hits;
+    uint64_t rounds256000_hits;
+    uint64_t salt_matches;
+    uint64_t candidate_rejects;
+    uint64_t salt_read_failures;
+    uint64_t candidate_read_failures;
+    const char *last_stage;
     volatile sig_atomic_t stop_requested;
 } capture_context_t;
 
 static capture_context_t g_ctx;
+
+/* Only fixed stage labels and counters belong in diagnostics; never key bytes,
+ * salts, addresses, page data, or arbitrary strings from the target process. */
+static void json_diagnostics(void) {
+    printf(
+        "\"diagnostics\":{\"pbkdf_calls\":%" PRIu64 ",\"wcdb_profile_hits\":%" PRIu64
+        ",\"rounds2_hits\":%" PRIu64 ",\"rounds256000_hits\":%" PRIu64
+        ",\"salt_matches\":%" PRIu64 ",\"candidate_rejects\":%" PRIu64
+        ",\"salt_read_failures\":%" PRIu64 ",\"candidate_read_failures\":%" PRIu64
+        ",\"last_stage\":\"%s\"}",
+        g_ctx.pbkdf_calls, g_ctx.wcdb_profile_hits, g_ctx.rounds2_hits, g_ctx.rounds256000_hits,
+        g_ctx.salt_matches, g_ctx.candidate_rejects, g_ctx.salt_read_failures,
+        g_ctx.candidate_read_failures, g_ctx.last_stage ? g_ctx.last_stage : "initializing"
+    );
+}
 
 static void json_success_preflight(const options_t *options) {
     printf(
@@ -86,21 +113,27 @@ static void json_success_capture(const options_t *options) {
     printf(
         "{\"status\":\"ok\",\"mode\":\"capture\",\"method\":\"macos_native_mach\","
         "\"pid\":%d,\"stub_file_address\":%" PRIu64 ",\"validated\":%s,"
-        "\"db_key\":\"%s\",\"pbkdf_calls\":%" PRIu64 "}\n",
+        "\"db_key\":\"%s\",\"pbkdf_calls\":%" PRIu64 ",",
         options->pid,
         options->stub_file_address,
         g_ctx.validated ? "true" : "false",
         g_ctx.db_key_hex,
         g_ctx.pbkdf_calls
     );
+    json_diagnostics();
+    printf("}\n");
 }
 
 static void json_error(const char *code, const char *message) {
     printf(
-        "{\"status\":\"error\",\"code\":\"%s\",\"message\":\"%s\"}\n",
+        "{\"status\":\"error\",\"code\":\"%s\",\"message\":\"%s\","
+        "\"method\":\"macos_native_mach\",\"pid\":%d,",
         code ? code : "native_capture_failed",
-        message ? message : "native capture failed"
+        message ? message : "native capture failed",
+        g_ctx.target_pid
     );
+    json_diagnostics();
+    printf("}\n");
 }
 
 static void on_signal(int signum) {
@@ -117,7 +150,7 @@ static void install_signal_handlers(void) {
     sigaction(SIGTERM, &action, NULL);
 }
 
-static bool write_ready_file(const char *path, pid_t pid) {
+static bool write_ready_file(const char *path, pid_t pid, const char *transaction_id) {
     if (!path || !*path) {
         return true;
     }
@@ -132,12 +165,15 @@ static bool write_ready_file(const char *path, pid_t pid) {
     if (descriptor < 0) {
         return false;
     }
-    char payload[128];
+    char payload[320];
     int length = snprintf(
         payload,
         sizeof(payload),
-        "{\"status\":\"ready\",\"method\":\"macos_native_mach\",\"pid\":%d}\n",
-        pid
+        "{\"status\":\"ready\",\"method\":\"macos_native_mach\",\"pid\":%d%s%s%s}\n",
+        pid,
+        transaction_id && *transaction_id ? ",\"transaction_id\":\"" : "",
+        transaction_id && *transaction_id ? transaction_id : "",
+        transaction_id && *transaction_id ? "\"" : ""
     );
     bool ok = length > 0 && (size_t)length < sizeof(payload)
         && write(descriptor, payload, (size_t)length) == length
@@ -178,6 +214,20 @@ static bool parse_int(const char *value, int *out) {
     return true;
 }
 
+static bool valid_transaction_id(const char *value) {
+    if (!value || !*value || strlen(value) > 128) {
+        return false;
+    }
+    /* This opaque correlation token is deliberately restricted for JSON. */
+    for (const char *cursor = value; *cursor; cursor++) {
+        if (!((*cursor >= 'a' && *cursor <= 'z') || (*cursor >= 'A' && *cursor <= 'Z') ||
+              (*cursor >= '0' && *cursor <= '9') || *cursor == '-' || *cursor == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool parse_args(int argc, char **argv, options_t *options) {
     if (!options) {
         return false;
@@ -209,6 +259,12 @@ static bool parse_args(int argc, char **argv, options_t *options) {
             strlcpy(options->page1_path, argv[++index], sizeof(options->page1_path));
         } else if (streq(arg, "--ready-file") && index + 1 < argc) {
             strlcpy(options->ready_file, argv[++index], sizeof(options->ready_file));
+        } else if (streq(arg, "--transaction-id") && index + 1 < argc) {
+            const char *value = argv[++index];
+            if (!valid_transaction_id(value)) {
+                return false;
+            }
+            strlcpy(options->transaction_id, value, sizeof(options->transaction_id));
         } else if (streq(arg, "--timeout") && index + 1 < argc) {
             if (!parse_int(argv[++index], &options->timeout_seconds)) {
                 return false;
@@ -325,14 +381,16 @@ static void bytes_to_hex(const uint8_t *bytes, size_t length, char *out_hex) {
     out_hex[length * 2] = '\0';
 }
 
-static bool breakpoint_operands_match(const arm_thread_state64_t *state) {
+static bool breakpoint_profile_matches(const arm_thread_state64_t *state) {
     uint64_t algorithm = state->__x[0];
     uint64_t password_len = state->__x[2];
     uint64_t salt_len = state->__x[4];
     uint64_t prf = state->__x[5];
-    uint64_t rounds = state->__x[6];
-    return algorithm == 2 && password_len == KEY_SIZE && salt_len == SALT_SIZE && prf == 5 &&
-           rounds == 256000;
+    return algorithm == 2 && password_len == KEY_SIZE && salt_len == SALT_SIZE && prf == 5;
+}
+
+static bool breakpoint_operands_match(const arm_thread_state64_t *state) {
+    return breakpoint_profile_matches(state) && state->__x[6] == 256000;
 }
 
 static bool salt_matches_expected(uint64_t rounds, const uint8_t *salt) {
@@ -487,6 +545,10 @@ static void release_debug_threads(void) {
     }
     free(g_ctx.saved_debug_states);
     g_ctx.saved_debug_states = NULL;
+    free(g_ctx.saved_debug_valid);
+    g_ctx.saved_debug_valid = NULL;
+    free(g_ctx.debug_state_modified);
+    g_ctx.debug_state_modified = NULL;
     g_ctx.debug_thread_count = 0;
     g_ctx.hw_breakpoints_installed = false;
 }
@@ -499,7 +561,7 @@ static kern_return_t restore_hardware_breakpoints(void) {
     kern_return_t first_error = KERN_SUCCESS;
     for (mach_msg_type_number_t index = 0; index < g_ctx.debug_thread_count; index++) {
         thread_t thread = g_ctx.debug_threads[index];
-        if (thread == MACH_PORT_NULL) {
+        if (thread == MACH_PORT_NULL || !g_ctx.saved_debug_valid[index] || !g_ctx.debug_state_modified[index]) {
             continue;
         }
         kern_return_t kr = thread_set_state(
@@ -516,6 +578,9 @@ static kern_return_t restore_hardware_breakpoints(void) {
         ) {
             first_error = kr;
         }
+    }
+    if (first_error != KERN_SUCCESS) {
+        g_ctx.cleanup_failed = true;
     }
     release_debug_threads();
     return first_error;
@@ -536,7 +601,12 @@ static kern_return_t install_hardware_breakpoints(task_t task) {
     }
 
     arm_debug_state64_t *saved_states = calloc(thread_count, sizeof(*saved_states));
-    if (!saved_states) {
+    bool *saved_valid = calloc(thread_count, sizeof(*saved_valid));
+    bool *modified = calloc(thread_count, sizeof(*modified));
+    if (!saved_states || !saved_valid || !modified) {
+        free(saved_states);
+        free(saved_valid);
+        free(modified);
         for (mach_msg_type_number_t index = 0; index < thread_count; index++) {
             if (threads[index] != MACH_PORT_NULL) {
                 (void)mach_port_deallocate(mach_task_self(), threads[index]);
@@ -553,6 +623,8 @@ static kern_return_t install_hardware_breakpoints(task_t task) {
     g_ctx.debug_threads = threads;
     g_ctx.debug_thread_count = thread_count;
     g_ctx.saved_debug_states = saved_states;
+    g_ctx.saved_debug_valid = saved_valid;
+    g_ctx.debug_state_modified = modified;
 
     const uint64_t control = HW_BREAKPOINT_CONTROL_EXEC_4BYTES;
     const uint64_t address = ((uint64_t)g_ctx.breakpoint_address) & ~0x3ull;
@@ -574,6 +646,7 @@ static kern_return_t install_hardware_breakpoints(task_t task) {
             return kr;
         }
         saved_states[index] = debug_state;
+        saved_valid[index] = true;
 
         bool installed = false;
         for (size_t slot = 0; slot < MAX_HW_BREAKPOINTS; slot++) {
@@ -597,6 +670,7 @@ static kern_return_t install_hardware_breakpoints(task_t task) {
             (void)restore_hardware_breakpoints();
             return kr;
         }
+        modified[index] = true;
     }
 
     g_ctx.hw_breakpoints_installed = true;
@@ -663,9 +737,15 @@ static kern_return_t refresh_hardware_breakpoints_if_needed(void) {
     if (kr != KERN_SUCCESS) {
         return kr;
     }
-    (void)restore_hardware_breakpoints();
-    kr = install_hardware_breakpoints(g_ctx.task);
-    (void)task_resume(g_ctx.task);
+    kr = restore_hardware_breakpoints();
+    if (kr == KERN_SUCCESS) {
+        kr = install_hardware_breakpoints(g_ctx.task);
+    }
+    kern_return_t resume_kr = task_resume(g_ctx.task);
+    if (resume_kr != KERN_SUCCESS) {
+        g_ctx.cleanup_failed = true;
+        return resume_kr;
+    }
     return kr;
 }
 
@@ -714,7 +794,10 @@ static void restore_exception_ports(task_t task) {
         if (g_ctx.masks[index] == 0) {
             continue;
         }
-        (void)task_set_exception_ports(task, g_ctx.masks[index], g_ctx.old_ports[index], g_ctx.old_behaviors[index], g_ctx.old_flavors[index]);
+        kern_return_t kr = task_set_exception_ports(task, g_ctx.masks[index], g_ctx.old_ports[index], g_ctx.old_behaviors[index], g_ctx.old_flavors[index]);
+        if (kr != KERN_SUCCESS && kr != KERN_TERMINATED && kr != MACH_SEND_INVALID_DEST) {
+            g_ctx.cleanup_failed = true;
+        }
     }
     if (g_ctx.exception_port != MACH_PORT_NULL) {
         mach_port_mod_refs(mach_task_self(), g_ctx.exception_port, MACH_PORT_RIGHT_RECEIVE, -1);
@@ -750,6 +833,19 @@ static kern_return_t handle_breakpoint(thread_t thread) {
     }
 
     g_ctx.pbkdf_calls += 1;
+    g_ctx.last_stage = "pbkdf_seen";
+    if (breakpoint_profile_matches(&state)) {
+        g_ctx.wcdb_profile_hits += 1;
+        g_ctx.last_stage = "profile_matched";
+        if (state.__x[6] == 2) {
+            /* Count this call without reading/accepting its per-database raw key. */
+            g_ctx.rounds2_hits += 1;
+            g_ctx.last_stage = "rounds2_seen";
+        } else if (state.__x[6] == 256000) {
+            g_ctx.rounds256000_hits += 1;
+            g_ctx.last_stage = "rounds256000_seen";
+        }
+    }
     if (!breakpoint_operands_match(&state) || !g_ctx.page1_loaded) {
         return continue_thread_at_x16(thread);
     }
@@ -758,19 +854,27 @@ static kern_return_t handle_breakpoint(thread_t thread) {
     uint8_t candidate[KEY_SIZE];
     kr = remote_read_exact(g_ctx.task, (mach_vm_address_t)state.__x[3], salt, sizeof(salt));
     if (kr != KERN_SUCCESS) {
+        g_ctx.salt_read_failures += 1;
+        g_ctx.last_stage = "salt_read_failed";
         return continue_thread_at_x16(thread);
     }
     if (!salt_matches_expected(state.__x[6], salt)) {
+        g_ctx.last_stage = "salt_mismatch";
         return continue_thread_at_x16(thread);
     }
+    g_ctx.salt_matches += 1;
+    g_ctx.last_stage = "salt_matched";
     kr = remote_read_exact(g_ctx.task, (mach_vm_address_t)state.__x[1], candidate, sizeof(candidate));
     if (kr != KERN_SUCCESS) {
+        g_ctx.candidate_read_failures += 1;
+        g_ctx.last_stage = "candidate_read_failed";
         return continue_thread_at_x16(thread);
     }
     if (candidate_matches_page1(candidate)) {
         bytes_to_hex(candidate, KEY_SIZE, g_ctx.db_key_hex);
         g_ctx.captured = true;
         g_ctx.validated = true;
+        g_ctx.last_stage = "validated";
         g_ctx.stop_requested = 1;
         /*
          * The candidate has already passed the encrypted page-1 HMAC check.
@@ -788,6 +892,8 @@ static kern_return_t handle_breakpoint(thread_t thread) {
         }
         return KERN_SUCCESS;
     }
+    g_ctx.candidate_rejects += 1;
+    g_ctx.last_stage = "candidate_rejected";
     return continue_thread_at_x16(thread);
 }
 
@@ -875,6 +981,13 @@ static kern_return_t wait_for_breakpoint(int timeout_seconds) {
     while (!g_ctx.stop_requested) {
         struct timeval now;
         gettimeofday(&now, NULL);
+        /* A dead task/PID is a terminal result, not another login timeout. */
+        mach_port_type_t port_type = 0;
+        kern_return_t port_kr = mach_port_type(mach_task_self(), g_ctx.task, &port_type);
+        if ((port_kr == KERN_SUCCESS && (port_type & MACH_PORT_TYPE_DEAD_NAME) != 0) ||
+            (g_ctx.target_pid > 0 && kill(g_ctx.target_pid, 0) < 0 && errno == ESRCH)) {
+            return KERN_TERMINATED;
+        }
         if ((now.tv_sec - start.tv_sec) >= timeout_seconds) {
             return KERN_OPERATION_TIMED_OUT;
         }
@@ -921,17 +1034,21 @@ static kern_return_t wait_for_breakpoint(int timeout_seconds) {
 
 static int run_preflight(const options_t *options) {
     memset(&g_ctx, 0, sizeof(g_ctx));
+    g_ctx.target_pid = options->pid;
+    g_ctx.last_stage = "attach";
     kern_return_t kr = attach_task(options->pid, &g_ctx.task);
     if (kr != KERN_SUCCESS) {
         json_error("native_attach_failed", "task_for_pid failed");
         return 1;
     }
+    g_ctx.last_stage = "resolve_breakpoint";
     kr = resolve_breakpoint_address(g_ctx.task, options, &g_ctx.breakpoint_address);
     if (kr != KERN_SUCCESS) {
         json_error("native_image_not_found", "wechat.dylib not found in target task");
         return 1;
     }
     uint32_t instruction = 0;
+    g_ctx.last_stage = "read_breakpoint";
     kr = read_instruction(g_ctx.task, g_ctx.breakpoint_address, &instruction);
     if (kr != KERN_SUCCESS) {
         json_error("native_breakpoint_read_failed", "cannot read PBKDF stub instruction");
@@ -941,12 +1058,19 @@ static int run_preflight(const options_t *options) {
         json_error("native_breakpoint_shape_mismatch", "PBKDF stub layout changed");
         return 1;
     }
-    task_suspend(g_ctx.task);
-    kr = install_hardware_breakpoints(g_ctx.task);
-    if (kr == KERN_SUCCESS) {
-        (void)restore_hardware_breakpoints();
+    g_ctx.last_stage = "install_breakpoint";
+    kr = task_suspend(g_ctx.task);
+    if (kr != KERN_SUCCESS) {
+        json_error("native_cleanup_failed", "cannot safely suspend target for preflight");
+        return 1;
     }
-    task_resume(g_ctx.task);
+    kr = install_hardware_breakpoints(g_ctx.task);
+    kern_return_t restore_kr = restore_hardware_breakpoints();
+    kern_return_t resume_kr = task_resume(g_ctx.task);
+    if (g_ctx.cleanup_failed || restore_kr != KERN_SUCCESS || resume_kr != KERN_SUCCESS) {
+        json_error("native_cleanup_failed", "preflight debug state cleanup failed");
+        return 1;
+    }
     if (kr != KERN_SUCCESS) {
         json_error("native_breakpoint_install_failed", "cannot install hardware breakpoint");
         return 1;
@@ -959,6 +1083,7 @@ static int run_capture(const options_t *options) {
     memset(&g_ctx, 0, sizeof(g_ctx));
     g_ctx.target_pid = options->pid;
     install_signal_handlers();
+    g_ctx.last_stage = "read_page1";
     const char *page1_source = options->page1_path[0] ? options->page1_path : options->database_path;
     if (!read_page1(page1_source, g_ctx.page1)) {
         json_error("native_probe_database_unreadable", "cannot read encrypted page1");
@@ -966,16 +1091,19 @@ static int run_capture(const options_t *options) {
     }
     g_ctx.page1_loaded = true;
 
+    g_ctx.last_stage = "attach";
     kern_return_t kr = attach_task(options->pid, &g_ctx.task);
     if (kr != KERN_SUCCESS) {
         json_error("native_attach_failed", "task_for_pid failed");
         return 1;
     }
+    g_ctx.last_stage = "resolve_breakpoint";
     kr = resolve_breakpoint_address(g_ctx.task, options, &g_ctx.breakpoint_address);
     if (kr != KERN_SUCCESS) {
         json_error("native_image_not_found", "wechat.dylib not found in target task");
         return 1;
     }
+    g_ctx.last_stage = "read_breakpoint";
     kr = read_instruction(g_ctx.task, g_ctx.breakpoint_address, &g_ctx.original_instruction);
     if (kr != KERN_SUCCESS) {
         json_error("native_breakpoint_read_failed", "cannot read PBKDF stub instruction");
@@ -985,29 +1113,53 @@ static int run_capture(const options_t *options) {
         json_error("native_breakpoint_shape_mismatch", "PBKDF stub layout changed");
         return 1;
     }
+    g_ctx.last_stage = "install_exception_port";
     kr = install_exception_port(g_ctx.task);
     if (kr != KERN_SUCCESS) {
         json_error("native_exception_port_failed", "cannot install breakpoint exception port");
         return 1;
     }
 
-    task_suspend(g_ctx.task);
-    kr = install_hardware_breakpoints(g_ctx.task);
-    task_resume(g_ctx.task);
+    g_ctx.last_stage = "install_breakpoint";
+    kr = task_suspend(g_ctx.task);
     if (kr != KERN_SUCCESS) {
         restore_exception_ports(g_ctx.task);
+        json_error("native_cleanup_failed", "cannot safely suspend target for capture");
+        return 1;
+    }
+    kr = install_hardware_breakpoints(g_ctx.task);
+    kern_return_t resume_kr = task_resume(g_ctx.task);
+    if (kr != KERN_SUCCESS || resume_kr != KERN_SUCCESS) {
+        (void)restore_hardware_breakpoints();
+        restore_exception_ports(g_ctx.task);
+        if (g_ctx.cleanup_failed || resume_kr != KERN_SUCCESS) {
+            json_error("native_cleanup_failed", "capture startup debug state cleanup failed");
+            return 1;
+        }
         json_error("native_breakpoint_install_failed", "cannot install hardware breakpoint");
         return 1;
     }
-    if (!write_ready_file(options->ready_file, options->pid)) {
-        task_suspend(g_ctx.task);
+    g_ctx.last_stage = "write_ready";
+    if (!write_ready_file(options->ready_file, options->pid, options->transaction_id)) {
+        kern_return_t suspend_kr = task_suspend(g_ctx.task);
         (void)restore_hardware_breakpoints();
         restore_exception_ports(g_ctx.task);
-        (void)task_resume(g_ctx.task);
+        if (suspend_kr == KERN_SUCCESS) {
+            if (task_resume(g_ctx.task) != KERN_SUCCESS) {
+                g_ctx.cleanup_failed = true;
+            }
+        } else {
+            g_ctx.cleanup_failed = true;
+        }
+        if (g_ctx.cleanup_failed) {
+            json_error("native_cleanup_failed", "readiness failure debug state cleanup failed");
+            return 1;
+        }
         json_error("native_ready_signal_failed", "cannot write monitor readiness signal");
         return 1;
     }
 
+    g_ctx.last_stage = "waiting";
     kr = wait_for_breakpoint(options->timeout_seconds);
 
     if (g_ctx.captured) {
@@ -1019,15 +1171,37 @@ static int run_capture(const options_t *options) {
         (void)restore_hardware_breakpoints();
         restore_exception_ports(g_ctx.task);
         if (suspend_kr == KERN_SUCCESS) {
-            (void)task_resume(g_ctx.task);
+            if (task_resume(g_ctx.task) != KERN_SUCCESS) {
+                g_ctx.cleanup_failed = true;
+            }
+        } else if (suspend_kr != KERN_TERMINATED && suspend_kr != MACH_SEND_INVALID_DEST) {
+            g_ctx.cleanup_failed = true;
         }
     }
 
+    if (kr == KERN_TERMINATED || kr == MACH_SEND_INVALID_DEST) {
+        json_error("native_capture_target_exited", "target process exited before capture completed");
+        return 1;
+    }
+    if (g_ctx.cleanup_failed && !g_ctx.captured) {
+        json_error("native_cleanup_failed", "capture debug state cleanup failed");
+        return 1;
+    }
+    /* Signals can interrupt mach_msg with MACH_RCV_INTERRUPTED instead of
+     * taking the ordinary loop exit; keep both paths explicitly classified. */
+    if (g_ctx.stop_requested && !g_ctx.captured) {
+        json_error("native_capture_interrupted", "capture helper was interrupted");
+        return 1;
+    }
     if (kr == KERN_OPERATION_TIMED_OUT) {
         json_error("native_capture_timeout", "timed out waiting for login-triggered PBKDF");
         return 1;
     }
-    if (kr != KERN_SUCCESS || !g_ctx.validated) {
+    if (kr != KERN_SUCCESS) {
+        json_error("native_capture_wait_failed", "breakpoint monitor failed");
+        return 1;
+    }
+    if (!g_ctx.validated) {
         json_error("native_capture_unvalidated", "captured candidate did not validate against page1");
         return 1;
     }
