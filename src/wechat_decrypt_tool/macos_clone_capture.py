@@ -1,10 +1,9 @@
-"""Safe macOS WCDB passphrase capture using an isolated APFS clone.
+"""Legacy isolated capture workflow and shared macOS LLDB callbacks.
 
-The Tencent-signed application is never modified.  A disposable ad-hoc copy
-runs with a private HOME containing a copy-on-write clone of the real WeChat
-container.  LLDB is attached only to that disposable process and accepts a
-PBKDF2 password only when the KDF profile and salt match a cloned database and
-the candidate passes that database's page-one HMAC verification.
+The legacy workflow uses a disposable APFS application/profile clone. The
+production in-place workflow also reuses these LLDB builders, under its own
+recoverable temporary-signature transaction. Account-aware callbacks require
+both message and session page HMACs before accepting any candidate.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from .macos_capture_validation import normalize_account_probe_pages, validate_account_candidate
 from .macos_db_key_capture import (
     DEFAULT_DEBUG_ROOT,
     MacOSDBKeyCaptureFailure,
@@ -53,6 +53,83 @@ WECHAT_DOCUMENTS_RELATIVE = Path("Documents")
 WECHAT_KEY_RETURN_POINTS = {
     "1B1A6433-A445-3247-B7E1-753C09CDB137": 0x2FC6880,
 }
+# Exact arm64 Mach-O identities only; offsets must never cross builds.
+WECHAT_PBKDF_STUB_POINTS = {
+    "8F7D3DD4-D676-36F9-8C31-CEE02C26C284": 0x6C737F8,
+    "07EE7CDA-5F9B-38A2-9E0C-E4DF83DB22E4": 0x6CD0ACC,
+}
+
+_LLDB_BREAKPOINT_VALIDATION_SOURCE = '''
+def _resolved_locations(breakpoint, target):
+    count = 0
+    for index in range(breakpoint.GetNumLocations()):
+        location = breakpoint.GetLocationAtIndex(index)
+        address = location.GetAddress()
+        if not location.IsResolved() or not address.IsValid():
+            continue
+        section = address.GetSection()
+        if (
+            section.IsValid()
+            and section.GetPermissions() & lldb.ePermissionsExecutable
+            and address.GetLoadAddress(target) != lldb.LLDB_INVALID_ADDRESS
+        ):
+            count += 1
+    return count
+'''
+
+
+def _normalize_pbkdf_stub_plan(plan: dict[str, int] | None) -> dict[str, int]:
+    points = dict(WECHAT_PBKDF_STUB_POINTS)
+    if plan is None:
+        return points
+    if not isinstance(plan, dict) or len(plan) > 128:
+        raise MacOSDBKeyCaptureFailure("capture_breakpoint_plan_invalid", "LLDB 断点计划格式无效，已停止监测。")
+    for identifier, offset in plan.items():
+        if (
+            not isinstance(identifier, str)
+            or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", identifier)
+            or type(offset) is not int or not 0 < offset < 2**64 or offset % 4
+        ):
+            raise MacOSDBKeyCaptureFailure("capture_breakpoint_plan_invalid", "LLDB 断点计划缺少有效的模块身份或地址。")
+        points[identifier.upper()] = offset
+    return points
+
+
+def resolve_lldb_pbkdf_stub_plan(wechat_app: str | Path | None) -> dict[str, int]:
+    """Read a UUID-bound arm64 import stub, without launching or attaching.
+
+    A parsed address is only a plan: both LLDB stages must still find the same
+    UUID at a loaded executable address. Known exact-UUID entries remain useful
+    when optional static inspection is unavailable; no version guess is made.
+    """
+
+    plan = _normalize_pbkdf_stub_plan(None)
+    if not wechat_app:
+        return plan
+    dylib = Path(wechat_app).expanduser() / "Contents/Resources/wechat.dylib"
+    try:
+        if not dylib.is_file():
+            return plan
+        before = dylib.stat()
+        load_commands = _run(["/usr/bin/otool", "-arch", "arm64", "-l", str(dylib)], timeout=60).stdout
+        uuids = re.findall(
+            r"(?m)^\s*cmd LC_UUID\s*\n\s*cmdsize \d+\s*\n\s*uuid ([0-9a-fA-F-]{36})\s*$",
+            load_commands,
+        )
+        if len(uuids) != 1:
+            return plan
+        from .macos_native_capture import _parse_pbkdf_stub_address
+
+        imports = _run(["/usr/bin/otool", "-arch", "arm64", "-Iv", str(dylib)], timeout=60).stdout
+        offset = _parse_pbkdf_stub_address(imports)
+        after = dylib.stat()
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ):
+            return plan
+        return _normalize_pbkdf_stub_plan({**plan, uuids[0]: offset})
+    except (OSError, MacOSDBKeyCaptureFailure, ValueError):
+        return plan
 
 
 def _state_path(debug_root: Path) -> Path:
@@ -372,13 +449,19 @@ def build_lldb_salt_capture_script(
     *,
     probe_page1: bytes | None = None,
     enable_key_return_fallback: bool = True,
+    ready_path: Path | None = None,
+    account_probe_pages: dict[str, bytes] | None = None,
+    transaction_id: str | None = None,
+    pbkdf_stub_plan: dict[str, int] | None = None,
 ) -> str:
     """Build callbacks that validate candidates before stopping the process."""
 
-    salts = _normalize_salts(expected_salts)
+    account_pages = normalize_account_probe_pages(account_probe_pages) if account_probe_pages is not None else {}
+    salts = _normalize_salts([*expected_salts, *(page[:16] for page in account_pages.values())])
     if not salts:
         raise MacOSDBKeyCaptureFailure("capture_salts_missing", "没有可用于过滤 PBKDF2 调用的数据库 salt")
     result_literal = json.dumps(str(result_path))
+    ready_literal = json.dumps(str(ready_path) if ready_path is not None else "")
     salts_literal = json.dumps(salts)
     hmac_salts_literal = json.dumps(
         {
@@ -387,7 +470,8 @@ def build_lldb_salt_capture_script(
         },
         sort_keys=True,
     )
-    page1_literal = json.dumps(bytes(probe_page1 or b"").hex())
+    page1_literal = json.dumps(bytes(probe_page1 or account_pages.get("message", b"")).hex())
+    account_pages_literal = json.dumps({role: page.hex() for role, page in account_pages.items()})
     return f'''import hashlib
 import hmac
 import json
@@ -395,26 +479,57 @@ import lldb
 import os
 
 RESULT_PATH = {result_literal}
+READY_PATH = {ready_literal}
 EXPECTED_SALTS = frozenset({salts_literal})
 EXPECTED_HMAC_SALTS = {hmac_salts_literal}
 PROBE_PAGE1 = bytes.fromhex({page1_literal})
+ACCOUNT_PROBE_PAGES = {{role: bytes.fromhex(page) for role, page in {account_pages_literal}.items()}}
+TRANSACTION_ID = {json.dumps(str(transaction_id or ""))}
 KEY_RETURN_POINTS = {json.dumps(WECHAT_KEY_RETURN_POINTS)}
+PBKDF_STUB_POINTS = {json.dumps(_normalize_pbkdf_stub_plan(pbkdf_stub_plan))}
 ENABLE_KEY_RETURN_FALLBACK = {bool(enable_key_return_fallback)!r}
 MODULE_NAME = __name__
 DIAGNOSTICS = {{
     "pbkdf_calls": 0,
     "pbkdf_shape_hits": 0,
+    "pbkdf_profiles": {{}},
     "pbkdf_rounds_2_hits": 0,
     "pbkdf_rounds_256000_hits": 0,
     "pbkdf_salt_hits": 0,
     "key_return_hits": 0,
     "candidate_rejections": 0,
+    "partial_candidates": 0,
 }}
 
+{_LLDB_BREAKPOINT_VALIDATION_SOURCE}
+
 def _write_result(payload):
+    if TRANSACTION_ID:
+        payload = dict(payload, transaction_id=TRANSACTION_ID)
     flags = os.O_WRONLY | os.O_TRUNC
     flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     descriptor = os.open(RESULT_PATH, flags)
+    try:
+        data = json.dumps(payload).encode()
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                return False
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return True
+
+def _write_ready(payload):
+    if not READY_PATH:
+        return True
+    if TRANSACTION_ID:
+        payload = dict(payload, transaction_id=TRANSACTION_ID)
+    flags = os.O_WRONLY | os.O_TRUNC
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(READY_PATH, flags)
     try:
         data = json.dumps(payload).encode()
         view = memoryview(data)
@@ -435,20 +550,26 @@ def _record_diagnostic(name):
 def _register(frame, name):
     return frame.FindRegister(name).GetValueAsUnsigned()
 
-def _candidate_matches_page1(candidate):
-    if len(candidate) != 32 or len(PROBE_PAGE1) < 4096:
-        return False
-    salt = PROBE_PAGE1[:16]
-    stored_hmac = PROBE_PAGE1[4032:4096]
-    for enc_key in (candidate, hashlib.pbkdf2_hmac("sha512", candidate, salt, 256000, 32)):
+def _candidate_page1_mode(candidate, page):
+    if len(candidate) != 32 or len(page) != 4096 or page.startswith(b"SQLite format 3\\x00"):
+        return ""
+    salt = page[:16]
+    stored_hmac = page[4032:4096]
+    for mode in ("raw_enc_key", "sqlcipher_passphrase"):
+        enc_key = candidate if mode == "raw_enc_key" else hashlib.pbkdf2_hmac("sha512", candidate, salt, 256000, 32)
         mac_salt = bytes(value ^ 0x3A for value in salt)
         mac_key = hashlib.pbkdf2_hmac("sha512", enc_key, mac_salt, 2, 32)
         digest = hmac.new(mac_key, digestmod=hashlib.sha512)
-        digest.update(PROBE_PAGE1[16:4032])
+        digest.update(page[16:4032])
         digest.update((1).to_bytes(4, "little"))
         if hmac.compare_digest(stored_hmac, digest.digest()):
-            return True
-    return False
+            return mode
+    return ""
+
+def _candidate_matches_page1(candidate):
+    # Compatibility for standalone single-database callers. Account captures
+    # always use _save_valid_candidate's mandatory two-role validation below.
+    return bool(_candidate_page1_mode(candidate, PROBE_PAGE1))
 
 def _normalize_candidate(raw):
     if len(raw) == 32:
@@ -463,16 +584,37 @@ def _normalize_candidate(raw):
 
 def _save_valid_candidate(candidate, salt, source, process):
     normalized = _normalize_candidate(candidate)
-    if not _candidate_matches_page1(normalized):
+    pages = ACCOUNT_PROBE_PAGES or {{"probe": PROBE_PAGE1}}
+    required_roles = ("message", "session") if ACCOUNT_PROBE_PAGES else ("probe",)
+    modes = {{}}
+    for role in required_roles:
+        mode = _candidate_page1_mode(normalized, pages.get(role, b""))
+        if mode:
+            modes[role] = mode
+    if len(modes) != len(required_roles):
+        if modes:
+            _record_diagnostic("partial_candidates")
         _record_diagnostic("candidate_rejections")
         return False
-    _write_result({{
+    unique_modes = set(modes.values())
+    if not _write_result({{
         "passphrase": normalized.hex(),
         "salt": salt,
         "source": source,
+        "key_mode": next(iter(unique_modes)) if len(unique_modes) == 1 else "mixed",
+        "validated_roles": list(required_roles),
         "diagnostics": dict(DIAGNOSTICS),
-    }})
+    }}):
+        return False
     print("WEDATA_MATCHED_VALIDATED_DATABASE_KEY", source, flush=True)
+    # This contains no key or salt. It lets the UI stop asking for a login
+    # before the expected shutdown needed to restore the official bundle.
+    try:
+        _write_ready({{"status": "captured", "method": "macos_lldb_stub", "pid": int(process.GetProcessID())}})
+    except Exception:
+        # The validated result is already durable; advisory progress failure
+        # must not keep a modified/debugged process alive or lose that result.
+        pass
     process.Kill()
     os._exit(0)
 
@@ -486,27 +628,35 @@ def _pbkdf_callback(frame, bp_loc, _internal_dict):
     salt_len = _register(frame, "x4")
     prf = _register(frame, "x5")
     rounds = _register(frame, "x6")
-    if algorithm != 2 or password_len != 32 or salt_len != 16 or prf != 5 or rounds not in (2, 256000):
+    profile = f"algorithm={{algorithm}},password_len={{password_len}},salt_len={{salt_len}},prf={{prf}},rounds={{rounds}}"
+    profiles = DIAGNOSTICS.setdefault("pbkdf_profiles", {{}})
+    if len(profiles) < 8 or profile in profiles:
+        profiles[profile] = int(profiles.get(profile, 0)) + 1
+        _write_result({{"diagnostics": dict(DIAGNOSTICS)}})
+    if password_len not in (32, 64) or salt_len != 16:
         return False
     _record_diagnostic("pbkdf_shape_hits")
-    _record_diagnostic("pbkdf_rounds_2_hits" if rounds == 2 else "pbkdf_rounds_256000_hits")
+    if rounds == 2:
+        _record_diagnostic("pbkdf_rounds_2_hits")
+    elif rounds == 256000:
+        _record_diagnostic("pbkdf_rounds_256000_hits")
 
     error = lldb.SBError()
     salt = process.ReadMemory(salt_ptr, salt_len, error)
     if not error.Success() or len(salt) != 16:
         return False
     salt_hex = salt.hex()
-    if rounds == 2:
+    if salt_hex in EXPECTED_HMAC_SALTS:
         database_salt = EXPECTED_HMAC_SALTS.get(salt_hex, "")
-        source = "pbkdf2_hmac_password"
+        source = "pbkdf_hmac_password"
     else:
         database_salt = salt_hex if salt_hex in EXPECTED_SALTS else ""
-        source = "pbkdf2_passphrase"
+        source = "pbkdf_database_password"
     if not database_salt:
         return False
     _record_diagnostic("pbkdf_salt_hits")
     password = process.ReadMemory(password_ptr, password_len, error)
-    if not error.Success() or len(password) != 32:
+    if not error.Success() or len(password) != password_len:
         return False
 
     _save_valid_candidate(password, database_salt, source, process)
@@ -567,7 +717,29 @@ def _setup(debugger, _command, _result, _internal_dict):
     breakpoint = target.BreakpointCreateByName("CCKeyDerivationPBKDF")
     breakpoint.SetScriptCallbackFunction(f"{{MODULE_NAME}}._pbkdf_callback")
     breakpoint.SetAutoContinue(True)
-    pbkdf_locations = breakpoint.GetNumResolvedLocations()
+    pbkdf_locations = _resolved_locations(breakpoint, target)
+    # On 4.1.13 LLDB can report a resolved CommonCrypto name breakpoint yet
+    # miss the call routed through WeChat's import stub.  Always install the
+    # UUID-bound stub breakpoint as well; it observes the original x0-x6 ABI
+    # arguments and is valid only for the exact dylib builds listed above.
+    for module in target.module_iter():
+        uuid = (module.GetUUIDString() or "").upper()
+        offset = PBKDF_STUB_POINTS.get(uuid)
+        if offset is None:
+            continue
+        address = module.ResolveFileAddress(offset)
+        section = address.GetSection() if address.IsValid() else lldb.SBSection()
+        if (
+            not address.IsValid()
+            or not section.IsValid()
+            or not (section.GetPermissions() & lldb.ePermissionsExecutable)
+            or address.GetLoadAddress(target) == lldb.LLDB_INVALID_ADDRESS
+        ):
+            continue
+        stub_breakpoint = target.BreakpointCreateBySBAddress(address)
+        stub_breakpoint.SetScriptCallbackFunction(f"{{MODULE_NAME}}._pbkdf_callback")
+        stub_breakpoint.SetAutoContinue(True)
+        pbkdf_locations += _resolved_locations(stub_breakpoint, target)
     key_locations = 0
     if ENABLE_KEY_RETURN_FALLBACK:
         for module in target.module_iter():
@@ -587,12 +759,19 @@ def _setup(debugger, _command, _result, _internal_dict):
             key_breakpoint = target.BreakpointCreateBySBAddress(address)
             key_breakpoint.SetScriptCallbackFunction(f"{{MODULE_NAME}}._key_return_callback")
             key_breakpoint.SetAutoContinue(True)
-            key_locations += key_breakpoint.GetNumResolvedLocations()
+            key_locations += _resolved_locations(key_breakpoint, target)
     print("WEDATA_KEY_MONITOR_READY", pbkdf_locations, key_locations, flush=True)
     if pbkdf_locations <= 0 and key_locations <= 0:
         process = target.GetProcess()
         process.Detach()
         os._exit(24)
+    _write_ready({{
+        "status": "ready",
+        "method": "macos_lldb_stub",
+        "pid": int(target.GetProcess().GetProcessID() or 0),
+        "pbkdf_locations": int(pbkdf_locations),
+        "key_return_locations": int(key_locations),
+    }})
 
 def __lldb_init_module(debugger, _internal_dict):
     debugger.HandleCommand(f"command script add -f {{MODULE_NAME}}._setup wedata_capture")
@@ -600,7 +779,9 @@ def __lldb_init_module(debugger, _internal_dict):
 '''
 
 
-def build_lldb_breakpoint_preflight_script(result_path: Path) -> str:
+def build_lldb_breakpoint_preflight_script(
+    result_path: Path, *, pbkdf_stub_plan: dict[str, int] | None = None
+) -> str:
     """Build a read-only LLDB command that verifies usable runtime breakpoints."""
 
     result_literal = json.dumps(str(result_path))
@@ -610,7 +791,10 @@ import os
 
 RESULT_PATH = {result_literal}
 KEY_RETURN_POINTS = {json.dumps(WECHAT_KEY_RETURN_POINTS)}
+PBKDF_STUB_POINTS = {json.dumps(_normalize_pbkdf_stub_plan(pbkdf_stub_plan))}
 MODULE_NAME = __name__
+
+{_LLDB_BREAKPOINT_VALIDATION_SOURCE}
 
 def _write_result(payload):
     flags = os.O_WRONLY | os.O_TRUNC
@@ -628,18 +812,56 @@ def _write_result(payload):
     finally:
         os.close(descriptor)
 
-def _resolved_locations(breakpoint):
+def _total_locations(breakpoint):
     try:
-        return breakpoint.GetNumResolvedLocations()
+        return breakpoint.GetNumLocations()
     except AttributeError:
-        return sum(1 for index in range(breakpoint.GetNumLocations()) if breakpoint.GetLocationAtIndex(index).IsResolved())
+        return 0
 
 def _setup(debugger, _command, _result, _internal_dict):
     target = debugger.GetSelectedTarget()
     process = target.GetProcess()
     pbkdf_breakpoint = target.BreakpointCreateByName("CCKeyDerivationPBKDF")
-    pbkdf_locations = _resolved_locations(pbkdf_breakpoint)
+    pbkdf_resolved_locations = _resolved_locations(pbkdf_breakpoint, target)
+    pbkdf_total_locations = _total_locations(pbkdf_breakpoint)
     pbkdf_breakpoint.SetEnabled(False)
+    pbkdf_stub_modules = []
+    rejected_pbkdf_stubs = []
+    for module in target.module_iter():
+        uuid = (module.GetUUIDString() or "").upper()
+        offset = PBKDF_STUB_POINTS.get(uuid)
+        if offset is None:
+            continue
+        module_name = module.GetFileSpec().GetFilename() or "unknown"
+        address = module.ResolveFileAddress(offset)
+        section = address.GetSection() if address.IsValid() else lldb.SBSection()
+        load_address = address.GetLoadAddress(target) if address.IsValid() else lldb.LLDB_INVALID_ADDRESS
+        executable = bool(section.IsValid() and section.GetPermissions() & lldb.ePermissionsExecutable)
+        if (
+            not address.IsValid()
+            or not section.IsValid()
+            or not executable
+            or load_address == lldb.LLDB_INVALID_ADDRESS
+        ):
+            rejected_pbkdf_stubs.append({{
+                "module": module_name,
+                "uuid": uuid,
+                "offset": offset,
+                "section": section.GetName() if section.IsValid() else "",
+            }})
+            continue
+        stub_breakpoint = target.BreakpointCreateBySBAddress(address)
+        locations = _resolved_locations(stub_breakpoint, target)
+        stub_breakpoint.SetEnabled(False)
+        if locations > 0:
+            pbkdf_resolved_locations += locations
+            pbkdf_total_locations += locations
+            pbkdf_stub_modules.append({{
+                "module": module_name,
+                "uuid": uuid,
+                "offset": offset,
+                "section": section.GetName() or "",
+            }})
     key_locations = 0
     matched_modules = []
     rejected_points = []
@@ -667,7 +889,7 @@ def _setup(debugger, _command, _result, _internal_dict):
             }})
             continue
         breakpoint = target.BreakpointCreateBySBAddress(address)
-        locations = _resolved_locations(breakpoint)
+        locations = _resolved_locations(breakpoint, target)
         breakpoint.SetEnabled(False)
         if locations > 0:
             key_locations += locations
@@ -679,27 +901,73 @@ def _setup(debugger, _command, _result, _internal_dict):
             }})
     payload = {{
         "pid": process.GetProcessID(),
-        "pbkdf_locations": pbkdf_locations,
+        "pbkdf_locations": pbkdf_resolved_locations,
+        "pbkdf_total_locations": pbkdf_total_locations,
+        "pbkdf_deferred": pbkdf_total_locations > 0 and pbkdf_resolved_locations <= 0,
+        "pbkdf_stub_modules": pbkdf_stub_modules,
+        "rejected_pbkdf_stubs": rejected_pbkdf_stubs,
         "key_return_locations": key_locations,
         "matched_modules": matched_modules,
         "rejected_points": rejected_points,
     }}
+    try:
+        detached = bool(process.Detach().Success())
+    except Exception:
+        detached = False
+    if not detached:
+        _write_result({{"status": "error", "code": "capture_preflight_detach_failed"}})
+        print("WEDATA_BREAKPOINT_PREFLIGHT_DETACH_FAILED", flush=True)
+        return
     _write_result(payload)
-    print("WEDATA_BREAKPOINT_PREFLIGHT", pbkdf_locations, key_locations, flush=True)
-    process.Detach()
+    print(
+        "WEDATA_BREAKPOINT_PREFLIGHT",
+        pbkdf_resolved_locations,
+        pbkdf_total_locations,
+        key_locations,
+        flush=True,
+    )
 
 def __lldb_init_module(debugger, _internal_dict):
     debugger.HandleCommand(f"command script add -f {{MODULE_NAME}}._setup wedata_preflight")
 '''
 
 
-def preflight_capture_breakpoints(*, pid: int, debug_root: Path = DEFAULT_DEBUG_ROOT) -> dict[str, Any]:
+def _wechat_binary_imports_pbkdf(wechat_app: str | Path | None) -> bool:
+    if not wechat_app:
+        return False
+    app = Path(wechat_app).expanduser()
+    candidates = (
+        app / "Contents/Resources/wechat.dylib",
+        app / "Contents/Resources/roam_migration.framework/Versions/A/roam_migration",
+        app / "Contents/Resources/roam_server.framework/Versions/A/roam_server",
+    )
+    for binary in candidates:
+        if not binary.is_file():
+            continue
+        result = _run(["/usr/bin/nm", "-u", str(binary)], check=False)
+        if result.returncode == 0 and "CCKeyDerivationPBKDF" in result.stdout:
+            return True
+    return False
+
+
+def preflight_capture_breakpoints(
+    *,
+    pid: int,
+    debug_root: Path = DEFAULT_DEBUG_ROOT,
+    wechat_app: str | Path | None = None,
+    pbkdf_stub_plan: dict[str, int] | None = None,
+) -> dict[str, Any]:
     """Attach briefly, validate breakpoint locations, and detach before re-login."""
 
     if platform.machine().lower() not in {"arm64", "aarch64"}:
         raise MacOSDBKeyCaptureFailure("capture_arch_unsupported", "当前安全捕获流程仅支持 Apple Silicon Mac")
     if shutil.which("lldb") is None:
         raise MacOSDBKeyCaptureFailure("lldb_missing", "未安装 LLDB，请先运行 xcode-select --install")
+
+    stub_plan = (
+        resolve_lldb_pbkdf_stub_plan(wechat_app)
+        if pbkdf_stub_plan is None else _normalize_pbkdf_stub_plan(pbkdf_stub_plan)
+    )
 
     result_path = _breakpoint_preflight_path(debug_root)
     result_path.parent.mkdir(parents=True, exist_ok=True)
@@ -710,12 +978,17 @@ def preflight_capture_breakpoints(*, pid: int, debug_root: Path = DEFAULT_DEBUG_
     with tempfile.TemporaryDirectory(prefix="wedata-breakpoint-preflight-") as temporary_dir:
         root = Path(temporary_dir)
         callback_path = root / "preflight_callback.py"
-        callback_path.write_text(build_lldb_breakpoint_preflight_script(result_path), encoding="utf-8")
+        callback_path.write_text(
+            build_lldb_breakpoint_preflight_script(result_path, pbkdf_stub_plan=stub_plan), encoding="utf-8"
+        )
         os.chmod(callback_path, 0o600)
         command_path = root / "preflight.lldb"
         command_path.write_text(
             "settings set target.preload-symbols false\n"
             f"process attach -p {int(pid)}\n"
+            # WeChat legitimately executes BRK during initialization.  LLDB
+            # must neither stop on nor deliver that signal back to the app;
+            # LLDB still owns its own software breakpoint exceptions.
             "process handle SIGTRAP -n false -p false -s false\n"
             f"command script import {callback_path}\n"
             "wedata_preflight\n"
@@ -724,7 +997,7 @@ def preflight_capture_breakpoints(*, pid: int, debug_root: Path = DEFAULT_DEBUG_
         )
         os.chmod(command_path, 0o600)
         command = _build_lldb_capture_command(command_path, 45)
-        output = _run_as_administrator(command, timeout=90)
+        output = _run_as_administrator(command, timeout=180)
 
     try:
         payload = json.loads(result_path.read_text(encoding="utf-8"))
@@ -734,9 +1007,17 @@ def preflight_capture_breakpoints(*, pid: int, debug_root: Path = DEFAULT_DEBUG_
     if "attach failed" in compact or "not allowed to attach" in compact:
         _remove_breakpoint_preflight(debug_root)
         raise MacOSDBKeyCaptureFailure("lldb_attach_failed", "LLDB 无法附加独立调试微信完成断点预检")
+    if isinstance(payload, dict) and payload.get("code") == "capture_preflight_detach_failed":
+        _remove_breakpoint_preflight(debug_root)
+        raise MacOSDBKeyCaptureFailure(
+            "capture_preflight_detach_failed", "LLDB 预检后未能确认分离，已停止进入密钥监测。", process_attached=True,
+        )
 
-    pbkdf_locations = int(payload.get("pbkdf_locations") or 0)
+    pbkdf_resolved_locations = int(payload.get("pbkdf_locations") or 0)
+    pbkdf_total_locations = int(payload.get("pbkdf_total_locations") or 0)
+    pbkdf_locations = pbkdf_resolved_locations
     key_return_locations = int(payload.get("key_return_locations") or 0)
+    pbkdf_deferred = bool(payload.get("pbkdf_deferred"))
     if pbkdf_locations <= 0 and key_return_locations <= 0:
         _remove_breakpoint_preflight(debug_root)
         raise MacOSDBKeyCaptureFailure(
@@ -744,9 +1025,16 @@ def preflight_capture_breakpoints(*, pid: int, debug_root: Path = DEFAULT_DEBUG_
             "当前微信版本没有可用的密钥捕获断点；监测未启动，请不要退出账号。",
             process_attached=True,
         )
-    return {
+    normalized_result = {
         "pid": int(payload.get("pid") or pid),
         "pbkdf_locations": pbkdf_locations,
+        "pbkdf_resolved_locations": pbkdf_resolved_locations,
+        "pbkdf_total_locations": pbkdf_total_locations,
+        "pbkdf_deferred": pbkdf_deferred,
+        "pbkdf_import_verified": bool(payload.get("pbkdf_stub_modules")),
+        "pbkdf_stub_plan": stub_plan,
+        "pbkdf_stub_modules": list(payload.get("pbkdf_stub_modules") or []),
+        "rejected_pbkdf_stubs": list(payload.get("rejected_pbkdf_stubs") or []),
         "key_return_locations": key_return_locations,
         "matched_modules": list(payload.get("matched_modules") or []),
         "rejected_points": list(payload.get("rejected_points") or []),
@@ -754,6 +1042,15 @@ def preflight_capture_breakpoints(*, pid: int, debug_root: Path = DEFAULT_DEBUG_
         "process_attached": True,
         "process_detached": True,
     }
+    temporary = result_path.with_name(f".{result_path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(normalized_result, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.chmod(temporary, 0o600)
+    temporary.replace(result_path)
+    os.chmod(result_path, 0o600)
+    return normalized_result
 
 
 def capture_salt_matched_passphrase(
@@ -763,24 +1060,36 @@ def capture_salt_matched_passphrase(
     probe_db_path: str | Path,
     timeout: int = 240,
     enable_key_return_fallback: bool = True,
-) -> str:
+    ready_file: str | Path | None = None,
+    account_probe_pages: dict[str, bytes] | None = None,
+    return_details: bool = False,
+    transaction_id: str | None = None,
+    pbkdf_stub_plan: dict[str, int] | None = None,
+) -> str | dict[str, Any]:
     if platform.machine().lower() not in {"arm64", "aarch64"}:
         raise MacOSDBKeyCaptureFailure("capture_arch_unsupported", "当前安全捕获流程仅支持 Apple Silicon Mac")
     if shutil.which("lldb") is None:
         raise MacOSDBKeyCaptureFailure("lldb_missing", "未安装 LLDB，请先运行 xcode-select --install")
 
     salts = _normalize_salts(expected_salts)
-    probe_database = Path(probe_db_path).expanduser()
-    try:
-        with probe_database.open("rb") as handle:
-            probe_page1 = handle.read(4096)
-    except OSError as exc:
-        raise MacOSDBKeyCaptureFailure(
-            "probe_database_unreadable",
-            f"无法读取目标数据库用于实时校验: {probe_database}",
-        ) from exc
-    if len(probe_page1) < 4096:
-        raise MacOSDBKeyCaptureFailure("probe_database_invalid", f"目标数据库首页不完整: {probe_database}")
+    account_pages = normalize_account_probe_pages(account_probe_pages) if account_probe_pages is not None else None
+    if account_pages is not None:
+        # Use the pre-capture account snapshot, never reread a live database
+        # whose salt may have changed during a relogin.
+        probe_page1 = account_pages["message"]
+        salts = _normalize_salts([*salts, *(page[:16] for page in account_pages.values())])
+    else:
+        probe_database = Path(probe_db_path).expanduser()
+        try:
+            with probe_database.open("rb") as handle:
+                probe_page1 = handle.read(4096)
+        except OSError as exc:
+            raise MacOSDBKeyCaptureFailure(
+                "probe_database_unreadable",
+                f"无法读取目标数据库用于实时校验: {probe_database}",
+            ) from exc
+        if len(probe_page1) < 4096:
+            raise MacOSDBKeyCaptureFailure("probe_database_invalid", f"目标数据库首页不完整: {probe_database}")
     with tempfile.TemporaryDirectory(prefix="wedata-salt-capture-") as temporary_dir:
         root = Path(temporary_dir)
         result_path = root / "result.json"
@@ -792,6 +1101,10 @@ def capture_salt_matched_passphrase(
                 salts,
                 probe_page1=probe_page1,
                 enable_key_return_fallback=enable_key_return_fallback,
+                ready_path=Path(ready_file).expanduser() if ready_file else None,
+                account_probe_pages=account_pages,
+                transaction_id=transaction_id,
+                pbkdf_stub_plan=pbkdf_stub_plan,
             ),
             encoding="utf-8",
         )
@@ -816,10 +1129,20 @@ def capture_salt_matched_passphrase(
         except (OSError, UnicodeError, ValueError):
             payload = {}
 
+    if not isinstance(payload, dict):
+        payload = {}
     passphrase = str(payload.get("passphrase") or "").strip().lower()
     captured_salt = str(payload.get("salt") or "").strip().lower()
     diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
-    if len(passphrase) == 64 and captured_salt in salts:
+    if re.fullmatch(r"[0-9a-f]{64}", passphrase) and captured_salt in salts:
+        if transaction_id and payload.get("transaction_id") != transaction_id:
+            raise MacOSDBKeyCaptureFailure("capture_transaction_mismatch", "捕获结果不属于当前事务，未保存账号密钥。")
+        validation = validate_account_candidate(passphrase, account_pages) if account_pages is not None else {
+            "key_mode": str(payload.get("key_mode") or ""),
+            "validated_roles": ["probe"],
+        }
+        if return_details:
+            return {"passphrase": passphrase, **validation, "diagnostics": diagnostics}
         return passphrase
     compact = " ".join(str(output or "").split()).lower()
     if "attach failed" in compact or "not allowed to attach" in compact:
@@ -833,16 +1156,18 @@ def capture_salt_matched_passphrase(
         )
     pbkdf_calls = int(diagnostics.get("pbkdf_calls") or 0)
     pbkdf_shape_hits = int(diagnostics.get("pbkdf_shape_hits") or 0)
+    pbkdf_profiles = diagnostics.get("pbkdf_profiles") if isinstance(diagnostics.get("pbkdf_profiles"), dict) else {}
     pbkdf_rounds_2_hits = int(diagnostics.get("pbkdf_rounds_2_hits") or 0)
     pbkdf_rounds_256000_hits = int(diagnostics.get("pbkdf_rounds_256000_hits") or 0)
     pbkdf_salt_hits = int(diagnostics.get("pbkdf_salt_hits") or 0)
     key_return_hits = int(diagnostics.get("key_return_hits") or 0)
     candidate_rejections = int(diagnostics.get("candidate_rejections") or 0)
+    partial_candidates = int(diagnostics.get("partial_candidates") or 0)
     detail = (
         f"断点统计：PBKDF2 调用 {pbkdf_calls}，参数匹配 {pbkdf_shape_hits}，"
         f"rounds=2 命中 {pbkdf_rounds_2_hits}，rounds=256000 命中 {pbkdf_rounds_256000_hits}，"
         f"数据库 salt 匹配 {pbkdf_salt_hits}，微信内部断点 {key_return_hits}，"
-        f"候选校验失败 {candidate_rejections}。"
+        f"候选校验失败 {candidate_rejections}，仅部分库匹配 {partial_candidates}，参数样本 {pbkdf_profiles}。"
     )
     process_exit = payload.get("process_exit") if isinstance(payload.get("process_exit"), dict) else None
     if process_exit is not None:
@@ -855,9 +1180,8 @@ def capture_salt_matched_passphrase(
             exit_detail += f"，原因 {exit_description}"
         raise MacOSDBKeyCaptureFailure(
             "debug_wechat_exited_during_capture",
-            f"独立调试微信在捕获阶段提前结束（{exit_detail}）。" + detail
-            + "未保存任何未经数据库校验的候选；"
-            + "请将这段非敏感诊断随微信版本和 build 一并反馈。",
+            f"临时调试微信在捕获阶段提前结束（{exit_detail}）。" + detail
+            + "未保存任何未经数据库校验的候选；请将这段非敏感诊断随微信版本和 build 一并反馈。",
             process_attached=True,
         )
     raise MacOSDBKeyCaptureFailure(
@@ -999,7 +1323,7 @@ def preflight_prepared_clone(
         raise MacOSDBKeyCaptureFailure("debug_capture_state_stale", "独立微信进程与捕获快照不匹配，请重新准备")
 
     try:
-        result = preflight_capture_breakpoints(pid=debug_pid, debug_root=debug_root)
+        result = preflight_capture_breakpoints(pid=debug_pid, debug_root=debug_root, wechat_app=debug_app)
     except Exception:
         _cleanup_prepared_clone(debug_root)
         raise
@@ -1081,6 +1405,7 @@ def capture_prepared_clone(
             # necessarily called again by every re-login path; the verified
             # internal return point is therefore required as a live fallback.
             enable_key_return_fallback=int(preflight.get("key_return_locations") or 0) > 0,
+            pbkdf_stub_plan=preflight.get("pbkdf_stub_plan"),
         )
         _validate_captured_passphrase(passphrase, probe_db_path)
         cache_path = save_passphrase(passphrase)
@@ -1111,6 +1436,7 @@ __all__ = [
     "build_lldb_salt_capture_script",
     "capture_prepared_clone",
     "capture_salt_matched_passphrase",
+    "resolve_lldb_pbkdf_stub_plan",
     "cleanup_clone_capture",
     "preflight_capture_breakpoints",
     "preflight_prepared_clone",

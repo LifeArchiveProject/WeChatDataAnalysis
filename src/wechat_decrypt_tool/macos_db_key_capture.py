@@ -157,6 +157,49 @@ def _wechat_version(wechat_app: Path) -> tuple[str, str]:
     return safe(info.get("CFBundleShortVersionString")), safe(info.get("CFBundleVersion"))
 
 
+def _official_identity_matches(
+    wechat_app: Path,
+    signature: dict[str, Any],
+    expected_version: tuple[str, str] | None,
+    expected_cdhash: str | None,
+) -> bool:
+    return bool(
+        _is_tencent_official_signature(signature)
+        and (expected_version is None or _wechat_version(wechat_app) == expected_version)
+        and (not expected_cdhash or str(signature.get("cdhash") or "").lower() == expected_cdhash.lower())
+    )
+
+
+def _wechat_bundle_identity(wechat_app: Path, signature: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Identify the exact bundle we created, not just any compatible ad-hoc app."""
+    signature = signature if signature is not None else inspect_wechat_signature(wechat_app)
+    version, build = _wechat_version(wechat_app)
+    stat = wechat_app.stat()
+    return {
+        "version": version, "build": build, "cdhash": str(signature.get("cdhash") or "").lower(),
+        "device": stat.st_dev, "inode": stat.st_ino,
+    }
+
+
+def _debug_identity_matches(
+    wechat_app: Path, expected: dict[str, Any] | None, signature: dict[str, Any] | None = None,
+) -> bool:
+    if not isinstance(expected, dict) or not expected.get("cdhash"):
+        return False
+    if not all(field in expected for field in ("version", "build", "device", "inode")):
+        return False
+    try:
+        if wechat_app.is_symlink() or not wechat_app.is_dir():
+            return False
+        signature = signature if signature is not None else inspect_wechat_signature(wechat_app)
+        return bool(
+            signature.get("valid") and signature.get("ad_hoc") and not signature.get("hardened_runtime")
+            and _wechat_bundle_identity(wechat_app, signature) == expected
+        )
+    except (OSError, ValueError, plistlib.InvalidFileException, MacOSDBKeyCaptureFailure):
+        return False
+
+
 def _original_backup_path(wechat_app: Path, backup_root: Path) -> Path:
     version, build = _wechat_version(wechat_app)
     return backup_root.expanduser() / f"WeChat-{version}-{build}-original.zip"
@@ -462,8 +505,13 @@ def _launch_wechat(
         if pid:
             time.sleep(2)
             stable_pid = _find_wechat_main_pid(wechat_app)
-            if stable_pid:
+            if stable_pid == pid:
                 return stable_pid
+            raise MacOSDBKeyCaptureFailure(
+                "wechat_launch_exited",
+                "临时微信在启动检查期间退出或更换了进程，已停止等待并尝试恢复官方原版。"
+                "如果系统提示无法验证，请勿继续登录或绕过安全检查。",
+            )
         time.sleep(0.25)
     raise MacOSDBKeyCaptureFailure("wechat_launch_failed", f"未能启动微信副本: {wechat_app}")
 
@@ -701,7 +749,7 @@ def ensure_wechat_in_place_debuggable(
     )
     original_cdhash = str(signature.get("cdhash") or "").lower()
     backup_cdhash = str(backup_verification.get("cdhash") or "").lower()
-    if original_cdhash and backup_cdhash != original_cdhash:
+    if not original_cdhash or not backup_cdhash or backup_cdhash != original_cdhash:
         raise MacOSDBKeyCaptureFailure(
             "official_backup_identity_mismatch",
             "所选目录中的原版备份虽有腾讯签名，但与当前安装的微信不是同一构建，已停止临时重签。",
@@ -720,6 +768,10 @@ def ensure_wechat_in_place_debuggable(
 
     try:
         _quit_wechat(wechat_app)
+        if os.path.lexists(_local_restore_staging_path(wechat_app)):
+            raise MacOSDBKeyCaptureFailure(
+                "official_restore_staging_conflict", "原版保护位置已有恢复资产，请由事务流程保留后再重试。",
+            )
         staged_app = _prepare_local_restore_staging(
             wechat_app,
             expected_version=(str(recovery["version"]), str(recovery["build"])),
@@ -758,13 +810,35 @@ def ensure_wechat_in_place_debuggable(
                 requires_wechat_resign=True,
                 wechat_modified=True,
             )
+        recovery["debug_identity"] = _wechat_bundle_identity(staged_app, signature)
+        if before_resign is not None:
+            # Persist the exact debug inode before it can enter the installed slot.
+            before_resign(dict(recovery))
+        current_signature = inspect_wechat_signature(wechat_app)
+        if not _official_identity_matches(
+            wechat_app, current_signature,
+            (str(recovery["version"]), str(recovery["build"])), str(recovery["official_cdhash"]),
+        ):
+            raise MacOSDBKeyCaptureFailure(
+                "external_install_conflict", "准备期间微信安装已变化；已保留当前应用和恢复资产，未覆盖。",
+            )
         _atomic_swap_paths(wechat_app, staged_app)
         installed_signature = inspect_wechat_signature(wechat_app)
+        if not _official_identity_matches(
+            staged_app, inspect_wechat_signature(staged_app),
+            (str(recovery["version"]), str(recovery["build"])), str(recovery["official_cdhash"]),
+        ):
+            # An external installer won the race between the last check and
+            # swap. Put its bundle back; do not classify it as our debug waste.
+            if _debug_identity_matches(wechat_app, recovery["debug_identity"], installed_signature):
+                _atomic_swap_paths(wechat_app, staged_app)
+            raise MacOSDBKeyCaptureFailure("external_install_conflict", "交换期间检测到其他微信安装，已停止本次捕获并保留恢复资产。")
         if (
             not installed_signature.get("valid")
             or not installed_signature.get("ad_hoc")
             or installed_signature.get("hardened_runtime")
             or not _has_compatible_in_place_signature(wechat_app)
+            or not _debug_identity_matches(wechat_app, recovery["debug_identity"], installed_signature)
         ):
             raise MacOSDBKeyCaptureFailure(
                 "in_place_swap_verify_failed",
@@ -779,8 +853,13 @@ def ensure_wechat_in_place_debuggable(
                 backup_path,
                 expected_version=(str(recovery["version"]), str(recovery["build"])),
                 expected_cdhash=str(recovery["official_cdhash"]),
+                expected_debug_identity=recovery.get("debug_identity"),
             )
         except Exception as restore_error:
+            if isinstance(restore_error, MacOSDBKeyCaptureFailure) and restore_error.code in {
+                "external_install_conflict", "in_place_debug_identity_unknown", "official_restore_staging_conflict",
+            }:
+                raise restore_error from capture_error
             raise MacOSDBKeyCaptureFailure(
                 "official_restore_failed",
                 f"临时重签失败，且自动恢复腾讯原版微信失败: {restore_error}",
@@ -800,6 +879,7 @@ def ensure_wechat_in_place_debuggable(
         "backup_created": backup_created,
         "backup_verified": True,
         "official_cdhash": backup_cdhash,
+        "debug_identity": recovery["debug_identity"],
     }
 
 
@@ -810,17 +890,35 @@ def restore_official_wechat_if_needed(
     work_root: Path | None = None,
     expected_version: tuple[str, str] | None = None,
     expected_cdhash: str | None = None,
+    expected_debug_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify the normal Tencent build and restore it atomically when needed."""
 
     staged = _local_restore_staging_path(wechat_app)
     current = inspect_wechat_signature(wechat_app)
     if _is_tencent_official_signature(current):
-        # Recovery may have been interrupted just after the atomic exchange.
-        # At that point the installed path is already official and ``staged``
-        # contains only WCDA's displaced ad-hoc bundle.
-        _remove_local_restore_staging(staged)
-        return {"official_wechat_verified": True, "official_wechat_restored": False}
+        if not _official_identity_matches(wechat_app, current, expected_version, expected_cdhash):
+            raise MacOSDBKeyCaptureFailure(
+                "external_install_conflict",
+                "当前腾讯官方微信与本次备份版本或构建不同；已保留当前应用、备份和恢复状态，未自动覆盖。",
+            )
+        # A matching official app can be an interrupted completed restore. Only
+        # delete staging when its exact identity proves that it is our debug app.
+        if _debug_identity_matches(staged, expected_debug_identity):
+            _remove_local_restore_staging(staged)
+        return {
+            "official_wechat_verified": True, "official_wechat_restored": False,
+            "original_identity_verified": bool(expected_version is not None and expected_cdhash),
+        }
+
+    if not _debug_identity_matches(wechat_app, expected_debug_identity, current):
+        raise MacOSDBKeyCaptureFailure(
+            "in_place_debug_identity_unknown",
+            "当前非官方微信无法确认为本次生成的调试副本；已保留恢复资产，拒绝自动覆盖。",
+            wechat_modified=True,
+        )
+    if expected_version is None or not all(expected_version) or not expected_cdhash:
+        raise MacOSDBKeyCaptureFailure("in_place_capture_state_invalid", "缺少原版构建身份，已停止自动恢复。", wechat_modified=True)
 
     use_local_staging = False
     if os.path.lexists(staged):
@@ -842,7 +940,12 @@ def restore_official_wechat_if_needed(
         except (OSError, plistlib.InvalidFileException, MacOSDBKeyCaptureFailure):
             use_local_staging = False
         if not use_local_staging:
-            _remove_local_restore_staging(staged)
+            if _debug_identity_matches(staged, expected_debug_identity):
+                _remove_local_restore_staging(staged)
+            else:
+                raise MacOSDBKeyCaptureFailure(
+                    "official_restore_staging_conflict", "原版保护位置存在身份不匹配的应用；已保留，未覆盖。", wechat_modified=True,
+                )
 
     if not use_local_staging:
         restore_root = (work_root or DEFAULT_DEBUG_ROOT).expanduser()
@@ -868,20 +971,43 @@ def restore_official_wechat_if_needed(
                     _remove_local_restore_staging(staged)
                 raise
         staged_signature = inspect_wechat_signature(staged)
-        if not _is_tencent_official_signature(staged_signature):
-            _remove_local_restore_staging(staged)
+        if not _official_identity_matches(staged, staged_signature, expected_version, expected_cdhash):
             raise MacOSDBKeyCaptureFailure("official_restore_staging_invalid", "恢复暂存的腾讯微信签名校验失败")
 
+    if not _debug_identity_matches(wechat_app, expected_debug_identity):
+        raise MacOSDBKeyCaptureFailure("external_install_conflict", "恢复前微信安装已变化；已保留应用和恢复资产。")
     _quit_wechat(wechat_app, force_for_restore=True)
+    if not _debug_identity_matches(wechat_app, expected_debug_identity):
+        raise MacOSDBKeyCaptureFailure("external_install_conflict", "关闭微信期间安装已变化；已停止恢复。")
+    if not _official_identity_matches(staged, inspect_wechat_signature(staged), expected_version, expected_cdhash):
+        raise MacOSDBKeyCaptureFailure("official_restore_staging_invalid", "恢复前原版保护身份已变化，已停止恢复。")
+    restore_identity = _wechat_bundle_identity(staged)
     swapped = False
     try:
         _atomic_swap_paths(wechat_app, staged)
         swapped = True
         installed = inspect_wechat_signature(wechat_app)
-        if not _is_tencent_official_signature(installed):
+        if not _official_identity_matches(wechat_app, installed, expected_version, expected_cdhash):
             raise MacOSDBKeyCaptureFailure("official_restore_verify_failed", "恢复后的腾讯微信签名校验失败")
-    except Exception:
+        if not _debug_identity_matches(staged, expected_debug_identity):
+            raise MacOSDBKeyCaptureFailure("external_install_conflict", "交换时微信被其他程序替换，已回滚并保留恢复资产。")
+    except Exception as restore_error:
         if swapped:
+            # An installer may also replace the destination immediately after
+            # our exchange. A blind rollback would overwrite that new install.
+            # Only exchange back when the destination is still our exact source.
+            current_signature = inspect_wechat_signature(wechat_app)
+            try:
+                still_our_restore = bool(
+                    _official_identity_matches(wechat_app, current_signature, expected_version, expected_cdhash)
+                    and _wechat_bundle_identity(wechat_app, current_signature) == restore_identity
+                )
+            except (OSError, ValueError, plistlib.InvalidFileException, MacOSDBKeyCaptureFailure):
+                still_our_restore = False
+            if not still_our_restore:
+                raise MacOSDBKeyCaptureFailure(
+                    "external_install_conflict", "恢复交换后安装身份再次变化；为避免覆盖外部安装，已停止回滚并保留恢复资产。",
+                ) from restore_error
             try:
                 _atomic_swap_paths(wechat_app, staged)
                 swapped = False
@@ -891,12 +1017,13 @@ def restore_official_wechat_if_needed(
                     f"微信原版恢复校验失败，且无法回滚交换: {rollback_error}",
                     wechat_modified=True,
                 ) from rollback_error
-        if os.path.lexists(staged):
-            _remove_local_restore_staging(staged)
+        # Keep the recovery source after rollback; it may be the only available
+        # original when the selected backup volume is offline.
         raise
-    _remove_local_restore_staging(staged)
+    if _debug_identity_matches(staged, expected_debug_identity):
+        _remove_local_restore_staging(staged)
 
-    return {"official_wechat_verified": True, "official_wechat_restored": True}
+    return {"official_wechat_verified": True, "official_wechat_restored": True, "original_identity_verified": True}
 
 
 def _atomic_swap_paths(first: Path, second: Path) -> None:
@@ -937,7 +1064,9 @@ def _build_lldb_capture_command(script_path: Path, timeout: int) -> str:
     ``do shell script`` only returns stdout after the privileged command exits,
     so a plain ``(cat; sleep) | lldb`` makes a successful capture appear stuck
     until the sleep finishes.  This wrapper preserves the upstream stdin
-    behaviour while explicitly killing the producer when LLDB detaches.
+    behaviour while reaping both the producer and the watchdog's child timer
+    when LLDB exits.  A surviving timer also holds AppleScript's output pipe
+    open, even after the wrapper shell itself has returned.
     """
 
     script_arg = shlex.quote(str(script_path))
@@ -949,12 +1078,19 @@ def _build_lldb_capture_command(script_path: Path, timeout: int) -> str:
         'lldb_pid=""\n'
         'watchdog_pid=""\n'
         "cleanup() {\n"
+        "  trap '' HUP INT TERM\n"
         '  if [ -n "$producer_pid" ]; then /bin/kill "$producer_pid" 2>/dev/null || true; fi\n'
         '  if [ -n "$watchdog_pid" ]; then /bin/kill "$watchdog_pid" 2>/dev/null || true; fi\n'
         '  if [ -n "$lldb_pid" ]; then /bin/kill "$lldb_pid" 2>/dev/null || true; fi\n'
+        '  if [ -n "$producer_pid" ]; then wait "$producer_pid" 2>/dev/null || true; fi\n'
+        '  if [ -n "$watchdog_pid" ]; then wait "$watchdog_pid" 2>/dev/null || true; fi\n'
+        '  if [ -n "$lldb_pid" ]; then wait "$lldb_pid" 2>/dev/null || true; fi\n'
         '  /bin/rm -rf "$capture_dir"\n'
         "}\n"
-        "trap cleanup EXIT HUP INT TERM\n"
+        "trap cleanup EXIT\n"
+        "trap 'exit 129' HUP\n"
+        "trap 'exit 130' INT\n"
+        "trap 'exit 143' TERM\n"
         '/usr/bin/mkfifo "$capture_fifo"\n'
         # ``exec`` makes the recorded producer PID become the sleep process
         # after cat finishes, so SIGTERM actually ends the keepalive instead
@@ -963,7 +1099,28 @@ def _build_lldb_capture_command(script_path: Path, timeout: int) -> str:
         "producer_pid=$!\n"
         '/usr/bin/env TERM=dumb /usr/bin/lldb < "$capture_fifo" 2>&1 &\n'
         "lldb_pid=$!\n"
-        f'( /bin/sleep {keepalive}; /bin/kill -TERM "$lldb_pid" 2>/dev/null || true ) &\n'
+        "(\n"
+        '  watchdog_sleep_pid=""\n'
+        '  watchdog_cancelled=""\n'
+        # Defer cancellation until the child PID is recorded, including a
+        # signal arriving between the background launch and its assignment.
+        "  trap 'watchdog_cancelled=1' HUP INT TERM\n"
+        "  cleanup_watchdog() {\n"
+        "    trap '' HUP INT TERM\n"
+        '    if [ -n "$watchdog_sleep_pid" ]; then\n'
+        '      /bin/kill "$watchdog_sleep_pid" 2>/dev/null || true\n'
+        '      wait "$watchdog_sleep_pid" 2>/dev/null || true\n'
+        "    fi\n"
+        "  }\n"
+        "  trap cleanup_watchdog EXIT\n"
+        f"  /bin/sleep {keepalive} &\n"
+        "  watchdog_sleep_pid=$!\n"
+        "  trap 'exit 0' HUP INT TERM\n"
+        '  if [ -n "$watchdog_cancelled" ]; then exit 0; fi\n'
+        '  wait "$watchdog_sleep_pid"\n'
+        '  watchdog_sleep_pid=""\n'
+        '  /bin/kill -TERM "$lldb_pid" 2>/dev/null || true\n'
+        ") &\n"
         "watchdog_pid=$!\n"
         'wait "$lldb_pid"\n'
         "lldb_status=$?\n"

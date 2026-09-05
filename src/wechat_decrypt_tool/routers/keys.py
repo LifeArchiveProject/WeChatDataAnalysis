@@ -640,7 +640,7 @@ async def get_macos_key_capture_status(request: Request):
             "errmsg": "实验性本机密钥捕获仅支持 macOS。",
             "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
         }
-    persisted = get_in_place_capture_status()
+    persisted = await asyncio.to_thread(get_in_place_capture_status)
     return {
         "status": 0,
         "errmsg": "ok",
@@ -718,6 +718,8 @@ async def preflight_macos_key_capture(request: Request, payload: MacosKeyCapture
             "data": {
                 "method": "macos_inplace_native",
                 "stage": "preflight_passed",
+                "transaction_id": str(result.get("transaction_id") or ""),
+                "capture_backend": result.get("capture_backend") if result.get("capture_backend") in {"native", "lldb"} else None,
                 "wechat_modified": bool(result.get("wechat_modified", True)),
                 "process_attached": bool(result.get("process_attached", False)),
             },

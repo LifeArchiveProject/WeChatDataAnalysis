@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .logging_config import get_logger
 from .macos_db_key_capture import (
     DEFAULT_DEBUG_ROOT,
     DEFAULT_WECHAT_APP,
@@ -37,6 +38,74 @@ _JSON_LIMIT = 128 * 1024
 _HELPER_TIMEOUT_PAD = 45
 _HELPER_NAME = "wcdb-native-capture"
 _HELPER_SOURCE = Path(__file__).resolve().parent / "native" / "macos" / "source" / "wcdb_native_capture.c"
+_TRANSACTION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+_DIAGNOSTIC_COUNTERS = (
+    "pbkdf_calls", "wcdb_profile_hits", "rounds2_hits", "rounds256000_hits",
+    "salt_matches", "candidate_rejects", "salt_read_failures", "candidate_read_failures",
+)
+_DIAGNOSTIC_STAGES = frozenset({
+    "initializing", "read_page1", "attach", "resolve_breakpoint", "read_breakpoint",
+    "install_exception_port", "install_breakpoint", "write_ready", "waiting", "pbkdf_seen",
+    "profile_matched", "rounds2_seen", "rounds256000_seen", "salt_read_failed", "salt_mismatch",
+    "salt_matched", "candidate_read_failed", "candidate_rejected", "validated",
+})
+_NATIVE_FAILURE_MESSAGES = {
+    "native_capture_failed": "原生捕获器执行失败",
+    "native_invalid_arguments": "原生捕获器参数无效",
+    "native_attach_failed": "原生捕获器无法附加微信进程",
+    "native_image_not_found": "原生捕获器未找到微信原生模块",
+    "native_breakpoint_read_failed": "原生捕获器无法读取 PBKDF 断点指令",
+    "native_breakpoint_shape_mismatch": "微信 PBKDF 导入桩布局与原生捕获器不匹配",
+    "native_breakpoint_install_failed": "原生捕获器无法安装硬件断点",
+    "native_probe_database_unreadable": "原生捕获器无法读取数据库校验页",
+    "native_exception_port_failed": "原生捕获器无法安装断点异常端口",
+    "native_ready_signal_failed": "原生捕获器无法写入就绪信号",
+    "native_cleanup_failed": "原生捕获器无法确认调试状态已完整恢复，必须结束当前事务",
+    "native_capture_timeout": "原生捕获等待超时，未取得通过校验的账号密钥",
+    "native_capture_target_exited": "微信目标进程已退出，原生捕获提前结束",
+    "native_capture_interrupted": "原生捕获器收到终止信号，捕获已中断",
+    "native_capture_wait_failed": "原生捕获断点监听失败，捕获提前结束",
+    "native_capture_unvalidated": "原生捕获候选未通过数据库校验",
+}
+
+
+def _parse_capture_diagnostics(payload: dict[str, Any]) -> dict[str, Any]:
+    """Accept only bounded counters and fixed stages, never arbitrary helper data."""
+    raw = payload.get("diagnostics")
+    result: dict[str, Any] = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    for name in _DIAGNOSTIC_COUNTERS:
+        value = raw.get(name)
+        if type(value) is int and 0 <= value <= (1 << 64) - 1:
+            result[name] = value
+    if "pbkdf_calls" not in result:
+        legacy_calls = payload.get("pbkdf_calls")
+        if type(legacy_calls) is int and 0 <= legacy_calls <= (1 << 64) - 1:
+            result["pbkdf_calls"] = legacy_calls
+    stage = raw.get("last_stage")
+    if isinstance(stage, str) and stage in _DIAGNOSTIC_STAGES:
+        result["last_stage"] = stage
+    return result
+
+
+def _diagnostic_failure_message(code: str, diagnostics: dict[str, Any]) -> str:
+    message = _NATIVE_FAILURE_MESSAGES[code]
+    if code == "native_capture_timeout":
+        if diagnostics.get("pbkdf_calls") == 0:
+            message += "；未命中 PBKDF 断点"
+        elif diagnostics.get("wcdb_profile_hits") == 0:
+            message += "；PBKDF 调用未匹配预期 WCDB 参数"
+        elif diagnostics.get("rounds256000_hits") == 0 and diagnostics.get("rounds2_hits", 0) > 0:
+            message += "；只命中 2 轮派生调用，不能将单库派生密钥作为账号密钥"
+        elif diagnostics.get("rounds256000_hits", 0) > 0 and diagnostics.get("salt_matches") == 0:
+            message += "；账号密钥派生调用未匹配校验库的盐"
+        elif diagnostics.get("candidate_rejects", 0) > 0:
+            message += "；候选账号密钥未通过校验"
+    if diagnostics:
+        summary = ", ".join(f"{name}={value}" for name, value in diagnostics.items())
+        message += f"（诊断：{summary}）"
+    return message
 
 
 def _resolve_wechat_dylib(wechat_app: Path) -> Path:
@@ -196,10 +265,13 @@ def _run_helper(
     probe_db_path: Path | None = None,
     probe_page1_path: Path | None = None,
     ready_file: Path | None = None,
+    transaction_id: str | None = None,
     timeout: int = 240,
 ) -> dict[str, Any]:
     if pid <= 0:
         raise MacOSDBKeyCaptureFailure("native_capture_invalid_pid", "微信调试进程 PID 无效")
+    if transaction_id and (not isinstance(transaction_id, str) or not _TRANSACTION_ID_RE.fullmatch(transaction_id)):
+        raise MacOSDBKeyCaptureFailure("native_capture_invalid_transaction", "原生捕获事务标识无效")
 
     helper_path = ensure_native_capture_helper(debug_root=debug_root)
     dylib = _resolve_wechat_dylib(wechat_app)
@@ -229,6 +301,8 @@ def _run_helper(
         command.extend(["--timeout", str(max(int(timeout), 30))])
     if ready_file is not None:
         command.extend(["--ready-file", str(ready_file.expanduser())])
+    if transaction_id:
+        command.extend(["--transaction-id", transaction_id])
 
     try:
         raw_output = _run_as_administrator(
@@ -238,7 +312,17 @@ def _run_helper(
     except MacOSDBKeyCaptureFailure as exc:
         embedded = _extract_embedded_json(str(exc))
         if embedded is None:
-            raise
+            # osascript can report the helper's termination without JSON.  Do
+            # not forward stderr: it may contain a partial secret-bearing result.
+            if exc.code == "administrator_cancelled":
+                raise MacOSDBKeyCaptureFailure("administrator_cancelled", "已取消管理员授权") from None
+            if exc.code == "administrator_timeout":
+                raise MacOSDBKeyCaptureFailure("administrator_timeout", "管理员授权或原生捕获等待超时") from None
+            if re.search(r"(?<!\d)1009(?!\d)|\bSIG(?:KILL|TERM|INT)\b|\bkilled(?::\s*9)?\b|\bterminated\b", str(exc), re.I):
+                raise MacOSDBKeyCaptureFailure(
+                    "native_capture_helper_terminated", "原生捕获器被系统终止，捕获提前结束",
+                ) from None
+            raise MacOSDBKeyCaptureFailure("administrator_failed", "管理员调用原生捕获器失败，未返回可解析结果") from None
         raw_output = embedded
     if not raw_output:
         raise MacOSDBKeyCaptureFailure("native_capture_empty", "原生捕获器没有返回结果")
@@ -251,24 +335,38 @@ def _run_helper(
     if not isinstance(payload, dict):
         raise MacOSDBKeyCaptureFailure("native_capture_invalid_payload", "原生捕获器返回结构无效")
 
+    diagnostics = _parse_capture_diagnostics(payload)
     status = str(payload.get("status") or "").strip().lower()
     if status != "ok":
-        code = str(payload.get("code") or "native_capture_failed").strip() or "native_capture_failed"
-        message = str(payload.get("message") or "原生捕获器执行失败").strip() or "原生捕获器执行失败"
+        raw_code = payload.get("code")
+        code = raw_code if isinstance(raw_code, str) and raw_code in _NATIVE_FAILURE_MESSAGES else "native_capture_failed"
+        get_logger(__name__).warning("native capture failed: code=%s diagnostics=%s", code, diagnostics)
+        message = _diagnostic_failure_message(code, diagnostics)
         raise MacOSDBKeyCaptureFailure(code, message, process_attached=True)
     if str(payload.get("mode") or "").strip().lower() != mode:
         raise MacOSDBKeyCaptureFailure("native_capture_mode_mismatch", "原生捕获器返回模式不匹配")
-    if int(payload.get("pid") or 0) != pid:
+    if type(payload.get("pid")) is not int or payload.get("pid") != pid:
         raise MacOSDBKeyCaptureFailure("native_capture_pid_mismatch", "原生捕获器返回的微信进程不匹配")
-    if int(payload.get("stub_file_address") or 0) != stub_address:
+    if type(payload.get("stub_file_address")) is not int or payload.get("stub_file_address") != stub_address:
         raise MacOSDBKeyCaptureFailure("native_capture_stub_mismatch", "原生捕获器返回的断点地址不匹配")
     if str(payload.get("method") or "") != "macos_native_mach":
         raise MacOSDBKeyCaptureFailure("native_capture_method_mismatch", "原生捕获器返回的方法标识无效")
-    return payload
+    # Success callers need the key, but must not inherit arbitrary helper fields
+    # that might later be copied into application state or diagnostics.
+    result = {name: payload[name] for name in ("status", "mode", "method", "pid", "stub_file_address")}
+    result["diagnostics"] = diagnostics
+    if "pbkdf_calls" in diagnostics:
+        result["pbkdf_calls"] = diagnostics["pbkdf_calls"]
+    if mode == "capture":
+        result["validated"] = payload.get("validated") is True
+        result["db_key"] = payload.get("db_key")
+    return result
 
 
 def _extract_embedded_json(message: str) -> str | None:
     raw = str(message or "").strip()
+    if len(raw) > _JSON_LIMIT:
+        return None
     start = raw.find("{")
     end = raw.rfind("}")
     if start < 0 or end <= start:
@@ -306,6 +404,7 @@ def capture_native_wcdb_key(
     probe_db_path: Path,
     probe_page1_path: Path | None = None,
     ready_file: Path | None = None,
+    transaction_id: str | None = None,
     timeout: int = 240,
     debug_root: Path = DEFAULT_DEBUG_ROOT,
 ) -> dict[str, Any]:
@@ -317,6 +416,7 @@ def capture_native_wcdb_key(
         probe_db_path=probe_db_path,
         probe_page1_path=probe_page1_path,
         ready_file=ready_file,
+        transaction_id=transaction_id,
         timeout=timeout,
     )
     if not bool(payload.get("validated")):
