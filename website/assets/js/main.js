@@ -1,9 +1,10 @@
 /* ════════════════════════════════════════════════════════════
    main.js — 滚动叙事总编排
-   loader → hero → manifesto → decrypt → features → wrapped
-   → privacy → stack → cta，一条时间轴讲完整个故事。
+   loader → hero（含 43 项高级能力的演示舞台）→ manifesto → decrypt → features
+   → machine → cta，一条时间轴讲完整个故事。
    ════════════════════════════════════════════════════════════ */
 import { createStage } from "./particles.js";
+import { createProStage, injectSceneCss, SCENES, PRO_GROUPS, PRO_ITEMS, PRO_TOTAL } from "./pro-demos/index.js";
 
 const { gsap } = window;
 gsap.registerPlugin(ScrollTrigger, ScrollToPlugin, SplitText, ScrambleTextPlugin, CustomEase, DrawSVGPlugin);
@@ -243,9 +244,7 @@ function boot() {
     buildManifesto();
     buildDecrypt();
     buildFeatures();
-    buildWrapped();
     buildMachine();
-    buildFriends();
     buildCTA();
     buildRail();
     exitLoader();
@@ -359,30 +358,91 @@ function heroReveal(q) {
   }
 }
 
-/* ---------- 高级版装置：43 项高级能力（与 README 高级版表逐项对应） ---------- */
+/* ---------- 高级版装置：43 项高级能力（数据来自 pro-demos/catalog.js，与应用内弹窗同源） ---------- */
 
-const PRO_MODULES = [
-  { name: "消息修改", items: ["修改文字消息", "编辑消息源码", "修改时间", "字段编辑", "恢复原消息", "修复为我发送", "反转微信气泡位置", "删除系统消息"] },
-  { name: "消息补录", items: ["文字", "图片", "文件", "语音", "视频", "表情", "转账记录", "红包记录", "位置", "链接卡片", "小程序卡片", "视频号卡片", "引用消息", "合并聊天记录", "通话记录", "系统消息", "拍一拍记录"] },
-  { name: "微信动作", items: ["发送文字消息", "群聊 @ 消息", "发送图片消息", "发送视频消息", "发送表情消息", "发送语音消息", "发送拍一拍"] },
-  { name: "朋友圈", items: ["自动后台刷新", "朋友圈点赞", "图片评论", "发布朋友圈"] },
-  { name: "群聊、联系人与提醒", items: ["修改本人群昵称", "发布群公告", "新建群聊", "修改群名称", "修改好友备注", "同意好友请求", "群聊/单聊关键词提醒"] },
-];
-
-const PRO_TOTAL = PRO_MODULES.reduce((total, module) => total + module.items.length, 0);
-
-// 六栏权限清单：五大模块 43 项一次性全部摊开（补录 17 项占双栏，CSS columns 对分）
+// 左栏清单：七组 43 项一次性全部摊开（CSS 多列自动平衡）；点任一项 → 右栏舞台切到它的演示
 function buildManifestGrid() {
   const grid = $("#hm-grid");
   if (!grid) return;
   let h = "";
-  for (const m of PRO_MODULES) {
-    const wide = m.items.length > 10;
-    h += `<div class="hm__col${wide ? " hm__col--wide" : ""}"><p class="hm__mod">${m.name}<i>${String(m.items.length).padStart(2, "0")}</i></p><ul class="hm__list">`;
-    h += m.items.map((it) => `<li class="hm__item">${it}</li>`).join("");
-    h += `</ul></div>`;
+  for (const g of PRO_GROUPS) {
+    h += `<p class="hm__mod">${g.label}<i>${String(g.items.length).padStart(2, "0")}</i></p><ul class="hm__list">`;
+    h += g.items.map((it) => `<li class="hm__item" data-key="${it.key}" data-cursor="hover">${it.name}</li>`).join("");
+    h += `</ul>`;
   }
   grid.innerHTML = h;
+  // 首屏读数与跑马灯里的总数同样从 catalog 取，HTML 里的数字只是兜底
+  const ops = $("#hero-pro-ops");
+  if (ops) ops.textContent = `PRO — 00 / ${PRO_TOTAL}`;
+  for (const el of $$(".tk-pro")) el.textContent = `高级版 — ${PRO_TOTAL} 项高级能力`;
+  grid.addEventListener("click", (e) => {
+    const li = e.target.closest(".hm__item[data-key]");
+    if (li && heroStage) { proExecOn = true; heroStage.select(li.dataset.key); }
+  });
+}
+
+// 右栏舞台：引擎只挂舞台（清单用首屏自己的 .hm__grid），刊头计数器 / 执行读数 / 清单点亮都跟着舞台走
+let heroStage = null;
+let proExecOn = false;
+function buildHeroStage() {
+  const host = $("#hm-stage");
+  if (!host || heroStage) return;
+  injectSceneCss();
+  heroStage = createProStage(host, {
+    gsap, items: PRO_ITEMS, scenes: SCENES, reduced: REDUCED, autostart: false,
+    onChange: heroOnChange, onComplete: heroOnComplete,
+  });
+  window.__heroStage = heroStage;
+  // 滚离首幕静默待机（页面隐藏由引擎自己监听）
+  ScrollTrigger.create({
+    trigger: "#hero", start: "top top", end: "bottom 15%",
+    onLeave: () => heroStage.setActive(false),
+    onEnterBack: () => heroStage.setActive(true),
+  });
+  fitHeroStage();
+  let rt = null;
+  addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(fitHeroStage, 120); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitHeroStage);
+  addEventListener("load", fitHeroStage);
+}
+
+// 舞台尺寸预算：宽度按「栏宽的 54%」与「巨字底边 → manifest 底边的可用高度」双封顶（16:10 场景屏 + 名称/说明/进度线 ≈ 34px）
+function fitHeroStage() {
+  const man = $(".hero__manifest"), title = $(".hero__title");
+  if (!man || !title) return;
+  const tb = title.getBoundingClientRect().bottom + scrollY;   // 首幕在页面最顶，文档坐标即幕内坐标
+  if (innerWidth <= 960) {
+    man.style.setProperty("--hm-mobile-top", Math.max(0, Math.round(tb + 18)) + "px");
+    man.style.removeProperty("--hm-stage-w");
+    return;
+  }
+  man.style.removeProperty("--hm-mobile-top");
+  const cs = getComputedStyle(man);
+  const bottomLimit = innerHeight - (parseFloat(cs.bottom) || 0);
+  const rowH = (sel) => { const el = $(sel); return el && getComputedStyle(el).display !== "none" ? el.getBoundingClientRect().height : 0; };
+  const gap = parseFloat(cs.rowGap) || 8;
+  const above = rowH(".hm__read") + rowH(".hm__rule") + gap * 2;
+  const bandH = bottomLimit - tb - 18 - above;
+  const gapX = parseFloat(cs.columnGap) || 24;
+  const w = Math.max(300, Math.min(0.54 * (man.clientWidth - gapX), (bandH - 34) / 0.625));
+  man.style.setProperty("--hm-stage-w", Math.round(w) + "px");
+}
+
+// 舞台切到某项：刊头计数器 PRO — NN / 43、清单对应项点亮、标题行尾执行读数乱码落定；场景播完（印章落下）时 ✓ 弹出
+function heroOnChange(item) {
+  if (proExecOn) { const idx = $("#hero-pro-ops"); if (idx) idx.textContent = "PRO — " + String(item.index).padStart(2, "0") + " / " + PRO_TOTAL; }
+  for (const el of $$("#hm-grid .hm__item.is-live")) el.classList.remove("is-live");
+  const li = $(`#hm-grid .hm__item[data-key="${item.key}"]`);
+  if (li) li.classList.add("is-live");
+  const t = $("#pro-exec-t"), ok = $("#pro-exec-ok");
+  if (!t) return;
+  gsap.set(ok, { opacity: 0 });
+  if (REDUCED) { t.textContent = item.name; return; }
+  gsap.to(t, { duration: 0.4, scrambleText: { text: item.name, chars: SCRAMBLE_CN, speed: 1 } });
+}
+function heroOnComplete() {
+  const ok = $("#pro-exec-ok");
+  if (ok) gsap.fromTo(ok, { opacity: 0, scale: 0.5 }, { opacity: 1, scale: 1, duration: 0.3, ease: "back.out(2.2)" });
 }
 
 // 开屏门闸解锁：入场收尾时摘掉滚动锁（幂等，兜底定时器也会调）
@@ -391,34 +451,11 @@ function unlockHeroGate() {
   lenis.start();
 }
 
-// 标题行尾执行读数：按模块顺序扫过全部能力，清单对应项同步点亮、刊头计数器跟随
-let proExecOn = false;
+// 入场收尾：舞台开始自动逐项播放（执行读数、计数器、清单点亮全部由舞台驱动）
 function startProExec() {
   if (proExecOn) return;
   proExecOn = true;
-  const t = $("#pro-exec-t"), ok = $("#pro-exec-ok"), idx = $("#hero-pro-ops");
-  const cells = $$("#hm-grid .hm__item");
-  const items = [];
-  for (const m of PRO_MODULES) for (const it of m.items) items.push(it);
-  let i = 0, prev = null;
-  const step = () => {
-    // 页面在后台或已滚离首幕时静默待机，不空转
-    if (document.hidden || scrollY > innerHeight * 0.9) { gsap.delayedCall(1, step); return; }
-    const n = i % items.length;
-    idx.textContent = "PRO — " + String(n + 1).padStart(2, "0") + " / " + PRO_TOTAL;
-    if (prev) prev.classList.remove("is-live");
-    prev = cells[n] || null;
-    if (prev) prev.classList.add("is-live");
-    gsap.set(ok, { opacity: 0 });
-    gsap.to(t, {
-      duration: 0.4,
-      scrambleText: { text: items[n], chars: SCRAMBLE_CN, speed: 1 },
-      onComplete: () => gsap.fromTo(ok, { opacity: 0, scale: 0.5 }, { opacity: 1, scale: 1, duration: 0.3, ease: "back.out(2.2)" }),
-    });
-    i++;
-    gsap.delayedCall(1.35, step);
-  };
-  step();
+  if (heroStage) heroStage.start();
 }
 
 // 滚动离场补间在清单接管完成后才创建：此时才是首幕真正的静止形态，起始值不会作废
@@ -461,14 +498,17 @@ function buildHero() {
   gsap.set(".hero__ticker", { yPercent: 110 });
   gsap.set(".hero__manifest", { opacity: 0 });
   gsap.set([".hm__rule", ".hm__get", ".hm__exec"], { opacity: 0 });
+  gsap.set("#hm-stage", { opacity: 0, y: 16 });
   buildManifestGrid();
+  buildHeroStage();
 
   if (REDUCED) {
-    gsap.set([".nav", ".rail", ".hero .ht-mask", ".hero__vert", ".hero__coord", ".hero__orb", ".hero__gh", ".hero__plat", ".hero__ticker", ".hero__manifest", ".hm__rule", ".hm__get", ".hm__exec"], { clearProps: "all" });
-    // 无动效时直接落在双区终态：巨字与全部能力清单同屏全显
-    const rOps = $("#hero-pro-ops"), rHc5 = $("#hc-5");
-    if (rOps) rOps.textContent = `PRO — ${PRO_TOTAL} / ${PRO_TOTAL}`;
+    gsap.set([".nav", ".rail", ".hero .ht-mask", ".hero__vert", ".hero__coord", ".hero__orb", ".hero__gh", ".hero__plat", ".hero__ticker", ".hero__manifest", ".hm__rule", ".hm__get", ".hm__exec", "#hm-stage"], { clearProps: "all" });
+    // 无动效时直接落在双区终态：巨字与全部能力清单同屏全显，舞台照常逐项播放（动画本身就是内容）
+    const rHc5 = $("#hc-5");
     if (rHc5) { rHc5.textContent = "ACCESS — READ / WRITE · PRO"; rHc5.classList.add("is-pro"); }
+    fitHeroStage();
+    startProExec();
     return;
   }
 
@@ -550,11 +590,11 @@ function heroIntro() {
       const ops = { v: 0 }, opsEl = $("#hero-pro-ops");
       gsap.to(ops, { v: PRO_TOTAL, duration: 1.5, ease: "power1.out", onUpdate: () => (opsEl.textContent = "PRO — " + String(Math.round(ops.v)).padStart(2, "0") + " / " + PRO_TOTAL) });
     }, [], PRO_AT + 0.8)
+    .to("#hm-stage", { opacity: 1, y: 0, duration: 0.9, ease: "cine" }, PRO_AT + 1.1)
     .to(".hm__get", { opacity: 1, duration: 0.6 }, PRO_AT + 2.3)
     .to(".hm__exec", { opacity: 1, duration: 0.5 }, PRO_AT + 2.45)
     .call(() => {
       startProExec();
-      unlockHeroGate();
       heroScrollOut();
       // hover 快闪重解密：入场收尾后才绑（早绑会杀掉未跑完的入场补间），且只杀自己上一次的补间
       const t2 = $("#hero-pro-t2");
@@ -563,7 +603,9 @@ function heroIntro() {
         if (tw) tw.kill();
         tw = gsap.to(t2, { duration: 0.5, scrambleText: { text: "还能写", chars: SCRAMBLE_CN, speed: 1 } });
       });
-    }, [], PRO_AT + 2.6);
+    }, [], PRO_AT + 2.6)
+    // 首屏全部显示完（执行读数 2.45+0.5s 落定）再锁 3 秒，用户看完整套装置才放行往下滚
+    .call(unlockHeroGate, [], PRO_AT + 2.95 + 3);
   return tl;
 }
 
@@ -1036,118 +1078,7 @@ function buildFeatures() {
   });
 }
 
-/* ─────────────────────────── act 05 · wrapped ─────────────────────────── */
-
-function buildWrapped() {
-  const slides = $$("#v-slides > *");
-  const N = slides.length;
-  const idxEl = $("#v-idx");
-  const ticks = $$("#v-ticks i");
-  const scene = $("#viewer");
-  let activeIdx = -1;
-
-  // 前 5 帧是产品实录影片：进入放映室才开播（静音循环），离场即暂停
-  const vids = slides.filter((el) => el.tagName === "VIDEO");
-  let filmOn = false;
-  const playFilm = () => { filmOn = true; vids.forEach((v) => { v.muted = true; const pr = v.play(); if (pr && pr.catch) pr.catch(() => {}); }); };
-  const pauseFilm = () => { filmOn = false; vids.forEach((v) => v.pause()); };
-
-  // 放映室：固定取景框内定向擦除转场，当前帧被推走、下一帧从右侧扫入
-  function setFlow(f) {
-    const fc = Math.max(0, Math.min(N - 1, f));
-    const c = Math.min(N - 2, Math.floor(fc));
-    const t = Math.max(0, Math.min(1, fc - c));
-    slides.forEach((img, i) => {
-      if (i === c) {
-        img.style.opacity = "1"; img.style.zIndex = "1";
-        img.style.clipPath = "inset(0 0 0 0)";
-        img.style.transform = `translateX(${(-t * 6).toFixed(2)}%) scale(1)`;
-        img.style.filter = `brightness(${(1 - t * 0.3).toFixed(3)})`;
-      } else if (i === c + 1) {
-        img.style.opacity = "1"; img.style.zIndex = "2";
-        img.style.clipPath = `inset(0 0 0 ${((1 - t) * 100).toFixed(2)}%)`;
-        img.style.transform = `translateX(${((1 - t) * 3.5).toFixed(2)}%) scale(${(1.045 - t * 0.045).toFixed(4)})`;
-        img.style.filter = "brightness(1)";
-      } else {
-        img.style.opacity = "0"; img.style.zIndex = "0";
-        img.style.clipPath = i < c ? "inset(0 100% 0 0)" : "inset(0 0 0 100%)";
-      }
-    });
-    if (filmOn) [c, c + 1].forEach((i) => {
-      const el = slides[i];
-      if (el && el.tagName === "VIDEO" && el.paused) { const pr = el.play(); if (pr && pr.catch) pr.catch(() => {}); }
-    });
-    const idx = Math.round(fc);
-    if (idx !== activeIdx) {
-      activeIdx = idx;
-      idxEl.textContent = String(idx + 1).padStart(2, "0");
-      ticks.forEach((tk, i) => tk.classList.toggle("on", i <= idx));
-      gsap.fromTo(idxEl, { yPercent: 14, opacity: 0.4 }, { yPercent: 0, opacity: 1, duration: 0.45, ease: "flow", overwrite: true });
-    }
-  }
-  setFlow(0);
-
-  const flowPos = { f: 0 };
-  if (REDUCED) { setFlow(0); return; }
-
-  const introChars = new SplitText(".wrapped__title", { type: "chars" });
-  gsap.set(introChars.chars, { opacity: 0, yPercent: 60 });
-  gsap.set(".wrapped__stats .wstat", { opacity: 0, y: 44 });
-  gsap.set(".wrapped__note", { opacity: 0 });
-  gsap.set(scene, { opacity: 0, y: 40, scale: 0.94 });
-
-  const tl = gsap.timeline({
-    scrollTrigger: {
-      trigger: "#wrapped", pin: true, scrub: 0.7,
-      start: "top top", end: "+=430%",
-      onEnter: () => { playFilm(); stage.morphTo("year", { duration: 1.7 }); stage.setTint(0x6b4a12, 1.6); stage.setOpacity(0.4, 1); },
-      onEnterBack: playFilm,
-      onLeave: pauseFilm,
-      onLeaveBack: () => { pauseFilm(); stage.morphTo("bubble", { duration: 1.4 }); stage.setTint(0x0b3d24, 1.4); stage.setOpacity(0.9, 1); },
-    },
-  });
-
-  // 幕次：标题独占 → 标题退场 → 放映室逐帧走片 → 数字收束
-  tl.to(introChars.chars, { opacity: 1, yPercent: 0, stagger: 0.03, duration: 0.9, ease: "flow" }, 0)
-    .to({}, { duration: 0.45 })
-    .to(".wrapped__intro", { yPercent: -46, opacity: 0, scale: 0.92, duration: 0.8, ease: "silk" }, ">")
-    .to(scene, { opacity: 1, y: 0, scale: 1, duration: 0.7, ease: "cine" }, "<0.25")
-    .to(flowPos, { f: N - 1, duration: 3.8, ease: "none", onUpdate: () => setFlow(flowPos.f) }, ">-0.1")
-    .to(scene, { yPercent: -3.5, duration: 0.5, ease: "silk" }, ">")
-    .to(".wrapped__stats .wstat", { opacity: 1, y: 0, stagger: 0.14, duration: 0.6, ease: "flow" }, "<")
-    .call(runCounters, [], "<")
-    .to(".wrapped__note", { opacity: 1, duration: 0.5 }, ">-0.2")
-    .to({}, { duration: 0.5 });
-}
-
-let countersDone = false;
-function runCounters() {
-  if (countersDone) return;
-  countersDone = true;
-  $$("[data-count]").forEach((el) => {
-    const target = +el.dataset.count;
-    const suffix = el.dataset.suffix || "";
-    const o = { v: 0 };
-    gsap.to(o, {
-      v: target, duration: 2.2, ease: "expo.out",
-      onUpdate: () => { el.textContent = Math.round(o.v).toLocaleString("en-US") + suffix; },
-    });
-  });
-  $$("[data-count-time]").forEach((el) => {
-    const [hh, mm] = el.dataset.countTime.split(":").map(Number);
-    const total = hh * 60 + mm;
-    const o = { v: 0 };
-    gsap.to(o, {
-      v: total, duration: 2.2, ease: "expo.out",
-      onUpdate: () => {
-        const h = Math.floor(o.v / 60), m = Math.round(o.v % 60);
-        el.textContent = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-      },
-    });
-  });
-}
-
-/* ─────────────────────────── act 06 · privacy ─────────────────────────── */
+/* ─────────────────────────── act 05 · machine（隐私 × 引擎 合并）─────────────────────────── */
 
 /* 第六幕改为滚动叙事：三个动作在本机真的跑一遍，两个读数一路对照 ——
    本机处理飞涨，出网死死钉在 0，最后定格盖章。 */
@@ -1225,7 +1156,7 @@ function buildMachine() {
       onUpdate(self) { mcUpdate(self.progress); },
       onEnter: () => { stage.morphTo("lock", { duration: 1.7 }); stage.setTint(0x0b3d24, 1.4); stage.setOpacity(0.5, 1); stage.setAmp(0.32, 1); },
       onEnterBack: () => { stage.morphTo("lock", { duration: 1.5 }); stage.setOpacity(0.5, 1); },
-      onLeaveBack: () => { stage.morphTo("year", { duration: 1.5 }); stage.setTint(0x6b4a12, 1.4); stage.setOpacity(0.65, 1); },
+      onLeaveBack: () => { stage.morphTo("bubble", { duration: 1.4 }); stage.setTint(0x0b3d24, 1.4); stage.setOpacity(0.9, 1); },
     },
   });
 
@@ -1437,85 +1368,7 @@ function buildStack() {
   });
 }
 
-/* ─────────────────────────── act 07 · friends（同路人 · 巨字名录）─────────────────────────── */
-
-function buildFriends() {
-  if (REDUCED) return;
-
-  const hexStrOf = (n) => { let h = ""; for (let i = 0; i < n; i++) h += HEXC[(Math.random() * 16) | 0]; return h; };
-  const names = $$(".ro-dec");
-
-  // 名录以密文态待命：真名先置为等长乱码,进场时逐字落定
-  names.forEach((el) => {
-    el.dataset.final = el.dataset.final || el.textContent;
-    el.textContent = hexStrOf(Math.max(6, Math.round(el.dataset.final.length * 1.4)));
-    el.classList.add("is-hex");
-  });
-
-  const introChars = new SplitText(".friends__title", { type: "chars" }).chars;
-  gsap.set(introChars, { opacity: 0, yPercent: 62, rotateX: -52, transformPerspective: 820, transformOrigin: "50% 100%" });
-  gsap.set(".friends__top .sec-tag, .friends__sub", { opacity: 0, y: 18 });
-  gsap.set(".ro-rule, .ro-rule--end", { scaleX: 0 });
-  gsap.set(".ro-idx, .ro-meta", { opacity: 0 });
-  gsap.set(".ro-name", { opacity: 0, y: 20 });
-
-  ScrollTrigger.create({
-    trigger: "#friends", start: "top 62%", once: true,
-    onEnter: () => {
-      const tl = gsap.timeline();
-      // 标题逐字立起 → 细线逐条抽出 → 编号/meta 亮起 → 巨字名以密文升起、逐字解密落定 → ghost 位开始翻滚
-      tl.to(".friends__top .sec-tag", { opacity: 1, y: 0, duration: 0.5, ease: "flow" }, 0)
-        .to(introChars, { opacity: 1, yPercent: 0, rotateX: 0, duration: 0.85, stagger: 0.04, ease: "cine" }, 0.1)
-        .to(".friends__sub", { opacity: 1, y: 0, duration: 0.6, ease: "flow" }, 0.55)
-        .to(".ro-rule, .ro-rule--end", { scaleX: 1, duration: 0.9, stagger: 0.14, ease: "cine" }, 0.7)
-        .to(".ro-idx, .ro-meta", { opacity: 1, stagger: 0.08, duration: 0.5 }, 1.0)
-        .to(".ro-name", { opacity: 1, y: 0, stagger: 0.12, duration: 0.6, ease: "flow" }, 1.05);
-      names.forEach((el, i) => tl.to(el, {
-        duration: 0.8, scrambleText: { text: el.dataset.final, chars: HEXC, speed: 0.6 },
-        onComplete: () => el.classList.remove("is-hex"),
-      }, 1.25 + i * 0.15));
-      // ghost 位：一串永远解不开的密文,慢速翻滚
-      tl.call(() => {
-        const ghost = $("#ro-ghost");
-        gsap.to(ghost, {
-          duration: 2.2, repeat: -1, repeatDelay: 0.6, repeatRefresh: true, ease: "none",
-          scrambleText: { text: () => hexStrOf(12), chars: HEXC, speed: 0.3 },
-        });
-      }, [], 2.1);
-      // 入场收尾兜底：无论中途发生什么,巨字名必须以终态站定
-      // (曾因 hover 补间 overwrite:true 在入场期杀掉显形补间,名字永久卡在 opacity 0 —— 用户真机截图实证)
-      tl.call(() => {
-        names.forEach((el) => {
-          gsap.set(el, { opacity: 1, y: 0 });
-          el.textContent = el.dataset.final;
-          el.classList.remove("is-hex");
-        });
-        // hover = 快速重解密一次(解密闪回)。入场完成后才绑,且只杀自己上一次的 hover 补间
-        if (!TOUCH) names.forEach((el) => {
-          const row = el.closest("a.ro-row");
-          if (!row) return;
-          let hv = null;
-          row.addEventListener("pointerenter", () => {
-            if (hv) hv.kill();
-            hv = gsap.to(el, { duration: 0.45, scrambleText: { text: el.dataset.final, chars: HEXC, speed: 1 } });
-          });
-        });
-      }, [], ">");
-    },
-  });
-
-  // 粒子明暗独立管理（入场触发器是 once,挂它身上的话 onLeaveBack 永远不会执行）：
-  // 在幕内压成远景别糊字,离场按邻幕期望恢复（machine 0.5 / cta 0.9）
-  ScrollTrigger.create({
-    trigger: "#friends", start: "top 62%", end: "bottom 40%",
-    onEnter: () => { stage.setOpacity(0.22, 1.2); stage.setTint(0x0e4d33, 1.4); },
-    onEnterBack: () => { stage.setOpacity(0.22, 1); stage.setTint(0x0e4d33, 1.2); },
-    onLeave: () => { stage.setOpacity(0.9, 1); },
-    onLeaveBack: () => { stage.setOpacity(0.5, 1); },
-  });
-}
-
-/* ─────────────────────────── act 07 · cta（终幕 · 归档落款）─────────────────────────── */
+/* ─────────────────────────── act 06 · cta（终幕 · 归档落款）─────────────────────────── */
 
 function buildCTA() {
   const gate = $("#cta-gate");
@@ -1615,10 +1468,8 @@ function setupCursor() {
     "02": () => hexStr(3),                                // 密文探针：乱码随手抖
     "03": (x, y) => "KEY 0x" + hx(x) + hx(y),             // 密钥
     "04": (x, y) => "0x" + hx(x) + "·" + hx(y),
-    "05": () => "WRAPPED 2025",
-    "06": () => "0 B · EGRESS",
-    "07": () => "SAY HI ↗",
-    "08": () => "GET LATEST ↓",
+    "05": () => "0 B · EGRESS",
+    "06": () => "GET LATEST ↓",
   };
   let act = "01";
   window.__cursorAct = (id) => {

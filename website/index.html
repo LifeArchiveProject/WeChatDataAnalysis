@@ -13,6 +13,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@900&family=Noto+Sans+SC:wght@500;700;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="assets/css/main.css" />
+  <link rel="stylesheet" href="assets/css/pro-demos.css" />
 </head>
 <body class="is-loading">
 
@@ -61,7 +62,7 @@
   </header>
 
   <aside class="rail" aria-hidden="true">
-    <div class="rail__idx mono"><span id="rail-cur">01</span><em>/ 08</em></div>
+    <div class="rail__idx mono"><span id="rail-cur">01</span><em>/ 06</em></div>
     <div class="rail__line"><i id="rail-fill"></i></div>
   </aside>
 
@@ -95,6 +96,8 @@
           <span class="hm__exec mono" aria-hidden="true"><i>▸</i><em id="pro-exec-t">修改文字消息</em><b id="pro-exec-ok">✓</b></span>
         </div>
         <div class="hm__grid" id="hm-grid"></div>
+        <!-- 舞台：43 项能力逐项演示（引擎在 assets/js/pro-demos/，由 main.js 挂载；顶部 HUD 由首屏刊头代劳，故隐藏） -->
+        <div class="hm__stage" id="hm-stage" aria-label="高级功能演示"></div>
       </div>
       <div class="hero__cta">
         <a class="hero__orb" data-magnetic data-cursor="hover" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest" target="_blank" rel="noopener">
@@ -218,45 +221,8 @@
       </div>
     </section>
 
-    <!-- ═══════════ ACT 05 · WRAPPED ═══════════ -->
-    <section class="act wrapped" id="wrapped" data-act="05">
-      <div class="wrapped__pin">
-        <header class="wrapped__intro">
-          <p class="sec-tag mono"><span class="tick"></span>ANNUAL WRAPPED — 年度总结</p>
-          <h2 class="wrapped__title"><span>而这一年，</span><br/><span>值得被数据<em>温柔复述</em></span></h2>
-        </header>
-
-        <!-- 年度总结 = 8 帧走片：前 5 帧为产品实录影片（MP4 由 frontend/public/AnnualSummary1-5.gif 转码，1916×1015 附近横版），后 3 帧静帧 1919×860；一律 contain 平铺可读、勿裁勿倾斜 -->
-        <div class="viewer" id="viewer">
-          <div class="cinema__hud mono">
-            <span class="hudl"><span class="tick"></span>WRAPPED FILM · 2025</span>
-            <span>FRAME <b id="v-idx">01</b><i>/ 03</i></span>
-          </div>
-          <figure class="viewer__frame">
-            <div class="viewer__slides" id="v-slides">
-              <img src="assets/img/AnnualSummary6.png" alt="年度总结卡片：月度挚友墙" decoding="async" />
-              <img src="assets/img/AnnualSummary7.png" alt="年度总结卡片：表情宇宙" decoding="async" />
-              <img src="assets/img/AnnualSummary8.png" alt="年度总结卡片：Bento 总览" decoding="async" />
-            </div>
-          </figure>
-          <div class="cinema__foot">
-            <div class="viewer__ticks" id="v-ticks"><i></i><i></i><i></i></div>
-          </div>
-        </div>
-
-        <div class="wrapped__stats">
-          <div class="wstat"><b class="mono" data-count="137842">0</b><span>条消息，被完整找回</span></div>
-          <div class="wstat"><b class="mono" data-count-time="04:17">00:00</b><span>最晚的一次夜聊</span></div>
-          <div class="wstat"><b class="mono" data-count="26" data-suffix=" 秒">0</b><span>回复 TA 的中位速度</span></div>
-          <div class="wstat"><b class="mono" data-count="8431">0</b><span>个表情包一起走过</span></div>
-        </div>
-
-        <p class="wrapped__note mono">8 张动态卡片 — 年度总览 · 赛博作息 · 字数统计 · 回复速度 · 表情宇宙 · 月度挚友墙 · 年度口头禅 · Bento 总结</p>
-      </div>
-    </section>
-
-    <!-- ═══════════ ACT 06 · THE MACHINE（隐私 × 引擎室 合并）═══════════ -->
-    <section class="act machine" id="machine" data-act="06">
+    <!-- ═══════════ ACT 05 · THE MACHINE（隐私 × 引擎室 合并）═══════════ -->
+    <section class="act machine" id="machine" data-act="05">
       <div class="mac__pin">
         <div class="mac__top">
           <p class="sec-tag mono"><span class="tick"></span>THE MACHINE — 本机 · 引擎 × 隐私</p>
@@ -312,39 +278,11 @@
       </div>
     </section>
 
-    <!-- ═══════════ ACT 07 · FRIENDS（同路人 · 巨字名录）═══════════ -->
-    <section class="act friends" id="friends" data-act="07">
-      <div class="friends__pin">
-        <header class="friends__top">
-          <p class="sec-tag mono"><span class="tick"></span>FELLOW TRAVELERS — 同路人</p>
-          <h2 class="friends__title">做这件事的，<em>不止我们</em>。</h2>
-          <p class="friends__sub">他们也一样——数据不出你的电脑。</p>
-        </header>
-
-        <!-- 装置：同路人名录 —— 无容器的巨字花名册；02 号是永远在翻滚的密文空位。加友链 = 复制 01 行、顺延编号 -->
-        <div class="roster">
-          <a class="ro-row" data-cursor="hover" href="https://miyu.aiqji.com/" target="_blank" rel="noopener">
-            <i class="ro-rule" aria-hidden="true"></i>
-            <span class="ro-idx mono">01</span>
-            <b class="ro-name ro-dec" data-final="密语 CipherTalk">密语 CipherTalk</b>
-            <span class="ro-meta mono">微信聊天记录，本地查看 · miyu.aiqji.com<i class="ro-arw">↗</i></span>
-          </a>
-          <div class="ro-row ro-row--ghost" aria-hidden="true">
-            <i class="ro-rule"></i>
-            <span class="ro-idx mono">02</span>
-            <b class="ro-name mono" id="ro-ghost">3F8A02C4E17B</b>
-            <span class="ro-meta mono">AWAITING — 虚位以待</span>
-          </div>
-          <i class="ro-rule ro-rule--end" aria-hidden="true"></i>
-        </div>
-      </div>
-    </section>
-
-    <!-- ═══════════ ACT 08 · CTA / FOOTER ═══════════ -->
-    <section class="act cta" id="cta" data-act="08">
+    <!-- ═══════════ ACT 06 · CTA / FOOTER ═══════════ -->
+    <section class="act cta" id="cta" data-act="06">
 
       <div class="cta__slug mono">
-        <span class="cta__slug-t"><i class="tick"></i>ACT 08 · 终章</span>
+        <span class="cta__slug-t"><i class="tick"></i>ACT 06 · 终章</span>
         <i class="cta__leader" aria-hidden="true"></i>
         <span class="cta__slug-t" id="cta-seal">FILE CLOSED · SEALED 2026</span>
       </div>

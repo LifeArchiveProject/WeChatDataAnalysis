@@ -1,4 +1,6 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
+import { fileURLToPath } from 'node:url'
+import { searchForWorkspaceRoot } from 'vite'
 import {
   FIRST_USE_AGREEMENT_STORAGE_KEY,
   FIRST_USE_AGREEMENT_VERSION,
@@ -9,6 +11,8 @@ const frontendHost = String(process.env.NUXT_HOST || '').trim()
 const frontendPort = Number.parseInt(String(process.env.NUXT_PORT || process.env.PORT || '3000').trim(), 10)
 const backendPort = String(process.env.WECHAT_TOOL_PORT || '10392').trim() || '10392'
 const devProxyTarget = `http://127.0.0.1:${backendPort}/api`
+const frontendDir = fileURLToPath(new URL('.', import.meta.url))
+const websiteAssetsDir = fileURLToPath(new URL('../website/assets', import.meta.url))
 const firstUseBootstrapScript = createFirstUseBootstrapScript({
   storageKey: FIRST_USE_AGREEMENT_STORAGE_KEY,
   version: FIRST_USE_AGREEMENT_VERSION,
@@ -51,6 +55,21 @@ export default defineNuxtConfig({
     }
   },
   
+  // 「高级功能」弹窗复用官网的 pro-demos 演示引擎（website/assets 下），跨根导入需要别名，
+  // 并让 dev server 额外放行 website/assets（保留 Vite 默认推断的工作区根，不把整个仓库暴露给 /@fs/）
+  vite: {
+    resolve: {
+      alias: {
+        '@website': websiteAssetsDir
+      }
+    },
+    server: {
+      fs: {
+        allow: [searchForWorkspaceRoot(frontendDir), websiteAssetsDir]
+      }
+    }
+  },
+
   // 应用配置
   css: [
     '@fortawesome/fontawesome-free/css/all.min.css',
