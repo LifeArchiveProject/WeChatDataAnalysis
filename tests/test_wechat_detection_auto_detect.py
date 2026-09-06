@@ -306,6 +306,46 @@ class TestWechatDetectionAutoDetect(unittest.TestCase):
         self.assertEqual(result, [str(data_root)])
 
 
+    def test_parse_global_config_falls_back_to_len_in_crc_meta(self):
+        """有的微信版本把 global_config 文件头写成 0，真正的长度在 crc 的 28..32。"""
+        import struct
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        def varint(n):
+            out = bytearray()
+            while True:
+                b = n & 0x7F
+                n >>= 7
+                if n:
+                    out.append(b | 0x80)
+                else:
+                    out.append(b)
+                    return bytes(out)
+
+        body = bytearray()
+        for key_name, value in (("mmkv_key_user_name", "wxid_zero_header"), ("mmkv_key_nick_name", "ZeroHeader")):
+            kb = key_name.encode("utf-8"); vb = value.encode("utf-8")
+            payload = varint(len(vb)) + vb
+            body += varint(len(kb)) + kb + varint(len(payload)) + payload
+        plaintext = b"\x00\x00\x00\x00" + bytes(body)
+        iv = b"\x22" * 16
+        encryptor = Cipher(algorithms.AES(wd._GLOBAL_CONFIG_CRYPT_KEY), modes.CFB(iv)).encryptor()
+        encrypted = encryptor.update(plaintext) + encryptor.finalize()
+
+        with TemporaryDirectory() as td:
+            config_dir = Path(td) / "all_users" / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "global_config").write_bytes(b"\x00\x00\x00\x00" + encrypted)   # 文件头是 0
+            (config_dir / "global_config.crc").write_bytes(
+                b"\x00" * 12 + iv + struct.pack("<I", len(encrypted)) + b"\x00" * 12
+            )
+            result = wd.parse_global_config(td)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["wxid"], "wxid_zero_header")
+        self.assertEqual(result["nickname"], "ZeroHeader")
+
     def test_parse_global_config_uses_iv_from_crc_meta(self):
         import struct
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes

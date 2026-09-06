@@ -215,14 +215,18 @@ def parse_global_config(base_path: str) -> dict:
         raw = Path(config_path).read_bytes()
         if len(raw) < 8:
             return None
-        data_len = struct.unpack("<I", raw[:4])[0]
-        if data_len <= 0 or 4 + data_len > len(raw):
-            return None
-
         meta = Path(meta_path).read_bytes()
         if len(meta) < 28:
             return None
         iv = meta[12:28]
+
+        data_len = struct.unpack("<I", raw[:4])[0]
+        if data_len <= 0 or 4 + data_len > len(raw):
+            # 有的微信版本把文件头写成 0，真正的载荷长度在 crc 的 28..32（crc 头 4 字节是该段的 crc32）
+            if len(meta) >= 32:
+                data_len = struct.unpack("<I", meta[28:32])[0]
+            if data_len <= 0 or 4 + data_len > len(raw):
+                return None
 
         encrypted = raw[4:4 + data_len]
         try:

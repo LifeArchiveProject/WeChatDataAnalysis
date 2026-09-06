@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PRO demos · lab</title>
+  <!--
+    高级版能力演示的本地调试页（不进官网导航，也不被应用引用）。
+    起服务：python3 website/serve.py 4321 → http://127.0.0.1:4321/dev/pro-lab.html
+    参数：
+      ?scene=edit-text      从指定场景开始
+      &only=1               播完重播同一场景（单场景打磨）
+      &speed=0.5            倍速
+      &cols=2               清单栏数
+    控制台：__panel.select('add-image') / __panel.stage.seek(2.4) / __panel.stage.resume()
+  -->
+  <link rel="stylesheet" href="../assets/css/pro-demos.css" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #050807; color: #e9f1eb; font-family: "Noto Sans SC", "PingFang SC", sans-serif; min-height: 100vh; }
+    .lab { max-width: 1240px; margin: 0 auto; padding: 28px 28px 48px; }
+    .lab__bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: .18em; color: #9aa8a0; margin-bottom: 18px; }
+    .lab__bar b { color: #ffc24b; font-weight: 600; }
+    .lab__bar button { all: unset; cursor: pointer; padding: 2px 8px; border: 1px solid rgba(150,180,160,.28); color: #e9f1eb; font: inherit; letter-spacing: .12em; }
+    .lab__bar button:hover { border-color: #ffc24b; color: #ffc24b; }
+    .lab__missing { color: #ff5d5d; }
+    #host { height: min(78vh, 720px); }
+    #host .pd-root { height: 100%; }
+    @media (max-width: 720px) { #host { height: auto; } }
+    .strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+    .strip__cell { min-width: 0; }
+    .strip__t { margin: 6px 0 0; font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-size: 10px; letter-spacing: .16em; color: #5c6a63; }
+  </style>
+</head>
+<body>
+  <div class="lab">
+    <div class="lab__bar" id="bar">
+      <span><b>PRO</b> · demos lab</span>
+      <span id="lab-state">—</span>
+      <button id="b-prev">‹ prev</button>
+      <button id="b-next">next ›</button>
+      <button id="b-pause">pause</button>
+      <button id="b-resume">resume</button>
+      <button id="b-replay">replay</button>
+      <span id="lab-missing"></span>
+    </div>
+    <div id="host"></div>
+  </div>
+
+  <script src="../vendor/gsap.min.js"></script>
+  <script type="module">
+    import { createProPanel, createProStage, injectSceneCss, missingScenes, SCENES, PRO_ITEMS, PRO_TOTAL } from "../assets/js/pro-demos/index.js";
+    const q = new URLSearchParams(location.search);
+    const host = document.getElementById("host");
+
+    // 走片模式：?scene=key&strip=1[&frames=6] → 同一场景 N 个关键帧并排定格，一张截图看完整段
+    if (q.get("strip") === "1") {
+      injectSceneCss();
+      // 定格截图：冻结 CSS transition（无头截图不推进过渡，类切换后的颜色要立刻可见）
+      const frz = document.createElement("style"); frz.textContent = ".pd-root * { transition: none !important; }"; document.head.appendChild(frz);
+      const key = q.get("scene") || PRO_ITEMS[0].key;
+      const frames = Math.max(2, Math.min(12, Number(q.get("frames") || 6)));
+      host.style.height = "auto";
+      host.className = "strip";
+      document.getElementById("bar").querySelector("#lab-state").textContent = `${key} · ${frames} frames`;
+      // 先起一个探针舞台量总时长，再按等分定格
+      const probe = createProStage(document.createElement("div"), { gsap: window.gsap, scenes: SCENES, items: PRO_ITEMS, autostart: false, autoplay: false });
+      probe.start(key); const dur = probe.duration(); probe.destroy();
+      for (let i = 0; i < frames; i++) {
+        const t = frames === 1 ? dur : (dur * (i + 0.5)) / frames;
+        const cell = document.createElement("div"); cell.className = "pd-root strip__cell";
+        host.appendChild(cell);
+        const st = createProStage(cell, { gsap: window.gsap, scenes: SCENES, items: PRO_ITEMS, autostart: false, autoplay: false, hudScramble: false });
+        st.start(key); st.seek(t);
+        const lab = document.createElement("p"); lab.className = "strip__t"; lab.textContent = `t = ${t.toFixed(2)}s / ${dur.toFixed(2)}s`;
+        cell.appendChild(lab);
+      }
+      window.__strip = { key, dur, frames };
+    } else {
+    if (q.get("cols")) host.style.setProperty("--pd-list-cols", q.get("cols"));
+    const state = document.getElementById("lab-state");
+    const panel = createProPanel(host, {
+      gsap: window.gsap,
+      start: q.get("scene") || undefined,
+      loopOne: q.get("only") === "1",
+      speed: Number(q.get("speed") || 1),
+      onChange: (it) => { state.textContent = `${String(it.index).padStart(2, "0")}/${PRO_TOTAL} · ${it.key}`; document.title = `${it.key} · lab`; },
+    });
+    if (q.get("cols")) panel.el.style.setProperty("--pd-list-cols", q.get("cols"));
+    window.__panel = panel;
+    const miss = missingScenes();
+    document.getElementById("lab-missing").innerHTML = miss.length ? `<span class="lab__missing">missing ${miss.length}: ${miss.join(" ")}</span>` : "all scenes present";
+    document.getElementById("b-prev").onclick = () => panel.stage.prev();
+    document.getElementById("b-next").onclick = () => panel.stage.next();
+    document.getElementById("b-pause").onclick = () => panel.pause();
+    document.getElementById("b-resume").onclick = () => panel.resume();
+    document.getElementById("b-replay").onclick = () => { panel.resume(); panel.stage.start(panel.stage.current?.key); };
+    }
+  </script>
+</body>
+</html>
