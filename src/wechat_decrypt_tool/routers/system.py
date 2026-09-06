@@ -81,28 +81,35 @@ async def toggle_img_helper(req: ImgHelperToggleRequest):
 
 @router.get("/api/system/cdn_image/status", summary="获取自动获取原图(CDN)开关状态")
 async def get_cdn_image_status(account: str | None = None):
-    remaining = None
-    if account:
-        try:
-            remaining = cdn_image_service.get_quota_remaining(str(account).strip())
-        except Exception:
-            remaining = None
+    account = str(account or "").strip()
     return {
         "enabled": cdn_image_service.is_cdn_download_enabled(),
-        "dailyLimit": cdn_image_service.DAILY_DOWNLOAD_LIMIT,
-        "remaining": remaining,
+        "tokenDuration": cdn_image_service.get_token_duration(),
+        "plan": cdn_image_service.get_plan_snapshot(account) if account else None,
     }
 
 
 class CdnImageToggleRequest(BaseModel):
     enabled: bool
+    tokenDuration: str | None = None
 
 
 @router.post("/api/system/cdn_image/toggle", summary="开启/关闭自动获取原图(CDN)")
 async def toggle_cdn_image(req: CdnImageToggleRequest):
+    # 先校验 tokenDuration 再落盘 enabled，避免 400 时设置只写了一半。
+    token_duration: str | None = None
+    if req.tokenDuration is not None:
+        token_duration = str(req.tokenDuration or "").strip().lower()
+        if token_duration not in cdn_image_service.TOKEN_DURATIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"tokenDuration 必须是 {', '.join(cdn_image_service.TOKEN_DURATIONS)} 之一",
+            )
     cdn_image_service.set_cdn_download_enabled(bool(req.enabled))
+    if token_duration is not None:
+        cdn_image_service.set_token_duration(token_duration)
     return {
         "status": "success",
         "enabled": cdn_image_service.is_cdn_download_enabled(),
-        "dailyLimit": cdn_image_service.DAILY_DOWNLOAD_LIMIT,
+        "tokenDuration": cdn_image_service.get_token_duration(),
     }

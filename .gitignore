@@ -24,6 +24,8 @@ wheels/
 # Local config templates
 /wechat_db_config_template.json
 /wechat_db_config.json
+# WxCDN 运行期状态（按 wxid 存 token / 额度 / 最近下载），只属于本机
+/cdn_account_state.json
 .ace-tool/
 pnpm-lock.yaml
 /tools/tmp_isaac64_compare.js

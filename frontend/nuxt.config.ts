@@ -56,7 +56,8 @@ export default defineNuxtConfig({
     '@fortawesome/fontawesome-free/css/all.min.css',
     '~/assets/css/chat.css',
     '~/assets/css/record-pages.css',
-    '~/assets/css/export-panels.css'
+    '~/assets/css/export-panels.css',
+    '~/assets/css/wxcdn-card.css'
   ],
 
   // 应用配置
