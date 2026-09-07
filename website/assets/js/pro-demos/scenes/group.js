@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   scenes / group.js — 群聊（4 项）
+   scenes / group.js — 群聊（8 项）
    每个场景：({ gsap, kit, tl, root, reduced, item }) => 把动画编进 tl（可返回 tl）。
    约定：所有补间都挂在 tl 上（不要裸调 gsap.to），舞台切换时靠 kill(tl) 清场。
    时长 4–7 秒，结尾用 kit.ok() 盖「已写入 / 已发布 / 已建群」印章并停留。
@@ -212,11 +212,137 @@ function groupRename({ kit, tl }) {
   return tl;
 }
 
+/* ── 成员选择：直接拉入与发送邀请使用不同的结果状态 ── */
+function groupMemberFlow({ gsap, kit, tl, invite = false }) {
+  const { chat } = familyChat(kit, { rows: 2 });
+  const picker = kit.picker(["小王", "阿明"], { title: invite ? "邀请成员" : "添加成员" });
+  gsap.set(picker.el, { xPercent: -50, yPercent: -50, x: 0, y: 0, opacity: 0, scale: 0.94 });
+  const menu = kit.menu([
+    { icon: "users", label: invite ? "邀请成员" : "添加成员" },
+  ], { at: chat.more, dx: -92, dy: 12 });
+  const result = chat.sys(invite ? "邀请待确认" : "成员已加入 · 演示");
+  gsap.set(result, { display: "none" });
+  const c = kit.cursor();
+
+  tl.add(c.show(), 0.2)
+    .add(c.tap(chat.more), 0.3)
+    .add(menu.open(), ">-0.05")
+    .add(c.to(menu.items[0], { duration: 0.35 }), "<+0.1")
+    .add(c.click(menu.items[0]), ">")
+    .add(menu.close(), ">")
+    .to(picker.el, { opacity: 1, scale: 1, duration: 0.3, ease: "back.out(1.6)" }, ">-0.1");
+  [0, 1].forEach((i) => {
+    tl.add(c.to(picker.rows[i].box, { duration: 0.32, dx: 4 }), i === 0 ? ">+0.15" : ">+0.2")
+      .add(c.click(picker.rows[i]), ">")
+      .call(() => picker.check(i), [], "<+0.06");
+  });
+  tl.call(() => { picker.done.textContent = invite ? "发送邀请" : "添加"; }, [], ">+0.15")
+    .add(c.to(picker.done, { duration: 0.4 }), ">")
+    .add(c.click(picker.done), ">")
+    .to(picker.el, { opacity: 0, scale: 0.96, duration: 0.22 }, "<+0.2")
+    .set(result, { display: "block" }, ">-0.05")
+    .add(kit.pop(result), "<")
+    .add(kit.flash(result, { color: invite ? "amber" : "neon", duration: 0.7 }), "<")
+    .add(kit.ok("演示完成", { en: invite ? "INVITE FLOW" : "ADD FLOW" }), ">-0.1")
+    .add(c.hide(), "<");
+  return tl;
+}
+
+function groupAddMembers(ctx) {
+  return groupMemberFlow({ ...ctx, invite: false });
+}
+
+function groupInviteMembers(ctx) {
+  return groupMemberFlow({ ...ctx, invite: true });
+}
+
+/* ── 破坏性成员操作：菜单后再进入确认面板，结果保留为演示状态 ── */
+function groupConfirmSheet(kit, { title, text, confirm, icon = "trash" }) {
+  const sheet = kit.sheet({ title, cls: "pd-group-confirm" });
+  const body = kit.h("div", "pd-group-confirm__body");
+  body.append(kit.icon(icon), kit.h("p", "", text));
+  sheet.body.appendChild(body);
+  sheet.cancel.textContent = "取消";
+  sheet.ok.textContent = confirm;
+  sheet.ok.classList.remove("pd-btn--amber");
+  sheet.ok.classList.add("pd-btn--red");
+  return sheet;
+}
+
+function groupRemoveMembers({ gsap, kit, tl }) {
+  const { chat, rows } = familyChat(kit);
+  const target = rows[0];
+  const menu = kit.menu([
+    { icon: "trash", label: "移除成员", danger: true },
+  ], { at: target, dx: 14, dy: 8 });
+  const sheet = groupConfirmSheet(kit, {
+    title: "移除群成员",
+    text: "将移除「小王」。请先确认，此处仅展示操作步骤。",
+    confirm: "确认移除",
+  });
+  const result = chat.sys("已移除 · 演示");
+  gsap.set(result, { display: "none" });
+  const c = kit.cursor();
+
+  tl.add(c.show(), 0.2)
+    .add(c.tap(target), 0.3)
+    .add(menu.open(), ">-0.05")
+    .add(c.to(menu.items[0], { duration: 0.4 }), "<+0.1")
+    .add(c.click(menu.items[0]), ">")
+    .add(menu.close(), ">")
+    .add(sheet.open(), ">-0.05")
+    .add(c.to(sheet.ok, { duration: 0.4 }), "<+0.2")
+    .add(c.click(sheet.ok), ">")
+    .add(sheet.close(), ">")
+    .add(kit.collapse(target), ">-0.05")
+    .set(result, { display: "block" }, "<+0.1")
+    .add(kit.pop(result), "<")
+    .add(kit.ok("已移除 · 演示", { en: "REMOVED DEMO" }), ">-0.1")
+    .add(c.hide(), "<");
+  return tl;
+}
+
+function groupLeave({ gsap, kit, tl }) {
+  const { chat } = familyChat(kit, { rows: 3 });
+  const menu = kit.menu([
+    { icon: "undo", label: "退出群聊", danger: true },
+  ], { at: chat.more, dx: -82, dy: 12 });
+  const sheet = groupConfirmSheet(kit, {
+    title: "退出群聊",
+    text: "将退出「家人群」。请先确认，此处仅展示操作步骤。",
+    confirm: "确认退出",
+    icon: "undo",
+  });
+  const result = chat.sys("已退出 · 演示");
+  gsap.set(result, { display: "none" });
+  const c = kit.cursor();
+
+  tl.add(c.show(), 0.2)
+    .add(c.tap(chat.more), 0.3)
+    .add(menu.open(), ">-0.05")
+    .add(c.to(menu.items[0], { duration: 0.4 }), "<+0.1")
+    .add(c.click(menu.items[0]), ">")
+    .add(menu.close(), ">")
+    .add(sheet.open(), ">-0.05")
+    .add(c.to(sheet.ok, { duration: 0.4 }), "<+0.2")
+    .add(c.click(sheet.ok), ">")
+    .add(sheet.close(), ">")
+    .set(result, { display: "block" }, ">-0.05")
+    .add(kit.pop(result), "<")
+    .add(kit.ok("已退出 · 演示", { en: "LEFT DEMO" }), ">-0.1")
+    .add(c.hide(), "<");
+  return tl;
+}
+
 export default {
   "group-my-nick": groupMyNick,
   "group-notice": groupNotice,
   "group-create": groupCreate,
   "group-rename": groupRename,
+  "group-add-members": groupAddMembers,
+  "group-invite-members": groupInviteMembers,
+  "group-remove-members": groupRemoveMembers,
+  "group-leave": groupLeave,
 };
 
 // 本组专属的局部样式；统一注入一次
@@ -258,4 +384,10 @@ export const css = `
 .pd-group-new.is-press { background: rgba(255, 194, 75, 0.38); filter: none; }
 .pd-group-sess { padding: 6px 2px 6px 4px; }
 .pd-group-sess .pd-sess__txt b { font-size: 11px; }
+
+/* 成员变更确认：用红色动作按钮，结果保留为静态演示 */
+.pd-group-confirm__body { display: flex; align-items: flex-start; gap: 10px; padding: 12px 10px; border: 1px solid rgba(255, 93, 93, 0.3); background: rgba(255, 93, 93, 0.06); border-radius: 4px; }
+.pd-group-confirm__body > .pd-ic { flex: none; width: 18px; height: 18px; color: var(--pd-red); }
+.pd-group-confirm__body p { margin: 0; color: var(--pd-ink); font-size: 11.5px; line-height: 1.6; }
+.pd-group-confirm .pd-sheet__foot .pd-btn--red { color: var(--pd-red); }
 `;

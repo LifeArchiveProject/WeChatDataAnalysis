@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   pro-demos / catalog.js — 高级版 43 项能力的唯一清单
+   pro-demos / catalog.js — 高级版 54 项能力的唯一清单
    官网首屏清单、官网高级版幕、应用内「高级功能」弹窗都从这里取数据，
    改一处三处同步。key 是场景文件的索引，别随手改。
    ════════════════════════════════════════════════════════════ */
@@ -48,8 +48,12 @@ export const PRO_GROUPS = [
       { key: "send-image", name: "发送图片消息", caption: "选一张图，经微信客户端真实发送。" },
       { key: "send-video", name: "发送视频消息", caption: "发送视频消息，走微信原生通道。" },
       { key: "send-emoji", name: "发送表情消息", caption: "发送一枚表情包。" },
-      { key: "send-voice", name: "发送语音消息", caption: "按住说话，松手发送。" },
+      { key: "send-file", name: "发送文件消息", caption: "选择本地文件，发送到当前微信会话。" },
+      { key: "send-link", name: "发送链接卡片", caption: "填写链接信息，发送一张链接卡片。" },
+      { key: "send-voice", name: "发送语音消息", caption: "选择语音文件，支持 MP3 语音发送。" },
       { key: "send-pat", name: "发送拍一拍", caption: "隔空拍一拍对方。" },
+      { key: "chat-mark-read", name: "会话标记已读", caption: "将当前会话标记为本地已读。" },
+      { key: "chat-set-mute", name: "会话免打扰", caption: "用同一个开关打开或关闭会话免打扰。" },
     ],
   },
   {
@@ -58,6 +62,7 @@ export const PRO_GROUPS = [
       { key: "sns-autorefresh", name: "自动后台刷新朋友圈", caption: "后台定时拉取朋友圈，新动态自动入库。" },
       { key: "sns-like", name: "朋友圈点赞", caption: "给任意一条朋友圈点赞。" },
       { key: "sns-image-comment", name: "朋友圈图片评论", caption: "在朋友圈图片下留下评论。" },
+      { key: "sns-text-comment", name: "朋友圈文字评论", caption: "在朋友圈动态下留下文字评论。" },
       { key: "sns-post", name: "发布朋友圈", caption: "文字加图片，直接发布一条朋友圈。" },
     ],
   },
@@ -68,6 +73,10 @@ export const PRO_GROUPS = [
       { key: "group-notice", name: "发布群公告", caption: "发布群公告，全员 @ 提醒。" },
       { key: "group-create", name: "新建群聊", caption: "勾选联系人，新建一个群聊。" },
       { key: "group-rename", name: "修改群名称", caption: "修改群名称，会话列表同步更新。" },
+      { key: "group-add-members", name: "拉好友进群", caption: "选择联系人并加入当前群聊。" },
+      { key: "group-invite-members", name: "邀请群成员", caption: "向群成员发出邀请。" },
+      { key: "group-remove-members", name: "移除群成员", caption: "从群聊中移除指定成员。" },
+      { key: "group-leave", name: "退出群聊", caption: "退出当前群聊。" },
     ],
   },
   {
@@ -75,6 +84,8 @@ export const PRO_GROUPS = [
     items: [
       { key: "contact-remark", name: "修改好友备注", caption: "修改好友备注，全局生效。" },
       { key: "contact-accept", name: "同意好友请求", caption: "一键同意好友请求。" },
+      { key: "contact-delete", name: "删除好友", caption: "从联系人中删除好友。" },
+      { key: "contact-add", name: "添加好友", caption: "填写验证消息并发送好友请求。" },
     ],
   },
   {

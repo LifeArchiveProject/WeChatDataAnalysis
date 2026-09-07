@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   scenes / contact.js — 联系人（2 项）
+   scenes / contact.js — 联系人（4 项）
    每个场景：({ gsap, kit, tl, root, reduced, item }) => 把动画编进 tl（可返回 tl）。
    约定：所有补间都挂在 tl 上（不要裸调 gsap.to），舞台切换时靠 kill(tl) 清场。
    时长 4–7 秒，结尾用 kit.ok() 盖「已写入 / 已同意」印章并停留。
@@ -45,7 +45,7 @@ function addressBook(kit) {
   main.append(head, card);
   el.appendChild(main);
   kit.mount(el);
-  return { el, list, first, remarkBig, nick, form, remark: form.rows[0], msgBtn, save };
+  return { el, list, first, remarkBig, nick, form, remark: form.rows[0], msgBtn, save, actions };
 }
 
 /* ── 修改好友备注：点「备注」行 → 打字 → 保存 → 列表名字落定、资料卡冒出备注名大字 → 印章 ── */
@@ -160,9 +160,93 @@ function contactAccept({ gsap, kit, tl }) {
   return tl;
 }
 
+/* ── 破坏性联系人操作：菜单后再进入确认面板，结果保留为演示状态 ── */
+function contactConfirmSheet(kit, { title, text, confirm, icon = "trash" }) {
+  const sheet = kit.sheet({ title, cls: "pd-contact-confirm" });
+  const body = kit.h("div", "pd-contact-confirm__body");
+  body.append(kit.icon(icon), kit.h("p", "", text));
+  sheet.body.appendChild(body);
+  sheet.cancel.textContent = "取消";
+  sheet.ok.textContent = confirm;
+  sheet.ok.classList.remove("pd-btn--amber");
+  sheet.ok.classList.add("pd-btn--red");
+  return sheet;
+}
+
+function contactDelete({ kit, tl }) {
+  const { first } = addressBook(kit);
+  const menu = kit.menu([
+    { icon: "user", label: "查看资料" },
+    { icon: "trash", label: "删除联系人", danger: true },
+  ], { at: first, dx: 14, dy: 8 });
+  const sheet = contactConfirmSheet(kit, {
+    title: "删除联系人",
+    text: "将删除「老地方」。请先确认，此处仅展示操作步骤。",
+    confirm: "确认删除",
+  });
+  const c = kit.cursor();
+
+  tl.add(c.show(), 0.2)
+    .add(c.tap(first), 0.3)
+    .add(menu.open(), ">-0.05")
+    .add(c.to(menu.items[1], { duration: 0.4 }), "<+0.1")
+    .add(c.click(menu.items[1]), ">")
+    .add(menu.close(), ">")
+    .add(sheet.open(), ">-0.05")
+    .add(c.to(sheet.ok, { duration: 0.4 }), "<+0.2")
+    .add(c.click(sheet.ok), ">")
+    .add(sheet.close(), ">")
+    .add(kit.flash(first, { color: "red", duration: 0.7 }), ">-0.05")
+    .add(kit.collapse(first), ">")
+    .add(kit.ok("已删除 · 演示", { en: "DELETED DEMO" }), ">-0.1")
+    .add(c.hide(), "<");
+  return tl;
+}
+
+function contactAdd({ kit, tl }) {
+  const { actions } = addressBook(kit);
+  const addBtn = kit.btn("添加朋友", "amber", actions);
+  const sheet = kit.sheet({ title: "添加好友", cls: "pd-contact-add-sheet" });
+  const form = kit.form([
+    ["微信号", "oldfriend2026", true],
+    ["验证消息", "你好，我是老朋友"],
+  ], sheet.body);
+  sheet.ok.textContent = "发送请求";
+  const c = kit.cursor();
+  const account = form.rows[0], message = form.rows[1];
+
+  tl.add(c.show(), 0.2)
+    .add(c.tap(addBtn), 0.3)
+    .add(sheet.open(), ">-0.05")
+    .add(c.to(account.value, { duration: 0.4 }), "<+0.15")
+    .add(c.click(account), ">")
+    .call(() => account.classList.add("is-edit"), [], "<+0.05")
+    .add(kit.type(account.value, "oldfriend2026", { cps: 12 }), ">+0.2")
+    .call(() => account.classList.remove("is-edit"), [], "<")
+    .add(c.to(message.value, { duration: 0.4 }), ">+0.15")
+    .add(c.click(message), ">")
+    .call(() => message.classList.add("is-edit"), [], "<+0.05")
+    .add(kit.type(message.value, "你好，我是老朋友", { cps: 14 }), ">+0.2")
+    .call(() => message.classList.remove("is-edit"), [], "<")
+    .add(c.to(sheet.ok, { duration: 0.4 }), ">+0.25")
+    .add(c.click(sheet.ok), ">")
+    .add(sheet.close(), ">")
+    .call(() => {
+      addBtn.textContent = "已发送";
+      addBtn.classList.remove("pd-btn--amber");
+      addBtn.classList.add("pd-btn--neon");
+    }, [], ">-0.05")
+    .add(kit.flash(addBtn, { color: "neon", duration: 0.7 }), "<")
+    .add(kit.ok("请求已发送 · 演示", { en: "REQUEST DEMO" }), ">-0.1")
+    .add(c.hide(), "<");
+  return tl;
+}
+
 export default {
   "contact-remark": contactRemark,
   "contact-accept": contactAccept,
+  "contact-delete": contactDelete,
+  "contact-add": contactAdd,
 };
 
 // 本组专属的局部样式；统一注入一次
@@ -231,4 +315,10 @@ export const css = `
   position: absolute; right: 0; top: 0; bottom: 0; width: 300px; z-index: 10; overflow: hidden;
   background: #0d1410; border-left: 1px solid var(--pd-line-strong); box-shadow: -20px 0 50px rgba(0, 0, 0, 0.5);
 }
+
+/* 联系人确认：动作按钮使用红色，结果保留为静态演示 */
+.pd-contact-confirm__body { display: flex; align-items: flex-start; gap: 10px; padding: 12px 10px; border: 1px solid rgba(255, 93, 93, 0.3); background: rgba(255, 93, 93, 0.06); border-radius: 4px; }
+.pd-contact-confirm__body > .pd-ic { flex: none; width: 18px; height: 18px; color: var(--pd-red); }
+.pd-contact-confirm__body p { margin: 0; color: var(--pd-ink); font-size: 11.5px; line-height: 1.6; }
+.pd-contact-confirm .pd-sheet__foot .pd-btn--red { color: var(--pd-red); }
 `;

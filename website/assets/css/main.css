@@ -251,7 +251,7 @@ main { position: relative; z-index: 1; }
 }
 .ht-line { display: block; overflow: hidden; padding-block: 0.08em; margin-block: -0.08em; }
 .ht-mask { display: inline-block; will-change: transform; }
-/* 双区构图：巨字与 43 项清单同屏共存，字号随视口高收缩，谁也不压谁 */
+/* 双区构图：巨字与 54 项清单同屏共存，字号随视口高收缩，谁也不压谁 */
 .ht-line--1 { text-align: left; font-size: min(clamp(1.7rem, 4.4vw, 4.2rem), 9vh); }
 .ht-line--2 { text-align: right; font-size: min(clamp(2.6rem, 8.8vw, 8.6rem), 19vh); margin-top: 0.02em; }
 /* 实心霓虹（描边中文在这个字号下会显乱），与终幕统一 */
@@ -344,7 +344,7 @@ main { position: relative; z-index: 1; }
 }
 .hm__headrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
 .hm__head { display: block; }
-/* 标题行尾的执行读数：43 项逐条切换，与清单里的对应项、刊头计数器三者联动 */
+/* 标题行尾的执行读数：54 项逐条切换，与清单里的对应项、刊头计数器三者联动 */
 .hm__exec {
   display: inline-flex; align-items: baseline; gap: 8px;
   font-size: clamp(0.95rem, 1.15vw, 1.15rem); letter-spacing: 0.1em;
@@ -368,8 +368,8 @@ main { position: relative; z-index: 1; }
   transition: text-shadow 0.35s;
 }
 .hm__head:hover .hm__title em { text-shadow: 0 0 52px rgba(255, 194, 75, 0.8), 0 2px 20px rgba(4, 8, 6, 0.8); }
-/* 六栏权限清单：五大模块 43 项一次性全部摊开（补录 17 项占双栏对分），纯排版无框 */
-/* 七组 43 项在左栏按 CSS 多列自动平衡（组头不与首项分离），栏数按视口高切换：≥700 高 3 栏、更矮 4 栏 */
+/* 六栏权限清单：五大模块 54 项一次性全部摊开（补录 17 项占双栏对分），纯排版无框 */
+/* 七组 54 项在左栏按 CSS 多列自动平衡（组头不与首项分离），栏数按视口高切换：≥700 高 3 栏、更矮 4 栏 */
 .hm__grid {
   columns: var(--hm-cols, 3); column-gap: clamp(12px, 1.6vw, 24px); column-fill: balance;
   padding-top: 2px; min-width: 0;
@@ -993,7 +993,7 @@ main { position: relative; z-index: 1; }
   .ht-line--2 { text-align: left; font-size: min(clamp(2.2rem, 11vw, 4.2rem), 8.4vh); }
   .hero__cta { left: 20px; right: auto; bottom: 9vh; flex-direction: row; align-items: center; gap: 26px; }
   .hero__plat { display: none; }
-  /* 窄屏：清单改为分组流式排版（仍是 43 项全量），CTA 彻底让路（导航栏保留下载入口） */
+  /* 窄屏：清单改为分组流式排版（仍是 54 项全量），CTA 彻底让路（导航栏保留下载入口） */
   .hero__cta { opacity: 0 !important; pointer-events: none; }
   /* 窄屏：manifest 不再贴底，而是进入文档流（顶边由 main.js 量巨字底边给出），首幕随内容自然变高；舞台全宽在清单上方 */
   .hero { padding-bottom: 72px; }

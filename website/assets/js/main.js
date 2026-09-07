@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════
    main.js — 滚动叙事总编排
-   loader → hero（含 43 项高级能力的演示舞台）→ manifesto → decrypt → features
+   loader → hero（含 54 项高级能力的演示舞台）→ manifesto → decrypt → features
    → machine → cta，一条时间轴讲完整个故事。
    ════════════════════════════════════════════════════════════ */
 import { createStage } from "./particles.js";
@@ -358,9 +358,9 @@ function heroReveal(q) {
   }
 }
 
-/* ---------- 高级版装置：43 项高级能力（数据来自 pro-demos/catalog.js，与应用内弹窗同源） ---------- */
+/* ---------- 高级版装置：54 项高级能力演示（数据来自 pro-demos/catalog.js，与应用内弹窗同源） ---------- */
 
-// 左栏清单：七组 43 项一次性全部摊开（CSS 多列自动平衡）；点任一项 → 右栏舞台切到它的演示
+// 左栏清单：七组 54 项一次性全部摊开（CSS 多列自动平衡）；点任一项 → 右栏舞台切到它的演示
 function buildManifestGrid() {
   const grid = $("#hm-grid");
   if (!grid) return;
@@ -428,7 +428,7 @@ function fitHeroStage() {
   man.style.setProperty("--hm-stage-w", Math.round(w) + "px");
 }
 
-// 舞台切到某项：刊头计数器 PRO — NN / 43、清单对应项点亮、标题行尾执行读数乱码落定；场景播完（印章落下）时 ✓ 弹出
+// 舞台切到某项：刊头计数器 PRO — NN / 54、清单对应项点亮、标题行尾演示读数乱码落定；场景播完（印章落下）时 ✓ 弹出
 function heroOnChange(item) {
   if (proExecOn) { const idx = $("#hero-pro-ops"); if (idx) idx.textContent = "PRO — " + String(item.index).padStart(2, "0") + " / " + PRO_TOTAL; }
   for (const el of $$("#hm-grid .hm__item.is-live")) el.classList.remove("is-live");

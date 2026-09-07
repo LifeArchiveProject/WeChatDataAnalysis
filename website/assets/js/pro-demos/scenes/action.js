@@ -1,12 +1,11 @@
 /* ════════════════════════════════════════════════════════════
-   scenes / action.js — 微信动作（7 项）
+   scenes / action.js — 微信动作（11 项）
    每个场景：({ gsap, kit, tl, root, reduced, item }) => 把动画编进 tl（可返回 tl）。
    约定：所有补间都挂在 tl 上（不要裸调 gsap.to），舞台切换时靠 kill(tl) 清场。
    时长 4–7 秒，结尾用 kit.ok() 盖「已写入 / 已发送」印章并停留。
 
-   这组的核心表达：在本应用（左窗）里操作，真实的微信客户端（右窗）那边真的发出去了。
-   统一用 kit.twin 双窗口 + kit.sendFlow 编排：左窗操作 → 点发送 → 琥珀光点飞到右窗 →
-   两边各落一条 → 印章「已发送 · SENT · VIA WECHAT」。
+   这组的核心表达：在本应用（左窗）里操作，微信客户端（右窗）呈现对应结果。
+   发送类统一用 kit.twin 双窗口 + kit.sendFlow 编排；会话状态类使用同一个控件切换状态。
    ════════════════════════════════════════════════════════════ */
 
 const AT_NAMES = ["小王", "阿明", "老张"];
@@ -47,10 +46,10 @@ function popover(kit, gsap, host, cls = "", head = "") {
 }
 
 /* ── 输入区里的附件小卡：缩略图 + 文件名 ── */
-function attachment(kit, gsap, chat, { video = false, name = "IMG_2041.jpg" } = {}) {
+function attachment(kit, gsap, chat, { video = false, iconName, name = "IMG_2041.jpg" } = {}) {
   const el = kit.h("i", "pd-action-attach");
   const th = kit.h("b", "pd-action-attach__th");
-  th.appendChild(kit.icon(video ? "play" : "image"));
+  th.appendChild(kit.icon(iconName || (video ? "play" : "image")));
   el.append(th, kit.h("span", "pd-action-attach__n", name));
   fieldBox(chat).insertBefore(el, chat.field);
   gsap.set(el, { display: "none" });
@@ -231,43 +230,98 @@ function sendEmoji({ gsap, kit, tl }) {
   return tl;
 }
 
+/* ═══════════════ send-file 发送文件消息 ═══════════════ */
+function sendFile({ gsap, kit, tl }) {
+  const { twin } = setup(kit);
+  const { appChat } = twin;
+  const icon = appChat.tools.children[2];
+  const pop = popover(kit, gsap, appChat.main, "pd-action-pick", "选择文件");
+  const files = ["会议纪要.pdf", "项目清单.xlsx", "资料.zip"];
+  const list = kit.h("div", "pd-action-filelist");
+  const rows = files.map((name) => {
+    const row = kit.h("i", "pd-action-thumb pd-action-file");
+    row.append(kit.icon("file"), kit.h("b", "pd-action-file__name", name));
+    list.appendChild(row);
+    return row;
+  });
+  pop.el.appendChild(list);
+  const name = files[0];
+  const attach = attachment(kit, gsap, appChat, { iconName: "file", name });
+  const c = kit.cursor(CURSOR_AT);
+  const beat = pickBeat(kit, gsap, {
+    cursor: c, icon, pop, target: rows[0], attach,
+  });
+  const flow = kit.sendFlow(twin, {
+    c, beat: () => beat,
+    stamp: "演示 · 已发送", en: "DEMO · SENT",
+    build: () => kit.card.file({ name, size: "2.4 MB" }),
+  });
+  clearAttachOnSend(flow, gsap, attach, beat);
+  tl.add(flow, 0);
+  return tl;
+}
+
+/* ═══════════════ send-link 发送链接卡片 ═══════════════ */
+function sendLink({ gsap, kit, tl }) {
+  const { twin } = setup(kit);
+  const { appChat } = twin;
+  const url = "https://example.com";
+  const title = "周末活动详情";
+  const desc = "点击查看活动安排";
+  const c = kit.cursor(CURSOR_AT);
+  const flow = kit.sendFlow(twin, {
+    c,
+    stamp: "演示 · 已发送", en: "DEMO · SENT",
+    beat: ({ cursor }) => {
+      const b = gsap.timeline();
+      b.add(cursor.tap(fieldBox(appChat), { duration: 0.5, dx: -58 }))
+        .add(parkCursor(cursor, appChat), ">-0.15")
+        .add(kit.type(appChat.field, url, { cps: 12 }), "<")
+        .to({}, { duration: 0.35 });
+      return b;
+    },
+    build: () => kit.card.link({ title, desc }),
+  });
+  tl.add(flow, 0);
+  return tl;
+}
+
 /* ═══════════════ send-voice 发送语音消息 ═══════════════ */
 function sendVoice({ gsap, kit, tl }) {
   const { twin } = setup(kit);
   const { appChat } = twin;
-  const mic = appChat.tools.children[3];
+  const icon = appChat.tools.children[2];
+  const pop = popover(kit, gsap, appChat.main, "pd-action-pick", "选择语音");
+  const paths = ["问候.mp3", "会议录音.mp3", "提醒.mp3"];
+  const list = kit.h("div", "pd-action-filelist");
+  const rows = paths.map((name) => {
+    const row = kit.h("i", "pd-action-thumb pd-action-file");
+    row.append(kit.icon("file"), kit.h("b", "pd-action-file__name", name));
+    list.appendChild(row);
+    return row;
+  });
+  pop.el.appendChild(list);
+  const attach = attachment(kit, gsap, appChat, {
+    iconName: "file", name: paths[0],
+  });
+  const convert = kit.h("div", "pd-action-convert");
+  convert.append(kit.icon("voice"), kit.h("span", "", "转换为语音 · 示意"));
+  appChat.main.appendChild(convert);
+  gsap.set(convert, { opacity: 0, y: 4 });
   const c = kit.cursor(CURSOR_AT);
-  const ring = c.el.firstElementChild, dot = c.el.lastElementChild;
+  const beat = pickBeat(kit, gsap, {
+    cursor: c, icon, pop, target: rows[0], attach,
+  });
+  beat.to(convert, { opacity: 1, y: 0, duration: 0.25 }, ">+0.1")
+    .to({}, { duration: 0.55 })
+    .to(convert, { opacity: 0, y: -3, duration: 0.2 }, ">-0.05");
 
-  // 录音条：红色录音点（REC 信号）+ 「录音中」 + 时间 + 跳动竖条，琥珀底盖在输入框位置
-  const rec = kit.h("div", "pd-action-rec");
-  const time = kit.h("b", "pd-action-rec__t", "0:00");
-  const bars = kit.h("i", "pd-action-rec__bars");
-  const barEls = Array.from({ length: 7 }, () => { const b = kit.h("b", ""); bars.appendChild(b); return b; });
-  rec.append(kit.h("i", "pd-action-rec__dot"), kit.h("span", "pd-action-rec__l", "录音中"), time, bars);
-  appChat.main.appendChild(rec);
-  gsap.set(rec, { opacity: 0 });
-  gsap.set(barEls, { scaleY: 0.25 });
-
-  const beat = gsap.timeline();
-  // 按在麦克风右下角，让麦克风变琥珀的「按住」状态露出来
-  beat.add(c.to(mic, { duration: 0.5, dx: 6, dy: 11 }))
-    // 按住：光标环常亮、白点压下变淡、麦克风变琥珀、录音条亮起
-    .set(ring, { opacity: 1, scale: 1 })
-    .call(() => mic.classList.add("pd-action-hold"))
-    .fromTo(dot, { scale: 1, opacity: 1 }, { scale: 0.6, opacity: 0.75, duration: 0.15 }, "<")
-    .to(rec, { opacity: 1, duration: 0.2 }, "<")
-    .add(kit.count(time, 3, { duration: 1.8, fmt: (v) => `0:0${Math.min(3, Math.round(v))}` }), "<")
-    // 竖条各自循环（repeat/yoyo 放进 stagger 对象，整段 ≈1.77s，与计时对齐；放在外层会让 repeat 作用于整组 stagger）
-    .to(barEls, { scaleY: () => 0.25 + Math.random() * 0.75, duration: 0.13, ease: "sine.inOut", stagger: { each: 0.035, repeat: 11, yoyo: true, repeatRefresh: true } }, "<+0.1")
-    // 松开：环散开、点回弹、录音条收起
-    .to(ring, { opacity: 0, scale: 1.8, duration: 0.3 }, ">+0.05")
-    .to(dot, { scale: 1, opacity: 1, duration: 0.2, ease: "back.out(3)" }, "<")
-    .call(() => mic.classList.remove("pd-action-hold"))
-    .to(rec, { opacity: 0, duration: 0.2 }, "<")
-    .to({}, { duration: 0.1 });
-
-  const flow = kit.sendFlow(twin, { c, beat: () => beat, noSendButton: true, build: () => kit.card.voice({ sec: 3, side: "r" }) });
+  const flow = kit.sendFlow(twin, {
+    c, beat: () => beat,
+    stamp: "演示 · 已发送", en: "DEMO · SENT",
+    build: () => kit.card.voice({ sec: 3, side: "r" }),
+  });
+  clearAttachOnSend(flow, gsap, attach, beat);
   tl.add(flow, 0);
   return tl;
 }
@@ -300,14 +354,68 @@ function sendPat({ gsap, kit, tl }) {
   return tl;
 }
 
+/* ═══════════════ chat-mark-read 会话标记已读 ═══════════════ */
+function markRead({ gsap, kit, tl }) {
+  const chat = kit.chat({ title: "老地方" });
+  chat.seed(3);
+  const session = chat.sessions[0];
+  const unread = kit.h("i", "pd-action-unread", "3");
+  session.querySelector(".pd-sess__txt").appendChild(unread);
+  const action = kit.h("b", "pd-action-state-btn", "标记已读");
+  chat.head.appendChild(action);
+  const c = kit.cursor();
+
+  tl.add(c.show(), 0.2)
+    .add(c.to(session, { duration: 0.45 }), 0.35)
+    .add(c.click(session), ">")
+    .add(c.to(action, { duration: 0.4 }), ">+0.15")
+    .add(c.click(action), ">")
+    .to(unread, { opacity: 0, scale: 0.5, duration: 0.3, ease: "back.in(2)" }, ">-0.05")
+    .add(kit.flash(session, { color: "neon", duration: 0.7 }), "<")
+    .add(kit.ok("演示 · 本地已读", { en: "DEMO · READ LOCAL" }), ">-0.1")
+    .add(c.hide(), "<");
+  return tl;
+}
+
+/* ═══════════════ chat-set-mute 会话免打扰 ═══════════════ */
+function setMute({ gsap, kit, tl }) {
+  const chat = kit.chat({ title: "老地方" });
+  chat.seed(2);
+  const session = chat.sessions[0];
+  const status = kit.h("i", "pd-action-state", "免打扰：关闭");
+  session.querySelector(".pd-sess__txt").appendChild(status);
+  const toggle = kit.h("b", "pd-action-state-btn", "开启免打扰");
+  chat.head.appendChild(toggle);
+  const c = kit.cursor();
+
+  tl.add(c.show(), 0.2)
+    .add(c.to(session, { duration: 0.45 }), 0.35)
+    .add(c.click(session), ">")
+    .add(c.to(toggle, { duration: 0.4 }), ">+0.15")
+    .add(c.click(toggle), ">")
+    .call(() => {
+      toggle.textContent = "关闭免打扰";
+      toggle.classList.add("is-on");
+      status.textContent = "免打扰：开启";
+    }, [], "<+0.12")
+    .add(kit.flash(status, { color: "amber", duration: 0.7 }), "<")
+    .add(kit.ok("演示 · 已开启", { en: "DEMO · MUTE ON" }), ">-0.1")
+    .add(c.hide(), "<");
+  return tl;
+}
+
 export default {
   "send-text": sendText,
   "send-at": sendAt,
   "send-image": sendImage,
   "send-video": sendVideo,
   "send-emoji": sendEmoji,
+  "send-file": sendFile,
+  "send-link": sendLink,
   "send-voice": sendVoice,
   "send-pat": sendPat,
+  "chat-mark-read": markRead,
+  "chat-set-mute": setMute,
 };
 
 // 本组专属的局部样式；统一注入一次
@@ -335,6 +443,10 @@ export const css = `
 .pd-action-thumb__dur { position: absolute; right: 4px; bottom: 2px; font-family: var(--pd-mono); font-weight: 400; font-size: 9px; letter-spacing: 0; color: var(--pd-ink); opacity: 0.8; }
 .pd-action-thumb.is-on { border-color: var(--pd-amber); box-shadow: 0 0 0 2px rgba(255, 194, 75, 0.22); color: var(--pd-amber); }
 .pd-action-thumb.is-on .pd-action-thumb__play { color: var(--pd-amber); opacity: 1; }
+.pd-action-filelist { display: flex; gap: 6px; padding: 0 2px 2px; }
+.pd-action-file { width: 78px; height: 52px; display: flex; flex-direction: column; gap: 3px; padding: 6px 4px 4px; }
+.pd-action-file .pd-ic { width: 17px; height: 17px; }
+.pd-action-file__name { max-width: 68px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--pd-mono); font-size: 8px; font-weight: 400; }
 
 /* 表情格 */
 .pd-action-emo__grid { display: grid; grid-template-columns: repeat(4, 30px); gap: 5px; padding: 0 2px 2px; }
@@ -354,20 +466,20 @@ export const css = `
 .pd-action-attach--emo .pd-action-attach__th { width: 28px; background: rgba(255, 194, 75, 0.08); }
 .pd-action-attach--emo .pd-action-attach__th .pd-ic { width: 16px; height: 16px; }
 
-/* 按住说话：琥珀 = 写入动作；只留一颗红色录音点作 REC 信号 */
-.pd-action-hold { color: var(--pd-amber); }
-.pd-action-rec {
+/* MP3 转换提示：仅表达产品流程，不展开底层实现 */
+.pd-action-convert {
   position: absolute; left: 106px; right: 66px; bottom: 13px; height: 28px; z-index: 6;
   display: flex; align-items: center; gap: 7px; padding: 0 8px; border-radius: 3px;
   background: rgba(255, 194, 75, 0.08); border: 1px solid rgba(255, 194, 75, 0.35);
   font-size: 11px; color: var(--pd-ink); white-space: nowrap;
 }
-.pd-action-rec__dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--pd-red); box-shadow: 0 0 8px rgba(255, 93, 93, 0.8); animation: pdActionPulse 0.9s steps(2) infinite; }
-.pd-action-rec__t { font-family: var(--pd-mono); font-weight: 500; font-size: 11px; letter-spacing: 0.06em; color: var(--pd-amber); }
-.pd-action-rec__bars { display: flex; gap: 2px; align-items: center; height: 16px; margin-left: auto; }
-.pd-action-rec__bars b { display: block; width: 3px; height: 16px; border-radius: 1px; background: var(--pd-amber); transform-origin: 50% 50%; }
-@keyframes pdActionPulse { 50% { opacity: 0.35; } }
-@media (prefers-reduced-motion: reduce) { .pd-action-rec__dot { animation: none; } }
+.pd-action-convert .pd-ic { width: 14px; height: 14px; color: var(--pd-amber); }
+
+/* 会话状态：按钮在同一位置切换开 / 关，列表副标题只作当前状态提示 */
+.pd-action-state-btn { margin-left: auto; flex: none; padding: 4px 8px; border: 1px solid rgba(255, 194, 75, 0.45); border-radius: 3px; color: var(--pd-amber); font-size: 10px; font-weight: 500; white-space: nowrap; }
+.pd-action-state-btn.is-on { border-color: rgba(61, 242, 141, 0.45); color: var(--pd-neon); background: rgba(61, 242, 141, 0.12); }
+.pd-action-unread { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 2px; border-radius: 50%; background: var(--pd-red); color: #fff; font-family: var(--pd-mono); font-size: 8px; font-style: normal; }
+.pd-action-state { color: var(--pd-faint); font-family: var(--pd-mono); font-size: 8px; font-style: normal; }
 
 /* 拍一拍那行：收紧到文字宽度，落库描边贴着字走 */
 .pd-action-pat { align-self: center; width: max-content; padding: 1px 8px; border-radius: 3px; }

@@ -1,12 +1,12 @@
 /* ════════════════════════════════════════════════════════════
-   scenes / moments.js — 朋友圈（4 项）
+   scenes / moments.js — 朋友圈（5 项）
    每个场景：({ gsap, kit, tl, root, reduced, item }) => 把动画编进 tl（可返回 tl）。
    约定：所有补间都挂在 tl 上（不要裸调 gsap.to），舞台切换时靠 kill(tl) 清场。
    时长 4–7 秒，结尾用 kit.ok() 盖「已写入 / 已发送」印章并停留。
 
    这组统一用 kit.feed() 朋友圈信息流（两条种子帖）：
    自动刷新 → 打开开关后头部刷新图标自转、新帖从顶上落下来；
-   点赞 / 图片评论 → 帖子上的动作真的写进去；发布 → 相机 → 抽屉 → 新帖落到最前。
+   点赞 / 文字评论 / 图片评论 → 帖子上的动作真的写进去；发布 → 相机 → 抽屉 → 新帖落到最前。
    ════════════════════════════════════════════════════════════ */
 
 const nameOf = (post) => post.querySelector(".pd-post__name");
@@ -225,6 +225,54 @@ function imageComment({ gsap, kit, tl }) {
   return tl;
 }
 
+/* ═══════════════ sns-text-comment 朋友圈文字评论 ═══════════════
+   点第一条帖子的「··」→ 评论 → 底部评论条打字 → 发送 → 帖子下方出现评论 → 印章「已评论」。 */
+function textComment({ gsap, kit, tl }) {
+  const { posts } = mkFeed(kit);
+  const post = posts[0];
+  const c = kit.cursor();
+  const act = actPanel(kit, gsap, post.more);
+  const bar = kit.h("div", "pd-moments-commentbar");
+  const field = kit.h("span", "pd-moments-commentbar__field");
+  const ph = kit.h("em", "pd-moments-commentbar__ph", "评论…");
+  const text = kit.h("span", "pd-moments-commentbar__text");
+  field.append(ph, text, kit.h("i", "pd-caret"));
+  const send = kit.h("b", "pd-btn pd-btn--amber", "发送");
+  bar.append(field, send);
+  post.body.appendChild(bar);
+  gsap.set(bar, { display: "none", opacity: 0 });
+
+  const line = kit.h("p", "");
+  line.append(kit.h("b", "", "我"), "：这条信息很有用");
+  post.cmtBox.appendChild(line);
+  gsap.set(line, { display: "none" });
+
+  tl.add(c.show(), 0.2)
+    .add(c.tap(post.more), 0.35)
+    .add(act.open(), ">-0.1")
+    .add(c.to(act.items[1], { duration: 0.35 }), ">+0.1")
+    .call(() => act.hover(1))
+    .add(c.click(act.items[1]), ">+0.15")
+    .add(act.close(), ">-0.15")
+    .set(bar, { display: "flex" }, ">-0.05")
+    .add(kit.pop(bar), "<")
+    .add(c.to(field, { duration: 0.4 }), ">")
+    .add(c.click(field), ">")
+    .set(ph, { display: "none" }, "<")
+    .add(kit.type(text, "这条信息很有用", { cps: 12 }), "<+0.1")
+    .add(c.to(send, { duration: 0.35 }), ">+0.2")
+    .add(c.click(send), ">")
+    .to(bar, { opacity: 0, duration: 0.25 }, ">-0.05")
+    .set(bar, { display: "none" })
+    .set(post.social, { display: "flex" }, ">-0.05")
+    .set(line, { display: "block" }, "<")
+    .add(kit.pop(post.social), "<")
+    .add(kit.flash(post.social, { color: "amber", duration: 0.7 }), "<")
+    .add(kit.ok("演示 · 已评论", { en: "DEMO · COMMENTED" }), ">-0.1")
+    .add(c.hide(), "<");
+  return tl;
+}
+
 /* ═══════════════ sns-post 发布朋友圈 ═══════════════
    点头部相机 → 抽屉「发表朋友圈」滑入：文本区 + ⊕ 图片格 → 打字「周末，老地方。」→
    点 ⊕ 两张图弹入 → 点「发表」→ 抽屉收起 → 新帖落到最前 → 印章「已发布」。 */
@@ -284,6 +332,7 @@ export default {
   "sns-autorefresh": autoRefresh,
   "sns-like": like,
   "sns-image-comment": imageComment,
+  "sns-text-comment": textComment,
   "sns-post": postMoment,
 };
 
@@ -335,6 +384,12 @@ export const css = `
 .pd-moments-heart { display: inline-flex; flex: none; }
 .pd-root .pd-post__likes.is-on .pd-moments-heart { color: var(--pd-amber); }
 .pd-root .pd-post__likes.is-on .pd-moments-heart .pd-ic { fill: var(--pd-amber); }
+
+/* 文字评论条：保持在帖子底部，提交后让评论行成为唯一焦点 */
+.pd-moments-commentbar { display: flex; align-items: center; gap: 7px; margin-top: 8px; padding: 4px 4px 4px 9px; border: 1px solid var(--pd-line-strong); border-radius: 16px; background: rgba(20, 27, 23, 0.96); }
+.pd-moments-commentbar__field { display: flex; align-items: center; min-width: 0; flex: 1 1 auto; color: var(--pd-ink); font-size: 11.5px; }
+.pd-moments-commentbar__ph { color: var(--pd-faint); }
+.pd-moments-commentbar .pd-btn { padding: 3px 10px; border-radius: 12px; }
 
 /* 图片查看层 */
 .pd-moments-viewer {
