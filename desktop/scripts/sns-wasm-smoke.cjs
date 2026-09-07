@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 function resolveSnsWasmFixture(nativeRoot) {
@@ -70,21 +71,28 @@ function smokeElectronNodeWasm({ electronExecutable, nativeRoot, env = process.e
 
 function smokePackagedBackendWasm({ backendExecutable, electronExecutable, nativeRoot, env = process.env }) {
   const { fixture } = resolveSnsWasmFixture(nativeRoot);
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "wda-sns-wasm-smoke-"));
   const smokeEnv = {
     ...env,
     PYTHONPATH: "",
+    WECHAT_TOOL_OUTPUT_DIR: outputDir,
     WECHAT_TOOL_NODE_EXECUTABLE: path.resolve(electronExecutable),
     WECHAT_TOOL_NODE_MODE: "electron-run-as-node",
   };
   delete smokeEnv.PYTHONHOME;
   delete smokeEnv.ELECTRON_RUN_AS_NODE;
-  const result = spawnSync(path.resolve(backendExecutable), ["--smoke-sns-wasm"], {
-    cwd: path.dirname(backendExecutable),
-    encoding: "utf8",
-    windowsHide: true,
-    env: smokeEnv,
-    timeout: 30_000,
-  });
+  let result;
+  try {
+    result = spawnSync(path.resolve(backendExecutable), ["--smoke-sns-wasm"], {
+      cwd: path.dirname(backendExecutable),
+      encoding: "utf8",
+      windowsHide: true,
+      env: smokeEnv,
+      timeout: 30_000,
+    });
+  } finally {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
   if (result.error) throw result.error;
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const line = String(result.stdout || "").trim().split(/\r?\n/).filter(Boolean).at(-1);
