@@ -46,6 +46,9 @@ DEBUG_SIGNATURE = {
     "identifier": "com.tencent.xinWeChat",
     "cdhash": "debug123",
 }
+DEBUG_IDENTITY = {
+    "version": "4.1.12", "build": "269341", "cdhash": "debug123", "device": 1, "inode": 2,
+}
 
 
 class TestMacOSDBKeyCapture(unittest.TestCase):
@@ -56,6 +59,8 @@ class TestMacOSDBKeyCapture(unittest.TestCase):
 
         def record(payload):
             self.assertEqual(payload["backup_path"], str(backup))
+            if events:
+                self.assertEqual(payload["debug_identity"], DEBUG_IDENTITY)
             events.append("state")
 
         sign_commands: list[list[str]] = []
@@ -69,9 +74,10 @@ class TestMacOSDBKeyCapture(unittest.TestCase):
         with (
             patch(
                 "wechat_decrypt_tool.macos_db_key_capture.inspect_wechat_signature",
-                side_effect=[OFFICIAL_SIGNATURE, DEBUG_SIGNATURE, DEBUG_SIGNATURE],
+                side_effect=[OFFICIAL_SIGNATURE, DEBUG_SIGNATURE, OFFICIAL_SIGNATURE, DEBUG_SIGNATURE, OFFICIAL_SIGNATURE],
             ),
             patch("wechat_decrypt_tool.macos_db_key_capture.os.access", return_value=True),
+            patch("wechat_decrypt_tool.macos_db_key_capture.os.path.lexists", return_value=False),
             patch("wechat_decrypt_tool.macos_db_key_capture.backup_original_wechat", return_value=(backup, False)),
             patch(
                 "wechat_decrypt_tool.macos_db_key_capture.verify_original_wechat_backup",
@@ -84,18 +90,21 @@ class TestMacOSDBKeyCapture(unittest.TestCase):
                 return_value=Path("/tmp/staged.app"),
             ),
             patch("wechat_decrypt_tool.macos_db_key_capture._has_compatible_in_place_signature", return_value=True),
+            patch("wechat_decrypt_tool.macos_db_key_capture._wechat_bundle_identity", return_value=DEBUG_IDENTITY),
+            patch("wechat_decrypt_tool.macos_db_key_capture._debug_identity_matches", return_value=True),
             patch("wechat_decrypt_tool.macos_db_key_capture._atomic_swap_paths") as swap,
             patch("wechat_decrypt_tool.macos_db_key_capture._run", side_effect=run),
         ):
             result = ensure_wechat_in_place_debuggable(official, backup.parent, before_resign=record)
 
-        self.assertEqual(events, ["state", "sign"])
+        self.assertEqual(events, ["state", "sign", "state"])
         self.assertNotIn("--deep", sign_commands[0])
         self.assertIn("--preserve-metadata=entitlements", sign_commands[0])
         self.assertEqual(sign_commands[0][-1], "/tmp/staged.app")
         swap.assert_called_once_with(official, Path("/tmp/staged.app"))
         self.assertTrue(result["wechat_resigned"])
         self.assertTrue(result["backup_verified"])
+        self.assertEqual(result["debug_identity"], DEBUG_IDENTITY)
 
     def test_in_place_preparation_rejects_backup_identity_mismatch_before_mutation(self) -> None:
         official = Path("/tmp/WeChat.app")
@@ -124,6 +133,7 @@ class TestMacOSDBKeyCapture(unittest.TestCase):
         with (
             patch("wechat_decrypt_tool.macos_db_key_capture.inspect_wechat_signature", return_value=OFFICIAL_SIGNATURE),
             patch("wechat_decrypt_tool.macos_db_key_capture.os.access", return_value=True),
+            patch("wechat_decrypt_tool.macos_db_key_capture.os.path.lexists", return_value=False),
             patch("wechat_decrypt_tool.macos_db_key_capture.backup_original_wechat", return_value=(backup, False)),
             patch(
                 "wechat_decrypt_tool.macos_db_key_capture.verify_original_wechat_backup",

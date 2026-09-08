@@ -181,7 +181,7 @@ class TestMacOSCloneCapture(unittest.TestCase):
             debug_root = Path(temporary_dir)
 
             def write_preflight(_command, *, timeout):
-                self.assertEqual(timeout, 90)
+                self.assertEqual(timeout, 180)
                 (debug_root / "breakpoint-preflight.json").write_text(
                     json.dumps(
                         {
@@ -239,6 +239,80 @@ class TestMacOSCloneCapture(unittest.TestCase):
             self.assertEqual(context.exception.code, "capture_breakpoints_unavailable")
             self.assertFalse((debug_root / "breakpoint-preflight.json").exists())
 
+    def test_breakpoint_preflight_rejects_deferred_system_symbol_location(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            debug_root = Path(temporary_dir)
+
+            def write_preflight(_command, *, timeout):
+                self.assertEqual(timeout, 180)
+                (debug_root / "breakpoint-preflight.json").write_text(
+                    json.dumps(
+                        {
+                            "pid": 321,
+                            "pbkdf_locations": 0,
+                            "pbkdf_total_locations": 1,
+                            "pbkdf_deferred": True,
+                            "key_return_locations": 0,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return "WEDATA_BREAKPOINT_PREFLIGHT 0 1 0"
+
+            with (
+                patch("wechat_decrypt_tool.macos_clone_capture.platform.machine", return_value="arm64"),
+                patch("wechat_decrypt_tool.macos_clone_capture.shutil.which", return_value="/usr/bin/lldb"),
+                patch(
+                    "wechat_decrypt_tool.macos_clone_capture._run_as_administrator",
+                    side_effect=write_preflight,
+                ),
+            ):
+                with self.assertRaises(MacOSDBKeyCaptureFailure) as failure:
+                    preflight_capture_breakpoints(pid=321, debug_root=debug_root)
+
+            self.assertEqual(failure.exception.code, "capture_breakpoints_unavailable")
+            self.assertFalse((debug_root / "breakpoint-preflight.json").exists())
+
+    def test_breakpoint_preflight_rejects_verified_binary_import_when_lldb_reports_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            debug_root = Path(temporary_dir)
+
+            def write_preflight(_command, *, timeout):
+                (debug_root / "breakpoint-preflight.json").write_text(
+                    json.dumps(
+                        {
+                            "pid": 321,
+                            "pbkdf_locations": 0,
+                            "pbkdf_total_locations": 0,
+                            "key_return_locations": 0,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return "WEDATA_BREAKPOINT_PREFLIGHT 0 0 0"
+
+            with (
+                patch("wechat_decrypt_tool.macos_clone_capture.platform.machine", return_value="arm64"),
+                patch("wechat_decrypt_tool.macos_clone_capture.shutil.which", return_value="/usr/bin/lldb"),
+                patch(
+                    "wechat_decrypt_tool.macos_clone_capture._run_as_administrator",
+                    side_effect=write_preflight,
+                ),
+                patch(
+                    "wechat_decrypt_tool.macos_clone_capture._wechat_binary_imports_pbkdf",
+                    return_value=True,
+                ),
+            ):
+                with self.assertRaises(MacOSDBKeyCaptureFailure) as failure:
+                    preflight_capture_breakpoints(
+                        pid=321,
+                        debug_root=debug_root,
+                        wechat_app=debug_root / "synthetic-missing-WeChat.app",
+                    )
+
+            self.assertEqual(failure.exception.code, "capture_breakpoints_unavailable")
+            self.assertFalse((debug_root / "breakpoint-preflight.json").exists())
+
     def test_prepared_preflight_cleans_private_clone_after_failure(self) -> None:
         debug_root = Path("/tmp/wcda-test-debug")
         debug_app = debug_root / "WeChat-Debug.app"
@@ -277,14 +351,12 @@ class TestMacOSCloneCapture(unittest.TestCase):
         )
 
         ast.parse(script)
-        self.assertIn("algorithm != 2", script)
-        self.assertIn("password_len != 32", script)
+        self.assertIn("password_len not in (32, 64)", script)
         self.assertIn("salt_len != 16", script)
-        self.assertIn("prf != 5", script)
-        self.assertIn("rounds not in (2, 256000)", script)
+        self.assertIn("pbkdf_profiles", script)
         self.assertIn("EXPECTED_HMAC_SALTS", script)
-        self.assertIn('source = "pbkdf2_hmac_password"', script)
-        self.assertIn('source = "pbkdf2_passphrase"', script)
+        self.assertIn('source = "pbkdf_hmac_password"', script)
+        self.assertIn('source = "pbkdf_database_password"', script)
         self.assertIn(salt, script)
         self.assertIn("database_salt = EXPECTED_HMAC_SALTS.get", script)
         self.assertIn("os.fsync", script)
@@ -348,16 +420,22 @@ class TestMacOSCloneCapture(unittest.TestCase):
                 return types.SimpleNamespace(GetValueAsUnsigned=lambda: registers[name])
 
         captured = []
+        namespace["_write_result"] = lambda _payload: True
         namespace["_record_diagnostic"] = lambda _name: None
         namespace["_save_valid_candidate"] = lambda candidate, database_salt, source, _process: captured.append(
             (candidate, database_salt, source)
         )
         namespace["_pbkdf_callback"](FakeFrame(), None, None)
 
-        self.assertEqual(captured, [(encryption_key, salt.hex(), "pbkdf2_hmac_password")])
+        self.assertEqual(captured, [(encryption_key, salt.hex(), "pbkdf_hmac_password")])
+        registers["x0"] = 99
+        registers["x5"] = 99
         registers["x6"] = 3
         namespace["_pbkdf_callback"](FakeFrame(), None, None)
-        self.assertEqual(len(captured), 1)
+        self.assertEqual(len(captured), 2)
+        registers["x2"] = 31
+        namespace["_pbkdf_callback"](FakeFrame(), None, None)
+        self.assertEqual(len(captured), 2)
 
     def test_capture_reports_debug_process_exit_without_waiting_for_generic_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
