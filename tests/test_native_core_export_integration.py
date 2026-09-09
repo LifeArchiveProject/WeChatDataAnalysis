@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import base64
 import sqlite3
+import struct
 import sys
 import zipfile
-from contextlib import ExitStack, nullcontext
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
@@ -18,7 +21,7 @@ from starlette.requests import Request
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from wechat_decrypt_tool import chat_export_service, native_core_export
+from wechat_decrypt_tool import chat_export_service, native_core_broker, native_core_export
 from wechat_decrypt_tool.export_integrity import IntegrityZipWriter, write_zip_integrity_sidecars
 from wechat_decrypt_tool.native_core_client import (
     NativeCoreComponentMissingError,
@@ -101,6 +104,122 @@ class _FakeExportClient:
     ) -> _FakeEncryptedSession:
         assert len(content_key) == 32
         return _FakeEncryptedSession(export_id, plaintext_size, chunk_size)
+
+
+@contextmanager
+def _background_database_operation(database_root):
+    acquired = Event()
+    release = Event()
+
+    def read_database():
+        with native_core_broker.managed_native_core_operation(database_root=database_root):
+            acquired.set()
+            assert release.wait(10), "后台数据库操作未收到释放信号"
+
+    # 用事件固定并发时序，避免依赖随机轮询间隔碰撞。
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(read_database)
+        try:
+            assert acquired.wait(10), "后台数据库操作未取得租约"
+            yield
+        finally:
+            release.set()
+            future.result(timeout=10)
+
+
+@pytest.fixture
+def database_broker(tmp_path, monkeypatch):
+    # 只替换进程和 native ABI，保留真实的 broker 租约与 ZIP 签名调用链。
+    process = Mock()
+    process.poll.return_value = None
+    monkeypatch.setattr(native_core_broker, "_process", process)
+    monkeypatch.setattr(native_core_broker, "_owned_endpoint", "database-endpoint")
+    monkeypatch.setattr(native_core_broker, "_owned_database_roots", (tmp_path,))
+    monkeypatch.setattr(native_core_broker, "_owned_database_disabled", False)
+    monkeypatch.setattr(native_core_broker, "_active_operations", 0)
+    return process
+
+
+@pytest.mark.parametrize("active_database_operation", [False, True])
+def test_zip_seal_reuses_database_broker(
+    tmp_path, monkeypatch, database_broker, active_database_operation
+):
+    process = database_broker
+    monkeypatch.setattr(native_core_export, "get_native_core_client", lambda: _FakeExportClient())
+    target = tmp_path / "export.zip"
+    operation = (
+        _background_database_operation(tmp_path)
+        if active_database_operation else nullcontext()
+    )
+    with operation:
+        with zipfile.ZipFile(target, "w") as raw:
+            writer = IntegrityZipWriter(raw)
+            writer.writestr("messages.txt", "\n".join(["测试消息"] * 87))
+            sealed = write_zip_integrity_sidecars(writer, "busy-regression")
+        assert native_core_broker._active_operations == int(active_database_operation)
+        assert native_core_broker._process is process
+        assert not native_core_broker._owned_database_disabled
+        assert sealed["authoritativeSealFormat"] == "WES1"
+        encrypted = native_core_export.encrypt_export_file(
+            target, export_id="busy-regression", content_key=bytes(range(32))
+        )
+        assert encrypted.output_path.read_bytes().startswith(b"WEC1-fake-header")
+        # 签名异常也必须释放本次租约，不能吞掉错误或误释放数据库操作。
+        with patch.object(_FakeExportClient, "seal_export_manifest", side_effect=RuntimeError("seal failed")):
+            with pytest.raises(RuntimeError, match="seal failed"):
+                native_core_export.seal_export_manifest("failed-seal", b"{}")
+        assert native_core_broker._active_operations == int(active_database_operation)
+        process.terminate.assert_not_called()
+    assert native_core_broker._active_operations == 0
+    with zipfile.ZipFile(target) as archive:
+        assert archive.read("_integrity/signature.wes") == b"WES1-envelope"
+        assert len(archive.read("messages.txt").decode().splitlines()) == 87
+
+
+@pytest.mark.parametrize("native_failure", [False, True])
+def test_decrypt_preserves_busy_database_broker(
+    tmp_path, monkeypatch, database_broker, native_failure
+):
+    payload = b"test export payload"
+    export_id = b"busy-decrypt"
+    # 使用有效的 WEC1 头经过真实解析；仅解密 ABI 使用替身，不验证密码学实现。
+    header = struct.pack(
+        "<4sHHIIQQII24s", b"WEC1", 1, 1, 64 + len(export_id),
+        64 * 1024, len(payload), 1, len(export_id), 0, bytes(24),
+    ) + export_id
+    source = tmp_path / "export.txt.wec"
+    destination = tmp_path / "export.txt"
+    source.write_bytes(header + bytes(40) + payload)
+    session = Mock(closed=False)
+    session.write.return_value = payload
+    error = RuntimeError("native decrypt failed")
+    if native_failure:
+        session.write.side_effect = error
+    client = Mock()
+    client.begin_decrypted_export.return_value = session
+    monkeypatch.setattr(native_core_export, "get_native_core_client", lambda: client)
+
+    with _background_database_operation(tmp_path):
+        if native_failure:
+            with pytest.raises(RuntimeError, match="native decrypt failed") as caught:
+                native_core_export.decrypt_export_file(source, content_key=bytes(range(32)))
+            assert caught.value is error
+            assert not destination.exists()
+            session.abort.assert_called_once_with()
+            session.finish.assert_not_called()
+        else:
+            result = native_core_export.decrypt_export_file(source, content_key=bytes(range(32)))
+            assert result.output_path == destination
+            assert destination.read_bytes() == payload
+            session.finish.assert_called_once_with()
+            session.abort.assert_not_called()
+        assert native_core_broker._active_operations == 1
+        assert native_core_broker._process is database_broker
+        assert not native_core_broker._owned_database_disabled
+        database_broker.terminate.assert_not_called()
+        assert not list(tmp_path.glob(".wcd-*.tmp"))
+        assert source.exists()
+    assert native_core_broker._active_operations == 0
 
 
 def test_required_mode_never_falls_back_when_native_export_is_missing() -> None:
