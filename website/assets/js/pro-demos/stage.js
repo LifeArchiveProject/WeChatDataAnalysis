@@ -34,6 +34,7 @@ export function createProStage(host, {
     </div>
     <div class="pd-hud pd-hud--bottom">
       <b class="pd-hud__name"></b>
+      <i class="pd-hud__use mono"></i>
       <span class="pd-hud__cap"></span>
     </div>
     <div class="pd-progress" aria-hidden="true"><i></i></div>
@@ -47,6 +48,7 @@ export function createProStage(host, {
   const bar = el.querySelector(".pd-progress i");
   const hudOp = el.querySelector(".pd-hud__op");
   const hudGrp = el.querySelector(".pd-hud__grp");
+  const hudUse = el.querySelector(".pd-hud__use");
   const hudName = el.querySelector(".pd-hud__name");
   const hudCap = el.querySelector(".pd-hud__cap");
 
@@ -79,6 +81,7 @@ export function createProStage(host, {
     if (run) { run.kill(); run = null; }
     gsap.killTweensOf(bar);
     screen.replaceChildren();
+    screen.classList.remove("has-strip", "has-flow");   // 情境条/工作流轨留下的收边类要跟着场景一起清，否则会传染给下一个场景
     kit = null;
   };
 
@@ -95,8 +98,12 @@ export function createProStage(host, {
     clearScene();
     cur = item;
     hudOp.textContent = `OP ${pad2(item.index)} / ${pad2(total)}`;
+    // 功能名旁挂场景标签、说明行讲为什么需要它：光看操作看不出用途，这两处负责回答
+    // （官网首屏会隐藏顶栏，所以场景必须挂在底栏，不能放顶栏）
     hudGrp.textContent = `${item.groupLabel} · ${item.groupTag}`;
-    hudCap.textContent = item.caption || "";
+    hudUse.textContent = item.use || "";
+    hudUse.style.display = item.use ? "" : "none";
+    hudCap.textContent = item.need || item.caption || "";
     const scene = scenes[item.key];
     if (onChange) onChange(item);
 

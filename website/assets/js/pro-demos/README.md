@@ -4,7 +4,7 @@
 调性沿用官网：近黑绿底、琥珀 = 写入动作、霓虹绿 = 成功落库、JetBrains Mono HUD、发丝线、扫描光。
 
 ```
-catalog.js   43 项能力的唯一清单（key / name / caption / 分组），三处共用
+catalog.js   54 项能力的唯一清单（key / name 做什么 / caption 怎么做 / use 什么场景 / need 为什么需要 / 分组），三处共用
 kit.js       骨架屏积木（聊天窗、气泡、卡片、光标、菜单、抽屉、表单、代码、印章、通知、朋友圈、会话列表、勾选器、芯片）
 stage.js     舞台 + 清单 + 面板（createProStage / createProList / createProPanel）
 index.js     对外入口：createProPanel(host, { gsap, ... })；汇总 scenes/*.js
@@ -52,11 +52,68 @@ export default { "send-text": sendText };
 export const css = ``;   // 本组局部样式（可空），引擎注入一次
 ```
 
+### 场景优先（最重要的一条）
+
+观众看的是**为什么要用它**，不是操作步骤。只演「右键→改字→保存」，看完仍然一头雾水。所以每个场景必须回答三件事：
+
+1. **此刻发生了什么**（情境）：`kit.scenario(...)` 在屏幕顶端立一条情境条，开场 `strip.in()` 滑入。真实动作类写业务时刻（`kit.scenario("23:14 · 客户咨询进来了")`）；本地存档类写自己的整理现场，且必须带 `{ local: true }`（`kit.scenario("按截图核对 · 这句话改错了", { local: true })`）。
+2. **谁在做、做了什么**（操作）：对话内容、人名、日期一律换成该场景真实会出现的东西——**但两类的取材不通用**。真实动作类用业务对象：客户「王总」「报价单」「工单 #2043」，不要「老地方 / 友 / 我」这种没头没尾的闲聊；本地存档类用私人往来：会话「小满」、侧栏「家人群 / 老同学 / 室友」、带年份的日期（`chat.time("2024-08-09 21:40")`），**不许**出现客户 / 报价 / 单价 / 合同 / 订单群这类 B2B 内容。
+3. **所以呢**（结果）：结尾 `strip.result(...)` 在情境条右端亮出结果，与 `kit.ok()` 印章同一拍。真实动作类给业务结果（「客户 2 秒内收到回复」）；本地存档类只给本地结果（「和截图对上了」「时间线补齐了」）。
+
+场景取自 catalog.js 每项的 `use`（场景标签）与 `need`（为什么需要），舞台 HUD 会把这两句常驻显示——动画演的必须**就是这一个场景**，别自己另编一个。
+
+**本地写入 vs 真实动作（不许搞混）**：消息修改（8）、消息补录（17）、会话标记已读、会话免打扰这 27 项**只写本地解密副本，单向、不回写微信，对方永远看不到**；其余 27 项（发送类、朋友圈、群聊、联系人）才是经微信客户端的真实操作。
+前者一律 `kit.scenario(text, { local: true })`，情境条上会常驻一枚「本地副本 · 不回写微信」——画面演的是一场真实对话，不点明就会被读成「对方也看到了」。
+文案同理：本地类的情境与结果只能讲**我这边的存档**（「和截图对上了」「时间线补齐了」「这段记忆完整了」），**不许**出现「对方收到」「客户看到了」「TA 就知道了」「与对方一致」。
+本地类的统一世界观：**一气之下清空了和 TA 的聊天记录，事后想找回**——能从备份恢复的恢复，恢复回来错乱的校订，恢复不了的按截图、相册、账单一条条补回本地副本。
+
+两类还有各自的**演法**，别搞混：
+
+| | 本地存档类（27） | 真实动作类（27） |
+| --- | --- | --- |
+| 语境 | 私人：误删后找回、校订自己的副本；会话「小满」+ `railNames: ["家人群", "老同学", "室友"]` | 业务：客服值班、社群运营、获客维护；客户「王总」「报价单」「工单 #2043」 |
+| 谁在操作 | **我**在整理自己的档案，光标点击是合理的 | **没有人**——工作流自动触发，不许出现「人点按钮」 |
+| 必用积木 | `kit.scenario(text, { local: true })` | `kit.workflow([触发, AI, 执行])` + `flow.step(i)` |
+| 禁用 | `kit.workflow` | `{ local: true }`、`kit.cursor` 的点击动作 |
+
+```js
+// 真实动作类：一条工作流轨说明「是规则和 AI 在跑，不是人在点」
+const flow = kit.workflow([
+  { label: "新消息命中「现货」", icon: "bolt" },  // 触发
+  { label: "生成回复", ai: true },                // AI 节点，自带 AI 徽标
+  { label: "自动发送", icon: "send" },            // 执行
+]);
+tl.add(flow.in(), "<+0.1").add(flow.step(0), ...).add(flow.step(1), ...).add(flow.done(), ...);
+```
+工作流轨占屏幕底端 24px（与情境条的顶端 22px 对称），已知布局根自动收高、印章自动上移；自建布局根加 `pd-pushed`。
+
+```js
+// 真实动作类：业务语境 + 工作流轨，结果讲对外效果
+function sendText({ kit, tl }) {
+  const twin = kit.twin({ title: "客户 · 王总" });
+  const strip = kit.scenario("23:14 · 客户咨询进来了");
+  tl.add(strip.in(), 0.1)
+    .add(/* …工作流逐步点亮… */)
+    .add(strip.result("客户 2 秒内收到回复"), ">-0.3");
+}
+
+// 本地存档类：私人语境 + { local: true }，结果只讲我这边的存档，光标是「我」在整理
+function editText({ kit, tl }) {
+  const chat = kit.chat({ title: "小满", railNames: ["家人群", "老同学", "室友"] });
+  const strip = kit.scenario("按截图核对 · 这句话改错了", { local: true });
+  chat.time("2024-08-09 21:40");
+  tl.add(strip.in(), 0.1)
+    .add(/* …右键改字、写回本地副本… */)
+    .add(strip.result("和截图对上了"), ">-0.3");
+}
+```
+
 约定：
 
 - 场景签名 `({ gsap, kit, tl, root, reduced, item }) => tl`。**所有补间都挂到 `tl` 上**（`tl.add / tl.to / tl.call`），不要裸调 `gsap.to`，舞台切换时靠 kill(tl) 清场。
 - 坐标系固定 640×400（`.pd-screen`），外层等比缩放；积木尺寸按这个坐标系写死。别让内容溢出（聊天列表区 `overflow: hidden`，塞太多行会被裁）。
-- 时长 4–7 秒；节奏：0.3s 起手 → 动作 → 结果 → `kit.ok()` 印章停 0.9s。舞台播完再停 `hold` 秒切下一项。
+- 时长 4.5–7.5 秒；节奏：情境条滑入 → 动作 → 结果（`strip.result` + `kit.ok()` 印章停 0.9s）。舞台播完再停 `hold` 秒切下一项。
+- 情境条占屏幕顶端 22px，已知布局根（`.pd-chat` / `.pd-feed` / `.pd-win`）会自动下推；自建布局根请加 `pd-pushed` 类。
 - 需要目标位置的补间（光标 `c.to(el)`、菜单 `kit.menu(items, { at: el })`）都是**懒取位置**：在补间开始那一刻才量 DOM，所以先 `tl.call` 把元素加进 DOM 再让光标过去是安全的。
 - 文字动画：`kit.type(el, text)` 打字机、`kit.scramble(el, text)` 乱码落定、`kit.count(el, n)` 数字滚表。
 - 局部样式写进本文件 `css` 字符串，类名以 `pd-<group>-` 前缀，别改 kit.js / pro-demos.css / stage.js。
@@ -82,6 +139,8 @@ export const css = ``;   // 本组局部样式（可空），引擎注入一次
 - **补录三件套**：`chat.rowAt(refRow, side, content, opts)` 在某行之后插入一行；`kit.gap(chat, refRow)` 在某行之后放一条琥珀插槽线 + 「⊕ 补录」药丸（初始 opacity 0，自己 fade 进来，带 `pill`）；`kit.compose({ type: "图片", fields: [[label, value]] })` 打开补录抽屉（类型芯片行 + 发送方/时间字段 + 预览区 `preview` + 「保存」`ok`），预览区里 `preview.appendChild(kit.card.image())` 即可
 - **整段流程（优先用）**：`kit.insertFlow(chat, { after: row, side: "r"|"l"|"sys", type: "图片", fields, build(previewMode) => node, beat({content, comp, cursor}) => tween, stamp, en, name })` 一次编好「插槽出现 → 点补录 → 抽屉预览 → 保存 → 新行落进聊天 → 印章」整段，返回 timeline（挂到 tl 上：`tl.add(kit.insertFlow(...), 0)`）；`kit.sendFlow(twin, { beat({cursor, appChat, wxChat}) => tween, build(where) => node, side, stamp, en, noSendButton })` 编好「左窗操作 → 点发送 → 光点飞到微信窗 → 两边落一条 → 印章」整段
 - **双窗口飞送**：`kit.twin({ title, group })` → `{ app, wx, appChat, wxChat, fly(fromEl, toEl) }`：左 330px 是本应用、右 296px 是微信客户端，两边各一张无会话栏聊天窗；`fly()` 返回一粒琥珀光点从 A 飞到 B 的 timeline，发送类场景统一用它表达「这边点发送，微信那边真的收到」
+- 工作流轨 `kit.workflow(steps, { title })` → `{ in(d), step(i, d), done(d), nodes }`；steps 项形如 `{ label, ai, icon }`（`ai:true` 挂 AI 徽标）
+- 情境条 `kit.scenario(text, { local })` → `{ in(d), result(txt, d), say(txt, d), text, out }`（`say` 中途改写情境文案）
 - 通用：`kit.pop(el)` 入场、`kit.fade(el,{to})`、`kit.collapse(el)` 删除折叠、`kit.flash(el,{color:"amber"|"neon"|"red"})`、`kit.skel(w,h)` 骨架条、`kit.lines([w...])`、`kit.avatar(label, "me"|"them"|"muted")`、`kit.avatarGrid([...])`、`kit.icon(name)`、`kit.note(text)` 屏底注释、`kit.btn(text, tone, parent)`、`kit.h(tag, cls, text)`、`kit.rect(el)`
 
 ## 调试与截图

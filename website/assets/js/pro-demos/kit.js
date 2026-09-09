@@ -55,10 +55,14 @@ const ICONS = {
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   mini: '<circle cx="12" cy="12" r="9"/><path d="M9.5 8.5a2.5 2.5 0 0 1 5 0v7a2.5 2.5 0 0 1-5 0"/>',
   send: '<path d="M4 4l16 8-16 8 3-8z"/>',
+  bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
+  ai: '<rect x="5" y="5" width="14" height="14" rx="3"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/><path d="M9.5 15V9h1.6l1.4 3 1.4-3H15v6" stroke-width="1.3"/>',
   key: '<circle cx="8" cy="14" r="4"/><path d="M11 11l9-9M16 6l3 3M18 4l2 2"/>',
 };
 
-export const icon = (name, cls = "pd-ic") => svg(ICONS[name] || "", "0 0 24 24", cls);
+// 少数图标不是按 24×24 画的，单独登记 viewBox，否则会被裁掉（voice 曾被裁成一个小逗号）
+const ICON_VB = { voice: "0 0 32 32" };
+export const icon = (name, cls = "pd-ic") => svg(ICONS[name] || "", ICON_VB[name] || "0 0 24 24", cls);
 
 /* ───────────────────────── 积木工厂 ───────────────────────── */
 
@@ -194,14 +198,15 @@ export function createKit(gsap, root, { reduced = false } = {}) {
   };
 
   /* ── 聊天窗：可带左侧会话栏；list 里放行，input 是输入条 ── */
-  K.chat = ({ title = "老地方", rail = true, group = false, cls = "", parent } = {}) => {
+  K.chat = ({ title = "客户 · 王总", rail = true, group = false, cls = "", parent, railNames } = {}) => {
     const el = h("div", `pd-chat ${group ? "pd-chat--group" : ""} ${rail ? "" : "pd-chat--norail"} ${cls}`);
     let railEl = null;
     if (rail) {
       railEl = h("aside", "pd-chat__rail");
       const search = h("i", "pd-chat__search");
       railEl.appendChild(search);
-      const names = ["老地方", "家人群", "同事", "小王"];
+      // 默认业务语境；本地存档类场景传 railNames 换成私人语境（家人群 / 室友 / 老同学）
+      const names = railNames ? [title, ...railNames].slice(0, 4) : [title, "客户群", "李经理", "订单群"];
       names.forEach((n, i) => {
         const r = h("div", "pd-sess" + (i === 0 ? " is-active" : ""));
         r.appendChild(K.avatar(n[0], i % 2 ? "them" : "muted"));
@@ -253,12 +258,12 @@ export function createKit(gsap, root, { reduced = false } = {}) {
       time(t = "昨天 21:47") { const e = h("p", "pd-time", t); list.appendChild(e); return e; },
       sys(t) { const e = h("p", "pd-sys", t); list.appendChild(e); return e; },
       seed(n = 3) {
-        // 三条常规往来，作为所有场景的默认上下文
+        // 三条常规往来，作为所有场景的默认上下文（业务语境：客户问 → 我方答 → 客户确认）
         const rows = [];
-        rows.push(api.time());
-        rows.push(api.row("l", "到了跟我说一声"));
-        rows.push(api.row("r", "刚落地，还是老地方见"));
-        if (n > 2) rows.push(api.row("l", "好，就这么定了"));
+        rows.push(api.time("今天 14:02"));
+        rows.push(api.row("l", "这批还有现货吗？"));
+        rows.push(api.row("r", "有的，现货充足"));
+        if (n > 2) rows.push(api.row("l", "好，我这边下单了"));
         return rows;
       },
     };
@@ -380,8 +385,11 @@ export function createKit(gsap, root, { reduced = false } = {}) {
       const p = at ? pos(at) : { x: 200, y: 200 };
       let x = p.x + dx, y = p.y + dy;
       const w = el.offsetWidth || 120, hh = el.offsetHeight || 100;
-      if (x + w > SCREEN_W - 8) x = p.x - w - dx;
-      if (y + hh > SCREEN_H - 8) y = SCREEN_H - hh - 8;
+      // 右侧放不下就翻到锚点左边：偏移取绝对值，否则负 dx 会把菜单越推越靠右（群聊组实证）
+      if (x + w > SCREEN_W - 8) x = p.x - w - Math.abs(dx);
+      // 最后统一夹回屏内，四边各留 8px
+      x = Math.max(8, Math.min(x, SCREEN_W - w - 8));
+      y = Math.max(8, Math.min(y, SCREEN_H - hh - 8));
       gsap.set(el, { x, y });
     };
     const api = {
@@ -516,8 +524,9 @@ export function createKit(gsap, root, { reduced = false } = {}) {
         return Object.assign(p, { av, body, text: txt, grid, tiles, meta, time: timeEl, more, social, likeRow, likeNames, cmtBox });
       },
       seed(n = 2) {
-        const a = api.post({ name: "小王", text: "周末的山，云在脚下。", imgs: 3, time: "10 分钟前" });
-        const b = n > 1 ? api.post({ name: "阿明", text: "新店开业，欢迎来坐。", imgs: 1, time: "1 小时前" }) : null;
+        // 默认两条客户动态（业务语境：朋友圈这组的真实用户是做客户运营的人）
+        const a = api.post({ name: "客户 · 王总", text: "新店下周开业，欢迎来坐。", imgs: 3, time: "10 分钟前" });
+        const b = n > 1 ? api.post({ name: "客户 · 李姐", text: "这批货已经到店了。", imgs: 1, time: "1 小时前" }) : null;
         return [a, b].filter(Boolean);
       },
     };
@@ -697,6 +706,72 @@ export function createKit(gsap, root, { reduced = false } = {}) {
       .add(K.ok(stamp, { en }), ">-0.3")
       .add(cursor.hide(), "<");
     return Object.assign(t, { cursor, rowApp, rowWx });
+  };
+
+  /* ── 情境条：屏幕顶端一条，左边交代「此刻发生了什么」，结尾右边给出「结果」 ──
+     每个场景都该有一条：光演操作观众不知道为什么要做，情境条先把场景立住。
+     它会把已知的布局根（聊天窗/朋友圈/窗口/自定义 .pd-pushed）下推 22px，光标与菜单不受影响。 */
+  K.scenario = (text, { parent, local = false } = {}) => {
+    const el = h("div", "pd-strip");
+    const t = h("span", "pd-strip__t", text);
+    // 只写本地解密副本的能力（消息修改 / 消息补录 / 标记已读 / 免打扰）必须挂这枚标：
+    // 画面演的是一场与客户的对话，不点明就会被读成「对方也看到了」
+    if (local) t.appendChild(h("i", "pd-strip__local", "本地副本 · 不回写微信"));
+    const r = h("b", "pd-strip__r");
+    el.append(t, r);
+    mount(el, parent);
+    root.classList.add("has-strip");
+    gsap.set(el, { opacity: 0, x: -12 });
+    gsap.set(r, { opacity: 0 });
+    return Object.assign(el, {
+      text: t, out: r,
+      in(d = 0.4) { return gsap.to(el, { opacity: 1, x: 0, duration: d, ease: "power3.out" }); },
+      // 结尾的业务结果：与印章同一拍出现，回答「所以呢」
+      result(txt, d = 0.4) {
+        const tl = gsap.timeline();
+        tl.call(() => { r.textContent = txt; })
+          .fromTo(r, { opacity: 0, x: 10 }, { opacity: 1, x: 0, duration: d, ease: "power3.out" });
+        return tl;
+      },
+      say(txt, d = 0.35) { const tl = gsap.timeline(); tl.call(() => { t.textContent = txt; }).fromTo(t, { opacity: 0.3 }, { opacity: 1, duration: d }); return tl; },
+    });
+  };
+
+  /* ── 工作流轨：贴在屏幕底端，动作类能力统一用它表达「不是人在点，是工作流自动跑」──
+     steps: [{ label, ai?, icon? }] 或纯字符串；step(i) 点亮第 i 步并返回 timeline。
+     它会把布局根的下边收 24px（与情境条的上边 22px 对称），印章自动上移让位。 */
+  K.workflow = (steps = [], { parent, title = "WORKFLOW" } = {}) => {
+    const el = h("div", "pd-flow");
+    el.appendChild(h("b", "pd-flow__tag", title));
+    const nodes = steps.map((raw, i) => {
+      const spec = typeof raw === "string" ? { label: raw } : raw;
+      if (i) el.appendChild(h("i", "pd-flow__arrow", "›"));
+      const n = h("span", "pd-flow__n" + (spec.ai ? " is-ai" : ""));
+      n.appendChild(icon(spec.icon || (spec.ai ? "ai" : i === 0 ? "bolt" : "check"), "pd-ic pd-flow__ic"));
+      if (spec.ai) n.appendChild(h("b", "pd-flow__ai", "AI"));
+      n.appendChild(h("span", "", spec.label));
+      el.appendChild(n);
+      return n;
+    });
+    mount(el, parent);
+    root.classList.add("has-flow");
+    gsap.set(el, { opacity: 0, y: 10 });
+    return Object.assign(el, {
+      nodes,
+      in(d = 0.4) { return gsap.to(el, { opacity: 1, y: 0, duration: d, ease: "power3.out" }); },
+      // 点亮第 i 步：前面的收成已完成态，当前这步高亮并轻微弹一下
+      step(i, d = 0.3) {
+        const t = gsap.timeline();
+        t.call(() => { nodes.forEach((n, k) => { n.classList.toggle("is-on", k === i); n.classList.toggle("is-done", k < i); }); })
+          .fromTo(nodes[i], { scale: 0.94 }, { scale: 1, duration: d, ease: "back.out(2.4)" });
+        return t;
+      },
+      done(d = 0.3) {
+        const t = gsap.timeline();
+        t.call(() => nodes.forEach((n) => { n.classList.remove("is-on"); n.classList.add("is-done"); }));
+        return t.to({}, { duration: d });
+      },
+    });
   };
 
   /* ── 通用按钮 ── */

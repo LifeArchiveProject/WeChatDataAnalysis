@@ -55,3 +55,12 @@ test('官网首屏五模块视图：项数合计为 54，群聊 / 联系人 / �
     ['group', 'contact', 'alert']
   )
 })
+
+test('每项能力都带场景与需求（use / need），否则动画只演操作、看不出用途', () => {
+  const missing = PRO_ITEMS.filter((it) => !it.use || !it.need)
+  assert.deepEqual(missing.map((it) => it.key), [], '缺少 use/need 的能力')
+  for (const it of PRO_ITEMS) {
+    assert.ok(it.use.length <= 8, `${it.key} 的场景标签过长：${it.use}`)
+    assert.ok(it.need.length >= 8 && it.need.length <= 34, `${it.key} 的需求句长度不合适：${it.need}`)
+  }
+})
