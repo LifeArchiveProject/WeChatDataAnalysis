@@ -104,3 +104,6 @@ pnpm-lock.yaml
 
 # Local scratch file accidentally generated during development
 /bento-summary.html
+
+# 高级版演示走片的默认输出目录（website/dev/shot.mjs），只是本地调试产物
+pro-shots/

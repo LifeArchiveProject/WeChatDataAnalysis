@@ -111,11 +111,17 @@
 }
 .pd-hud__op { color: var(--pd-amber); flex: none; }
 .pd-hud__grp { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 场景标签：紧跟功能名，回答「什么时候会用到它」 */
+.pd-hud__use {
+  flex: none; font-size: 9.5px; letter-spacing: 0.14em; line-height: 1.5;
+  padding: 2px 7px 1px; border: 1px solid rgba(255, 194, 75, 0.5); border-radius: 2px;
+  color: var(--pd-amber); background: rgba(255, 194, 75, 0.09); white-space: nowrap;
+}
 .pd-hud__pro {
   flex: none; color: var(--pd-amber); padding: 2px 6px 1px 8px;
   background: rgba(255, 194, 75, 0.12); border: 1px solid rgba(255, 194, 75, 0.35);
 }
-.pd-hud--bottom { letter-spacing: 0; align-items: baseline; }
+.pd-hud--bottom { letter-spacing: 0; align-items: baseline; gap: 10px; }
 .pd-hud__name {
   flex: none; font-family: var(--pd-sans); font-weight: 900;
   font-size: clamp(15px, 1.4cqw + 8px, 19px); color: var(--pd-ink); letter-spacing: 0.01em; white-space: nowrap;
@@ -163,6 +169,82 @@
   transform-origin: 0 50%; transform: scaleX(0);
   box-shadow: 0 0 8px rgba(255, 194, 75, 0.6);
 }
+
+/* ── 情境条：贴在屏幕顶端，左「此刻发生了什么」右「结果」 ── */
+.pd-strip {
+  position: absolute; left: 0; right: 0; top: 0; height: 22px; z-index: 16;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 11px;
+  background: linear-gradient(90deg, rgba(255, 194, 75, 0.13), rgba(9, 14, 11, 0.86) 62%);
+  border-bottom: 1px solid rgba(255, 194, 75, 0.26);
+  font-family: var(--pd-mono); font-size: 10.5px; letter-spacing: 0.1em; line-height: 1;
+}
+.pd-strip__t {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  color: var(--pd-amber); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pd-strip__t::before {
+  content: ""; flex: none; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--pd-amber); box-shadow: 0 0 6px rgba(255, 194, 75, 0.85);
+}
+.pd-strip__local {
+  flex: none; padding: 1px 5px 0; border-radius: 2px; letter-spacing: 0.06em; font-size: 9px;
+  border: 1px solid rgba(150, 180, 160, 0.42); color: var(--pd-dim); background: rgba(9, 14, 11, 0.72);
+}
+.pd-strip__r { flex: none; font-weight: 600; color: var(--pd-neon); text-shadow: 0 0 12px rgba(61, 242, 141, 0.45); white-space: nowrap; }
+/* 情境条占掉顶端 22px：把布局根整体下推，光标/菜单/印章的坐标不受影响 */
+.pd-screen.has-strip > .pd-chat,
+.pd-screen.has-strip > .pd-feed,
+.pd-screen.has-strip > .pd-win,
+.pd-screen.has-strip > .pd-sheet,
+.pd-screen.has-strip > .pd-pushed { top: 22px; }
+/* 窗口是写死 400px 高的，下推后要同步收高，否则出屏 */
+.pd-screen.has-strip > .pd-win { height: 378px; }
+
+/* ── 工作流轨：贴底 24px，动作类场景用它说明「是工作流在跑，不是人在点」 ── */
+.pd-flow {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 24px; z-index: 16;
+  display: flex; align-items: center; gap: 7px; padding: 0 11px;
+  background: linear-gradient(90deg, rgba(9, 14, 11, 0.9), rgba(61, 242, 141, 0.1));
+  border-top: 1px solid rgba(61, 242, 141, 0.24);
+  font-family: var(--pd-mono); font-size: 9.5px; letter-spacing: 0.08em; line-height: 1;
+  overflow: hidden; white-space: nowrap;
+}
+.pd-flow__tag {
+  flex: none; padding: 2px 6px 1px; border-radius: 2px; letter-spacing: 0.2em; font-weight: 600;
+  color: #04140b; background: var(--pd-neon); opacity: 0.86;
+}
+.pd-flow__arrow { flex: none; color: var(--pd-faint); }
+.pd-flow__n {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px 1px; border-radius: 2px; border: 1px solid transparent;
+  color: var(--pd-faint); transition: color 0.25s, border-color 0.25s, background 0.25s;
+}
+.pd-flow__ic { width: 10px; height: 10px; }
+.pd-flow__ai {
+  font-size: 8px; font-weight: 700; letter-spacing: 0.1em; padding: 1px 3px 0; border-radius: 2px;
+  color: #140d01; background: var(--pd-amber);
+}
+.pd-flow__n.is-on { color: var(--pd-amber); border-color: rgba(255, 194, 75, 0.5); background: rgba(255, 194, 75, 0.1); }
+.pd-flow__n.is-done { color: var(--pd-neon); }
+.pd-flow__n.is-ai.is-on { border-color: rgba(255, 194, 75, 0.7); }
+/* 工作流轨占掉底端 24px：布局根收高，印章上移让位 */
+.pd-screen.has-flow > .pd-chat,
+.pd-screen.has-flow > .pd-feed,
+.pd-screen.has-flow > .pd-sheet,
+.pd-screen.has-flow > .pd-pushed { bottom: 24px; }
+.pd-screen.has-flow > .pd-win { height: 376px; }
+.pd-screen.has-strip.has-flow > .pd-win { height: 354px; }
+.pd-screen.has-flow .pd-stamp { bottom: 34px; }
+/* 四角刻度画在未缩放的取景框上：舞台一缩小就会压住情境条文案与结果文案，
+   所以有情境条就撤掉上面两枚、有工作流轨就撤掉下面两枚（那两条本身已经是边框） */
+.pd-screen.has-strip ~ .pd-corner.tl,
+.pd-screen.has-strip ~ .pd-corner.tr,
+.pd-screen.has-flow ~ .pd-corner.bl,
+.pd-screen.has-flow ~ .pd-corner.br { display: none; }
+/* 通知横幅也要给情境条让位，否则压住右端的结果文案 */
+.pd-screen.has-strip > .pd-toast { top: 32px; }
+/* 卡片页脚的内边距会被 .pd-root p { padding: 0 } 吃掉（特异性更高），这里提权补回 */
+.pd-root .pd-card__foot { padding: 6px 12px; }
 
 /* ─────────────────────────── 积木：光标 ─────────────────────────── */
 

@@ -242,7 +242,7 @@ main { position: relative; z-index: 1; }
 .hero__coord #hc-1.is-live { color: var(--neon); }
 .hero__coord #hc-5.is-pro { color: var(--amber); }
 .hero__title {
-  position: absolute; z-index: 2; left: 50%; top: 31%;
+  position: absolute; z-index: 2; left: 50%; top: 28%;
   transform: translate(-50%, -50%);
   width: min(88vw, 1520px);
   font-weight: 900; line-height: 1.02; letter-spacing: -0.015em;
@@ -328,7 +328,9 @@ main { position: relative; z-index: 1; }
   color: #140d01; background: var(--amber);
   box-shadow: 0 0 22px rgba(255, 194, 75, 0.4);
 }
+/* 计数器紧跟 PRO 压印块（原先贴最右会被右侧巨字压住），巡光线退到行尾吃掉余量 */
 .hm__rule span { flex: none; color: var(--amber); letter-spacing: 0.22em; }
+.hero__pro-rule { order: 1; }
 .hero__pro-rule { flex: 1; position: relative; height: 1px; background: rgba(255, 194, 75, 0.28); }
 .hero__pro-rule em {
   position: absolute; top: -1px; left: 0; width: 30px; height: 3px; border-radius: 2px;
@@ -376,7 +378,7 @@ main { position: relative; z-index: 1; }
 }
 .hm__mod {
   font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.18em;
-  color: var(--amber); margin: 7px 0 4px; white-space: nowrap;
+  color: var(--amber); margin: 5px 0 3px; white-space: nowrap;
   break-after: avoid; break-inside: avoid;
 }
 .hm__mod:first-child { margin-top: 0; }
@@ -384,7 +386,7 @@ main { position: relative; z-index: 1; }
 .hm__mod i { font-style: normal; margin-left: 8px; opacity: 0.65; }
 .hm__list { list-style: none; }
 .hm__item {
-  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; line-height: 1.62;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; line-height: 1.5;
   color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   transition: color 0.25s, text-shadow 0.25s; cursor: pointer;
 }
