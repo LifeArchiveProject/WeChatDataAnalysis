@@ -1150,17 +1150,19 @@ def _contact_rows(context: _AccountContext, usernames: list[str] | None) -> list
     if targets:
         where = " WHERE username IN (" + ",".join(_sql_literal(value) for value in targets) + ")"
     result: dict[str, dict[str, Any]] = {}
-    for table in ("contact", "stranger"):
+    # 全量通讯录只读取 contact；定向查询才补充陌生人资料。
+    for table in (("contact", "stranger") if targets else ("contact",)):
         try:
             rows = _query(context, database_path, f"SELECT * FROM {table}{where}")
         except Exception:
+            if not targets:
+                # 保留失败状态，供上层回退到本地库或提示错误。
+                raise
             continue
         for row in rows:
             username = str(row.get("username") or row.get("user_name") or "").strip()
             if username and username not in result:
                 result[username] = row
-        if not targets:
-            break
     return list(result.values())
 
 

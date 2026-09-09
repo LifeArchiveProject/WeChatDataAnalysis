@@ -629,6 +629,12 @@ class TestContactsExport(unittest.TestCase):
                 with (
                     patch.object(chat_contacts.WCDB_REALTIME, "ensure_connected", return_value=rt_conn),
                     patch.object(chat_contacts, "_wcdb_get_sessions", return_value=sessions),
+                    patch.object(chat_contacts, "_query_realtime_contact_rows", return_value=[
+                        {"username": "wxid_friend", "local_type": 1},
+                        {"username": "room@chatroom", "local_type": 2},
+                        {"username": "gh_service", "local_type": 1},
+                    ]),
+                    patch.object(chat_contacts, "_query_realtime_official_account_type_map", return_value={}),
                     patch.object(
                         chat_contacts,
                         "_wcdb_get_display_names",
