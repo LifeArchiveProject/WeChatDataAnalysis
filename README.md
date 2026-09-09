@@ -230,6 +230,7 @@ npm run dist:mac
 8. **[wx-dat](https://github.com/waaaaashi/wx-dat)**
 9. **[Ritsu](https://xhslink.com/m/7YJUsd1sgyF)**
 10. **[recarto404](https://github.com/recarto404)**
+11. **[xiaoshengbao](https://github.com/xiaoshengbao)**
 
 ## 贡献
 
