@@ -77,6 +77,25 @@ test("migrateOutputDirectory switches empty source to a new directory", async ()
   }
 });
 
+test("migrateOutputDirectory preserves Unicode directory names and file contents", async () => {
+  const root = makeTempDir();
+  const currentDir = path.join(root, "原始聊天记录");
+  const nextDir = path.join(root, "软件备份 & 空格", "𠮷-输出📁");
+  const relativeFile = path.join("databases", "中文账号", "消息.db");
+  const contents = Buffer.from([0, 255, 1, 128, 34, 10]);
+  try {
+    fs.mkdirSync(path.dirname(path.join(currentDir, relativeFile)), { recursive: true });
+    fs.writeFileSync(path.join(currentDir, relativeFile), contents);
+    const result = await migrateOutputDirectory({ currentDir, nextDir });
+    assert.equal(result.changed, true);
+    assert.deepEqual(fs.readFileSync(path.join(nextDir, relativeFile)), contents);
+    assert.deepEqual(fs.readFileSync(path.join(result.backupDir, relativeFile)), contents);
+    assert.equal(getEffectiveOutputDirPath({ dataDir: root, settingsOutputDir: nextDir }), nextDir);
+  } finally {
+    cleanupDir(root);
+  }
+});
+
 test("migrateOutputDirectory blocks non-empty targets", async () => {
   const root = makeTempDir();
   const currentDir = path.join(root, "current-output");
