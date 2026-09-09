@@ -20,7 +20,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: installer-unicode-${{ github.workflow }}-${{ github.ref }}
+  # 不同提交分别完成回归检查，避免连续推送让旧提交留下 Cancelled 状态。
+  # 同一提交的重复触发仍可取消，减少重复运行。
+  group: installer-unicode-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:

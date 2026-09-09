@@ -19,11 +19,15 @@ async function resolveCompiler() {
   return getMakeNsisPath(build.toolsets?.nsis, build.nsis?.customNsisBinary);
 }
 
-function run(command, args, env = {}) {
+function run(command, args, { env = {}, timeout = 30000, label = path.basename(command) } = {}) {
+  const startedAt = Date.now();
   const result = spawnSync(command, args, {
-    encoding: "utf8", windowsHide: true, timeout: 30000, env: { ...process.env, ...env },
+    encoding: "utf8", windowsHide: true, timeout, env: { ...process.env, ...env },
   });
-  assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
+  assert.equal(result.status, 0, [
+    `${label}: elapsed=${Date.now() - startedAt}ms, timeout=${timeout}ms, status=${result.status}, signal=${result.signal}`,
+    result.error?.message, result.stderr, result.stdout,
+  ].filter(Boolean).join("\n"));
   return result;
 }
 
@@ -65,7 +69,7 @@ test("compiled NSIS and PowerShell preserve Unicode paths through install and up
     ].join("\n");
     const scriptPath = path.join(root, "probe.nsi");
     fs.writeFileSync(scriptPath, "\uFEFF" + script, "utf8");
-    run(compiler.path, ["/V2", scriptPath], compiler.env);
+    run(compiler.path, ["/V2", scriptPath], { env: compiler.env });
 
     const chineseOutput = path.join(configRoot, "软件备份", "𠮷", "wechat-data-analysis");
     const pendingOutput = path.join(configRoot, "聊天记录 & 空格-$folder-$(1+1)-`tick", "输出📁");
@@ -88,7 +92,8 @@ test("compiled NSIS and PowerShell preserve Unicode paths through install and up
       // 连续运行两次，确认保存后再次回填不会二次转码。
       for (let attempt = 0; attempt < 2; attempt++) {
         fs.rmSync(resultPath, { force: true });
-        run(exePath, []);
+        // CI 中探针及其 PowerShell 子进程可能启动较慢；保留超时和全部结果断言，不自动重试。
+        run(exePath, [], { timeout: 120000, label: `${fixture.name}（第 ${attempt + 1} 次）` });
         assert.equal(fs.readFileSync(resultPath, "utf16le"), fixture.expected, fixture.name);
         const expectedSettings = { ...fixture.settings, ...fixture.legacy,
           pendingOutputDir: fixture.expected === defaultOutput ? "" : fixture.expected };
