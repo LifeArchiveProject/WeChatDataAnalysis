@@ -754,9 +754,11 @@ def get_favorite_voice(server_id: int = Query(..., gt=0), account: Optional[str]
 
 
 def _load_tags(conn: Any) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]]]:
+    # TEXT 中也可能包含非 UTF-8 字节；保留到 _text 中容错解码，避免标签整批丢失。
     tag_rows = _optional_rows(
         conn,
-        "SELECT local_id, server_id, name, seq FROM fav_tag_db_item ORDER BY seq ASC, local_id ASC",
+        "SELECT local_id, server_id, CAST(name AS BLOB) AS name, seq "
+        "FROM fav_tag_db_item ORDER BY seq ASC, local_id ASC",
     )
     tags: list[dict[str, Any]] = []
     tags_by_local_id: dict[int, dict[str, Any]] = {}
@@ -830,15 +832,19 @@ def list_favorites(
         meta = _source_meta(conn)
         tags, tags_by_favorite = _load_tags(conn)
         try:
+            # 微信的 TEXT 值不一定是合法 UTF-8。按字节传输，交给现有 _text/_parse_xml
+            # 容错处理，避免原生查询解码单个值失败时中断整个收藏列表。
             rows = conn.execute(
-                "SELECT local_id, server_id, type, update_time, content, source_id, "
-                "sync_status, upload_status, fromusr, realchatname "
+                "SELECT local_id, server_id, type, update_time, "
+                "CAST(content AS BLOB) AS content, CAST(source_id AS BLOB) AS source_id, "
+                "sync_status, upload_status, CAST(fromusr AS BLOB) AS fromusr, "
+                "CAST(realchatname AS BLOB) AS realchatname "
                 "FROM fav_db_item ORDER BY update_time DESC, local_id DESC"
             ).fetchall()
         except Exception as exc:
             raise HTTPException(
-                status_code=400,
-                detail=f"favorite.db schema is not supported: {exc}",
+                status_code=500,
+                detail=f"读取 favorite.db 收藏记录失败：{exc}",
             ) from exc
 
     items = []

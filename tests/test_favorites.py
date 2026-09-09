@@ -1,11 +1,15 @@
 import sqlite3
+import struct
 import sys
+import threading
 import unittest
+from contextlib import closing, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from fastapi import HTTPException
 from starlette.requests import Request
 
 
@@ -14,6 +18,58 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 from wechat_decrypt_tool.routers import favorites as favorites_router
+from wechat_decrypt_tool.routers import general as general_router
+from wechat_decrypt_tool import wcdb_realtime
+from wechat_decrypt_tool.native_core_client import parse_native_query_page
+
+
+class _SQLiteTextBytes(bytes):
+    """保留 SQLite TEXT 原始字节，同时与 BLOB 区分。"""
+
+
+@contextmanager
+def _native_favorite_source(db_path: Path):
+    # 用合成 SQLite 数据生成原生查询协议，实际执行生产代码的严格 UTF-8 解码。
+    conn = sqlite3.connect(str(db_path))
+    conn.text_factory = _SQLiteTextBytes
+
+    def execute(_handle, *, kind, path, sql):
+        cursor = conn.execute(sql)
+        rows = cursor.fetchall()
+        columns = [column[0] for column in cursor.description]
+        payload = bytearray(b"WQR1" + struct.pack("<HHII", 1, 0, len(columns), len(rows)))
+
+        def append_sized(value):
+            payload.extend(struct.pack("<I", len(value)))
+            payload.extend(value)
+
+        for column in columns:
+            append_sized(column.encode("utf-8"))
+        for row in rows:
+            for value in row:
+                if value is None:
+                    payload.append(0)
+                elif isinstance(value, int):
+                    payload.append(1)
+                    payload.extend(struct.pack("<q", value))
+                elif isinstance(value, float):
+                    payload.append(2)
+                    payload.extend(struct.pack("<d", value))
+                else:
+                    payload.append(3 if isinstance(value, _SQLiteTextBytes) else 4)
+                    append_sized(value)
+        return list(parse_native_query_page(bytes(payload), has_more=False).records())
+
+    rt_conn = SimpleNamespace(handle=1, lock=threading.RLock())
+    source = general_router._WCDBDatabaseSource(rt_conn, db_path)
+    try:
+        with (
+            patch.object(wcdb_realtime.native_core_realtime, "exec_query", side_effect=execute),
+            patch.object(favorites_router, "_open_db_source", return_value=source),
+        ):
+            yield source
+    finally:
+        conn.close()
 
 
 def _request() -> Request:
@@ -186,6 +242,84 @@ class TestFavorites(unittest.TestCase):
 
             default = inspect.signature(favorites_router.list_favorites).parameters["source"].default
         self.assertEqual(default.default, "realtime")
+
+    def test_realtime_invalid_utf8_fields_do_not_break_the_favorite_list(self):
+        cases = {
+            "content": b'<favitem type="5"><desc>hello\xffworld</desc></favitem>',
+            "source_id": b"source-\xff",
+            "fromusr": b"wxid_\xff",
+            "realchatname": b"chat_\xff",
+        }
+        for field, value in cases.items():
+            with self.subTest(field=field), TemporaryDirectory() as td:
+                account_dir = Path(td)
+                db_path = account_dir / "favorite.db"
+                self._seed_favorite_db(db_path)
+                with closing(sqlite3.connect(str(db_path))) as conn, conn:
+                    conn.execute(
+                        f"UPDATE fav_db_item SET {field} = CAST(? AS TEXT) WHERE local_id = 2",
+                        (value,),
+                    )
+                    self.assertEqual(conn.execute("PRAGMA quick_check").fetchone()[0], "ok")
+                with _native_favorite_source(db_path) as source:
+                    # 先证明夹具确实复现 issue 的原始异常，不能仅模拟上层返回值。
+                    with self.assertRaisesRegex(wcdb_realtime.WCDBRealtimeError, "query text cell is not UTF-8"):
+                        source.execute(f"SELECT {field} FROM fav_db_item WHERE local_id = 2")
+                    response = self._call(account_dir, source="realtime")
+                local = self._call(account_dir)
+                self.assertEqual(response["items"], local["items"])
+                self.assertEqual(response["dataSource"], "realtime")
+                self.assertEqual(response["databaseTotal"], 2)
+                self.assertEqual(response["items"][0]["textBlocks"], ["项目会议纪要\n第二行"])
+                item = response["items"][1]
+                if field == "content":
+                    self.assertTrue(item["parsed"])
+                    self.assertIn("hello\ufffdworld", item["textBlocks"])
+                else:
+                    output_field = {
+                        "source_id": "sourceId",
+                        "fromusr": "sourceUsername",
+                        "realchatname": "sourceChatUsername",
+                    }[field]
+                    self.assertEqual(item[output_field], value.decode("utf-8", "replace"))
+
+    def test_realtime_invalid_utf8_tag_is_preserved_and_filterable(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td)
+            db_path = account_dir / "favorite.db"
+            self._seed_favorite_db(db_path)
+            with closing(sqlite3.connect(str(db_path))) as conn, conn:
+                conn.execute("UPDATE fav_tag_db_item SET name = CAST(? AS TEXT)", (b"tag-\xff",))
+            with _native_favorite_source(db_path):
+                response = self._call(account_dir, source="realtime", tag_id=7)
+            self.assertEqual(response["total"], 1)
+            self.assertEqual(response["tags"][0]["name"], "tag-\ufffd")
+            self.assertEqual(response["items"][0]["tags"][0]["name"], "tag-\ufffd")
+
+    def test_realtime_and_local_sources_return_the_same_normal_favorites(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td)
+            db_path = account_dir / "favorite.db"
+            self._seed_favorite_db(db_path)
+            local = self._call(account_dir)
+            with _native_favorite_source(db_path):
+                realtime = self._call(account_dir, source="realtime")
+            for key in ("items", "tags", "typeCounts", "total", "databaseTotal"):
+                self.assertEqual(realtime[key], local[key])
+
+    def test_query_failure_is_not_misreported_as_unsupported_schema(self):
+        with TemporaryDirectory() as td:
+            account_dir = Path(td)
+            self._seed_favorite_db(account_dir / "favorite.db")
+            source = MagicMock()
+            source.__enter__.return_value = source
+            source.execute.side_effect = wcdb_realtime.WCDBRealtimeError("query text cell is not UTF-8")
+            with patch.object(favorites_router, "_open_db_source", return_value=source):
+                with self.assertRaises(HTTPException) as caught:
+                    self._call(account_dir, source="realtime")
+            self.assertEqual(caught.exception.status_code, 500)
+            self.assertNotIn("schema is not supported", caught.exception.detail)
+            self.assertIn("query text cell is not UTF-8", caught.exception.detail)
 
     def test_direct_favorite_types_do_not_use_recorditem_numbering(self):
         voice = favorites_router._parse_favorite_row(
