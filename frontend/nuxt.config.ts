@@ -1,6 +1,7 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
 import { fileURLToPath } from 'node:url'
 import { searchForWorkspaceRoot } from 'vite'
+import { assistantUiAliases } from './lib/assistant-ui-aliases'
 import {
   FIRST_USE_AGREEMENT_STORAGE_KEY,
   FIRST_USE_AGREEMENT_VERSION,
@@ -58,10 +59,9 @@ export default defineNuxtConfig({
   // 「高级功能」弹窗复用官网的 pro-demos 演示引擎（website/assets 下），跨根导入需要别名，
   // 并让 dev server 额外放行 website/assets（保留 Vite 默认推断的工作区根，不把整个仓库暴露给 /@fs/）
   vite: {
+    ssr: { noExternal: [/^@assistant-ui\//] },
     resolve: {
-      alias: {
-        '@website': websiteAssetsDir
-      }
+      alias: [...assistantUiAliases, { find: '@website', replacement: websiteAssetsDir }]
     },
     server: {
       fs: {

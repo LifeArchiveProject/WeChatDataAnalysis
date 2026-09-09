@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('Read', 'Write', 'RemoveLegacyLinks', 'DeleteCustom')]
     [string] $Mode,
@@ -7,6 +7,7 @@ param(
     [string] $LegacySettingsPath1 = '',
     [string] $LegacySettingsPath2 = '',
     [string] $SelectedOutputPath = '',
+    [string] $ResultPath = '',
     [string] $CandidateLinkPath1 = '',
     [string] $CandidateLinkPath2 = '',
     [string] $PathFile = '',
@@ -38,7 +39,8 @@ function Get-InstallerOutputDirectory {
         }
 
         try {
-            $json = Get-Content -LiteralPath $candidate -Raw | ConvertFrom-Json
+            # 配置由 Electron 以无 BOM 的 UTF-8 写入，不能使用系统默认代码页。
+            $json = Get-Content -LiteralPath $candidate -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($null -eq $json) {
                 continue
             }
@@ -73,6 +75,11 @@ function Get-InstallerOutputDirectory {
 
 function Read-InstallerOutputDirectory {
     $result = Get-InstallerOutputDirectory
+    if (-not [string]::IsNullOrWhiteSpace($ResultPath)) {
+        # NSIS 显式读取 UTF-16LE 文件，避免子进程标准输出被按本地代码页解码。
+        [System.IO.File]::WriteAllText($ResultPath, $result, [System.Text.Encoding]::Unicode)
+        return
+    }
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     [Console]::Write($result)
 }
@@ -178,7 +185,7 @@ function Write-InstallerOutputDirectory {
             continue
         }
         try {
-            $existing = Get-Content -LiteralPath $candidate -Raw | ConvertFrom-Json
+            $existing = Get-Content -LiteralPath $candidate -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($null -eq $existing) {
                 continue
             }
@@ -242,7 +249,7 @@ function Remove-InstallerCustomOutputDirectory {
         return
     }
 
-    $target = (Get-Content -LiteralPath $PathFile -Raw).Trim()
+    $target = (Get-Content -LiteralPath $PathFile -Raw -Encoding UTF8).Trim()
     $defaults = @($DefaultOutputPath, $LegacyOutputPath1, $LegacyOutputPath2) |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     $isDefault = $false

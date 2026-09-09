@@ -84,7 +84,37 @@ class ColoredFormatter(logging.Formatter):
 
 
 class RecreatingFileHandler(logging.FileHandler):
-    """Recreate a removed log directory before reopening a delayed handler."""
+    """在同一把 handler 锁内切换日期及重建被删除的目录。"""
+
+    def __init__(self, filename, *args, daily=False, **kwargs):
+        self.daily = daily
+        super().__init__(filename, *args, **kwargs)
+
+    def current_path(self):
+        self.acquire()
+        try:
+            desired = Path(self.baseFilename)
+            if self.daily:
+                from .app_paths import get_output_dir
+                now = datetime.now()
+                desired = get_output_dir() / 'logs' / now.strftime('%Y/%m/%d') / now.strftime('%d_wechat_tool.log')
+            if str(desired.resolve()) != self.baseFilename or not Path(self.baseFilename).exists():
+                if self.stream:
+                    self.stream.close()
+                    self.stream = None
+                self.baseFilename = str(desired.resolve())
+                self.stream = self._open()
+            return Path(self.baseFilename)
+        finally:
+            self.release()
+
+    def emit(self, record):
+        self.acquire()
+        try:
+            self.current_path()
+            super().emit(record)
+        finally:
+            self.release()
 
     def _open(self):
         Path(self.baseFilename).parent.mkdir(parents=True, exist_ok=True)
@@ -162,6 +192,9 @@ class WeChatLogger:
             wants_console_handler = False
 
         if WeChatLogger._initialized:
+            for handler in root_logger.handlers:
+                if isinstance(handler, RecreatingFileHandler) and handler.daily:
+                    self.log_file = handler.current_path()
             current_log_file = Path(getattr(self, "log_file", desired_log_file))
             has_expected_file_handler = False
             has_stream_handler = False
@@ -208,7 +241,7 @@ class WeChatLogger:
         )
 
         # 文件处理器
-        file_handler = RecreatingFileHandler(self.log_file, encoding='utf-8')
+        file_handler = RecreatingFileHandler(self.log_file, encoding='utf-8', daily=True)
         file_handler.setFormatter(file_formatter)
         file_handler.setLevel(level)
         file_handler.addFilter(SensitiveHttpClientLogFilter())
@@ -282,6 +315,9 @@ class WeChatLogger:
         if console_handler is not None:
             fastapi_logger.addHandler(console_handler)
         fastapi_logger.setLevel(level)
+        # 已挂载相同文件 handler 的 logger 不再向父级重复投递。
+        for named in (uvicorn_logger, uvicorn_access_logger, uvicorn_error_logger, fastapi_logger):
+            named.propagate = False
         
         # 记录初始化信息
         logger = logging.getLogger(__name__)
@@ -325,6 +361,10 @@ class WeChatLogger:
         """获取当前日志文件路径"""
         if not hasattr(self, "log_file"):
             self.setup_logging()
+        for handler in logging.getLogger().handlers:
+            if isinstance(handler, RecreatingFileHandler) and handler.daily:
+                self.log_file = handler.current_path()
+                break
         return self.log_file
 
 

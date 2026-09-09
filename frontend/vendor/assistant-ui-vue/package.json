@@ -1,0 +1,22 @@
+{
+  "name": "@assistant-ui/vue",
+  "version": "0.0.0-preview.3a45a01",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@assistant-ui/core": "0.3.17",
+    "@assistant-ui/store": "0.3.12",
+    "@assistant-ui/tap": "0.9.16"
+  },
+  "peerDependencies": {
+    "vue": "^3.5.0"
+  }
+}

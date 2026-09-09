@@ -152,7 +152,7 @@ class TestContactTypeDetection(unittest.TestCase):
             patch.object(chat_contacts.WCDB_REALTIME, "ensure_connected", return_value=fake_conn),
             patch.object(chat_contacts, "_wcdb_get_sessions", return_value=[]),
             patch.object(chat_contacts, "_wcdb_get_contacts_compact", return_value=contact_rows),
-            patch.object(chat_contacts, "_query_realtime_contact_rows", return_value=[]),
+            patch.object(chat_contacts, "_query_realtime_contact_rows", side_effect=RuntimeError("SQL unsupported")),
             patch.object(chat_contacts, "_query_realtime_official_account_type_map", return_value={}),
             patch.object(
                 chat_contacts,

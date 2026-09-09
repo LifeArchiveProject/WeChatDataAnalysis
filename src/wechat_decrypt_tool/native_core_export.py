@@ -130,7 +130,7 @@ def seal_export_manifest(
     payload = bytes(manifest)
     if not payload:
         raise ValueError("export manifest must not be empty")
-    with managed_native_core_operation(export_only=True):
+    with managed_native_core_operation(prefer_export_only=True):
         envelope = _seal_export_manifest(
             get_native_core_client(),
             export_id=str(export_id or ""),
@@ -306,8 +306,7 @@ def encrypt_export_file(
 ) -> NativeEncryptedExportResult:
     """Encrypt one completed export artifact into an atomic WEC1 container.
 
-    The source file is never modified. The process-wide export-only operation
-    token is held through publish and cleanup.
+    源文件保持不变；发布和清理期间持续持有进程租约，优先复用现有 broker。
     """
 
     source = Path(source_path).expanduser().resolve(strict=True)
@@ -343,7 +342,7 @@ def encrypt_export_file(
                 "encrypted export source size must be between 1 and 274877906944"
             )
 
-        managed_operation = managed_native_core_operation(export_only=True)
+        managed_operation = managed_native_core_operation(prefer_export_only=True)
         operation_stack.enter_context(managed_operation)
         active_client = get_native_core_client()
 
@@ -512,7 +511,7 @@ def decrypt_export_file(
             raise NativeCoreProtocolError("encrypted export header is truncated.")
         header = parse_native_encrypted_export_header(fixed_header + header_suffix)
 
-        managed_operation = managed_native_core_operation(export_only=True)
+        managed_operation = managed_native_core_operation(prefer_export_only=True)
         operation_stack.enter_context(managed_operation)
         active_client = get_native_core_client()
 

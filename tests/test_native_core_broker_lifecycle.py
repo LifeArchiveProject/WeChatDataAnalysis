@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import pytest
 
 from wechat_decrypt_tool import native_core_broker
 
@@ -162,3 +164,38 @@ def test_last_export_only_operation_stops_owned_broker() -> None:
             native_core_broker._owned_database_disabled,
             native_core_broker._active_operations,
         ) = original
+
+
+@pytest.mark.parametrize("state", ["absent", "dead", "export", "database"])
+def test_export_preference_selects_mode_without_replacing_live_broker(monkeypatch, state):
+    process = None if state == "absent" else Mock()
+    if process is not None:
+        process.poll.return_value = 1 if state == "dead" else None
+    monkeypatch.setattr(native_core_broker, "_process", process)
+    monkeypatch.setattr(native_core_broker, "_owned_database_disabled", state == "export")
+    monkeypatch.setattr(native_core_broker, "_active_operations", 0)
+    with (
+        patch.object(native_core_broker, "ensure_native_core_broker", return_value="endpoint") as ensure,
+        patch.object(native_core_broker, "stop_native_core_broker"),
+    ):
+        with native_core_broker.managed_native_core_operation(prefer_export_only=True):
+            assert native_core_broker._active_operations == 1
+        assert native_core_broker._active_operations == 0
+    ensure.assert_called_once_with(database_root=None, export_only=state != "database")
+
+
+def test_strict_export_only_still_rejects_busy_database_broker(monkeypatch):
+    process = Mock()
+    process.poll.return_value = None
+    monkeypatch.setattr(native_core_broker, "_process", process)
+    monkeypatch.setattr(native_core_broker, "_owned_database_disabled", False)
+    monkeypatch.setattr(native_core_broker, "_active_operations", 1)
+    with pytest.raises(native_core_broker.NativeCoreUnavailableError, match="BUSY with 1"):
+        native_core_broker.managed_native_core_operation(export_only=True)
+    assert native_core_broker._active_operations == 1
+
+
+@pytest.mark.parametrize("options", [{"export_only": True}, {"database_root": Path("unused")}])
+def test_export_preference_rejects_conflicting_requirements(options):
+    with pytest.raises(native_core_broker.NativeCoreProtocolError, match="cannot be combined"):
+        native_core_broker.managed_native_core_operation(prefer_export_only=True, **options)

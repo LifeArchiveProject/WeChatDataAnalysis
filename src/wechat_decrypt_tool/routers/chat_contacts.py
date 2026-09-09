@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field, SecretStr
 
 from ..account_source_policy import account_prefers_decrypted_snapshot
+from ..logging_config import get_logger
 
 try:
     from pypinyin import Style, lazy_pinyin
@@ -65,6 +66,7 @@ from ..wcdb_realtime import (
 )
 
 router = APIRouter(route_class=PathFixRoute)
+logger = get_logger(__name__)
 
 
 _SYSTEM_USERNAMES = {
@@ -389,6 +391,10 @@ def _run_contacts_read_with_fallback(
         if source_active != "realtime" or not (account_dir / "contact.db").is_file():
             raise
         fallback_reason = _normalize_text(getattr(exc, "detail", "") or str(exc))
+        logger.warning(
+            "[contacts] 实时读取失败，回退本地数据库 account=%s error=%s",
+            account_dir.name, fallback_reason,
+        )
         source_active = "decrypted"
         result = read(source_active)
 
@@ -1445,15 +1451,12 @@ def _query_realtime_contact_rows(handle: int) -> list[dict[str, Any]]:
     # 通讯录分类口径来自 contact 表。stranger/session 里的历史私聊很多，
     # 不能兜底算作“好友”，否则好友数会膨胀到所有历史会话数量。
     for table in ("contact",):
-        try:
-            table_rows = _wcdb_exec_query(
-                handle,
-                kind="contact",
-                path=None,
-                sql=f"SELECT * FROM {table}",
-            )
-        except Exception:
-            continue
+        table_rows = _wcdb_exec_query(
+            handle,
+            kind="contact",
+            path=None,
+            sql=f"SELECT * FROM {table}",
+        )
         for row in table_rows or []:
             if not isinstance(row, dict):
                 continue
@@ -1755,27 +1758,28 @@ def _collect_contacts_for_account_realtime(
         session_usernames.append(username)
 
     contact_rows: list[dict[str, Any]] = []
-    contact_source_available = False
     official_account_type_map: dict[str, int] = {}
+    contact_query_method = "sql"
     try:
         with rt_conn.lock:
-            # One full-table query provides every field needed by the list,
-            # including extra_buffer, type flags and avatar URLs. Older DLLs
-            # without exec_query support retain the compact API as a fallback.
-            contact_rows = _query_realtime_contact_rows(rt_conn.handle)
-            if contact_rows:
-                contact_source_available = True
-            else:
-                try:
-                    contact_rows = _wcdb_get_contacts_compact(rt_conn.handle, [])
-                    contact_source_available = True
-                except Exception:
-                    contact_rows = []
+            # 全表查询成功但零行是有效结果；只有查询失败才尝试旧版备用接口。
+            try:
+                contact_rows = _query_realtime_contact_rows(rt_conn.handle)
+            except Exception as exc:
+                logger.warning(
+                    "[contacts] 实时全表查询失败，尝试备用接口 account=%s error=%s",
+                    account_dir.name, exc,
+                )
+                contact_query_method = "compact"
+                contact_rows = _wcdb_get_contacts_compact(rt_conn.handle, [])
             official_account_type_map = _query_realtime_official_account_type_map(rt_conn.handle)
-    except Exception:
-        contact_rows = []
-        contact_source_available = False
-        official_account_type_map = {}
+    except Exception as exc:
+        logger.warning("[contacts] 实时联系人查询失败 account=%s error=%s", account_dir.name, exc)
+        raise HTTPException(status_code=400, detail=f"Realtime contact lookup failed: {exc}") from exc
+    logger.info(
+        "[contacts] 实时联系人查询完成 account=%s method=%s rows=%d sessions=%d",
+        account_dir.name, contact_query_method, len(contact_rows), len(session_usernames),
+    )
 
     contact_rows_by_username: dict[str, dict[str, Any]] = {}
     for row in contact_rows:
@@ -1859,8 +1863,7 @@ def _collect_contacts_for_account_realtime(
         if username in row_usernames or username in seen_contacts:
             continue
         # 只用 session 兜底群聊。私聊/公众号若不在通讯录表，不应计入通讯录分类。
-        # 只有联系人接口本身不可用时，才退回 session 全量口径。
-        if contact_source_available and "@chatroom" not in username:
+        if "@chatroom" not in username:
             continue
         item = _contact_item_from_session(
             account_dir=account_dir,

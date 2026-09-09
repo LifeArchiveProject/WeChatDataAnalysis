@@ -4326,19 +4326,24 @@ def _iter_realtime_rows_for_conversation(
     )
     yielded = 0
     self_username = _wcdb_resolve_account_native_wxid(account_dir, rt_conn)
-    for item in source_rows:
-        if not isinstance(item, dict):
-            continue
-        row = _normalize_realtime_message_item_for_export(
-            item,
-            account_dir=account_dir,
-            conv_username=conv_username,
-            self_username=self_username,
-        )
-        if row.local_id <= 0:
-            continue
-        yielded += 1
-        yield row
+    try:
+        for item in source_rows:
+            if not isinstance(item, dict):
+                continue
+            row = _normalize_realtime_message_item_for_export(
+                item,
+                account_dir=account_dir,
+                conv_username=conv_username,
+                self_username=self_username,
+            )
+            if row.local_id <= 0:
+                continue
+            yielded += 1
+            yield row
+    finally:
+        # 消费者暂停或提前结束时，立即释放底层原生消息游标。
+        if hasattr(source_rows, 'close'):
+            source_rows.close()
     logger.info(
         "[chat-export] realtime message stream completed account=%s conversation=%s rows=%s",
         account_dir.name,
@@ -4600,7 +4605,15 @@ def _iter_rows_for_conversation(
     def sort_key(r: _Row) -> tuple[int, int, int]:
         return (int(r.create_time or 0), int(r.sort_seq or 0), int(r.local_id or 0))
 
-    return heapq.merge(*streams, key=sort_key)
+    def merged_rows():
+        try:
+            yield from heapq.merge(*streams, key=sort_key)
+        finally:
+            # heapq.merge 不负责关闭输入流；需主动释放各分库的 SQLite 连接。
+            for stream in streams:
+                stream.close()
+
+    return merged_rows()
 
 
 def _incremental_row_key(row: _Row) -> tuple[int, int, int, int, str, str]:

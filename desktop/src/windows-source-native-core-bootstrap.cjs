@@ -104,18 +104,26 @@ function validatePin(input) {
     "runtimeManifestSha256",
     "expiresAtUnix",
   ];
+  const installer = input?.schemaVersion === 3;
+  if (installer) keys.splice(keys.indexOf("runtimeManifestSha256"), 1, "nativeFiles", "buildId");
   assertExactKeys(input, keys, "Windows public source-runtime pin");
+  if (installer) {
+    assertExactKeys(input.nativeFiles, [...PAYLOAD_FILES.keys()].map(name => path.basename(name)), "固定原生组件文件");
+    if (!BUILD_ID_PATTERN.test(String(input.buildId || "")) ||
+        Object.values(input.nativeFiles).some(hash => !SHA256_PATTERN.test(String(hash)) || hash === "0".repeat(64))) {
+      throw new Error("安装包原生组件固定摘要无效");
+    }
+  }
   if (
-    input.schemaVersion !== 2 ||
+    ![2, 3].includes(input.schemaVersion) ||
     input.platform !== "win32" ||
     input.architecture !== "x64" ||
     input.publisherRepository !== PUBLISHER_REPOSITORY ||
-    !RELEASE_TAG_PATTERN.test(String(input.releaseTag || "")) ||
-    input.assetName !== ASSET_NAME ||
+    !(installer ? /^v\d+\.\d+\.\d+$/.test(input.releaseTag) : RELEASE_TAG_PATTERN.test(String(input.releaseTag || ""))) ||
+    input.assetName !== (installer ? `WeChatDataAnalysis-${input.releaseTag.slice(1)}-Setup.exe` : ASSET_NAME) ||
     !SHA256_PATTERN.test(String(input.assetSha256 || "")) ||
     input.assetSha256 === "0".repeat(64) ||
-    !SHA256_PATTERN.test(String(input.runtimeManifestSha256 || "")) ||
-    input.runtimeManifestSha256 === "0".repeat(64) ||
+    (!installer && (!SHA256_PATTERN.test(String(input.runtimeManifestSha256 || "")) || input.runtimeManifestSha256 === "0".repeat(64))) ||
     !Number.isSafeInteger(input.expiresAtUnix) ||
     input.expiresAtUnix <= 0
   ) {
@@ -231,8 +239,9 @@ function downloadPinnedRelease(archivePath, pin, { env, spawnSyncImpl }) {
       spawnSyncImpl,
     }
   );
-  const stat = assertRegularFile(archivePath, MAX_ARCHIVE_BYTES);
-  if (stat.size > MAX_ARCHIVE_BYTES || sha256File(archivePath) !== pin.assetSha256) {
+  const maxBytes = pin.schemaVersion === 3 ? 1024 * 1024 * 1024 : MAX_ARCHIVE_BYTES;
+  assertRegularFile(archivePath, maxBytes);
+  if (sha256File(archivePath) !== pin.assetSha256) {
     throw new Error("WCDA 公共 Windows 源码运行时的固定 SHA-256 校验失败");
   }
 }
@@ -282,6 +291,19 @@ function extractArchive(archivePath, destination, { env, spawnSyncImpl }) {
       spawnSyncImpl,
     }
   );
+}
+
+function extractInstallerRuntime(archivePath, destination, { env, spawnSyncImpl }) {
+  // 只解包，不运行安装程序；安装包和三个组件均按固定摘要校验。
+  // NSIS 自解压包需要完整 7z；7za 精简版不包含 NSIS 解码器。
+  const sevenZip = path.join(path.dirname(require.resolve("electron-winstaller/package.json")), "vendor", "7z.exe");
+  const options = { env: publicDownloadEnvironment(env), spawnSyncImpl, label: "提取发布版只读原生组件" };
+  runTool(sevenZip, ["e", archivePath, `-o${destination}`, "$PLUGINSDIR/app-64.7z", "-y"], options);
+  const inner = path.join(destination, "app-64.7z");
+  assertRegularFile(inner, 1024 * 1024 * 1024);
+  runTool(sevenZip, ["e", inner, `-o${path.join(destination, "native-core")}`,
+    ...[...PAYLOAD_FILES.keys()].map(name => `resources/backend/native/${path.basename(name)}`), "-y"], options);
+  fs.unlinkSync(inner);
 }
 
 function walkRuntimeDirectory(root) {
@@ -403,6 +425,21 @@ function validateWindowsSourceRuntimeDirectory(
   }
   const tree = walkRuntimeDirectory(directory);
   assertExactSet(tree.directories, RUNTIME_DIRECTORIES, "Windows source-runtime directory");
+  if (pin.schemaVersion === 3) {
+    assertExactSet(tree.files, new Set(PAYLOAD_FILES.keys()), "发布版原生组件文件");
+    for (const relative of PAYLOAD_FILES.keys()) {
+      const file = path.join(directory, ...relative.split("/"));
+      assertRegularFile(file);
+      if (sha256File(file) !== pin.nativeFiles[path.basename(relative)]) throw new Error(`原生组件摘要不匹配：${relative}`);
+    }
+    const paths = runtimePaths(directory);
+    const policy = resolveNativeCoreRuntimePolicy({ env: {}, isPackaged: false, nativeDir: paths.nativeDir, nowUnix, platform: "win32" });
+    if (policy.artifactState !== "source-public" || policy.manifest.buildId !== pin.buildId || policy.manifest.buildExpiresAtUnix !== pin.expiresAtUnix) {
+      throw new Error("发布版组件不符合固定的源码只读运行时要求");
+    }
+    assertWindowsNativeAsrCapability({ nativeDir: paths.nativeDir, manifest: policy.manifest });
+    return { ...paths, manifest: policy.manifest, pin, policy };
+  }
   assertExactSet(tree.files, RUNTIME_FILES, "Windows source-runtime file");
 
   const manifestPath = path.join(directory, RUNTIME_MANIFEST_FILE);
@@ -519,11 +556,12 @@ function ensureWindowsSourceNativeCore({
 
   const nonce = `${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
   const temporary = path.join(root, `.${cacheKey}.tmp-${nonce}`);
-  const archivePath = path.join(root, `.${cacheKey}.download-${nonce}.tar.gz`);
+  const archivePath = path.join(root, `.${cacheKey}.download-${nonce}${pin.schemaVersion === 3 ? ".exe" : ".tar.gz"}`);
   fs.mkdirSync(temporary);
   try {
     downloadPinnedRelease(archivePath, pin, { env, spawnSyncImpl });
-    extractArchive(archivePath, temporary, { env, spawnSyncImpl });
+    if (pin.schemaVersion === 3) extractInstallerRuntime(archivePath, temporary, { env, spawnSyncImpl });
+    else extractArchive(archivePath, temporary, { env, spawnSyncImpl });
     validateWindowsSourceRuntimeDirectory(temporary, pin, { nowUnix });
     if (fs.existsSync(runtimeDir)) removeCacheEntry(root, runtimeDir);
     fs.renameSync(temporary, runtimeDir);

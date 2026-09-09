@@ -49,6 +49,61 @@ test("installer writes desktop settings as UTF-8 without a BOM", () => {
   assert.doesNotMatch(settingsScript, /\[System\.IO\.File\]::WriteAllText\(\$DefaultSettingsPath/);
 });
 
+test("PowerShell source keeps its UTF-8 BOM so Windows PowerShell can parse Chinese comments", () => {
+  // Windows PowerShell 5.1 对脚本源码也按 BOM 判断编码。
+  assert.deepEqual([...fs.readFileSync(settingsScriptPath).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+});
+
+test("installer text reads declare UTF-8 even when the host default code page is UTF-8", () => {
+  // UTF-8 系统上隐式解码也可能通过运行测试，因此还需固定文件读取的编码约定。
+  const reads = settingsScript.split(/\r?\n/).filter((line) => /\bGet-Content\b/.test(line) && !/^\s*#/.test(line));
+  assert.ok(reads.length > 0);
+  for (const line of reads) assert.match(line, /-Encoding\s+UTF8\b/i);
+});
+
+test(
+  "installer preserves Unicode settings when updating and returns an explicit UTF-16LE path file",
+  { skip: process.platform !== "win32" },
+  () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "wda-installer-unicode-"));
+    const settingsPath = path.join(root, "desktop-settings.json");
+    const resultPath = path.join(root, "result.txt");
+    const outputDir = String.raw`F:\软件备份\𠮷\wechat-data-analysis`;
+    const selectedOutput = String.raw`F:\聊天记录 & 备份\输出📁`;
+    const commonArgs = ["-DefaultSettingsPath", settingsPath, "-DefaultOutputPath", path.join(root, "default")];
+    try {
+      fs.writeFileSync(settingsPath, JSON.stringify({ outputDir, label: "中文配置" }), "utf8");
+      const firstRead = runInstallerSettingsHelper(["-Mode", "Read", ...commonArgs]);
+      assert.equal(firstRead.status, 0, firstRead.stderr);
+      assert.equal(firstRead.stdout, outputDir);
+
+      const write = runInstallerSettingsHelper([
+        "-Mode", "Write", ...commonArgs, "-SelectedOutputPath", selectedOutput,
+      ]);
+      assert.equal(write.status, 0, write.stderr);
+      assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, "utf8")), {
+        outputDir, label: "中文配置", pendingOutputDir: selectedOutput,
+      });
+
+      const read = runInstallerSettingsHelper(["-Mode", "Read", ...commonArgs, "-ResultPath", resultPath]);
+      assert.equal(read.status, 0, read.stderr);
+      assert.equal(read.stdout, "");
+      const bytes = fs.readFileSync(resultPath);
+      assert.deepEqual([...bytes.subarray(0, 2)], [0xff, 0xfe]);
+      assert.equal(bytes.toString("utf16le").replace(/^\uFEFF/, ""), selectedOutput);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+);
+
+test("installer reads the Unicode result file instead of using captured stdout as a path", () => {
+  const body = installerScript.match(/Function WDA_InitOutputDirSelection(?<body>[^]*?)FunctionEnd/)?.groups?.body;
+  assert.ok(body);
+  assert.match(body, /-ResultPath "\$PLUGINSDIR\\wda-output-dir-result\.txt"/);
+  assert.match(body, /FileReadUTF16LE \$2 \$1/);
+});
+
 test("installer keeps filename-based AppData as a legacy read and uninstall alias", () => {
   assert.match(installerScript, /WDA_FILENAME_SETTINGS_PATH/);
   assert.match(installerScript, /WDA_FILENAME_OUTPUT_DIR/);
