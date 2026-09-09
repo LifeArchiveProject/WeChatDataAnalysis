@@ -104,3 +104,14 @@ pnpm-lock.yaml
 
 # Local scratch file accidentally generated during development
 /bento-summary.html
+/tmp/local-search-validation/
+
+# 本地跨平台验收的传输包、运行目录与远程连接辅助脚本
+/tmp/macos-ai-*
+/tmp/macos-public-manifest.json
+/tmp/mac-desktop-probe.cjs
+/tmp/mac-ui-check.cjs
+/tmp/mac-user-ui.cjs
+/tmp/mac-e2e-private.json
+/tmp/ai-frozen-check/
+/tmp/ai-macos-regression-*/

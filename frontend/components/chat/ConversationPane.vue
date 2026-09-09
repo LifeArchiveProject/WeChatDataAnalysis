@@ -1,9 +1,9 @@
 <template>
   <div class="conversation-pane flex-1 flex flex-col min-h-0 min-w-0">
     <div v-if="selectedContact" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
-      <div class="chat-header">
-        <div class="flex items-center gap-3">
-          <h2 class="chat-header-title text-base font-medium" :class="{ 'privacy-blur': privacyMode }">
+      <div class="chat-header" :class="{ 'chat-header-ai': aiSidebarOpen }">
+        <div class="flex min-w-0 items-center gap-3">
+          <h2 class="chat-header-title truncate text-base font-medium" :class="{ 'privacy-blur': privacyMode }">
             {{ selectedContact ? selectedContact.name : '' }}
           </h2>
           <button
@@ -22,6 +22,7 @@
           </button>
         </div>
         <div class="ml-auto flex items-center gap-2">
+          <button type="button" class="header-btn-icon" :class="{ 'header-btn-icon-active': aiSidebarOpen }" aria-label="AI 助手" title="AI 助手" :aria-pressed="aiSidebarOpen" @click="toggleAiSidebar">AI</button>
           <button
             type="button"
             class="header-btn-icon"
@@ -196,3 +197,12 @@ export default defineComponent({
   }
 })
 </script>
+
+<style scoped>
+/* 侧栏打开后给工具栏单独一行，保留聊天内容空间，避免会话名被挤成竖排。 */
+@media (min-width: 1001px) and (max-width: 1440px) {
+  .chat-header-ai { height: auto; min-height: 56px; flex-shrink: 0; flex-wrap: wrap; gap: 4px; padding-top: 8px; padding-bottom: 8px; }
+  .chat-header-ai > div:first-child { width: 100%; }
+  .chat-header-ai > div:last-child { margin-left: 0; flex-wrap: wrap; }
+}
+</style>

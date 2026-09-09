@@ -151,7 +151,6 @@ async function main() {
     log(`[native-core] source=${sourceNativeCore.reason} profile=source-public`);
   }
 
-  const npmCommand = "npm";
   // Track electron.exe itself instead of an intermediate command shell.
   const electronCommand = require("electron");
   const children = new Set();
@@ -167,7 +166,9 @@ async function main() {
   process.on("SIGINT", () => shutdown(130));
   process.on("SIGTERM", () => shutdown(143));
 
-  const frontend = spawnLogged(npmCommand, ["run", "dev"], { cwd: frontendDir, env: sharedEnv }, "[frontend]");
+  // 复用启动脚本的 Node，避免系统 npm 的脚本入口切回旧版 Node。
+  const frontend = spawnLogged(process.execPath, [path.join(frontendDir, "node_modules", "@nuxt", "cli", "bin", "nuxi.mjs"), "dev"],
+    { cwd: frontendDir, env: sharedEnv, shell: false }, "[frontend]");
   children.add(frontend);
   frontend.once("exit", (code, signal) => {
     log(`frontend exited code=${code} signal=${signal}`);
