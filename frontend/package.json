@@ -11,6 +11,10 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
+    "@assistant-ui/core": "0.3.17",
+    "@assistant-ui/store": "0.3.12",
+    "@assistant-ui/tap": "0.9.16",
+    "@assistant-ui/vue": "file:vendor/assistant-ui-vue",
     "@fortawesome/fontawesome-free": "6.5.1",
     "@nuxtjs/tailwindcss": "^6.14.0",
     "@pinia/nuxt": "^0.11.2",
