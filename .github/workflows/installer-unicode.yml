@@ -1,0 +1,56 @@
+name: Windows Installer Unicode
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/installer-unicode.yml'
+      - '.github/workflows/release.yml'
+      - '.gitattributes'
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/installer-unicode.yml'
+      - '.github/workflows/release.yml'
+      - '.gitattributes'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-unicode-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unicode-paths:
+    name: Windows installer Unicode paths
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      # 仅测试安装器函数，不构建完整应用，也不需要签名或真实用户数据。
+      - name: Install locked test dependencies
+        working-directory: desktop
+        run: npm ci --ignore-scripts
+      - name: Verify Unicode install, upgrade, settings and data migration
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          node --test `
+            tests/desktop-settings.test.cjs `
+            tests/output-dir.test.cjs `
+            tests/installer-output-dir.test.cjs `
+            tests/installer-safety.test.cjs `
+            tests/installer-unicode-integration.test.cjs
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Windows installer Unicode regression tests failed.'
+          }

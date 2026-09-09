@@ -11,28 +11,27 @@ const helperPath = path.join(desktopRoot, "scripts", "installer-output-dir.ps1")
 const installerSource = fs.readFileSync(path.join(desktopRoot, "scripts", "installer-custom.nsh"), "utf8");
 const powershellPath = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 
-function findCompiler() {
-  if (process.env.NSIS_MAKENSIS) return process.env.NSIS_MAKENSIS;
-  const cacheRoot = process.env.ELECTRON_BUILDER_CACHE || path.join(process.env.LOCALAPPDATA || "", "electron-builder", "Cache");
-  const nsisRoot = path.join(cacheRoot, "nsis");
-  if (!fs.existsSync(nsisRoot)) return null;
-  return fs.readdirSync(nsisRoot).sort().reverse()
-    .map((name) => path.join(nsisRoot, name, "makensis.exe"))
-    .find((candidate) => fs.existsSync(candidate));
+async function resolveCompiler() {
+  if (process.env.NSIS_MAKENSIS) return { path: process.env.NSIS_MAKENSIS };
+  // 使用锁定的打包器解析工具及 NSISDIR，兼容新旧缓存布局；工具缺失时下载，失败则测试失败。
+  const { getMakeNsisPath } = require("app-builder-lib/out/toolsets/windows");
+  const { build } = require("../package.json");
+  return getMakeNsisPath(build.toolsets?.nsis, build.nsis?.customNsisBinary);
 }
 
-function run(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8", windowsHide: true, timeout: 30000 });
+function run(command, args, env = {}) {
+  const result = spawnSync(command, args, {
+    encoding: "utf8", windowsHide: true, timeout: 30000, env: { ...process.env, ...env },
+  });
   assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
   return result;
 }
 
 // 测试只编译目录初始化和保存函数；所有配置与输出均位于独立临时目录。
 test("compiled NSIS and PowerShell preserve Unicode paths through install and upgrade", {
-  skip: process.platform !== "win32" ? "Windows integration test"
-    : !findCompiler() && process.env.WDA_REQUIRE_NSIS_TEST !== "1" && "NSIS compiler unavailable; set NSIS_MAKENSIS",
-}, () => {
-  assert.ok(findCompiler(), "NSIS compiler is required; set NSIS_MAKENSIS or populate the electron-builder cache");
+  skip: process.platform !== "win32",
+}, async () => {
+  const compiler = await resolveCompiler();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wda-nsis-unicode-"));
   try {
     const configRoot = path.join(root, "中文配置 & 空格");
@@ -66,7 +65,7 @@ test("compiled NSIS and PowerShell preserve Unicode paths through install and up
     ].join("\n");
     const scriptPath = path.join(root, "probe.nsi");
     fs.writeFileSync(scriptPath, "\uFEFF" + script, "utf8");
-    run(findCompiler(), ["/V2", scriptPath]);
+    run(compiler.path, ["/V2", scriptPath], compiler.env);
 
     const chineseOutput = path.join(configRoot, "软件备份", "𠮷", "wechat-data-analysis");
     const pendingOutput = path.join(configRoot, "聊天记录 & 空格-$folder-$(1+1)-`tick", "输出📁");
