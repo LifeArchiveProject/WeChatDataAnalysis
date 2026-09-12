@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   scenes / group.js — 群聊（9 项）
+   scenes / group.js — 群聊（8 项）
    每个场景：({ gsap, kit, tl, root, reduced, item }) => 把动画编进 tl（可返回 tl）。
    约定：所有补间都挂在 tl 上（不要裸调 gsap.to），舞台切换时靠 kill(tl) 清场。
 
@@ -172,40 +172,6 @@ function hiddenRow(gsap, chat, side, content, opts) {
   const r = chat.row(side, content, opts);
   gsap.set(r, { display: "none" });
   return r;
-}
-
-/* ── 群成员好友申请清单：本人 / 已有好友不可选，只留下一个明确的待添加人 ── */
-function friendMemberPicker(kit, members, parent) {
-  const el = kit.h("div", "pd-group-friend-picker");
-  const head = kit.h("div", "pd-group-friend-picker__h");
-  head.append(kit.h("i", "pd-group-friend-picker__k", "来源群成员"), kit.h("b", "", "滚动查看"));
-  const list = kit.h("div", "pd-group-friend-picker__list");
-  const rows = members.map(([name, detail, badge, tone = "off"]) => {
-    const row = kit.h("div", "pd-group-friend-picker__r");
-    const check = kit.h("i", "pd-group-friend-check");
-    check.appendChild(kit.icon("check"));
-    const copy = kit.h("div", "pd-group-friend-picker__t");
-    copy.append(kit.h("b", "", name), kit.h("i", "", detail));
-    const state = kit.h("b", `pd-group-inv is-${tone}`, badge);
-    row.append(check, kit.avatar(name[0], tone === "off" ? "muted" : "them"), copy, state);
-    list.appendChild(row);
-    return Object.assign(row, { el: row, check, badge: state });
-  });
-  el.append(head, list);
-  parent.appendChild(el);
-  return { el, head, list, rows };
-}
-
-function chooseFriendMember(gsap, row) {
-  const t = gsap.timeline();
-  t.call(() => {
-    row.el.classList.add("is-selected");
-    row.check.classList.add("is-on");
-    row.badge.textContent = "已选";
-    row.badge.className = "pd-group-inv is-sent";
-  })
-    .fromTo(row.check, { opacity: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 0.28, ease: "back.out(2.8)" });
-  return t;
 }
 
 /* ───────────────────────── 场景 ───────────────────────── */
@@ -502,86 +468,6 @@ function groupAddMembers({ gsap, kit, tl }) {
   return tl;
 }
 
-/* ── 群成员加好友 ──
-      触发：运营从来源群里找一个尚未成为好友的人。
-      选择：滚动成员清单，跳过本人和已有好友，只显式勾选一名非好友。
-      执行：先生成草稿，用户启动后停在「申请待通过」，不把申请画成已加好友。 ── */
-function groupAddFriends({ gsap, kit, tl }) {
-  const SOURCE = "星辰科技客户群";
-  const TARGET = "客户 · 陈总";
-  const { chat } = clientChat(kit, {
-    rows: 1,
-    lines: [["l", "这位新同事也在群里，先确认一下", { name: "王总", av: "王" }]],
-  });
-  const strip = kit.scenario("来源群出现新联系人 · 先发好友验证");
-  const flow = kit.workflow([
-    { label: "选择来源群", icon: "users" },
-    { label: "跳过本人 / 已有好友", icon: "check" },
-    { label: "显式勾选 1 名非好友", icon: "user" },
-    { label: "创建草稿", icon: "edit" },
-    { label: "用户启动任务", icon: "bolt" },
-  ]);
-  const panel = autoPanel(kit, gsap, { kicker: "CONTACT", title: "群成员加好友" });
-  const source = kit.h("div", "pd-group-friend-source");
-  const sourceValue = kit.h("b", "pd-group-friend-source__v", "请选择群聊");
-  source.append(kit.h("i", "pd-group-friend-source__k", "来源群"), sourceValue);
-  panel.body.appendChild(source);
-
-  const picker = friendMemberPicker(kit, [
-    ["我 · 当前账号", "账号本人", "跳过", "off"],
-    ["客户 · 王总", "已有好友", "跳过", "off"],
-    [TARGET, "非好友 · 可添加", "待选择", "off"],
-    ["客户 · 赵主管", "非好友 · 可添加", "待选择", "off"],
-    ["客户 · 李姐", "非好友 · 可添加", "待选择", "off"],
-  ], panel.body);
-
-  const draft = kit.h("div", "pd-group-friend-draft");
-  const draftHead = kit.h("div", "pd-group-friend-draft__h");
-  draftHead.append(kit.h("i", "pd-group-friend-draft__k", "DRAFT"), kit.h("b", "", "好友申请任务"));
-  const draftMeta = kit.h("div", "pd-group-friend-draft__meta");
-  draftMeta.append(kit.h("span", "", `来源 · ${SOURCE}`), kit.h("span", "", `目标 · ${TARGET}`));
-  const draftState = kit.h("i", "pd-group-friend-state", "草稿 · 未开始");
-  const start = kit.h("b", "pd-btn pd-btn--amber pd-group-friend-start", "启动草稿");
-  draft.append(draftHead, draftMeta, draftState, start);
-  panel.body.appendChild(draft);
-  gsap.set(draft, { display: "none" });
-
-  const sys = hiddenSys(gsap, kit, chat, `已向<b>${TARGET}</b>发出好友申请 · <i class="pd-tag">待通过</i>`);
-
-  tl.add(strip.in(), 0.05)
-    .add(flow.in(), "<+0.1")
-    .add(panel.in(), 0.45)
-    .add(flow.step(0), "<+0.15")
-    .add(kit.scramble(sourceValue, SOURCE, { duration: 0.45 }), "<+0.1")
-    .add(kit.flash(source, { color: "amber", duration: 0.45 }), "<")
-    .add(flow.step(1), ">+0.25")
-    .add(setBadge(gsap, kit, picker.rows[0], "跳过", "off"), "<+0.1")
-    .add(setBadge(gsap, kit, picker.rows[1], "跳过", "off"), ">+0.08")
-    .to(picker.list, { scrollTop: 54, duration: 0.55, ease: "power2.out" }, ">+0.15")
-    .add(flow.step(2), ">+0.25")
-    .add(chooseFriendMember(gsap, picker.rows[2]), "<+0.1")
-    .add(kit.flash(picker.rows[2].el, { color: "amber", duration: 0.55 }), "<")
-    .add(flow.step(3), ">+0.3")
-    .set(draft, { display: "block" }, ">-0.05")
-    .add(kit.pop(draft), "<")
-    .add(flow.step(4), ">+0.35")
-    .call(() => {
-      start.textContent = "运行中";
-      start.className = "pd-btn pd-btn--neon pd-group-friend-start";
-      draftState.textContent = "运行中 · 等待结果";
-    }, [], "<+0.12")
-    .add(kit.flash(start, { color: "amber", duration: 0.5 }), "<")
-    .call(() => { draftState.textContent = "申请待通过"; }, [], ">+0.3")
-    .add(panel.out(), ">+0.15")
-    .set(sys, { display: "block" }, ">-0.1")
-    .add(kit.pop(sys), "<")
-    .add(kit.flash(sys, { color: "amber", duration: 0.6 }), "<")
-    .add(flow.done(), "<")
-    .add(kit.ok("申请待通过", { en: "PENDING" }), ">-0.3")
-    .add(strip.result("好友申请待通过"), "<");
-  return tl;
-}
-
 /* ── 邀请群成员 ──
       触发：名单比群成员多，还有人没进群。
       执行：按名单逐个发邀请，状态停在「已邀请 · 待确认」→ 邀请已发出。
@@ -745,7 +631,6 @@ export default {
   "group-create": groupCreate,
   "group-rename": groupRename,
   "group-add-members": groupAddMembers,
-  "group-add-friends": groupAddFriends,
   "group-invite-members": groupInviteMembers,
   "group-remove-members": groupRemoveMembers,
   "group-leave": groupLeave,
@@ -879,39 +764,5 @@ export const css = `
 
 /* 退群之后：聊天区只剩一行「你已退出」，居中 */
 .pd-group-emptied { justify-content: center; }
-
-/* 群成员加好友：来源群 + 可滚动成员清单 + 草稿状态 */
-.pd-group-friend-source {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px;
-  border: 1px solid var(--pd-line-strong); border-radius: 3px; background: rgba(255, 255, 255, 0.03);
-}
-.pd-group-friend-source__k,
-.pd-group-friend-draft__k {
-  font-family: var(--pd-mono); font-style: normal; font-size: 8.5px; letter-spacing: 0.12em; color: var(--pd-faint);
-}
-.pd-group-friend-source__v { min-width: 0; overflow: hidden; color: var(--pd-amber); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.pd-group-friend-picker { display: flex; min-height: 0; flex-direction: column; gap: 5px; }
-.pd-group-friend-picker__h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.pd-group-friend-picker__h b { font-family: var(--pd-mono); font-size: 8.5px; font-weight: 400; letter-spacing: 0.08em; color: var(--pd-faint); }
-.pd-group-friend-picker__list { display: flex; height: 112px; flex-direction: column; gap: 4px; overflow-y: auto; padding-right: 2px; }
-.pd-group-friend-picker__r { display: flex; min-height: 27px; align-items: center; gap: 6px; padding: 3px 5px; border: 1px solid transparent; border-radius: 3px; }
-.pd-group-friend-picker__r.is-selected { border-color: rgba(255, 194, 75, 0.5); background: rgba(255, 194, 75, 0.08); }
-.pd-group-friend-picker__r .pd-av { width: 21px; height: 21px; flex: none; border-radius: 3px; font-size: 9px; }
-.pd-group-friend-check { display: grid; width: 14px; height: 14px; flex: none; place-items: center; border: 1px solid var(--pd-line-strong); border-radius: 2px; color: transparent; }
-.pd-group-friend-check .pd-ic { width: 11px; height: 11px; stroke-width: 2.4; }
-.pd-group-friend-check.is-on { border-color: var(--pd-amber); color: var(--pd-amber); }
-.pd-group-friend-picker__t { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
-.pd-group-friend-picker__t b,
-.pd-group-friend-picker__t i { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pd-group-friend-picker__t b { color: var(--pd-ink); font-size: 10.5px; font-weight: 500; }
-.pd-group-friend-picker__t i { color: var(--pd-faint); font-family: var(--pd-mono); font-size: 8px; font-style: normal; }
-.pd-group-friend-draft { display: flex; flex-direction: column; gap: 5px; padding: 6px 7px; border: 1px solid var(--pd-line-strong); border-radius: 3px; background: rgba(255, 255, 255, 0.035); }
-.pd-group-friend-draft__h { display: flex; align-items: center; gap: 7px; }
-.pd-group-friend-draft__h b { color: var(--pd-ink); font-size: 10.5px; font-weight: 500; }
-.pd-group-friend-draft__meta { display: flex; flex-direction: column; gap: 2px; color: var(--pd-dim); font-family: var(--pd-mono); font-size: 8px; }
-.pd-group-friend-state { color: var(--pd-amber); font-family: var(--pd-mono); font-size: 9px; font-style: normal; letter-spacing: 0.05em; }
-.pd-group-friend-start { align-self: flex-end; min-width: 72px; }
-.pd-group-friend-start.pd-btn--neon { color: var(--pd-neon); }
-
 .pd-screen .pd-group-left b { color: var(--pd-amber); font-weight: 500; }
 `;

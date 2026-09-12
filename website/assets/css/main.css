@@ -187,7 +187,6 @@ em { font-style: normal; }
 }
 .nav__brand { display: flex; align-items: center; gap: 12px; }
 .nav__logo { width: 30px; height: 30px; border-radius: 8px; filter: drop-shadow(0 0 10px rgba(7, 193, 96, 0.5)); }
-.nav__tagline { color: var(--ink); font-family: var(--font-serif); font-size: clamp(12px, 1.1vw, 15px); letter-spacing: 0.04em; line-height: 1.2; white-space: nowrap; }
 .nav__word { font-size: 12px; letter-spacing: 0.14em; color: var(--ink-dim); }
 .nav__links { display: flex; gap: 10px; align-items: center; }
 .nav__gh, .nav__dl {
@@ -252,7 +251,7 @@ main { position: relative; z-index: 1; }
 }
 .ht-line { display: block; overflow: hidden; padding-block: 0.08em; margin-block: -0.08em; }
 .ht-mask { display: inline-block; will-change: transform; }
-/* 双区构图：巨字与 61 项清单同屏共存，字号随视口高收缩，谁也不压谁 */
+/* 双区构图：巨字与 53 项清单同屏共存，字号随视口高收缩，谁也不压谁 */
 .ht-line--1 { text-align: left; font-size: min(clamp(1.7rem, 4.4vw, 4.2rem), 9vh); }
 .ht-line--2 { text-align: right; font-size: min(clamp(2.6rem, 8.8vw, 8.6rem), 19vh); margin-top: 0.02em; }
 /* 实心霓虹（描边中文在这个字号下会显乱），与终幕统一 */
@@ -312,7 +311,6 @@ main { position: relative; z-index: 1; }
 .hm__stage .pd-hud__name { font-size: clamp(13px, 1.1vw, 16px); }
 .hm__stage .pd-hud__cap { font-size: clamp(10.5px, 0.85vw, 12px); }
 .hm__stage .pd-screenbox { box-shadow: 0 26px 70px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(61, 242, 141, 0.05); }
-.hm__demo-note { margin-top: 9px; color: var(--ink-dim); font-size: 10px; line-height: 1.5; }
 .hm__read {
   display: flex; align-items: center; gap: 10px;
   font-size: clamp(11px, 1.2vw, 13px); letter-spacing: 0.14em; color: var(--ink-dim);
@@ -348,7 +346,7 @@ main { position: relative; z-index: 1; }
 }
 .hm__headrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
 .hm__head { display: block; }
-/* 标题行尾的执行读数：61 项逐条切换，与清单里的对应项、刊头计数器三者联动 */
+/* 标题行尾的执行读数：53 项逐条切换，与清单里的对应项、刊头计数器三者联动 */
 .hm__exec {
   display: inline-flex; align-items: baseline; gap: 8px;
   font-size: clamp(0.95rem, 1.15vw, 1.15rem); letter-spacing: 0.1em;
@@ -372,8 +370,8 @@ main { position: relative; z-index: 1; }
   transition: text-shadow 0.35s;
 }
 .hm__head:hover .hm__title em { text-shadow: 0 0 52px rgba(255, 194, 75, 0.8), 0 2px 20px rgba(4, 8, 6, 0.8); }
-/* 六栏权限清单：功能模块 61 项一次性全部摊开（补录 17 项占双栏对分），纯排版无框 */
-/* 七组 61 项在左栏按 CSS 多列自动平衡（组头不与首项分离），栏数按视口高切换：≥700 高 3 栏、更矮 4 栏 */
+/* 六栏权限清单：五大模块 53 项一次性全部摊开（补录 17 项占双栏对分），纯排版无框 */
+/* 六组 53 项在左栏按 CSS 多列自动平衡（组头不与首项分离），栏数按视口高切换：≥700 高 3 栏、更矮 4 栏 */
 .hm__grid {
   columns: var(--hm-cols, 3); column-gap: clamp(12px, 1.6vw, 24px); column-fill: balance;
   padding-top: 2px; min-width: 0;
@@ -997,7 +995,7 @@ main { position: relative; z-index: 1; }
   .ht-line--2 { text-align: left; font-size: min(clamp(2.2rem, 11vw, 4.2rem), 8.4vh); }
   .hero__cta { left: 20px; right: auto; bottom: 9vh; flex-direction: row; align-items: center; gap: 26px; }
   .hero__plat { display: none; }
-  /* 窄屏：清单改为分组流式排版（仍是 61 项全量），CTA 彻底让路（导航栏保留下载入口） */
+  /* 窄屏：清单改为分组流式排版（仍是 53 项全量），CTA 彻底让路（导航栏保留下载入口） */
   .hero__cta { opacity: 0 !important; pointer-events: none; }
   /* 窄屏：manifest 不再贴底，而是进入文档流（顶边由 main.js 量巨字底边给出），首幕随内容自然变高；舞台全宽在清单上方 */
   .hero { padding-bottom: 72px; }
@@ -1045,150 +1043,6 @@ main { position: relative; z-index: 1; }
   .dhud__left { flex-direction: column; gap: 4px; }
   .river-gates i { display: none; }
   .river-exits span { padding: 6px 10px; font-size: 10px; }
-}
-
-/* ─────────────────────────── hero manifest layout ─────────────────────────── */
-
-/* 首屏：紧凑品牌标语与高级能力展示。 */
-.hero {
-  min-height: auto;
-  overflow: visible;
-  padding: 112px clamp(20px, 4.8vw, 72px) 70px;
-}
-.hero__manifest {
-  position: relative;
-  left: auto;
-  right: auto;
-  bottom: auto;
-  display: flex;
-  width: min(1200px, 100%);
-  margin: 0 auto;
-  flex-direction: column;
-  gap: 12px;
-  padding: 0;
-}
-.hero__headline {
-  margin: 4px 0 0;
-  font-size: clamp(1.55rem, 3.1vw, 2.8rem);
-  font-weight: 900;
-  line-height: 1.18;
-  letter-spacing: -0.02em;
-  color: var(--ink);
-}
-.hm__headrow { align-items: baseline; gap: 8px 18px; }
-.hm__title { font-size: clamp(0.95rem, 1.3vw, 1.15rem); }
-.hm__exec { font-size: clamp(0.82rem, 1vw, 1rem); }
-.hm__read { display: flex; }
-.hm__body {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
-  align-items: start;
-  gap: clamp(18px, 2.4vw, 30px);
-}
-.hm__grid {
-  grid-area: auto;
-  width: 100%;
-  height: clamp(420px, 68vh, 600px);
-  max-height: calc(100vh - 220px);
-  columns: auto;
-  column-count: auto;
-  column-gap: 0;
-  column-fill: initial;
-  background: rgba(5, 12, 8, 0.88);
-  overflow-x: hidden;
-  overflow-y: auto;
-  padding: 8px 10px 10px 0;
-  border-top: 1px solid var(--line-strong);
-  border-bottom: 1px solid var(--line-strong);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(61, 242, 141, 0.3) transparent;
-}
-.hm__list { list-style: none; margin: 0; padding: 0; }
-.hm__list li { display: block; min-width: 0; }
-.hm__item {
-  appearance: none;
-  -webkit-appearance: none;
-  display: block;
-  width: 100%;
-  margin: 0;
-  padding: 4px 8px;
-  border: 0;
-  border-left: 1px solid transparent;
-  border-radius: 0;
-  background: transparent;
-  color: var(--ink-dim);
-  font: inherit;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  letter-spacing: 0.04em;
-  line-height: 1.45;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  transition: color 0.25s, text-shadow 0.25s, border-color 0.25s, background 0.25s;
-}
-.hm__item:hover { color: var(--amber); background: rgba(255, 194, 75, 0.05); }
-.hm__item.is-live { border-left-color: var(--amber); background: rgba(255, 194, 75, 0.08); }
-.hm__right { grid-area: auto; display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 14px; }
-.hm__stage,
-.hm__detail { width: min(650px, 100%); }
-.hm__stage { grid-area: auto; min-width: 0; position: relative; }
-.hm__stage .pd-screenbox { width: 100%; }
-.hm__detail {
-  min-height: 150px;
-  padding: 18px 20px;
-  border: 1px solid var(--line-strong);
-  border-radius: 4px;
-  background: rgba(8, 16, 11, 0.94);
-}
-.hm__detail h3 { margin-bottom: 9px; font-size: 17px; font-weight: 700; letter-spacing: 0.06em; color: var(--ink); }
-.hm__detail p { color: var(--ink-dim); font-size: 14px; line-height: 1.7; }
-.hm__detail #pro-detail-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
-.hm__detail #pro-detail-tags span {
-  padding: 2px 6px;
-  border: 1px solid rgba(255, 194, 75, 0.4);
-  border-radius: 2px;
-  color: var(--amber);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-.hm__detail #pro-detail-steps { display: grid; gap: 5px; margin: 12px 0 0 20px; color: var(--ink-dim); font-size: 13px; line-height: 1.6; }
-.hm__detail #pro-detail-note { margin-top: 12px; color: var(--ink-dim); font-size: 11px; }
-.hm__get { align-self: flex-start; margin-top: 2px; }
-.hero__ticker { position: absolute; bottom: 0; }
-
-@media (max-width: 960px) {
-  .nav__tagline { max-width: 42vw; overflow: hidden; text-overflow: ellipsis; }
-  .hero { padding: 92px 20px 62px; }
-  .hero__manifest { gap: 10px; }
-  .hm__body { grid-template-columns: 1fr; gap: 16px; }
-  .hm__right { order: 1; width: 100%; }
-  .hm__grid { order: 0; height: 240px; max-height: none; padding-right: 8px; }
-  .hm__list li + li::before { content: none; }
-  .hm__stage, .hm__detail { width: 100%; }
-  .hm__stage .pd-hud--top { display: flex; }
-  .hm__get { margin-top: 0; }
-  .hero__ticker { position: relative; bottom: auto; margin: 24px -20px -62px; }
-}
-
-@media (max-width: 560px) {
-  .nav { padding-inline: 14px; }
-  .nav__brand { gap: 8px; }
-  .nav__tagline { max-width: none; flex: none; font-size: 11px; }
-  .nav__links { gap: 8px; }
-  .nav__gh { padding: 8px 10px; }
-  .nav__gh #gh-stars { display: none; }
-  .nav__dl { padding: 8px 12px; white-space: nowrap; }
-  .hero { padding: 82px 14px 54px; }
-  .hero__headline { font-size: clamp(1.35rem, 7vw, 2rem); }
-  .hm__read { align-items: flex-start; flex-direction: column; gap: 5px; line-height: 1.45; }
-  .hm__headrow { align-items: flex-start; flex-direction: column; gap: 5px; }
-  .hm__title { white-space: normal; }
-  .hm__detail { min-height: 150px; padding: 12px; }
-  .hero__ticker { margin-right: -14px; margin-left: -14px; }
 }
 
 /* ─────────────────────────── reduced motion ─────────────────────────── */
