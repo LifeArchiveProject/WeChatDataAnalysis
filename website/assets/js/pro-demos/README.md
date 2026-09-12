@@ -1,10 +1,14 @@
 # pro-demos — 高级版能力演示引擎
 
-官网「高级版」幕与应用内「高级功能」弹窗共用的一套骨架屏动画：左边能力清单、右边舞台，自动逐项播放，点清单即切换。
+官网「高级版」幕与应用内「高级功能」弹窗共用的一套示例数据动画：左边能力清单、右边舞台，自动逐项播放，点清单即切换。动画仅操作本地 DOM，不连接微信，不执行真实查找、发送或联系人变更。
 调性沿用官网：近黑绿底、琥珀 = 写入动作、霓虹绿 = 成功落库、JetBrains Mono HUD、发丝线、扫描光。
 
+官网主舞台选择功能后保留画面，动画下方显示适用场景与流程示例。`scenario` 为具体用途说明、`scenarios` 为场景标签、`workflow` 为可组合步骤；它们不代表软件内置了消息监听、AI 决策或外部业务系统。
+
+沟通场景参考[腾讯官方的客户联系应用场景](https://cloud.tencent.com/document/product/1739/100914)及[欢迎语与快捷回复培训资料](https://training.tencentads.com/uploads/202206/5e2fI5kw_HYdsV5.pdf)，仅借鉴服务场景，不表示本项目接入了企业微信官方接口。
+
 ```
-catalog.js   53 项能力的唯一清单（key / name 做什么 / caption 怎么做 / use 什么场景 / need 为什么需要 / 分组），三处共用
+catalog.js   61 项能力的唯一清单（key / name 做什么 / caption 怎么做 / use 什么场景 / need 为什么需要 / 分组），三处共用
 kit.js       骨架屏积木（聊天窗、气泡、卡片、光标、菜单、抽屉、表单、代码、印章、通知、朋友圈、会话列表、勾选器、芯片）
 stage.js     舞台 + 清单 + 面板（createProStage / createProList / createProPanel）
 index.js     对外入口：createProPanel(host, { gsap, ... })；汇总 scenes/*.js
