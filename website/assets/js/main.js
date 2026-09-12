@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════
    main.js — 滚动叙事总编排
-   loader → hero（含 54 项高级能力的演示舞台）→ manifesto → decrypt → features
+   loader → hero（含 53 项高级能力的演示舞台）→ manifesto → decrypt → features
    → machine → cta，一条时间轴讲完整个故事。
    ════════════════════════════════════════════════════════════ */
 import { createStage } from "./particles.js";
@@ -358,9 +358,9 @@ function heroReveal(q) {
   }
 }
 
-/* ---------- 高级版装置：54 项高级能力演示（数据来自 pro-demos/catalog.js，与应用内弹窗同源） ---------- */
+/* ---------- 高级版装置：53 项高级能力演示（数据来自 pro-demos/catalog.js，与应用内弹窗同源） ---------- */
 
-// 左栏清单：七组 54 项一次性全部摊开（CSS 多列自动平衡）；点任一项 → 右栏舞台切到它的演示
+// 左栏清单：六组 53 项一次性全部摊开（CSS 多列自动平衡）；点任一项 → 右栏舞台切到它的演示
 function buildManifestGrid() {
   const grid = $("#hm-grid");
   if (!grid) return;
@@ -962,7 +962,7 @@ function buildFeatures() {
   const N = cards.length;
   const META = [
     { name: "聊天记录 1:1 复刻", meta: "全消息类型 · 时间轴跳转 · 高仿界面", desc: "文本、图片、视频、语音、表情、引用、合并转发……逐一还原，样式尽可能与微信保持一致。" },
-    { name: "实时消息同步", meta: "WCDB 直读 · SSE 推送 · 关键词提醒", desc: "直连微信 4.x 的 WCDB；高级版可动态添加关键词，群聊或单聊的新消息命中后立即提醒。" },
+    { name: "实时消息同步", meta: "WCDB 直读 · SSE 推送", desc: "直连微信 4.x 的 WCDB，新消息到达后通过 SSE 增量更新会话界面。" },
     {
       name: "修改与补录 · 随时恢复",
       desc: "从普通消息、媒体到结构化卡片，完整补录与修改能力一次列清。",

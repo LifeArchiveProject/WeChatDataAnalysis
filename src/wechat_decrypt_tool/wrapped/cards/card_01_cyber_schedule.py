@@ -22,6 +22,7 @@ from ...chat_helpers import (
     _should_keep_session,
 )
 from ...logging_config import get_logger
+from .. import resolve_wrapped_self_username
 
 logger = get_logger(__name__)
 
@@ -659,7 +660,10 @@ def _fetch_message_moment_payload(
 
         my_rowid: Optional[int]
         try:
-            r2 = conn.execute("SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1", (str(account_dir.name),)).fetchone()
+            r2 = conn.execute(
+                "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
+                (resolve_wrapped_self_username(account_dir),),
+            ).fetchone()
             my_rowid = int(r2[0]) if r2 and r2[0] is not None else None
         except Exception:
             my_rowid = None
@@ -1402,7 +1406,7 @@ def build_card_01_cyber_schedule(
     `heatmap` can be provided by the caller to reuse computation across cards.
     """
 
-    sender = str(account_dir.name or "").strip()
+    sender = resolve_wrapped_self_username(account_dir)
     heatmap = heatmap or compute_weekday_hour_heatmap(account_dir=account_dir, year=year, sender_username=sender)
 
     narrative = "今年你没有发出聊天消息"

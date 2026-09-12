@@ -24,6 +24,7 @@ from ...chat_helpers import (
     _to_char_token_text,
 )
 from ...logging_config import get_logger
+from .. import resolve_wrapped_self_username
 
 logger = get_logger(__name__)
 
@@ -1138,7 +1139,7 @@ def build_card_00_global_overview(
 ) -> dict[str, Any]:
     """Card #0: 年度全局概览（开场综合页，建议作为第2页）。"""
 
-    sender = str(account_dir.name or "").strip()
+    sender = resolve_wrapped_self_username(account_dir)
     heatmap = heatmap or compute_weekday_hour_heatmap(account_dir=account_dir, year=year, sender_username=sender)
     stats = compute_global_overview_stats(account_dir=account_dir, year=year, sender_username=sender)
 

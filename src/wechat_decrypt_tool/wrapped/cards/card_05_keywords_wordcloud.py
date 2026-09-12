@@ -16,6 +16,7 @@ import jieba
 
 from ...chat_helpers import _decode_message_content, _decode_sqlite_text, _iter_message_db_paths, _quote_ident
 from ...logging_config import get_logger
+from .. import resolve_wrapped_self_username
 
 logger = get_logger(__name__)
 try:
@@ -521,6 +522,7 @@ def _scan_common_phrase_counts(
     max_seen: int | None = None,
 ) -> tuple[Counter[str], dict[str, Any]]:
     start_ts, end_ts = _year_range_epoch_seconds(int(year))
+    my_username = resolve_wrapped_self_username(account_dir) if outgoing_only else ""
     _ = seed  # 保留参数以兼容现有调用；扫描顺序不再使用随机。
 
     db_paths = _iter_message_db_paths(account_dir)
@@ -548,7 +550,7 @@ def _scan_common_phrase_counts(
                 try:
                     r = conn.execute(
                         "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
-                        (str(account_dir.name),),
+                        (my_username,),
                     ).fetchone()
                     if r is not None and r[0] is not None:
                         my_rowid = int(r[0])
@@ -647,6 +649,7 @@ def _scan_message_pool(
     max_seen: int = 120_000,
 ) -> tuple[list[str], dict[str, Any]]:
     start_ts, end_ts = _year_range_epoch_seconds(int(year))
+    my_username = resolve_wrapped_self_username(account_dir) if outgoing_only else ""
     _ = seed  # 保留参数以兼容现有调用；抽样本身使用非确定性随机。
     rnd = random.SystemRandom()
 
@@ -674,7 +677,7 @@ def _scan_message_pool(
                 try:
                     r = conn.execute(
                         "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
-                        (str(account_dir.name),),
+                        (my_username,),
                     ).fetchone()
                     if r is not None and r[0] is not None:
                         my_rowid = int(r[0])

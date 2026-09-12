@@ -27,6 +27,7 @@ from ...chat_helpers import (
 )
 from ...chat_search_index import get_chat_search_index_db_path
 from ...logging_config import get_logger
+from .. import resolve_wrapped_self_username
 
 logger = get_logger(__name__)
 
@@ -262,7 +263,7 @@ def compute_keyboard_stats(
     - 中文汉字：需要拼音转换，成本高；对“消息”做采样（sample_rate）后估算总体拼音字母分布
     """
     start_ts, end_ts = _year_range_epoch_seconds(year)
-    my_username = str(account_dir.name or "").strip()
+    my_username = resolve_wrapped_self_username(account_dir)
 
     sample_rate = max(0.0, min(1.0, float(sample_rate)))
 
@@ -705,7 +706,7 @@ def sample_typed_phrases(
         return _build_typed_phrase_payload(pool=candidates, year=year, k=k)
 
     start_ts, end_ts = _year_range_epoch_seconds(year)
-    my_username = str(account_dir.name or "").strip()
+    my_username = resolve_wrapped_self_username(account_dir)
     if not my_username:
         return []
 
@@ -758,7 +759,7 @@ def compute_text_message_char_counts(*, account_dir: Path, year: int) -> tuple[i
     """Return (sent_chars, received_chars) for render_type='text' messages in the year."""
 
     start_ts, end_ts = _year_range_epoch_seconds(year)
-    my_username = str(account_dir.name or "").strip()
+    my_username = resolve_wrapped_self_username(account_dir)
 
     # Prefer search index when available.
     index_path = get_chat_search_index_db_path(account_dir)
@@ -991,7 +992,7 @@ def compute_voice_call_stats(*, account_dir: Path, year: int) -> dict[str, Any]:
     local_type IN (34, 50) 的消息量小，全年扫描成本可控。
     """
     start_ts, end_ts = _year_range_epoch_seconds(year)
-    my_username = str(account_dir.name or "").strip()
+    my_username = resolve_wrapped_self_username(account_dir)
 
     # 会话 username 从表名反解（msg_<md5(username)> / chat_<md5(username)>）。
     session_usernames = _list_session_usernames(account_dir / "session.db")

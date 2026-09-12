@@ -11,6 +11,7 @@ from typing import Any, Optional
 from ..chat_helpers import _decode_sqlite_text, _iter_message_db_paths, _quote_ident, _resolve_account_dir
 from ..chat_search_index import get_chat_search_index_db_path, get_chat_search_index_status
 from ..logging_config import get_logger
+from . import resolve_wrapped_self_username
 from .storage import wrapped_cache_dir, wrapped_cache_path
 from .cards.card_00_global_overview import build_card_00_global_overview
 from .cards.card_01_cyber_schedule import WeekdayHourHeatmap, build_card_01_cyber_schedule, compute_weekday_hour_heatmap
@@ -28,7 +29,7 @@ logger = get_logger(__name__)
 # an older partial cache.
 _IMPLEMENTED_UPTO_ID = 7
 # Bump this when we change card payloads/ordering while keeping the same implemented_upto.
-_CACHE_VERSION = 38
+_CACHE_VERSION = 39
 
 
 # "Manifest" is used by the frontend to render the deck quickly, then lazily fetch each card.
@@ -549,7 +550,11 @@ def _get_or_compute_heatmap_sent(*, account_dir: Path, scope: str, year: int, re
             if cached is not None:
                 return cached
 
-        heatmap = compute_weekday_hour_heatmap(account_dir=account_dir, year=year, sender_username=account_dir.name)
+        heatmap = compute_weekday_hour_heatmap(
+            account_dir=account_dir,
+            year=year,
+            sender_username=resolve_wrapped_self_username(account_dir),
+        )
         try:
             path.write_text(
                 json.dumps(

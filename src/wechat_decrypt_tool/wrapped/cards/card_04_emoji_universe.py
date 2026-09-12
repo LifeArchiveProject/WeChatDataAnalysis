@@ -27,6 +27,7 @@ from ...chat_helpers import (
 )
 from ...chat_search_index import get_chat_search_index_db_path
 from ...logging_config import get_logger
+from .. import resolve_wrapped_self_username
 
 logger = get_logger(__name__)
 
@@ -478,7 +479,7 @@ def _build_local_emoji_url(
 
 def compute_emoji_universe_stats(*, account_dir: Path, year: int) -> dict[str, Any]:
     start_ts, end_ts = _year_range_epoch_seconds(year)
-    my_username = str(account_dir.name or "").strip()
+    my_username = resolve_wrapped_self_username(account_dir)
 
     sent_sticker_count = 0
     total_sent_messages = 0

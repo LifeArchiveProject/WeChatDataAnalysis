@@ -844,7 +844,8 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
         "type": 1,  # 默认类型
         "title": "",
         "contentUrl": "",
-        "finderFeed": {}
+        "finderFeed": {},
+        "finderLive": {},
     }
 
     xml_str = _decode_sns_text_blob(xml_text)
@@ -965,21 +966,54 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
             "url": _clean_url(_find_text(".//finderFeed/mediaList/media/url"))
         }
 
+    if post_type == 34:
+        out["finderLive"] = {
+            "id": _find_text(".//finderLive/finderLiveID"),
+            "username": _find_text(".//finderLive/finderUsername"),
+            "objectId": _find_text(".//finderLive/finderObjectID"),
+            "nonceId": _find_text(".//finderLive/finderNonceID"),
+            "nickname": _find_text(".//finderLive/nickname"),
+            "headUrl": _clean_url(_find_text(".//finderLive/headUrl")),
+            "desc": _find_text(".//finderLive/desc"),
+            "liveStatus": _safe_int(_find_text(".//finderLive/liveStatus")),
+            "coverUrl": _clean_url(
+                _find_text(".//finderLive/media/coverUrl", ".//finderLive/coverUrl")
+            ),
+            "width": _safe_int(_find_text(".//finderLive/media/width")),
+            "height": _safe_int(_find_text(".//finderLive/media/height")),
+        }
+
     media: list[dict[str, Any]] = []
     try:
-        for m in root.findall(".//mediaList//media"):
-            mt = _safe_int(m.findtext("type"))
-            url_el = m.find("url") if m.find("url") is not None else m.find("urlV")
-            thumb_el = m.find("thumb") if m.find("thumb") is not None else m.find("thumbV")
+        media_nodes = list(root.findall(".//mediaList//media"))
+        media_nodes.extend(root.findall(".//finderLive/media"))
+        for m in media_nodes:
+            mt = _safe_int(m.findtext("type") or m.findtext("mediaType"))
+
+            def _first_media_child(*names: str) -> Optional[ET.Element]:
+                for name in names:
+                    element = m.find(name)
+                    if element is not None:
+                        return element
+                return None
+
+            url_el = _first_media_child("url", "urlV", "coverUrl")
+            thumb_el = _first_media_child("thumb", "thumbV", "thumbUrl", "coverUrl")
 
             url = _clean_url(url_el.text if url_el is not None else "")
             thumb = _clean_url(thumb_el.text if thumb_el is not None else "")
 
             url_attrs = dict(url_el.attrib) if url_el is not None and url_el.attrib else {}
             thumb_attrs = dict(thumb_el.attrib) if thumb_el is not None and thumb_el.attrib else {}
-            media_id = str(m.findtext("id") or "").strip()
+            media_id = str(m.findtext("id") or m.findtext("mediaId") or "").strip()
             size_el = m.find("size")
             size = dict(size_el.attrib) if size_el is not None and size_el.attrib else {}
+            width = str(m.findtext("width") or "").strip()
+            height = str(m.findtext("height") or "").strip()
+            if width and not size.get("width"):
+                size["width"] = width
+            if height and not size.get("height"):
+                size["height"] = height
 
             if not url and not thumb:
                 continue
@@ -2425,6 +2459,7 @@ def list_sns_timeline(
                     "title": parsed2.get("title", ""),
                     "contentUrl": parsed2.get("contentUrl", ""),
                     "finderFeed": parsed2.get("finderFeed", {}),
+                    "finderLive": parsed2.get("finderLive", {}),
                     "official": official2,
                 }
             )
@@ -2633,6 +2668,7 @@ def list_sns_timeline(
                     "title": parsed3.get("title", ""),
                     "contentUrl": parsed3.get("contentUrl", ""),
                     "finderFeed": parsed3.get("finderFeed", {}),
+                    "finderLive": parsed3.get("finderLive", {}),
                     "official": official3,
                 }
             )
@@ -2845,6 +2881,7 @@ def list_sns_timeline(
             title = ""
             content_url = ""
             finder_feed = {}
+            finder_live = {}
             try:
                 tid_u = int(r.get("id") or 0)
                 tid_s = (tid_u & 0xFFFFFFFFFFFFFFFF)
@@ -2867,6 +2904,7 @@ def list_sns_timeline(
                     title = parsed.get("title", "")
                     content_url = parsed.get("contentUrl", "")
                     finder_feed = parsed.get("finderFeed", {})
+                    finder_live = parsed.get("finderLive", {})
 
                     pcomments = parsed.get("comments") or []
                     if isinstance(pcomments, list) and pcomments:
@@ -2943,6 +2981,7 @@ def list_sns_timeline(
                     "title": title,
                     "contentUrl": content_url,
                     "finderFeed": finder_feed,
+                    "finderLive": finder_live,
                     "official": official,
                 }
             )

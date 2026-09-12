@@ -2536,6 +2536,10 @@ const formatMomentTypeLabel = (post) => {
     const name = String(post?.finderFeed?.nickname || '').trim()
     return name ? `视频号·${name}` : '视频号'
   }
+  if (t === 34) {
+    const name = String(post?.finderLive?.nickname || '').trim()
+    return name ? `视频号直播·${name}` : '视频号直播'
+  }
   if (isExternalShareMoment(post)) return formatExternalShareSourceLabel(post)
   return ''
 }

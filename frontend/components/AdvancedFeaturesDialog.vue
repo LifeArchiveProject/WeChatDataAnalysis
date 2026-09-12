@@ -42,7 +42,7 @@
           </div>
 
           <footer class="afd-foot">
-            <p class="afd-foot__meta afd-mono">{{ PRO_TOTAL }} 项 · 写入 / 动作 / 提醒</p>
+            <p class="afd-foot__meta afd-mono">{{ PRO_TOTAL }} 项 · 写入 / 动作</p>
             <button type="button" class="afd-get afd-mono" @click="openDeveloperContact">
               获取 — QQ {{ DEVELOPER_QQ }} · 备注「高级版」 <i aria-hidden="true">↗</i>
             </button>

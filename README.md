@@ -10,7 +10,7 @@
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
     <img src="https://gh-down-badges.linkof.link/LifeArchiveProject/WeChatDataAnalysis" alt="Downloads" />
     <img src="https://img.shields.io/github/forks/LifeArchiveProject/WeChatDataAnalysis" alt="Forks" />
-    <a href="https://qm.qq.com/q/VQEQ7PcGkk"><img src="https://img.shields.io/badge/QQ Group-WeChatDataAnalysis-12B7F5?logo=tencentqq&logoColor=white" alt="QQ Group" /></a>
+    <a href="https://qm.qq.com/q/2IB0gvYpYA"><img src="https://img.shields.io/badge/QQ Group-WeChatDataAnalysis-12B7F5?logo=tencentqq&logoColor=white" alt="QQ Group" /></a>
     <img src="https://img.shields.io/badge/Python-3776AB?logo=Python&logoColor=white" alt="Python" />
     <img src="https://img.shields.io/badge/Vue.js-4FC08D?logo=Vue.js&logoColor=white" alt="Vue.js" />
     <img src="https://img.shields.io/badge/SQLite-003B57?logo=SQLite&logoColor=white" alt="SQLite" />
@@ -96,7 +96,7 @@
 
 ## 高级版
 
-常规版聚焦于**解密、读取、导出与年度总结**等只读能力；**高级版**在此基础上提供**写入、动作与实时提醒**能力，覆盖消息修改、消息补录、微信动作、朋友圈互动、群聊管理、联系人与会话管理、关键词提醒。当前公开版本仅展示功能说明与演示动画，不包含高级功能的执行实现；实际使用需要匹配微信版本的高级版。
+常规版聚焦于**解密、读取、导出与年度总结**等只读能力；**高级版**在此基础上提供**写入动作**能力，覆盖消息修改、消息补录、微信动作、朋友圈互动、群聊管理、联系人与会话管理。当前公开版本仅展示功能说明与演示动画，不包含高级功能的执行实现；实际使用需要匹配微信版本的高级版。
 
 > **获取方式**：请联系 QQ **3434549571**（备注「高级版」）即可获取。
 
@@ -108,7 +108,6 @@
 | 朋友圈 | 自动后台刷新朋友圈、朋友圈点赞、图片评论、文字评论、发布朋友圈 |
 | 群聊 | 修改本人群昵称、发布群公告、新建群聊、修改群名称、拉好友进群、邀请群成员、移除群成员、退出群聊 |
 | 联系人 | 修改好友备注、同意好友请求、添加好友、删除好友 |
-| 关键词提醒 | 动态添加关键词，实时检测群聊和单聊的新消息，命中后通过 SSE 触发应用内提醒，并在系统允许时发送通知 |
 
 ## 可导出的内容
 
@@ -132,7 +131,7 @@
 也欢迎加入下方 QQ 群一起讨论。
 
 <p align="center">
-    <a href="https://qm.qq.com/q/VQEQ7PcGkk">
+    <a href="https://qm.qq.com/q/2IB0gvYpYA">
         <img src="frontend/public/QQImage_1770190010691_1103312318341691201.jpg" alt="WeChatDataAnalysis 加群二维码" width="360" />
     </a>
 </p>
