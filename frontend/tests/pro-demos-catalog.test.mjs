@@ -10,9 +10,9 @@ import {
   PRO_TOTAL
 } from '../../website/assets/js/pro-demos/catalog.js'
 
-test('高级版清单：共 54 项，key 唯一，每项带 name / caption / index / group', () => {
-  assert.equal(PRO_TOTAL, 54)
-  assert.equal(PRO_ITEMS.length, 54)
+test('高级版清单：共 53 项，key 唯一，每项带 name / caption / index / group', () => {
+  assert.equal(PRO_TOTAL, 53)
+  assert.equal(PRO_ITEMS.length, 53)
 
   const keys = PRO_ITEMS.map((it) => it.key)
   assert.equal(new Set(keys).size, keys.length, 'key 有重复')
@@ -28,10 +28,10 @@ test('高级版清单：共 54 项，key 唯一，每项带 name / caption / ind
   })
 })
 
-test('分组顺序固定为 edit / add / action / moments / group / contact / alert，且每项 group 与所在分组一致', () => {
+test('分组顺序固定为 edit / add / action / moments / group / contact，且每项 group 与所在分组一致', () => {
   assert.deepEqual(
     PRO_GROUPS.map((g) => g.key),
-    ['edit', 'add', 'action', 'moments', 'group', 'contact', 'alert']
+    ['edit', 'add', 'action', 'moments', 'group', 'contact']
   )
   for (const g of PRO_GROUPS) {
     assert.ok(g.label && g.tag, `${g.key} 缺 label / tag`)
@@ -45,14 +45,14 @@ test('分组顺序固定为 edit / add / action / moments / group / contact / al
   assert.equal(PRO_GROUPS.reduce((n, g) => n + g.items.length, 0), PRO_TOTAL)
 })
 
-test('官网首屏五模块视图：项数合计为 54，群聊 / 联系人 / 提醒 合并为末尾一栏', () => {
-  assert.equal(PRO_HERO_MODULES.reduce((n, m) => n + m.items.length, 0), 54)
+test('官网首屏五模块视图：项数合计为 53，群聊 / 联系人合并为末尾一栏', () => {
+  assert.equal(PRO_HERO_MODULES.reduce((n, m) => n + m.items.length, 0), 53)
   assert.equal(PRO_HERO_MODULES.length, 5)
   const last = PRO_HERO_MODULES[PRO_HERO_MODULES.length - 1]
-  assert.equal(last.name, '群聊、联系人与提醒')
+  assert.equal(last.name, '群聊与联系人')
   assert.deepEqual(
     [...new Set(last.items.map((it) => it.group))],
-    ['group', 'contact', 'alert']
+    ['group', 'contact']
   )
 })
 

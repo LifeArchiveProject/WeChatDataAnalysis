@@ -21,6 +21,7 @@ from ...chat_search_index import (
     start_chat_search_index_build,
 )
 from ...logging_config import get_logger
+from .. import resolve_wrapped_self_username
 
 logger = get_logger(__name__)
 
@@ -246,7 +247,7 @@ def compute_reply_speed_stats(*, account_dir: Path, year: int) -> dict[str, Any]
     """
 
     start_ts, end_ts = _year_range_epoch_seconds(int(year))
-    my_username = str(account_dir.name or "").strip()
+    my_username = resolve_wrapped_self_username(account_dir)
 
     # Scoring hyper-params (tuned for "更偏向聊天频率高的" 的直觉)。
     gap_cap_seconds = 6 * 60 * 60  # 6h: scoring 上限（超过当作一样慢）

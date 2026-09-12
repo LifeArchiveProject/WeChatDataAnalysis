@@ -809,18 +809,25 @@ def _collect_sns_remote_media_tasks(
 
     for post in posts:
         media_list = post.get("media") if isinstance(post.get("media"), list) else []
+        media_entries = [(media, False) for media in media_list]
+        comments = post.get("comments") if isinstance(post.get("comments"), list) else []
+        for comment in comments:
+            if not isinstance(comment, dict):
+                continue
+            images = comment.get("images") if isinstance(comment.get("images"), list) else []
+            media_entries.extend((image, True) for image in images)
         try:
             post_type = int(post.get("type") or 1)
         except Exception:
             post_type = 1
-        for media_raw in media_list:
+        for media_raw, is_comment_image in media_entries:
             media = media_raw if isinstance(media_raw, dict) else {}
             try:
                 media_type = int(media.get("type") or 0)
             except Exception:
                 media_type = 0
 
-            prefer_thumb = media_type == 6 or post_type in {3, 5, 42}
+            prefer_thumb = False if is_comment_image else (media_type == 6 or post_type in {3, 5, 42})
             image_url, image_key, image_token, image_is_original = _sns_image_source(
                 media,
                 prefer_thumb=prefer_thumb,
@@ -959,6 +966,10 @@ def _format_moment_type_label(post: dict[str, Any]) -> str:
         ff = post.get("finderFeed") if isinstance(post.get("finderFeed"), dict) else {}
         name = str(ff.get("nickname") or "").strip() if isinstance(ff, dict) else ""
         return f"视频号·{name}" if name else "视频号"
+    if t == 34:
+        live = post.get("finderLive") if isinstance(post.get("finderLive"), dict) else {}
+        name = str(live.get("nickname") or "").strip() if isinstance(live, dict) else ""
+        return f"视频号直播·{name}" if name else "视频号直播"
     if t in (5, 42):
         name0 = str(post.get("sourceName") or "").strip()
         if name0:
@@ -1157,6 +1168,7 @@ def _load_sns_export_snapshot(
             "title": parsed.get("title", ""),
             "contentUrl": parsed.get("contentUrl", ""),
             "finderFeed": parsed.get("finderFeed", {}),
+            "finderLive": parsed.get("finderLive", {}),
             "official": official,
             # 原始 XML 指纹会同时覆盖正文、评论、点赞和媒体变化。
             "_contentFingerprint": hashlib.sha256(content_xml.encode("utf-8", errors="replace")).hexdigest(),
@@ -2799,6 +2811,7 @@ class SnsExportManager:
                         cn = _clean_name(c.get("nickname") or c.get("displayName") or c.get("username") or "") or "未知"
                         refn = _clean_name(c.get("refNickname") or c.get("refUsername") or c.get("refUserName") or "")
                         text = str(c.get("content") or "").strip()
+                        comment_images = c.get("images") if isinstance(c.get("images"), list) else []
                         out.append('<div class="text-xs leading-5 break-words">')
                         out.append(f'<span class="font-medium text-[#576b95]">{_esc_text(cn)}</span>')
                         if refn:
@@ -2806,7 +2819,29 @@ class SnsExportManager:
                             out.append(f'<span class="font-medium text-[#576b95]">{_esc_text(refn)}</span>')
                         out.append('<span class="text-gray-900">: ')
                         out.append(render_text_with_emojis(text))
-                        out.append("</span></div>")
+                        out.append("</span>")
+                        if comment_images:
+                            out.append('<span class="inline-flex flex-wrap align-middle gap-1 ml-1">')
+                            for image_index, image_raw in enumerate(comment_images):
+                                image = image_raw if isinstance(image_raw, dict) else {}
+                                image_arc = export_image_to_zip(
+                                    zf=zf,
+                                    post=post,
+                                    media=image,
+                                    idx=image_index,
+                                    prefer_thumb=False,
+                                )
+                                if not image_arc:
+                                    continue
+                                out.append(
+                                    f'<a href="{_esc_attr(image_arc)}" target="_blank" rel="noopener noreferrer" '
+                                    'class="inline-flex w-10 h-10 rounded-[6px] overflow-hidden bg-gray-200 border border-gray-200 '
+                                    'items-center justify-center align-middle">'
+                                    f'<img src="{_esc_attr(image_arc)}" alt="评论图片" class="w-full h-full object-cover" '
+                                    'loading="lazy" referrerpolicy="no-referrer" /></a>'
+                                )
+                            out.append("</span>")
+                        out.append("</div>")
                     out.append("</div>")
                 out.append("</div>")
 

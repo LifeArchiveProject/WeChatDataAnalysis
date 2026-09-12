@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   pro-demos / catalog.js — 高级版 54 项能力的唯一清单
+   pro-demos / catalog.js — 高级版 53 项能力的唯一清单
    官网首屏清单、官网首屏舞台、应用内「高级功能」弹窗都从这里取数据，
    每项四件套：name 做什么 / caption 怎么做 / use 用在什么场景 / need 为什么需要它。
    改一处三处同步。key 是场景文件的索引，别随手改。
@@ -89,12 +89,6 @@ export const PRO_GROUPS = [
       { key: "contact-add", name: "添加好友", caption: "填写验证消息并发送好友请求。", use: "加回头客", need: "老客户名单，逐个发出好友申请" },
     ],
   },
-  {
-    key: "alert", label: "提醒", tag: "ALERT", icon: "fa-bell",
-    items: [
-      { key: "alert-keyword", name: "群聊/单聊关键词提醒", caption: "添加关键词，群聊与单聊新消息命中即刻提醒。", use: "盯单不漏", need: "「发票」「报价」一命中，立刻弹提醒" },
-    ],
-  },
 ];
 
 // 每项就地补上所属分组与全局序号（1 起）；PRO_ITEMS 与分组里的是同一批对象
@@ -106,12 +100,12 @@ export const PRO_TOTAL = PRO_ITEMS.length;
 
 export const PRO_BY_KEY = Object.fromEntries(PRO_ITEMS.map((it) => [it.key, it]));
 
-// 官网首屏六栏清单沿用的五模块视图：群聊 / 联系人 / 提醒 合并成一栏
+// 官网首屏六栏清单沿用的五模块视图：群聊 / 联系人合并成一栏
 export const PRO_HERO_MODULES = (() => {
-  const merged = { name: "群聊、联系人与提醒", items: [] };
+  const merged = { name: "群聊与联系人", items: [] };
   const out = [];
   for (const g of PRO_GROUPS) {
-    if (g.key === "group" || g.key === "contact" || g.key === "alert") merged.items.push(...g.items);
+    if (g.key === "group" || g.key === "contact") merged.items.push(...g.items);
     else out.push({ name: g.label, items: [...g.items] });
   }
   out.push(merged);

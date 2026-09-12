@@ -20,6 +20,7 @@ from ...chat_search_index import (
     start_chat_search_index_build,
 )
 from ...logging_config import get_logger
+from .. import resolve_wrapped_self_username
 
 logger = get_logger(__name__)
 
@@ -115,7 +116,7 @@ def _score_month_agg(
 
 def compute_monthly_best_friends_wall_stats(*, account_dir: Path, year: int) -> dict[str, Any]:
     start_ts, end_ts = _year_range_epoch_seconds(int(year))
-    my_username = str(account_dir.name or "").strip()
+    my_username = resolve_wrapped_self_username(account_dir)
 
     gap_cap_seconds = 6 * 60 * 60
     tau_seconds = 30 * 60
