@@ -13,12 +13,11 @@ import action, { css as actionCss } from "./scenes/action.js";
 import moments, { css as momentsCss } from "./scenes/moments.js";
 import group, { css as groupCss } from "./scenes/group.js";
 import contact, { css as contactCss } from "./scenes/contact.js";
-import automation, { css as automationCss } from "./scenes/automation.js";
 
 export { PRO_GROUPS, PRO_ITEMS, PRO_TOTAL, PRO_BY_KEY, PRO_HERO_MODULES, createProStage, createProList };
 
-export const SCENES = { ...edit, ...addA, ...addB, ...action, ...moments, ...group, ...contact, ...automation };
-export const SCENE_CSS = [editCss, addACss, addBCss, actionCss, momentsCss, groupCss, contactCss, automationCss].filter(Boolean).join("\n");
+export const SCENES = { ...edit, ...addA, ...addB, ...action, ...moments, ...group, ...contact };
+export const SCENE_CSS = [editCss, addACss, addBCss, actionCss, momentsCss, groupCss, contactCss].filter(Boolean).join("\n");
 
 let cssInjected = false;
 export function injectSceneCss() {

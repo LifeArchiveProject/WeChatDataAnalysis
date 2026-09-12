@@ -141,9 +141,10 @@ function commentLine(kit, gsap, post, say) {
   return line;
 }
 
-/* ═══════════════ sns-autorefresh 手动同步朋友圈 ═══════════════
-   工作流：用户发起同步 → 连续拉取第 1 / 第 2 页 → 列表继续滚动查看。
-   同一刷新按钮只切换「同步 / 同步中 / 已同步」；这里只演两页示例历史，不声称全量已拉完。 */
+/* ═══════════════ sns-autorefresh 自动后台刷新朋友圈 ═══════════════
+   工作流：每 5 分钟 → 自动拉取 → 入库。
+   头部的倒计时自己走到 00:00，刷新图标转一圈，客户的新动态自己落进信息流盖 NEW；
+   走完两轮 → 「2 条新动态入库」。全程没人在守着。 */
 function autoRefresh({ gsap, kit, tl }) {
   const { feed } = mkFeed(kit, {
     fade: true,
@@ -152,33 +153,32 @@ function autoRefresh({ gsap, kit, tl }) {
       { who: CUSTOMERS.chen, text: "仓库到货了，都已经上架。", imgs: 2, time: "昨天" },
     ],
   });
-  const strip = kit.scenario("需要回看客户历史 · 用户发起同步");
+  const strip = kit.scenario("客户随时在发 · 没人守着");
   const flow = kit.workflow([
-    { label: "用户发起同步", icon: "refresh" },
-    { label: "拉取第 1 页", icon: "refresh" },
-    { label: "拉取第 2 页", icon: "refresh" },
+    { label: "每 5 分钟", icon: "clock" },
+    { label: "自动拉取", icon: "refresh" },
+    { label: "入库", icon: "check" },
   ]);
 
-  // 头部：同一个刷新按钮承载同步状态 + 计数角标，挨着相机
+  // 头部：刷新图标 + 计数角标，挨着相机
   const tools = kit.h("span", "pd-moments-tools");
   const rf = kit.h("i", "pd-moments-refresh");
-  const rfLabel = kit.h("span", "pd-moments-refresh__label", "同步");
-  rf.append(kit.icon("refresh"), rfLabel);
+  rf.appendChild(kit.icon("refresh"));
   const badge = kit.h("b", "pd-moments-badge", "+1");
   tools.append(rf, feed.camera, badge);
   feed.head.appendChild(tools);
   gsap.set(badge, { opacity: 0, scale: 0.4 });
 
-  // 头部里的页码读数：只展示两页示例历史
+  // 头部里的定时读数：AUTO PULL 05:00 自己往下走（不是开关，没有人去拨）
   const note = kit.note("", feed.head);
   note.classList.add("pd-moments-note");
-  const page = kit.h("b", "pd-moments-timer", "PAGE 0 / 2");
-  note.append(kit.h("span", "", "MANUAL SYNC"), page);
+  const timer = kit.h("b", "pd-moments-timer", "05:00");
+  note.append(kit.h("span", "", "AUTO PULL"), timer);
   feed.head.insertBefore(note, tools);
 
-  // 两页客户历史示例预建、藏起来；后建的在最上（最新的最先看到）
-  const p1 = addPost(feed, { who: CUSTOMERS.zhao, text: "店里招店长两名，有合适的推荐给我。", imgs: 0, time: "昨天 18:40", top: true });
-  const p2 = addPost(feed, { who: CUSTOMERS.wang, text: "新店下周开业，欢迎来捧场。", imgs: 2, time: "今天 09:20", top: true });
+  // 两条客户新动态预建、藏起来；后建的在最上（最新的最先看到）
+  const p1 = addPost(feed, { who: CUSTOMERS.zhao, text: "店里招店长两名，有合适的推荐给我。", imgs: 0, time: "刚刚", top: true });
+  const p2 = addPost(feed, { who: CUSTOMERS.wang, text: "新店下周开业，欢迎来捧场。", imgs: 2, time: "刚刚", top: true });
   gsap.set([p1, p2], { display: "none" });
 
   const spin = () => {
@@ -197,19 +197,9 @@ function autoRefresh({ gsap, kit, tl }) {
   const arrive = (post, n) => {
     const t = gsap.timeline();
     t.add(dropIn(gsap, post), 0)
-      .add(popTag(gsap, kit, post, `PAGE ${n}`, "pd-tag--neon"), 0.35)
+      .add(popTag(gsap, kit, post, "NEW", "pd-tag--neon"), 0.35)
       .add(kit.flash(post, { color: "neon", duration: 0.6 }), 0.35)
       .add(bump(n), 0.35);
-    return t;
-  };
-
-  const refreshState = (text, cls = "") => {
-    const t = gsap.timeline();
-    t.call(() => {
-      rfLabel.textContent = text;
-      rf.classList.remove("is-syncing", "is-synced");
-      if (cls) rf.classList.add(cls);
-    });
     return t;
   };
 
@@ -217,21 +207,19 @@ function autoRefresh({ gsap, kit, tl }) {
     .add(flow.in(), "<+0.1")
     .add(kit.fade(note), "<")
     .add(flow.step(0), 0.45)
-    .add(refreshState("同步中", "is-syncing"), "<+0.15")
+    .add(kit.count(timer, 0, { from: 300, duration: 1, fmt: mmss }), "<")
+    .add(kit.flash(timer, { color: "amber", duration: 0.4 }), ">-0.05")
     .add(flow.step(1), "<")
     .add(spin(), "<")
-    .call(() => { page.textContent = "PAGE 1 / 2"; }, [], ">-0.05")
-    .add(arrive(p1, 1), "<+0.08")
-    .to(feed.list, { scrollTop: 34, duration: 0.5, ease: "power2.out" }, ">+0.1")
-    .add(flow.step(2), ">+0.2")
-    .call(() => { page.textContent = "PAGE 2 / 2"; }, [], "<")
-    .add(spin(), "<+0.1")
+    .add(arrive(p1, 1), ">-0.15")
+    .call(() => { timer.textContent = "05:00"; }, [], ">")
+    .add(kit.count(timer, 0, { from: 300, duration: 0.9, fmt: mmss }), ">+0.2")
+    .add(spin(), ">-0.12")
     .add(arrive(p2, 2), ">-0.15")
-    .to(feed.list, { scrollTop: 68, duration: 0.5, ease: "power2.out" }, ">+0.08")
-    .add(refreshState("已同步", "is-synced"), ">+0.1")
-    .add(kit.ok("两页已同步", { en: "2 PAGES" }), ">+0.05")
+    .add(flow.step(2), ">-0.25")
+    .add(kit.ok("已入库 · +2", { en: "AUTO SYNCED" }), ">+0.05")
     .add(flow.done(), "<")
-    .add(strip.result("两页示例历史已载入"), "<");
+    .add(strip.result("2 条新动态入库"), "<");
   return tl;
 }
 
@@ -503,13 +491,10 @@ export const css = `
   mask-image: linear-gradient(#000 82%, transparent 100%);
 }
 
-/* 头部：同一个刷新按钮承载状态 + 角标 */
+/* 头部：刷新图标 + 角标 */
 .pd-moments-tools { position: relative; display: flex; align-items: center; gap: 12px; }
-.pd-moments-refresh { display: inline-flex; align-items: center; justify-content: center; gap: 4px; width: auto; min-width: 18px; height: 20px; padding: 1px 5px; border: 1px solid var(--pd-line-strong); border-radius: 3px; color: var(--pd-dim); }
+.pd-moments-refresh { display: grid; place-items: center; width: 18px; height: 18px; color: var(--pd-dim); }
 .pd-moments-refresh.is-spin { color: var(--pd-amber); }
-.pd-moments-refresh.is-syncing { border-color: rgba(255, 194, 75, 0.55); color: var(--pd-amber); }
-.pd-moments-refresh.is-synced { border-color: rgba(61, 242, 141, 0.45); color: var(--pd-neon); }
-.pd-moments-refresh__label { font-family: var(--pd-mono); font-size: 8.5px; letter-spacing: 0.08em; white-space: nowrap; }
 /* kit 的 .pd-feed__head .pd-ic 直接命中 svg，得比它更具体才能让自转时真的变琥珀 */
 .pd-root .pd-feed__head .pd-moments-refresh.is-spin .pd-ic { color: var(--pd-amber); }
 .pd-moments-badge {
