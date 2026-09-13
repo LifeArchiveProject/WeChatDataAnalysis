@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════
    main.js — 滚动叙事总编排
-   loader → hero（含 53 项高级能力的演示舞台）→ manifesto → decrypt → features
+   loader → hero（整幕就是 61 项高级能力：清单 + 演示舞台 + 场景解说）→ manifesto → decrypt → features
    → machine → cta，一条时间轴讲完整个故事。
    ════════════════════════════════════════════════════════════ */
 import { createStage } from "./particles.js";
@@ -315,19 +315,20 @@ function exitLoader() {
 
 /* ─────────────────────────── act 01 · hero ─────────────────────────── */
 
-/* ---------- 开屏解密装置：巨字以密文入场，光刃扫过逐字解开 ---------- */
+/* ---------- 开屏解密装置：主句以密文入场，光刃扫过逐字解开 ----------
+   （标语「你的聊天记录，本就属于你」已退到导航栏，首屏正文整幕让给高级功能） */
 
 const HEXC = "0123456789ABCDEF";
 let heroChars = [], heroScan = null, heroTitle = null;
 
 function heroSplit() {
-  heroTitle = $(".hero__title");
+  heroTitle = $(".hm__title");
   heroScan = $(".hero__decrypt");
-  heroChars = $$(".hero__title .ht-mask").flatMap((m) => new SplitText(m, { type: "chars" }).chars);
+  heroChars = ["#hero-pro-t1", "#hero-pro-t2"].flatMap((sel) => new SplitText($(sel), { type: "chars" }).chars);
   const box = heroTitle.getBoundingClientRect();
   heroChars.forEach((c) => {
     c.dataset.plain = c.textContent;
-    // 阈值取字符在标题块内的横向位置 —— 光刃是空间上的扫过，两行会自然交错解开
+    // 阈值取字符在主句里的横向位置 —— 光刃是空间上的扫过，逐字定格
     const r = c.getBoundingClientRect();
     c._t = box.width ? (r.left + r.width / 2 - box.left) / box.width : Math.random();
     c._state = -1;
@@ -358,9 +359,19 @@ function heroReveal(q) {
   }
 }
 
-/* ---------- 高级版装置：53 项高级能力演示（数据来自 pro-demos/catalog.js，与应用内弹窗同源） ---------- */
+// hover 主句：整句快闪重解密一遍（比 scrambleText 稳 —— 那会把 SplitText 拆出的字符节点冲掉）
+let heroFlashTw = null, heroScrollQ = 1.12;   // heroScrollQ：滚动反向再加密当前压到的光刃位置，1.12 = 在页顶、主句全明文
+function heroFlash() {
+  // 一滚动主句就归滚动再加密管，快闪会把本该碎回密文的字全部解开，所以只在页顶时响应
+  if (!heroChars.length || REDUCED || heroScrollQ < 1.12) return;
+  if (heroFlashTw) heroFlashTw.kill();
+  const o = { q: -0.12 };
+  heroFlashTw = gsap.to(o, { q: 1.12, duration: 0.75, ease: "power2.inOut", onUpdate: () => heroReveal(o.q) });
+}
 
-// 左栏清单：六组 53 项一次性全部摊开（CSS 多列自动平衡）；点任一项 → 右栏舞台切到它的演示
+/* ---------- 高级版装置：61 项高级能力演示（数据来自 pro-demos/catalog.js，与应用内弹窗同源） ---------- */
+
+// 左栏清单：七组 61 项一次性全部摊开（CSS 多列自动平衡）；点任一项 → 右栏舞台切到它的演示
 function buildManifestGrid() {
   const grid = $("#hm-grid");
   if (!grid) return;
@@ -381,7 +392,7 @@ function buildManifestGrid() {
   });
 }
 
-// 右栏舞台：引擎只挂舞台（清单用首屏自己的 .hm__grid），刊头计数器 / 执行读数 / 清单点亮都跟着舞台走
+// 右栏舞台：引擎只挂舞台（清单用首屏自己的 .hm__grid），刊头计数器 / 执行读数 / 清单点亮 / 场景解说都跟着舞台走
 let heroStage = null;
 let proExecOn = false;
 function buildHeroStage() {
@@ -389,7 +400,9 @@ function buildHeroStage() {
   if (!host || heroStage) return;
   injectSceneCss();
   heroStage = createProStage(host, {
+    // 舞台底栏只留「做什么 / 怎么做」，「用在什么场景」交给舞台下方的场景解说（首屏专有，应用弹窗仍走 use/need）
     gsap, items: PRO_ITEMS, scenes: SCENES, reduced: REDUCED, autostart: false,
+    hudCapField: "caption", hudUse: false,
     onChange: heroOnChange, onComplete: heroOnComplete,
   });
   window.__heroStage = heroStage;
@@ -399,6 +412,8 @@ function buildHeroStage() {
     onLeave: () => heroStage.setActive(false),
     onEnterBack: () => heroStage.setActive(true),
   });
+  // 场景解说先落第一项再量尺寸：右栏此时还是透明的，入场时不会闪出占位文案，fitHeroStage 也量到三行填满后的真实高度
+  if (PRO_ITEMS[0]) renderScene(PRO_ITEMS[0], { animate: false });
   fitHeroStage();
   let rt = null;
   addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(fitHeroStage, 120); });
@@ -406,34 +421,73 @@ function buildHeroStage() {
   addEventListener("load", fitHeroStage);
 }
 
-// 舞台尺寸预算：宽度按「栏宽的 54%」与「巨字底边 → manifest 底边的可用高度」双封顶（16:10 场景屏 + 名称/说明/进度线 ≈ 34px）
+// 舞台尺寸预算：宽度按「右栏最多吃掉版心的 62%」与「刊头三行之下的可用高度」双封顶
+// （右栏 = 16:10 场景屏 + 名称/说明/进度线 ≈ 46px + 场景解说块实测高 + 两者之间的间距）
 function fitHeroStage() {
-  const man = $(".hero__manifest"), title = $(".hero__title");
-  if (!man || !title) return;
-  const tb = title.getBoundingClientRect().bottom + scrollY;   // 首幕在页面最顶，文档坐标即幕内坐标
-  if (innerWidth <= 960) {
-    man.style.setProperty("--hm-mobile-top", Math.max(0, Math.round(tb + 18)) + "px");
-    man.style.removeProperty("--hm-stage-w");
-    return;
-  }
-  man.style.removeProperty("--hm-mobile-top");
+  const man = $(".hero__manifest"), right = $(".hm__right"), scene = $("#hm-scene");
+  if (!man || !right) return;
+  if (innerWidth <= 960) { man.style.removeProperty("--hm-stage-w"); man.style.removeProperty("--hm-cols"); return; }
   const cs = getComputedStyle(man);
-  const bottomLimit = innerHeight - (parseFloat(cs.bottom) || 0);
   const rowH = (sel) => { const el = $(sel); return el && getComputedStyle(el).display !== "none" ? el.getBoundingClientRect().height : 0; };
   const gap = parseFloat(cs.rowGap) || 8;
-  const above = rowH(".hm__read") + rowH(".hm__rule") + gap * 2;
-  const bandH = bottomLimit - tb - 18 - above;
+  const above = rowH(".hm__read") + rowH(".hm__rule") + rowH(".hm__headrow") + gap * 3;
+  const bandH = man.clientHeight - above;
+  const sceneH = scene ? scene.getBoundingClientRect().height : 110;
+  const innerGap = parseFloat(getComputedStyle(right).rowGap) || 12;
   const gapX = parseFloat(cs.columnGap) || 24;
-  const w = Math.max(300, Math.min(0.54 * (man.clientWidth - gapX), (bandH - 34) / 0.625));
+  const w = Math.max(320, Math.min(0.62 * (man.clientWidth - gapX), (bandH - 46 - sceneH - innerGap) / 0.625));
   man.style.setProperty("--hm-stage-w", Math.round(w) + "px");
+  fitManifestGrid();
 }
 
-// 舞台切到某项：刊头计数器 PRO — NN / 54、清单对应项点亮、标题行尾演示读数乱码落定；场景播完（印章落下）时 ✓ 弹出
+// 清单栏数：61 项多列排版不会自己收进容器高度，栏数不够就会漫过底下的取件台。
+// 按「清单顶边 → 取件台顶边」这段真实可用高度往上加栏，加到装得下为止（3→5 栏封顶，再多就该缩字号了）。
+function fitManifestGrid() {
+  const man = $(".hero__manifest"), grid = $("#hm-grid"), cta = $(".hero__cta");
+  if (!man || !grid || !cta || innerWidth <= 960) return;
+  const gap = parseFloat(getComputedStyle(man).rowGap) || 8;
+  const avail = cta.getBoundingClientRect().top - grid.getBoundingClientRect().top - gap;
+  if (avail <= 0) return;
+  for (let cols = 3; cols <= 5; cols++) {
+    man.style.setProperty("--hm-cols", cols);
+    if (grid.getBoundingClientRect().height <= avail || cols === 5) break;
+  }
+}
+
+/* ---------- 动画下方的场景解说：场景标签 + 工作流三步 + 边界一句（叙述句已撤，别再加回来） ---------- */
+const SCENE_EDGE = {
+  edit: "只写本地解密副本 · 微信那边一个字不动",
+  add: "只写本地解密副本 · 不会重新发出去",
+  action: "经微信客户端真实发送 · 对方会收到",
+  moments: "经微信客户端真实互动 · 对方会看到",
+  group: "经微信客户端真实操作 · 群成员会看到",
+  contact: "经微信客户端真实操作 · 结果以微信为准",
+  automation: "任务由你配置并手动启动 · 可随时暂停",
+};
+
+function renderScene(item, { animate = true } = {}) {
+  const use = $("#scene-use"), grp = $("#scene-grp"), flow = $("#scene-flow"), edge = $("#scene-edge");
+  if (!use || !grp || !flow || !edge) return;
+  use.textContent = item.use || item.name;
+  grp.textContent = `${item.groupLabel} · ${item.groupTag}`;
+  const steps = item.flow || [];
+  flow.innerHTML = steps.length
+    ? `<u>${item.local ? "本地整理" : "工作流"}</u>` + steps.map((t, i) => {
+        return (i ? "<i>›</i>" : "") + `<b${t.startsWith("AI ") ? ' class="is-ai"' : ""}>${t}</b>`;
+      }).join("")
+    : "";
+  edge.textContent = item.edge || SCENE_EDGE[item.group] || "";
+  if (REDUCED || !animate) return;
+  gsap.fromTo([use, flow, edge], { opacity: 0, y: 6 }, { opacity: 1, y: 0, duration: 0.4, ease: "flow", stagger: 0.06, overwrite: "auto" });
+}
+
+// 舞台切到某项：刊头计数器 PRO — NN / 61、清单对应项点亮、场景解说换页、标题行尾演示读数乱码落定；场景播完（印章落下）时 ✓ 弹出
 function heroOnChange(item) {
   if (proExecOn) { const idx = $("#hero-pro-ops"); if (idx) idx.textContent = "PRO — " + String(item.index).padStart(2, "0") + " / " + PRO_TOTAL; }
   for (const el of $$("#hm-grid .hm__item.is-live")) el.classList.remove("is-live");
   const li = $(`#hm-grid .hm__item[data-key="${item.key}"]`);
   if (li) li.classList.add("is-live");
+  renderScene(item);
   const t = $("#pro-exec-t"), ok = $("#pro-exec-ok");
   if (!t) return;
   gsap.set(ok, { opacity: 0 });
@@ -451,7 +505,7 @@ function unlockHeroGate() {
   lenis.start();
 }
 
-// 入场收尾：舞台开始自动逐项播放（执行读数、计数器、清单点亮全部由舞台驱动）
+// 入场收尾：舞台开始自动逐项播放（执行读数、计数器、清单点亮、场景解说全部由舞台驱动）
 function startProExec() {
   if (proExecOn) return;
   proExecOn = true;
@@ -463,50 +517,38 @@ let heroOutBuilt = false;
 function heroScrollOut() {
   if (heroOutBuilt) return;
   heroOutBuilt = true;
-  gsap.to(".hero__title", {
-    yPercent: -20, ease: "none",
-    scrollTrigger: { trigger: "#hero", start: "top top", end: "78% top", scrub: 0.6 },
-  });
-  gsap.to(".ht-line--1 .ht-mask", {
-    xPercent: -9, ease: "none",
-    scrollTrigger: { trigger: "#hero", start: "top top", end: "bottom top", scrub: 0.6 },
-  });
-  gsap.to(".ht-line--2 .ht-mask", {
-    xPercent: 9, ease: "none",
-    scrollTrigger: { trigger: "#hero", start: "top top", end: "bottom top", scrub: 0.6 },
-  });
-  gsap.to([".hero__manifest", ".hero__cta", ".hero__coord", ".hero__vert", ".hero__ticker", ".hero__title"], {
+  gsap.to([".hero__manifest", ".hero__vert", ".hero__ticker"], {
     opacity: 0, ease: "none",
-    scrollTrigger: { trigger: "#hero", start: "6% top", end: "52% top", scrub: 0.6 },
+    scrollTrigger: { trigger: "#hero", start: "10% top", end: "56% top", scrub: 0.6 },
   });
-  // 向下滚动时巨字反向再加密：先解开的最后碎回去
+  // 向下滚动时主句反向再加密：先解开的最后碎回去
   ScrollTrigger.create({
     trigger: "#hero", start: "top top", end: "42% top", scrub: 0.5,
-    onUpdate(self) { heroReveal(1.12 - self.progress * 1.3); },
+    onUpdate(self) {
+      heroScrollQ = 1.12 - self.progress * 1.3;
+      if (heroFlashTw) { heroFlashTw.kill(); heroFlashTw = null; }   // 别让 hover 快闪和滚动抢同一批字符
+      heroReveal(heroScrollQ);
+    },
   });
 }
 
 function buildHero() {
   gsap.set(".nav", { yPercent: -140, opacity: 0 });
   gsap.set(".rail", { opacity: 0 });
-  gsap.set(".hero .ht-mask", { yPercent: 118 });
+  gsap.set([".nav__claim", ".nav__sep"], { opacity: 0 });
   gsap.set(".hero__vert", { clipPath: "inset(0 0 100% 0)" });
-  gsap.set(".hero__coord", { opacity: 0, y: -14 });
   gsap.set(".hero__orb", { scale: 0.4, opacity: 0 });
-  gsap.set(".hero__gh", { opacity: 0, y: 14 });
-  gsap.set(".hero__plat", { opacity: 0, y: 14 });
+  gsap.set(".hero__cta-txt", { opacity: 0, y: 14 });
   gsap.set(".hero__ticker", { yPercent: 110 });
   gsap.set(".hero__manifest", { opacity: 0 });
-  gsap.set([".hm__rule", ".hm__get", ".hm__exec"], { opacity: 0 });
-  gsap.set("#hm-stage", { opacity: 0, y: 16 });
+  gsap.set([".hm__read", ".hm__rule", ".hm__headrow", ".hm__exec"], { opacity: 0 });
+  gsap.set(".hm__right", { opacity: 0, y: 16 });
   buildManifestGrid();
   buildHeroStage();
 
   if (REDUCED) {
-    gsap.set([".nav", ".rail", ".hero .ht-mask", ".hero__vert", ".hero__coord", ".hero__orb", ".hero__gh", ".hero__plat", ".hero__ticker", ".hero__manifest", ".hm__rule", ".hm__get", ".hm__exec", "#hm-stage"], { clearProps: "all" });
-    // 无动效时直接落在双区终态：巨字与全部能力清单同屏全显，舞台照常逐项播放（动画本身就是内容）
-    const rHc5 = $("#hc-5");
-    if (rHc5) { rHc5.textContent = "ACCESS — READ / WRITE · PRO"; rHc5.classList.add("is-pro"); }
+    gsap.set([".nav", ".rail", ".nav__claim", ".nav__sep", ".hero__vert", ".hero__orb", ".hero__cta-txt", ".hero__ticker", ".hero__manifest", ".hm__read", ".hm__rule", ".hm__headrow", ".hm__exec", ".hm__right"], { clearProps: "all" });
+    // 无动效时直接落在终态：清单、舞台、场景解说同屏全显，舞台照常逐项播放（动画本身就是内容）
     fitHeroStage();
     startProExec();
     return;
@@ -522,31 +564,32 @@ function heroIntro() {
   if (REDUCED) return gsap.timeline();
   stage.setOpacity(0.9, 2.2);
 
-  const SCAN_AT = 1.5, SCAN_DUR = 1.45;
-  const hc1 = $("#hc-1");
-  const dec = { p: 0 };
+  const SCAN_AT = 1.5, SCAN_DUR = 1.35;
+  const ops = $("#hero-pro-ops");   // 刊头计数器：扫描期间先当解密读数用，扫完再交还给 PRO — NN / 总数
+  const dec = { p: 0 }, roll = { v: 0 };
   const decUpdate = () => {
     const W = heroTitle.offsetWidth || 1;
     const q = -0.12 + dec.p * 1.24;
     heroScan.style.transform = `translateX(${(q * W).toFixed(1)}px)`;
     heroReveal(q);
-    hc1.textContent = "DECRYPT — " + (gsap.utils.clamp(0, 1, dec.p) * 100).toFixed(1) + "% · SCANNING";
+    ops.textContent = "DECRYPT — " + (gsap.utils.clamp(0, 1, dec.p) * 100).toFixed(1) + "% · SCANNING";
   };
 
   const tl = gsap.timeline({ defaults: { ease: "flow" } });
   tl.to(".nav", { yPercent: 0, opacity: 1, duration: 0.9 }, 0.15)
     .to(".rail", { opacity: 1, duration: 0.8 }, 0.4)
     .to(".hero__vert", { clipPath: "inset(0 0 0% 0)", duration: 1.1, ease: "silk" }, 0.3)
-    .to(".ht-line--1 .ht-mask", { yPercent: 0, duration: 1.15, ease: "cine" }, 0.36)
-    .to(".ht-line--2 .ht-mask", { yPercent: 0, duration: 1.3, ease: "cine" }, 0.52)
-    .to(".hero__coord", { opacity: 1, y: 0, duration: 0.8 }, 0.9)
-    .to(".hero__orb", { scale: 1, opacity: 1, duration: 1.1, ease: "back.out(1.7)" }, 1.05)
-    .to(".hero__gh", { opacity: 1, y: 0, duration: 0.7 }, 1.25)
-    .to(".hero__plat", { opacity: 1, y: 0, duration: 0.7 }, 1.38)
+    .to(".hero__manifest", { opacity: 1, duration: 0.4 }, 0.3)
+    .to(".hm__read", { opacity: 1, duration: 0.6 }, 0.5)
+    .to(".hm__rule", { opacity: 1, duration: 0.6 }, 0.62)
+    .to(".hm__headrow", { opacity: 1, duration: 0.6 }, 0.72)
     .to(".hero__ticker", { yPercent: 0, duration: 0.9, ease: "cine" }, 1.15)
+    .call(() => {
+      gsap.to("#hero-scramble", { duration: 1.1, scrambleText: { text: "解密 · 浏览 · 搜索 · 导出 · 年度总结 —— 全部离线完成", chars: SCRAMBLE_CN, speed: 0.7 } });
+    }, [], 0.55)
 
-    // ── 解密序列：密文抖动 → 光刃横扫逐字定格 → 粒子自散乱聚拢
-    .call(() => hc1.classList.add("is-live"), [], 0.9)
+    // ── 解密序列：主句密文抖动 → 光刃横扫逐字定格 → 粒子自散乱聚拢
+    .call(() => ops.classList.add("is-scan"), [], 0.9)
     .to({}, { duration: SCAN_AT - 0.9, onUpdate: decUpdate }, 0.9)
     .set(heroScan, { opacity: 1 }, SCAN_AT)
     .call(() => {
@@ -555,57 +598,45 @@ function heroIntro() {
     }, [], SCAN_AT)
     .to(dec, { p: 1, duration: SCAN_DUR, ease: "power1.inOut", onUpdate: decUpdate }, SCAN_AT)
     .to(heroScan, { opacity: 0, duration: 0.45 }, SCAN_AT + SCAN_DUR - 0.15)
+    // 导航栏标语在光刃收尾时跟着解出（比主句晚约半拍落定）：巨字退场了，这句话在 logo 边上照样是解出来的
+    .to([".nav__claim", ".nav__sep"], { opacity: 1, duration: 0.5 }, SCAN_AT + SCAN_DUR - 0.5)
+    .call(() => {
+      gsap.to("#nav-claim-a", { duration: 0.85, scrambleText: { text: "你的聊天记录，本就属于", chars: SCRAMBLE_CN, speed: 0.8 } });
+      gsap.to("#nav-claim-b", { duration: 1.05, scrambleText: { text: "你", chars: SCRAMBLE_CN, speed: 0.5 } });
+    }, [], SCAN_AT + SCAN_DUR - 0.5)
     .call(() => {
       stage.pulse(1.7);
-      hc1.classList.remove("is-live");
-      gsap.to(hc1, {
-        duration: 0.9,
-        scrambleText: { text: "DB — AES-256 · SQLCIPHER COMPAT", chars: HEXC + " ·—", speed: 0.8 },
+      ops.classList.remove("is-scan");
+      gsap.to(ops, {
+        duration: 0.7,
+        scrambleText: { text: `PRO — 00 / ${PRO_TOTAL}`, chars: HEXC + " ·/—", speed: 0.8 },
       });
-      $$(".hero .ht-line").forEach((l) => (l.style.overflow = "visible")); // 交还霓虹辉光的外溢空间
     }, [], SCAN_AT + SCAN_DUR);
 
-  // ── 权限清单下半场：巨字保持完整亮相，全部能力在其下方全量摊开，两块内容同屏共存
-  const PRO_AT = SCAN_AT + SCAN_DUR + 0.15;
+  // ── 权限清单下半场：61 项从四面八方飞进各自格位，舞台与场景解说随后接管首屏
+  const PRO_AT = SCAN_AT + SCAN_DUR + 0.1;
   tl.call(() => stage.setOpacity(0.6, 1.2), [], PRO_AT)
-    .to(".hero__manifest", { opacity: 1, duration: 0.5 }, PRO_AT + 0.1)
-    .call(() => {
-      gsap.to("#hero-scramble", { duration: 1.1, scrambleText: { text: "解密 · 浏览 · 搜索 · 导出 · 年度总结 —— 全部离线完成", chars: SCRAMBLE_CN, speed: 0.7 } });
-      gsap.to("#hero-pro-t1", { duration: 0.9, scrambleText: { text: "高级版 —— 不止能读，", chars: SCRAMBLE_CN, speed: 0.7 } });
-      gsap.to("#hero-pro-t2", { duration: 1.25, scrambleText: { text: "还能写", chars: SCRAMBLE_CN, speed: 0.5 } });
-      const hc5 = $("#hc-5");
-      if (hc5) {
-        hc5.classList.add("is-pro");
-        gsap.to(hc5, { duration: 0.9, scrambleText: { text: "ACCESS — READ / WRITE · PRO", chars: HEXC + " ·/—", speed: 0.8 } });
-      }
-    }, [], PRO_AT + 0.45)
-    .to(".hm__rule", { opacity: 1, duration: 0.6 }, PRO_AT + 0.55)
-    .fromTo("#hm-grid .hm__mod", { opacity: 0, y: -10 }, { opacity: 1, y: 0, duration: 0.5, ease: "flow", stagger: 0.07 }, PRO_AT + 0.7)
+    .fromTo("#hm-grid .hm__mod", { opacity: 0, y: -10 }, { opacity: 1, y: 0, duration: 0.5, ease: "flow", stagger: 0.06 }, PRO_AT + 0.05)
     // 全部能力从四面八方飞入各自格位：散乱 → 秩序
     .fromTo("#hm-grid .hm__item",
       { opacity: 0, x: () => gsap.utils.random(-280, 280), y: () => gsap.utils.random(-200, 150), scale: 1.14 },
-      { opacity: 1, x: 0, y: 0, scale: 1, duration: 0.75, ease: "power3.out", stagger: { each: 0.022, from: "random" } },
-      PRO_AT + 0.8)
+      { opacity: 1, x: 0, y: 0, scale: 1, duration: 0.75, ease: "power3.out", stagger: { each: 0.018, from: "random" } },
+      PRO_AT + 0.15)
+    // 计数器滚表挂在时间轴上（不在 call 里另起补间）：掉帧或后台切回时也一定先于舞台启动那一拍渲染完
+    .to(roll, { v: PRO_TOTAL, duration: 1.5, ease: "power1.out", onUpdate: () => (ops.textContent = "PRO — " + String(Math.round(roll.v)).padStart(2, "0") + " / " + PRO_TOTAL) }, PRO_AT + 0.15)
+    .to(".hm__right", { opacity: 1, y: 0, duration: 0.9, ease: "cine" }, PRO_AT + 0.5)
+    .to(".hero__orb", { scale: 1, opacity: 1, duration: 1.1, ease: "back.out(1.7)" }, PRO_AT + 0.9)
+    .to(".hero__cta-txt", { opacity: 1, y: 0, duration: 0.7 }, PRO_AT + 1.05)
+    .to(".hm__exec", { opacity: 1, duration: 0.5 }, PRO_AT + 1.2)
     .call(() => {
-      const ops = { v: 0 }, opsEl = $("#hero-pro-ops");
-      gsap.to(ops, { v: PRO_TOTAL, duration: 1.5, ease: "power1.out", onUpdate: () => (opsEl.textContent = "PRO — " + String(Math.round(ops.v)).padStart(2, "0") + " / " + PRO_TOTAL) });
-    }, [], PRO_AT + 0.8)
-    .to("#hm-stage", { opacity: 1, y: 0, duration: 0.9, ease: "cine" }, PRO_AT + 1.1)
-    .to(".hm__get", { opacity: 1, duration: 0.6 }, PRO_AT + 2.3)
-    .to(".hm__exec", { opacity: 1, duration: 0.5 }, PRO_AT + 2.45)
-    .call(() => {
+      gsap.killTweensOf(ops);   // 光刃收尾那条「PRO — 00」乱码若因掉帧还没收，别让它在舞台写入 01 / 61 之后再盖回去
       startProExec();
       heroScrollOut();
-      // hover 快闪重解密：入场收尾后才绑（早绑会杀掉未跑完的入场补间），且只杀自己上一次的补间
-      const t2 = $("#hero-pro-t2");
-      let tw = null;
-      $("#hero-pro").addEventListener("mouseenter", () => {
-        if (tw) tw.kill();
-        tw = gsap.to(t2, { duration: 0.5, scrambleText: { text: "还能写", chars: SCRAMBLE_CN, speed: 1 } });
-      });
-    }, [], PRO_AT + 2.6)
-    // 首屏全部显示完（执行读数 2.45+0.5s 落定）再锁 3 秒，用户看完整套装置才放行往下滚
-    .call(unlockHeroGate, [], PRO_AT + 2.95 + 3);
+      // hover 快闪重解密：入场收尾后才绑（早绑会和光刃扫描的 decUpdate 同时驱动 heroReveal，抢同一批字符）
+      $("#hero-pro").addEventListener("mouseenter", heroFlash);
+    }, [], PRO_AT + 1.7)
+    // 首屏全部显示完再锁 3 秒，用户看完整套装置才放行往下滚
+    .call(unlockHeroGate, [], PRO_AT + 2 + 3);
   return tl;
 }
 
