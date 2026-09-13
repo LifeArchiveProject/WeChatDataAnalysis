@@ -54,6 +54,13 @@ test("PowerShell source keeps its UTF-8 BOM so Windows PowerShell can parse Chin
   assert.deepEqual([...fs.readFileSync(settingsScriptPath).subarray(0, 3)], [0xef, 0xbb, 0xbf]);
 });
 
+test("installer text reads declare UTF-8 even when the host default code page is UTF-8", () => {
+  // UTF-8 系统上隐式解码也可能通过运行测试，因此还需固定文件读取的编码约定。
+  const reads = settingsScript.split(/\r?\n/).filter((line) => /\bGet-Content\b/.test(line) && !/^\s*#/.test(line));
+  assert.ok(reads.length > 0);
+  for (const line of reads) assert.match(line, /-Encoding\s+UTF8\b/i);
+});
+
 test(
   "installer preserves Unicode settings when updating and returns an explicit UTF-16LE path file",
   { skip: process.platform !== "win32" },

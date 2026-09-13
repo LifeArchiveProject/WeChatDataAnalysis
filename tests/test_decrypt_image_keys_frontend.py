@@ -143,14 +143,17 @@ def test_macos_database_key_uses_helper_first_and_explicit_lldb_fallback():
 def test_macos_lldb_fallback_is_staged_and_recovers_pending_state():
     source = read_decrypt_page()
     api_source = read_use_api()
+    progress_source = (ROOT / "frontend" / "lib" / "macos-capture-progress.js").read_text(encoding="utf-8")
 
     assert "步骤 1 / 3" in source
     assert "已进入聊天，开始预检" in source
     assert "步骤 2 / 3" in source
     assert "已看到二维码，开始监测" in source
     assert "getMacosKeyCaptureStatus" in source
-    assert "statusResponse?.data?.monitor_ready === true" in source
-    assert "captureOutcomePromise" in source
+    assert "followMacosCapture" in source
+    assert "return statusResponse?.status === 0 ? statusResponse.data : null" in source
+    assert "status.monitor_ready === true" in progress_source
+    assert "const outcome = await completion" in progress_source
     assert "显示“监测已就绪”前请不要登录微信" in source
     assert "检测到上次未完成的临时调试微信" in source
     assert "if (macosKeyCaptureOwnedByPage.value) void cleanupMacosKeyCapture" in source
