@@ -205,7 +205,7 @@ export function createKit(gsap, root, { reduced = false } = {}) {
       railEl = h("aside", "pd-chat__rail");
       const search = h("i", "pd-chat__search");
       railEl.appendChild(search);
-      // 默认业务语境；本地存档类场景传 railNames 换成私人语境（家人群 / 室友 / 老同学）
+      // 默认业务语境；回写类场景传 railNames 换成私人语境（家人群 / 室友 / 老同学）
       const names = railNames ? [title, ...railNames].slice(0, 4) : [title, "客户群", "李经理", "订单群"];
       names.forEach((n, i) => {
         const r = h("div", "pd-sess" + (i === 0 ? " is-active" : ""));
@@ -714,9 +714,9 @@ export function createKit(gsap, root, { reduced = false } = {}) {
   K.scenario = (text, { parent, local = false } = {}) => {
     const el = h("div", "pd-strip");
     const t = h("span", "pd-strip__t", text);
-    // 只写本地解密副本的能力（消息修改 / 消息补录 / 标记已读 / 免打扰）必须挂这枚标：
-    // 画面演的是一场与客户的对话，不点明就会被读成「对方也看到了」
-    if (local) t.appendChild(h("i", "pd-strip__local", "本地副本 · 不回写微信"));
+    // 回写类能力（消息修改 / 消息补录 / 标记已读 / 免打扰）挂这枚标：
+    // 直接改进你本机的微信、且随时能还原，点明这两点
+    if (local) t.appendChild(h("i", "pd-strip__local", "直接写入微信 · 可随时还原"));
     const r = h("b", "pd-strip__r");
     el.append(t, r);
     mount(el, parent);

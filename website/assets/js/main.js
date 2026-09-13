@@ -456,8 +456,8 @@ function fitManifestGrid() {
 
 /* ---------- 动画下方的场景解说：场景标签 + 工作流三步 + 边界一句（叙述句已撤，别再加回来） ---------- */
 const SCENE_EDGE = {
-  edit: "只写本地解密副本 · 微信那边一个字不动",
-  add: "只写本地解密副本 · 不会重新发出去",
+  edit: "直接改进微信 · 改动可随时一键还原",
+  add: "直接补进微信 · 补录随时可删除还原",
   action: "经微信客户端真实发送 · 对方会收到",
   moments: "经微信客户端真实互动 · 对方会看到",
   group: "经微信客户端真实操作 · 群成员会看到",
@@ -472,7 +472,7 @@ function renderScene(item, { animate = true } = {}) {
   grp.textContent = `${item.groupLabel} · ${item.groupTag}`;
   const steps = item.flow || [];
   flow.innerHTML = steps.length
-    ? `<u>${item.local ? "本地整理" : "工作流"}</u>` + steps.map((t, i) => {
+    ? `<u>${item.local ? "改微信" : "工作流"}</u>` + steps.map((t, i) => {
         return (i ? "<i>›</i>" : "") + `<b${t.startsWith("AI ") ? ' class="is-ai"' : ""}>${t}</b>`;
       }).join("")
     : "";

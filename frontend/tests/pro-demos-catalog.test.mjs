@@ -65,7 +65,7 @@ test('每项都带 story（场景编写依据，首屏不显示）、flow（首�
   }
 })
 
-test('本地写入与真实动作的边界：只动本地解密副本的恰好 27 项', () => {
+test('回写类与真实动作的边界：直接回写微信本地库、可还原的恰好 27 项', () => {
   assert.equal(PRO_LOCAL_ITEMS.length, 27)
   const localKeys = PRO_LOCAL_ITEMS.map((it) => it.key)
   // 消息修改 8 + 消息补录 17 + 这两项会话状态

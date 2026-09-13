@@ -9,8 +9,8 @@
       一律 kit.workflow 立一条底轨（触发 → 取件或 AI → 自动执行），全程**没有人在点**：
       不用 kit.cursor，内容自己出现、自己发出；自动产生的那条挂一枚 kit.tag，静止帧里也看得出不是手打的。
       核心表达仍是 kit.twin 双窗 + twin.fly：左窗是本应用，右窗是真实微信，光点飞过去 = 那边真的收到了。
-   ② chat-mark-read / chat-set-mute 只写**本地解密副本**，单向、不回写微信：
-      情境条必须 kit.scenario(text, { local: true })，画面里是人在整理自己的档案，光标操作是合理的。
+   ② chat-mark-read / chat-set-mute 直接改**你本机微信的会话状态**，可随时还原：
+      情境条必须 kit.scenario(text, { local: true })，画面里是人在整理自己的会话，光标操作是合理的。
    ════════════════════════════════════════════════════════════ */
 
 /* ── 起手：情境条 + 双窗口 + 两边同一段业务上下文 ── */
@@ -831,7 +831,7 @@ export const css = `
 }
 .pd-action-convert .pd-ic { width: 14px; height: 14px; color: var(--pd-amber); }
 
-/* 会话状态：按钮在同一位置切换开 / 关（本地写入两项用）*/
+/* 会话状态：按钮在同一位置切换开 / 关（回写类两项用）*/
 .pd-action-state-btn { margin-left: auto; flex: none; padding: 4px 8px; border: 1px solid rgba(255, 194, 75, 0.45); border-radius: 3px; color: var(--pd-amber); font-size: 10px; font-weight: 500; white-space: nowrap; }
 .pd-action-state-btn.is-on { border-color: rgba(61, 242, 141, 0.45); color: var(--pd-neon); background: rgba(61, 242, 141, 0.12); }
 /* 未读数：脱离布局钉在会话行右端，会话名才有地方写全 */
