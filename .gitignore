@@ -118,3 +118,6 @@ pnpm-lock.yaml
 
 # 高级版演示走片的默认输出目录（website/dev/shot.mjs），只是本地调试产物
 pro-shots/
+
+# 隔离验收数据库、真实聊天资料和本地状态快照不得进入版本库。
+/tmp/deepagents-migration/

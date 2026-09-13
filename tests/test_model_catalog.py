@@ -85,7 +85,7 @@ def test_upstream_fields_override_catalog_and_survive_restart(tmp_path):
     store = AIStore(tmp_path)
     models = ModelService(store)
     models.metadata.data = CATALOG
-    profile = {'provider':'custom','model':'fixture-model','base_url':'https://proxy.example/v1','protocol':'openai'}
+    profile = {'id':'selected','provider':'custom','model':'fixture-model','base_url':'https://proxy.example/v1','protocol':'openai'}
     items = parse_model_catalog({'data':[{'id':'fixture-model','context_length':64000,
         'architecture':{'input_modalities':['text']}, 'top_provider':{'max_completion_tokens':8192},
         'capabilities':{'tool_call':True}}]})

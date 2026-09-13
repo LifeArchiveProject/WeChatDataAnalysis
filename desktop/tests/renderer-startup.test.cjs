@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { loadWithRedirect, isInternalRedirect } = require('../src/renderer-startup.cjs');
+const { loadWithRedirect, isInternalRedirect, resolveDesktopUiUrl } = require('../src/renderer-startup.cjs');
 
 test('首次使用页跳转完成后不重新加载首页', async () => {
   const contents = new EventEmitter();
@@ -49,4 +49,38 @@ test('打包页面只接受同一目录内的跳转', () => {
   assert.equal(isInternalRedirect(url('ui/index.html'), url('ui/agreement/index.html')), true);
   assert.equal(isInternalRedirect(url('ui/index.html'), url('secret.html')), false);
   assert.equal(isInternalRedirect(url('ui/index.html'), 'about:blank'), false);
+});
+
+test('开发页面一直不响应时，在期限内中止加载并释放监听器', async () => {
+  const contents = new EventEmitter();
+  contents.getURL = () => 'http://127.0.0.1:3040/';
+  let stopped = 0;
+  let abort;
+  contents.stop = () => {
+    stopped++; contents.emit('did-finish-load');
+    setImmediate(() => abort(Object.assign(new Error('late abort'), { code: 'ERR_ABORTED' })));
+  };
+  await assert.rejects(loadWithRedirect({ webContents: contents,
+    loadURL: () => new Promise((_, reject) => { abort = reject; }) }, 'http://127.0.0.1:3040/', 5000, 20),
+  error => error.code === 'ERR_NAVIGATION_TIMEOUT');
+  assert.equal(stopped, 1);
+  assert.equal(contents.listenerCount('did-finish-load'), 0);
+});
+
+test('总期限包含未完成的首次使用页跳转，停止事件不能伪装为成功', async () => {
+  const contents = new EventEmitter();
+  contents.getURL = () => 'http://localhost:3000/agreement';
+  contents.stop = () => contents.emit('did-finish-load');
+  await assert.rejects(loadWithRedirect({ webContents: contents, loadURL: async () => {
+    throw Object.assign(new Error('aborted'), { code: 'ERR_ABORTED' });
+  } }, 'http://localhost:3000/', 10000, 20), error => error.code === 'ERR_NAVIGATION_TIMEOUT');
+  assert.equal(contents.listenerCount('did-finish-load'), 0);
+});
+
+test('静态入口使用实际后端端口，忽略遗留开发地址', () => {
+  const options = { startUrl: 'http://127.0.0.1:3040', backendUrl: 'http://127.0.0.1:10494/', isPackaged: false };
+  assert.equal(resolveDesktopUiUrl({ ...options, staticUi: true }), options.backendUrl);
+  assert.equal(resolveDesktopUiUrl(options), options.startUrl);
+  assert.equal(resolveDesktopUiUrl({ ...options, startUrl: '' }), 'http://localhost:3000');
+  assert.equal(resolveDesktopUiUrl({ ...options, startUrl: '', isPackaged: true }), options.backendUrl);
 });

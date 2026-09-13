@@ -4287,6 +4287,7 @@ def _normalize_realtime_message_item_for_export(
         sender_username=sender_username,
         is_sent=bool(is_sent),
         packed_info_data=_pick_case_insensitive_value(item, "packed_info_data", "packedInfoData", "PackedInfoData"),
+        msg_source=_pick_case_insensitive_value(item, "msg_source", "source", "msgSource"),
     )
 
 
@@ -4436,6 +4437,7 @@ class _Row:
     sender_username: str
     is_sent: bool
     packed_info_data: Any = None
+    msg_source: Any = None
 
 
 def _iter_rows_for_conversation(
@@ -4469,7 +4471,7 @@ def _iter_rows_for_conversation(
     account_wxid = resolve_account_self_username(account_dir)
 
     def iter_db(db_path: Path) -> Iterable[_Row]:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True)
         conn.row_factory = sqlite3.Row
         try:
             table_name = _resolve_msg_table_name(conn, conv_username)
@@ -4498,8 +4500,11 @@ def _iter_rows_for_conversation(
 
             quoted = _quote_ident(table_name)
             has_packed_info_data = False
+            source_column = None
             try:
                 cols = conn.execute(f"PRAGMA table_info({quoted})").fetchall()
+                column_names = {_decode_sqlite_text(c[1]).strip().lower() for c in cols}
+                source_column = next((c for c in ('source', 'msg_source') if c in column_names), None)
                 has_packed_info_data = any(
                     _decode_sqlite_text(c[1]).strip().lower() == "packed_info_data" for c in cols
                 )
@@ -4525,6 +4530,8 @@ def _iter_rows_for_conversation(
             packed_select = (
                 "m.packed_info_data AS packed_info_data, " if has_packed_info_data else "NULL AS packed_info_data, "
             )
+            # AI 读取保留微信原始 @ 身份；旧库没有该列时仍可读取。
+            packed_select += f'm.{source_column} AS msg_source, ' if source_column else 'NULL AS msg_source, '
             sql_with_join = (
                 "SELECT "
                 "m.local_id, m.server_id, m.local_type, m.sort_seq, m.real_sender_id, m.create_time, "
@@ -4593,6 +4600,7 @@ def _iter_rows_for_conversation(
                         sender_username=sender_username,
                         is_sent=bool(is_sent),
                         packed_info_data=r["packed_info_data"],
+                        msg_source=r["msg_source"],
                     )
         finally:
             try:

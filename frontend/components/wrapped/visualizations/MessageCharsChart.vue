@@ -1321,6 +1321,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+@reference "../../../assets/css/tailwind.css";
 /* ============ 布局 ============ */
 
 .tf-root {

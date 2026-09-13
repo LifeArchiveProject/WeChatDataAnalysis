@@ -55,6 +55,7 @@ _message_table_cache: OrderedDict[
     tuple[str, str, str], _MessageTableResolutionCacheEntry
 ] = OrderedDict()
 _query_capability_cache: OrderedDict[tuple[str, str, str], int] = OrderedDict()
+_message_schema_cache: OrderedDict[tuple[str, str], tuple[float, dict[str, str]]] = OrderedDict()
 
 
 def _normalized_path_key(path: Path | str) -> str:
@@ -107,12 +108,13 @@ def _cache_message_tables(
     username: str,
     candidates: list[Path],
     resolved: list[tuple[Path, str]],
+    cached_at: Optional[float] = None,
 ) -> None:
     key = _message_table_cache_key(rt_conn, db_storage_dir, username)
     entry = _MessageTableResolutionCacheEntry(
         candidate_signature=tuple(_normalized_path_key(path) for path in candidates),
         resolved=tuple((str(path), str(table)) for path, table in resolved),
-        cached_at=time.monotonic(),
+        cached_at=time.monotonic() if cached_at is None else cached_at,
     )
     with _reader_cache_lock:
         _message_table_cache.pop(key, None)
@@ -138,6 +140,7 @@ def _clear_realtime_reader_caches() -> None:
     with _reader_cache_lock:
         _message_table_cache.clear()
         _query_capability_cache.clear()
+        _message_schema_cache.clear()
 
 
 def _pick(item: Any, *keys: str) -> Any:
@@ -246,11 +249,6 @@ def _resolve_tables(
     exec_query: ExecQuery,
 ) -> tuple[list[tuple[Path, str]], int, int, list[str]]:
     expected = f"Msg_{hashlib.md5(str(username or '').strip().encode('utf-8')).hexdigest()}"
-    sql = (
-        "SELECT name FROM sqlite_master WHERE type='table' AND lower(name)=lower("
-        + _sql_literal(expected)
-        + ") LIMIT 1"
-    )
     candidates = _message_db_paths(db_storage_dir, username)
     cached = _get_cached_message_tables(
         rt_conn=rt_conn,
@@ -264,25 +262,17 @@ def _resolve_tables(
     resolved: list[tuple[Path, str]] = []
     probed = 0
     diagnostics: list[str] = []
+    schema_times: list[float] = []
     for db_path in candidates:
         try:
-            rows = _locked_call(
-                rt_conn,
-                exec_query,
-                rt_conn.handle,
-                kind="message",
-                path=str(db_path),
-                sql=sql,
-            )
+            actual, schema_time = _resolve_schema_table(rt_conn, db_path, expected, exec_query)
+            schema_times.append(schema_time)
             probed += 1
         except Exception as exc:
             diagnostics.append(f"probe {db_path.name}: {exc}")
             continue
-        for row in rows or []:
-            actual = str(_pick(row, "name") or "").strip()
-            if actual:
-                resolved.append((db_path, actual))
-                break
+        if actual:
+            resolved.append((db_path, actual))
     if probed == len(candidates):
         _cache_message_tables(
             rt_conn=rt_conn,
@@ -290,8 +280,38 @@ def _resolve_tables(
             username=username,
             candidates=candidates,
             resolved=resolved,
+            # 二级缓存不能从本次命中重新计时，从而延长旧目录的有效期。
+            cached_at=min(schema_times) if schema_times else None,
         )
     return resolved, len(candidates), probed, diagnostics
+
+
+def _resolve_schema_table(rt_conn: Any, db_path: Path, expected: str, exec_query: ExecQuery) -> tuple[str, float]:
+    """跨会话复用数据库表目录，沿用命中 30 秒、缺失 2 秒的失效边界。"""
+    key = _connection_cache_id(rt_conn), _normalized_path_key(db_path)
+    now = time.monotonic()
+    with _reader_cache_lock:
+        cached = _message_schema_cache.pop(key, None)
+        if cached:
+            stamp, names = cached
+            actual = names.get(expected.lower(), '')
+            ttl = _MESSAGE_TABLE_CACHE_TTL_SECONDS if actual else _MESSAGE_TABLE_NEGATIVE_CACHE_TTL_SECONDS
+            if now - stamp <= ttl:
+                _message_schema_cache[key] = cached
+                return actual, stamp
+    rows = _locked_call(rt_conn, exec_query, rt_conn.handle, kind='message', path=str(db_path),
+                        sql="SELECT name FROM sqlite_master WHERE type='table'")
+    names = {}
+    for row in rows or []:
+        name = str(_pick(row, 'name') or '').strip()
+        if name:
+            names[name.lower()] = name
+    stamp = time.monotonic()
+    with _reader_cache_lock:
+        _message_schema_cache[key] = stamp, names
+        while len(_message_schema_cache) > 128:
+            _message_schema_cache.popitem(last=False)
+    return names.get(expected.lower(), ''), stamp
 
 
 def _account_username_candidates(rt_conn: Any, account_dir: Path) -> tuple[str, ...]:

@@ -185,13 +185,23 @@ Function WDA_InitOutputDirSelection
   Call WDA_UseCurrentUserAppData
   Call WDA_PrepareOutputDirScript
   StrCpy $WDA_SelectedOutputDir "${WDA_DEFAULT_OUTPUT_DIR}"
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\wda-output-dir.ps1" -Mode Read -DefaultSettingsPath "${WDA_DEFAULT_SETTINGS_PATH}" -DefaultOutputPath "${WDA_DEFAULT_OUTPUT_DIR}" -LegacySettingsPath1 "${WDA_PRODUCT_SETTINGS_PATH}" -LegacySettingsPath2 "${WDA_FILENAME_SETTINGS_PATH}"'
+  Delete "$PLUGINSDIR\wda-output-dir-result.txt"
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\wda-output-dir.ps1" -Mode Read -ResultPath "$PLUGINSDIR\wda-output-dir-result.txt" -DefaultSettingsPath "${WDA_DEFAULT_SETTINGS_PATH}" -DefaultOutputPath "${WDA_DEFAULT_OUTPUT_DIR}" -LegacySettingsPath1 "${WDA_PRODUCT_SETTINGS_PATH}" -LegacySettingsPath2 "${WDA_FILENAME_SETTINGS_PATH}"'
   Pop $0
   Pop $1
   ${If} $0 == "0"
-  ${AndIf} $1 != ""
-    StrCpy $WDA_SelectedOutputDir "$1"
+    ; 路径通过 Unicode 文件传递，避免控制台编码影响中文和生僻字。
+    ClearErrors
+    FileOpen $2 "$PLUGINSDIR\wda-output-dir-result.txt" r
+    ${IfNot} ${Errors}
+      FileReadUTF16LE $2 $1
+      FileClose $2
+      ${If} $1 != ""
+        StrCpy $WDA_SelectedOutputDir "$1"
+      ${EndIf}
+    ${EndIf}
   ${EndIf}
+  Delete "$PLUGINSDIR\wda-output-dir-result.txt"
   Call WDA_RestoreInstallShellContext
 FunctionEnd
 
