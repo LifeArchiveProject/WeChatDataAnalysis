@@ -5,7 +5,7 @@
 <div align="center">
     <h1>WeChatDataAnalysis - 微信数据库解密与分析工具</h1>
     <p>微信4.x数据解密并生成年度总结，高仿微信，支持实时更新，导出聊天记录，朋友圈等大量便捷功能</p>
-    <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
+    官网链接：https://lifearchiveproject.github.io/WeChatDataAnalysis/    <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
     <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
     <img src="https://gh-down-badges.linkof.link/LifeArchiveProject/WeChatDataAnalysis" alt="Downloads" />
     <img src="https://img.shields.io/github/forks/LifeArchiveProject/WeChatDataAnalysis" alt="Forks" />
@@ -56,7 +56,7 @@
 | 联系人 | 修改好友备注、同意好友请求、添加好友、删除好友、新建标签、设置标签、手机号 / 微信号找人、联系人变化记录 |
 | 自动化任务 | 定时群发任务、新好友备注 / 标签 / 欢迎消息处理、朋友圈跟圈任务（按关键词筛出新动态，自动点赞、评论并跟发同样内容，命中屏蔽词的不发） |
 
-其中**消息修改、消息补录以及会话标记已读、会话免打扰共 27 项直接回写你本机的微信数据库**，改动均可随时一键还原；其余 34 项经微信客户端真实执行或读取（其中联系人变化记录只比对本机快照）。演示动画使用虚构数据，不连接微信；真实查找、发送与互动需要登录微信并通过微信联网，好友申请是否送达、是否通过与最终执行结果分别确认。自动化任务默认关闭，需自行配置并手动启动。
+其中**消息修改、消息补录以及会话标记已读、会话免打扰共 27 项直接回写你本机的微信还可同步到手机**，改动均可随时一键还原
 
 ## 可导出的内容
 
