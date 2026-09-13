@@ -11,6 +11,9 @@ const pad2 = (n) => String(n).padStart(2, "0");
 export function createProStage(host, {
   gsap, scenes = {}, items = [], reduced = false,
   hold = 0.9, autoplay = true, loopOne = false, start, autostart = true, onChange, onComplete, speed = 1, hudScramble = true,
+  // 底栏说明行取哪一句：默认 need（为什么需要它）；宿主若在舞台外另有场景解说（官网首屏），
+  // 可传 hudCapField:"caption" 只留「怎么做」、hudUse:false 摘掉重复的场景标签
+  hudCapField = "need", hudUse = true,
 } = {}) {
   if (!gsap) throw new Error("[pro-demos] createProStage 需要注入 gsap");
   const total = items.length;
@@ -48,7 +51,7 @@ export function createProStage(host, {
   const bar = el.querySelector(".pd-progress i");
   const hudOp = el.querySelector(".pd-hud__op");
   const hudGrp = el.querySelector(".pd-hud__grp");
-  const hudUse = el.querySelector(".pd-hud__use");
+  const hudUseEl = el.querySelector(".pd-hud__use");
   const hudName = el.querySelector(".pd-hud__name");
   const hudCap = el.querySelector(".pd-hud__cap");
 
@@ -98,12 +101,12 @@ export function createProStage(host, {
     clearScene();
     cur = item;
     hudOp.textContent = `OP ${pad2(item.index)} / ${pad2(total)}`;
-    // 功能名旁挂场景标签、说明行讲为什么需要它：光看操作看不出用途，这两处负责回答
-    // （官网首屏会隐藏顶栏，所以场景必须挂在底栏，不能放顶栏）
+    // 默认（应用弹窗）：功能名旁挂场景标签、说明行讲为什么需要它——光看操作看不出用途，这两处负责回答；
+    // 宿主在舞台外另有场景解说时（官网首屏）用 hudUse / hudCapField 让出去，见参数处注释
     hudGrp.textContent = `${item.groupLabel} · ${item.groupTag}`;
-    hudUse.textContent = item.use || "";
-    hudUse.style.display = item.use ? "" : "none";
-    hudCap.textContent = item.need || item.caption || "";
+    hudUseEl.textContent = hudUse ? (item.use || "") : "";
+    hudUseEl.style.display = hudUse && item.use ? "" : "none";
+    hudCap.textContent = item[hudCapField] || item.caption || "";
     const scene = scenes[item.key];
     if (onChange) onChange(item);
 

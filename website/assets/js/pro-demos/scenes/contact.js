@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   scenes / contact.js — 联系人（4 项）
+   scenes / contact.js — 联系人（8 项）
    每个场景：({ gsap, kit, tl, root, reduced, item }) => 把动画编进 tl（可返回 tl）。
    约定：所有补间都挂在 tl 上（不要裸调 gsap.to），舞台切换时靠 kill(tl) 清场。
 
@@ -11,14 +11,24 @@
    情境条讲「什么条件触发了它」，strip.result() 讲「省了什么事」，配 kit.ok() 印章停 0.9s。
 
    统一叙事：使用者是做客户获取与维护的人——投放来的申请自动通过，备注按来源自动规范，
-   僵尸粉按规则自动清，老客户名单逐个自动发申请。
+   僵尸粉按规则自动清，老客户名单逐个自动发申请；标签这一档是九月地推收进来的家长，
+   先建去处（create-label）再往人身上叠（set-labels），名单里只有号码的先查（search），
+   换机之后两份本机快照对一对（insights）。
+
+   三条文案红线（这一组最容易翻车的地方）：
+   - 申请类只停在「已发出 / 待通过」，永远不演成「已添加成功」；
+   - 不许有「一键全加 / 批量自动加好友」这类说法，演的是把名单理出来、按节奏逐个发；
+   - 联系人变化记录只说「不在当前列表中」，不写单删检测、不写清粉，也不给红色警报感。
 
    两张脸（都是自建布局根，必须带 pd-pushed 让出顶端 22px 情境条与底端 24px 工作流轨）：
    - 通讯录 .pd-contact：左 190px 名单（可带状态小字）+ 右侧资料卡（大头像 / 昵称 / 字段 / 附加块）
+     hero 传 null、fields 留空就把右栏整块让给场景自绘（标签盘 / 变化记录时间线）
    - 新的朋友 .pd-contact-req：左 340px 申请列表 + 右侧空会话区，通过后聊天窗从右滑入
    ════════════════════════════════════════════════════════════ */
 
-/* ── 通讯录/名单布局：rows 每行可给 note（状态小字）代替骨架条 ── */
+/* ── 通讯录/名单布局：rows 每行可给 note（状态小字）代替骨架条 ──
+   hero 传 null 则不摆资料主角（标签管理 / 变化记录这类右侧不是「一个人」的场景）；
+   fields 为空则连表单都不建，右侧整块留给场景自绘的内容。 */
 function addressBook(kit, {
   head = "联系人资料",
   cap = null,
@@ -39,7 +49,7 @@ function addressBook(kit, {
     const r = kit.h("div", "pd-sess" + (o.active ? " is-active" : ""));
     r.appendChild(kit.avatar(o.av ?? o.name[0], o.tone ?? (i % 2 ? "muted" : "them")));
     const txt = kit.h("div", "pd-sess__txt");
-    const nameEl = kit.h("b", "", o.name);
+    const nameEl = kit.h("b", o.nameCls || "", o.name);
     const noteEl = o.note != null
       ? kit.h("i", "pd-contact__note" + (o.noteCls ? " " + o.noteCls : ""), o.note)
       : kit.skel(46 + ((i * 17) % 30), 5);
@@ -56,14 +66,17 @@ function addressBook(kit, {
   const headEl = kit.h("header", "pd-contact__head");
   headEl.append(kit.h("b", "", head), kit.icon("dots", "pd-ic pd-contact__more"));
   const card = kit.h("div", "pd-contact__card");
-  const heroEl = kit.h("div", "pd-contact__hero");
-  const heroTxt = kit.h("div", "pd-contact__hero-txt");
-  const remarkBig = kit.h("b", "pd-contact__remark", "");
-  const nick = kit.h("b", "pd-contact__name", hero.nick);
-  heroTxt.append(remarkBig, nick);
-  heroEl.append(kit.avatar(hero.av, "them"), heroTxt);
-  card.appendChild(heroEl);
-  const form = kit.form(fields, card);
+  let heroEl = null, heroTxt = null, remarkBig = null, nick = null;
+  if (hero) {
+    heroEl = kit.h("div", "pd-contact__hero");
+    heroTxt = kit.h("div", "pd-contact__hero-txt");
+    remarkBig = kit.h("b", "pd-contact__remark", "");
+    nick = kit.h("b", "pd-contact__name", hero.nick);
+    heroTxt.append(remarkBig, nick);
+    heroEl.append(kit.avatar(hero.av, "them"), heroTxt);
+    card.appendChild(heroEl);
+  }
+  const form = fields.length ? kit.form(fields, card) : { el: null, rows: [] };
   const actionRow = kit.h("div", "pd-contact__actions");
   const btns = actions.map(([t, tone]) => kit.btn(t, tone, actionRow));
   if (actions.length) card.appendChild(actionRow);
@@ -462,11 +475,390 @@ function contactAdd({ gsap, kit, tl }) {
   return tl;
 }
 
+/* ═══════════════ contact-create-label 新建联系人标签 · 新渠道先有个去处 ═══════════════ */
+/* 九月地推收进来 42 位家长，现有三个标签里没有一个装得下他们：
+   规则先把新标签「渠道-地推-9月场」建出来，人这一步**不动**——只演 0→1 个标签，
+   名单那几行从「无标签」落成「等着归入」，归类是下一项（contact-set-labels）的事。 */
+function contactCreateLabel({ gsap, kit, tl }) {
+  const LABEL = "渠道-地推-9月场";
+  const { el, card, rows, cap } = addressBook(kit, {
+    head: "联系人标签",
+    cap: "待归类 · 42 人",
+    rows: [
+      { name: "周妈妈（朵朵）", av: "周", tone: "them", note: "无标签", noteCls: "is-warn", active: true },
+      { name: "李爸爸（果果）", av: "李", tone: "muted", note: "无标签", noteCls: "is-warn" },
+      { name: "陈妈妈（小满）", av: "陈", tone: "them", note: "无标签", noteCls: "is-warn" },
+      { name: "刘妈妈（乐乐）", av: "刘", tone: "muted", note: "无标签", noteCls: "is-warn" },
+      { name: "赵爸爸（一一）", av: "赵", tone: "them", note: "无标签", noteCls: "is-warn" },
+    ],
+    hero: null,
+    fields: [],
+  });
+  el.classList.add("pd-contact-label");
+
+  // 上半块：现有标签只有三个去处，这批家长哪个都不属于
+  const have = kit.h("div", "pd-contact-label__box");
+  const haveK = kit.h("i", "pd-contact-label__k mono", "现有标签 · 3 个");
+  have.appendChild(haveK);
+  const chips = kit.chips([], { parent: have });
+  const olds = ["渠道-抖音", "渠道-转介绍", "已成交"].map((w) => {
+    const c = chips.add(w);
+    c.classList.add("pd-chip--dim");
+    gsap.set(c, { opacity: 0 });
+    return c;
+  });
+  card.appendChild(have);
+
+  // 下半块：新建的这一个——名字自己落定，再作为一枚芯片归队
+  const make = kit.h("div", "pd-contact-label__box pd-contact-label__new");
+  make.appendChild(kit.h("i", "pd-contact-label__k mono", "新建标签 · NEW LABEL"));
+  const nameEl = kit.h("b", "pd-contact-label__name", "—");
+  make.appendChild(nameEl);
+  const meta = kit.h("div", "pd-contact-label__meta");
+  const cnt = kit.h("b", "", "0");
+  const metaTxt = kit.h("span", "");
+  metaTxt.append("这一档等着归入 ", cnt, " 人");
+  meta.append(kit.icon("users"), metaTxt);
+  make.appendChild(meta);
+  card.appendChild(make);
+  gsap.set(meta, { opacity: 0 });
+
+  const strip = kit.scenario("九月地推收了一批家长 · 没处放");
+  const flow = kit.workflow([
+    { label: "想清楚怎么分", icon: "users" },
+    { label: "新建标签", icon: "plus" },
+    { label: "留给后续归类", icon: "clock" },
+  ]);
+  const fresh = chips.add(LABEL);
+  fresh.classList.add("is-hit");
+  gsap.set(fresh, { display: "none" });
+
+  tl.add(strip.in(), 0.05)
+    .add(flow.in(), 0.15)
+    /* ① 想清楚怎么分：现有三个去处摆出来，名单这一批一个都对不上 */
+    .add(flow.step(0), 0.6)
+    .add(kit.flash(cap, { color: "amber", duration: 0.7 }), 0.65);
+  olds.forEach((c, i) => tl.add(kit.pop(c, { y: 4 }), 0.7 + i * 0.13));
+  rows.slice(0, 3).forEach((r, i) => tl.add(kit.flash(r.note, { color: "amber", duration: 0.6 }), 1.0 + i * 0.1));
+  /* ② 新建标签：名字乱码落定，不是有人坐这儿打的 */
+  tl.add(flow.step(1), 1.65)
+    .call(() => make.classList.add("is-edit"), [], 1.7)
+    .add(kit.scramble(nameEl, LABEL, { duration: 0.95 }), 1.75)
+    .call(() => make.classList.remove("is-edit"), [], 2.75)
+    /* 落定后才归队：芯片弹进现有标签那一行并高亮，3 个变 4 个 */
+    .set(fresh, { display: "inline-block" }, 2.85)
+    .add(kit.pop(fresh), 2.85)
+    .add(kit.scramble(haveK, "现有标签 · 4 个", { duration: 0.45 }), 2.9)
+    .add(kit.flash(have, { color: "neon", duration: 0.7 }), 2.9)
+    /* ③ 留给后续归类：人先不动，只是从「无标签」变成有地方可去 */
+    .add(flow.step(2), 3.3)
+    .to(meta, { opacity: 1, duration: 0.3 }, 3.35)
+    .add(kit.count(cnt, 42, { duration: 0.9 }), 3.4);
+  rows.forEach((r, i) => {
+    const at = 3.45 + i * 0.12;
+    tl.call(() => { r.note.classList.remove("is-warn"); r.note.classList.add("is-wait"); }, [], at)
+      .add(kit.scramble(r.note, "等着归入", { duration: 0.42 }), at);
+  });
+  tl.add(flow.done(), 4.3)
+    .add(kit.ok("标签已新建", { en: "LABEL CREATED", hold: 1.4 }), 4.4)
+    .add(strip.result("42 人有地方去了"), 4.4);
+  return tl;
+}
+
+/* ═══════════════ contact-set-labels 设置联系人标签 · 一个人身上叠多枚 ═══════════════ */
+/* 微信的标签是「按完整标签集保存」：原有那枚不能丢，新的一档叠上去。
+   面板里勾的是全集（已成交这一档没勾，看得出不是盲目加），保存后一行三枚并排，
+   名单里 24 位家长错开落成「已打标签」。 */
+function contactSetLabels({ gsap, kit, tl }) {
+  const { el, card, rows, cap, form, remarkBig, nick } = addressBook(kit, {
+    head: "联系人资料",
+    cap: "待打标 · 24 人",
+    rows: [
+      { name: "周妈妈（朵朵）", av: "周", tone: "them", note: "待打标", noteCls: "is-warn", active: true },
+      { name: "李爸爸（果果）", av: "李", tone: "muted", note: "待打标", noteCls: "is-warn" },
+      { name: "陈妈妈（小满）", av: "陈", tone: "them", note: "待打标", noteCls: "is-warn" },
+      { name: "刘妈妈（乐乐）", av: "刘", tone: "muted", note: "待打标", noteCls: "is-warn" },
+      { name: "赵爸爸（一一）", av: "赵", tone: "them", note: "待打标", noteCls: "is-warn" },
+    ],
+    hero: { av: "周", nick: "周朵朵妈妈" },
+    fields: [["微信号", "wxid_zhou0912", true], ["标签", ""], ["试听", "9 月 7 日 · 已到场"]],
+  });
+  el.classList.add("pd-contact-labels");
+  remarkBig.textContent = "地推-周妈妈-朵朵";
+  nick.classList.add("is-sub");
+
+  // 标签字段行：原有那枚一开始就在，新的两枚等会儿叠进同一行
+  const field = form.rows[1];
+  const fieldTag = autoTag(kit, gsap, field, "规则叠加");
+  const tagBox = kit.h("span", "pd-contact-labels__row");
+  const old = kit.h("i", "pd-chip pd-chip--dim", "渠道-地推-9月场");
+  tagBox.appendChild(old);
+  const news = ["已试听", "待跟进"].map((w) => {
+    const c = kit.h("i", "pd-chip", w);
+    tagBox.appendChild(c);
+    gsap.set(c, { display: "none" });
+    return c;
+  });
+  field.value.textContent = "";
+  field.value.appendChild(tagBox);
+  // 叠加规则常驻一行：原有那枚为什么没被顶掉，看这里
+  const rule = kit.h("div", "pd-contact-rule");
+  rule.append(kit.icon("plus"), kit.h("span", "", "叠加规则 · 原有保留，只增不删"));
+  card.appendChild(rule);
+
+  // 标签集面板：勾的是「完整一套」，所以原有那枚一开始就是勾上的
+  const picker = kit.picker(["渠道-地推-9月场", "已试听", "待跟进", "已成交"], { title: "标签集 · 保存以此为准" });
+  picker.el.classList.add("pd-contact-lbl");
+  ["原有", "新增", "新增", "未选"].forEach((k, i) => {
+    picker.rows[i].appendChild(kit.h("i", "pd-contact-lbl__k mono", k));
+  });
+  picker.check(0, true);                              // 完整标签集：原有那枚一开始就勾着
+  const foot = picker.done.parentElement;
+  picker.done.remove();                               // 没有人来点「完成」
+  const auto = kit.h("b", "pd-contact-auto");
+  auto.append(kit.icon("bolt"), kit.h("span", "", "规则自动执行 · 无人工"));
+  foot.appendChild(auto);
+  gsap.set(picker.el, { xPercent: -50, yPercent: -50, opacity: 0, scale: 0.94, transformOrigin: "50% 50%" });
+
+  const strip = kit.scenario("这位家长又多了一重身份");
+  const flow = kit.workflow([
+    { label: "选中联系人", icon: "user" },
+    { label: "勾选完整标签集", icon: "check" },
+    { label: "确认保存", icon: "edit" },
+  ]);
+
+  tl.add(strip.in(), 0.05)
+    .add(flow.in(), 0.15)
+    /* ① 选中联系人：名单里这一位被规则挑出来，原有标签在卡上摆着 */
+    .add(flow.step(0), 0.6)
+    .add(kit.flash(rows[0], { color: "amber", duration: 0.7 }), 0.65)
+    .add(kit.flash(old, { color: "amber", duration: 0.6 }), 0.85)
+    /* ② 勾选完整标签集：原有那枚保持勾上，新的一档补勾，没选的就是没选 */
+    .add(flow.step(1), 1.25)
+    .to(picker.el, { opacity: 1, scale: 1, duration: 0.32, ease: "back.out(1.6)" }, 1.3)
+    .add(kit.flash(picker.rows[0], { color: "neon", duration: 0.5 }), 1.6)
+    .call(() => picker.check(1, true), [], 1.95)
+    .add(kit.flash(picker.rows[1], { color: "amber", duration: 0.5 }), 1.95)
+    .call(() => picker.check(2, true), [], 2.3)
+    .add(kit.flash(picker.rows[2], { color: "amber", duration: 0.5 }), 2.3)
+    .call(() => auto.classList.add("is-on"), [], 2.6)
+    .add(kit.flash(auto, { color: "neon", duration: 0.6 }), 2.6)
+    /* ③ 确认保存：面板收掉，新的两枚叠进同一行，原有那枚还在 */
+    .add(flow.step(2), 3.0)
+    .to(picker.el, { opacity: 0, scale: 0.96, duration: 0.28, ease: "power2.in" }, 3.0)
+    .call(() => field.classList.add("is-edit"), [], 3.1)
+    .add(kit.pop(fieldTag), 3.15)
+    .set(news[0], { display: "inline-block" }, 3.2)
+    .add(kit.pop(news[0], { y: 4 }), 3.2)
+    .set(news[1], { display: "inline-block" }, 3.4)
+    .add(kit.pop(news[1], { y: 4 }), 3.4)
+    .call(() => field.classList.remove("is-edit"), [], 3.7)
+    .add(kit.flash(field, { color: "neon", duration: 0.7 }), 3.7);
+  /* 名单里的 24 位错开落定：这一轮是批量打标，不是改一个人 */
+  rows.forEach((r, i) => {
+    const at = 3.6 + i * 0.11;
+    tl.call(() => { r.note.classList.remove("is-warn"); r.note.classList.add("is-done"); }, [], at)
+      .add(kit.scramble(r.note, "已打标签", { duration: 0.42 }), at);
+  });
+  tl.add(kit.scramble(cap, "已打标 · 24 人", { duration: 0.45 }), 4.15)
+    .add(flow.done(), 4.35)
+    .add(kit.ok("标签已保存", { en: "LABELS SAVED", hold: 1.4 }), 4.45)
+    .add(strip.result("三档并存 · 24 人"), 4.45);
+  return tl;
+}
+
+/* ═══════════════ contact-search 手机号 / 微信号找人 · 先出结果不自动添加 ═══════════════ */
+/* 名单里只有一串号码：号码自己填进查询行，经微信查一次，药丸从「查询中」翻成「已找到」，
+   空态让位给资料卡。**到此为止**——关系那一栏写着「未添加」，加不加是人的决定。 */
+function contactSearch({ gsap, kit, tl }) {
+  const NUM = "138****6012";
+  const { el, main, card, rows, form, heroTxt } = addressBook(kit, {
+    head: "查找联系人",
+    cap: "待查号码 · 36 个",
+    rows: [
+      { name: NUM, nameCls: "mono", av: "#", tone: "muted", note: "待查", noteCls: "is-warn", active: true },
+      { name: "wxid_zhou_0715", nameCls: "mono", av: "@", tone: "them", note: "待查", noteCls: "is-warn" },
+      { name: "139****8802", nameCls: "mono", av: "#", tone: "muted", note: "待查", noteCls: "is-warn" },
+      { name: "186****3376", nameCls: "mono", av: "#", tone: "them", note: "待查", noteCls: "is-warn" },
+      { name: "wxid_he_2203", nameCls: "mono", av: "@", tone: "muted", note: "待查", noteCls: "is-warn" },
+    ],
+    hero: { av: "林", nick: "林（山海建材）" },
+    fields: [["微信号", "wxid_lin_0421", true], ["地区", "广东 深圳"], ["关系", "未添加"]],
+  });
+  el.classList.add("pd-contact-find");
+
+  // 查询行：号码自己落进去，右端一枚状态药丸
+  const q = kit.h("div", "pd-contact-find__q");
+  q.appendChild(kit.h("i", "pd-contact-find__k mono", "查询 · 手机号 / 微信号"));
+  const qv = kit.h("b", "pd-contact-find__v mono", "—");
+  const pill = kit.h("em", "pd-contact-find__pill", "待查");
+  const scan = kit.h("i", "pd-contact-scan");
+  const beam = kit.h("b");
+  scan.appendChild(beam);
+  q.append(qv, pill, scan);
+  main.insertBefore(q, card);
+  gsap.set(beam, { xPercent: -120 });   // 扫描光的起点要先推出框外，否则开场那几帧左边挂着一块绿
+
+  // 查到之前右边没有资料可看
+  const empty = kit.h("div", "pd-contact__empty");
+  empty.append(kit.icon("user"), kit.h("span", "", "等待查询"));
+  main.appendChild(empty);
+  const rel = form.rows[2];
+  const relTag = autoTag(kit, gsap, rel, "未发申请");
+  const note = kit.h("i", "pd-contact-find__hint mono", "经当前登录的微信查找 · 不自动发申请");
+  card.appendChild(note);
+  gsap.set([card, note], { opacity: 0 });
+
+  const strip = kit.scenario("对方只报了一串手机号");
+  const flow = kit.workflow([
+    { label: "输入手机号或微信号", icon: "at" },
+    { label: "经微信查找", icon: "refresh" },
+    { label: "先看结果再决定", icon: "user" },
+  ]);
+
+  tl.add(strip.in(), 0.05)
+    .add(flow.in(), 0.15)
+    /* ① 号码从名单里取，乱码落进查询行——没有人坐在这儿打字 */
+    .add(flow.step(0), 0.6)
+    .add(kit.flash(rows[0], { color: "amber", duration: 0.7 }), 0.65)
+    .add(kit.scramble(qv, NUM, { duration: 0.85 }), 0.8)
+    /* ② 经微信查一次：一道光横扫查询行，药丸翻成「查询中」 */
+    .add(flow.step(1), 1.75)
+    .call(() => pill.classList.add("is-run"), [], 1.75)
+    .add(kit.scramble(pill, "查询中", { duration: 0.4 }), 1.78)
+    .fromTo(beam, { xPercent: -120 }, { xPercent: 320, duration: 0.85, ease: "none", immediateRender: false }, 1.8)
+    .call(() => { pill.classList.remove("is-run"); pill.classList.add("is-ok"); }, [], 2.7)
+    .add(kit.scramble(pill, "已找到", { duration: 0.4 }), 2.72)
+    /* ③ 空态让位给资料卡：这是查询结果，不是一位新好友 */
+    .add(flow.step(2), 3.05)
+    .to(empty, { opacity: 0, duration: 0.3 }, 3.05)
+    .to(card, { opacity: 1, duration: 0.35 }, 3.1)
+    .add(kit.pop(heroTxt, { y: 6 }), 3.15)
+    .call(() => { rows[0].note.classList.remove("is-warn"); rows[0].note.classList.add("is-done"); }, [], 3.3)
+    .add(kit.scramble(rows[0].note, "已找到", { duration: 0.42 }), 3.3)
+    .add(kit.flash(form.rows[0], { color: "neon", duration: 0.6 }), 3.4)
+    .add(kit.flash(form.rows[1], { color: "neon", duration: 0.6 }), 3.55)
+    .add(kit.pop(relTag), 3.75)
+    .add(kit.flash(rel, { color: "amber", duration: 0.7 }), 3.75)
+    .to(note, { opacity: 1, duration: 0.3 }, 3.95)
+    .add(flow.done(), 4.25)
+    .add(kit.ok("已找到 · 未添加", { en: "FOUND · NOT ADDED", hold: 1.4 }), 4.35)
+    .add(strip.result("加不加你自己定"), 4.35);
+  return tl;
+}
+
+/* ═══════════════ contact-insights 联系人变化记录 · 两份本机快照对一对 ═══════════════ */
+/* 换机迁移之后三千多人没法用眼睛核：上周的快照与今天的快照逐条比对，
+   新增 / 资料变化 / 不在当前列表 各成一册。
+   最后那一册只说「不在当前列表中」，不写原因——
+   它是两份本机名单的差集，不是、也做不到对方那一侧的关系判定，文案上这条线不许越。 */
+function contactInsights({ gsap, kit, tl }) {
+  const { el, card, rows, cap } = addressBook(kit, {
+    head: "联系人变化记录",
+    cap: "本机快照 · 每周三 10:00",
+    rows: [
+      { name: "快照 · 09-11", nameCls: "mono", av: "11", tone: "them", note: "3,236 人 · 今天", active: true },
+      { name: "快照 · 09-04", nameCls: "mono", av: "04", tone: "muted", note: "3,214 人" },
+      { name: "快照 · 08-28", nameCls: "mono", av: "28", tone: "them", note: "3,209 人" },
+      { name: "快照 · 08-21", nameCls: "mono", av: "21", tone: "muted", note: "3,201 人" },
+      { name: "快照 · 08-14", nameCls: "mono", av: "14", tone: "them", note: "3,196 人" },
+    ],
+    hero: null,
+    fields: [],
+  });
+  el.classList.add("pd-contact-diff");
+
+  // 对比条：拿哪两份在比，一目了然
+  const cmp = kit.h("div", "pd-contact-diff__cmp");
+  cmp.append(
+    kit.h("b", "mono", "09-04 · 3,214 人"),
+    kit.h("i", "pd-contact-diff__vs", "⇄"),
+    kit.h("b", "mono", "09-11 · 3,236 人"),
+  );
+  const pill = kit.h("em", "pd-contact-diff__pill", "待比对");
+  const scan = kit.h("i", "pd-contact-scan");
+  const beam = kit.h("b");
+  scan.appendChild(beam);
+  cmp.append(pill, scan);
+  card.appendChild(cmp);
+  gsap.set(beam, { xPercent: -120 });
+
+  // 三类变化各成一册；第三册是暗灰的陈述句，不是红色警报
+  const list = kit.h("div", "pd-contact-diff__list");
+  const mk = (kind, sign, title, sub, n) => {
+    const r = kit.h("div", `pd-contact-diff__r is-${kind}`);
+    r.appendChild(kit.h("i", "pd-contact-diff__s", sign));
+    const t = kit.h("div", "pd-contact-diff__t");
+    t.append(kit.h("b", "", title), kit.h("i", "", sub));
+    r.appendChild(t);
+    const num = kit.h("b", "pd-contact-diff__n", "0");
+    r.appendChild(num);
+    list.appendChild(r);
+    gsap.set(r, { opacity: 0 });
+    return Object.assign(r, { num, to: n });
+  };
+  const diffs = [
+    mk("add", "+", "新增 · 抖音-王总", "本周新加进来的", 25),
+    mk("mod", "✎", "资料变化 · 李姐改了昵称", "昵称 / 头像 / 备注有改动", 8),
+    mk("gone", "−", "不在当前列表 · 陈工", "上周快照里有 · 今天不在列表中", 3),
+  ];
+  // 比完之前这块是空的：盖一张虚线等待板，位置压在名册上，落定时淡出，不挤动布局
+  const wait = kit.h("div", "pd-contact-diff__wait");
+  wait.append(kit.icon("swap"), kit.h("span", "", "等待比对 · 新增 / 资料变化 / 不在当前列表"));
+  list.appendChild(wait);
+  card.appendChild(list);
+  const note = kit.h("i", "pd-contact-diff__hint mono", "只读本机快照 · 只在本地比对");
+  card.appendChild(note);
+  gsap.set(note, { opacity: 0 });
+
+  const strip = kit.scenario("换完新手机 · 三千多人没法一个个核");
+  const flow = kit.workflow([
+    { label: "按周期存快照", icon: "clock" },
+    { label: "两份逐条比对", icon: "swap" },
+    { label: "列出三类变化", icon: "file" },
+  ]);
+  gsap.set(rows[0], { display: "none" });
+
+  tl.add(strip.in(), 0.05)
+    .add(flow.in(), 0.15)
+    /* ① 按周期存快照：今天这一份刚落到本机 */
+    .add(flow.step(0), 0.6)
+    .set(rows[0], { display: "flex" }, 0.65)
+    .add(kit.pop(rows[0]), 0.65)
+    .add(kit.flash(cap, { color: "amber", duration: 0.7 }), 0.7)
+    /* ② 两份逐条比对：一道光横扫对比条 */
+    .add(flow.step(1), 1.35)
+    .add(kit.flash(rows[0], { color: "amber", duration: 0.6 }), 1.35)
+    .add(kit.flash(rows[1], { color: "amber", duration: 0.6 }), 1.45)
+    .call(() => pill.classList.add("is-run"), [], 1.5)
+    .add(kit.scramble(pill, "比对中", { duration: 0.4 }), 1.52)
+    .fromTo(beam, { xPercent: -120 }, { xPercent: 320, duration: 0.9, ease: "none", immediateRender: false }, 1.55)
+    .call(() => { pill.classList.remove("is-run"); pill.classList.add("is-ok"); }, [], 2.45)
+    .add(kit.scramble(pill, "比对完成", { duration: 0.4 }), 2.47)
+    /* ③ 三类变化逐条落定，各自报出条数 */
+    .add(flow.step(2), 2.8)
+    .to(wait, { opacity: 0, duration: 0.28 }, 2.8);
+  diffs.forEach((r, i) => {
+    const at = 2.85 + i * 0.42;
+    tl.add(kit.pop(r, { y: 6, duration: 0.36 }), at)
+      .add(kit.count(r.num, r.to, { duration: 0.55, fmt: (v) => `${Math.round(v)} 人` }), at + 0.1);
+  });
+  tl.to(note, { opacity: 1, duration: 0.3 }, 4.15)
+    .add(flow.done(), 4.4)
+    .add(kit.ok("变化已列清", { en: "SNAPSHOT DIFF", hold: 1.4 }), 4.5)
+    .add(strip.result("迁移前后，对得上了"), 4.5);
+  return tl;
+}
+
 export default {
   "contact-remark": contactRemark,
   "contact-accept": contactAccept,
   "contact-delete": contactDelete,
   "contact-add": contactAdd,
+  "contact-create-label": contactCreateLabel,
+  "contact-set-labels": contactSetLabels,
+  "contact-search": contactSearch,
+  "contact-insights": contactInsights,
 };
 
 // 本组专属的局部样式；统一注入一次
@@ -632,4 +1024,104 @@ export const css = `
 .pd-contact-pv__txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .pd-contact-pv__txt b { font-size: 11.5px; font-weight: 500; color: var(--pd-ink); white-space: nowrap; }
 .pd-contact-pv__txt i { font-size: 10px; color: var(--pd-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── 名单状态小字第三色：既不是警示也不是完成，是「等着归入」 ── */
+.pd-contact__note.is-wait { color: var(--pd-dim); }
+
+/* ── 新建标签：上「现有的三个去处」下「新建的这一个」 ── */
+.pd-contact-label__box {
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 4px;
+  border: 1px solid var(--pd-line); background: rgba(255, 255, 255, 0.025);
+  transition: border-color 0.25s, background 0.25s;
+}
+.pd-contact-label__k { display: block; font-size: 8.5px; letter-spacing: 0.2em; color: var(--pd-faint); white-space: nowrap; }
+/* 新建的这一个占满余下的高度：它才是这一帧的主角，底下不留一块空 */
+.pd-contact-label .pd-contact__card { flex: 1 1 auto; min-height: 0; padding-bottom: 16px; }
+.pd-contact-label__new { flex: 1 1 auto; justify-content: center; gap: 10px; border-style: dashed; border-color: var(--pd-line-strong); }
+.pd-contact-label__new.is-edit { border-color: rgba(255, 194, 75, 0.5); background: rgba(255, 194, 75, 0.06); }
+.pd-contact-label__name {
+  font-size: 16px; font-weight: 700; line-height: 1.3; color: var(--pd-amber);
+  text-shadow: 0 0 10px rgba(255, 194, 75, 0.35); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pd-contact-label__meta {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  font-family: var(--pd-mono); font-size: 9.5px; letter-spacing: 0.1em; color: var(--pd-dim); white-space: nowrap;
+}
+.pd-contact-label__meta .pd-ic { width: 12px; height: 12px; flex: none; color: var(--pd-faint); }
+.pd-contact-label__meta b { color: var(--pd-neon); font-weight: 600; }
+
+/* ── 设置标签：一行里并排几枚，标签列窄一点给芯片让位 ── */
+.pd-contact-labels .pd-field.is-auto { grid-template-columns: 54px minmax(0, 1fr) auto; }
+.pd-contact-labels__row { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
+.pd-contact-labels__row .pd-chip { flex: none; }
+/* 标签集面板：勾的是「全集」，左边那圈头像在这儿没有意义 */
+/* 往下挪一截，别压住资料卡上那个人的名字 */
+.pd-contact-lbl { top: 60%; }
+.pd-contact-lbl .pd-picker__row .pd-av { display: none; }
+.pd-contact-lbl .pd-picker__row b { font-family: var(--pd-mono); font-size: 11px; }
+.pd-contact-lbl__k { margin-left: auto; flex: none; font-size: 8.5px; letter-spacing: 0.16em; color: var(--pd-faint); }
+.pd-contact-lbl .pd-picker__row.is-on .pd-contact-lbl__k { color: var(--pd-amber); }
+.pd-contact-lbl .pd-picker__foot { justify-content: flex-start; }
+
+/* ── 找人：查询行 + 「查询中 / 已找到」状态药丸 ── */
+.pd-contact-find__q {
+  position: relative; overflow: hidden; flex: none; height: 54px; margin: 12px 20px 0;
+  display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 4px;
+  border: 1px dashed var(--pd-line-strong); background: rgba(255, 255, 255, 0.025);
+}
+.pd-contact-find__k { position: absolute; left: 13px; top: 7px; font-size: 8.5px; letter-spacing: 0.18em; color: var(--pd-faint); white-space: nowrap; }
+.pd-contact-find__v {
+  flex: 1 1 auto; min-width: 0; margin-top: 12px; font-size: 15px; font-weight: 600; letter-spacing: 0.06em;
+  color: var(--pd-amber); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 查找与变化记录共用的状态药丸（待查 → 查询中 → 已找到 / 待比对 → 比对中 → 比对完成），各自只差定位 */
+.pd-contact-find__pill, .pd-contact-diff__pill {
+  flex: none; padding: 2px 9px 1px; border-radius: 10px; white-space: nowrap;
+  font-family: var(--pd-mono); font-size: 9.5px; letter-spacing: 0.14em;
+  border: 1px solid var(--pd-line-strong); color: var(--pd-faint); background: rgba(255, 255, 255, 0.03);
+}
+.pd-contact-find__pill.is-run, .pd-contact-diff__pill.is-run { border-color: rgba(255, 194, 75, 0.5); color: var(--pd-amber); background: rgba(255, 194, 75, 0.09); }
+.pd-contact-find__pill.is-ok, .pd-contact-diff__pill.is-ok { border-color: rgba(61, 242, 141, 0.5); color: var(--pd-neon); background: rgba(61, 242, 141, 0.09); }
+.pd-contact-find__pill { margin-top: 12px; }
+.pd-contact-find .pd-contact__empty { top: 102px; }
+.pd-contact-find .pd-contact__card { padding-top: 16px; }
+.pd-contact-find__hint { display: block; font-size: 8.5px; letter-spacing: 0.14em; color: var(--pd-faint); white-space: nowrap; }
+.pd-contact-find .pd-contact__rail .pd-av { font-family: var(--pd-mono); font-size: 13px; color: var(--pd-dim); }
+
+/* ── 变化记录：对比条 + 三册变化 ── */
+.pd-contact-diff .pd-contact__rail .pd-av { font-family: var(--pd-mono); font-size: 11px; }
+/* 三册各占一格，把整栏撑满：静止帧里像三本摊开的册子，而不是浮在上半页 */
+.pd-contact-diff .pd-contact__card { flex: 1 1 auto; min-height: 0; padding-top: 14px; padding-bottom: 14px; gap: 10px; }
+.pd-contact-diff__cmp {
+  position: relative; overflow: hidden; display: flex; align-items: center; gap: 9px;
+  padding: 8px 11px; border-radius: 4px; border: 1px solid var(--pd-line); background: rgba(255, 255, 255, 0.025);
+}
+.pd-contact-diff__cmp b { font-size: 10.5px; font-weight: 500; color: var(--pd-ink); white-space: nowrap; }
+.pd-contact-diff__vs { flex: none; color: var(--pd-faint); font-size: 12px; }
+.pd-contact-diff__pill { margin-left: auto; }
+.pd-contact-diff__list { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.pd-contact-diff__wait {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px;
+  border: 1px dashed var(--pd-line-strong); border-radius: 4px; background: rgba(11, 18, 14, 0.96);
+  font-family: var(--pd-mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--pd-faint); white-space: nowrap;
+}
+.pd-contact-diff__wait .pd-ic { width: 13px; height: 13px; flex: none; }
+.pd-contact-diff__r {
+  flex: 1 1 0; display: flex; align-items: center; gap: 10px; padding: 7px 11px; border-radius: 4px;
+  border-left: 2px solid var(--pd-line-strong); background: rgba(255, 255, 255, 0.03); min-width: 0;
+}
+.pd-contact-diff__s { flex: none; width: 15px; text-align: center; font-family: var(--pd-mono); font-size: 13px; color: var(--pd-faint); }
+.pd-contact-diff__t { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pd-contact-diff__t b { font-size: 11.5px; font-weight: 500; color: var(--pd-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pd-contact-diff__t i { font-family: var(--pd-mono); font-size: 8.5px; letter-spacing: 0.08em; color: var(--pd-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pd-contact-diff__n { flex: none; font-family: var(--pd-mono); font-size: 11px; font-weight: 600; color: var(--pd-dim); white-space: nowrap; }
+.pd-contact-diff__r.is-add { border-left-color: var(--pd-neon); background: rgba(61, 242, 141, 0.07); }
+.pd-contact-diff__r.is-add .pd-contact-diff__s, .pd-contact-diff__r.is-add .pd-contact-diff__n { color: var(--pd-neon); }
+/* 类名别叫 is-edit：pro-demos.css 有一条全局 .pd-screen .is-edit 会给它描一圈琥珀轮廓 */
+.pd-contact-diff__r.is-mod { border-left-color: var(--pd-amber); background: rgba(255, 194, 75, 0.07); }
+.pd-contact-diff__r.is-mod .pd-contact-diff__s, .pd-contact-diff__r.is-mod .pd-contact-diff__n { color: var(--pd-amber); }
+/* 第三册只是一句陈述：暗灰，不给红色警报感——它讲的是「不在当前列表中」，不是谁删了谁 */
+.pd-contact-diff__r.is-gone { border-left-color: var(--pd-line-strong); background: rgba(255, 255, 255, 0.02); }
+.pd-contact-diff__r.is-gone .pd-contact-diff__t b { color: var(--pd-dim); }
+.pd-contact-diff__hint { display: block; font-size: 8.5px; letter-spacing: 0.16em; color: var(--pd-faint); white-space: nowrap; }
 `;

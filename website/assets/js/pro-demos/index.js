@@ -4,7 +4,7 @@
    应用：import { createProPanel } from "@website/js/pro-demos/index.js"（gsap 传 npm 包）
    样式在 website/assets/css/pro-demos.css；各场景文件自带的局部样式由这里注入一次。
    ════════════════════════════════════════════════════════════ */
-import { PRO_GROUPS, PRO_ITEMS, PRO_TOTAL, PRO_BY_KEY, PRO_HERO_MODULES } from "./catalog.js";
+import { PRO_GROUPS, PRO_ITEMS, PRO_TOTAL, PRO_BY_KEY, PRO_LOCAL_ITEMS } from "./catalog.js";
 import { createProStage, createProList, createProPanel as _createProPanel } from "./stage.js";
 import edit, { css as editCss } from "./scenes/edit.js";
 import addA, { css as addACss } from "./scenes/add-a.js";
@@ -13,11 +13,12 @@ import action, { css as actionCss } from "./scenes/action.js";
 import moments, { css as momentsCss } from "./scenes/moments.js";
 import group, { css as groupCss } from "./scenes/group.js";
 import contact, { css as contactCss } from "./scenes/contact.js";
+import automation, { css as automationCss } from "./scenes/automation.js";
 
-export { PRO_GROUPS, PRO_ITEMS, PRO_TOTAL, PRO_BY_KEY, PRO_HERO_MODULES, createProStage, createProList };
+export { PRO_GROUPS, PRO_ITEMS, PRO_TOTAL, PRO_BY_KEY, PRO_LOCAL_ITEMS, createProStage, createProList };
 
-export const SCENES = { ...edit, ...addA, ...addB, ...action, ...moments, ...group, ...contact };
-export const SCENE_CSS = [editCss, addACss, addBCss, actionCss, momentsCss, groupCss, contactCss].filter(Boolean).join("\n");
+export const SCENES = { ...edit, ...addA, ...addB, ...action, ...moments, ...group, ...contact, ...automation };
+export const SCENE_CSS = [editCss, addACss, addBCss, actionCss, momentsCss, groupCss, contactCss, automationCss].filter(Boolean).join("\n");
 
 let cssInjected = false;
 export function injectSceneCss() {

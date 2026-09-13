@@ -26,7 +26,9 @@
   --pd-tile: #1a221d;
   --pd-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   --pd-sans: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, "Segoe UI", sans-serif;
-  --pd-list-cols: 1;
+  /* auto = 不建立多栏容器：定高的 .pd-list 一旦是多栏（哪怕 column-count:1），装不下的内容会横着溢出成 overflow columns，
+     纵向滚动随之失效，清单只剩第一栏可见（61 项时只露出 8 项，实测）。要两栏的宿主再显式设 2。 */
+  --pd-list-cols: auto;
   color: var(--pd-ink);
   font-family: var(--pd-sans);
   font-size: 13px;
@@ -70,7 +72,7 @@
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 194, 75, 0.28) transparent;
   padding-right: 8px;
-  columns: var(--pd-list-cols);
+  columns: var(--pd-list-cols, auto);
   column-gap: 28px;
   position: relative;
 }

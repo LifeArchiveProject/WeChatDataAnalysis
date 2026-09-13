@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   scenes / group.js — 群聊（8 项）
+   scenes / group.js — 群聊（9 项）
    每个场景：({ gsap, kit, tl, root, reduced, item }) => 把动画编进 tl（可返回 tl）。
    约定：所有补间都挂在 tl 上（不要裸调 gsap.to），舞台切换时靠 kill(tl) 清场。
 
@@ -13,7 +13,7 @@
 
    场景取自 catalog：进客户群自动规范身份、排期到点自动发公告、合同签了自动开服务群、
    新群自动套命名规则、提到技术问题自动拉值班、名单没进群的逐个自动邀请、
-   命中广告关键词自动清退、项目结项自动退群。
+   命中广告关键词自动清退、项目结项自动退群、群要解散把非好友成员逐轮发申请。
    情境条讲「什么条件触发了它」，结尾 strip.result() 讲「省了什么事」，与印章同一拍。
    时长 4.5–7.5 秒，印章停留 ≥0.9 秒。
    ════════════════════════════════════════════════════════════ */
@@ -625,6 +625,118 @@ function groupLeave({ gsap, kit, tl }) {
   return tl;
 }
 
+/* ── 群成员批量加好友 ──
+      触发：闪购群明晚解散，群主在群里说了——群一散，没加过好友的人连一条私信都发不出去。
+      比对：群成员名单和通讯录对一遍，已是好友的跳过，剩下的进待加名单。
+      执行：验证消息按来源群自动生成（借群关系做信任嫁接），一轮 8 个逐条发出，
+            状态停在「已发申请 · 等待对方通过」——通不通过由对方决定，这里不演「已添加」。
+      与「邀请群成员」的区别：那是拉人进这个群，这是把群里的人加成好友，群散了也还联系得上 ── */
+function groupAddFriends({ gsap, kit, tl }) {
+  const GROUP = "星辰闪购 3 群";
+  const MSG = "我是星辰闪购 3 群运营小吴";
+  const { chat } = clientChat(kit, {
+    title: GROUP,
+    rails: [GROUP, "星辰科技客户群", "王总", "李经理"],
+    rows: 2,
+    // 群里说话的这两位，就是下面名单里要加的那两位——名单不是凭空来的
+    lines: [
+      ["l", "这波秒杀还补吗？", { name: "陈女士", av: "陈" }],
+      ["l", "我也想再来两件", { name: "刘先生", av: "刘" }],
+    ],
+  });
+  // 名单面板占着右上大半屏：居中的时间行会被它切掉一半，这一场不摆时间行
+  gsap.set(chat.list.firstElementChild, { display: "none" });
+  const strip = kit.scenario("闪购群明晚解散 · 380 人只有 90 个好友");
+  const flow = kit.workflow([
+    { label: "群明晚解散", icon: "users" },
+    { label: "比对通讯录挑出非好友", ai: true },
+    { label: "按节奏逐个发申请", icon: "send" },
+  ]);
+  const notice = hiddenRow(gsap, chat, "l", "明晚 21:00 群就解散", { name: "群主 · 小林", av: "林" });
+
+  const panel = autoPanel(kit, gsap, { kicker: "ROSTER", title: "群成员 · 380 人", cls: "pd-group-fr" });
+  // 比对结果：已是好友 90 / 未加 290，两个数字在「挑出非好友」那一步滚上来
+  const sum = kit.h("div", "pd-group-fr__sum");
+  const sumTxt = kit.h("span", "");
+  const nFriend = kit.h("b", "", "0");
+  const nTodo = kit.h("b", "is-todo", "0");
+  sumTxt.append("已是好友 ", nFriend, " · 未加 ", nTodo);
+  sum.append(kit.h("i", "pd-group-fr__k", "DIFF"), sumTxt);
+  panel.body.appendChild(sum);
+
+  const list = roster(kit, [
+    ["王总", "群成员 · 已是好友", "跳过", "off"],
+    ["李姐", "群成员 · 已是好友", "跳过", "off"],
+    ["陈女士", "群成员 · 未加好友", "待加"],
+    ["刘先生", "群成员 · 未加好友", "待加"],
+  ], panel.body);
+  const note = (r) => r.querySelector(".pd-group-roster__t i");
+
+  // 验证消息：模板写在上面一行，落定的那句话在下面——借「哪个群」的关系做自我介绍
+  const msgBox = kit.h("div", "pd-group-fr__msg");
+  const msgVal = kit.h("b", "", "—");
+  msgBox.append(kit.h("i", "", "验证消息 · {来源群}+{我}"), msgVal);
+  panel.body.appendChild(msgBox);
+
+  // 本轮进度：一轮 8 个，不是一口气把 290 个全发出去
+  const prog = kit.h("div", "pd-group-fr__prog");
+  const progTxt = kit.h("span", "");
+  const progN = kit.h("b", "", "0");
+  progTxt.append("本轮已发出 ", progN, " / 8");
+  const bar = kit.h("i", "pd-group-fr__bar");
+  const fill = kit.h("b", "");
+  bar.appendChild(fill);
+  prog.append(kit.h("i", "pd-group-fr__k", "WAVE"), progTxt, bar);
+  panel.body.appendChild(prog);
+  gsap.set(fill, { scaleX: 0 });
+  panel.body.appendChild(kit.h("i", "pd-group-fr__fine", "逐条发出 · 每轮 8 个，间隔 5 分钟"));
+
+  const sys = hiddenSys(gsap, kit, chat, '本轮已向 <b>8</b> 位群友发出好友申请<i class="pd-tag">等待对方通过</i>');
+
+  // 一行落成「已发申请」：状态牌翻琥珀，副行改成「等待对方通过」
+  const sent = (row, at) => {
+    tl.add(setBadge(gsap, kit, row, "已发申请", "sent"), at)
+      .add(kit.scramble(note(row), "等待对方通过", { duration: 0.45 }), at)
+      .add(kit.flash(row, { color: "amber", duration: 0.6 }), at);
+  };
+
+  tl.add(strip.in(), 0.05)
+    .add(flow.in(), 0.15)
+    /* ① 群主在群里说了：明晚解散——来源群就定在这个群 */
+    .add(flow.step(0), 0.35)
+    .set(notice, { display: "flex" }, 0.35)
+    .add(kit.pop(notice), 0.35)
+    .add(kit.flash(notice.content, { color: "amber", duration: 0.6 }), 0.45)
+    .add(kit.flash(chat.sessions[0], { color: "amber", duration: 0.7 }), 0.6)
+    /* ② 群成员名单和通讯录对一遍：90 个已是好友直接跳过，剩下 290 个进待加名单 */
+    .add(panel.in(), 1.25)
+    .add(flow.step(1), 1.3)
+    .add(kit.count(nFriend, 90, { duration: 0.7 }), 1.55)
+    .add(kit.count(nTodo, 290, { duration: 0.7 }), 1.55)
+    .to([list.rows[0], list.rows[1]], { opacity: 0.5, duration: 0.35 }, 1.6)
+    .add(kit.flash(list.rows[2], { color: "amber", duration: 0.55 }), 1.95)
+    .add(kit.flash(list.rows[3], { color: "amber", duration: 0.55 }), 2.08)
+    /* ③ 验证消息按来源群自己生成（没有人在打字），本轮 8 个逐条发出去 */
+    .add(flow.step(2), 2.55)
+    .call(() => { msgVal.textContent = ""; }, [], 2.55)
+    .add(kit.scramble(msgVal, MSG, { duration: 0.9 }), 2.6)
+    .to(fill, { scaleX: 1, duration: 1.05, ease: "power1.inOut" }, 3.45)
+    .add(kit.count(progN, 8, { duration: 1.05 }), 3.45);
+  sent(list.rows[2], 3.55);
+  sent(list.rows[3], 3.95);
+  /* 停在「已发申请 · 等待对方通过」：通不通过由对方决定，这里不写「已添加」 */
+  tl.add(panel.out(), 4.45)
+    .set(sys, { display: "block" }, 4.55)
+    .add(kit.pop(sys), 4.55)
+    .add(kit.flash(sys, { color: "amber", duration: 0.7 }), 4.6)
+    /* 印章压在输入条的「发送」上：先把输入条压暗，收尾画面里不留半露的绿按钮 */
+    .to(chat.input, { opacity: 0.25, duration: 0.3 }, 4.62)
+    .add(flow.done(), 4.85)
+    .add(kit.ok("申请已发出", { en: "REQUESTS SENT", hold: 1.4 }), 4.95)
+    .add(strip.result("290 个申请，群散前发完"), 4.95);
+  return tl;
+}
+
 export default {
   "group-my-nick": groupMyNick,
   "group-notice": groupNotice,
@@ -634,6 +746,7 @@ export default {
   "group-invite-members": groupInviteMembers,
   "group-remove-members": groupRemoveMembers,
   "group-leave": groupLeave,
+  "group-add-friends": groupAddFriends,
 };
 
 // 本组专属的局部样式；统一注入一次
@@ -765,4 +878,36 @@ export const css = `
 /* 退群之后：聊天区只剩一行「你已退出」，居中 */
 .pd-group-emptied { justify-content: center; }
 .pd-screen .pd-group-left b { color: var(--pd-amber); font-weight: 500; }
+
+/* ── 群成员批量加好友：名单面板比别处多摆比对结果、验证消息、本轮进度与节奏注脚，
+      加宽一档、上沿抬到 34px、每一行都收紧一档，底边才压不到工作流轨 ── */
+.pd-group-fr { width: 236px; top: 34px; }
+.pd-group-fr .pd-group-auto__h { padding: 6px 9px; }
+.pd-group-fr .pd-group-auto__b { padding: 7px 9px 8px; gap: 6px; }
+.pd-group-fr .pd-group-roster { gap: 4px; }
+.pd-group-fr .pd-group-roster__r { padding: 2px 6px; }
+.pd-group-fr .pd-group-roster__r .pd-av { width: 20px; height: 20px; font-size: 9px; }
+.pd-group-fr .pd-group-roster__t b { font-size: 11px; }
+.pd-group-fr .pd-group-roster__t i { font-size: 8px; }
+.pd-group-fr__sum,
+.pd-group-fr__prog {
+  display: flex; align-items: center; gap: 7px; min-width: 0; white-space: nowrap;
+  font-family: var(--pd-mono); font-size: 9.5px; letter-spacing: 0.08em; color: var(--pd-dim);
+}
+.pd-group-fr__k { flex: none; font-style: normal; padding: 1px 5px 0; border-radius: 2px; letter-spacing: 0.2em; opacity: 0.86; }
+.pd-group-fr__sum .pd-group-fr__k { color: #140d01; background: var(--pd-amber); }
+.pd-group-fr__prog .pd-group-fr__k { color: #04140b; background: var(--pd-neon); }
+.pd-group-fr__sum span b { color: var(--pd-ink); font-weight: 600; }
+.pd-group-fr__sum span b.is-todo { color: var(--pd-amber); }
+.pd-group-fr__prog span b { color: var(--pd-neon); font-weight: 600; }
+.pd-group-fr__bar { flex: 1 1 auto; min-width: 30px; height: 3px; border-radius: 2px; background: var(--pd-skel); overflow: hidden; }
+.pd-group-fr__bar b { display: block; width: 100%; height: 100%; transform-origin: 0 50%; background: var(--pd-neon); box-shadow: 0 0 8px rgba(61, 242, 141, 0.6); }
+
+/* 验证消息：上面一行 mono 模板，下面是自动落定的那句话（借来源群做自我介绍） */
+.pd-group-fr__msg { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pd-group-fr__msg i { font-family: var(--pd-mono); font-style: normal; font-size: 9px; letter-spacing: 0.12em; color: var(--pd-faint); white-space: nowrap; }
+.pd-group-fr__msg b { font-size: 12px; font-weight: 500; color: var(--pd-amber); min-height: 14px; line-height: 1.3; }
+
+/* 节奏注脚：一轮一轮发，不是一口气发完 */
+.pd-group-fr__fine { font-family: var(--pd-mono); font-style: normal; font-size: 8.5px; letter-spacing: 0.08em; line-height: 1.55; color: var(--pd-faint); }
 `;
