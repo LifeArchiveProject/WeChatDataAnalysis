@@ -189,8 +189,8 @@
   background: var(--pd-amber); box-shadow: 0 0 6px rgba(255, 194, 75, 0.85);
 }
 .pd-strip__local {
-  flex: none; padding: 1px 5px 0; border-radius: 2px; letter-spacing: 0.06em; font-size: 9px;
-  border: 1px solid rgba(150, 180, 160, 0.42); color: var(--pd-dim); background: rgba(9, 14, 11, 0.72);
+  flex: none; letter-spacing: 0.06em; font-size: 9px; font-weight: 600;
+  color: var(--pd-neon); text-shadow: 0 0 8px rgba(61, 242, 141, 0.5);
 }
 .pd-strip__r { flex: none; font-weight: 600; color: var(--pd-neon); text-shadow: 0 0 12px rgba(61, 242, 141, 0.45); white-space: nowrap; }
 /* 情境条占掉顶端 22px：把布局根整体下推，光标/菜单/印章的坐标不受影响 */

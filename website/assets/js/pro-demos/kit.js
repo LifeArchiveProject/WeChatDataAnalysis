@@ -716,7 +716,7 @@ export function createKit(gsap, root, { reduced = false } = {}) {
     const t = h("span", "pd-strip__t", text);
     // 回写类能力（消息修改 / 消息补录 / 标记已读 / 免打扰）挂这枚标：
     // 直接改进你本机的微信、且随时能还原，点明这两点
-    if (local) t.appendChild(h("i", "pd-strip__local", "直接写入微信 · 可随时还原"));
+    if (local) t.appendChild(h("i", "pd-strip__local", "直接修改电脑和手机微信 · 可随时还原"));
     const r = h("b", "pd-strip__r");
     el.append(t, r);
     mount(el, parent);
