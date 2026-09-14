@@ -52,7 +52,8 @@ def test_exact_matching_and_runtime_capabilities(tmp_path):
     assert resolved['vision'] is True and resolved['context_window'] == 128000
     assert resolved['model_metadata']['tool_call'] is False
     assert resolved['model_metadata']['logo_url'] == 'https://models.dev/logos/openai.svg'
-    assert input_limit(resolved) == 111104
+    # Agent 实际每步输出为 8192，而非目录声明的最大 16384。
+    assert input_limit(resolved) == 119296
     assert output_limit(resolved) == 16384
     assert models.metadata.lookup({'provider':'custom','model':'fixture-model-preview'}) is None
     assert models.metadata.enrich({'provider':'custom','model':'unknown','context_window':64000})['context_window'] == 64000
