@@ -99,7 +99,16 @@
                 <!-- 联系人信息 -->
                 <div class="flex-1 min-w-0">
                   <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-                    <h3 class="session-list-item-name min-w-0 truncate text-[14px] leading-5" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</h3>
+                    <h3 class="session-list-item-name flex min-w-0 items-center gap-1.5 text-[14px] leading-5">
+                      <span class="truncate" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</span>
+                      <img
+                        v-if="contact.isEnterpriseGroup"
+                        src="/assets/images/wechat/wecom.png"
+                        alt="企业微信群"
+                        title="企业微信群"
+                        class="h-4 w-4 shrink-0"
+                      >
+                    </h3>
                     <span
                       class="session-list-item-time max-w-[92px] truncate whitespace-nowrap text-[11px]"
                       :title="contact.lastMessageTime"

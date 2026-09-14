@@ -3,14 +3,17 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 const STORAGE_KEY = 'chat-agent-panel-width'
 const DEFAULT_WIDTH = 440
 
-export function useAgentPanelResize(panel, expanded) {
-  const preferred = ref(DEFAULT_WIDTH), available = ref(1200), reserved = ref(320), resizing = ref(false)
+export function useAgentPanelResize(panel, expanded, options = {}) {
+  const storageKey = options.storageKey || STORAGE_KEY
+  const defaultWidth = options.defaultWidth || DEFAULT_WIDTH
+  const minWidth = options.minWidth || 320
+  const preferred = ref(defaultWidth), available = ref(1200), reserved = ref(320), resizing = ref(false)
   let drag, observer
   const maximum = computed(() => Math.max(0, available.value - reserved.value))
-  const minimum = computed(() => Math.min(320, maximum.value))
+  const minimum = computed(() => Math.min(minWidth, maximum.value))
   const clamp = value => Math.round(Math.min(maximum.value, Math.max(minimum.value, value)))
   const width = computed(() => clamp(preferred.value))
-  const save = () => { try { localStorage.setItem(STORAGE_KEY, String(preferred.value)) } catch { /* 隐私模式不影响拖动。 */ } }
+  const save = () => { try { localStorage.setItem(storageKey, String(preferred.value)) } catch { /* 隐私模式不影响拖动。 */ } }
   const measure = () => {
     const parent = panel.value?.parentElement
     available.value = Math.min(window.innerWidth, parent?.getBoundingClientRect().width || window.innerWidth)
@@ -35,7 +38,7 @@ export function useAgentPanelResize(panel, expanded) {
     resizing.value = true
   }
   const move = event => { if (drag && event.pointerId === drag.id) preferred.value = clamp(drag.width + drag.x - event.clientX) }
-  const reset = () => { preferred.value = DEFAULT_WIDTH; save() }
+  const reset = () => { preferred.value = defaultWidth; save() }
   const keyboard = event => {
     const step = event.shiftKey ? 80 : 20
     const values = { ArrowLeft: width.value + step, ArrowRight: width.value - step, Home: minimum.value, End: maximum.value }
@@ -43,7 +46,7 @@ export function useAgentPanelResize(panel, expanded) {
     else if (event.key === 'Enter') { event.preventDefault(); reset() }
   }
   onMounted(() => {
-    try { const stored = Number(localStorage.getItem(STORAGE_KEY)); if (Number.isFinite(stored) && stored >= 320) preferred.value = stored } catch { /* 无本地存储时使用默认宽度。 */ }
+    try { const stored = Number(localStorage.getItem(storageKey)); if (Number.isFinite(stored) && stored >= minWidth) preferred.value = stored } catch { /* 无本地存储时使用默认宽度。 */ }
     measure(); observer = new ResizeObserver(measure)
     if (panel.value?.parentElement) observer.observe(panel.value.parentElement)
     panel.value?.parentElement?.querySelectorAll('.session-list-panel, .resource-sidebar, .voice-transcription-sidebar').forEach(element => observer.observe(element))

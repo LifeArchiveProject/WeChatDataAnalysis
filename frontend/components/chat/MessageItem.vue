@@ -64,8 +64,9 @@
           :class="[message.isSent ? 'items-end' : 'items-start', { 'privacy-blur': privacyMode }]"
           @contextmenu="openMediaContextMenu($event, message, 'message')"
         >
-          <div v-if="message.isGroup && !message.isSent && message.senderDisplayName" class="message-sender-name text-[11px] mb-1" :class="message.isSent ? 'text-right' : 'text-left'">
-            {{ message.senderDisplayName }}
+          <div v-if="message.isGroup && !message.isSent && message.senderDisplayName" class="message-sender-name flex min-w-0 items-center gap-2 text-[11px] mb-1" :class="message.isSent ? 'text-right' : 'text-left'">
+            <span class="truncate">{{ message.senderDisplayName }}</span>
+            <span v-if="message.senderEnterpriseName" class="shrink-0 text-[#ff8000]">@{{ message.senderEnterpriseName }}</span>
           </div>
           <div
             class="absolute -top-6 z-10 rounded bg-black/70 text-white text-[10px] px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap"

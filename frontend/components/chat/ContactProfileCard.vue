@@ -38,6 +38,7 @@
             <span v-if="contactProfileResolvedGender" class="contact-inline-pill">{{ contactProfileResolvedGender }}</span>
             <span v-if="contactProfileResolvedRegion" class="contact-inline-region">{{ contactProfileResolvedRegion }}</span>
           </div>
+          <div v-if="contactProfileData?.enterpriseName" class="contact-enterprise-tag">@{{ contactProfileData.enterpriseName }}</div>
           <div class="contact-subtitle">{{ contactProfileResolvedHeaderSubtitle }}</div>
         </div>
       </div>
@@ -78,6 +79,19 @@
         <div class="contact-field contact-field-tall">
           <div class="contact-label">签名</div>
           <div class="contact-value contact-signature" :class="{ 'privacy-blur': privacyMode }">{{ contactProfileResolvedSignature }}</div>
+        </div>
+      </div>
+
+      <div v-if="contactProfileData?.enterpriseInfo?.length" class="contact-profile-section">
+        <div class="contact-label mb-3">企业信息</div>
+        <div v-for="field in contactProfileData.enterpriseInfo" :key="field.title" class="contact-field">
+          <div class="contact-label">{{ field.title }}</div>
+          <div class="contact-value flex items-center justify-end gap-2" :class="{ 'privacy-blur': privacyMode }">
+            <span v-for="(detail, index) in field.details" :key="index" class="inline-flex min-w-0 items-center gap-1">
+              <span class="truncate">{{ detail.text }}</span>
+              <img v-if="detail.icon" :src="detail.icon" alt="" class="h-4 w-4 shrink-0 object-contain" referrerpolicy="no-referrer" />
+            </span>
+          </div>
         </div>
       </div>
 
@@ -380,6 +394,12 @@ export default defineComponent({
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.contact-enterprise-tag {
+  margin-top: 6px;
+  color: #ff8000;
+  font-size: 12px;
 }
 
 .contact-profile-section {

@@ -206,6 +206,7 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
       lastMessageTime: session.lastMessageTime || '',
       unreadCount: session.unreadCount || 0,
       isGroup: !!session.isGroup,
+      isEnterpriseGroup: !!session.isEnterpriseGroup,
       isTop: !!session.isTop,
       username: session.username
     }))

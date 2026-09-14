@@ -3,8 +3,15 @@
     <div v-if="selectedContact" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
       <div class="chat-header" :class="{ 'chat-header-ai': aiSidebarOpen }">
         <div class="flex min-w-0 items-center gap-3">
-          <h2 class="chat-header-title truncate text-base font-medium" :class="{ 'privacy-blur': privacyMode }">
-            {{ selectedContact ? selectedContact.name : '' }}
+          <h2 class="chat-header-title flex min-w-0 items-center gap-1.5 text-base font-medium">
+            <span class="truncate" :class="{ 'privacy-blur': privacyMode }">{{ selectedContact.name }}</span>
+            <img
+              v-if="selectedContact.isEnterpriseGroup"
+              src="/assets/images/wechat/wecom.png"
+              alt="企业微信群"
+              title="企业微信群"
+              class="h-4 w-4 shrink-0"
+            >
           </h2>
           <button
             v-if="groupAnnouncement"
@@ -21,7 +28,7 @@
             <span>群公告</span>
           </button>
         </div>
-        <div class="ml-auto flex items-center gap-2">
+        <div class="ml-auto flex shrink-0 items-center gap-2">
           <button type="button" class="header-btn-icon" :class="{ 'header-btn-icon-active': aiSidebarOpen }" aria-label="AI 助手" title="AI 助手" :aria-pressed="aiSidebarOpen" @click="toggleAiSidebar">AI</button>
           <button
             type="button"
@@ -105,6 +112,23 @@
               {{ opt.label }}
             </option>
           </select>
+          <button
+            v-if="selectedContact.isGroup"
+            type="button"
+            class="header-btn-icon"
+            :class="{ 'header-btn-icon-active': groupMembersSidebarOpen }"
+            :title="groupMembersSidebarOpen ? '关闭群成员' : '更多（群成员）'"
+            :aria-label="groupMembersSidebarOpen ? '关闭群成员' : '更多（群成员）'"
+            :aria-expanded="groupMembersSidebarOpen"
+            aria-controls="group-members-sidebar"
+            @click="toggleGroupMembersSidebar"
+          >
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="5" cy="12" r="1.8" />
+              <circle cx="12" cy="12" r="1.8" />
+              <circle cx="19" cy="12" r="1.8" />
+            </svg>
+          </button>
         </div>
       </div>
 

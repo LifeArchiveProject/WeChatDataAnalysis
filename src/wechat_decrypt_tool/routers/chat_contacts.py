@@ -597,6 +597,8 @@ def _parse_contact_extra_buffer(extra_buffer: Any) -> dict[str, Any]:
         "source_scene": None,
         "add_time": None,
         "add_time_text": "",
+        "enterprise_app_id": "",
+        "enterprise_wording_id": "",
     }
     if extra_buffer is None:
         return out
@@ -652,6 +654,15 @@ def _parse_contact_extra_buffer(extra_buffer: Any) -> dict[str, Any]:
                     out["province"] = text
                 elif field_no == 7:
                     out["city"] = text
+            elif field_no == 1:
+                # OpenIM extra_buffer stores the app id as field 1 and the
+                # enterprise wording id as field 2. Personal contacts use a
+                # different (varint) field layout, so only keep text here.
+                out["enterprise_app_id"] = _decode_proto_text(chunk)
+            elif field_no == 2:
+                wording_id = _decode_proto_text(chunk)
+                if wording_id.endswith("@im.wxwork"):
+                    out["enterprise_wording_id"] = wording_id
             continue
 
         if wire_type == 1:
@@ -664,6 +675,113 @@ def _parse_contact_extra_buffer(extra_buffer: Any) -> dict[str, Any]:
         break
 
     return out
+
+
+def _parse_contact_custom_info(value: Any) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(_normalize_text(value))
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(payload, dict) or not isinstance(payload.get("custom_info"), list):
+        return []
+    sections = []
+    for section in payload["custom_info"]:
+        if not isinstance(section, dict) or not isinstance(section.get("detail"), list):
+            continue
+        details = []
+        for detail in section["detail"]:
+            if not isinstance(detail, dict):
+                continue
+            text = _normalize_text(detail.get("desc"))
+            if not text:
+                continue
+            icon = _normalize_text(detail.get("icon"))
+            details.append({
+                "text": text,
+                "icon": icon if icon.startswith("https://wwcdn.weixin.qq.com/") else "",
+            })
+        if details:
+            sections.append({"title": _normalize_text(section.get("title")), "details": details})
+    return sections
+
+
+def _load_enterprise_contact_info(
+    contact_db_path: Path,
+    usernames: list[str],
+    *,
+    rt_conn: Any = None,
+) -> dict[str, dict[str, Any]]:
+    targets = sorted({u for u in usernames if _is_enterprise_openim_username(u)})
+    if not targets or (rt_conn is None and not contact_db_path.exists()):
+        return {}
+    conn = None
+    try:
+        if rt_conn is None:
+            conn = sqlite3.connect(str(contact_db_path))
+            conn.row_factory = sqlite3.Row
+
+        def query(sql: str) -> list[dict[str, Any]]:
+            if rt_conn is not None:
+                with rt_conn.lock:
+                    return _wcdb_exec_query(rt_conn.handle, kind="contact", path=None, sql=sql)
+            return [dict(row) for row in conn.execute(sql).fetchall()]
+
+        quoted = ",".join(_sql_literal(u) for u in targets)
+        rows = query(
+            f"SELECT username, description, extra_buffer FROM contact WHERE username IN ({quoted}) "
+            f"UNION ALL SELECT username, description, extra_buffer FROM stranger WHERE username IN ({quoted})"
+        )
+        parsed = {}
+        wording_keys = set()
+        for row in rows:
+            username = _normalize_text(row.get("username"))
+            if username in parsed:
+                continue
+            extra = _parse_contact_extra_buffer(row.get("extra_buffer"))
+            sections = _parse_contact_custom_info(row.get("description")) or _parse_contact_custom_info(extra["signature"])
+            key = (extra["enterprise_app_id"], extra["enterprise_wording_id"])
+            parsed[username] = (key, sections)
+            if all(key):
+                wording_keys.add(key)
+
+        wordings = {}
+        if wording_keys:
+            predicates = " OR ".join(
+                f"(app_id={_sql_literal(app_id)} AND wording_id={_sql_literal(wording_id)})"
+                for app_id, wording_id in sorted(wording_keys)
+            )
+            wording_rows = query(
+                "SELECT app_id, wording_id, wording FROM openim_wording "
+                f"WHERE lang_id=1 AND ({predicates})"
+            )
+            wordings = {(str(r["app_id"]), str(r["wording_id"])): _normalize_text(r["wording"]) for r in wording_rows}
+
+        result = {}
+        for username, (key, sections) in parsed.items():
+            name = wordings.get(key, "")
+            for section in sections:
+                for detail in section["details"]:
+                    if detail["text"] == key[1]:
+                        detail["text"] = name
+                section["details"] = [detail for detail in section["details"] if detail["text"]]
+            sections = [section for section in sections if section["details"]]
+            if name or sections:
+                result[username] = {"enterpriseName": name, "enterpriseInfo": sections}
+        return result
+    except Exception as exc:
+        logger.warning("[contacts] failed to read enterprise profile: %s", exc)
+        return {}
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _attach_enterprise_contact_info(contact: dict[str, Any], enterprise_info: Optional[dict[str, Any]]) -> None:
+    if not enterprise_info:
+        return
+    contact.update(enterprise_info)
+    if enterprise_info.get("enterpriseInfo") and _parse_contact_custom_info(contact.get("signature")):
+        contact["signature"] = ""
 
 
 @lru_cache(maxsize=1)
@@ -1671,6 +1789,8 @@ def _get_contact_profile_realtime(
         display_name_fallback=display_name_fallback,
         avatar_link_fallback=avatar_link_fallback,
     )
+    enterprise_info_by_username = _load_enterprise_contact_info(account_dir / "contact.db", [username], rt_conn=rt_conn)
+    _attach_enterprise_contact_info(contact, enterprise_info_by_username.get(username))
     for room in common_chatrooms:
         room_username = _normalize_text(room.get("username"))
         room["displayName"] = _normalize_text(common_chatroom_names.get(room_username)) or room_username
@@ -1696,6 +1816,8 @@ def _get_contact_profile_decrypted(
         username=username,
         row=row,
     )
+    enterprise_info = _load_enterprise_contact_info(account_dir / "contact.db", [username]).get(username)
+    _attach_enterprise_contact_info(contact, enterprise_info)
     contact["announcement"] = _query_decrypted_group_announcement(account_dir / "contact.db", username)
     return (
         contact,
@@ -2378,6 +2500,84 @@ def get_chat_contact_profile(
         **source_meta,
         "found": bool(found),
         "contact": contact,
+    }
+
+
+@router.get("/api/chat/contacts/group_members", summary="分页获取群成员")
+def get_chat_group_members(
+    request: Request,
+    account: Optional[str] = None,
+    username: str = "",
+    limit: int = 40,
+    offset: int = 0,
+    source: Optional[str] = None,
+):
+    account_dir = _resolve_account_dir(account)
+    base_url = str(request.base_url).rstrip("/")
+    group_username = _normalize_text(username)
+    if not group_username:
+        raise HTTPException(status_code=400, detail="username is required.")
+    if limit < 1 or offset < 0:
+        raise HTTPException(status_code=400, detail="limit must be positive and offset must not be negative.")
+
+    sql = f"""
+        SELECT nm.username AS username,
+               COALESCE(NULLIF(c.remark, ''), NULLIF(s.remark, ''), '') AS remark,
+               COALESCE(NULLIF(c.nick_name, ''), NULLIF(s.nick_name, ''), '') AS nick_name
+        FROM chat_room cr
+        JOIN chatroom_member cm ON cm.room_id = cr.id
+        JOIN name2id nm ON nm.rowid = cm.member_id
+        LEFT JOIN contact c ON c.username = nm.username
+        LEFT JOIN stranger s ON s.username = nm.username
+        WHERE cr.username = {_sql_literal(group_username)}
+        ORDER BY cm.rowid
+        LIMIT {int(limit) + 1} OFFSET {int(offset)}
+    """
+
+    def read_members(source_active: str) -> list[dict[str, Any]]:
+        if source_active == "realtime":
+            try:
+                rt_conn = WCDB_REALTIME.ensure_connected(account_dir)
+                with rt_conn.lock:
+                    return _wcdb_exec_query(rt_conn.handle, kind="contact", path=None, sql=sql)
+            except WCDBRealtimeError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Realtime group member lookup failed: {exc}") from exc
+
+        contact_db_path = account_dir / "contact.db"
+        if not contact_db_path.is_file():
+            raise HTTPException(status_code=400, detail="Decrypted contact database unavailable.")
+        conn = sqlite3.connect(str(contact_db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            return [dict(row) for row in conn.execute(sql).fetchall()]
+        except sqlite3.Error as exc:
+            raise HTTPException(status_code=400, detail=f"Decrypted group member lookup failed: {exc}") from exc
+        finally:
+            conn.close()
+
+    rows, _, _ = _run_contacts_read_with_fallback(
+        account_dir=account_dir,
+        source=source,
+        read=read_members,
+    )
+    has_more = len(rows) > limit
+    members = []
+    for row in rows[:limit]:
+        member_username = _normalize_text(_pick_case_insensitive_value(row, "username", "user_name"))
+        if not member_username:
+            continue
+        members.append({
+            "username": member_username,
+            "displayName": _pick_display_name(row, member_username),
+            "avatar": base_url + _build_avatar_url(account_dir.name, member_username),
+        })
+    return {
+        "status": "success",
+        "members": members,
+        "hasMore": has_more,
+        "nextOffset": offset + len(members),
     }
 
 

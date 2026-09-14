@@ -288,6 +288,7 @@ export const createMessageNormalizer = ({
       sender,
       senderUsername: rawSenderUsername,
       senderDisplayName,
+      senderEnterpriseName: String(msg.senderEnterpriseName || '').trim(),
       content: msg.content || '',
       time: formatMessageTime(msg.createTime),
       fullTime: formatMessageFullTime(msg.createTime),
