@@ -141,22 +141,26 @@ import { DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, readLocalBoolSetting } from '~/lib
 import { isFirstUseAgreementAccepted } from '~/lib/first-use-agreement'
 
 const { listChatAccounts } = useApi()
+const router = useRouter()
 const exportDialogOpen = ref(false)
 
 onMounted(async () => {
   if (!process.client || typeof window === 'undefined') return
   if (!isFirstUseAgreementAccepted()) return
 
-  const enabled = readLocalBoolSetting(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, false)
+  const enabled = readLocalBoolSetting(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, true)
   if (!enabled) return
 
   try {
     const resp = await listChatAccounts()
     const accounts = resp?.accounts || []
     if (accounts.length) {
-      await navigateTo('/chat', { replace: true })
+      // 提前获取路由实例，避免等待账号请求后丢失 Nuxt 上下文。
+      await router.replace('/chat')
     }
-  } catch {}
+  } catch (error) {
+    console.warn('启动时自动进入聊天页失败：', error)
+  }
 })
 
 const openExportDialog = () => {
