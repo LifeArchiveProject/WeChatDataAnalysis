@@ -553,8 +553,57 @@ class TestNativeCoreRealtime(unittest.TestCase):
         self.assertEqual([path.name for path, _table in third[0]], ["message_0.db", "message_1.db"])
         self.assertEqual(
             probed_paths,
-            ["message_0.db", "message_0.db", "message_1.db"],
+            ["message_0.db", "message_1.db"],
         )
+
+    def test_schema_directory_reuses_other_conversation_without_extending_expiry(self) -> None:
+        connection = type('Connection', (), {'handle': 901, 'lock': threading.Lock()})()
+        names = ['Msg_' + hashlib.md5(u.encode()).hexdigest() for u in ('first', 'second', 'new')]
+        available = names[:2]
+        calls = []
+        def execute(handle, **kwargs):
+            calls.append(kwargs['path'])
+            return [{'name': name} for name in available]
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            (root / 'message').mkdir()
+            (root / 'message/message_0.db').write_bytes(b'fixture')
+            def resolve(username):
+                return chat_realtime_reader._resolve_tables(rt_conn=connection, db_storage_dir=root,
+                                                           username=username, exec_query=execute)
+            with patch.object(chat_realtime_reader.time, 'monotonic', return_value=100):
+                self.assertEqual(resolve('first')[0][0][1], names[0])
+            with patch.object(chat_realtime_reader.time, 'monotonic', return_value=120):
+                self.assertEqual(resolve('second')[0][0][1], names[1])
+                self.assertEqual(len(calls), 1)
+            # 第二个会话的缓存仍从原目录的 100 秒计时，不延长到 150 秒。
+            with patch.object(chat_realtime_reader.time, 'monotonic', return_value=131):
+                self.assertEqual(resolve('second')[0][0][1], names[1])
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(resolve('new')[0], [])
+            available.append(names[2])
+            with patch.object(chat_realtime_reader.time, 'monotonic', return_value=134):
+                self.assertEqual(resolve('new')[0][0][1], names[2])
+                self.assertEqual(len(calls), 3)
+
+    def test_schema_cache_isolates_connections_paths_and_retries_failed_queries(self) -> None:
+        first = type('Connection', (), {'handle': 902, 'lock': threading.Lock()})()
+        second = type('Connection', (), {'handle': 903, 'lock': threading.Lock()})()
+        calls = []
+        def execute(handle, **kwargs):
+            calls.append((handle, kwargs['path']))
+            return [{'name': 'Msg_first'}]
+        with TemporaryDirectory() as td:
+            a, b = Path(td) / 'a.db', Path(td) / 'b.db'
+            lookup = chat_realtime_reader._resolve_schema_table
+            for connection, path in ((first, a), (second, a), (first, b)):
+                self.assertEqual(lookup(connection, path, 'Msg_first', execute)[0], 'Msg_first')
+            self.assertEqual(len(calls), 3)
+            c = Path(td) / 'c.db'
+            with self.assertRaises(RuntimeError):
+                lookup(first, c, 'Msg_first', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('读取失败')))
+            self.assertEqual(lookup(first, c, 'Msg_first', execute)[0], 'Msg_first')
+            self.assertEqual(len(calls), 4)
 
     def test_supported_message_projection_is_reused_after_the_first_fallback(self) -> None:
         class _Connection:

@@ -757,6 +757,7 @@ const originFor = (cell, seg) => {
 </script>
 
 <style scoped>
+@reference "../../../assets/css/tailwind.css";
 /* ---------------- 分段容器 ---------------- */
 
 /* 16:9 / 4:3 保持原样：等价于原来的 .overflow-x-auto */

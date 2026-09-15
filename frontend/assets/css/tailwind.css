@@ -1,6 +1,8 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../../tailwind.config.js";
+
+/* Tailwind 4 显式保留旧版边框默认值，避免全站边框继承文字色。 */
+@layer base { *, ::before, ::after { border-color: var(--color-gray-200, currentColor); } }
 
 /* 自定义全局样式 - 微信配色主题 */
 @layer base {
@@ -2049,6 +2051,11 @@
     color: var(--message-list-status);
   }
 
+}
+
+/* Tailwind 4 保留原生层叠层：主题覆盖必须在 utilities 之后，
+ * 否则 bg-white、文字色等工具类会压过旧版的深色适配。 */
+@layer theme-overrides {
   html[data-theme='dark'] .theme-scope {
     color: var(--app-text-primary);
   }
@@ -2107,7 +2114,7 @@
     border-color: var(--app-border);
   }
 
-  html[data-theme='dark'] .theme-scope .divide-y > :not([hidden]) ~ :not([hidden]) {
+  html[data-theme='dark'] .theme-scope .divide-y > :not([hidden]) {
     border-color: var(--app-border-soft);
   }
 

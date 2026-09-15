@@ -2508,7 +2508,7 @@ def _load_group_nickname_map_from_contact_db(
         return best
 
     try:
-        conn = sqlite3.connect(str(contact_db_path))
+        conn = sqlite3.connect(Path(contact_db_path).resolve().as_uri() + '?mode=ro', uri=True)
     except Exception:
         return {}
 

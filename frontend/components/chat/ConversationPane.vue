@@ -183,6 +183,7 @@
         <p class="conversation-empty-text text-sm">
           从左侧列表选择联系人查看聊天记录
         </p>
+        <button v-if="selectedAccount" type="button" class="mt-5 rounded-lg border px-4 py-2 text-sm" :aria-pressed="aiSidebarOpen" @click="toggleAiSidebar">向全部聊天提问</button>
       </div>
     </div>
 
