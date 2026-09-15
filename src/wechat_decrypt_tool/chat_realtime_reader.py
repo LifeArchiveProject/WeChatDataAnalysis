@@ -192,12 +192,27 @@ def _clean_account_name(value: str) -> str:
     return match.group(1) if match else text
 
 
-def _locked_call(rt_conn: Any, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+def _locked_call(
+    rt_conn: Any, func: Callable[..., Any], *args: Any,
+    _timings: Optional[dict[str, Any]] = None, **kwargs: Any,
+) -> Any:
     lock = getattr(rt_conn, "lock", None)
-    if lock is None:
+    if _timings is None:
+        if lock is None:
+            return func(*args, **kwargs)
+        with lock:
+            return func(*args, **kwargs)
+    started = time.perf_counter()
+    if lock is not None:
+        lock.acquire()
+    acquired = time.perf_counter()
+    _timings["lockWaitMs"] = _timings.get("lockWaitMs", 0.0) + (acquired - started) * 1000
+    try:
         return func(*args, **kwargs)
-    with lock:
-        return func(*args, **kwargs)
+    finally:
+        _timings["sqlMs"] = _timings.get("sqlMs", 0.0) + (time.perf_counter() - acquired) * 1000
+        if lock is not None:
+            lock.release()
 
 
 def _message_db_paths(db_storage_dir: Optional[Path], username: str) -> list[Path]:
@@ -247,6 +262,7 @@ def _resolve_tables(
     db_storage_dir: Optional[Path],
     username: str,
     exec_query: ExecQuery,
+    timings: Optional[dict[str, Any]] = None,
 ) -> tuple[list[tuple[Path, str]], int, int, list[str]]:
     expected = f"Msg_{hashlib.md5(str(username or '').strip().encode('utf-8')).hexdigest()}"
     candidates = _message_db_paths(db_storage_dir, username)
@@ -265,7 +281,7 @@ def _resolve_tables(
     schema_times: list[float] = []
     for db_path in candidates:
         try:
-            actual, schema_time = _resolve_schema_table(rt_conn, db_path, expected, exec_query)
+            actual, schema_time = _resolve_schema_table(rt_conn, db_path, expected, exec_query, timings)
             schema_times.append(schema_time)
             probed += 1
         except Exception as exc:
@@ -286,7 +302,10 @@ def _resolve_tables(
     return resolved, len(candidates), probed, diagnostics
 
 
-def _resolve_schema_table(rt_conn: Any, db_path: Path, expected: str, exec_query: ExecQuery) -> tuple[str, float]:
+def _resolve_schema_table(
+    rt_conn: Any, db_path: Path, expected: str, exec_query: ExecQuery,
+    timings: Optional[dict[str, Any]] = None,
+) -> tuple[str, float]:
     """跨会话复用数据库表目录，沿用命中 30 秒、缺失 2 秒的失效边界。"""
     key = _connection_cache_id(rt_conn), _normalized_path_key(db_path)
     now = time.monotonic()
@@ -300,6 +319,7 @@ def _resolve_schema_table(rt_conn: Any, db_path: Path, expected: str, exec_query
                 _message_schema_cache[key] = cached
                 return actual, stamp
     rows = _locked_call(rt_conn, exec_query, rt_conn.handle, kind='message', path=str(db_path),
+                        _timings=timings,
                         sql="SELECT name FROM sqlite_master WHERE type='table'")
     names = {}
     for row in rows or []:
@@ -525,6 +545,60 @@ def count_realtime_message_rows_via_exec(
             return None
         total += _to_int(_pick(rows[0], "count")) if rows else 0
     return total
+
+
+def fetch_daily_counts_via_exec(
+    *,
+    rt_conn: Any,
+    username: str,
+    db_storage_dir: Optional[Path],
+    exec_query: ExecQuery,
+    start_time: int,
+    end_time: int,
+    timings: Optional[dict[str, Any]] = None,
+) -> dict[str, int]:
+    """只读取目标月的每日计数；任一分库失败都不能返回不完整的日历。"""
+    metrics = timings if timings is not None else {}
+    metrics["stage"] = "discovery"
+    started = time.perf_counter()
+    try:
+        resolved, candidate_count, probed, _ = _resolve_tables(
+            rt_conn=rt_conn, db_storage_dir=db_storage_dir, username=username,
+            exec_query=exec_query, timings=metrics,
+        )
+    finally:
+        metrics["discoveryMs"] = (time.perf_counter() - started) * 1000
+    metrics.update(databasesProbed=probed, candidateDatabases=candidate_count, tablesFound=len(resolved))
+    if candidate_count <= 0 or probed != candidate_count:
+        raise RealtimeMessageReadError("无法完整读取消息分库目录，请重试")
+
+    counts: dict[str, int] = {}
+    metrics["stage"] = "aggregate"
+    started = time.perf_counter()
+    try:
+        for db_path, table_name in resolved:
+            # 时间过滤直接使用字段，保留已有时间索引的范围查询能力。
+            sql = (
+                "SELECT strftime('%Y-%m-%d', create_time, 'unixepoch', 'localtime') AS day, "
+                f"COUNT(*) AS c FROM {_quote_ident(table_name)} "
+                f"WHERE create_time >= {int(start_time)} AND create_time < {int(end_time)} "
+                "GROUP BY day"
+            )
+            raw_rows = _locked_call(
+                rt_conn, exec_query, rt_conn.handle, kind="message", path=str(db_path),
+                sql=sql, _timings=metrics,
+            )
+            metrics["returnedRows"] = metrics.get("returnedRows", 0) + len(raw_rows)
+            for row in raw_rows:
+                day = str(_pick(row, "day") or "")
+                count = int(_pick(row, "c"))
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) or count <= 0:
+                    raise RealtimeMessageReadError("消息日期统计返回了无效数据，请重试")
+                counts[day] = counts.get(day, 0) + count
+    finally:
+        metrics["aggregateMs"] = (time.perf_counter() - started) * 1000
+    metrics["stage"] = "complete"
+    return counts
 
 
 def fetch_anchor_via_exec(

@@ -634,11 +634,14 @@ const timeSidebarCounts = ref({}) // { 'YYYY-MM-DD': count }
 const timeSidebarMax = ref(0)
 const timeSidebarTotal = ref(0)
 const timeSidebarLoading = ref(false)
+const timeSidebarReady = ref(false)
 const timeSidebarError = ref('')
 const timeSidebarSelectedDate = ref('') // YYYY-MM-DD (current/selected day)
 const isJumpingToFirst = ref(false)
-// Simple in-memory cache per (account|username|YYYY-MM)
-const timeSidebarCache = ref({})
+// 只缓存完整统计，按访问顺序淘汰，避免长期浏览积累无界缓存。
+const timeSidebarCache = new Map()
+const TIME_SIDEBAR_CACHE_TTL_MS = 30_000
+const TIME_SIDEBAR_CACHE_LIMIT = 120
 const timeSidebarWeekdays = ['一', '二', '三', '四', '五', '六', '日']
 
 const timeSidebarMonthLabel = computed(() => {
@@ -724,7 +727,8 @@ const timeSidebarCalendarCells = computed(() => {
 
     const dateStr = `${y}-${_pad2(m)}-${_pad2(dayNum)}`
     const count = Math.max(0, Number(counts[dateStr] || 0))
-    const disabled = count <= 0
+    const known = timeSidebarReady.value && !timeSidebarLoading.value && !timeSidebarError.value
+    const disabled = !known || count <= 0
     const style = !disabled
       ? { backgroundColor: _calendarHeatColor(count, Math.max(maxV, count)) }
       : null
@@ -740,11 +744,11 @@ const timeSidebarCalendarCells = computed(() => {
       day: String(dayNum),
       dateStr,
       count,
-      countText: String(count),
+      countText: known ? String(count) : '—',
       disabled,
       className,
       style,
-      title: `${dateStr}：${count} 条`
+      title: known ? `${dateStr}：${count} 条` : `${dateStr}：尚未完成统计`
     })
   }
   return out
@@ -767,18 +771,29 @@ messageSearchDebounceTimer = null
 }
 
 let timeSidebarReqId = 0
+let timeSidebarPending = null
 
-const closeTimeSidebar = () => {
-timeSidebarOpen.value = false
-timeSidebarError.value = ''
+const cancelTimeSidebarRequest = () => {
+  ++timeSidebarReqId
+  timeSidebarPending?.controller.abort()
+  timeSidebarPending = null
+  timeSidebarLoading.value = false
 }
 
-const _timeSidebarCacheKey = ({ account, username, year, month }) => {
+const closeTimeSidebar = () => {
+cancelTimeSidebarRequest()
+timeSidebarOpen.value = false
+timeSidebarError.value = ''
+timeSidebarReady.value = false
+_applyTimeSidebarMonthData(null)
+}
+
+const _timeSidebarCacheKey = ({ account, username, source, year, month }) => {
 const acc = String(account || '').trim()
 const u = String(username || '').trim()
 const y = Number(year || 0)
 const m = Number(month || 0)
-return `${acc}|${u}|${y}-${_pad2(m)}`
+return JSON.stringify([acc, u, source, y, m])
 }
 
 const _applyTimeSidebarMonthData = (data) => {
@@ -788,7 +803,7 @@ timeSidebarMax.value = Math.max(0, Number(data?.max || 0))
 timeSidebarTotal.value = Math.max(0, Number(data?.total || 0))
 }
 
-const loadTimeSidebarMonth = async ({ year, month, force } = {}) => {
+const loadTimeSidebarMonth = ({ year, month, force } = {}) => {
 if (!selectedAccount.value) return
 if (!selectedContact.value?.username) return
 
@@ -802,35 +817,51 @@ timeSidebarMonth.value = m
 const key = _timeSidebarCacheKey({
   account: selectedAccount.value,
   username: selectedContact.value.username,
+  source: DEFAULT_CHAT_SOURCE,
   year: y,
   month: m
 })
 
+if (!force && timeSidebarPending?.key === key) return timeSidebarPending.promise
+// 即使命中缓存，也必须先让上一月份的请求失效。
+cancelTimeSidebarRequest()
+timeSidebarReady.value = false
+timeSidebarError.value = ''
+_applyTimeSidebarMonthData(null)
+const now = Date.now()
+for (const [cacheKey, entry] of timeSidebarCache) {
+  if (now - entry.cachedAt >= TIME_SIDEBAR_CACHE_TTL_MS) timeSidebarCache.delete(cacheKey)
+}
 if (!force) {
-  const cached = timeSidebarCache.value[key]
+  const cached = timeSidebarCache.get(key)
   if (cached) {
-    timeSidebarError.value = ''
-    _applyTimeSidebarMonthData(cached)
+    timeSidebarCache.delete(key)
+    timeSidebarCache.set(key, cached)
+    _applyTimeSidebarMonthData(cached.data)
+    timeSidebarReady.value = true
     return
   }
 }
 
-const reqId = ++timeSidebarReqId
+const reqId = timeSidebarReqId
+const pending = { key, controller: new AbortController(), promise: null }
+timeSidebarPending = pending
 timeSidebarLoading.value = true
-timeSidebarError.value = ''
-
+pending.promise = (async () => {
 try {
   const resp = await api.getChatMessageDailyCounts({
     account: selectedAccount.value,
     username: selectedContact.value.username,
     year: y,
     month: m,
-    source: DEFAULT_CHAT_SOURCE
+    source: DEFAULT_CHAT_SOURCE,
+    signal: pending.controller.signal
   })
   if (reqId !== timeSidebarReqId) return
   if (String(resp?.status || '') !== 'success') {
     throw new Error(String(resp?.message || '加载日历失败'))
   }
+  if (resp?.scanLimited) throw new Error('日历统计不完整，请重试')
 
   const data = {
     counts: resp?.counts || {},
@@ -839,7 +870,12 @@ try {
   }
 
   _applyTimeSidebarMonthData(data)
-  timeSidebarCache.value = { ...timeSidebarCache.value, [key]: data }
+  timeSidebarReady.value = true
+  timeSidebarCache.delete(key)
+  timeSidebarCache.set(key, { data, cachedAt: Date.now() })
+  while (timeSidebarCache.size > TIME_SIDEBAR_CACHE_LIMIT) {
+    timeSidebarCache.delete(timeSidebarCache.keys().next().value)
+  }
 } catch (e) {
   if (reqId !== timeSidebarReqId) return
   timeSidebarError.value = e?.message || '加载日历失败'
@@ -847,9 +883,21 @@ try {
 } finally {
   if (reqId === timeSidebarReqId) {
     timeSidebarLoading.value = false
+    timeSidebarPending = null
   }
 }
+})()
+return pending.promise
 }
+
+const retryTimeSidebarMonth = () => loadTimeSidebarMonth({ force: true })
+
+watch([selectedAccount, () => selectedContact.value?.username], () => {
+  closeTimeSidebar()
+  timeSidebarYear.value = null
+  timeSidebarMonth.value = null
+  timeSidebarSelectedDate.value = ''
+}, { flush: 'sync' })
 
 const _pickTimeSidebarInitialYearMonth = () => {
 const list = messages.value || []
@@ -881,8 +929,11 @@ if (Number(timeSidebarYear.value || 0) !== y || Number(timeSidebarMonth.value ||
 }
 
 const toggleTimeSidebar = async () => {
-timeSidebarOpen.value = !timeSidebarOpen.value
-if (!timeSidebarOpen.value) return
+if (timeSidebarOpen.value) {
+  closeTimeSidebar()
+  return
+}
+timeSidebarOpen.value = true
 closeMessageSearch()
 
 const { year, month } = _pickTimeSidebarInitialYearMonth()
@@ -893,7 +944,7 @@ timeSidebarMonth.value = month
 const list = messages.value || []
 const last = Array.isArray(list) && list.length ? list[list.length - 1] : null
 const ds = _dateStrFromEpochSeconds(Number(last?.createTime || 0))
-if (ds) await _applyTimeSidebarSelectedDate(ds, { syncMonth: false })
+if (ds) timeSidebarSelectedDate.value = ds
 
 await loadTimeSidebarMonth({ year, month, force: false })
 }
@@ -1566,7 +1617,7 @@ try {
 }
 
 const onTimeSidebarDayClick = async (cell) => {
-if (!cell || cell.disabled) return
+if (!timeSidebarReady.value || timeSidebarLoading.value || timeSidebarError.value || !cell || cell.disabled) return
 const ds = String(cell.dateStr || '').trim()
 if (!ds) return
 await locateByDate(ds)
@@ -2110,6 +2161,8 @@ if (c.scrollTop <= 240 && autoLoadReady.value && hasMoreMessages.value && !isLoa
   })
 
   onUnmounted(() => {
+    cancelTimeSidebarRequest()
+    timeSidebarCache.clear()
     if (messageSearchDebounceTimer) clearTimeout(messageSearchDebounceTimer)
     messageSearchDebounceTimer = null
     stopMessageSearchIndexPolling()
@@ -2175,6 +2228,7 @@ if (c.scrollTop <= 240 && autoLoadReady.value && hasMoreMessages.value && !isLoa
     timeSidebarMax,
     timeSidebarTotal,
     timeSidebarLoading,
+    timeSidebarReady,
     timeSidebarError,
     timeSidebarSelectedDate,
     isJumpingToFirst,
@@ -2196,6 +2250,7 @@ if (c.scrollTop <= 240 && autoLoadReady.value && hasMoreMessages.value && !isLoa
     closeMessageSearch,
     closeTimeSidebar,
     loadTimeSidebarMonth,
+    retryTimeSidebarMonth,
     toggleTimeSidebar,
     prevTimeSidebarMonth,
     nextTimeSidebarMonth,

@@ -304,30 +304,19 @@ class TestChatMessageCalendarHeatmap(unittest.TestCase):
             self.assertEqual(msgs[0].get("id"), f"message:{table}:1")
             self.assertEqual(msgs[1].get("id"), f"message_1:{table}:1")
 
-    def test_realtime_daily_counts_uses_wcdb_rows(self):
+    def test_realtime_daily_counts_uses_aggregate_without_scanning_messages(self):
         with TemporaryDirectory() as td:
             account_dir = Path(td) / "acc"
             account_dir.mkdir(parents=True, exist_ok=True)
             username = "wxid_test_user"
 
-            ts_feb01_10 = int(datetime(2026, 2, 1, 10, 0, 0).timestamp())
-            ts_feb01_11 = int(datetime(2026, 2, 1, 11, 0, 0).timestamp())
-            ts_feb14_12 = int(datetime(2026, 2, 14, 12, 0, 0).timestamp())
-            ts_mar01_00 = int(datetime(2026, 3, 1, 0, 0, 0).timestamp())
-            rows = [
-                {"local_id": 4, "create_time": ts_mar01_00},
-                {"local_id": 3, "create_time": ts_feb14_12},
-                {"local_id": 2, "create_time": ts_feb01_11},
-                {"local_id": 1, "create_time": ts_feb01_10},
-            ]
-
-            def fake_get_messages(_handle, _username, *, limit=50, offset=0):
-                return rows[int(offset) : int(offset) + int(limit)]
-
             with (
                 patch.object(chat_router, "_resolve_account_dir", return_value=account_dir),
                 patch.object(chat_router.WCDB_REALTIME, "ensure_connected", return_value=_FakeRealtimeConnection()),
-                patch.object(chat_router, "_wcdb_get_messages", side_effect=fake_get_messages),
+                patch.object(chat_router, "_resolve_account_db_storage_dir", return_value=account_dir),
+                patch.object(chat_router, "_shared_fetch_realtime_daily_counts_via_exec",
+                             return_value={"2026-02-14": 1, "2026-02-01": 2}) as aggregate,
+                patch.object(chat_router, "_wcdb_get_messages", side_effect=AssertionError("不应逐条读取")),
             ):
                 resp = chat_router.get_chat_message_daily_counts(
                     username=username,
@@ -342,6 +331,10 @@ class TestChatMessageCalendarHeatmap(unittest.TestCase):
             self.assertEqual(resp.get("counts"), {"2026-02-14": 1, "2026-02-01": 2})
             self.assertEqual(resp.get("total"), 3)
             self.assertEqual(resp.get("max"), 2)
+            self.assertFalse(resp["scanLimited"])
+            self.assertEqual(resp["scannedMessages"], 0)
+            self.assertEqual(aggregate.call_args.kwargs["start_time"], int(datetime(2026, 2, 1).timestamp()))
+            self.assertEqual(aggregate.call_args.kwargs["end_time"], int(datetime(2026, 3, 1).timestamp()))
 
     def test_realtime_anchor_day_and_around_use_wcdb_rows(self):
         from fastapi import FastAPI
