@@ -201,6 +201,7 @@ export const useChatSessions = ({ chatAccounts, selectedAccount, realtimeEnabled
     return sessions.map((session) => ({
       id: session.id,
       name: session.name || session.username || session.id,
+      enterpriseName: session.enterpriseName || '',
       avatar: session.avatar || null,
       lastMessage: normalizeSessionPreview(session.lastMessage || ''),
       lastMessageTime: session.lastMessageTime || '',

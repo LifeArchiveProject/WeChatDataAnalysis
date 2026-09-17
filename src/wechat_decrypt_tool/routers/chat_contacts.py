@@ -285,6 +285,8 @@ _REGION_LOOKUP_PATH = Path(__file__).resolve().parents[1] / "resources" / "conta
 class ContactTypeFilter(BaseModel):
     friends: bool = True
     groups: bool = True
+    enterprise_friends: Optional[bool] = None
+    enterprise_groups: Optional[bool] = None
     officials: bool = True
     official_subscriptions: Optional[bool] = None
     official_services: Optional[bool] = None
@@ -992,11 +994,32 @@ def _resolve_official_filter(
     return subscriptions, services
 
 
+def _resolve_enterprise_filter(
+    include_friends: bool,
+    include_groups: bool,
+    include_enterprise_friends: Optional[bool],
+    include_enterprise_groups: Optional[bool],
+) -> tuple[bool, bool]:
+    enterprise_friends = (
+        bool(include_friends)
+        if include_enterprise_friends is None
+        else bool(include_enterprise_friends)
+    )
+    enterprise_groups = (
+        bool(include_groups)
+        if include_enterprise_groups is None
+        else bool(include_enterprise_groups)
+    )
+    return enterprise_friends, enterprise_groups
+
+
 def _contact_type_selected(
     item: dict[str, Any],
     *,
     include_friends: bool,
     include_groups: bool,
+    include_enterprise_friends: bool,
+    include_enterprise_groups: bool,
     include_official_subscriptions: bool,
     include_official_services: bool,
     include_former_friends: bool,
@@ -1007,6 +1030,10 @@ def _contact_type_selected(
         return bool(include_friends)
     if t == "group":
         return bool(include_groups)
+    if t == "enterprise_friend":
+        return bool(include_enterprise_friends)
+    if t == "enterprise_group":
+        return bool(include_enterprise_groups)
     if t == "official":
         kind = _normalize_text(item.get("officialAccountKind"))
         if kind == "service":
@@ -1024,6 +1051,8 @@ def _filter_contacts_by_type(
     *,
     include_friends: bool,
     include_groups: bool,
+    include_enterprise_friends: Optional[bool],
+    include_enterprise_groups: Optional[bool],
     include_officials: bool,
     include_official_subscriptions: Optional[bool],
     include_official_services: Optional[bool],
@@ -1035,7 +1064,22 @@ def _filter_contacts_by_type(
         include_official_subscriptions,
         include_official_services,
     )
-    if not any([include_friends, include_groups, subscriptions, services, include_former_friends, include_blocked]):
+    enterprise_friends, enterprise_groups = _resolve_enterprise_filter(
+        include_friends,
+        include_groups,
+        include_enterprise_friends,
+        include_enterprise_groups,
+    )
+    if not any([
+        include_friends,
+        include_groups,
+        enterprise_friends,
+        enterprise_groups,
+        subscriptions,
+        services,
+        include_former_friends,
+        include_blocked,
+    ]):
         return []
     return [
         item
@@ -1044,6 +1088,8 @@ def _filter_contacts_by_type(
             item,
             include_friends=include_friends,
             include_groups=include_groups,
+            include_enterprise_friends=enterprise_friends,
+            include_enterprise_groups=enterprise_groups,
             include_official_subscriptions=subscriptions,
             include_official_services=services,
             include_former_friends=include_former_friends,
@@ -1290,6 +1336,31 @@ def _load_session_group_usernames(session_db_path: Path) -> set[str]:
         return out
     finally:
         conn.close()
+
+
+def _load_decrypted_enterprise_group_usernames(contact_db_path: Path) -> set[str]:
+    out: set[str] = set()
+    if not contact_db_path.exists():
+        return out
+
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = sqlite3.connect(str(contact_db_path))
+        rows = conn.execute(
+            "SELECT username_ FROM chat_room_info_detail "
+            "WHERE (chat_room_status_ & 131072) != 0"
+        ).fetchall()
+    except sqlite3.Error:
+        return out
+    finally:
+        if conn is not None:
+            conn.close()
+
+    for row in rows:
+        username = _normalize_text(row[0] if row else "")
+        if username.endswith("@chatroom"):
+            out.add(username)
+    return out
 
 
 def _infer_contact_type(username: str, row: dict[str, Any]) -> Optional[str]:
@@ -1588,6 +1659,31 @@ def _query_realtime_contact_rows(handle: int) -> list[dict[str, Any]]:
     return rows
 
 
+def _query_realtime_enterprise_group_usernames(handle: int) -> set[str]:
+    out: set[str] = set()
+    try:
+        rows = _wcdb_exec_query(
+            handle,
+            kind="contact",
+            path=None,
+            sql=(
+                "SELECT username_ FROM chat_room_info_detail "
+                "WHERE (chat_room_status_ & 131072) != 0"
+            ),
+        )
+    except Exception:
+        return out
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        username = _normalize_text(
+            _pick_case_insensitive_value(row, "username_", "username", "user_name")
+        )
+        if username.endswith("@chatroom"):
+            out.add(username)
+    return out
+
+
 def _query_realtime_official_account_type_map(handle: int) -> dict[str, int]:
     out: dict[str, int] = {}
     try:
@@ -1833,6 +1929,8 @@ def _collect_contacts_for_account_realtime(
     include_friends: bool,
     include_groups: bool,
     include_officials: bool,
+    include_enterprise_friends: Optional[bool] = None,
+    include_enterprise_groups: Optional[bool] = None,
     include_official_subscriptions: Optional[bool] = None,
     include_official_services: Optional[bool] = None,
     include_former_friends: bool = False,
@@ -1843,7 +1941,22 @@ def _collect_contacts_for_account_realtime(
         include_official_subscriptions,
         include_official_services,
     )
-    if not any([include_friends, include_groups, official_subscriptions, official_services, include_former_friends, include_blocked]):
+    enterprise_friends, enterprise_groups = _resolve_enterprise_filter(
+        include_friends,
+        include_groups,
+        include_enterprise_friends,
+        include_enterprise_groups,
+    )
+    if not any([
+        include_friends,
+        include_groups,
+        enterprise_friends,
+        enterprise_groups,
+        official_subscriptions,
+        official_services,
+        include_former_friends,
+        include_blocked,
+    ]):
         return []
 
     try:
@@ -1881,6 +1994,7 @@ def _collect_contacts_for_account_realtime(
 
     contact_rows: list[dict[str, Any]] = []
     official_account_type_map: dict[str, int] = {}
+    enterprise_group_usernames: set[str] = set()
     contact_query_method = "sql"
     try:
         with rt_conn.lock:
@@ -1895,6 +2009,7 @@ def _collect_contacts_for_account_realtime(
                 contact_query_method = "compact"
                 contact_rows = _wcdb_get_contacts_compact(rt_conn.handle, [])
             official_account_type_map = _query_realtime_official_account_type_map(rt_conn.handle)
+            enterprise_group_usernames = _query_realtime_enterprise_group_usernames(rt_conn.handle)
     except Exception as exc:
         logger.warning("[contacts] 实时联系人查询失败 account=%s error=%s", account_dir.name, exc)
         raise HTTPException(status_code=400, detail=f"Realtime contact lookup failed: {exc}") from exc
@@ -1955,6 +2070,13 @@ def _collect_contacts_for_account_realtime(
         contact_type = _infer_contact_type(username, row)
         if contact_type is None:
             continue
+        if contact_type == "friend" and _is_allowed_enterprise_openim_by_local_type(
+            username,
+            _to_int(_pick_case_insensitive_value(row, "local_type", "localType", "WCDB_CT_local_type")),
+        ):
+            contact_type = "enterprise_friend"
+        elif contact_type == "group" and username in enterprise_group_usernames:
+            contact_type = "enterprise_group"
         item = _contact_item_from_profile_row(
             account_dir=account_dir,
             base_url=base_url,
@@ -1972,6 +2094,8 @@ def _collect_contacts_for_account_realtime(
             item,
             include_friends=bool(include_friends),
             include_groups=bool(include_groups),
+            include_enterprise_friends=enterprise_friends,
+            include_enterprise_groups=enterprise_groups,
             include_official_subscriptions=official_subscriptions,
             include_official_services=official_services,
             include_former_friends=bool(include_former_friends),
@@ -1996,7 +2120,7 @@ def _collect_contacts_for_account_realtime(
             sort_ts=int(session_ts_map.get(username, 0) or 0),
         )
         if "@chatroom" in username:
-            item["type"] = "group"
+            item["type"] = "enterprise_group" if username in enterprise_group_usernames else "group"
         _attach_official_account_kind(item, official_account_type_map)
         if not _matches_keyword(item, keyword or ""):
             continue
@@ -2004,6 +2128,8 @@ def _collect_contacts_for_account_realtime(
             item,
             include_friends=bool(include_friends),
             include_groups=bool(include_groups),
+            include_enterprise_friends=enterprise_friends,
+            include_enterprise_groups=enterprise_groups,
             include_official_subscriptions=official_subscriptions,
             include_official_services=official_services,
             include_former_friends=bool(include_former_friends),
@@ -2036,6 +2162,8 @@ def _collect_contacts_for_account(
     include_friends: bool,
     include_groups: bool,
     include_officials: bool,
+    include_enterprise_friends: Optional[bool] = None,
+    include_enterprise_groups: Optional[bool] = None,
     include_official_subscriptions: Optional[bool] = None,
     include_official_services: Optional[bool] = None,
     include_former_friends: bool = False,
@@ -2047,7 +2175,22 @@ def _collect_contacts_for_account(
         include_official_subscriptions,
         include_official_services,
     )
-    if not any([include_friends, include_groups, official_subscriptions, official_services, include_former_friends, include_blocked]):
+    enterprise_friends, enterprise_groups = _resolve_enterprise_filter(
+        include_friends,
+        include_groups,
+        include_enterprise_friends,
+        include_enterprise_groups,
+    )
+    if not any([
+        include_friends,
+        include_groups,
+        enterprise_friends,
+        enterprise_groups,
+        official_subscriptions,
+        official_services,
+        include_former_friends,
+        include_blocked,
+    ]):
         return []
 
     source_norm = _resolve_contacts_source_for_account(_normalize_contacts_source(source), account_dir)
@@ -2059,6 +2202,8 @@ def _collect_contacts_for_account(
             include_friends=include_friends,
             include_groups=include_groups,
             include_officials=include_officials,
+            include_enterprise_friends=include_enterprise_friends,
+            include_enterprise_groups=include_enterprise_groups,
             include_official_subscriptions=include_official_subscriptions,
             include_official_services=include_official_services,
             include_former_friends=include_former_friends,
@@ -2071,6 +2216,7 @@ def _collect_contacts_for_account(
     official_account_type_map = _load_official_account_type_map(contact_db_path)
     session_ts_map = _load_session_sort_timestamps(session_db_path)
     session_group_usernames = _load_session_group_usernames(session_db_path)
+    enterprise_group_usernames = _load_decrypted_enterprise_group_usernames(contact_db_path)
 
     contacts: list[dict[str, Any]] = []
     for username, row in contact_rows.items():
@@ -2084,6 +2230,13 @@ def _collect_contacts_for_account(
         contact_type = _infer_contact_type(username, row)
         if contact_type is None:
             continue
+        if contact_type == "friend" and _is_allowed_enterprise_openim_by_local_type(
+            username,
+            _to_int(row.get("local_type")),
+        ):
+            contact_type = "enterprise_friend"
+        elif contact_type == "group" and username in enterprise_group_usernames:
+            contact_type = "enterprise_group"
 
         display_name = _pick_display_name(row, username)
         if not display_name:
@@ -2130,6 +2283,8 @@ def _collect_contacts_for_account(
             item,
             include_friends=bool(include_friends),
             include_groups=bool(include_groups),
+            include_enterprise_friends=enterprise_friends,
+            include_enterprise_groups=enterprise_groups,
             include_official_subscriptions=official_subscriptions,
             include_official_services=official_services,
             include_former_friends=bool(include_former_friends),
@@ -2138,7 +2293,7 @@ def _collect_contacts_for_account(
             continue
         contacts.append(item)
 
-    if include_groups:
+    if include_groups or enterprise_groups:
         for username in session_group_usernames:
             if username in contact_rows:
                 continue
@@ -2156,7 +2311,7 @@ def _collect_contacts_for_account(
                 "alias": "",
                 "gender": 0,
                 "signature": "",
-                "type": "group",
+                "type": "enterprise_group" if username in enterprise_group_usernames else "group",
                 "country": "",
                 "province": "",
                 "city": "",
@@ -2177,6 +2332,8 @@ def _collect_contacts_for_account(
                 item,
                 include_friends=bool(include_friends),
                 include_groups=bool(include_groups),
+                include_enterprise_friends=enterprise_friends,
+                include_enterprise_groups=enterprise_groups,
                 include_official_subscriptions=official_subscriptions,
                 include_official_services=official_services,
                 include_former_friends=bool(include_former_friends),
@@ -2204,6 +2361,8 @@ def _build_counts(contacts: list[dict[str, Any]]) -> dict[str, int]:
     counts = {
         "friends": 0,
         "groups": 0,
+        "enterpriseFriends": 0,
+        "enterpriseGroups": 0,
         "officials": 0,
         "officialSubscriptions": 0,
         "officialServices": 0,
@@ -2226,6 +2385,10 @@ def _build_counts(contacts: list[dict[str, Any]]) -> dict[str, int]:
             counts["friends"] += 1
         elif t == "group":
             counts["groups"] += 1
+        elif t == "enterprise_friend":
+            counts["enterpriseFriends"] += 1
+        elif t == "enterprise_group":
+            counts["enterpriseGroups"] += 1
         elif t == "official":
             counts["officials"] += 1
             kind = _normalize_text(item.get("officialAccountKind")) or "unknown"
@@ -2305,6 +2468,16 @@ def _write_json_export(
             "contactTypes": {
                 "friends": bool(contact_types.friends),
                 "groups": bool(contact_types.groups),
+                "enterpriseFriends": (
+                    bool(contact_types.friends)
+                    if contact_types.enterprise_friends is None
+                    else bool(contact_types.enterprise_friends)
+                ),
+                "enterpriseGroups": (
+                    bool(contact_types.groups)
+                    if contact_types.enterprise_groups is None
+                    else bool(contact_types.enterprise_groups)
+                ),
                 "officials": bool(contact_types.officials),
                 "officialSubscriptions": (
                     bool(contact_types.officials)
@@ -2589,6 +2762,8 @@ def list_chat_contacts(
     keyword: Optional[str] = None,
     include_friends: bool = True,
     include_groups: bool = True,
+    include_enterprise_friends: Optional[bool] = None,
+    include_enterprise_groups: Optional[bool] = None,
     include_officials: bool = True,
     include_official_subscriptions: Optional[bool] = None,
     include_official_services: Optional[bool] = None,
@@ -2607,6 +2782,8 @@ def list_chat_contacts(
             keyword=keyword,
             include_friends=True,
             include_groups=True,
+            include_enterprise_friends=True,
+            include_enterprise_groups=True,
             include_officials=True,
             include_official_subscriptions=True,
             include_official_services=True,
@@ -2619,6 +2796,8 @@ def list_chat_contacts(
         all_contacts,
         include_friends=bool(include_friends),
         include_groups=bool(include_groups),
+        include_enterprise_friends=include_enterprise_friends,
+        include_enterprise_groups=include_enterprise_groups,
         include_officials=bool(include_officials),
         include_official_subscriptions=include_official_subscriptions,
         include_official_services=include_official_services,
@@ -2666,6 +2845,8 @@ def export_chat_contacts(request: Request, req: ContactExportRequest):
             keyword=req.keyword,
             include_friends=bool(req.contact_types.friends),
             include_groups=bool(req.contact_types.groups),
+            include_enterprise_friends=req.contact_types.enterprise_friends,
+            include_enterprise_groups=req.contact_types.enterprise_groups,
             include_officials=bool(req.contact_types.officials),
             include_official_subscriptions=req.contact_types.official_subscriptions,
             include_official_services=req.contact_types.official_services,

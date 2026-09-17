@@ -4,7 +4,12 @@
       <div class="chat-header" :class="{ 'chat-header-ai': aiSidebarOpen }">
         <div class="flex min-w-0 items-center gap-3">
           <h2 class="chat-header-title flex min-w-0 items-center gap-1.5 text-base font-medium">
-            <span class="truncate" :class="{ 'privacy-blur': privacyMode }">{{ selectedContact.name }}</span>
+            <span class="min-w-0 truncate" :class="{ 'privacy-blur': privacyMode }">{{ selectedContact.name }}</span>
+            <span
+              v-if="selectedContact.enterpriseName"
+              class="min-w-0 max-w-[16rem] truncate text-[14px] text-[#ff8000]"
+              :class="{ 'privacy-blur': privacyMode }"
+            >@{{ selectedContact.enterpriseName }}</span>
             <img
               v-if="selectedContact.isEnterpriseGroup"
               src="/assets/images/wechat/wecom.png"

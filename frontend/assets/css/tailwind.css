@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @config "../../tailwind.config.js";
 
+@keyframes agent-icon-spin { to { transform: rotate(360deg); } }
+.agent-icon-spin { animation: agent-icon-spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .agent-icon-spin { animation: none; } }
+
 /* Tailwind 4 显式保留旧版边框默认值，避免全站边框继承文字色。 */
 @layer base { *, ::before, ::after { border-color: var(--color-gray-200, currentColor); } }
 

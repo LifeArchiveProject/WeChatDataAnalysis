@@ -5,13 +5,13 @@
       :aria-activedescendant="open && active >= 0 ? `${listId}-${active}` : undefined" :disabled="disabled"
       :title="selected?.label || placeholder" @click="open ? close() : show()" @keydown="onKeydown">
       <span :class="{ 'is-placeholder': !selected }">{{ selected?.label || placeholder }}</span>
-      <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+      <ChevronDown :size="14" :stroke-width="1.8" aria-hidden="true" />
     </button>
     <Teleport to="body">
       <div v-if="open" :id="searchable ? undefined : listId" ref="menu" class="ui-select-menu" :class="{ 'is-mono': mono }"
         :role="searchable ? undefined : 'listbox'" :aria-label="searchable ? undefined : label" :aria-busy="loading" :style="position" @mousedown="onMenuMouseDown">
         <div v-if="searchable" class="ui-select-search">
-          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+          <Search :size="16" :stroke-width="1.8" aria-hidden="true" />
           <input ref="searchInput" v-model="query" type="search" role="combobox" :aria-label="searchPlaceholder" :placeholder="searchPlaceholder"
             aria-autocomplete="list" aria-expanded="true" :aria-controls="listId" :aria-activedescendant="active >= 0 ? `${listId}-${active}` : undefined"
             autocomplete="off" @keydown="onSearchKeydown" />
@@ -24,7 +24,7 @@
           class="ui-select-option" :class="{ 'is-active': active === index, 'is-selected': option.value === modelValue, 'is-disabled': option.disabled }"
           @mousemove="!option.disabled && (active = index)" @click.stop="choose(index)">
           <span class="ui-select-option-copy"><span>{{ option.label }}</span><small v-if="option.description">{{ option.description }}</small></span>
-          <i v-if="option.value === modelValue" class="fa-solid fa-check" aria-hidden="true"></i>
+          <Check v-if="option.value === modelValue" :size="16" :stroke-width="1.8" aria-hidden="true" />
         </div>
         <div v-if="!visibleOptions.length && !loading && !loadError" class="ui-select-empty" role="status">{{ query.trim() ? '没有匹配的选项' : '暂无可选项' }}</div>
         </div>
@@ -35,6 +35,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
+import { Check, ChevronDown, Search } from '@lucide/vue'
 const props = defineProps({
   modelValue: { type: String, default: '' }, options: { type: Array, default: () => [] },
   label: { type: String, required: true }, placeholder: { type: String, default: '请选择' },
@@ -155,16 +156,16 @@ onBeforeUnmount(() => {
 .ui-select { display: block; min-width: 0; }
 .ui-select .ui-select-trigger { width: 100%; height: 34px; min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 10px; border: 1px solid var(--app-border, #e7e9ed); border-radius: 6px; background: var(--app-surface-bg, #fff); color: var(--app-text-primary, #20272f); font-size: 12px; font-weight: 400; text-align: left; cursor: pointer; }
 .ui-select-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ui-select-trigger > i { font-size: 9px; color: #88938d; transition: transform .15s; }
+.ui-select-trigger > :is(i,svg) { flex:none; color: #88938d; transition: transform .15s; }
 .ui-select-trigger[aria-expanded=true] { border-color: #079b57; box-shadow: 0 0 0 2px #079b5712; }
-.ui-select-trigger[aria-expanded=true] > i { transform: rotate(180deg); }
+.ui-select-trigger[aria-expanded=true] > :is(i,svg) { transform: rotate(180deg); }
 .ui-select-trigger:disabled { opacity: .45; cursor: not-allowed; }
 .ui-select-trigger .is-placeholder { color: #929b97; }
 .ui-select.is-plain .ui-select-trigger { height: 29px; min-height: 29px; padding-left: 0; background: transparent; border-color: transparent; font-weight: 550; }
 .ui-select.is-mono .ui-select-trigger, .ui-select-menu.is-mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .ui-select-menu { position: fixed; z-index: 21000; overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box; padding: 5px; border: 1px solid #e1e7e3; border-radius: 9px; background: #fff; color: #29332e; box-shadow: 0 8px 28px #182c231c, 0 2px 6px #182c230a; font-size: 12px; line-height: 1.5; scrollbar-width: thin; scrollbar-color: #cbd5ce transparent; }
 .ui-select-search { position:sticky; top:-5px; z-index:1; padding:5px 3px 8px; margin-top:-1px; background:inherit; border-bottom:1px solid #e1e7e3; }
-.ui-select-search > i { position:absolute; left:13px; top:16px; color:#7c8981; font-size:11px; pointer-events:none; }
+.ui-select-search > :is(i,svg) { position:absolute; left:13px; top:16px; color:#7c8981; pointer-events:none; }
 .ui-select-search input { box-sizing:border-box; width:100%; height:32px; padding:0 9px 0 29px; border:1px solid #e1e7e3; border-radius:5px; color:inherit; background:transparent; font:inherit; outline:none; }
 .ui-select-search input:focus { border-color:#079b57; }
 .ui-select-search input::placeholder { color:#7c8981; }
@@ -174,7 +175,7 @@ onBeforeUnmount(() => {
 .ui-select-option.is-active { background: #f1f5f2; }
 .ui-select-option.is-selected { color: #07834a; background: #edf8f1; font-weight: 500; }
 .ui-select-option.is-active.is-selected { background: #e1f2e8; }
-.ui-select-option > i { flex-shrink: 0; font-size: 10px; }
+.ui-select-option > :is(i,svg) { flex-shrink: 0; }
 .ui-select-option.is-disabled { opacity: .4; cursor: not-allowed; }
 .ui-select-empty { padding: 12px 10px; color: #7c8981; }
 html[data-theme=dark] .ui-select-menu { color: #e6eaed; background: #262b2d; border-color: #3b4340; box-shadow: 0 8px 28px #0005; }
@@ -183,5 +184,5 @@ html[data-theme=dark] .ui-select-search input:focus { border-color:#70d6a4; }
 html[data-theme=dark] .ui-select-option.is-active { background: #343c37; }
 html[data-theme=dark] .ui-select-option.is-selected { color: #70d6a4; background: #1a3e2d; }
 html[data-theme=dark] .ui-select-option-copy small { color: #a0aea6; }
-@media (prefers-reduced-motion: reduce) { .ui-select-trigger > i { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .ui-select-trigger > :is(i,svg) { transition: none; } }
 </style>

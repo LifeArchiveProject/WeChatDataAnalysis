@@ -135,8 +135,6 @@ def _should_keep_session(username: str, include_official: bool) -> bool:
 
     if "@kefu.openim" in username:
         return False
-    if "@openim" in username:
-        return False
     if "service_" in username:
         return False
 
@@ -150,7 +148,7 @@ def _should_keep_session(username: str, include_official: bool) -> bool:
     }:
         return False
 
-    return username.endswith("@chatroom") or username.startswith("wxid_") or ("@" not in username)
+    return username.endswith(("@chatroom", "@openim")) or username.startswith("wxid_") or ("@" not in username)
 
 
 def _format_session_time(ts: Optional[int]) -> str:

@@ -77,7 +77,7 @@
                     <div class="min-w-0 flex-1" :class="{ 'privacy-blur': privacyMode }">
                       <div class="text-sm text-gray-900 truncate">{{ contact.displayName }}</div>
                       <div class="text-xs text-gray-500 truncate">{{ contact.username }}</div>
-                      <div class="text-[11px] text-gray-500 truncate" v-if="contact.type !== 'group' && (contact.region || contact.source)">
+                      <div class="text-[11px] text-gray-500 truncate" v-if="!['group', 'enterprise_group'].includes(contact.type) && (contact.region || contact.source)">
                         <span v-if="contact.region">地区：{{ contact.region }}</span>
                         <span v-if="contact.region && contact.source"> · </span>
                         <span
@@ -336,6 +336,8 @@ const searchKeyword = ref('')
 const contactTypes = reactive({
   friends: true,
   groups: false,
+  enterpriseFriends: false,
+  enterpriseGroups: false,
   officials: false,
   services: false,
   formerFriends: false,
@@ -349,6 +351,8 @@ const visibleContactLimit = ref(CONTACTS_RENDER_BATCH_SIZE)
 const counts = reactive({
   friends: 0,
   groups: 0,
+  enterpriseFriends: 0,
+  enterpriseGroups: 0,
   officials: 0,
   services: 0,
   formerFriends: 0,
@@ -467,6 +471,8 @@ const contactTypeIconPaths = {
 const contactFilterCards = computed(() => [
   { key: 'friends', label: '好友', count: counts.friends, iconPaths: contactTypeIconPaths.user },
   { key: 'groups', label: '群聊', count: counts.groups, iconPaths: contactTypeIconPaths.users },
+  { key: 'enterpriseFriends', label: '企微好友', count: counts.enterpriseFriends, iconPaths: contactTypeIconPaths.user },
+  { key: 'enterpriseGroups', label: '企微群', count: counts.enterpriseGroups, iconPaths: contactTypeIconPaths.users },
   { key: 'officials', label: '公众号', count: counts.officials, iconPaths: contactTypeIconPaths.message },
   { key: 'services', label: '服务号', count: counts.services, iconPaths: contactTypeIconPaths.message },
   { key: 'formerFriends', label: '曾经的好友', count: counts.formerFriends, iconPaths: contactTypeIconPaths.userX },
@@ -478,6 +484,8 @@ const typeLabel = (contactOrType) => {
   const type = typeof contactOrType === 'string' ? contactOrType : contactOrType?.type
   if (type === 'friend') return '好友'
   if (type === 'group') return '群聊'
+  if (type === 'enterprise_friend') return '企微好友'
+  if (type === 'enterprise_group') return '企微群'
   if (type === 'official') {
     if (contact?.officialAccountKind === 'service') return '服务号'
     if (contact?.officialAccountKind === 'enterprise') return '企业号'
@@ -493,6 +501,7 @@ const typeBadgeClass = (contactOrType) => {
   const type = typeof contactOrType === 'string' ? contactOrType : contactOrType?.type
   if (type === 'friend') return 'bg-blue-100 text-blue-700'
   if (type === 'group') return 'bg-green-100 text-green-700'
+  if (type === 'enterprise_friend' || type === 'enterprise_group') return 'bg-orange-100 text-orange-700'
   if (type === 'official') {
     if (contact?.officialAccountKind === 'service') return 'bg-amber-100 text-amber-700'
     return 'bg-orange-100 text-orange-700'
@@ -608,6 +617,8 @@ const hasSelectedContactTypes = computed(() => {
   return !!(
     contactTypes.friends ||
     contactTypes.groups ||
+    contactTypes.enterpriseFriends ||
+    contactTypes.enterpriseGroups ||
     contactTypes.officials ||
     contactTypes.services ||
     contactTypes.formerFriends ||
@@ -619,6 +630,8 @@ const selectedContactTypeCount = computed(() => {
   return [
     contactTypes.friends,
     contactTypes.groups,
+    contactTypes.enterpriseFriends,
+    contactTypes.enterpriseGroups,
     contactTypes.officials,
     contactTypes.services,
     contactTypes.formerFriends,
@@ -630,6 +643,8 @@ const buildContactIncludeParams = () => {
   return {
     include_friends: !!contactTypes.friends,
     include_groups: !!contactTypes.groups,
+    include_enterprise_friends: !!contactTypes.enterpriseFriends,
+    include_enterprise_groups: !!contactTypes.enterpriseGroups,
     include_officials: !!(contactTypes.officials || contactTypes.services),
     include_official_subscriptions: !!contactTypes.officials,
     include_official_services: !!contactTypes.services,
@@ -642,6 +657,8 @@ const buildContactTypePayload = () => {
   return {
     friends: !!contactTypes.friends,
     groups: !!contactTypes.groups,
+    enterprise_friends: !!contactTypes.enterpriseFriends,
+    enterprise_groups: !!contactTypes.enterpriseGroups,
     officials: !!(contactTypes.officials || contactTypes.services),
     official_subscriptions: !!contactTypes.officials,
     official_services: !!contactTypes.services,
@@ -747,6 +764,8 @@ const numberFrom = (...values) => {
 const resetCounts = () => {
   counts.friends = 0
   counts.groups = 0
+  counts.enterpriseFriends = 0
+  counts.enterpriseGroups = 0
   counts.officials = 0
   counts.services = 0
   counts.formerFriends = 0
@@ -757,13 +776,15 @@ const resetCounts = () => {
 const applyCounts = (source = {}) => {
   counts.friends = numberFrom(source.friends, source.private)
   counts.groups = numberFrom(source.groups, source.group)
+  counts.enterpriseFriends = numberFrom(source.enterpriseFriends)
+  counts.enterpriseGroups = numberFrom(source.enterpriseGroups)
   counts.officials = numberFrom(source.officialSubscriptions, source.official_subscription, source.officials)
   counts.services = numberFrom(source.services, source.officialServices, source.official_service)
   counts.formerFriends = numberFrom(source.formerFriends, source.former_friends, source.former_friend)
   counts.blocked = numberFrom(source.blocked)
   counts.total = numberFrom(
     source.total,
-    counts.friends + counts.groups + counts.officials + counts.services + counts.formerFriends + counts.blocked,
+    counts.friends + counts.groups + counts.enterpriseFriends + counts.enterpriseGroups + counts.officials + counts.services + counts.formerFriends + counts.blocked,
   )
 }
 
@@ -1082,6 +1103,8 @@ watch(() => [
   selectedAccount.value,
   contactTypes.friends,
   contactTypes.groups,
+  contactTypes.enterpriseFriends,
+  contactTypes.enterpriseGroups,
   contactTypes.officials,
   contactTypes.services,
   contactTypes.formerFriends,

@@ -100,7 +100,12 @@
                 <div class="flex-1 min-w-0">
                   <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
                     <h3 class="session-list-item-name flex min-w-0 items-center gap-1.5 text-[14px] leading-5">
-                      <span class="truncate" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</span>
+                      <span class="min-w-0 truncate" :class="{ 'privacy-blur': privacyMode }">{{ contact.name }}</span>
+                      <span
+                        v-if="contact.enterpriseName"
+                        class="min-w-0 max-w-[8rem] truncate text-[12px] text-[#ff8000]"
+                        :class="{ 'privacy-blur': privacyMode }"
+                      >@{{ contact.enterpriseName }}</span>
                       <img
                         v-if="contact.isEnterpriseGroup"
                         src="/assets/images/wechat/wecom.png"
