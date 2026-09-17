@@ -421,6 +421,7 @@ main { position: relative; z-index: 1; }
 .hm__get {
   display: inline-flex; align-items: center; gap: 8px;
   font-size: 11px; letter-spacing: 0.18em; color: var(--amber); opacity: 0.92;
+  word-break: keep-all;   /* 窄栏折行只在空格处断，别把「私聊群主」拆开 */
   border-bottom: 1px dashed rgba(255, 194, 75, 0.45); padding-bottom: 5px;
   transition: opacity 0.3s, border-color 0.3s, text-shadow 0.3s;
 }
