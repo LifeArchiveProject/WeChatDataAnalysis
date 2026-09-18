@@ -501,6 +501,63 @@ class TestMacOSCloneCapture(unittest.TestCase):
         self.assertIn("rounds=2 命中 4", str(context.exception))
         self.assertIn("未保存任何未经数据库校验的候选", str(context.exception))
 
+    def test_capture_reports_watchdog_timeout_without_claiming_running_process_exited(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            probe = root / "message_0.db"
+            probe.write_bytes(bytes(range(256)) * 16)
+
+            class FixedTemporaryDirectory:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def __enter__(self):
+                    return str(root)
+
+                def __exit__(self, exc_type, exc, traceback):
+                    return False
+
+            def report_timeout(_command, *, timeout):
+                self.assertEqual(timeout, 285.0)
+                (root / "result.json").write_text(
+                    json.dumps(
+                        {
+                            "diagnostics": {"pbkdf_calls": 0},
+                            "process_exit": {
+                                "pid": 321,
+                                "state": "running",
+                                "exit_status": -1,
+                                "exit_description": "",
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return "WEDATA_LLDB_EXIT=143"
+
+            with (
+                patch("wechat_decrypt_tool.macos_clone_capture.platform.machine", return_value="arm64"),
+                patch("wechat_decrypt_tool.macos_clone_capture.shutil.which", return_value="/usr/bin/lldb"),
+                patch(
+                    "wechat_decrypt_tool.macos_clone_capture.tempfile.TemporaryDirectory",
+                    FixedTemporaryDirectory,
+                ),
+                patch(
+                    "wechat_decrypt_tool.macos_clone_capture._run_as_administrator",
+                    side_effect=report_timeout,
+                ),
+            ):
+                with self.assertRaises(MacOSDBKeyCaptureFailure) as context:
+                    capture_salt_matched_passphrase(
+                        pid=321,
+                        expected_salts=[bytes(range(16))],
+                        probe_db_path=probe,
+                    )
+
+        self.assertEqual(context.exception.code, "capture_timeout")
+        self.assertIn("没有提前退出", str(context.exception))
+        self.assertNotIn("提前结束", str(context.exception))
+
     def test_salt_normalization_rejects_non_database_values(self) -> None:
         self.assertEqual(_normalize_salts(["AB" * 16, bytes.fromhex("cd" * 16), "bad"]), ["ab" * 16, "cd" * 16])
 
