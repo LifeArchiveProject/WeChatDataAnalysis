@@ -309,6 +309,7 @@
 <script setup>
 import { useApi } from '~/composables/useApi'
 import { storeToRefs } from 'pinia'
+import { useChatAccountsStore } from '~/stores/chatAccounts'
 import { usePrivacyStore } from '~/stores/privacy'
 import { useReducedMotion } from '~/composables/useReducedMotion'
 import { createWrappedStage } from '~/composables/useWrappedStage'
@@ -323,6 +324,8 @@ const api = useApi()
 const route = useRoute()
 const router = useRouter()
 
+const chatAccountsStore = useChatAccountsStore()
+const { selectedAccount } = storeToRefs(chatAccountsStore)
 const privacyStore = usePrivacyStore()
 const { privacyMode } = storeToRefs(privacyStore)
 
@@ -337,8 +340,10 @@ const frameId = computed({
 const queryYear = Number(route.query?.year)
 const defaultYear = new Date().getFullYear() - 1
 const year = ref(Number.isFinite(queryYear) ? queryYear : defaultYear)
-// 分享视图不展示账号信息：默认让后端自动选择；需要指定时可用 query ?account=wxid_xxx
-const account = ref(typeof route.query?.account === 'string' ? route.query.account : '')
+// 显式 query 用于固定分享账号；普通入口跟随应用当前选中的账号。
+const queryAccount = typeof route.query?.account === 'string' ? route.query.account.trim() : ''
+const accountPinnedByQuery = !!queryAccount
+const account = ref(queryAccount)
 
  const accounts = ref([])
  const accountsLoading = ref(true)
@@ -350,6 +355,7 @@ const report = ref(null)
 // If user clicks "强制刷新", pass refresh=true for subsequent per-card requests in this session.
 const refreshCards = ref(false)
 let reportToken = 0
+let accountSyncReady = false
 // reload 中后端 snap 年份回写 year 时置位，抑制 watch(year) 的二次 reload。
 let suppressYearWatch = false
 
@@ -1349,6 +1355,14 @@ const loadAccounts = async () => {
   }
 }
 
+watch(selectedAccount, async (next) => {
+  if (accountPinnedByQuery) return
+  const nextAccount = String(next || '').trim()
+  if (!nextAccount || nextAccount === account.value) return
+  account.value = nextAccount
+  if (accountSyncReady) await reload(false, true)
+})
+
 const ensureCardLoaded = async (cardId) => {
   const id = Number(cardId)
   if (!Number.isFinite(id)) return
@@ -1512,7 +1526,10 @@ onMounted(async () => {
   // passive:false：拖拽期间 preventDefault 阻止浏览器把触摸手势判定为滚动
   deckEl.value?.addEventListener('touchmove', onDeckTouchMove, { passive: false })
 
+  await chatAccountsStore.ensureLoaded()
+  if (!accountPinnedByQuery) account.value = String(selectedAccount.value || '').trim()
   await loadAccounts()
+  accountSyncReady = true
   // Auto-generate once if we already have chat accounts (direct WCDB or legacy), to match "one click" expectations.
   if (accounts.value.length > 0) {
     await reload()
