@@ -20,7 +20,7 @@ dependencies = [
     "pilk>=0.2.4",
     "pypinyin>=0.53.0",
     "jieba>=0.42.1",
-    "wx_key>=2.0.1; sys_platform == 'win32'",
+    "wx_key>=2.1.1; sys_platform == 'win32' or sys_platform == 'linux'",
     "pefile>=2024.8.26; sys_platform == 'win32'",
     "pymem>=1.14.0; sys_platform == 'win32'",
     "yara-python>=4.5.2; sys_platform == 'win32'",

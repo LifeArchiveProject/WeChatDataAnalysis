@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -19,6 +20,7 @@ const {
   WINDOWS_NATIVE_ASR_TARGET,
 } = require("../src/windows-native-asr-capability.cjs");
 const { buildWindowsPeWithExports } = require("./pe-export-fixture.cjs");
+const { PRODUCER_WORKFLOW } = require("../scripts/linux-native-core-packaging.cjs");
 
 const BUILD_ISSUED_AT_UNIX = Math.floor(Date.now() / 1000) - 60;
 const BUILD_LIFETIME_SECONDS = 45 * 24 * 60 * 60;
@@ -138,6 +140,155 @@ function quietLogger() {
   return { log() {}, warn() {} };
 }
 
+// ---- Linux（schema v4）固定件 -------------------------------------------------
+// Linux 没有代码签名，产物身份 = 内容哈希，所以固定件必须把哈希算对，
+// 否则测的就不是「校验逻辑」而是「固定件写错了」。
+const LINUX_BUILD_ISSUED_AT_UNIX = Math.floor(Date.now() / 1000) - 60;
+const LINUX_REPOSITORY = "LifeArchiveProject/WCDB";
+const LINUX_SOURCE_REVISION = "a8f42de851a34365834e566bf587089af5df7c19";
+const LINUX_BUILD_ID = "linux-x64-release-2026.09.16";
+
+function sha256Hex(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+// 最小可用 ELF 头：测试只需要 64 位 / 小端 / x86-64 / 类型正确。
+function linuxElfBytes(type) {
+  const buffer = Buffer.alloc(64);
+  buffer.write("\x7fELF", 0, "latin1");
+  buffer[4] = 2;
+  buffer[5] = 1;
+  buffer.writeUInt16LE(type, 16);
+  buffer.writeUInt16LE(0x3e, 18);
+  return buffer;
+}
+
+function linuxManifest({ sourceRuntime = true, overrides = {} } = {}) {
+  return {
+    schemaVersion: 4,
+    platform: "linux",
+    distributionMode: "public",
+    buildId: LINUX_BUILD_ID,
+    buildIssuedAtUnix: LINUX_BUILD_ISSUED_AT_UNIX,
+    buildExpiresAtUnix: LINUX_BUILD_ISSUED_AT_UNIX + BUILD_LIFETIME_SECONDS,
+    developmentBuild: false,
+    offlineBootstrapFeatureBits: 3,
+    offlineExportSealFormat: "WES2",
+    codeSignatureEnforced: true,
+    rootPublicKeyCompiled: true,
+    testHooksEnabled: false,
+    stagingPinnedSignerTrust: false,
+    linuxIntegrityMode: "content-hash-pin",
+    linuxClientSha256: "",
+    linuxBrokerSha256: "",
+    linuxPeerVerification: "same-user-peer-credentials",
+    linuxHostVerification: sourceRuntime ? "same-user-direct-parent" : "content-hash-pin",
+    securityNoticeId: "WCE-AUTOMATED-ANALYSIS-NOTICE-V2",
+    securityNoticeSha256: "aa".repeat(32),
+    securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
+    securityCheckpointCount: 7,
+    securityCheckpointSetSha256: "bb".repeat(32),
+    ...(sourceRuntime ? { sourceRuntime: true } : {}),
+    ...overrides,
+  };
+}
+
+const LINUX_CHECKSUM_FILE_NAMES = [
+  "Test-LinuxNativeProductionArtifact.py",
+  "libwechatdb_client.so",
+  "wechatdb_broker",
+  "wechatdb_native_build.json",
+];
+
+function writeLinuxArtifactSet(
+  root,
+  { sourceRuntime = true, manifestOverrides = {}, provenanceOverrides = {}, tamperClient = false } = {}
+) {
+  fs.mkdirSync(root, { recursive: true });
+  const clientName = "libwechatdb_client.so";
+  const brokerName = "wechatdb_broker";
+  const manifestName = "wechatdb_native_build.json";
+  const clientBytes = linuxElfBytes(3);
+  const brokerBytes = linuxElfBytes(2);
+
+  const manifest = linuxManifest({ sourceRuntime, overrides: manifestOverrides });
+  manifest.linuxClientSha256 = sha256Hex(clientBytes);
+  manifest.linuxBrokerSha256 = sha256Hex(brokerBytes);
+  Object.assign(manifest, manifestOverrides);
+
+  fs.writeFileSync(path.join(root, clientName), clientBytes);
+  fs.writeFileSync(path.join(root, brokerName), brokerBytes);
+  fs.writeFileSync(path.join(root, "Test-LinuxNativeProductionArtifact.py"), "# fixture\n");
+  fs.writeFileSync(path.join(root, manifestName), JSON.stringify(manifest, null, 2));
+
+  const checksums = LINUX_CHECKSUM_FILE_NAMES.map(
+    (name) => `${sha256Hex(fs.readFileSync(path.join(root, name)))}  ${name}`
+  ).join("\n") + "\n";
+  fs.writeFileSync(path.join(root, "SHA256SUMS.txt"), checksums);
+
+  const provenance = {
+    schemaVersion: 1,
+    artifactName: "wechatdb-native-linux-x64-source-public",
+    producer: "manual",
+    workflow: "manual",
+    repository: LINUX_REPOSITORY,
+    runId: 0,
+    runAttempt: 0,
+    sourceRevision: LINUX_SOURCE_REVISION,
+    build: {
+      architecture: "x64",
+      distributionMode: manifest.distributionMode,
+      expiresAtUnix: manifest.buildExpiresAtUnix,
+      id: manifest.buildId,
+      integrityMode: manifest.linuxIntegrityMode,
+      issuedAtUnix: manifest.buildIssuedAtUnix,
+      linuxBrokerSha256: manifest.linuxBrokerSha256,
+      linuxClientSha256: manifest.linuxClientSha256,
+      offlineBootstrapFeatureBits: manifest.offlineBootstrapFeatureBits,
+      offlineExportSealFormat: manifest.offlineExportSealFormat,
+      platform: "linux",
+      readOnlyBuild: true,
+      securityCheckpointCount: manifest.securityCheckpointCount,
+      securityCheckpointSetId: manifest.securityCheckpointSetId,
+      securityCheckpointSetSha256: manifest.securityCheckpointSetSha256,
+      securityNoticeId: manifest.securityNoticeId,
+      securityNoticeSha256: manifest.securityNoticeSha256,
+      ...(sourceRuntime
+        ? { linuxHostVerification: manifest.linuxHostVerification, sourceRuntime: true }
+        : {}),
+      ...(provenanceOverrides.build || {}),
+    },
+    manifestSha256: sha256Hex(fs.readFileSync(path.join(root, manifestName))),
+    checksumsSha256: sha256Hex(fs.readFileSync(path.join(root, "SHA256SUMS.txt"))),
+    artifacts: LINUX_CHECKSUM_FILE_NAMES.map((name) => ({
+      path: name,
+      sha256: sha256Hex(fs.readFileSync(path.join(root, name))),
+      size: fs.statSync(path.join(root, name)).size,
+    })),
+  };
+  const { build: _ignoredBuild, ...provenanceTopLevel } = provenanceOverrides;
+  Object.assign(provenance, provenanceTopLevel);
+  fs.writeFileSync(path.join(root, "provenance.json"), JSON.stringify(provenance, null, 2));
+
+  if (tamperClient) {
+    // 密封之后再改字节：SHA256SUMS / provenance 仍然声称原始哈希。
+    const bytes = Buffer.from(fs.readFileSync(path.join(root, clientName)));
+    bytes[40] ^= 0xff;
+    fs.writeFileSync(path.join(root, clientName), bytes);
+  }
+  return { manifest, provenance };
+}
+
+function linuxEnv(artifactDir, overrides = {}) {
+  return {
+    WCE_NATIVE_CORE_ARTIFACT_DIR: artifactDir,
+    WCE_NATIVE_CORE_ARTIFACT_REPOSITORY: LINUX_REPOSITORY,
+    WCE_NATIVE_CORE_SOURCE_REVISION: LINUX_SOURCE_REVISION,
+    WCE_NATIVE_CORE_BUILD_ID: LINUX_BUILD_ID,
+    ...overrides,
+  };
+}
+
 test("artifact names are platform-specific and complete", () => {
   assert.deepEqual(nativeCoreArtifactNames("win32"), [
     "wechatdb_client.dll",
@@ -149,7 +300,11 @@ test("artifact names are platform-specific and complete", () => {
     "wechatdb_broker",
     "wechatdb_native_build.json",
   ]);
-  assert.deepEqual(nativeCoreArtifactNames("linux"), []);
+  assert.deepEqual(nativeCoreArtifactNames("linux"), [
+    "libwechatdb_client.so",
+    "wechatdb_broker",
+    "wechatdb_native_build.json",
+  ]);
 });
 
 test("runtime staging filters checked-out native and legacy WCDB files", () => {
@@ -599,20 +754,200 @@ test("malformed and structurally invalid manifests fail even with a development 
     );
     assert.throws(
       () => resolveNativeCoreArtifacts({ env, platform: "win32" }),
-      /schemaVersion must equal 2 or 3; buildId must be a non-empty string/
+      /schemaVersion must equal 2, 3 or 4; buildId must be a non-empty string/
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("unsupported platforms stay optional but fail closed when configured", () => {
-  const optional = resolveNativeCoreArtifacts({ env: {}, platform: "linux" });
-  assert.equal(optional.artifactDir, null);
+test("Linux native core is a required closed artifact set", () => {
   assert.throws(
-    () => resolveNativeCoreArtifacts({ env: { WCE_NATIVE_CORE_REQUIRED: "yes" }, platform: "linux" }),
-    /unsupported on platform: linux/
+    () => resolveNativeCoreArtifacts({ env: {}, platform: "linux" }),
+    /Missing WCE_NATIVE_CORE_ARTIFACT_DIR/
   );
+  assert.throws(
+    () =>
+      resolveNativeCoreArtifacts({
+        env: { WCE_NATIVE_CORE_REQUIRED: "yes" },
+        platform: "linux",
+      }),
+    /Missing WCE_NATIVE_CORE_ARTIFACT_DIR/
+  );
+});
+
+test("Linux source-public and production profiles both resolve from sealed artifacts", () => {
+  const root = makeTempDir();
+  try {
+    for (const sourceRuntime of [true, false]) {
+      const artifactDir = path.join(root, sourceRuntime ? "sp" : "prod");
+      writeLinuxArtifactSet(artifactDir, { sourceRuntime });
+      const resolved = resolveNativeCoreArtifacts({
+        env: linuxEnv(artifactDir),
+        platform: "linux",
+      });
+      assert.equal(resolved.required, true);
+      assert.equal(resolved.allowDevelopment, false);
+      assert.deepEqual(resolved.names, [
+        "libwechatdb_client.so",
+        "wechatdb_broker",
+        "wechatdb_native_build.json",
+      ]);
+      assert.equal(
+        resolved.manifest.linuxHostVerification,
+        sourceRuntime ? "same-user-direct-parent" : "content-hash-pin"
+      );
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Linux content-hash pins reject any post-seal tampering", () => {
+  const root = makeTempDir();
+  try {
+    const artifactDir = path.join(root, "tampered");
+    writeLinuxArtifactSet(artifactDir, { tamperClient: true });
+    assert.throws(
+      () => resolveNativeCoreArtifacts({ env: linuxEnv(artifactDir), platform: "linux" }),
+      /checksum set does not match the artifact allowlist/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Linux protected pins fail closed on build id, revision and repository drift", () => {
+  const root = makeTempDir();
+  try {
+    const artifactDir = path.join(root, "pinned");
+    writeLinuxArtifactSet(artifactDir);
+    assert.throws(
+      () =>
+        resolveNativeCoreArtifacts({
+          env: linuxEnv(artifactDir, { WCE_NATIVE_CORE_BUILD_ID: "linux-x64-other-2026.09.16" }),
+          platform: "linux",
+        }),
+      /does not match the protected build id pin/
+    );
+    assert.throws(
+      () =>
+        resolveNativeCoreArtifacts({
+          env: linuxEnv(artifactDir, { WCE_NATIVE_CORE_SOURCE_REVISION: "0".repeat(40) }),
+          platform: "linux",
+        }),
+      /provenance revision does not match the protected pin/
+    );
+    assert.throws(
+      () =>
+        resolveNativeCoreArtifacts({
+          env: linuxEnv(artifactDir, { WCE_NATIVE_CORE_ARTIFACT_REPOSITORY: "evil/fork" }),
+          platform: "linux",
+        }),
+      /provenance repository does not match the protected pin/
+    );
+    assert.throws(
+      () =>
+        resolveNativeCoreArtifacts({
+          env: linuxEnv(artifactDir, { WCE_NATIVE_CORE_ARTIFACT_RUN_ID: "123" }),
+          platform: "linux",
+        }),
+      /must not claim a CI run/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Linux artifacts are only accepted from the reviewed producer workflow", () => {
+  const root = makeTempDir();
+  try {
+    // A workflow-produced artifact has to come from the reviewed producer, not
+    // from any workflow that happens to know the pin format.
+    const rogueDir = path.join(root, "rogue");
+    writeLinuxArtifactSet(rogueDir, {
+      provenanceOverrides: {
+        producer: "github-actions",
+        workflow: ".github/workflows/rogue-production.yml",
+        runId: 4242,
+        runAttempt: 1,
+      },
+    });
+    assert.throws(
+      () =>
+        resolveNativeCoreArtifacts({
+          env: linuxEnv(rogueDir, { WCE_NATIVE_CORE_ARTIFACT_RUN_ID: "4242" }),
+          platform: "linux",
+        }),
+      /must come from \.github\/workflows\/linux-native-production\.yml/
+    );
+
+    const reviewedDir = path.join(root, "reviewed");
+    writeLinuxArtifactSet(reviewedDir, {
+      provenanceOverrides: {
+        producer: "github-actions",
+        workflow: PRODUCER_WORKFLOW,
+        runId: 4242,
+        runAttempt: 1,
+      },
+    });
+    const resolved = resolveNativeCoreArtifacts({
+      env: linuxEnv(reviewedDir, { WCE_NATIVE_CORE_ARTIFACT_RUN_ID: "4242" }),
+      platform: "linux",
+    });
+    assert.equal(resolved.provenance.runId, 4242);
+    assert.equal(resolved.provenance.workflow, PRODUCER_WORKFLOW);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Linux profile self-consistency and binary identity are enforced", () => {
+  const root = makeTempDir();
+  try {
+    // 声明 sourceRuntime 却用 production 强度的 host 校验：必须拒绝。
+    const inconsistent = path.join(root, "inconsistent");
+    writeLinuxArtifactSet(inconsistent, {
+      manifestOverrides: { linuxHostVerification: "content-hash-pin" },
+    });
+    assert.throws(
+      () => resolveNativeCoreArtifacts({ env: linuxEnv(inconsistent), platform: "linux" }),
+      /linuxHostVerification must equal same-user-direct-parent/
+    );
+
+    // 客户端不是 ELF：必须拒绝。
+    const notElf = path.join(root, "not-elf");
+    writeLinuxArtifactSet(notElf);
+    fs.writeFileSync(path.join(notElf, "libwechatdb_client.so"), "not an elf at all");
+    assert.throws(
+      () => resolveNativeCoreArtifacts({ env: linuxEnv(notElf), platform: "linux" }),
+      /checksum set does not match the artifact allowlist/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("packaged Linux native core is re-hashed before packing", () => {
+  const root = makeTempDir();
+  try {
+    const { validatePackagedBackend } = require("../scripts/native-core-before-pack.cjs");
+    const nativeDir = path.join(root, "native");
+    writeLinuxArtifactSet(nativeDir);
+    fs.writeFileSync(path.join(root, "wechat-backend"), "# packaged backend\n");
+
+    const validated = validatePackagedBackend({ backendDir: root, platform: "linux" });
+    assert.equal(validated.platform, "linux");
+
+    // 打包后再被替换一个字节 → 内容哈希必须拦住。
+    fs.writeFileSync(path.join(nativeDir, "wechatdb_broker"), linuxElfBytes(3));
+    assert.throws(
+      () => validatePackagedBackend({ backendDir: root, platform: "linux" }),
+      /Packaged Linux native core failed content verification: content hash mismatch for wechatdb_broker/
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("boolean packaging flags reject ambiguous values", () => {

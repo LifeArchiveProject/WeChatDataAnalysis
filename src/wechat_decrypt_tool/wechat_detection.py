@@ -356,7 +356,22 @@ def get_process_list():
 
 
 def _wechat_process_targets() -> set[str]:
-    return {"wechat"} if sys.platform == "darwin" else {"weixin.exe", "wechat.exe"}
+    if sys.platform == "darwin":
+        return {"wechat"}
+    if sys.platform.startswith("linux"):
+        # Linux 版微信的进程名就是 wechat（AppImage 解包后同样如此）。
+        return {"wechat", "wechat-bin"}
+    return {"weixin.exe", "wechat.exe"}
+
+
+# Linux 微信可执行文件的标准位置：发行版包是 /usr/bin/wechat（符号链接到
+# /opt/wechat/wechat），手工安装可能在 ~/.local/bin。
+_LINUX_WECHAT_EXECUTABLE_PATHS = (
+    "/usr/bin/wechat",
+    "/opt/wechat/wechat",
+    "/usr/local/bin/wechat",
+    "~/.local/bin/wechat",
+)
 
 
 def _is_wechat_dir_candidate_name(name: str) -> bool:
@@ -442,6 +457,18 @@ def _build_auto_detect_scan_paths() -> List[str]:
             if re.match(r"^\d+(?:\.\d+)+(?:b\d+(?:\.\d+)*)?$", item.name):
                 add(str(item))
         add(str(container_root / "Documents" / "xwechat_files"))
+        return scan_paths
+
+    if sys.platform.startswith("linux"):
+        # Linux 版微信 4.x 的数据落在“文档目录”下的 xwechat_files/<wxid>/db_storage。
+        # 除 XDG 文档目录外，也兼容解包目录/自定义安装把数据放到家目录或
+        # ~/.local/share 的情形。
+        add(os.path.join(home_dir, "Documents", "xwechat_files"))
+        add(os.path.join(home_dir, "xwechat_files"))
+        add(os.path.join(home_dir, ".local", "share", "xwechat_files"))
+        xdg_documents = str(os.environ.get("XDG_DOCUMENTS_DIR") or "").strip()
+        if xdg_documents:
+            add(os.path.join(xdg_documents, "xwechat_files"))
         return scan_paths
 
     user_profile = str(os.environ.get("USERPROFILE") or "").strip()
@@ -1089,7 +1116,11 @@ def detect_wechat_installation(data_root_path: str | None = None) -> Dict[str, A
 
                     # 尝试获取版本信息
                     try:
-                        if sys.platform == "darwin":
+                        if sys.platform.startswith("linux"):
+                            # Linux 上没有 PE 版本资源/Info.plist 可读，版本号只用于
+                            # 展示，留空即可（不要走到 win32api 那支去制造噪音）。
+                            version = ""
+                        elif sys.platform == "darwin":
                             info_plist = Path(result["wechat_install_path"]) / "Contents" / "Info.plist"
                             with info_plist.open("rb") as stream:
                                 info = plistlib.load(stream)
@@ -1127,6 +1158,19 @@ def detect_wechat_installation(data_root_path: str | None = None) -> Dict[str, A
                     ).strip() or None
                 except (OSError, ValueError):
                     pass
+                break
+        elif sys.platform.startswith("linux"):
+            # 未运行时按标准位置兜底；/usr/bin/wechat 是符号链接，resolve() 后
+            # 取父目录就是真正的安装目录（例如 /opt/wechat）。
+            for candidate in _LINUX_WECHAT_EXECUTABLE_PATHS:
+                executable = Path(candidate).expanduser()
+                if not executable.is_file():
+                    continue
+                result["wechat_exe_path"] = str(executable)
+                result["wechat_install_path"] = str(executable.resolve().parent)
+                result["detection_methods"].append(
+                    f"标准位置检测到微信: {executable}"
+                )
                 break
 
     # 2. 使用新的账号检测逻辑：同时支持 Backup 与登录信息目录，并合并结果

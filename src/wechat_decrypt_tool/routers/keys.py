@@ -28,7 +28,7 @@ from ..key_service import (
 )
 from ..media_helpers import _load_media_keys, _resolve_account_dir
 from ..path_fix import PathFixRoute
-from ..platform_support import current_platform, is_macos, runtime_capabilities
+from ..platform_support import current_platform, is_macos, is_windows, runtime_capabilities
 
 router = APIRouter(route_class=PathFixRoute)
 logger = get_logger(__name__)
@@ -573,7 +573,10 @@ async def get_wechat_db_key(
                 },
             }
         mode = str(key_mode or "auto").strip().lower()
-        if mode in {"v4", "key_v4", "memory", "memory_scan"}:
+        # V4 内存扫描只存在于 Windows。Linux 的 Hook 走 fork + TRACEME（免提权），
+        # 根本不存在「先扫内存失败、再改用 Hook」这套流程；若这里仍然返回
+        # can_fallback_to_hook，前端就会弹一次永远不可能成功的引导弹窗。
+        if is_windows() and mode in {"v4", "key_v4", "memory", "memory_scan"}:
             return {
                 "status": -2,
                 "errmsg": f"扫内存失败: {str(e)}",
@@ -613,7 +616,10 @@ async def get_wechat_db_key(
                 },
             }
         mode = str(key_mode or "auto").strip().lower()
-        if mode in {"v4", "key_v4", "memory", "memory_scan"}:
+        # V4 内存扫描只存在于 Windows。Linux 的 Hook 走 fork + TRACEME（免提权），
+        # 根本不存在「先扫内存失败、再改用 Hook」这套流程；若这里仍然返回
+        # can_fallback_to_hook，前端就会弹一次永远不可能成功的引导弹窗。
+        if is_windows() and mode in {"v4", "key_v4", "memory", "memory_scan"}:
             return {
                 "status": -2,
                 "errmsg": f"扫内存失败: {str(e)}",

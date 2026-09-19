@@ -1,4 +1,4 @@
-name: Release (Windows and macOS ARM64)
+name: Release (Windows, macOS ARM64 and Linux x64)
 
 on:
   push:
@@ -732,10 +732,17 @@ jobs:
     uses: ./.github/workflows/macos-private-build.yml
     secrets: inherit
 
+  # Linux 与 Windows/macOS 同为必需平台：pin 没配齐就整个 release 失败（fail closed），
+  # 不允许「静默少发一个平台」。准备步骤见 linux-private-build.yml 顶部的注释。
+  build-linux-x64:
+    uses: ./.github/workflows/linux-private-build.yml
+    secrets: inherit
+
   publish-release:
     needs:
       - build-windows
       - build-macos-arm64
+      - build-linux-x64
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release history
@@ -806,11 +813,14 @@ jobs:
           VER="${VERSION#v}"
           EXE="WeChatDataAnalysis-${VER}-Setup.exe"
           DMG="WeChatDataAnalysis-${VER}-mac-arm64.dmg"
+          LINUX_TGZ="WeChatDataAnalysis-${VER}-linux-x86_64.tar.gz"
           EXE_7Z="${EXE}.7z"
           DMG_7Z="${DMG}.7z"
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}"
           EXE_URL="${BASE_URL}/${EXE}"
           MAC_ARM64_URL="${BASE_URL}/${DMG}"
+          LINUX_URL="${BASE_URL}/${LINUX_TGZ}"
+          LINUX_INSTALLER_URL="${BASE_URL}/install.sh"
 
           gh release download "${VERSION}" --pattern "${EXE}" --pattern "${DMG}" --dir /tmp/release
 
@@ -823,6 +833,8 @@ jobs:
           echo "version=${VERSION}"             >> $GITHUB_OUTPUT
           echo "exe_url=${EXE_URL}"             >> $GITHUB_OUTPUT
           echo "mac_arm64_url=${MAC_ARM64_URL}" >> $GITHUB_OUTPUT
+          echo "linux_url=${LINUX_URL}"         >> $GITHUB_OUTPUT
+          echo "linux_installer_url=${LINUX_INSTALLER_URL}" >> $GITHUB_OUTPUT
           { echo "body<<BODY_EOF"; echo "$BODY"; echo "BODY_EOF"; } >> $GITHUB_OUTPUT
 
           MAX_BYTES=209715200
@@ -859,6 +871,7 @@ jobs:
 
             - Windows 安装包 [下载链接](${{ steps.prep.outputs.exe_url }})
             - macOS arm64 [下载链接](${{ steps.prep.outputs.mac_arm64_url }})
+            - Linux x64 [下载链接](${{ steps.prep.outputs.linux_url }})（一键安装脚本 [install.sh](${{ steps.prep.outputs.linux_installer_url }})，用户级免 root）
 
             欢迎大家使用和测试~
           file_path: ${{ steps.prep.outputs.file_path_list }}
