@@ -22,7 +22,6 @@ const APPROVED_ACTIONS = new Map([
   ["actions/upload-artifact", "ea165f8d65b6e75b540449e92b4886f43607fa02"],
   ["dtolnay/rust-toolchain", "4cda84d5c5c54efe2404f9d843567869ab1699d4"],
   ["softprops/action-gh-release", "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65"],
-  ["H3CoF6/qq-notify-action", "50d180981e7c7b8552a3331b981e3f8cfcf40c44"],
 ]);
 
 function assertRemoteActionsPinned(workflow) {
@@ -355,11 +354,6 @@ test("the tag release requires and publishes the Linux x64 package", () => {
   // Linux is a required platform: a missing native-core pin fails the release
   // instead of silently publishing without it.
   assert.match(publishJob, /- build-linux-x64/);
-
-  const qqJob = workflow.match(/\n  qq-notify:\n([\s\S]*?)$/)?.[1] || "";
-  assert.match(qqJob, /linux_url/);
-  assert.match(qqJob, /WeChatDataAnalysis-\$\{VER\}-linux-x86_64\.tar\.gz/);
-  assert.match(qqJob, /install\.sh/);
 });
 
 test("Linux release workflow consumes the pinned native core and publishes the unrooted payload", () => {
