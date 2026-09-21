@@ -73,6 +73,7 @@ class TestVoiceTranscriptionSettings(unittest.TestCase):
 
     def test_runtime_setting_is_used_when_environment_is_not_set(self):
         self.runtime_settings.write_voice_transcription_device_setting("cuda")
+        self.runtime_settings.write_voice_transcription_model_setting("turbo")
 
         device, source = self.runtime_settings.read_effective_voice_transcription_device()
         config = self.voice_transcription.VoiceTranscriptionConfig.from_env()
@@ -82,12 +83,12 @@ class TestVoiceTranscriptionSettings(unittest.TestCase):
         self.assertEqual(config.compute_type, "float16")
         self.assertEqual(config.device_source, "settings")
 
-    def test_default_model_is_medium(self):
+    def test_default_model_is_ctc(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("WECHAT_TOOL_WHISPER_MODEL", None)
             config = self.voice_transcription.VoiceTranscriptionConfig.from_env()
 
-        self.assertEqual(config.model, "medium")
+        self.assertEqual(config.model, "zipformer-small-ctc-int8")
 
     def test_environment_device_takes_precedence_over_saved_setting(self):
         self.runtime_settings.write_voice_transcription_device_setting("cuda")

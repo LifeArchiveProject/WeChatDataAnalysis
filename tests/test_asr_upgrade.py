@@ -18,6 +18,60 @@ CPU = "qwen3-asr-06b-onnx-int4"
 GPU = "qwen3-asr-06b-hf"
 
 
+def test_only_four_supported_profiles_are_published():
+    assert [item['id'] for item in voice.VOICE_MODEL_CATALOG] == [CTC, CPU, 'turbo', GPU]
+    assert set(voice.VOICE_MODEL_REPOSITORIES) == {CTC, CPU, 'turbo', GPU}
+    assert set(assets.SPECS) == {CTC, CPU, GPU}
+
+
+@pytest.mark.parametrize('retired', sorted(assets.RETIRED_VOICE_MODELS))
+def test_retired_models_cannot_be_selected_or_downloaded(monkeypatch, retired):
+    save = Mock()
+    download = Mock()
+    monkeypatch.setattr(voice, 'write_voice_transcription_model_setting', save)
+    monkeypatch.setattr(voice, '_download_voice_model_snapshot', download)
+    for action in [voice.set_voice_transcription_model, voice.VoiceModelDownloadManager().start]:
+        with pytest.raises(voice.VoiceTranscriptionError) as caught:
+            action(retired)
+        assert caught.value.code == 'invalid_model'
+    save.assert_not_called()
+    download.assert_not_called()
+
+
+@pytest.mark.parametrize('retired', sorted(assets.RETIRED_VOICE_MODELS))
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+def test_saved_retired_model_migrates_without_rewriting_settings(tmp_path, monkeypatch, retired, device):
+    from wechat_decrypt_tool import runtime_settings
+    monkeypatch.setenv('WECHAT_TOOL_DATA_DIR', str(tmp_path))
+    monkeypatch.delenv('WECHAT_TOOL_WHISPER_MODEL', raising=False)
+    monkeypatch.delenv('WECHAT_TOOL_WHISPER_DEVICE', raising=False)
+    runtime_settings.write_voice_transcription_model_setting(retired)
+    runtime_settings.write_voice_transcription_device_setting(device)
+    config = voice.VoiceTranscriptionConfig.from_env()
+    expected = GPU if retired == 'qwen3-asr-17b-hf' else ('turbo' if device == 'cuda' else CTC)
+    assert config.model == expected
+    assert config.device == ('cuda' if expected in {GPU, 'turbo'} else 'cpu')
+    assert config.migrated_from == retired
+    assert runtime_settings.read_voice_transcription_model_setting() == retired
+    assert runtime_settings.read_voice_transcription_device_setting() == device
+
+
+def test_default_ctc_ignores_stale_saved_cuda_device(monkeypatch):
+    monkeypatch.setattr(voice, 'read_effective_voice_transcription_model', lambda: (CTC, 'default'))
+    monkeypatch.setattr(voice, 'read_effective_voice_transcription_device', lambda: ('cuda', 'settings'))
+    assert voice.VoiceTranscriptionConfig.from_env().device == 'cpu'
+
+
+def test_retired_environment_model_keeps_device_lock(monkeypatch):
+    monkeypatch.setattr(voice, 'read_effective_voice_transcription_model', lambda: ('qwen3-asr-17b-hf', 'env'))
+    monkeypatch.setattr(voice, 'read_effective_voice_transcription_device', lambda: ('cpu', 'env'))
+    config = voice.VoiceTranscriptionConfig.from_env()
+    assert config.model == GPU
+    assert config.model_source == 'env'
+    assert config.device == 'cpu'
+    assert config.device_source == 'env'
+
+
 @pytest.fixture
 def small_asset(monkeypatch):
     files = {"ctc.int8.onnx": b"model", "data/tokens.txt": b"tokens"}
@@ -91,7 +145,7 @@ def test_cache_isolated_by_model_and_revision(tmp_path, monkeypatch):
     assert updated.lookup_cached_transcripts(tmp_path, [1]) == {}
 
 
-def test_select_new_model_matches_device_without_remapping_legacy(monkeypatch):
+def test_select_new_model_matches_device_and_turbo_preserves_device(monkeypatch):
     monkeypatch.setattr(voice, "read_effective_voice_transcription_model", lambda: ("medium", "settings"))
     monkeypatch.setattr(voice, "read_effective_voice_transcription_device", lambda: ("cpu", "settings"))
     monkeypatch.setattr(voice, "get_voice_transcription_service", lambda: SimpleNamespace(config=voice.VoiceTranscriptionConfig()))
@@ -105,9 +159,9 @@ def test_select_new_model_matches_device_without_remapping_legacy(monkeypatch):
     voice.set_voice_transcription_model(GPU)
     save_model.assert_called_once_with(GPU)
     save_device.assert_called_once_with("cuda")
-    voice.set_voice_transcription_model("tiny")
+    voice.set_voice_transcription_model("turbo")
     assert save_device.call_count == 1
-    assert save_model.call_args.args == ("tiny",)
+    assert save_model.call_args.args == ("turbo",)
 
 
 def test_env_device_lock_rejects_incompatible_model(monkeypatch):
@@ -146,7 +200,7 @@ def test_gpu_status_uses_torch_probe_not_ctranslate(monkeypatch):
     assert "PyTorch" in status["reason"]
 
 
-@pytest.mark.parametrize("model", [CTC, CPU, GPU, "qwen3-asr-17b-hf"])
+@pytest.mark.parametrize("model", [CTC, CPU, GPU])
 def test_new_backends_bound_concurrency(model):
     config = voice.VoiceTranscriptionConfig(model=model, num_workers=99)
     assert voice.resolve_voice_transcription_batch_concurrency(99, config) == (99, 1)

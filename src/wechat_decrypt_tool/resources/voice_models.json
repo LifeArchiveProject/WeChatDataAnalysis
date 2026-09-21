@@ -102,45 +102,5 @@
         "sha256": "945e980986de2ca7768f3326bfdbb4fbea3406f972b8ae0be233089f2b253c11"
       }
     }
-  },
-  "qwen3-asr-17b-hf": {
-    "backend": "qwen-hf",
-    "repo": "Qwen/Qwen3-ASR-1.7B-hf",
-    "revision": "bcd2b5b7f32b480ab5790554cfa8347f246a14f3",
-    "cacheVersion": 1,
-    "devices": [
-      "cuda"
-    ],
-    "precision": "bfloat16",
-    "files": {
-      "chat_template.jinja": {
-        "size": 1434,
-        "sha256": "f50e6b694fbf4a683206e37869990d68333fe95d285730f084c838a34b0d98c2"
-      },
-      "config.json": {
-        "size": 2399,
-        "sha256": "117ac8e63e2af7cae3665e5a632d6eb03f5f384915519ceb6403c15ec6533f63"
-      },
-      "generation_config.json": {
-        "size": 165,
-        "sha256": "9939fc9388b79bd70757f938b87381e817173d6a6158f5af6506c0b73e775c3c"
-      },
-      "model.safetensors": {
-        "size": 4076193080,
-        "sha256": "2db53c7d81bd9b8cbc6a074e89be2c968a0d373fb4ee68bb1b1e14f7042dfee1"
-      },
-      "processor_config.json": {
-        "size": 487,
-        "sha256": "bc0b230081b44e629dd5b9045b78495615c1831b4b9f4cffe97bd37e82a6156a"
-      },
-      "tokenizer.json": {
-        "size": 11429653,
-        "sha256": "fe1fad59be22a41ee293363fcf95fdedbc7c93f3b49270b1d2e18bd1399a7a05"
-      },
-      "tokenizer_config.json": {
-        "size": 998,
-        "sha256": "945e980986de2ca7768f3326bfdbb4fbea3406f972b8ae0be233089f2b253c11"
-      }
-    }
   }
 }
