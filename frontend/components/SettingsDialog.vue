@@ -313,7 +313,7 @@
                 <div class="flex flex-wrap items-start justify-between gap-2">
                   <div class="min-w-0 flex-1">
                     <div class="text-[13px] font-medium text-[var(--app-text-primary)]">语音识别模型</div>
-                    <div class="mt-0.5 text-[11px] leading-relaxed text-[var(--app-text-muted)]">低配选 Zipformer；CPU 质量优先选 Qwen INT4；GPU 极速选 Turbo，质量优先选 Qwen。下载后选择，语音在本机处理。</div>
+                    <div class="mt-0.5 text-[11px] leading-relaxed text-[var(--app-text-muted)]">低配电脑选 CTC；无独显选 Qwen CPU；有 NVIDIA 显卡可选 Turbo 或 Qwen GPU。下载并选择模型后，语音在本机处理。</div>
                   </div>
                   <span class="shrink-0 rounded-full bg-[var(--app-surface-muted)] px-2 py-1 text-[10px] text-[var(--app-text-secondary)]">当前：{{ voiceModelText }}</span>
                 </div>
@@ -324,7 +324,6 @@
                 <div v-else-if="voiceModels.length" id="voice-model-list" class="mt-3 grid gap-2.5 sm:grid-cols-2" role="list" aria-label="可用语音识别模型">
                   <article
                     v-for="model in voiceModels"
-                    v-show="!model.legacy || showLegacyVoiceModels || model.selected || isVoiceModelDownloading(model)"
                     :key="model.id"
                     role="listitem"
                     class="flex min-h-[142px] min-w-0 flex-col rounded-[9px] border p-3 transition"
@@ -336,7 +335,6 @@
                         <div class="flex flex-wrap items-center gap-1.5">
                           <span class="text-[13px] font-semibold text-[var(--app-text-primary)]">{{ model.name }}</span>
                           <span v-if="model.recommended" class="rounded-full bg-[var(--app-surface-muted)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--app-accent)]">推荐</span>
-                          <span v-if="model.legacy" class="text-[10px] text-[var(--app-text-muted)]">旧版兼容</span>
                           <span v-if="model.selected" class="rounded-full bg-[var(--app-surface-muted)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--app-accent)]">已选择</span>
                         </div>
                         <div class="mt-1 text-[10px] text-[var(--app-text-muted)]">{{ model.size }} · {{ model.speed }} · {{ model.quality }}</div>
@@ -406,13 +404,8 @@
                 </div>
                 <div v-else-if="!voiceDeviceError" class="mt-3 rounded-[8px] bg-[var(--app-surface-soft)] px-3 py-4 text-center text-[11px] text-[var(--app-text-muted)]">后端未返回可用模型列表。</div>
 
-                <button v-if="voiceModels.some(model => model.legacy)" type="button"
-                  class="voice-setting-focus mt-3 rounded px-1 py-1 text-[12px] text-[var(--app-accent)] hover:underline"
-                  :aria-expanded="showLegacyVoiceModels" aria-controls="voice-model-list"
-                  @click="showLegacyVoiceModels = !showLegacyVoiceModels"
-                >{{ showLegacyVoiceModels ? '收起旧版 Whisper 模型' : '显示旧版 Whisper 模型' }}</button>
-
                 <div v-if="voiceModelLocked" class="mt-2 text-[11px] leading-relaxed text-[var(--app-text-secondary)]">模型由 WECHAT_TOOL_WHISPER_MODEL 环境变量固定，界面中不可切换。</div>
+                <div v-if="voiceModelMigrationMessage" role="status" class="mt-2 text-[11px] leading-relaxed text-[var(--app-text-secondary)]">{{ voiceModelMigrationMessage }}</div>
                 <div v-if="voiceStatusReason" class="mt-2 text-[11px] leading-relaxed text-[var(--app-text-muted)]">{{ voiceStatusReason }}</div>
                 <div v-if="voiceModelMessage" class="mt-2 text-[11px] text-[var(--app-accent)]">{{ voiceModelMessage }}</div>
                 <ErrorNotice v-if="voiceModelError" :message="voiceModelError" compact manual class="mt-1.5 text-[11px] text-[var(--danger-color)]" />
@@ -940,15 +933,15 @@ const voiceDeviceError = ref('')
 const voiceDevicePreference = ref('cpu')
 const voiceDeviceSource = ref('default')
 const voiceActiveDevice = ref('')
-const voiceModel = ref('medium')
+const voiceModel = ref('zipformer-small-ctc-int8')
 const voiceModels = ref([])
-const showLegacyVoiceModels = ref(false)
 const voiceSupportedDevices = ref(['cpu', 'cuda'])
 const voiceModelSource = ref('default')
 const voiceModelAction = ref({ id: '', type: '' })
 const voiceModelDeletePendingIds = ref([])
 const voiceModelError = ref('')
 const voiceModelMessage = ref('')
+const voiceModelMigrationMessage = ref('')
 const voiceTranscriptDeleteBusy = ref(false)
 const voiceTranscriptDeleteError = ref('')
 const voiceTranscriptDeleteMessage = ref('')
@@ -963,7 +956,7 @@ const voiceDeviceLocked = computed(() => voiceDeviceSource.value === 'env')
 const voiceModelLocked = computed(() => voiceModelSource.value === 'env')
 const voiceCudaAvailable = computed(() => !!voiceCuda.value?.available)
 const voiceCudaReason = computed(() => String(voiceCuda.value?.reason || '').trim())
-const voiceModelText = computed(() => voiceModels.value.find(model => model.id === voiceModel.value)?.name || voiceModel.value || 'medium')
+const voiceModelText = computed(() => voiceModels.value.find(model => model.id === voiceModel.value)?.name || voiceModel.value || 'zipformer-small-ctc-int8')
 const voiceDeviceLabel = computed(() => voiceDevicePreference.value === 'cuda' ? 'NVIDIA GPU' : 'CPU')
 const voiceCudaDeviceLabels = computed(() => {
   const devices = Array.isArray(voiceCuda.value?.devices) ? voiceCuda.value.devices : []
@@ -1252,7 +1245,8 @@ const applyVoiceTranscriptionStatus = (status) => {
   voiceDeviceSource.value = String(status.deviceSource || 'default').trim() || 'default'
   voiceActiveDevice.value = String(status.activeDevice || '').trim().toLowerCase()
   voiceSupportedDevices.value = Array.isArray(status.supportedDevices) ? status.supportedDevices : ['cpu', 'cuda']
-  voiceModel.value = String(status.model || 'medium').trim() || 'medium'
+  voiceModelMigrationMessage.value = String(status.modelMigrationMessage || '')
+  voiceModel.value = String(status.model || 'zipformer-small-ctc-int8').trim() || 'zipformer-small-ctc-int8'
   voiceModelSource.value = String(status.modelSettingSource || 'default').trim() || 'default'
   voiceModels.value = (Array.isArray(status.models) ? status.models : []).map((item) => {
     const id = String(item?.id || '').trim()
@@ -1272,7 +1266,6 @@ const applyVoiceTranscriptionStatus = (status) => {
       quality: String(item?.quality || '质量未知').trim(),
       description: String(item?.description || '').trim(),
       recommended: item?.recommended === true,
-      legacy: item?.legacy === true,
       runtimeAvailable: item?.runtimeAvailable !== false,
       runtimeReason: String(item?.runtimeReason || '缺少运行组件，请更新应用或选择其他模型。'),
       selected: item?.selected === true || id === voiceModel.value,

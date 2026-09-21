@@ -70,80 +70,21 @@ from .runtime_settings import (
 )
 from .app_paths import get_data_dir, get_output_databases_dir, get_output_dir
 from .asr_models import (
-    SPECS as ASR_MODEL_SPECS, NEW_MODEL_CATALOG, cache_identity,
+    SPECS as ASR_MODEL_SPECS, NEW_MODEL_CATALOG, DEFAULT_VOICE_MODEL, RETIRED_VOICE_MODELS, cache_identity,
     dependency_status, model_files_ready, verify_model_files,
 )
 from .asr_worker import AsrCancelled, AsrError, ProcessBackend, probe_qwen_cuda
 
 
 VOICE_MODEL_CATALOG: tuple[dict[str, Any], ...] = (
-    {
-        "id": "tiny",
-        "name": "Tiny",
-        "size": "约 75 MB",
-        "speed": "最快",
-        "quality": "基础",
-        "description": "适合快速预览和低配置设备。",
-    },
-    {
-        "id": "base",
-        "name": "Base",
-        "size": "约 145 MB",
-        "speed": "很快",
-        "quality": "入门",
-        "description": "速度与基础准确率兼顾。",
-    },
-    {
-        "id": "small",
-        "name": "Small",
-        "size": "约 466 MB",
-        "speed": "较快",
-        "quality": "良好",
-        "description": "日常中文聊天的轻量选择。",
-    },
-    {
-        "id": "medium",
-        "name": "Medium",
-        "size": "约 1.5 GB",
-        "speed": "中等",
-        "quality": "较高",
-        "description": "默认推荐，兼顾中文准确率与资源占用。",
-        "recommended": True,
-    },
-    {
-        "id": "large-v3",
-        "name": "Large v3",
-        "size": "约 3.1 GB",
-        "speed": "较慢",
-        "quality": "最高",
-        "description": "追求最高准确率，适合高性能设备。",
-    },
-    {
-        "id": "turbo",
-        "name": "Turbo",
-        "size": "约 1.6 GB",
-        "speed": "快",
-        "quality": "很高",
-        "description": "Large v3 的高速版本，推荐 NVIDIA GPU。",
-    },
-)
-_WHISPER_CATALOG = VOICE_MODEL_CATALOG
-VOICE_MODEL_CATALOG = (
     *NEW_MODEL_CATALOG[:2],
-    next(item for item in _WHISPER_CATALOG if item["id"] == "turbo"),
+    dict(id="turbo", name="Turbo", size="约 1.6 GB", speed="GPU 极速", quality="速度优先",
+         description="适合批量转写和快速查看语音内容，推荐使用 NVIDIA 显卡。"),
     *NEW_MODEL_CATALOG[2:],
-    *({**item, "legacy": True, "recommended": False,
-       "description": "保留原有 Whisper 识别方式，已有设置和缓存继续可用。",
-       "quality": "兼容模型"} for item in _WHISPER_CATALOG if item["id"] != "turbo"),
 )
 VOICE_MODEL_IDS = frozenset(str(item["id"]) for item in VOICE_MODEL_CATALOG)
 VOICE_MODEL_STORAGE_DIRNAME = "voice_models"
 VOICE_MODEL_REPOSITORIES: dict[str, str] = {
-    "tiny": "Systran/faster-whisper-tiny",
-    "base": "Systran/faster-whisper-base",
-    "small": "Systran/faster-whisper-small",
-    "medium": "Systran/faster-whisper-medium",
-    "large-v3": "Systran/faster-whisper-large-v3",
     "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
 }
 VOICE_MODEL_REPOSITORIES.update({key: value["repo"] for key, value in ASR_MODEL_SPECS.items()})
@@ -618,7 +559,7 @@ class _VoiceTranscriptionCancelled(RuntimeError):
 @dataclass(frozen=True)
 class VoiceTranscriptionConfig:
     enabled: bool = True
-    model: str = "medium"
+    model: str = DEFAULT_VOICE_MODEL
     language: str = "zh"
     device: str = "cpu"
     compute_type: str = "int8"
@@ -627,6 +568,7 @@ class VoiceTranscriptionConfig:
     allow_download: bool = False
     beam_size: int = 5
     num_workers: int = 1
+    migrated_from: str = ""
 
     @classmethod
     def from_env(cls) -> "VoiceTranscriptionConfig":
@@ -634,8 +576,15 @@ class VoiceTranscriptionConfig:
         model, model_source = read_effective_voice_transcription_model()
         language = str(os.environ.get("WECHAT_TOOL_WHISPER_LANGUAGE") or "zh").strip() or "zh"
         device, device_source = read_effective_voice_transcription_device()
+        # 只在读取时迁移停用选项；保留旧配置和模型文件，切换后的缓存按新模型隔离。
+        migrated_from = model if model in RETIRED_VOICE_MODELS else ""
+        if migrated_from == "qwen3-asr-17b-hf":
+            model = "qwen3-asr-06b-hf"
+        elif migrated_from:
+            model = "turbo" if device == "cuda" else DEFAULT_VOICE_MODEL
         spec = ASR_MODEL_SPECS.get(model)
-        if spec and device_source == "default":
+        if spec and (device_source == "default" or
+                     (device_source != "env" and (migrated_from or model_source == "default"))):
             device = spec["devices"][0]
         compute_type = str(os.environ.get("WECHAT_TOOL_WHISPER_COMPUTE_TYPE") or "").strip()
         if not compute_type:
@@ -655,6 +604,7 @@ class VoiceTranscriptionConfig:
             compute_type=compute_type,
             device_source=device_source,
             model_source=model_source,
+            migrated_from=migrated_from,
             allow_download=allow_download,
             beam_size=beam_size,
         )
@@ -1000,7 +950,7 @@ def inspect_model_readiness(model: str) -> dict[str, Any]:
 def get_voice_model_catalog(*, selected_model: Optional[str] = None) -> list[dict[str, Any]]:
     """Return the curated multilingual model list with current cache state."""
 
-    selected = str(selected_model or VoiceTranscriptionConfig.from_env().model or "medium").strip()
+    selected = str(selected_model or VoiceTranscriptionConfig.from_env().model or DEFAULT_VOICE_MODEL).strip()
     jobs: dict[str, dict[str, Any]] = {}
     manager = globals().get("VOICE_MODEL_DOWNLOAD_MANAGER")
     if manager is not None:
@@ -1611,6 +1561,12 @@ class VoiceTranscriptionService:
             "modelSource": str(model_readiness.get("source") or "unavailable"),
             "modelDownloadRequired": bool(not model_ready and can_prepare_model),
             "model": _public_model_name(self.config.model),
+            "modelMigrationMessage": (
+                "原语音模型已停用，已切换到 " + next(
+                    (item["name"] for item in VOICE_MODEL_CATALOG if item["id"] == self.config.model),
+                    self.config.model,
+                ) + "。可在下方重新选择模型。" if self.config.migrated_from else ""
+            ),
             "backend": spec["backend"] if spec else "whisper",
             "supportedDevices": spec["devices"] if spec else ["cpu", "cuda"],
             "modelSettingSource": self.config.model_source,
