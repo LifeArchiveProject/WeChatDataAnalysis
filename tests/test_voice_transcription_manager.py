@@ -66,7 +66,10 @@ class TestVoiceModelCatalog(unittest.TestCase):
         ):
             models = get_voice_model_catalog(selected_model="medium")
 
-        self.assertEqual([item["id"] for item in models], ["tiny", "base", "small", "medium", "large-v3", "turbo"])
+        self.assertEqual([item["id"] for item in models], [
+            "zipformer-small-ctc-int8", "qwen3-asr-06b-onnx-int4", "turbo",
+            "qwen3-asr-06b-hf", "qwen3-asr-17b-hf", "tiny", "base", "small", "medium", "large-v3",
+        ])
         selected = next(item for item in models if item["id"] == "medium")
         self.assertTrue(selected["selected"])
         self.assertTrue(selected["downloaded"])
