@@ -101,7 +101,8 @@ def test_small_scope_prefetch_is_reused_without_subagent(tmp_path, monkeypatch):
 
 
 def test_all_history_single_chat_runs_parallel_without_repeated_read(tmp_path, monkeypatch):
-    service, _ = setup(tmp_path, monkeypatch, Data(same_second=True))
+    # 八条同秒消息仍覆盖四个工作槽和第二轮调度；更大队列由专门的 50 条用例验证。
+    service, _ = setup(tmp_path, monkeypatch, Data(8, same_second=True))
     async def check():
         gateway = await prepared(service)
         selected = await gateway.select(complete=True)
@@ -111,7 +112,9 @@ def test_all_history_single_chat_runs_parallel_without_repeated_read(tmp_path, m
         stats = fake_workers(service, monkeypatch)
         parent = service.run(gateway.id)
         plan = service.analysis_plans.get(parent, selected['plan_handle'])
-        result = await asyncio.wait_for(service.execute_plan(parent, plan), 45)
+        # 本用例验证完整覆盖和去重，真实 SQLite 在 Windows CI 上较慢；这里只设防死锁期限。
+        # 四路并行的速度收益由 test_four_workers_accelerate_eight_equal_jobs 单独断言。
+        result = await asyncio.wait_for(service.execute_plan(parent, plan), 180)
         # 持久化开销会影响短任务占槽数；四路加速由固定耗时测试单独验证。
         assert 1 < stats['peak'] <= 4
         assert result['phase'] == 'completed' and gateway.validate_complete()
