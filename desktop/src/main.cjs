@@ -2174,7 +2174,9 @@ function startBackend() {
     // The desktop backend only needs runtime dependencies. Letting `uv run`
     // include the default dev group can block Electron startup on an unrelated
     // pytest/Pygments download before Python is even launched.
-    backendProc = spawn("uv", ["run", "--no-dev", "main.py"], {
+    const voiceExtras = ["--extra", "voice-transcription"];
+    if (env.WECHAT_TOOL_QWEN_GPU === "1") voiceExtras.push("--extra", "voice-transcription-gpu");
+    backendProc = spawn("uv", ["run", "--no-dev", ...voiceExtras, "main.py"], {
       cwd: repoRoot(),
       env,
       stdio: "inherit",

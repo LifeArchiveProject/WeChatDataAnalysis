@@ -544,7 +544,8 @@ test("desktop startBackend clears legacy WCDB state and never starts the sidecar
   const startBackend = mainSource.match(/function startBackend\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(startBackend, /configureNativeCoreRuntime\(env\)/);
   assert.match(startBackend, /clearLegacyWcdbEnvironment\(env\)/);
-  assert.match(startBackend, /spawn\("uv", \["run", "--no-dev", "main\.py"\]/);
+  assert.match(startBackend, /spawn\("uv", \["run", "--no-dev", \.\.\.voiceExtras, "main\.py"\]/);
+  assert.match(startBackend, /voiceExtras = \["--extra", "voice-transcription"\]/);
   assert.match(startBackend, /PYTHONIOENCODING:\s*"utf-8"/);
   assert.match(startBackend, /WECHAT_TOOL_NODE_EXECUTABLE:\s*process\.execPath/);
   assert.match(startBackend, /WECHAT_TOOL_NODE_MODE:\s*"electron-run-as-node"/);

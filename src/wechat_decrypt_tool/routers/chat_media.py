@@ -125,12 +125,12 @@ class VoiceTranscriptionCacheLookupRequest(BaseModel):
 
 class VoiceTranscriptionSettingsRequest(BaseModel):
     device: Optional[str] = Field(None, description="推理设备：cpu 或 cuda")
-    model: Optional[str] = Field(None, description="Whisper 模型")
+    model: Optional[str] = Field(None, description="本地语音模型")
 
 
 class VoiceTranscriptionBatchRequest(BaseModel):
     account: Optional[str] = Field(None, description="账号目录名")
-    force: bool = Field(False, description="忽略现有 Whisper 缓存并重新识别")
+    force: bool = Field(False, description="忽略现有本地模型缓存并重新识别")
     engine: StrictStr = Field("local", description="批量转写方式：local 或 wechat-native")
     concurrency: Optional[conint(strict=True, ge=0)] = Field(  # type: ignore[valid-type]
         None,
@@ -3742,12 +3742,12 @@ async def get_chat_voice(server_id: int, account: Optional[str] = None):
     )
 
 
-@router.get("/api/chat/media/voice/transcription/status", summary="检查本地 Whisper 语音转文字能力")
+@router.get("/api/chat/media/voice/transcription/status", summary="检查本地语音转文字能力")
 async def get_chat_voice_transcription_status():
     return await asyncio.to_thread(get_voice_transcription_service().status)
 
 
-@router.put("/api/chat/media/voice/transcription/settings", summary="设置本地 Whisper 模型或推理设备")
+@router.put("/api/chat/media/voice/transcription/settings", summary="设置本地语音模型或推理设备")
 async def set_chat_voice_transcription_settings(req: VoiceTranscriptionSettingsRequest, request: Request):
     _require_local_voice_mutation(request)
     device = str(req.device or "").strip()
@@ -3769,7 +3769,7 @@ async def set_chat_voice_transcription_settings(req: VoiceTranscriptionSettingsR
     return {"status": "success", "configuration": configuration}
 
 
-@router.post("/api/chat/media/voice/transcription/models/{model}/download", summary="下载 Whisper 模型")
+@router.post("/api/chat/media/voice/transcription/models/{model}/download", summary="下载本地语音模型")
 async def download_chat_voice_transcription_model(model: str, request: Request):
     _require_local_voice_mutation(request)
     try:
@@ -3782,7 +3782,7 @@ async def download_chat_voice_transcription_model(model: str, request: Request):
         ) from exc
 
 
-@router.get("/api/chat/media/voice/transcription/models/downloads/{job_id}", summary="查询 Whisper 模型下载任务")
+@router.get("/api/chat/media/voice/transcription/models/downloads/{job_id}", summary="查询语音模型下载任务")
 async def get_chat_voice_transcription_model_download(job_id: str):
     try:
         return VOICE_MODEL_DOWNLOAD_MANAGER.get(job_id)
@@ -3793,7 +3793,7 @@ async def get_chat_voice_transcription_model_download(job_id: str):
         ) from exc
 
 
-@router.delete("/api/chat/media/voice/transcription/models/{model}", summary="删除 Whisper 模型")
+@router.delete("/api/chat/media/voice/transcription/models/{model}", summary="删除本地语音模型")
 async def delete_chat_voice_transcription_model(model: str, request: Request):
     _require_local_voice_mutation(request)
     try:

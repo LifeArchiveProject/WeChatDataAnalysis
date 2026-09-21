@@ -121,3 +121,7 @@ pro-shots/
 
 # 隔离验收数据库、真实聊天资料和本地状态快照不得进入版本库。
 /tmp/deepagents-migration/
+
+# 语音验收包含真实聊天音频、转写、模型权重及本地运行环境。
+/tmp/stt-benchmark-20260921/
+/tmp/stt-integration-20260921/

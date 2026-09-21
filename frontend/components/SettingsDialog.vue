@@ -263,7 +263,7 @@
                 <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
                   <div class="min-w-0 flex-1">
                     <div class="text-[13px] font-medium text-[var(--app-text-primary)]">推理设备</div>
-                    <div class="mt-0.5 text-[11px] leading-relaxed text-[var(--app-text-muted)]">CPU 兼容所有设备；NVIDIA GPU 使用 CUDA 加速，初始化失败会自动回退 CPU。</div>
+                    <div class="mt-0.5 text-[11px] leading-relaxed text-[var(--app-text-muted)]">选择新模型时会匹配所需设备。Whisper 支持 GPU 失败后回退 CPU；Qwen GPU 不会自动切换模型。</div>
                   </div>
                   <div class="flex w-full shrink-0 overflow-hidden rounded-[6px] border border-[var(--app-border)] bg-[var(--app-surface-bg)] sm:w-auto" role="radiogroup" aria-label="语音转文字推理设备">
                     <button
@@ -272,7 +272,8 @@
                       :aria-checked="voiceDevicePreference === 'cpu'"
                       class="voice-setting-focus flex-1 px-2.5 py-1.5 text-[12px] transition disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
                       :class="voiceDevicePreference === 'cpu' ? 'bg-[var(--app-surface-muted)] text-[var(--app-accent)]' : 'text-[var(--app-text-secondary)] hover:bg-[var(--app-neutral-btn-hover)]'"
-                      :disabled="voiceDeviceBusy || voiceDeviceLocked"
+                      :disabled="voiceDeviceBusy || voiceDeviceLocked || !voiceSupportedDevices.includes('cpu')"
+                      :title="voiceSupportedDevices.includes('cpu') ? '使用 CPU 识别' : '当前模型需要 GPU，请先选择 CPU 模型'"
                       @click="setVoiceDevice('cpu')"
                     >
                       CPU
@@ -283,8 +284,8 @@
                       :aria-checked="voiceDevicePreference === 'cuda'"
                       class="voice-setting-focus flex-1 border-l border-[var(--app-border)] px-2.5 py-1.5 text-[12px] transition disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
                       :class="voiceDevicePreference === 'cuda' ? 'bg-[var(--app-surface-muted)] text-[var(--app-accent)]' : 'text-[var(--app-text-secondary)] hover:bg-[var(--app-neutral-btn-hover)]'"
-                      :disabled="voiceDeviceBusy || voiceDeviceLocked || !voiceCudaAvailable"
-                      :title="voiceCudaAvailable ? '使用 NVIDIA CUDA 加速' : (voiceCudaReason || '未检测到可用的 NVIDIA CUDA 设备')"
+                      :disabled="voiceDeviceBusy || voiceDeviceLocked || !voiceCudaAvailable || !voiceSupportedDevices.includes('cuda')"
+                      :title="!voiceSupportedDevices.includes('cuda') ? '当前模型仅使用 CPU，请先选择 GPU 模型' : voiceCudaAvailable ? '使用 NVIDIA CUDA 加速' : (voiceCudaReason || '未检测到可用的 NVIDIA CUDA 设备')"
                       @click="setVoiceDevice('cuda')"
                     >
                       NVIDIA GPU
@@ -292,7 +293,7 @@
                   </div>
                 </div>
 
-                <div v-if="voiceStatusLoading" class="mt-2 text-[11px] text-[var(--app-text-muted)]">正在检测本地 Whisper 与 CUDA 状态...</div>
+                <div v-if="voiceStatusLoading" class="mt-2 text-[11px] text-[var(--app-text-muted)]">正在检测语音模型与运行环境...</div>
                 <template v-else>
                   <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[var(--app-text-secondary)]">
                     <span>已选：{{ voiceDeviceLabel }}</span>
@@ -311,8 +312,8 @@
               <div class="px-3.5 py-3">
                 <div class="flex flex-wrap items-start justify-between gap-2">
                   <div class="min-w-0 flex-1">
-                    <div class="text-[13px] font-medium text-[var(--app-text-primary)]">Whisper 模型</div>
-                    <div class="mt-0.5 text-[11px] leading-relaxed text-[var(--app-text-muted)]">模型需先下载到本机，再选择用于后续语音识别；本应用下载的模型可随时删除。</div>
+                    <div class="text-[13px] font-medium text-[var(--app-text-primary)]">语音识别模型</div>
+                    <div class="mt-0.5 text-[11px] leading-relaxed text-[var(--app-text-muted)]">低配选 Zipformer；CPU 质量优先选 Qwen INT4；GPU 极速选 Turbo，质量优先选 Qwen。下载后选择，语音在本机处理。</div>
                   </div>
                   <span class="shrink-0 rounded-full bg-[var(--app-surface-muted)] px-2 py-1 text-[10px] text-[var(--app-text-secondary)]">当前：{{ voiceModelText }}</span>
                 </div>
@@ -320,9 +321,10 @@
                 <div v-if="voiceStatusLoading" class="mt-3 grid gap-2 sm:grid-cols-2" aria-label="正在读取模型列表">
                   <div v-for="index in 4" :key="index" class="h-[134px] rounded-[9px] bg-[var(--app-surface-muted)]" />
                 </div>
-                <div v-else-if="voiceModels.length" class="mt-3 grid gap-2.5 sm:grid-cols-2" role="list" aria-label="可用 Whisper 模型">
+                <div v-else-if="voiceModels.length" id="voice-model-list" class="mt-3 grid gap-2.5 sm:grid-cols-2" role="list" aria-label="可用语音识别模型">
                   <article
                     v-for="model in voiceModels"
+                    v-show="!model.legacy || showLegacyVoiceModels || model.selected || isVoiceModelDownloading(model)"
                     :key="model.id"
                     role="listitem"
                     class="flex min-h-[142px] min-w-0 flex-col rounded-[9px] border p-3 transition"
@@ -334,6 +336,7 @@
                         <div class="flex flex-wrap items-center gap-1.5">
                           <span class="text-[13px] font-semibold text-[var(--app-text-primary)]">{{ model.name }}</span>
                           <span v-if="model.recommended" class="rounded-full bg-[var(--app-surface-muted)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--app-accent)]">推荐</span>
+                          <span v-if="model.legacy" class="text-[10px] text-[var(--app-text-muted)]">旧版兼容</span>
                           <span v-if="model.selected" class="rounded-full bg-[var(--app-surface-muted)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--app-accent)]">已选择</span>
                         </div>
                         <div class="mt-1 text-[10px] text-[var(--app-text-muted)]">{{ model.size }} · {{ model.speed }} · {{ model.quality }}</div>
@@ -342,6 +345,7 @@
                     </div>
 
                     <div class="mt-1.5 line-clamp-2 text-[10px] leading-relaxed text-[var(--app-text-secondary)]">{{ model.description }}</div>
+                    <div v-if="!model.runtimeAvailable" class="mt-1.5 text-[11px] leading-relaxed text-[var(--app-text-secondary)]">{{ model.runtimeReason }}</div>
                     <div v-if="isVoiceModelDownloading(model)" class="mt-2" data-voice-model-progress>
                       <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[10px] leading-relaxed">
                         <span class="text-[var(--app-text-secondary)]">{{ voiceModelDownloadStageText(model) }}</span>
@@ -371,8 +375,8 @@
                         v-if="model.downloaded && !model.selected"
                         type="button"
                         class="voice-setting-focus rounded-[5px] border border-[var(--app-border)] bg-[var(--app-surface-bg)] px-2 py-1 text-[10px] font-medium text-[var(--app-accent)] transition hover:bg-[var(--app-neutral-btn-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-                        :disabled="voiceModelLocked || isVoiceModelActionBusy(model.id)"
-                        :title="voiceModelLocked ? '模型由启动环境变量固定' : `选择 ${model.name}`"
+                        :disabled="voiceModelLocked || !model.runtimeAvailable || isVoiceModelActionBusy(model.id)"
+                        :title="voiceModelLocked ? '模型由启动环境变量固定' : !model.runtimeAvailable ? model.runtimeReason : `选择 ${model.name}`"
                         @click="selectVoiceModel(model)"
                       >
                         {{ isVoiceModelActionBusy(model.id, 'select') ? '选择中...' : '选择' }}
@@ -402,6 +406,12 @@
                 </div>
                 <div v-else-if="!voiceDeviceError" class="mt-3 rounded-[8px] bg-[var(--app-surface-soft)] px-3 py-4 text-center text-[11px] text-[var(--app-text-muted)]">后端未返回可用模型列表。</div>
 
+                <button v-if="voiceModels.some(model => model.legacy)" type="button"
+                  class="voice-setting-focus mt-3 rounded px-1 py-1 text-[12px] text-[var(--app-accent)] hover:underline"
+                  :aria-expanded="showLegacyVoiceModels" aria-controls="voice-model-list"
+                  @click="showLegacyVoiceModels = !showLegacyVoiceModels"
+                >{{ showLegacyVoiceModels ? '收起旧版 Whisper 模型' : '显示旧版 Whisper 模型' }}</button>
+
                 <div v-if="voiceModelLocked" class="mt-2 text-[11px] leading-relaxed text-[var(--app-text-secondary)]">模型由 WECHAT_TOOL_WHISPER_MODEL 环境变量固定，界面中不可切换。</div>
                 <div v-if="voiceStatusReason" class="mt-2 text-[11px] leading-relaxed text-[var(--app-text-muted)]">{{ voiceStatusReason }}</div>
                 <div v-if="voiceModelMessage" class="mt-2 text-[11px] text-[var(--app-accent)]">{{ voiceModelMessage }}</div>
@@ -413,7 +423,7 @@
                   <div class="min-w-0 flex-1">
                     <div class="text-[13px] font-medium text-[var(--app-text-primary)]">本项目转写数据</div>
                     <div class="mt-0.5 text-[11px] leading-relaxed text-[var(--app-text-muted)]">
-                      删除所有账号中由本项目 Whisper 生成的转写文字。微信原生转写、原始语音和模型都会保留。
+                      删除所有账号中由本项目本地模型生成的转写文字。微信原生转写、原始语音和模型都会保留。
                     </div>
                   </div>
                   <button
@@ -932,6 +942,8 @@ const voiceDeviceSource = ref('default')
 const voiceActiveDevice = ref('')
 const voiceModel = ref('medium')
 const voiceModels = ref([])
+const showLegacyVoiceModels = ref(false)
+const voiceSupportedDevices = ref(['cpu', 'cuda'])
 const voiceModelSource = ref('default')
 const voiceModelAction = ref({ id: '', type: '' })
 const voiceModelDeletePendingIds = ref([])
@@ -951,7 +963,7 @@ const voiceDeviceLocked = computed(() => voiceDeviceSource.value === 'env')
 const voiceModelLocked = computed(() => voiceModelSource.value === 'env')
 const voiceCudaAvailable = computed(() => !!voiceCuda.value?.available)
 const voiceCudaReason = computed(() => String(voiceCuda.value?.reason || '').trim())
-const voiceModelText = computed(() => String(voiceModel.value || 'medium').trim() || 'medium')
+const voiceModelText = computed(() => voiceModels.value.find(model => model.id === voiceModel.value)?.name || voiceModel.value || 'medium')
 const voiceDeviceLabel = computed(() => voiceDevicePreference.value === 'cuda' ? 'NVIDIA GPU' : 'CPU')
 const voiceCudaDeviceLabels = computed(() => {
   const devices = Array.isArray(voiceCuda.value?.devices) ? voiceCuda.value.devices : []
@@ -1239,6 +1251,7 @@ const applyVoiceTranscriptionStatus = (status) => {
   voiceDevicePreference.value = requestedDevice === 'cuda' ? 'cuda' : 'cpu'
   voiceDeviceSource.value = String(status.deviceSource || 'default').trim() || 'default'
   voiceActiveDevice.value = String(status.activeDevice || '').trim().toLowerCase()
+  voiceSupportedDevices.value = Array.isArray(status.supportedDevices) ? status.supportedDevices : ['cpu', 'cuda']
   voiceModel.value = String(status.model || 'medium').trim() || 'medium'
   voiceModelSource.value = String(status.modelSettingSource || 'default').trim() || 'default'
   voiceModels.value = (Array.isArray(status.models) ? status.models : []).map((item) => {
@@ -1259,6 +1272,9 @@ const applyVoiceTranscriptionStatus = (status) => {
       quality: String(item?.quality || '质量未知').trim(),
       description: String(item?.description || '').trim(),
       recommended: item?.recommended === true,
+      legacy: item?.legacy === true,
+      runtimeAvailable: item?.runtimeAvailable !== false,
+      runtimeReason: String(item?.runtimeReason || '缺少运行组件，请更新应用或选择其他模型。'),
       selected: item?.selected === true || id === voiceModel.value,
       downloaded,
       downloadable: item?.downloadable !== false,
@@ -1452,7 +1468,7 @@ const startVoiceModelDownload = async (model) => {
 }
 
 const selectVoiceModel = async (model) => {
-  if (!model?.id || !model.downloaded || model.selected || voiceModelLocked.value || isVoiceModelActionBusy(model.id)) return
+  if (!model?.id || !model.downloaded || !model.runtimeAvailable || model.selected || voiceModelLocked.value || isVoiceModelActionBusy(model.id)) return
   const generation = voiceModelDownloadGeneration(model.id)
   voiceModelAction.value = { id: model.id, type: 'select' }
   voiceModelError.value = ''
@@ -1530,7 +1546,7 @@ const voiceTranscriptDeleteErrorMessage = (error) => {
 
 const deleteAllProjectVoiceTranscripts = async () => {
   if (voiceTranscriptDeleteBusy.value) return
-  const confirmation = '此操作不可撤销：将删除所有账号中由本项目 Whisper 生成的全部转写文字。微信原生转写、原始语音和已下载模型都会保留。确定继续吗？'
+  const confirmation = '此操作不可撤销：将删除所有账号中由本项目本地模型生成的全部转写文字。微信原生转写、原始语音和已下载模型都会保留。确定继续吗？'
   if (!window.confirm(confirmation)) return
 
   voiceTranscriptDeleteBusy.value = true

@@ -652,10 +652,21 @@ function main() {
     "--collect-all",
     "opencc",
     "--collect-all",
+    "sherpa_onnx",
+    "--add-data",
+    pyInstallerAddData(path.join(repoRoot, "src/wechat_decrypt_tool/resources/voice_models.json"), "wechat_decrypt_tool/resources"),
+    "--collect-all",
     "watchfiles",
     ...aiPackagingArgs(repoRoot),
     entry,
   ];
+
+  // CUDA/PyTorch 体积较大，仅在明确构建 Qwen GPU 版本时收集。
+  if (process.argv.includes("--qwen-gpu")) {
+    args.splice(args.length - 1, 0, "--collect-all", "torch", "--collect-all", "transformers");
+  } else {
+    args.splice(args.length - 1, 0, "--exclude-module", "torch", "--exclude-module", "transformers");
+  }
 
   if (process.platform === "win32") {
     args.splice(

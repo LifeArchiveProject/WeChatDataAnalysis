@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
+from types import SimpleNamespace
 
 import httpx
 
@@ -34,6 +35,30 @@ _OPENCC_CONVERTER_LOCK = threading.Lock()
 _CUDA_PROBE_CACHE_TTL_SECONDS = 5.0
 _CUDA_PROBE_CACHE_LOCK = threading.Lock()
 _CUDA_PROBE_CACHE: Optional[tuple[float, dict[str, Any]]] = None
+_VOICE_CUDA_DLL_HANDLES: list[Any] = []
+_VOICE_CUDA_DLL_LOCK = threading.Lock()
+
+
+def _prepare_whisper_cuda_libraries() -> None:
+    """Windows 下复用可选 GPU 组件自带的 CUDA 12 库，避免只装 CUDA 13 时回退。"""
+    if os.name != "nt":
+        return
+    with _VOICE_CUDA_DLL_LOCK:
+        if _VOICE_CUDA_DLL_HANDLES:
+            return
+        try:
+            spec = importlib.util.find_spec("torch")
+            if not spec or not spec.origin:
+                return
+            folder = Path(spec.origin).parent / "lib"
+            if not (folder / "cublas64_12.dll").is_file():
+                return
+            # CTranslate2 使用 LoadLibrary；PATH 和 Python DLL 搜索目录都需要设置。
+            handle = os.add_dll_directory(str(folder))
+            os.environ["PATH"] = str(folder) + os.pathsep + os.environ.get("PATH", "")
+            _VOICE_CUDA_DLL_HANDLES.append(handle)
+        except (ImportError, OSError, ValueError):
+            logger.debug("可选 CUDA 库目录不可用，继续使用系统运行库。", exc_info=True)
 
 from .runtime_settings import (
     VOICE_TRANSCRIPTION_DEVICE_CPU,
@@ -44,6 +69,11 @@ from .runtime_settings import (
     write_voice_transcription_model_setting,
 )
 from .app_paths import get_data_dir, get_output_databases_dir, get_output_dir
+from .asr_models import (
+    SPECS as ASR_MODEL_SPECS, NEW_MODEL_CATALOG, cache_identity,
+    dependency_status, model_files_ready, verify_model_files,
+)
+from .asr_worker import AsrCancelled, AsrError, ProcessBackend, probe_qwen_cuda
 
 
 VOICE_MODEL_CATALOG: tuple[dict[str, Any], ...] = (
@@ -97,6 +127,15 @@ VOICE_MODEL_CATALOG: tuple[dict[str, Any], ...] = (
         "description": "Large v3 的高速版本，推荐 NVIDIA GPU。",
     },
 )
+_WHISPER_CATALOG = VOICE_MODEL_CATALOG
+VOICE_MODEL_CATALOG = (
+    *NEW_MODEL_CATALOG[:2],
+    next(item for item in _WHISPER_CATALOG if item["id"] == "turbo"),
+    *NEW_MODEL_CATALOG[2:],
+    *({**item, "legacy": True, "recommended": False,
+       "description": "保留原有 Whisper 识别方式，已有设置和缓存继续可用。",
+       "quality": "兼容模型"} for item in _WHISPER_CATALOG if item["id"] != "turbo"),
+)
 VOICE_MODEL_IDS = frozenset(str(item["id"]) for item in VOICE_MODEL_CATALOG)
 VOICE_MODEL_STORAGE_DIRNAME = "voice_models"
 VOICE_MODEL_REPOSITORIES: dict[str, str] = {
@@ -107,6 +146,7 @@ VOICE_MODEL_REPOSITORIES: dict[str, str] = {
     "large-v3": "Systran/faster-whisper-large-v3",
     "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
 }
+VOICE_MODEL_REPOSITORIES.update({key: value["repo"] for key, value in ASR_MODEL_SPECS.items()})
 VOICE_MODEL_DOWNLOAD_ALLOW_PATTERNS = (
     "config.json",
     "preprocessor_config.json",
@@ -155,14 +195,14 @@ def get_legacy_voice_model_storage_root() -> Path:
 def _managed_voice_model_dir(model: str) -> Path:
     model_id = str(model or "").strip()
     if model_id not in VOICE_MODEL_IDS:
-        raise VoiceTranscriptionError("invalid_model", "不支持该 Whisper 模型。")
+        raise VoiceTranscriptionError("invalid_model", "不支持该语音模型。")
     return get_voice_model_storage_root() / model_id
 
 
 def _legacy_voice_model_dir(model: str) -> Path:
     model_id = str(model or "").strip()
     if model_id not in VOICE_MODEL_IDS:
-        raise VoiceTranscriptionError("invalid_model", "不支持该 Whisper 模型。")
+        raise VoiceTranscriptionError("invalid_model", "不支持该语音模型。")
     return get_legacy_voice_model_storage_root() / model_id
 
 
@@ -594,9 +634,14 @@ class VoiceTranscriptionConfig:
         model, model_source = read_effective_voice_transcription_model()
         language = str(os.environ.get("WECHAT_TOOL_WHISPER_LANGUAGE") or "zh").strip() or "zh"
         device, device_source = read_effective_voice_transcription_device()
+        spec = ASR_MODEL_SPECS.get(model)
+        if spec and device_source == "default":
+            device = spec["devices"][0]
         compute_type = str(os.environ.get("WECHAT_TOOL_WHISPER_COMPUTE_TYPE") or "").strip()
         if not compute_type:
             compute_type = "float16" if device == VOICE_TRANSCRIPTION_DEVICE_CUDA else "int8"
+        if spec:
+            compute_type = spec["precision"]
         allow_download = _env_bool("WECHAT_TOOL_WHISPER_ALLOW_DOWNLOAD", False)
         try:
             beam_size = max(1, min(10, int(os.environ.get("WECHAT_TOOL_WHISPER_BEAM_SIZE") or 5)))
@@ -740,7 +785,9 @@ def _public_model_name(value: str) -> str:
     return raw
 
 
-def _model_directory_is_ready(path: Path) -> bool:
+def _model_directory_is_ready(path: Path, model: str = "") -> bool:
+    if model in ASR_MODEL_SPECS:
+        return model_files_ready(path, model)
     try:
         if not path.is_dir():
             return False
@@ -823,7 +870,7 @@ def inspect_model_readiness(model: str) -> dict[str, Any]:
         managed_dir = _managed_voice_model_dir(raw)
         managed_root = get_voice_model_storage_root()
         managed_owned = _managed_model_path_is_owned(managed_root, managed_dir)
-        if managed_owned and _model_directory_is_ready(managed_dir):
+        if managed_owned and _model_directory_is_ready(managed_dir, raw):
             return {
                 "ready": True,
                 "downloadable": True,
@@ -854,7 +901,7 @@ def inspect_model_readiness(model: str) -> dict[str, Any]:
             same_location = legacy_dir.resolve() == managed_dir.resolve()
         except OSError:
             same_location = legacy_dir.absolute() == managed_dir.absolute()
-        if not same_location and _model_directory_is_ready(legacy_dir):
+        if not same_location and _model_directory_is_ready(legacy_dir, raw):
             return {
                 "ready": True,
                 "downloadable": True,
@@ -864,6 +911,9 @@ def inspect_model_readiness(model: str) -> dict[str, Any]:
                 "reason": "检测到旧 output 目录中的模型；可继续使用，但本应用不会在此处删除它。",
             }
 
+    if raw in ASR_MODEL_SPECS:
+        return dict(ready=False, downloadable=True, managed=managed_partial, deletable=managed_partial,
+                    source="app-cache", reason="模型尚未下载完整，请在模型列表中下载。")
     try:
         from faster_whisper.utils import download_model
     except Exception:
@@ -965,8 +1015,14 @@ def get_voice_model_catalog(*, selected_model: Optional[str] = None) -> list[dic
         readiness = inspect_model_readiness(model_id)
         job = jobs.get(model_id) or {}
         item = dict(definition)
+        runtime_ready, runtime_reason = dependency_status(model_id)
+        spec = ASR_MODEL_SPECS.get(model_id, {})
         item.update(
             {
+                "backend": spec.get("backend", "whisper"),
+                "devices": spec.get("devices", ["cpu", "cuda"]),
+                "runtimeAvailable": runtime_ready,
+                "runtimeReason": runtime_reason,
                 "selected": model_id == selected,
                 "downloaded": bool(readiness.get("ready")),
                 "downloadable": bool(readiness.get("downloadable")),
@@ -1464,7 +1520,8 @@ class VoiceTranscriptionService:
         model_loader: Optional[Callable[[VoiceTranscriptionConfig], Any]] = None,
     ) -> None:
         self.config = config or VoiceTranscriptionConfig.from_env()
-        self._model_loader = model_loader or self._load_faster_whisper_model
+        self._model_loader = model_loader or self._load_backend_model
+        self._cache_model = cache_identity(self.config.model)
         self._model: Any = None
         self._active_device = ""
         self._active_compute_type = ""
@@ -1475,7 +1532,7 @@ class VoiceTranscriptionService:
         self._active_inferences = 0
         self._model_transitioning = False
         self._model_generation = 0
-        self._model_num_workers = max(1, int(self.config.num_workers or 1))
+        self._model_num_workers = 1 if self.config.model in ASR_MODEL_SPECS else max(1, int(self.config.num_workers or 1))
         self._retired = False
         # Service replacement can overlap with a completed inference writing its
         # cache, so all service generations must serialize the SQLite file.
@@ -1498,6 +1555,10 @@ class VoiceTranscriptionService:
             dependency_available = importlib.util.find_spec("faster_whisper") is not None
         except Exception:
             dependency_available = False
+        spec = ASR_MODEL_SPECS.get(self.config.model)
+        runtime_reason = ""
+        if spec:
+            dependency_available, runtime_reason = dependency_status(self.config.model)
         try:
             text_normalizer_available = importlib.util.find_spec("opencc") is not None
         except Exception:
@@ -1505,14 +1566,19 @@ class VoiceTranscriptionService:
         model_readiness = self._model_readiness()
         model_ready = bool(model_readiness.get("ready"))
         model_downloadable = bool(model_readiness.get("downloadable"))
-        can_prepare_model = bool(self.config.allow_download and model_downloadable)
+        can_prepare_model = bool(not spec and self.config.allow_download and model_downloadable)
         cuda = probe_cuda()
+        if spec and spec["backend"] == "qwen-hf":
+            cuda = probe_qwen_cuda() if dependency_available else dict(available=False, deviceCount=0, devices=[], reason=runtime_reason)
+        device_supported = not spec or self.config.device in spec["devices"]
+        device_ready = device_supported and (not spec or self.config.device != "cuda" or cuda["available"])
         fallback_reason = self._fallback_reason
-        if not fallback_reason and self.config.device == VOICE_TRANSCRIPTION_DEVICE_CUDA and not cuda["available"]:
+        if not spec and not fallback_reason and self.config.device == VOICE_TRANSCRIPTION_DEVICE_CUDA and not cuda["available"]:
             fallback_reason = f"{cuda['reason']} 首次识别会自动回退到 CPU。"
         available = bool(
             self.config.enabled
             and dependency_available
+            and device_ready
             and text_normalizer_available
             and self.config.model
             and (model_ready or can_prepare_model)
@@ -1521,11 +1587,15 @@ class VoiceTranscriptionService:
         if not self.config.enabled:
             reason = "语音转文字功能未启用。"
         elif not dependency_available:
-            reason = "未安装 faster-whisper，请安装语音转文字可选依赖。"
+            reason = runtime_reason or "未安装 faster-whisper，请安装语音转文字可选依赖。"
         elif not text_normalizer_available:
             reason = "未安装 OpenCC，无法保证输出为简体中文。"
         elif not str(self.config.model or "").strip():
             reason = "未配置 Whisper 模型。"
+        elif not device_supported:
+            reason = "当前模型不支持所选设备，请在设置中选择匹配的模型和设备。"
+        elif not device_ready:
+            reason = str(cuda.get("reason") or "当前模型所需的 GPU 不可用，请选择 CPU 模型。")
         elif not model_ready:
             reason = str(model_readiness.get("reason") or "Whisper 模型尚未准备好。")
             if can_prepare_model:
@@ -1541,6 +1611,8 @@ class VoiceTranscriptionService:
             "modelSource": str(model_readiness.get("source") or "unavailable"),
             "modelDownloadRequired": bool(not model_ready and can_prepare_model),
             "model": _public_model_name(self.config.model),
+            "backend": spec["backend"] if spec else "whisper",
+            "supportedDevices": spec["devices"] if spec else ["cpu", "cuda"],
             "modelSettingSource": self.config.model_source,
             "models": get_voice_model_catalog(selected_model=self.config.model),
             "language": self.config.language,
@@ -1551,11 +1623,11 @@ class VoiceTranscriptionService:
             "deviceSource": self.config.device_source,
             "activeDevice": self._active_device or None,
             "activeComputeType": self._active_compute_type or None,
-            "modelLoaded": self._model is not None,
+            "modelLoaded": self._model is not None and getattr(self._model, "is_loaded", True),
             "numWorkers": self._model_num_workers,
             "cuda": cuda,
             "requestedDeviceAvailable": bool(
-                self.config.device != VOICE_TRANSCRIPTION_DEVICE_CUDA or cuda["available"]
+                device_supported and (self.config.device != VOICE_TRANSCRIPTION_DEVICE_CUDA or cuda["available"])
             ),
             "usingFallback": bool(self._fallback_reason),
             "fallbackReason": fallback_reason,
@@ -1642,7 +1714,7 @@ class VoiceTranscriptionService:
             str(account_path.absolute()),
             sid,
             source_hash,
-            str(self.config.model),
+            self._cache_model,
             str(self.config.language),
         )
         with _voice_transcript_singleflight(flight_key, cancel_event):
@@ -1654,7 +1726,7 @@ class VoiceTranscriptionService:
             self._raise_if_cancelled(cancel_event)
             payload, ext, _media_type = _convert_silk_to_browser_audio(data, preferred_format="wav")
             if not payload or ext == "silk":
-                raise VoiceTranscriptionError("voice_decode_failed", "语音解码失败，无法交给 Whisper 识别。")
+                raise VoiceTranscriptionError("voice_decode_failed", "语音解码失败，无法进行本地识别。")
 
             temp_path: Optional[Path] = None
             try:
@@ -1716,6 +1788,8 @@ class VoiceTranscriptionService:
         """Reload the model at a quiescent point with matching CTranslate2 workers."""
 
         workers = max(1, int(concurrency or 1))
+        if self.config.model in ASR_MODEL_SPECS:
+            workers = 1
         with self._inference_condition:
             while self._model_transitioning and not self._retired:
                 self._raise_if_cancelled(cancel_event)
@@ -1815,6 +1889,7 @@ class VoiceTranscriptionService:
         try:
             try:
                 text, info = self._transcribe_once(model, path, cancel_event=cancel_event)
+                compute_type = getattr(model, "precision", compute_type)
             except _VoiceTranscriptionCancelled as exc:
                 try:
                     exc.__traceback__ = None
@@ -1831,7 +1906,7 @@ class VoiceTranscriptionService:
                 raise
             except Exception as exc:
                 inference_error_type = type(exc).__name__
-                if device == VOICE_TRANSCRIPTION_DEVICE_CUDA and _is_cuda_runtime_error(exc):
+                if self.config.model not in ASR_MODEL_SPECS and device == VOICE_TRANSCRIPTION_DEVICE_CUDA and _is_cuda_runtime_error(exc):
                     cuda_fallback_required = True
                     with self._inference_condition:
                         self._cuda_fallback_pending = True
@@ -1922,6 +1997,17 @@ class VoiceTranscriptionService:
         cancel_event: Optional[threading.Event] = None,
     ) -> tuple[str, Any]:
         self._raise_if_cancelled(cancel_event)
+        if self.config.model in ASR_MODEL_SPECS:
+            try:
+                result = model.transcribe_audio(str(path), self.config.language, cancel_event)
+            except AsrCancelled:
+                raise _VoiceTranscriptionCancelled() from None
+            except AsrError as exc:
+                raise VoiceTranscriptionError(exc.code, str(exc)) from exc
+            self._raise_if_cancelled(cancel_event)
+            self._active_compute_type = result["precision"]
+            return normalize_transcript_text(result["text"]), SimpleNamespace(
+                language=result["language"], duration=result["duration"])
         segments, info = model.transcribe(
             str(path),
             language=self.config.language,
@@ -1946,6 +2032,8 @@ class VoiceTranscriptionService:
         return normalize_transcript_text(text), info
 
     def _release_loaded_model_unlocked(self) -> None:
+        if isinstance(self._model, ProcessBackend):
+            self._model.close()
         self._model = None
         self._active_device = ""
         self._active_compute_type = ""
@@ -1978,6 +2066,9 @@ class VoiceTranscriptionService:
                 return self._model
 
             runtime_config = replace(self.config, num_workers=self._model_num_workers)
+            if runtime_config.model in ASR_MODEL_SPECS:
+                # Qwen GPU 不会静默改用另一个 CPU 模型，错误交由用户选择处理。
+                return self._load_model(runtime_config)
             if runtime_config.device == VOICE_TRANSCRIPTION_DEVICE_CUDA:
                 if self._cuda_fallback_pending:
                     return self._load_cpu_fallback(self._fallback_reason)
@@ -2017,11 +2108,30 @@ class VoiceTranscriptionService:
         except Exception as exc:
             raise VoiceTranscriptionError(
                 "model_load_failed",
-                f"Whisper 模型加载失败：{type(exc).__name__}",
+                f"语音模型加载失败：{type(exc).__name__}",
             ) from exc
 
     @staticmethod
+    def _load_backend_model(config: VoiceTranscriptionConfig) -> Any:
+        spec = ASR_MODEL_SPECS.get(config.model)
+        if not spec:
+            return VoiceTranscriptionService._load_faster_whisper_model(config)
+        if config.device not in spec["devices"]:
+            raise VoiceTranscriptionError("invalid_device", "当前模型不支持所选设备，请选择对应的 CPU 或 GPU 模型。")
+        available, reason = dependency_status(config.model)
+        if not available:
+            raise VoiceTranscriptionError("dependency_missing", reason)
+        folder = _managed_voice_model_dir(config.model)
+        if not _managed_model_path_is_owned(get_voice_model_storage_root(), folder) or not _model_directory_is_ready(folder, config.model):
+            folder = _legacy_voice_model_dir(config.model)
+            if not _model_directory_is_ready(folder, config.model):
+                raise VoiceTranscriptionError("model_not_ready", "模型文件未准备好，请先在设置中下载模型。")
+        return ProcessBackend(spec["backend"], str(folder), spec["precision"])
+
+    @staticmethod
     def _load_faster_whisper_model(config: VoiceTranscriptionConfig) -> Any:
+        if config.device == VOICE_TRANSCRIPTION_DEVICE_CUDA:
+            _prepare_whisper_cuda_libraries()
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:
@@ -2084,7 +2194,7 @@ class VoiceTranscriptionService:
                 row = conn.execute(
                     "SELECT text, detected_language, duration, text_version FROM transcript "
                     "WHERE server_id = ? AND source_hash = ? AND model = ? AND language = ? LIMIT 1",
-                    (int(server_id), source_hash, self.config.model, self.config.language),
+                    (int(server_id), source_hash, self._cache_model, self.config.language),
                 ).fetchone()
                 if row:
                     normalized_text, needs_update = self._normalize_cached_text(row[0], row[3])
@@ -2098,7 +2208,7 @@ class VoiceTranscriptionService:
                                 time.time(),
                                 int(server_id),
                                 source_hash,
-                                self.config.model,
+                                self._cache_model,
                                 self.config.language,
                             ),
                         )
@@ -2163,7 +2273,7 @@ class VoiceTranscriptionService:
                     "SELECT server_id, source_hash, text, detected_language, duration, text_version FROM transcript "
                     f"WHERE model = ? AND language = ? AND server_id IN ({placeholders}) "
                     "ORDER BY updated_at DESC",
-                    (self.config.model, self.config.language, *ids),
+                    (self._cache_model, self.config.language, *ids),
                 ).fetchall()
                 normalized_rows = []
                 for row in rows or []:
@@ -2178,7 +2288,7 @@ class VoiceTranscriptionService:
                                 time.time(),
                                 int(row[0]),
                                 str(row[1]),
-                                self.config.model,
+                                self._cache_model,
                                 self.config.language,
                             ),
                         )
@@ -2243,7 +2353,7 @@ class VoiceTranscriptionService:
                     (
                         int(server_id),
                         source_hash,
-                        self.config.model,
+                        self._cache_model,
                         self.config.language,
                         normalized_text,
                         str(result.get("language") or self.config.language),
@@ -2277,6 +2387,9 @@ def _download_voice_model_snapshot(
         # A cancelled worker must not wait for other executor workers to drain.
         "max_workers": 1,
     }
+    if model_id in ASR_MODEL_SPECS:
+        spec = ASR_MODEL_SPECS[model_id]
+        common.update(revision=spec["revision"], allow_patterns=list(spec["files"]))
 
     class SilentTqdm(base_tqdm):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -2461,7 +2574,7 @@ class VoiceModelDownloadManager:
     def start(self, model: str) -> dict[str, Any]:
         model_id = str(model or "").strip()
         if model_id not in VOICE_MODEL_IDS:
-            raise VoiceTranscriptionError("invalid_model", "不支持该 Whisper 模型。")
+            raise VoiceTranscriptionError("invalid_model", "不支持该语音模型。")
         activity_key = ""
         cancel_event = threading.Event()
         completion_event = threading.Event()
@@ -2522,7 +2635,7 @@ class VoiceModelDownloadManager:
 
         model_id = str(model or "").strip()
         if model_id not in VOICE_MODEL_IDS:
-            raise VoiceTranscriptionError("invalid_model", "不支持该 Whisper 模型。")
+            raise VoiceTranscriptionError("invalid_model", "不支持该语音模型。")
 
         job_id = ""
         completion_event: Optional[threading.Event] = None
@@ -2634,7 +2747,7 @@ class VoiceModelDownloadManager:
                     "model_download_refused",
                     "拒绝写入应用模型目录之外的路径。",
                 )
-            if _model_directory_is_ready(model_dir):
+            if _model_directory_is_ready(model_dir, model_id):
                 self._update(job_id, status="done", stage="done", percent=100, finishedAt=time.time())
                 return
 
@@ -2668,8 +2781,13 @@ class VoiceModelDownloadManager:
                 total_bytes=0,
                 force=True,
             )
-            if downloaded_dir.resolve() != stage_dir.resolve() or not _model_directory_is_ready(stage_dir):
+            if downloaded_dir.resolve() != stage_dir.resolve() or not _model_directory_is_ready(stage_dir, model_id):
                 raise VoiceTranscriptionError("model_download_incomplete", "模型下载完成，但缓存文件不完整。")
+            if model_id in ASR_MODEL_SPECS:
+                try:
+                    verify_model_files(stage_dir, model_id, lambda: update_progress(stage="verifying", downloaded_bytes=0, total_bytes=0))
+                except ValueError as exc:
+                    raise VoiceTranscriptionError("model_download_corrupt", str(exc)) from exc
             if cancel_event.is_set():
                 raise _VoiceModelDownloadCancelled()
             self._update_progress(
@@ -2692,7 +2810,7 @@ class VoiceModelDownloadManager:
             stage_dir = None
             if cancel_event.is_set():
                 raise _VoiceModelDownloadCancelled()
-            if not _model_directory_is_ready(model_dir):
+            if not _model_directory_is_ready(model_dir, model_id):
                 raise VoiceTranscriptionError("model_download_incomplete", "模型下载完成，但缓存文件不完整。")
             current_service = get_voice_transcription_service()
             if current_service.config.model == model_id:
@@ -2775,6 +2893,9 @@ def resolve_voice_transcription_batch_concurrency(
         ) else 1
     else:
         effective = requested_value
+    if config.model in ASR_MODEL_SPECS:
+        # 新后端串行复用单个进程，避免多份模型挤占低配内存或显存。
+        effective = 1
     return requested_value, effective
 
 
@@ -3437,6 +3558,9 @@ def set_voice_transcription_device(device: str) -> dict[str, Any]:
 
     current_service = get_voice_transcription_service()
     current_model = current_service.config.model
+    spec = ASR_MODEL_SPECS.get(current_model)
+    if spec and normalized not in spec["devices"]:
+        raise VoiceTranscriptionError("invalid_device", "当前模型不支持该设备，请先选择对应的 CPU 或 GPU 模型。")
     _begin_voice_model_deletion(current_model)
     try:
         write_voice_transcription_device_setting(normalized)
@@ -3451,7 +3575,7 @@ def set_voice_transcription_model(model: str) -> dict[str, Any]:
 
     normalized = str(model or "").strip()
     if normalized not in VOICE_MODEL_IDS:
-        raise VoiceTranscriptionError("invalid_model", "不支持该 Whisper 模型。")
+        raise VoiceTranscriptionError("invalid_model", "不支持该语音模型。")
 
     _configured, source = read_effective_voice_transcription_model()
     if source == "env":
@@ -3462,8 +3586,24 @@ def set_voice_transcription_model(model: str) -> dict[str, Any]:
 
     current_service = get_voice_transcription_service()
     current_model = current_service.config.model
+    spec = ASR_MODEL_SPECS.get(normalized)
+    target_device = None
+    if spec:
+        target_device = spec["devices"][0]
+        configured_device, device_source = read_effective_voice_transcription_device()
+        if device_source == "env" and configured_device != target_device:
+            raise VoiceTranscriptionError("device_locked", "启动环境变量固定的设备与此模型不兼容，请选择匹配的模型。")
+        ready, reason = dependency_status(normalized)
+        if not ready:
+            raise VoiceTranscriptionError("dependency_missing", reason)
+        if not inspect_model_readiness(normalized)["ready"]:
+            raise VoiceTranscriptionError("model_not_ready", "请先下载完整模型，再选择使用。")
+        if target_device == "cuda" and not probe_qwen_cuda()["available"]:
+            raise VoiceTranscriptionError("gpu_unavailable", "Qwen GPU 运行环境不可用，请检查 GPU 组件和驱动，或选择 CPU 模型。")
     _begin_voice_model_deletion(current_model)
     try:
+        if target_device is not None:
+            write_voice_transcription_device_setting(target_device)
         write_voice_transcription_model_setting(normalized)
         return _reset_voice_transcription_service().status()
     finally:
@@ -3475,7 +3615,7 @@ def delete_voice_model(model: str) -> dict[str, Any]:
 
     model_id = str(model or "").strip()
     if model_id not in VOICE_MODEL_IDS:
-        raise VoiceTranscriptionError("invalid_model", "不支持该 Whisper 模型。")
+        raise VoiceTranscriptionError("invalid_model", "不支持该语音模型。")
 
     if VOICE_TRANSCRIPTION_BATCH_MANAGER.has_active_model(model_id):
         raise VoiceTranscriptionError("model_busy", "该模型正在用于批量转写，暂时不能删除。")
