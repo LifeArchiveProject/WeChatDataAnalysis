@@ -58,13 +58,28 @@ class SemanticIndex:
         return {'messages': messages, 'chunks': chunks}
 
     @observed('index.commit')
-    def commit(self, generation, messages, chunks, vectors, job, checkpoint=None):
+    def commit(self, generation, messages, chunks, vectors, job, checkpoint=None, reconcile_snapshot=None):
         import sqlite_vec
         if len(chunks) != len(vectors):
             raise ValueError('向量数量与片段数量不一致，未提交当前批次')
         with self.connection() as db:
+            if reconcile_snapshot:
+                db.execute('ATTACH DATABASE ? AS snapshot', (str(reconcile_snapshot),))
             db.execute('BEGIN IMMEDIATE')
             if checkpoint: checkpoint()
+            if reconcile_snapshot:
+                # 共享片段的向量包含全部成员文本；删除任一成员时必须移除整片，
+                # 随后由 messages/chunks 参数原子地重建仍存在的相邻消息。
+                db.execute('CREATE TEMP TABLE reconcile_chunks(id TEXT PRIMARY KEY)')
+                db.execute('''INSERT OR IGNORE INTO reconcile_chunks
+                    SELECT DISTINCT c.id FROM chunks c
+                    JOIN members m ON m.chunk=c.id
+                    JOIN snapshot.reconcile r ON r.source=m.source
+                    WHERE c.generation=?''', (generation,))
+                db.execute('DELETE FROM members WHERE chunk IN (SELECT id FROM reconcile_chunks)')
+                db.execute('DELETE FROM chunks WHERE id IN (SELECT id FROM reconcile_chunks)')
+                db.execute('DELETE FROM messages WHERE generation=? AND source IN '
+                           '(SELECT source FROM snapshot.reconcile)', (generation,))
             for position, message in enumerate(messages):
                 if checkpoint and position % 100 == 0: checkpoint()
                 source = message['source']
@@ -86,6 +101,33 @@ class SemanticIndex:
             db.execute('INSERT OR REPLACE INTO progress VALUES(?,?)', (job['id'], json.dumps(job, ensure_ascii=False)))
         diagnostic_event('index.checkpoint.committed', task_id=job['id'], generation=generation, processed=job.get('processed'),
                          offset=job.get('offset'), chat_index=job.get('chat_index'), chunks=len(chunks), count=len(messages), committed=True)
+
+    @observed('index.reconcile')
+    def reconciliation(self, generation, snapshot, scopes):
+        """记录快照中缺失的来源，并返回需要重建共享片段的现存相邻消息。"""
+        if not scopes:
+            return {'missing': 0, 'messages': []}
+        with self.connection() as db:
+            db.execute('ATTACH DATABASE ? AS snapshot', (str(snapshot),))
+            db.execute('CREATE TEMP TABLE reconcile_scopes(segment INTEGER PRIMARY KEY, username TEXT, start INTEGER, end INTEGER)')
+            db.executemany('INSERT INTO reconcile_scopes VALUES(?,?,?,?)',
+                           [(s['segment'], s['username'], s['start'], s['end']) for s in scopes])
+            db.execute('DELETE FROM snapshot.reconcile')
+            db.execute('''INSERT OR IGNORE INTO snapshot.reconcile
+                SELECT m.source FROM messages m JOIN reconcile_scopes s
+                  ON s.username=m.username AND m.created>=s.start AND m.created<=s.end
+                WHERE m.generation=? AND NOT EXISTS
+                  (SELECT 1 FROM snapshot.messages frozen WHERE frozen.source=m.source)''', (generation,))
+            missing = db.execute('SELECT count(*) FROM snapshot.reconcile').fetchone()[0]
+            rows = db.execute('''SELECT DISTINCT current.body,current.username,current.created,current.source
+                FROM snapshot.reconcile removed
+                JOIN members old_member ON old_member.source=removed.source
+                JOIN chunks old_chunk ON old_chunk.id=old_member.chunk AND old_chunk.generation=?
+                JOIN members neighbor ON neighbor.chunk=old_chunk.id
+                JOIN messages current ON current.generation=old_chunk.generation AND current.source=neighbor.source
+                WHERE EXISTS (SELECT 1 FROM snapshot.messages frozen WHERE frozen.source=current.source)
+                ORDER BY current.username,current.created,current.source''', (generation,)).fetchall()
+        return {'missing': missing, 'messages': [json.loads(row['body']) for row in rows]}
 
     def existing(self, generation, messages):
         with self.connection() as db:

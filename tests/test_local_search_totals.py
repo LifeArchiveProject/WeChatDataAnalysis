@@ -21,11 +21,13 @@ def snapshot(tmp_path, **values):
 
 def test_snapshot_is_deduplicated_complete_and_immutable(tmp_path):
     plan = snapshot(tmp_path)
-    plan.append(0, {'messages': [message('a'), message('a'), message('b')], 'has_more': True}, lambda: None)
+    plan.append(0, {'messages': [message('a'), message('a'), message('b')], 'has_more': True,
+                    'warning': '第一页读取不完整'}, lambda: None)
     with pytest.raises(ValueError):
         plan.freeze(1)
     plan.append(0, {'messages': [message('b'), message('c')], 'has_more': False}, lambda: None)
     assert plan.freeze(1)['total'] == 3
+    assert plan.segment(0)['warning'] == '第一页读取不完整'
     reopened = snapshot(tmp_path, processed=2, offset=2)
     assert reopened.metadata()['total'] == 3
     assert [m['source'] for m in reopened.page(0, 1, 100, lambda: None)['messages']] == ['b', 'c']

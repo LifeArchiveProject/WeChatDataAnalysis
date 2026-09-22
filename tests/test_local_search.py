@@ -466,6 +466,51 @@ def test_manual_build_is_incremental_across_settings_and_scope_changes(tmp_path,
     asyncio.run(run())
 
 
+def test_full_reconciliation_removes_missing_messages_and_rebuilds_neighbors(tmp_path, monkeypatch):
+    from tokenizers import Tokenizer, models
+    from wechat_decrypt_tool.local_search.catalog import model_dir
+
+    async def run():
+        rows = [message('kept', '继续保留'), message('deleted', '已经删除的秘密', timestamp=101)]
+        warning = ['']
+
+        def reader(account, username, start, end, offset):
+            return {'messages': [dict(m) for m in rows if start <= m['time'] <= end],
+                    'name': username, 'has_more': False, 'warning': warning[0]}
+        service = LocalSearch(tmp_path/'state', tmp_path/'models', reader=reader, engine=FakeEngine())
+        root = model_dir(service.downloads.root, 'bge-small-zh')
+        root.mkdir(parents=True)
+        Tokenizer(models.WordLevel({'[UNK]': 0}, unk_token='[UNK]')).save(str(root/'tokenizer.json'))
+        monkeypatch.setattr(service.downloads, 'available', lambda _: True)
+        monkeypatch.setattr(service, 'enrichment_version', lambda _: [])
+        await service.configure('a', {'enabled': True, 'model': 'bge-small-zh', 'days': 0,
+                                      'start': 0, 'end': 1000, 'usernames': ['allowed']})
+        first = await service.build('a')
+        await service.jobs[first['id']]
+        assert first['status'] == 'done'
+        assert service.index('a').keyword(first['generation'], '秘密', ['allowed'])
+
+        rows.pop()
+        warning[0] = '数据源暂时不完整'
+        incomplete = await service.build('a', incremental=False)
+        await service.jobs[incomplete['id']]
+        assert incomplete['status'] == 'done'
+        assert service.index('a').keyword(first['generation'], '秘密', ['allowed'])
+
+        warning[0] = ''
+        reconciled = await service.build('a', incremental=False)
+        await service.jobs[reconciled['id']]
+        index = service.index('a')
+        assert reconciled['status'] == 'done' and reconciled['removed'] == 1
+        assert index.keyword(first['generation'], '秘密', ['allowed']) == []
+        assert index.stats(first['generation'])['messages'] == 1
+        assert {r['message']['source'] for r in index.search(first['generation'], [1., 0.], ['allowed'])} == {'kept'}
+        with index.connection() as db:
+            assert db.execute("SELECT count(*) FROM members WHERE source='deleted'").fetchone()[0] == 0
+        await service.stop()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize('change,expected_mode,expected_start', [
     ({}, 'incremental', 9400),
     ({'start': 200}, 'incremental', 0),

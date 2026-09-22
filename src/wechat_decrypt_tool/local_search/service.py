@@ -283,6 +283,39 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
                 self.update(job, status='running', read_count=job['processed'], embedded_count=job['embedded'])
                 plan = await self.count_message_total(job, check)
                 segments = job.get('segments')
+                targets = segments or [{'username': username,
+                    'start': job.get('read_starts', {}).get(username, job.get('read_start', job['start'])),
+                    'end': job['end']} for username in cfg['usernames']]
+
+                async def encode_chunks(chunks, embedded_base):
+                    vectors = []
+                    last_embedding_update = time.monotonic()
+                    if chunks:
+                        self.update(job, stage='embedding')
+                    for batch_start in range(0, len(chunks), 8):
+                        check()
+                        await self.yield_to_queries(check)
+                        batch = chunks[batch_start:batch_start + 8]
+                        strategy = cfg['device']
+                        # 语音任务占用显卡时，本地索引主动让出。
+                        try:
+                            from ..voice_transcription import _VOICE_MODEL_ACTIVITY
+                            if any(_VOICE_MODEL_ACTIVITY.values()):
+                                strategy = 'cpu'
+                        except ImportError:
+                            pass
+                        diagnostic_event('index.batch.started', index=batch_start, batch_size=len(batch), strategy=strategy,
+                                         reason_code='voice_priority' if strategy != cfg['device'] else 'configured')
+                        values = await asyncio.to_thread(self.engine.encode, root, spec, [c['text'] for c in batch],
+                                                         strategy, cfg['device_id'], False, cancelled)
+                        diagnostic_event('index.batch.finished', index=batch_start, count=len(values),
+                                         actual_device=self.engine.status.get('actual_device'))
+                        vectors.extend(values)
+                        if len(vectors) == len(chunks) or time.monotonic() - last_embedding_update >= 0.25:
+                            self.update(job, embedded_count=embedded_base + len(vectors))
+                            last_embedding_update = time.monotonic()
+                    return vectors
+
                 for position in range(job['chat_index'], len(segments) if segments is not None else len(cfg['usernames'])):
                     segment = segments[position] if segments is not None else None
                     username = segment['username'] if segment else cfg['usernames'][position]
@@ -327,28 +360,7 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
                             changed = await asyncio.to_thread(index.affected_messages, job['generation'], [m for m in messages if m['source'] not in unchanged])
                             chunks = await asyncio.to_thread(make_chunks, changed, tokenizer)
                             diagnostic_event('index.page.organized', count=len(changed), unchanged=len(unchanged), chunks=len(chunks))
-                            vectors = []
-                            last_embedding_update = time.monotonic()
-                            if chunks: self.update(job, stage='embedding')
-                            for batch_start in range(0, len(chunks), 8):
-                                check()
-                                await self.yield_to_queries(check)
-                                batch = chunks[batch_start:batch_start + 8]
-                                strategy = cfg['device']
-                                # 语音任务占用显卡时，本地索引主动让出。
-                                try:
-                                    from ..voice_transcription import _VOICE_MODEL_ACTIVITY
-                                    if any(_VOICE_MODEL_ACTIVITY.values()): strategy = 'cpu'
-                                except ImportError:
-                                    pass
-                                diagnostic_event('index.batch.started', index=batch_start, batch_size=len(batch), strategy=strategy,
-                                                 reason_code='voice_priority' if strategy!=cfg['device'] else 'configured')
-                                values = await asyncio.to_thread(self.engine.encode, root, spec, [c['text'] for c in batch], strategy, cfg['device_id'], False, cancelled)
-                                diagnostic_event('index.batch.finished', index=batch_start, count=len(values), actual_device=self.engine.status.get('actual_device'))
-                                vectors.extend(values)
-                                if len(vectors) == len(chunks) or time.monotonic() - last_embedding_update >= 0.25:
-                                    self.update(job, embedded_count=job['embedded'] + len(vectors))
-                                    last_embedding_update = time.monotonic()
+                            vectors = await encode_chunks(chunks, job['embedded'])
                             check()
                             more = result.get('has_more', False)
                             next_job = {**job, 'chat_index': position if more else position + 1,
@@ -375,6 +387,21 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
                     raise InferenceFailure('本轮消息清单与已保存数量不一致，已保留进度，请重试。', 'count_mismatch')
                 current = self.config(account)
                 if current.get('revision') != cfg.get('revision'): raise InferenceFailure('配置已更新', 'cancelled')
+                if not job.get('incremental'):
+                    scopes = await asyncio.to_thread(plan.reconciliation_scopes, targets)
+                    reconciliation = await asyncio.to_thread(index.reconciliation, job['generation'], plan.path, scopes)
+                    if reconciliation['missing']:
+                        changed = reconciliation['messages']
+                        chunks = await asyncio.to_thread(make_chunks, changed, tokenizer)
+                        vectors = await encode_chunks(chunks, job['embedded'])
+                        next_job = {**job, 'embedded': job['embedded'] + len(chunks),
+                                    'removed': job.get('removed', 0) + reconciliation['missing']}
+                        self.update(job, stage='saving')
+                        await asyncio.to_thread(index.commit, job['generation'], changed, chunks, vectors,
+                                                next_job, check, plan.path)
+                        job.update(next_job)
+                        diagnostic_event('index.reconcile.finished', generation=job['generation'],
+                                         dropped_count=reconciliation['missing'], count=len(changed), chunks=len(chunks))
                 # 完成清理、范围约束和统计后才发布成功状态。
                 await asyncio.to_thread(index.prune, job['generation'], cfg['usernames'], job['start'], job['end'])
                 stats = await asyncio.to_thread(index.stats, job['generation'])

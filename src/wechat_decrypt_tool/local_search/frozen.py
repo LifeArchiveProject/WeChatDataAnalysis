@@ -14,6 +14,8 @@ class FrozenMessages:
                 CREATE TABLE IF NOT EXISTS segments(position INTEGER PRIMARY KEY, body TEXT);
                 CREATE TABLE IF NOT EXISTS messages(segment INTEGER, ordinal INTEGER, source TEXT, body TEXT,
                     PRIMARY KEY(segment,ordinal), UNIQUE(segment,source));
+                CREATE INDEX IF NOT EXISTS messages_source ON messages(source);
+                CREATE TABLE IF NOT EXISTS reconcile(source TEXT PRIMARY KEY);
             ''')
             if not self._get(db, 'plan'):
                 self._put(db, 'plan', {'job_id': job['id'], 'base': job['processed'],
@@ -65,9 +67,10 @@ class FrozenMessages:
                     (position, state['ordinal'] + 1, message['source'], json.dumps(message, ensure_ascii=False)))
                 if inserted.rowcount:
                     state['ordinal'] += 1
+            warning = '；'.join(dict.fromkeys(filter(None, [state.get('warning', ''), result.get('warning', '')])))
             state.update(offset=state['offset'] + len(result['messages']), cursor=result.get('cursor'),
                 complete=not result.get('has_more', False), name=result.get('name', ''),
-                source=result.get('source', 'snapshot'), warning=result.get('warning', ''))
+                source=result.get('source', 'snapshot'), warning=warning)
             checkpoint()
             db.execute('INSERT OR REPLACE INTO segments VALUES(?,?)',
                        (position, json.dumps(state, ensure_ascii=False)))
@@ -103,6 +106,16 @@ class FrozenMessages:
         checkpoint()
         return {'messages': messages, 'has_more': more,
                 'name': state['name'], 'source': state['source'], 'warning': state['warning']}
+
+    def reconciliation_scopes(self, targets):
+        """只返回读取完整且无来源警告、可安全核对删除的快照范围。"""
+        with self.connection() as db:
+            states = {row[0]: json.loads(row[1])
+                      for row in db.execute('SELECT position,body FROM segments')}
+        return [{'segment': position, 'username': target['username'],
+                 'start': target['start'], 'end': target['end']}
+                for position, target in enumerate(targets)
+                if (state := states.get(position)) and state.get('complete') and not state.get('warning')]
 
     def discard(self):
         # 只删除由任务 ID 推导的临时快照文件；索引与聊天数据库不受影响。
