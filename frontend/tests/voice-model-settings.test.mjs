@@ -74,7 +74,7 @@ test('download-time deletion stays available and supersedes stale download work'
 
 test('settings shows inference device before the model catalog', () => {
   assert.ok(voiceSectionStart >= 0 && voiceSectionEnd > voiceSectionStart)
-  assert.ok(voiceSectionSource.indexOf('>推理设备<') < voiceSectionSource.indexOf('>Whisper 模型<'))
+  assert.ok(voiceSectionSource.indexOf('>推理设备<') < voiceSectionSource.indexOf('>语音识别模型<'))
 })
 
 test('settings keeps device and model selection feedback compact', () => {
