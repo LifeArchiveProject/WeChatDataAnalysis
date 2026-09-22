@@ -325,7 +325,7 @@ const route = useRoute()
 const router = useRouter()
 
 const chatAccountsStore = useChatAccountsStore()
-const { selectedAccount } = storeToRefs(chatAccountsStore)
+const { selectedAccount, accounts, loading: accountsLoading } = storeToRefs(chatAccountsStore)
 const privacyStore = usePrivacyStore()
 const { privacyMode } = storeToRefs(privacyStore)
 
@@ -344,9 +344,6 @@ const year = ref(Number.isFinite(queryYear) ? queryYear : defaultYear)
 const queryAccount = typeof route.query?.account === 'string' ? route.query.account.trim() : ''
 const accountPinnedByQuery = !!queryAccount
 const account = ref(queryAccount)
-
- const accounts = ref([])
- const accountsLoading = ref(true)
 
 const loading = ref(false)
 const error = ref('')
@@ -1343,18 +1340,6 @@ const exportAllPages = async () => {
   }
 }
 
-const loadAccounts = async () => {
-  accountsLoading.value = true
-  try {
-    const resp = await api.listChatAccounts()
-    accounts.value = Array.isArray(resp?.accounts) ? resp.accounts : []
-  } catch (e) {
-    accounts.value = []
-  } finally {
-    accountsLoading.value = false
-  }
-}
-
 watch(selectedAccount, async (next) => {
   if (accountPinnedByQuery) return
   const nextAccount = String(next || '').trim()
@@ -1528,7 +1513,6 @@ onMounted(async () => {
 
   await chatAccountsStore.ensureLoaded()
   if (!accountPinnedByQuery) account.value = String(selectedAccount.value || '').trim()
-  await loadAccounts()
   accountSyncReady = true
   // Auto-generate once if we already have chat accounts (direct WCDB or legacy), to match "one click" expectations.
   if (accounts.value.length > 0) {
