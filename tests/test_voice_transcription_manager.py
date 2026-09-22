@@ -58,16 +58,19 @@ class TestVoiceModelCatalog(unittest.TestCase):
         with patch(
             "wechat_decrypt_tool.voice_transcription.inspect_model_readiness",
             side_effect=lambda model: {
-                "ready": model in {"small", "medium"},
+                "ready": model in {"turbo", "medium"},
                 "downloadable": True,
                 "source": "huggingface-cache",
                 "reason": "",
             },
         ):
-            models = get_voice_model_catalog(selected_model="medium")
+            models = get_voice_model_catalog(selected_model="turbo")
 
-        self.assertEqual([item["id"] for item in models], ["tiny", "base", "small", "medium", "large-v3", "turbo"])
-        selected = next(item for item in models if item["id"] == "medium")
+        self.assertEqual([item["id"] for item in models], [
+            "zipformer-small-ctc-int8", "qwen3-asr-06b-onnx-int4", "turbo",
+            "qwen3-asr-06b-hf",
+        ])
+        selected = next(item for item in models if item["id"] == "turbo")
         self.assertTrue(selected["selected"])
         self.assertTrue(selected["downloaded"])
         self.assertTrue(all(not item["id"].endswith(".en") for item in models))
@@ -89,10 +92,10 @@ class TestVoiceModelCatalog(unittest.TestCase):
             ),
             patch(
                 "wechat_decrypt_tool.voice_transcription.VOICE_MODEL_DOWNLOAD_MANAGER.latest_by_model",
-                return_value={"small": job},
+                return_value={"turbo": job},
             ),
         ):
-            model = next(item for item in get_voice_model_catalog() if item["id"] == "small")
+            model = next(item for item in get_voice_model_catalog() if item["id"] == "turbo")
 
         self.assertEqual(model["downloadPercent"], 37)
         self.assertEqual(model["downloadedBytes"], 370)
@@ -112,7 +115,7 @@ class TestVoiceBatchManager(unittest.TestCase):
 
     def test_batch_job_reports_cached_success_failure_and_completion(self):
         service = Mock(spec=VoiceTranscriptionService)
-        service.config = VoiceTranscriptionConfig(model="small")
+        service.config = VoiceTranscriptionConfig(model="turbo")
         service.transcribe_voice.side_effect = [
             {"cached": True, "text": "one"},
             {"cached": False, "text": "two"},
@@ -142,7 +145,7 @@ class TestVoiceBatchManager(unittest.TestCase):
 
     def test_only_one_account_batch_can_run_at_a_time(self):
         service = Mock(spec=VoiceTranscriptionService)
-        service.config = VoiceTranscriptionConfig(model="small")
+        service.config = VoiceTranscriptionConfig(model="turbo")
         manager = VoiceTranscriptionBatchManager(service_getter=lambda: service)
 
         entered = threading.Event()
@@ -311,9 +314,9 @@ class TestVoiceBatchManager(unittest.TestCase):
         self.assertEqual(
             resolve_voice_transcription_batch_concurrency(
                 None,
-                VoiceTranscriptionConfig(model="small", device="cuda"),
+                VoiceTranscriptionConfig(model="turbo", device="cuda"),
             ),
-            (0, 2),
+            (0, 1),
         )
         self.assertEqual(
             resolve_voice_transcription_batch_concurrency(
@@ -325,20 +328,20 @@ class TestVoiceBatchManager(unittest.TestCase):
         self.assertEqual(
             resolve_voice_transcription_batch_concurrency(
                 0,
-                VoiceTranscriptionConfig(model="small", device="cpu"),
+                VoiceTranscriptionConfig(model="turbo", device="cpu"),
             ),
             (0, 1),
         )
         self.assertEqual(
             resolve_voice_transcription_batch_concurrency(
                 99,
-                VoiceTranscriptionConfig(model="small", device="cpu"),
+                VoiceTranscriptionConfig(model="turbo", device="cpu"),
             ),
             (99, 99),
         )
 
     def test_batch_concurrency_rejects_negative_or_non_integer_values(self):
-        config = VoiceTranscriptionConfig(model="small", device="cpu")
+        config = VoiceTranscriptionConfig(model="turbo", device="cpu")
         for concurrency in (-1, True, 1.5, "5"):
             with self.subTest(concurrency=concurrency):
                 with self.assertRaises(VoiceTranscriptionError) as raised:
@@ -347,7 +350,7 @@ class TestVoiceBatchManager(unittest.TestCase):
 
     def test_batch_concurrency_is_naturally_limited_by_work_item_count(self):
         service = Mock(spec=VoiceTranscriptionService)
-        service.config = VoiceTranscriptionConfig(model="small", device="cpu")
+        service.config = VoiceTranscriptionConfig(model="turbo", device="cpu")
         service.configure_inference_concurrency.return_value = 3
         service.transcribe_voice.return_value = {"cached": False, "text": "ok"}
         manager = VoiceTranscriptionBatchManager(service_getter=lambda: service)
@@ -376,7 +379,7 @@ class TestVoiceBatchManager(unittest.TestCase):
 
     def test_empty_batch_preserves_request_but_uses_no_workers(self):
         service = Mock(spec=VoiceTranscriptionService)
-        service.config = VoiceTranscriptionConfig(model="small", device="cpu")
+        service.config = VoiceTranscriptionConfig(model="turbo", device="cpu")
         manager = VoiceTranscriptionBatchManager(service_getter=lambda: service)
         with tempfile.TemporaryDirectory() as tmp, patch(
             "wechat_decrypt_tool.voice_transcription.list_voice_server_ids",
@@ -400,7 +403,7 @@ class TestVoiceBatchManager(unittest.TestCase):
 
     def test_batch_runs_multiple_voice_transcriptions_in_parallel(self):
         service = Mock(spec=VoiceTranscriptionService)
-        service.config = VoiceTranscriptionConfig(model="small", device="cpu")
+        service.config = VoiceTranscriptionConfig(model="turbo", device="cpu")
         service.configure_inference_concurrency.return_value = 2
         state_lock = threading.Lock()
         both_entered = threading.Event()
@@ -459,7 +462,7 @@ class TestVoiceBatchManager(unittest.TestCase):
 
     def test_batch_cancel_stops_dispatching_new_voice_items(self):
         service = Mock(spec=VoiceTranscriptionService)
-        service.config = VoiceTranscriptionConfig(model="small", device="cpu")
+        service.config = VoiceTranscriptionConfig(model="turbo", device="cpu")
         service.configure_inference_concurrency.return_value = 2
         entered_lock = threading.Lock()
         two_entered = threading.Event()
@@ -517,7 +520,7 @@ class TestVoiceBatchManager(unittest.TestCase):
                 return segments(), SimpleNamespace(language="zh", duration=1.0)
 
         service = VoiceTranscriptionService(
-            VoiceTranscriptionConfig(model="small", device="cpu"),
+            VoiceTranscriptionConfig(model="turbo", device="cpu"),
             model_loader=lambda _config: BlockingModel(),
         )
         manager = VoiceTranscriptionBatchManager(service_getter=lambda: service)
@@ -579,7 +582,7 @@ class TestVoiceBatchManager(unittest.TestCase):
         inference_entered = threading.Event()
         release_inference = threading.Event()
         service = Mock(spec=VoiceTranscriptionService)
-        service.config = VoiceTranscriptionConfig(model="small", device="cpu")
+        service.config = VoiceTranscriptionConfig(model="turbo", device="cpu")
         service.ensure_available.return_value = {"available": True}
         service.configure_inference_concurrency.return_value = 1
 
@@ -590,7 +593,7 @@ class TestVoiceBatchManager(unittest.TestCase):
 
         service.transcribe_voice.side_effect = transcribe
         replacement = Mock(spec=VoiceTranscriptionService)
-        replacement.config = VoiceTranscriptionConfig(model="small", device="cpu")
+        replacement.config = VoiceTranscriptionConfig(model="turbo", device="cpu")
         module = voice_transcription_module
         with tempfile.TemporaryDirectory() as tmp:
             with (
@@ -669,7 +672,7 @@ class TestVoiceBatchManager(unittest.TestCase):
 
     def test_batch_counts_voice_message_without_audio_as_failed(self):
         service = Mock(spec=VoiceTranscriptionService)
-        service.config = VoiceTranscriptionConfig(model="small")
+        service.config = VoiceTranscriptionConfig(model="turbo")
         service.transcribe_voice.side_effect = VoiceTranscriptionError("voice_not_found", "未找到语音数据。")
         manager = VoiceTranscriptionBatchManager(service_getter=lambda: service)
 
@@ -718,7 +721,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
             base = Path(tmp)
             data_dir = base / "data"
             output_dir = base / "migrated-output"
-            legacy = output_dir / "voice_models" / "small"
+            legacy = output_dir / "voice_models" / "turbo"
             legacy.mkdir(parents=True)
             for filename in ("model.bin", "config.json", "tokenizer.json", "vocabulary.json"):
                 (legacy / filename).write_bytes(b"ready")
@@ -729,7 +732,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
             ):
                 self.assertEqual(get_voice_model_storage_root(), data_dir / "voice_models")
                 self.assertEqual(get_legacy_voice_model_storage_root(), output_dir / "voice_models")
-                readiness = inspect_model_readiness("small")
+                readiness = inspect_model_readiness("turbo")
 
         self.assertTrue(readiness["ready"])
         self.assertEqual(readiness["source"], "legacy-output-cache")
@@ -769,7 +772,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
                 ),
             ):
                 manager = VoiceModelDownloadManager()
-                job = manager.start("small")
+                job = manager.start("turbo")
                 deadline = time.time() + 2
                 while time.time() < deadline:
                     job = manager.get(job["jobId"])
@@ -777,14 +780,14 @@ class TestVoiceModelDeletion(unittest.TestCase):
                         break
                     time.sleep(0.01)
 
-            final_ready = (managed_root / "small" / "model.bin").is_file()
-            stages_left = list(managed_root.glob(".small.download-*"))
+            final_ready = (managed_root / "turbo" / "model.bin").is_file()
+            stages_left = list(managed_root.glob(".turbo.download-*"))
 
         self.assertEqual(job["status"], "done")
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][0], "small")
+        self.assertEqual(calls[0][0], "turbo")
         self.assertEqual(calls[0][1].parent, managed_root)
-        self.assertTrue(calls[0][1].name.startswith(".small.download-"))
+        self.assertTrue(calls[0][1].name.startswith(".turbo.download-"))
         self.assertTrue(final_ready)
         self.assertEqual(stages_left, [])
         self.assertEqual(job["stage"], "done")
@@ -799,7 +802,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
             return_value=Path(tmp) / "voice_models",
         ), self.assertLogs("wechat_decrypt_tool.voice_transcription", level="ERROR") as logs:
             manager = VoiceModelDownloadManager()
-            job = manager.start("small")
+            job = manager.start("turbo")
             deadline = time.time() + 2
             while time.time() < deadline:
                 job = manager.get(job["jobId"])
@@ -809,7 +812,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
 
         self.assertEqual(job["status"], "error")
         self.assertIn("HTTPS 安全连接失败", job["error"])
-        self.assertIn("[voice-model-download] failed model=small", "\n".join(logs.output))
+        self.assertIn("[voice-model-download] failed model=turbo", "\n".join(logs.output))
 
     def test_snapshot_download_reports_huggingface_aggregate_bytes(self):
         calls = []
@@ -868,13 +871,13 @@ class TestVoiceModelDeletion(unittest.TestCase):
         ):
             target = Path(tmp) / "stage"
             result = _download_voice_model_snapshot(
-                "small",
+                "turbo",
                 output_dir=target,
                 progress_callback=lambda **value: progress.append(value),
             )
 
         self.assertEqual(result, target)
-        self.assertEqual(calls[0][0], "Systran/faster-whisper-small")
+        self.assertEqual(calls[0][0], "mobiuslabsgmbh/faster-whisper-large-v3-turbo")
         self.assertTrue(calls[0][1]["dry_run"])
         self.assertNotIn("dry_run", calls[1][1])
         byte_updates = [item for item in progress if item["stage"] == "downloading"]
@@ -932,7 +935,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
             side_effect=fake_snapshot,
         ):
             _download_voice_model_snapshot(
-                "small",
+                "turbo",
                 output_dir=Path(tmp) / "stage",
                 progress_callback=lambda **value: progress.append(value),
             )
@@ -997,7 +1000,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
         ), patch.object(base_tqdm, "close", new=counted_close):
             with self.assertRaises(ExpectedCancellation):
                 _download_voice_model_snapshot(
-                    "small",
+                    "turbo",
                     output_dir=Path(tmp) / "stage",
                     progress_callback=on_progress,
                 )
@@ -1062,7 +1065,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
         ), patch.object(base_tqdm, "close", new=counted_close):
             with self.assertRaises(ExpectedCancellation):
                 _download_voice_model_snapshot(
-                    "small",
+                    "turbo",
                     output_dir=Path(tmp) / "stage",
                     progress_callback=on_progress,
                 )
@@ -1118,7 +1121,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
                 ),
             ):
                 manager = VoiceModelDownloadManager()
-                job = manager.start("small")
+                job = manager.start("turbo")
                 self.assertTrue(entered.wait(1))
                 active = manager.get(job["jobId"])
                 self.assertEqual(active["status"], "running")
@@ -1162,12 +1165,12 @@ class TestVoiceModelDeletion(unittest.TestCase):
             return_value=SimpleNamespace(config=VoiceTranscriptionConfig(model="medium")),
         ):
             manager = VoiceModelDownloadManager()
-            first = manager.start("small")
+            first = manager.start("turbo")
             self.assertTrue(entered.wait(1))
             try:
-                self.assertEqual(manager.start("small")["jobId"], first["jobId"])
+                self.assertEqual(manager.start("turbo")["jobId"], first["jobId"])
                 with self.assertRaises(VoiceTranscriptionError) as raised:
-                    manager.start("base")
+                    manager.start("zipformer-small-ctc-int8")
             finally:
                 release.set()
                 deadline = time.time() + 2
@@ -1181,8 +1184,8 @@ class TestVoiceModelDeletion(unittest.TestCase):
     def test_incomplete_managed_download_is_deletable(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "voice_models"
-            target = root / "small"
-            stage = root / ".small.download-interrupted"
+            target = root / "turbo"
+            stage = root / ".turbo.download-interrupted"
             target.mkdir(parents=True)
             stage.mkdir()
             (target / "model.bin").write_bytes(b"partial")
@@ -1196,8 +1199,8 @@ class TestVoiceModelDeletion(unittest.TestCase):
                 patch("wechat_decrypt_tool.voice_transcription.VOICE_TRANSCRIPTION_BATCH_MANAGER.has_active_model", return_value=False),
                 patch("wechat_decrypt_tool.voice_transcription.get_voice_transcription_service", return_value=SimpleNamespace(config=VoiceTranscriptionConfig(model="medium"))),
             ):
-                readiness = inspect_model_readiness("small")
-                deleted = delete_voice_model("small")
+                readiness = inspect_model_readiness("turbo")
+                deleted = delete_voice_model("turbo")
 
         self.assertFalse(readiness["ready"])
         self.assertTrue(readiness["deletable"])
@@ -1248,12 +1251,12 @@ class TestVoiceModelDeletion(unittest.TestCase):
                     return_value=SimpleNamespace(config=VoiceTranscriptionConfig(model="medium")),
                 ),
             ):
-                job = manager.start("small")
+                job = manager.start("turbo")
                 self.assertTrue(entered.wait(1))
 
                 def delete_model():
                     try:
-                        delete_result.append(delete_voice_model("small"))
+                        delete_result.append(delete_voice_model("turbo"))
                     except Exception as exc:  # pragma: no cover - asserted below
                         delete_errors.append(exc)
 
@@ -1264,18 +1267,18 @@ class TestVoiceModelDeletion(unittest.TestCase):
                 # Deletion must wait for the worker to leave its download call.
                 self.assertTrue(delete_thread.is_alive())
                 with self.assertRaises(VoiceTranscriptionError) as raised:
-                    manager.start("small")
+                    manager.start("turbo")
                 self.assertEqual(raised.exception.code, "model_busy")
                 with self.assertRaises(VoiceTranscriptionError) as raised:
-                    acquire_voice_model_activity("small")
+                    acquire_voice_model_activity("turbo")
                 self.assertEqual(raised.exception.code, "model_busy")
 
                 allow_download_to_return.set()
                 delete_thread.join(2)
 
                 final_job = manager.get(job["jobId"])
-                stages_left = list(root.glob(".small.download-*"))
-                target_exists = (root / "small").exists()
+                stages_left = list(root.glob(".turbo.download-*"))
+                target_exists = (root / "turbo").exists()
 
         self.assertFalse(delete_thread.is_alive())
         self.assertEqual(delete_errors, [])
@@ -1331,12 +1334,12 @@ class TestVoiceModelDeletion(unittest.TestCase):
                     return_value=SimpleNamespace(config=VoiceTranscriptionConfig(model="medium")),
                 ),
             ):
-                job = manager.start("small")
+                job = manager.start("turbo")
                 self.assertTrue(entered.wait(1))
-                result = delete_voice_model("small")
+                result = delete_voice_model("turbo")
                 final_job = manager.get(job["jobId"])
-                target_exists = (root / "small").exists()
-                stages_left = list(root.glob(".small.download-*"))
+                target_exists = (root / "turbo").exists()
+                stages_left = list(root.glob(".turbo.download-*"))
 
         self.assertTrue(result["deleted"])
         self.assertFalse(finished_normally.is_set())
@@ -1382,12 +1385,12 @@ class TestVoiceModelDeletion(unittest.TestCase):
                     return_value=SimpleNamespace(config=VoiceTranscriptionConfig(model="medium")),
                 ),
             ):
-                job = manager.start("small")
+                job = manager.start("turbo")
                 self.assertTrue(worker_entered.wait(1))
                 self.assertEqual(manager.get(job["jobId"])["status"], "queued")
 
                 delete_thread = threading.Thread(
-                    target=lambda: delete_result.append(delete_voice_model("small"))
+                    target=lambda: delete_result.append(delete_voice_model("turbo"))
                 )
                 delete_thread.start()
                 time.sleep(0.05)
@@ -1453,11 +1456,11 @@ class TestVoiceModelDeletion(unittest.TestCase):
                     return_value=SimpleNamespace(config=VoiceTranscriptionConfig(model="medium")),
                 ),
             ):
-                job = manager.start("small")
+                job = manager.start("turbo")
                 self.assertTrue(replace_entered.wait(1))
 
                 delete_thread = threading.Thread(
-                    target=lambda: delete_result.append(delete_voice_model("small"))
+                    target=lambda: delete_result.append(delete_voice_model("turbo"))
                 )
                 delete_thread.start()
                 time.sleep(0.05)
@@ -1471,8 +1474,8 @@ class TestVoiceModelDeletion(unittest.TestCase):
             self.assertEqual(final_job["status"], "cancelled")
             self.assertEqual(len(delete_result), 1)
             self.assertTrue(delete_result[0]["deleted"])
-            self.assertFalse((root / "small").exists())
-            self.assertEqual(list(root.glob(".small.download-*")), [])
+            self.assertFalse((root / "turbo").exists())
+            self.assertEqual(list(root.glob(".turbo.download-*")), [])
 
     def test_download_rejects_linked_model_root(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1490,7 +1493,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
                 return_value=root,
             ):
                 manager = VoiceModelDownloadManager()
-                job = manager.start("small")
+                job = manager.start("turbo")
                 deadline = time.time() + 2
                 while time.time() < deadline:
                     job = manager.get(job["jobId"])
@@ -1499,15 +1502,15 @@ class TestVoiceModelDeletion(unittest.TestCase):
                     time.sleep(0.01)
 
             self.assertEqual(job["status"], "error")
-            self.assertFalse((outside / "small").exists())
+            self.assertFalse((outside / "turbo").exists())
 
     def test_delete_refuses_while_model_has_active_lease(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "voice_models"
-            target = root / "small"
+            target = root / "turbo"
             target.mkdir(parents=True)
             (target / "model.bin").write_bytes(b"model")
-            activity_key = acquire_voice_model_activity("small")
+            activity_key = acquire_voice_model_activity("turbo")
             try:
                 with (
                     patch("wechat_decrypt_tool.voice_transcription.get_voice_model_storage_root", return_value=root),
@@ -1515,7 +1518,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
                     patch("wechat_decrypt_tool.voice_transcription.VOICE_TRANSCRIPTION_BATCH_MANAGER.has_active_model", return_value=False),
                 ):
                     with self.assertRaises(VoiceTranscriptionError) as raised:
-                        delete_voice_model("small")
+                        delete_voice_model("turbo")
             finally:
                 release_voice_model_activity(activity_key)
 
@@ -1525,13 +1528,15 @@ class TestVoiceModelDeletion(unittest.TestCase):
         self.assertTrue(target_still_exists)
 
     def test_model_setting_refuses_while_current_model_has_active_lease(self):
-        current = SimpleNamespace(config=VoiceTranscriptionConfig(model="small"))
-        activity_key = acquire_voice_model_activity("small")
+        current = SimpleNamespace(config=VoiceTranscriptionConfig(model="turbo"))
+        activity_key = acquire_voice_model_activity("turbo")
         try:
             with (
+                patch("wechat_decrypt_tool.voice_transcription.inspect_model_readiness", return_value={"ready": True}),
+                patch("wechat_decrypt_tool.voice_transcription.dependency_status", return_value=(True, "")),
                 patch(
                     "wechat_decrypt_tool.voice_transcription.read_effective_voice_transcription_model",
-                    return_value=("small", "user"),
+                    return_value=("turbo", "user"),
                 ),
                 patch(
                     "wechat_decrypt_tool.voice_transcription.get_voice_transcription_service",
@@ -1543,7 +1548,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
                 patch("wechat_decrypt_tool.voice_transcription._reset_voice_transcription_service") as reset,
             ):
                 with self.assertRaises(VoiceTranscriptionError) as raised:
-                    set_voice_transcription_model("base")
+                    set_voice_transcription_model("zipformer-small-ctc-int8")
         finally:
             release_voice_model_activity(activity_key)
 
@@ -1554,7 +1559,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
     def test_delete_removes_only_application_owned_model_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "voice_models"
-            target = root / "small"
+            target = root / "turbo"
             target.mkdir(parents=True)
             (target / "model.bin").write_bytes(b"model")
             outside = Path(tmp) / "shared-cache.bin"
@@ -1575,7 +1580,7 @@ class TestVoiceModelDeletion(unittest.TestCase):
                 ),
                 patch("wechat_decrypt_tool.voice_transcription._reset_voice_transcription_service"),
             ):
-                result = delete_voice_model("small")
+                result = delete_voice_model("turbo")
 
             self.assertTrue(result["deleted"])
             self.assertEqual(result["freedBytes"], 5)
@@ -1594,14 +1599,14 @@ class TestVoiceExportModelActivity(unittest.TestCase):
 
         def acquire(_model):
             events.append("acquire")
-            return "small"
+            return "turbo"
 
         with (
             patch.object(chat_export_service, "_resolve_account_dir", return_value=Path("synthetic-account")),
             patch.object(
                 chat_export_service,
                 "get_voice_transcription_service",
-                return_value=SimpleNamespace(config=VoiceTranscriptionConfig(model="small")),
+                return_value=SimpleNamespace(config=VoiceTranscriptionConfig(model="turbo")),
             ),
             patch.object(chat_export_service, "acquire_voice_model_activity", side_effect=acquire),
             patch.object(chat_export_service, "capture_voice_transcript_cache_generation", return_value=73),
@@ -1630,7 +1635,7 @@ class TestVoiceExportModelActivity(unittest.TestCase):
 
         self.assertEqual(events, ["acquire", "start"])
         self.assertEqual(job.voice_cache_generation, 73)
-        self.assertEqual(thread_type.call_args.kwargs["kwargs"]["voice_activity_key"], "small")
+        self.assertEqual(thread_type.call_args.kwargs["kwargs"]["voice_activity_key"], "turbo")
 
     def test_export_with_voice_transcription_holds_model_activity(self):
         from wechat_decrypt_tool import chat_export_service
@@ -1649,16 +1654,16 @@ class TestVoiceExportModelActivity(unittest.TestCase):
             patch.object(
                 chat_export_service,
                 "get_voice_transcription_service",
-                return_value=SimpleNamespace(config=VoiceTranscriptionConfig(model="small")),
+                return_value=SimpleNamespace(config=VoiceTranscriptionConfig(model="turbo")),
             ),
-            patch.object(chat_export_service, "acquire_voice_model_activity", return_value="small") as acquire,
+            patch.object(chat_export_service, "acquire_voice_model_activity", return_value="turbo") as acquire,
             patch.object(chat_export_service, "release_voice_model_activity") as release,
             patch.object(manager, "_run_job", side_effect=finish_export),
         ):
             manager._run_job_safe(job, Path("synthetic-account"), report_outcome=False)
 
-        acquire.assert_called_once_with("small")
-        release.assert_called_once_with("small")
+        acquire.assert_called_once_with("turbo")
+        release.assert_called_once_with("turbo")
 
 
 if __name__ == "__main__":

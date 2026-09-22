@@ -13,6 +13,8 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
   const exportResetBaseline = ref(false)
   const exportBaselineStatus = ref('unknown')
   const exportHtmlPageSize = ref(1000)
+  const exportTranscribeVoice = ref(false)
+  const exportDownloadRemoteMedia = ref(false)
   const exportMessageTypeOptions = [
     { value: 'text', label: '文本' },
     { value: 'image', label: '图片' },
@@ -778,6 +780,8 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportResetBaseline.value = false
     exportBaselineStatus.value = exportFolder.value ? 'auto' : 'unknown'
     exportHtmlPageSize.value = 1000
+    exportTranscribeVoice.value = false
+    exportDownloadRemoteMedia.value = false
     const defaultListTab = selectedContact.value?.username ? 'current' : 'all'
     exportScope.value = 'selected'
     exportListTab.value = defaultListTab
@@ -904,7 +908,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
       mediaKindSet.add('voice')
       mediaKindSet.add('file')
     }
-    if (selectedTypeSet.has('image')) mediaKindSet.add('image')
+    if (selectedTypeSet.has('image') || selectedTypeSet.has('link')) mediaKindSet.add('image')
     if (selectedTypeSet.has('emoji')) mediaKindSet.add('emoji')
     if (selectedTypeSet.has('video')) {
       mediaKindSet.add('video')
@@ -915,6 +919,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
 
     const mediaKinds = Array.from(mediaKindSet)
     const includeMedia = !privacyMode.value && mediaKinds.length > 0
+    const transcribeVoice = !privacyMode.value && selectedTypeSet.has('voice') && !!exportTranscribeVoice.value
 
     isExportCreating.value = true
     exportAutoSavedFor.value = ''
@@ -934,6 +939,12 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
           ? 'invalid'
           : (baseline ? (missingFiles.length ? 'repair' : 'ready') : 'new')
       }
+      if (transcribeVoice) {
+        const status = await api.getVoiceTranscriptionStatus()
+        if (!status?.available) {
+          throw new Error(String(status?.reason || '本地语音模型当前不可用，请检查模型配置。'))
+        }
+      }
       const response = await api.createChatExport({
         account: selectedAccount.value,
         source: 'auto',
@@ -947,12 +958,12 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
         message_types: messageTypes,
         include_media: includeMedia,
         media_kinds: mediaKinds,
-        download_remote_media: false,
+        download_remote_media: exportFormat.value === 'html' && !!exportDownloadRemoteMedia.value && !privacyMode.value,
         html_page_size: Math.max(0, Math.floor(Number(exportHtmlPageSize.value || 1000))),
         output_dir: isDesktopExportRuntime() ? String(exportFolder.value || '').trim() : null,
         privacy_mode: !!privacyMode.value,
         file_name: isIncrementalFolderMode.value ? null : (exportFileName.value || null),
-        transcribe_voice: false,
+        transcribe_voice: transcribeVoice,
         output_mode: exportOutputMode.value,
         folder_name: isIncrementalFolderMode.value ? exportFolderNamePreview.value : null,
         baseline: isIncrementalFolderMode.value ? baseline : null,
@@ -1022,6 +1033,8 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     exportFolderNamePreview,
     isIncrementalFolderMode,
     exportHtmlPageSize,
+    exportTranscribeVoice,
+    exportDownloadRemoteMedia,
     exportMessageTypeOptions,
     exportMessageTypes,
     areAllExportMessageTypesSelected,

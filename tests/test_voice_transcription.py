@@ -799,7 +799,7 @@ class TestVoiceTranscription(unittest.TestCase):
                 return fake_model
 
             service = VoiceTranscriptionService(
-                VoiceTranscriptionConfig(device="cuda", compute_type="float16"),
+                VoiceTranscriptionConfig(model="turbo", device="cuda", compute_type="float16"),
                 model_loader=model_loader,
             )
             cuda_report = {"available": True, "deviceCount": 1, "devices": [], "reason": ""}
@@ -842,7 +842,7 @@ class TestVoiceTranscription(unittest.TestCase):
             return cuda_model if config.device == "cuda" else cpu_model
 
         service = VoiceTranscriptionService(
-            VoiceTranscriptionConfig(device="cuda", compute_type="float16"),
+            VoiceTranscriptionConfig(model="turbo", device="cuda", compute_type="float16"),
             model_loader=model_loader,
         )
         cuda_report = {"available": True, "deviceCount": 1, "devices": [], "reason": ""}
@@ -1194,7 +1194,7 @@ class TestVoiceTranscription(unittest.TestCase):
             return InvalidAudioModel()
 
         service = VoiceTranscriptionService(
-            VoiceTranscriptionConfig(device="cuda", compute_type="float16"),
+            VoiceTranscriptionConfig(model="turbo", device="cuda", compute_type="float16"),
             model_loader=model_loader,
         )
         cuda_report = {"available": True, "deviceCount": 1, "devices": [], "reason": ""}
@@ -1320,7 +1320,7 @@ class TestVoiceTranscription(unittest.TestCase):
                 return fake_model
 
             service = VoiceTranscriptionService(
-                VoiceTranscriptionConfig(),
+                VoiceTranscriptionConfig(model="turbo"),
                 model_loader=model_loader,
             )
             with patch(
