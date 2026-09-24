@@ -1357,7 +1357,13 @@ def _avatar_url(args: dict[str, Any], ctx: McpToolContext) -> dict[str, Any]:
 
 
 def _chat_image_url(args: dict[str, Any], ctx: McpToolContext) -> dict[str, Any]:
-    return _media_url("/api/chat/media/image", args, ctx, ["md5", "file_id", "server_id", "account", "username", "deep_scan", "prefer_live"])
+    # 默认比较本地候选图片的实际尺寸，避免旧缩略图缓存遮住已下载的大图。
+    args = {"prefer_live": True, **args}
+    return _media_url("/api/chat/media/image", args, ctx, [
+        "md5", "file_id", "server_id", "account", "username",
+        "src_create_time", "file_size", "record_index", "record_index_path", "record_attach",
+        "deep_scan", "prefer_live", "fetch_remote",
+    ])
 
 
 def _chat_emoji_url(args: dict[str, Any], ctx: McpToolContext) -> dict[str, Any]:
@@ -1444,7 +1450,27 @@ def _install_tools() -> None:
     _register("wechat.analytics.get_wrapped_annual", "Return full annual wrapped data. Prefer meta/card for mobile clients.", object_schema({**COMMON_ACCOUNT, "year": int_schema("Optional year.")}), _wrapped_annual, package="wechat.analytics")
 
     _register("wechat.media.get_avatar_url", "Build a URL for a contact avatar.", object_schema({**COMMON_ACCOUNT, "username": string_schema("Contact username.")}, required=["username"]), _avatar_url, package="wechat.media")
-    _register("wechat.media.get_chat_image_url", "Build a URL for a chat image message resource.", object_schema(additional_properties=True), _chat_image_url, package="wechat.media")
+    _register(
+        "wechat.media.get_chat_image_url",
+        "获取聊天图片链接，默认优先本地较高清版本。需要大图时设置 fetch_remote=true，并提供 server_id 和 username；本地缺失时尝试远程补图，可能消耗下载额度。返回链接后需实际读取图片，普通请求可能仍返回缩略图。",
+        object_schema({
+            **COMMON_ACCOUNT,
+            "md5": string_schema("图片 MD5。"),
+            "file_id": string_schema("图片文件标识。"),
+            "server_id": int_schema("原图片消息的服务端 ID，远程补图需要。"),
+            "msg_svr_id": int_schema("server_id 的兼容别名。"),
+            "username": string_schema("图片所属会话。"),
+            "src_create_time": int_schema("原消息时间戳。"),
+            "file_size": int_schema("原图片文件大小。", minimum=0),
+            "record_index": int_schema("合并转发中的图片索引。", minimum=0),
+            "record_index_path": string_schema("嵌套合并转发中的索引路径。"),
+            "record_attach": string_schema("消息返回的附件定位信息。"),
+            "deep_scan": bool_schema("允许扩大本地文件搜索范围。", default=False),
+            "prefer_live": bool_schema("比较本地候选图片尺寸，优先较高清版本。", default=True),
+            "fetch_remote": bool_schema("明确请求大图；本地缺失时尝试 CDN 下载，失败会报错。", default=False),
+        }, additional_properties=True),
+        _chat_image_url, package="wechat.media",
+    )
     _register("wechat.media.get_chat_emoji_url", "Build a URL for a chat emoji message resource.", object_schema(additional_properties=True), _chat_emoji_url, package="wechat.media")
     _register("wechat.media.get_chat_video_thumb_url", "Build a URL for a chat video thumbnail.", object_schema(additional_properties=True), _chat_video_thumb_url, package="wechat.media")
     _register("wechat.media.get_chat_video_url", "Build a URL for a chat video resource.", object_schema(additional_properties=True), _chat_video_url, package="wechat.media")
