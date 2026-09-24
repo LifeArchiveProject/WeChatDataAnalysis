@@ -154,7 +154,7 @@ def resolve_media(account, message, max_mb):
     if path is None and kind == "image" and raw.get("imageFileId"):
         path = _fallback_search_media_by_file_id(str(_resolve_account_wxid_dir(account_dir) or ''), raw["imageFileId"], kind="image", username=message["username"], allow_global_scan=False)
     if path is None:
-        raise ValueError("本机附件或图片缺失，请先在微信中下载并刷新")
+        raise ValueError("本机附件或图片缺失")
     path = Path(path)
     if path.stat().st_size > max_mb * 1024 * 1024:
         raise ValueError(f"附件超过 {max_mb} MB，请调整上限后重试")
