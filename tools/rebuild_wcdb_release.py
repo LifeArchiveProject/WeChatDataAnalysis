@@ -211,7 +211,7 @@ def main() -> None:
     with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as stream:
         for name, value in values.items():
             stream.write(f"{name}={value}\n")
-    print(f"WCDB build window: {issued_at} → {issued_at + LIFETIME_SECONDS}", flush=True)
+    print(f"WCDB build window: {issued_at} to {issued_at + LIFETIME_SECONDS}", flush=True)
 
 
 if __name__ == "__main__":
