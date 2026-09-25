@@ -12,6 +12,10 @@ const workflow = fs.readFileSync(
   path.resolve(desktopRoot, "..", ".github", "workflows", "macos-private-build.yml"),
   "utf8"
 );
+const rebuildRelease = fs.readFileSync(
+  path.resolve(desktopRoot, "..", "tools", "rebuild_wcdb_release.py"),
+  "utf8"
+);
 
 test("macOS certificate extraction uses codesign's fixed filenames in an isolated cwd", () => {
   const {
@@ -144,7 +148,10 @@ test("macOS private workflow keeps the canonical Producer and WCDA certificate v
     assert.doesNotMatch(workflow, new RegExp(`\\b${retiredAlias}\\b`));
   }
   assert.match(workflow, /WCE_NATIVE_CORE_ARTIFACT_RUN_ID/);
-  assert.match(workflow, /wechatdb-native-macos-arm64-production/);
+  assert.match(
+    rebuildRelease,
+    /"macos-native":\s*\(\s*"macos-native-production\.yml",\s*"wechatdb-native-macos-arm64-production"/
+  );
   assert.match(workflow, /macos-native-core-packaging\.cjs/);
   assert.match(workflow, /WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256/);
   assert.match(workflow, /WCE_INTEGRITY_ARTIFACT_SHA256/);
@@ -156,30 +163,30 @@ test("macOS private workflow keeps the canonical Producer and WCDA certificate v
 });
 
 test("macOS private workflow verifies the pinned integrity Release before extraction", () => {
-  assert.match(workflow, /release_tag="macos-integrity-\$WCE_INTEGRITY_BUILD_ID"/);
   assert.match(
-    workflow,
-    /asset_name="wce-integrity-macos-arm64-production-\$WCE_INTEGRITY_BUILD_ID\.zip"/
+    rebuildRelease,
+    /"macos-integrity":\s*\(\s*"macos-integrity-production\.yml",\s*"wce-integrity-macos-arm64-production"/
   );
-  assert.match(workflow, /gh release download "\$release_tag"/);
-  assert.match(workflow, /shasum -a 256 "\$archive"/);
-  assert.match(workflow, /test "\$actual_sha256" = "\$WCE_INTEGRITY_ARTIFACT_SHA256"/);
-  assert.match(workflow, /\/usr\/bin\/unzip -q "\$archive" -d "\$artifact_dir"/);
-  assert.doesNotMatch(
-    workflow,
-    /gh run download "\$WCE_INTEGRITY_ARTIFACT_RUN_ID"/
-  );
+  assert.match(rebuildRelease, /tag = f"\{component\}-\{build_id\}"/);
+  assert.match(rebuildRelease, /asset_name = f"\{artifact_name\}-\{build_id\}\.zip"/);
+  assert.match(rebuildRelease, /release = api\(f"releases\/tags\/\{tag\}"\)/);
+  assert.match(rebuildRelease, /release\.get\("target_commitish"\) != revision/);
+  assert.match(rebuildRelease, /releases\/assets\/\{asset\['id'\]\}/);
+  assert.match(rebuildRelease, /"Accept: application\/octet-stream"/);
+  assert.match(rebuildRelease, /expected_digest = asset\.get\("digest"\)/);
+  assert.match(rebuildRelease, /f"sha256:\{digest\}" != expected_digest/);
+  assert.match(rebuildRelease, /WCE_INTEGRITY_BINARY_SHA256/);
 
-  const downloadIndex = workflow.indexOf('gh release download "$release_tag"');
-  const hashIndex = workflow.indexOf('shasum -a 256 "$archive"');
-  const extractIndex = workflow.indexOf('/usr/bin/unzip -q "$archive"');
-  assert.ok(downloadIndex >= 0 && downloadIndex < hashIndex);
+  const releaseIndex = rebuildRelease.indexOf('release = api(f"releases/tags/{tag}")');
+  const targetIndex = rebuildRelease.indexOf('release.get("target_commitish")');
+  const digestIndex = rebuildRelease.indexOf('expected_digest = asset.get("digest")');
+  const downloadIndex = rebuildRelease.indexOf("releases/assets/{asset['id']}");
+  const hashIndex = rebuildRelease.indexOf('digest = hashlib.file_digest(archive, "sha256")');
+  const extractIndex = rebuildRelease.indexOf("package.extractall(destination)");
+  assert.ok(releaseIndex >= 0 && releaseIndex < targetIndex);
+  assert.ok(targetIndex < digestIndex);
+  assert.ok(digestIndex < downloadIndex);
+  assert.ok(downloadIndex < hashIndex);
   assert.ok(hashIndex < extractIndex);
-});
-
-test("macOS private workflow retries transient Producer artifact downloads from a clean directory", () => {
-  assert.match(workflow, /for attempt in 1 2 3/);
-  assert.match(workflow, /rm -rf "\$artifact_dir"[\s\S]*gh run download/);
-  assert.match(workflow, /if gh run download[\s\S]*downloaded=1[\s\S]*break/);
-  assert.match(workflow, /test "\$downloaded" = 1/);
+  assert.doesNotMatch(rebuildRelease, /actions\/runs\/\{run_id\}\/artifacts/);
 });
