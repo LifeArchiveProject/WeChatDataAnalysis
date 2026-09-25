@@ -5,9 +5,13 @@ Windows and macOS packaging rebuild their WCDB components from the current
 the current UTC time. The signed components and their manifests expire exactly
 45 days after that time. A failed producer stops packaging.
 
-`tools/rebuild_wcdb_release.py` downloads artifacts from those exact producer
-runs, verifies GitHub's archive SHA-256 and the new build window, and supplies
-the artifact coordinates to the existing signature and provenance checks.
+`tools/rebuild_wcdb_release.py` downloads the exact Release asset for each
+producer run. The tag is `<component>-<build-id>` and the asset is
+`<artifact-name>-<build-id>.zip`; the script requires the Release target to
+equal the producer revision, verifies GitHub's asset `digest` against the
+downloaded ZIP, and checks the new build window before supplying coordinates to
+the existing signature and provenance checks. It does not use Actions artifact
+storage or an older Release as a fallback.
 The macOS native core, key helper and export-integrity module are built in
 parallel. The integrity module uses the exact WeChatDataAnalysis revision being
 packaged.

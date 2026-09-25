@@ -119,25 +119,37 @@ def wait_for_build(build: dict, revision: str) -> int:
 def download(build: dict, run_id: int, revision: str, issued_at: int, output_root: Path) -> dict:
     component = build["component"]
     _, artifact_name, directory_name, prefix, manifest_name = COMPONENTS[component]
-    artifacts = api(f"actions/runs/{run_id}/artifacts")["artifacts"]
-    artifact = next(item for item in artifacts if item["name"] == artifact_name)
-    if artifact["expired"]:
-        raise RuntimeError(f"Producer artifact has expired: {artifact_name}")
-    expected_digest = artifact["digest"]
+    build_id = build["build_id"]
+    tag = f"{component}-{build_id}"
+    asset_name = f"{artifact_name}-{build_id}.zip"
+    release = api(f"releases/tags/{tag}")
+    if release.get("target_commitish") != revision:
+        raise RuntimeError(f"Producer Release target does not match {revision}: {tag}")
+    assets = [item for item in release.get("assets", []) if item.get("name") == asset_name]
+    if len(assets) != 1:
+        raise RuntimeError(f"Producer Release must contain exactly one asset: {asset_name}")
+    asset = assets[0]
+    expected_digest = asset.get("digest")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_digest or ""):
-        raise RuntimeError(f"Producer artifact has no SHA-256 digest: {artifact_name}")
+        raise RuntimeError(f"Producer Release asset has no SHA-256 digest: {asset_name}")
     destination = output_root / directory_name
     destination.mkdir(parents=True, exist_ok=False)
     with tempfile.TemporaryFile() as archive:
         subprocess.run(
-            ["gh", "api", f"repos/{REPOSITORY}/actions/artifacts/{artifact['id']}/zip"],
+            [
+                "gh",
+                "api",
+                f"repos/{REPOSITORY}/releases/assets/{asset['id']}",
+                "--header",
+                "Accept: application/octet-stream",
+            ],
             stdout=archive,
             check=True,
         )
         archive.seek(0)
         digest = hashlib.file_digest(archive, "sha256").hexdigest()
         if f"sha256:{digest}" != expected_digest:
-            raise RuntimeError(f"Producer artifact digest mismatch: {artifact_name}")
+            raise RuntimeError(f"Producer Release asset digest mismatch: {asset_name}")
         archive.seek(0)
         with zipfile.ZipFile(archive) as package:
             package.extractall(destination)
