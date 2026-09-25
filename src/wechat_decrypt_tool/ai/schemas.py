@@ -21,7 +21,7 @@ class ProviderInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     provider: Literal[
         "deepseek", "xiaomi", "claude", "kimi", "openai", "gemini", "qwen", "zhipu",
-        "doubao", "siliconflow", "openrouter", "groq", "ollama", "lmstudio", "custom",
+        "doubao", "siliconflow", "openrouter", "requesty", "groq", "ollama", "lmstudio", "custom",
     ] = "deepseek"
     protocol: Literal["openai", "anthropic"] = "openai"
     base_url: str = Field(min_length=1, max_length=2048)

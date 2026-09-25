@@ -175,6 +175,7 @@ const providerPresentation = {
   doubao: { label: '豆包', caption: '火山方舟', hint: '火山方舟 · 国内通用接口', aliases: '字节 火山引擎 Volcengine Ark' },
   siliconflow: { caption: 'SiliconCloud', hint: '硅基流动 · 国内模型服务', aliases: 'SiliconCloud' },
   openrouter: { caption: '多模型聚合服务', hint: '聚合多个服务商的模型', aliases: '' },
+  requesty: { caption: '多模型聚合服务', hint: '聚合多个服务商的模型', aliases: '' },
   groq: { hint: 'Groq 官方兼容接口', aliases: '' },
   ollama: { caption: '本地模型服务', hint: '本地模型 · 默认端口 11434', aliases: '本机 local' },
   lmstudio: { caption: '本地模型服务', hint: '本地模型 · 默认端口 1234', aliases: '本机 local' },

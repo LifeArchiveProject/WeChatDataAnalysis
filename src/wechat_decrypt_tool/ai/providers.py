@@ -57,6 +57,7 @@ PRESETS = [
     {"provider": "doubao", "name": "豆包（火山方舟）", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "protocol": "openai"},
     {"provider": "siliconflow", "name": "硅基流动", "base_url": "https://api.siliconflow.cn/v1", "protocol": "openai"},
     {"provider": "openrouter", "name": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "protocol": "openai"},
+    {"provider": "requesty", "name": "Requesty", "base_url": "https://router.requesty.ai/v1", "protocol": "openai"},
     {"provider": "groq", "name": "Groq", "base_url": "https://api.groq.com/openai/v1", "protocol": "openai"},
     {"provider": "ollama", "name": "Ollama", "base_url": "http://127.0.0.1:11434/v1", "protocol": "openai"},
     {"provider": "lmstudio", "name": "LM Studio", "base_url": "http://127.0.0.1:1234/v1", "protocol": "openai"},

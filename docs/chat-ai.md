@@ -16,7 +16,7 @@
 
 ### AI 服务预设
 
-「新增服务」提供 14 项预设：DeepSeek、Claude、Kimi、OpenAI、Google Gemini、通义千问（阿里云百炼）、智谱 GLM、豆包（火山方舟）、硅基流动、OpenRouter、Groq、Ollama、LM Studio 和自定义。可以按名称或别名搜索，例如「谷歌」「千问」「GLM」「火山」；自定义入口排在列表末尾。
+「新增服务」提供 15 项预设：DeepSeek、Claude、Kimi、OpenAI、Google Gemini、通义千问（阿里云百炼）、智谱 GLM、豆包（火山方舟）、硅基流动、OpenRouter、Requesty、Groq、Ollama、LM Studio 和自定义。可以按名称或别名搜索，例如「谷歌」「千问」「GLM」「火山」；自定义入口排在列表末尾。
 
 预设会填写配置名称、API 地址和协议，地址仍可修改。国内平台默认使用国内通用 API 地址，不是 Coding Plan 专用入口。Gemini 使用 `/v1beta/openai` 兼容接口。切换预设会清空密钥、模型选择和图片能力，需要重新确认；不会复用原服务的密钥。
 

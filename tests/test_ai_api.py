@@ -19,8 +19,8 @@ def test_all_presets_can_be_created_read_and_edited(tmp_path):
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 1)), base_url="http://localhost") as client:
             presets = (await client.get("/api/ai/settings")).json()["presets"]
-            assert len(presets) == 15
-            assert {p["provider"] for p in presets} == {"deepseek", "xiaomi", "claude", "kimi", "custom", "openai", "gemini", "qwen", "zhipu", "doubao", "siliconflow", "openrouter", "groq", "ollama", "lmstudio"}
+            assert len(presets) == 16
+            assert {p["provider"] for p in presets} == {"deepseek", "xiaomi", "claude", "kimi", "custom", "openai", "gemini", "qwen", "zhipu", "doubao", "siliconflow", "openrouter", "requesty", "groq", "ollama", "lmstudio"}
             assert presets[-1]["provider"] == "custom"
             for preset in presets:
                 assert "model" not in preset
@@ -35,7 +35,7 @@ def test_all_presets_can_be_created_read_and_edited(tmp_path):
             settings = await client.get("/api/ai/settings")
             assert "private-key" not in settings.text
             profiles = settings.json()["profiles"]
-            assert len(profiles) == 15
+            assert len(profiles) == 16
             assert all(p["name"] == "已编辑" and p["model"] == "another-model" for p in profiles)
             assert {p["provider"] for p in profiles} == {p["provider"] for p in presets}
             assert (await client.post("/api/ai/profiles", json={**presets[0], "provider": "unknown", "model": "test"})).status_code == 422
