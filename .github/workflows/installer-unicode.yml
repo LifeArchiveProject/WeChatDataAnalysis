@@ -7,6 +7,8 @@ on:
       - 'desktop/**'
       - '.github/workflows/installer-unicode.yml'
       - '.github/workflows/release.yml'
+      - '.github/workflows/macos-private-build.yml'
+      - 'tools/rebuild_wcdb_release.py'
       - '.gitattributes'
   push:
     branches: [main]
@@ -14,6 +16,8 @@ on:
       - 'desktop/**'
       - '.github/workflows/installer-unicode.yml'
       - '.github/workflows/release.yml'
+      - '.github/workflows/macos-private-build.yml'
+      - 'tools/rebuild_wcdb_release.py'
       - '.gitattributes'
 
 permissions:
@@ -43,16 +47,18 @@ jobs:
       - name: Install locked test dependencies
         working-directory: desktop
         run: npm ci --ignore-scripts
-      - name: Verify Unicode install, upgrade, settings and data migration
+      - name: Verify release configuration and Unicode installation
         working-directory: desktop
         shell: pwsh
         run: |
           node --test `
+            tests/package-config.test.cjs `
+            tests/macos-xkey-signing.test.cjs `
             tests/desktop-settings.test.cjs `
             tests/output-dir.test.cjs `
             tests/installer-output-dir.test.cjs `
             tests/installer-safety.test.cjs `
             tests/installer-unicode-integration.test.cjs
           if ($LASTEXITCODE -ne 0) {
-            throw 'Windows installer Unicode regression tests failed.'
+            throw 'Release configuration or installer checks failed.'
           }
