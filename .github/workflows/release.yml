@@ -52,28 +52,34 @@ jobs:
           "TAG_NAME=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: .python-version
+
+      - name: Rebuild Windows native core for this release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.WCE_NATIVE_CORE_PRODUCER_TOKEN }}
+        run: |
+          python tools/rebuild_wcdb_release.py `
+            --component windows-native `
+            --output-root $env:RUNNER_TEMP
+
       - name: Require pinned native artifact source
         id: native-artifact-source
         shell: pwsh
         env:
-          # The artifact repository identifies the producer; the download
-          # repository identifies where the immutable asset is hosted.
-          NATIVE_ARTIFACT_REPOSITORY: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_REPOSITORY }}
-          NATIVE_ARTIFACT_DOWNLOAD_REPOSITORY: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY }}
-          NATIVE_ARTIFACT_RUN_ID: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_RUN_ID }}
-          NATIVE_ARTIFACT_SHA256: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_SHA256 }}
-          NATIVE_SOURCE_REVISION: ${{ vars.WCE_NATIVE_CORE_SOURCE_REVISION }}
-          NATIVE_BUILD_ID: ${{ vars.WCE_NATIVE_CORE_BUILD_ID }}
           NATIVE_CLIENT_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 }}
           NATIVE_BROKER_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_BROKER_SIGNER_SHA256 }}
           PRIVATE_ROOT_SHA256: ${{ vars.WCE_WINDOWS_PRIVATE_ROOT_SHA256 }}
         run: |
-          $repository = [string]$env:NATIVE_ARTIFACT_REPOSITORY
+          $repository = [string]$env:WCE_NATIVE_CORE_ARTIFACT_REPOSITORY
           $repository = $repository.Trim()
           if ($repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
             throw "WCE_NATIVE_CORE_ARTIFACT_REPOSITORY must be an explicit owner/repository value."
           }
-          $downloadRepository = [string]$env:NATIVE_ARTIFACT_DOWNLOAD_REPOSITORY
+          $downloadRepository = [string]$env:WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY
           $downloadRepository = $downloadRepository.Trim()
           if ([string]::IsNullOrWhiteSpace($downloadRepository)) {
             $downloadRepository = $repository
@@ -81,23 +87,23 @@ jobs:
             throw "WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY must be an explicit owner/repository value."
           }
 
-          $rawRunId = ([string]$env:NATIVE_ARTIFACT_RUN_ID).Trim()
+          $rawRunId = ([string]$env:WCE_NATIVE_CORE_ARTIFACT_RUN_ID).Trim()
           [long]$runId = 0
           if (-not [long]::TryParse($rawRunId, [ref]$runId) -or $runId -le 0) {
             throw "WCE_NATIVE_CORE_ARTIFACT_RUN_ID must be an explicit positive workflow run ID."
           }
 
-          $artifactSha256 = ([string]$env:NATIVE_ARTIFACT_SHA256).Trim().ToLowerInvariant()
+          $artifactSha256 = ([string]$env:WCE_NATIVE_CORE_ARTIFACT_SHA256).Trim().ToLowerInvariant()
           if ($artifactSha256 -cnotmatch '^[0-9a-f]{64}$' -or
               $artifactSha256 -match '^0{64}$') {
             throw "WCE_NATIVE_CORE_ARTIFACT_SHA256 must be a non-zero lowercase SHA-256 digest."
           }
 
-          $sourceRevision = ([string]$env:NATIVE_SOURCE_REVISION).Trim()
+          $sourceRevision = ([string]$env:WCE_NATIVE_CORE_SOURCE_REVISION).Trim()
           if ($sourceRevision -cnotmatch '^[0-9a-f]{40}$') {
             throw "WCE_NATIVE_CORE_SOURCE_REVISION must be an exact lowercase 40-character Git revision."
           }
-          $buildId = ([string]$env:NATIVE_BUILD_ID).Trim()
+          $buildId = ([string]$env:WCE_NATIVE_CORE_BUILD_ID).Trim()
           if ($buildId -notmatch '^[A-Za-z0-9._-]{8,128}$' -or
               $buildId -match '(^|[._-])(dev|debug|test|local|snapshot|staging)([._-]|$)') {
             throw "WCE_NATIVE_CORE_BUILD_ID must be an immutable production build ID."
@@ -198,42 +204,6 @@ jobs:
           cache-dependency-path: |
             frontend/package-lock.json
             desktop/package-lock.json
-
-      - name: Download pinned native source-public release asset
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN }}
-          NATIVE_REPOSITORY: ${{ steps.native-artifact-source.outputs.download-repository }}
-          NATIVE_BUILD_ID: ${{ steps.native-artifact-source.outputs.build-id }}
-          NATIVE_ARTIFACT_SHA256: ${{ steps.native-artifact-source.outputs.artifact-sha256 }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-            throw "WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN is required to download the private native Release."
-          }
-          $releaseTag = "windows-native-$env:NATIVE_BUILD_ID"
-          $assetName = "wechatdb-native-windows-x64-source-public-$env:NATIVE_BUILD_ID.zip"
-          $archivePath = Join-Path $env:RUNNER_TEMP $assetName
-          $artifactPath = Join-Path $env:RUNNER_TEMP 'wechatdb-native-windows-x64-source-public'
-          if ((Test-Path -LiteralPath $archivePath) -or
-              (Test-Path -LiteralPath $artifactPath)) {
-            throw "Native Release destination already exists on the clean runner."
-          }
-
-          gh release download $releaseTag `
-            --repo $env:NATIVE_REPOSITORY `
-            --pattern $assetName `
-            --dir $env:RUNNER_TEMP
-          if ($LASTEXITCODE -ne 0 -or
-              -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
-            throw "Failed to download the exact native source-public Release asset."
-          }
-
-          $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualSha256 -cne $env:NATIVE_ARTIFACT_SHA256) {
-            throw "Native source-public Release asset SHA-256 does not match the pinned digest."
-          }
-          New-Item -ItemType Directory -Path $artifactPath | Out-Null
-          Expand-Archive -LiteralPath $archivePath -DestinationPath $artifactPath
 
       - name: Import protected cloud signing identity
         id: cloud-signing
@@ -417,11 +387,6 @@ jobs:
             Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "WCE_NATIVE_CORE_SECURITY_CHECKPOINT_SET_SHA256=$($manifest.securityCheckpointSetSha256)" |
             Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Setup Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version-file: .python-version
 
       - name: Install uv
         shell: pwsh
