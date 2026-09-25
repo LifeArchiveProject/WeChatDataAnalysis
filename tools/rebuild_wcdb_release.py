@@ -100,14 +100,14 @@ def wait_for_build(build: dict, revision: str) -> int:
         if run_id is None:
             time.sleep(5)
     print(f"Waiting for https://github.com/{REPOSITORY}/actions/runs/{run_id}", flush=True)
-    subprocess.run(
-        ["gh", "run", "watch", str(run_id), "--repo", REPOSITORY, "--exit-status"],
-        check=True,
-    )
     run = api(f"actions/runs/{run_id}")
+    while run["status"] != "completed":
+        time.sleep(10)
+        run = api(f"actions/runs/{run_id}")
+    if run["conclusion"] != "success":
+        raise RuntimeError(f"WCDB producer {run_id} finished with {run['conclusion']}")
     if (
-        run["conclusion"] != "success"
-        or run["head_sha"] != revision
+        run["head_sha"] != revision
         or run["head_branch"] != "main"
         or run["event"] != "workflow_dispatch"
         or run["path"] != f".github/workflows/{build['workflow']}"
