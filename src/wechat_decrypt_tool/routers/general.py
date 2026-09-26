@@ -357,6 +357,57 @@ def _decode_varint(raw: bytes, idx: int) -> tuple[int | None, int]:
     return None, start
 
 
+def _parse_friend_verification_detail_expired(detail_buffer: Any) -> bool | None:
+    raw = _coerce_blob_bytes(detail_buffer)
+    if not raw:
+        return None
+
+    idx = 0
+    while idx < len(raw):
+        tag, next_idx = _decode_varint(raw, idx)
+        if tag is None or tag == 0 or next_idx <= idx:
+            return None
+        idx = next_idx
+        field_no = tag >> 3
+        wire_type = tag & 0x7
+
+        if wire_type == 0:
+            value, next_idx = _decode_varint(raw, idx)
+            if value is None or next_idx <= idx:
+                return None
+            idx = next_idx
+            if field_no == 4:
+                return bool(value)
+            continue
+
+        if wire_type == 1:
+            if idx + 8 > len(raw):
+                return None
+            idx += 8
+            continue
+
+        if wire_type == 2:
+            size, next_idx = _decode_varint(raw, idx)
+            if size is None or next_idx <= idx:
+                return None
+            idx = next_idx
+            end = idx + int(size)
+            if end > len(raw):
+                return None
+            idx = end
+            continue
+
+        if wire_type == 5:
+            if idx + 4 > len(raw):
+                return None
+            idx += 4
+            continue
+
+        return None
+
+    return None
+
+
 def _decode_probable_utf8(raw: bytes) -> str:
     if not raw:
         return ""
@@ -868,6 +919,69 @@ def _resolve_general_contacts(
     return out
 
 
+def _load_friend_verification_contact_flags(
+    ctx: Any,
+    *,
+    source: str,
+    usernames: list[str],
+) -> tuple[dict[str, bool], bool]:
+    targets = list(dict.fromkeys([_text(username) for username in usernames if _text(username)]))
+    if not targets:
+        return {}, True
+
+    try:
+        if str(source or "").strip().lower() == "realtime":
+            conn = _open_realtime_db_source(ctx, db_group="contact", db_name="contact.db")
+        else:
+            conn = _open_db_source(
+                ctx,
+                source="decrypted",
+                db_group="contact",
+                db_name="contact.db",
+                decrypted_name="contact.db",
+            )
+        with conn:
+            names_sql = ",".join("'" + username.replace("'", "''") + "'" for username in targets)
+            rows = conn.execute(f"SELECT username, flag FROM contact WHERE username IN ({names_sql})").fetchall()
+    except Exception:
+        return {}, False
+
+    out: dict[str, bool] = {}
+    for row in rows:
+        username = _text(row["username"])
+        out[username] = bool(_safe_int(row["flag"], 0) & 1)
+    return out, True
+
+
+def _friend_verification_state(
+    *,
+    is_sender: bool,
+    type_value: int,
+    timestamp: int,
+    detail_expired: bool | None,
+    contact_flags_available: bool,
+    contact_added: bool,
+    now_ts: float,
+) -> tuple[str, bool]:
+    if type_value != 37 or not contact_flags_available:
+        return "unknown", False
+    if contact_added:
+        return "accepted", False
+    if detail_expired is None:
+        return "unknown", False
+
+    expired = detail_expired is True
+    if timestamp > 0 and now_ts - float(timestamp) > 259200.0:
+        expired = True
+    if expired:
+        return "expired", False
+    if timestamp > 0 and detail_expired is False:
+        if is_sender:
+            return "outgoing", False
+        return "pending", True
+    return "unknown", False
+
+
 def _attach_contact(
     item: dict[str, Any],
     contact_map: dict[str, dict[str, Any]],
@@ -1323,6 +1437,7 @@ def list_friend_verifications(
     source: str = Query("auto", pattern="^(auto|realtime|decrypted)$"),
     limit: int = Query(80, ge=1, le=_MAX_LIMIT),
     offset: int = Query(0, ge=0),
+    pendingOnly: bool = False,
 ):
     ctx, db_path = _general_context(account)
     account_name = ctx.name
@@ -1330,6 +1445,7 @@ def list_friend_verifications(
     offset = _clamp_offset(offset)
     items: list[dict[str, Any]] = []
     usernames: list[str] = []
+    verification_details: list[tuple[dict[str, Any], bool | None]] = []
     meta: dict[str, str] = {}
     with _open_general_source(ctx, source) as conn:
         meta = _source_meta(conn)
@@ -1337,6 +1453,7 @@ def list_friend_verifications(
             """
             SELECT user_name_, type_, timestamp_, encrypt_user_name_, content_, is_sender_,
                    ticket_, scene_, length(CAST(fmessage_detail_buf_ AS BLOB)) AS fmessage_detail_size_,
+                   hex(CAST(fmessage_detail_buf_ AS BLOB)) AS fmessage_detail_hex_,
                    remark_, label_ids_
             FROM FMessageTable
             ORDER BY timestamp_ DESC
@@ -1361,6 +1478,33 @@ def list_friend_verifications(
                 "labelIds": _text(r["label_ids_"]),
             }
             items.append(item)
+            verification_details.append(
+                (item, _parse_friend_verification_detail_expired(r["fmessage_detail_hex_"]))
+            )
+
+    contact_flags, contact_flags_available = _load_friend_verification_contact_flags(
+        ctx,
+        source=_text(meta.get("dataSource")) or "decrypted",
+        usernames=usernames,
+    )
+    now_ts = datetime.now().timestamp()
+    for item, detail_expired in verification_details:
+        verification_state, is_pending = _friend_verification_state(
+            is_sender=bool(item.get("isSender")),
+            type_value=_safe_int(item.get("type"), 0),
+            timestamp=_safe_int(item.get("timestamp"), 0),
+            detail_expired=detail_expired,
+            contact_flags_available=(
+                contact_flags_available and _text(item.get("userName")) in contact_flags
+            ),
+            contact_added=contact_flags.get(_text(item.get("userName")), False),
+            now_ts=now_ts,
+        )
+        item["verificationState"] = verification_state
+        item["isPending"] = is_pending
+    if pendingOnly:
+        items = [item for item in items if item.get("isPending")]
+
     contact_map = _resolve_general_contacts(
         account_dir=ctx.account_dir,
         account_name=account_name,
