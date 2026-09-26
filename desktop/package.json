@@ -20,6 +20,7 @@
     "smoke:win:real": "node scripts/smoke-windows-real-database.cjs",
     "dist": "npm run dist:win",
     "dist:win": "npm run build:ui && npm run build:backend && npm run build:icon && electron-builder --win --x64 --publish never",
+    "dist:linux": "npm run build:ui && npm run build:backend && electron-builder --linux dir --x64 --publish never && node scripts/build-linux-installer.cjs",
     "dist:mac": "npm run dist:mac:arm64",
     "dist:mac:arm64": "npm run verify:mac:native && npm run build:ui && npm run build:backend && npm run build:icon && electron-builder --mac dmg zip --arm64 --publish never",
     "dist:mac:arm64:release": "npm run verify:mac:native && npm run build:ui && npm run build:backend && npm run build:icon && cross-env MACOS_DISTRIBUTION_BUILD=1 electron-builder --mac dmg zip --arm64 --publish never --config.forceCodeSigning=true"
@@ -101,6 +102,14 @@
         ]
       }
     ],
+    "linux": {
+      "icon": "src/icon.png",
+      "category": "Utility",
+      "executableName": "wechat-data-analysis",
+      "target": [
+        "dir"
+      ]
+    },
     "win": {
       "icon": "build/icon.ico",
       "forceCodeSigning": true,

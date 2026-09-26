@@ -12,6 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
 from .app_paths import get_data_dir
 from .native_core_client import NativeCoreProtocolError, NativeCoreUnavailableError
 
@@ -27,6 +31,12 @@ _LEGACY_ENTROPY_DOMAIN = b"WeChatDataAnalysis/native-core/device-credential/v1\0
 _ENTROPY_DOMAIN = b"WeChatDataAnalysis/native-core/device-credential/v2\0"
 _MACOS_KEYCHAIN_MAGIC = b"WCEKC002"
 _MACOS_KEYCHAIN_SERVICE = "com.lifearchive.wechatdataanalysis.native-core-credential.v2"
+# Linux 没有系统级 per-user keystore（DPAPI/Keychain 对应物），所以采用两种
+# Unix 惯例的组合：文件 0600（等同 SSH 私钥的卫生标准）+ 用 machine-id + uid
+# 派生密钥的 AEAD 信封（这样把文件拷到另一台机器/另一个用户下也解不开）。
+_LINUX_MAGIC = b"WCELDC1"
+_LINUX_AAD = b"WeChatDataAnalysis/native-core/device-credential/linux/v1"
+_LINUX_NONCE_BYTES = 12
 
 CredentialTransform = Callable[[bytes, bytes], bytes]
 BytesLike = bytes | bytearray | memoryview
@@ -203,6 +213,30 @@ def _parse_record(plaintext: bytes, *, expected_schema: int) -> StoredDeviceCred
     raise NativeCoreProtocolError("Native core device credential is invalid.")
 
 
+def _linux_machine_identity() -> bytes:
+    """machine-id + uid：把凭据绑定到"这台机器上的这个用户"。"""
+    for candidate in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            value = Path(candidate).read_text(encoding="ascii").strip()
+        except OSError:
+            continue
+        if value:
+            return f"{value}:{os.getuid()}".encode("utf-8")
+    raise NativeCoreUnavailableError(
+        "Cannot determine the Linux machine identity for the native core device credential."
+    )
+
+
+def _linux_credential_key(entropy: bytes) -> bytes:
+    """entropy 作为 salt/AAD 绑定 device/build/service，拷到别处失效。"""
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=entropy,
+        info=_LINUX_AAD,
+    ).derive(_linux_machine_identity())
+
+
 def _protect_current_user(payload: bytes, entropy: bytes) -> bytes:
     if sys.platform == "darwin":
         account_digest = hashlib.sha256(
@@ -235,8 +269,15 @@ def _protect_current_user(payload: bytes, entropy: bytes) -> bytes:
         from .native_core_raw_key_cache import _dpapi_transform
 
         return _dpapi_transform(payload, entropy=entropy, protect=True)
+    if sys.platform.startswith("linux"):
+        nonce = os.urandom(_LINUX_NONCE_BYTES)
+        sealed = AESGCM(_linux_credential_key(entropy)).encrypt(
+            nonce, payload, _LINUX_AAD
+        )
+        return _LINUX_MAGIC + nonce + sealed
     raise NativeCoreUnavailableError(
-        "Native core device credentials require Windows DPAPI or macOS Keychain."
+        "Native core device credentials require Windows DPAPI, macOS Keychain or "
+        "the Linux machine-bound credential store."
     )
 
 
@@ -288,8 +329,30 @@ def _unprotect_current_user(payload: bytes, entropy: bytes) -> bytes:
         from .native_core_raw_key_cache import _dpapi_transform
 
         return _dpapi_transform(payload, entropy=entropy, protect=False)
+    if sys.platform.startswith("linux"):
+        offset = len(_LINUX_MAGIC)
+        if (
+            len(payload) <= offset + _LINUX_NONCE_BYTES
+            or not payload.startswith(_LINUX_MAGIC)
+        ):
+            raise NativeCoreProtocolError(
+                "Native core Linux credential binding is invalid."
+            )
+        nonce = payload[offset : offset + _LINUX_NONCE_BYTES]
+        try:
+            return AESGCM(_linux_credential_key(entropy)).decrypt(
+                nonce, payload[offset + _LINUX_NONCE_BYTES :], _LINUX_AAD
+            )
+        except Exception as exc:
+            # 解不开通常意味着换机器/换用户/换 device-build-service 绑定，
+            # 与 macOS Keychain 不一致的情形等价：当作凭据失效处理。
+            raise NativeCoreProtocolError(
+                "Native core Linux device credential cannot be decrypted on this "
+                "machine or user."
+            ) from exc
     raise NativeCoreUnavailableError(
-        "Native core device credentials require Windows DPAPI or macOS Keychain."
+        "Native core device credentials require Windows DPAPI, macOS Keychain or "
+        "the Linux machine-bound credential store."
     )
 
 

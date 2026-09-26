@@ -82,9 +82,11 @@
                 </svg>
                 {{ isMacos
                   ? '优先调用本地受控组件；仅在明确失败且您再次确认后，才提供实验性本机调试兜底。获取接口仅允许本机访问。'
+                  : isLinux
+                  ? '点击按钮将由 wx_key 拉起微信并在弹出的窗口中完成登录以获取【数据库解密密钥】；Linux 不执行内存扫描。您也可以手动输入已知的64位密钥。'
                   : '点击按钮将优先使用 V4 内存扫描获取【数据库解密密钥】；失败时会询问您是否改用 Hook。您也可以手动输入已知的64位密钥。' }}
               </p>
-              <p v-if="!isMacos" class="mt-2 text-xs text-[#7F7F7F] flex items-start">
+              <p v-if="!isMacos && !isLinux" class="mt-2 text-xs text-[#7F7F7F] flex items-start">
                 <svg class="w-4 h-4 mr-1 mt-0.5 text-[#10AEEF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
@@ -119,7 +121,7 @@
                 id="dbPath"
                 v-model="formData.db_storage_path"
                 type="text"
-                :placeholder="isMacos ? '例如: /Users/你的用户名/.../<账号目录>/db_storage（账号目录可能是 wxid_... 或自定义名称）' : '例如: D:\\wechatMSG\\xwechat_files\\wxid_xxx\\db_storage'"
+                :placeholder="isMacos ? '例如: /Users/你的用户名/.../<账号目录>/db_storage（账号目录可能是 wxid_... 或自定义名称）' : isLinux ? '例如: /home/你的用户名/Documents/xwechat_files/wxid_xxx/db_storage' : '例如: D:\\wechatMSG\\xwechat_files\\wxid_xxx\\db_storage'"
                 class="w-full px-4 py-3 bg-white border border-[#EDEDED] rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[#07C160] focus:border-transparent transition-all duration-200"
                 :class="{ 'border-red-500': formErrors.db_storage_path }"
                 required
@@ -1130,6 +1132,9 @@ const macosKeyCaptureCleanupInFlight = ref(false)
 const platformCapabilities = ref({ platform: '' })
 const platformCapabilitiesLoaded = ref(false)
 const isMacos = computed(() => platformCapabilities.value?.platform === 'macos')
+const isLinux = computed(() => platformCapabilities.value?.platform === 'linux')
+// 路径分隔符：只有 Windows 用反斜杠，Linux 与 macOS 一样是正斜杠。
+const pathSeparator = computed(() => (platformCapabilities.value?.platform === 'windows' ? '\\' : '/'))
 const imageKeyMemoryScanChecking = computed(() => !platformCapabilitiesLoaded.value)
 const imageKeyMemoryScanSupported = computed(() => {
   if (!platformCapabilitiesLoaded.value) return false
@@ -2245,20 +2250,40 @@ const handleGetDbKey = async () => {
     return
   }
 
-  const shouldContinue = await requestGuideDialog({
-    eyebrow: '密钥获取提示',
-    title: '获取前请确认微信已登录',
-    description: '系统会先尝试从当前运行的微信中扫描数据库密钥。这里只做操作提醒，不会强制检查登录状态。',
-    details: [
-      '保持电脑版微信运行，并登录需要解密的账号',
-      '确认下方数据库路径属于同一个微信账号',
-      '获取期间不要退出微信或切换到其他账号'
-    ],
-    note: '如果内存扫描失败，系统会再次询问是否切换到 Hook 获取。',
-    primaryLabel: '准备好了，开始获取',
-    secondaryLabel: '暂不获取',
-    tone: 'guide'
-  })
+  // Linux 没有 V4 内存扫描这一套逻辑（见 platform_support / key_service 的说明）：
+  // wx_key 采用 fork + TRACEME 自己拉起微信，一次到位，不存在「先扫内存、失败再改用 Hook」。
+  // 因此这里不能走 Windows 的提示与兜底流程，否则会先误导用户「正在扫描内存」，
+  // 再弹一次永远不可能成功的「内存扫描失败，是否改用 Hook？」。
+  const shouldContinue = await requestGuideDialog(isLinux.value
+    ? {
+        eyebrow: '密钥获取提示',
+        title: '获取前请确认微信已登录',
+        description: '获取密钥时会由 wx_key 拉起微信，请在它弹出的微信窗口里完成登录；Linux 不执行内存扫描。',
+        details: [
+          '获取时会先关闭正在运行的微信，再由 wx_key 重新拉起',
+          '请关闭微信的「自动登录」，在弹出的窗口里手动登录同一个账号',
+          '程序不能以 root 运行，否则 AppImage 版微信没有窗口',
+          '获取期间不要退出微信或切换到其他账号'
+        ],
+        note: '这里只做操作提醒，不会强制检查登录状态。',
+        primaryLabel: '准备好了，开始获取',
+        secondaryLabel: '暂不获取',
+        tone: 'guide'
+      }
+    : {
+        eyebrow: '密钥获取提示',
+        title: '获取前请确认微信已登录',
+        description: '系统会先尝试从当前运行的微信中扫描数据库密钥。这里只做操作提醒，不会强制检查登录状态。',
+        details: [
+          '保持电脑版微信运行，并登录需要解密的账号',
+          '确认下方数据库路径属于同一个微信账号',
+          '获取期间不要退出微信或切换到其他账号'
+        ],
+        note: '如果内存扫描失败，系统会再次询问是否切换到 Hook 获取。',
+        primaryLabel: '准备好了，开始获取',
+        secondaryLabel: '暂不获取',
+        tone: 'guide'
+      })
   if (!shouldContinue) return
 
   const requestRevision = ++dbKeyRequestRevision
@@ -2313,7 +2338,11 @@ const handleGetDbKey = async () => {
     }
 
     let res = null
-    if (dbStoragePath) {
+    if (isLinux.value) {
+      // Linux 直接走 Hook：没有内存扫描可尝试，后端也会拒绝 key_v4 模式。
+      res = await fetchByHook()
+      if (!isDbKeyRequestActive(requestRevision, requestController)) return
+    } else if (dbStoragePath) {
       warning.value = '正在优先尝试 V4 内存扫描获取数据库密钥。'
       res = await getKeys({
         wechat_install_path: wechatInstallPath,
@@ -3586,8 +3615,9 @@ onMounted(async () => {
       platformCapabilities.value = await getPlatformCapabilities()
     } catch {
       const macos = /Macintosh|Mac OS X/i.test(String(navigator.userAgent || ''))
+      const linux = !macos && /Linux/i.test(String(navigator.userAgent || ''))
       platformCapabilities.value = {
-        platform: macos ? 'macos' : 'windows',
+        platform: macos ? 'macos' : linux ? 'linux' : 'windows',
         database_key_extraction: !macos,
         database_key_guidance: macos
           ? '未能确认 macOS 数据库密钥组件，请检查本地服务或更新完整应用。'
@@ -3595,6 +3625,8 @@ onMounted(async () => {
         image_key_memory_scan: !macos,
         image_key_memory_scan_note: macos
           ? '未能确认 macOS 图片密钥扫描资源，请检查本地服务后重试。'
+          : linux
+          ? '未能确认 Linux 平台的 wx_key 组件，请检查本地服务后重试。'
           : ''
       }
     } finally {
@@ -3609,7 +3641,7 @@ onMounted(async () => {
         const account = JSON.parse(selectedAccount)
         // 填充数据路径
         if (account.data_dir) {
-          const separator = isMacos.value ? '/' : '\\'
+          const separator = pathSeparator.value
           formData.db_storage_path = String(account.data_dir).replace(/[\\/]+$/, '') + separator + 'db_storage'
         }
         if (account.account_name) {

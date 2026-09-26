@@ -59,6 +59,7 @@ export default defineNuxtConfig({
   // 「高级功能」弹窗复用官网的 pro-demos 演示引擎（website/assets 下），跨根导入需要别名，
   // 并让 dev server 额外放行 website/assets（保留 Vite 默认推断的工作区根，不把整个仓库暴露给 /@fs/）
   vite: {
+    ssr: { noExternal: ['@assistant-ui/core', '@assistant-ui/store', '@assistant-ui/tap', '@assistant-ui/vue'] },
     plugins: [tailwindcss()],
     resolve: {
       alias: [{ find: '@website', replacement: websiteAssetsDir }]

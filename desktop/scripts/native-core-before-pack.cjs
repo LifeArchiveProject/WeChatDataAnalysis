@@ -9,6 +9,9 @@ const {
 const {
   assertWindowsNativeAsrCapability,
 } = require("../src/windows-native-asr-capability.cjs");
+const {
+  linuxContentPinErrors,
+} = require("./linux-native-core-packaging.cjs");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const LEGACY_WCDB_PATHS = [
@@ -184,6 +187,13 @@ function validatePackagedBackend({
   }
   if (platform === "win32") {
     assertWindowsNativeAsrCapability({ nativeDir, manifest });
+  }
+  if (platform === "linux") {
+    // 打包后再验一次「内容哈希 pin」：这是 Linux 唯一的产物身份，必须逐字节站得住。
+    const pinErrors = linuxContentPinErrors({ directory: nativeDir, manifest });
+    if (pinErrors.length > 0) {
+      throw new Error(`Packaged Linux native core failed content verification: ${pinErrors.join("; ")}`);
+    }
   }
   return { backendDir, manifest, nativeDir, platform };
 }

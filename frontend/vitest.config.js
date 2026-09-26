@@ -12,6 +12,11 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
-    include: ['tests/**/*.test.js']
+    include: ['tests/**/*.test.js'],
+    server: {
+      deps: {
+        inline: ['@assistant-ui/core', '@assistant-ui/store', '@assistant-ui/tap', '@assistant-ui/vue']
+      }
+    }
   }
 })

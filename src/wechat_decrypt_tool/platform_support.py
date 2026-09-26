@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import platform
@@ -31,6 +32,10 @@ def is_macos() -> bool:
 
 def is_windows() -> bool:
     return current_platform() == "windows"
+
+
+def is_linux() -> bool:
+    return current_platform() == "linux"
 
 
 def _native_root() -> Path:
@@ -133,6 +138,39 @@ def mac_native_core_paths() -> tuple[Path, Path, Path]:
     )
 
 
+def linux_native_core_paths() -> tuple[Path, Path, Path]:
+    """Linux 的 client 是 .so，broker 与 macOS 同名（同为裸可执行文件）。"""
+    return (
+        _first_existing_native_resource(
+            Path("libwechatdb_client.so"),
+            explicit=str(
+                os.environ.get("WECHAT_TOOL_NATIVE_CORE_LIBRARY", "") or ""
+            ).strip(),
+        ),
+        _first_existing_native_resource(
+            Path("wechatdb_broker"),
+            explicit=str(
+                os.environ.get("WECHAT_TOOL_NATIVE_CORE_BROKER", "") or ""
+            ).strip(),
+        ),
+        _first_existing_native_resource(Path("wechatdb_native_build.json")),
+    )
+
+
+def _linux_native_core_manifest_ready(manifest: dict[str, Any]) -> bool:
+    """Linux 只认 source-public profile（与 Windows/macOS 同一原则）。
+
+    必须与 native_core_client 的授权策略保持一致：那边会拒掉 production
+    profile，这里就不能报"可用"，否则界面说可用、一调用就报错。
+    """
+    return (
+        manifest.get("linuxIntegrityMode") == "content-hash-pin"
+        and manifest.get("linuxPeerVerification") == "same-user-peer-credentials"
+        and manifest.get("sourceRuntime") is True
+        and manifest.get("linuxHostVerification") == "same-user-direct-parent"
+    )
+
+
 def _native_core_resources_ready(paths: tuple[Path, Path, Path]) -> bool:
     client, broker, manifest_path = paths
     try:
@@ -153,6 +191,8 @@ def _native_core_resources_ready(paths: tuple[Path, Path, Path]) -> bool:
         return False
     if manifest.get("schemaVersion") == 2 and "platform" not in manifest:
         return True
+    if manifest.get("schemaVersion") == 4 and manifest.get("platform") == "linux":
+        return _linux_native_core_manifest_ready(manifest)
     if manifest.get("schemaVersion") != 3 or manifest.get("platform") != "macos":
         return False
     source_fields = {
@@ -167,13 +207,31 @@ def _native_core_resources_ready(paths: tuple[Path, Path, Path]) -> bool:
     )
 
 
+def _linux_wx_key_available() -> bool:
+    """Linux 的密钥获取全部依赖 wx_key（hook 模式，由它 fork 拉起微信）。
+
+    不 import，只用 find_spec 探测，避免能力查询带起原生模块加载。
+    """
+    try:
+        return importlib.util.find_spec("wx_key") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def runtime_capabilities() -> dict[str, Any]:
     system = current_platform()
     architecture = (platform.machine() or "unknown").lower()
     apple_silicon = system == "macos" and architecture in {"arm64", "aarch64"}
+    linux_key_ready = system == "linux" and _linux_wx_key_available()
     helper = mac_image_scan_helper_path() if system == "macos" else None
     image_scan_library = mac_image_scan_library_path() if system == "macos" else None
-    native_core_paths = mac_native_core_paths() if system == "macos" else None
+    native_core_paths = (
+        mac_native_core_paths()
+        if system == "macos"
+        else linux_native_core_paths()
+        if system == "linux"
+        else None
+    )
     image_scan_ready = bool(
         helper
         and image_scan_library
@@ -181,8 +239,9 @@ def runtime_capabilities() -> dict[str, Any]:
         and image_scan_library.is_file()
         and helper.parent.resolve() == image_scan_library.parent.resolve()
     )
+    # macOS 的实时 WCDB 仅支持 Apple Silicon；Linux 没有架构门槛（x86_64 基线）。
     realtime_ready = bool(
-        apple_silicon
+        (system != "macos" or apple_silicon)
         and native_core_paths
         and _native_core_resources_ready(native_core_paths)
     )
@@ -209,7 +268,11 @@ def runtime_capabilities() -> dict[str, Any]:
         "platform_release": platform.release(),
         "architecture": architecture,
         "apple_silicon": apple_silicon,
-        "database_key_extraction": system == "windows" or bool(mac_db_key_status["available"]),
+        "database_key_extraction": (
+            system == "windows"
+            or bool(mac_db_key_status["available"])
+            or linux_key_ready
+        ),
         "macos_lldb_fallback": macos_lldb_fallback,
         "macos_lldb_fallback_note": (
             "实验性本机调试兜底仅支持 Apple Silicon Mac，并需要安装 Xcode Command Line Tools。"
@@ -218,10 +281,12 @@ def runtime_capabilities() -> dict[str, Any]:
         ),
         "database_key_manual_input": True,
         "database_decryption": True,
-        "image_key_memory_scan": system == "windows" or image_scan_ready,
+        "image_key_memory_scan": system == "windows" or image_scan_ready or linux_key_ready,
         "image_key_memory_scan_note": (
             "macOS 图片密钥扫描原生资源缺失或安装不完整，请重新安装完整发行包。"
             if system == "macos" and not image_scan_ready
+            else "Linux 图片密钥获取依赖 wx_key（本地算法），未检测到该模块。"
+            if system == "linux" and not linux_key_ready
             else ""
         ),
         "realtime_wcdb": system == "windows" or realtime_ready,
@@ -230,6 +295,8 @@ def runtime_capabilities() -> dict[str, Any]:
             if system == "macos" and not apple_silicon
             else "macOS 实时 WCDB 原生资源缺失，请重新安装完整发行包。"
             if system == "macos" and not realtime_ready
+            else "Linux 实时 WCDB 需要受限 source-public 原生组件（内容哈希 pin + 构建有效期），组件缺失或不是该 profile 时就不可用。"
+            if system == "linux" and not realtime_ready
             else ""
         ),
         "wechat_process_media_hook": system == "windows",
@@ -239,6 +306,11 @@ def runtime_capabilities() -> dict[str, Any]:
         "database_key_guidance": (
             str(mac_db_key_status.get("note") or MAC_DB_KEY_GUIDANCE)
             if system == "macos"
+            else "Linux 取密钥时会由 wx_key 拉起微信（免提权，走 fork + TRACEME），"
+            "请在弹出的微信里完成登录；Linux 不提供 V4 内存扫描（需要提权 attach），"
+            "取密钥只有 Hook 一条路。程序不能以 root 运行，否则 AppImage 版微信"
+            "会因 FUSE 对 root 不可见而打不开窗口。"
+            if system == "linux"
             else ""
         ),
         "database_key_build_id": (
@@ -255,11 +327,13 @@ def runtime_capabilities() -> dict[str, Any]:
 __all__ = [
     "MAC_DB_KEY_GUIDANCE",
     "current_platform",
+    "is_linux",
     "is_macos",
     "is_windows",
     "mac_image_scan_helper_path",
     "mac_image_scan_library_path",
     "mac_db_key_bundle_dir",
     "mac_native_core_paths",
+    "linux_native_core_paths",
     "runtime_capabilities",
 ]

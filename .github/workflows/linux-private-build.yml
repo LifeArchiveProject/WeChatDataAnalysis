@@ -1,0 +1,562 @@
+name: Linux Private Build
+
+# Linux 的发布构建。与 macOS 的 macos-private-build.yml 对齐，但签名模型不同：
+# Linux 没有代码签名，原生组件的身份 = 内容哈希（linuxIntegrityMode: content-hash-pin）。
+#
+# 整个链路只有两个外部输入：
+#   1. 私藏仓产出的 source-public 原生核心（五元组 pin）；
+#   2. 私藏仓 private/wce_integrity 的源码 revision（用于编译导出完整性模块）。
+#
+# 产物形态刻意不做 AppImage / deb：作者的分发形态只有 Windows 安装包与 macOS dmg，
+# Linux 走「用户级、免 root 的 tar.gz + install.sh」。electron-builder 只出 dir 目标。
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Package version; omitted callers derive it from a v* tag
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (for example 2.5.2)
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  build-linux-x64:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+    env:
+      UV_MANAGED_PYTHON: "true"
+      # The artifact repository identifies the producer; the download repository
+      # identifies where the immutable asset is currently hosted.
+      WCE_NATIVE_CORE_ARTIFACT_REPOSITORY: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_REPOSITORY }}
+      WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY }}
+      WCE_NATIVE_CORE_ARTIFACT_SHA256: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_SHA256 }}
+      WCE_NATIVE_CORE_ARTIFACT_RUN_ID: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_RUN_ID }}
+      WCE_NATIVE_CORE_SOURCE_REVISION: ${{ vars.WCE_LINUX_NATIVE_CORE_SOURCE_REVISION }}
+      WCE_NATIVE_CORE_BUILD_ID: ${{ vars.WCE_LINUX_NATIVE_CORE_BUILD_ID }}
+      WCE_NATIVE_CORE_CLIENT_SHA256: ${{ vars.WCE_LINUX_NATIVE_CORE_CLIENT_SHA256 }}
+      WCE_NATIVE_CORE_BROKER_SHA256: ${{ vars.WCE_LINUX_NATIVE_CORE_BROKER_SHA256 }}
+      # 可选：完整性模块的源码默认与被 pin 的原生核心同一个仓库/revision
+      # （producer 工作流就在那个 checkout 上跑，所以 private/wce_integrity 也在同一棵树里）。
+      WCE_LINUX_INTEGRITY_SOURCE_REPOSITORY: ${{ vars.WCE_LINUX_INTEGRITY_SOURCE_REPOSITORY }}
+      WCE_LINUX_INTEGRITY_SOURCE_REVISION: ${{ vars.WCE_LINUX_INTEGRITY_SOURCE_REVISION }}
+      WCE_NATIVE_CORE_REQUIRED: "1"
+      WCE_NATIVE_CORE_ALLOW_DEVELOPMENT_ARTIFACTS: "0"
+      CI: "true"
+      PACKAGE_VERSION_INPUT: ${{ inputs.version }}
+    steps:
+      - name: Checkout exact release revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify immutable source and protected pins
+        shell: bash
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_REVISION"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+          requested_version="${PACKAGE_VERSION_INPUT#v}"
+          case "$WORKFLOW_REF" in
+            refs/heads/main)
+              test "$(git rev-parse origin/main)" = "$WORKFLOW_REVISION"
+              package_version="$requested_version"
+              ;;
+            refs/tags/v*)
+              tag="${WORKFLOW_REF#refs/tags/}"
+              tag_version="${tag#v}"
+              test "$tag" = "$GITHUB_REF_NAME"
+              test "$(git rev-parse --verify "${WORKFLOW_REF}^{commit}")" = "$WORKFLOW_REVISION"
+              git rev-parse --verify origin/main
+              git merge-base --is-ancestor "$WORKFLOW_REF" origin/main
+              if [[ -n "$requested_version" ]]; then
+                test "$requested_version" = "$tag_version"
+              fi
+              package_version="$tag_version"
+              ;;
+            *)
+              echo "Linux packages may only be built from main or a v* release tag" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$package_version" =~ ^[0-9]+(\.[0-9]+)+([.-][A-Za-z0-9.-]+)?$ ]]
+          printf 'PACKAGE_VERSION=%s\n' "$package_version" >> "$GITHUB_ENV"
+
+          [[ "$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          download_repository="${WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY:-}"
+          if [[ -n "$download_repository" ]]; then
+            [[ "$download_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          else
+            download_repository="$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY"
+          fi
+          [[ "$WCE_NATIVE_CORE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$WCE_NATIVE_CORE_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ ! "$WCE_NATIVE_CORE_ARTIFACT_SHA256" =~ ^0{64}$ ]]
+          [[ "$WCE_NATIVE_CORE_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WCE_NATIVE_CORE_BUILD_ID" =~ ^[A-Za-z0-9._-]{8,128}$ ]]
+          [[ ! "$WCE_NATIVE_CORE_BUILD_ID" =~ (^|[._-])(dev|debug|test|local|snapshot|staging)([._-]|$) ]]
+          # 内容哈希 pin 是可选的（缺省时以 manifest 声明为准），但一旦给出就必须是
+          # 非零摘要——发布构建不允许「声明了却不校验」。
+          for name in WCE_NATIVE_CORE_CLIENT_SHA256 WCE_NATIVE_CORE_BROKER_SHA256; do
+            value="${!name:-}"
+            if [[ -n "$value" ]]; then
+              [[ "$value" =~ ^[0-9a-f]{64}$ ]]
+              [[ ! "$value" =~ ^0{64}$ ]]
+            fi
+          done
+
+          integrity_repository="${WCE_LINUX_INTEGRITY_SOURCE_REPOSITORY:-$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY}"
+          integrity_revision="${WCE_LINUX_INTEGRITY_SOURCE_REVISION:-$WCE_NATIVE_CORE_SOURCE_REVISION}"
+          [[ "$integrity_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$integrity_revision" =~ ^[0-9a-f]{40}$ ]]
+
+          printf 'LINUX_NATIVE_DOWNLOAD_REPOSITORY=%s\n' "$download_repository" >> "$GITHUB_ENV"
+          printf 'LINUX_INTEGRITY_SOURCE_REPOSITORY=%s\n' "$integrity_repository" >> "$GITHUB_ENV"
+          printf 'LINUX_INTEGRITY_SOURCE_REVISION=%s\n' "$integrity_revision" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: .python-version
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install uv
+          uv python install 3.11
+          npm ci --prefix frontend
+          npm ci --prefix desktop
+
+      - name: Download the pinned Producer native-core artifact
+        timeout-minutes: 20
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WCE_LINUX_PRODUCER_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          # 与 Windows 的 native-artifact 步骤同一条错误提示：secret 缺失时给出可执行的信息，
+          # 而不是一个裸的 test 失败（Linux 没有 environment，所以它必须是仓库级 secret）。
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "WCE_LINUX_PRODUCER_READ_TOKEN is required to download the private native Release." >&2
+            exit 1
+          fi
+          artifact_dir="$RUNNER_TEMP/wechatdb-native-linux-x64-source-public"
+          release_tag="linux-native-$WCE_NATIVE_CORE_BUILD_ID"
+          release_asset="wechatdb-native-linux-x64-source-public-$WCE_NATIVE_CORE_BUILD_ID.tar.gz"
+          release_archive="$RUNNER_TEMP/$release_asset"
+          downloaded=0
+          for attempt in 1 2 3; do
+            rm -rf "$artifact_dir"
+            mkdir -p "$artifact_dir"
+            rm -f "$release_archive"
+            # 首选不可变 Release 资产（核对 pin 过的 tar.gz 摘要），退路是精确 run id
+            # 的工作流产物。退路拿不到 tar.gz，所以它靠 workflow 产物内部的
+            # provenance.json / SHA256SUMS.txt / manifest 落到同一份五元组上：
+            # run id、revision、build id 与两组内容哈希 pin 都会被
+            # resolveLinuxNativeCoreArtifacts 重新核对，未被核对过的只剩 tar.gz
+            # 这个外层封装的摘要本身。
+            if [[ -n "$LINUX_NATIVE_DOWNLOAD_REPOSITORY" ]] && \
+              gh release download "$release_tag" \
+                --repo "$LINUX_NATIVE_DOWNLOAD_REPOSITORY" \
+                --pattern "$release_asset" \
+                --dir "$RUNNER_TEMP"
+            then
+              actual_sha256="$(sha256sum "$release_archive" | awk '{print $1}')"
+              test "$actual_sha256" = "$WCE_NATIVE_CORE_ARTIFACT_SHA256"
+              tar -xzf "$release_archive" -C "$artifact_dir"
+              downloaded=1
+              break
+            elif gh run download "$WCE_NATIVE_CORE_ARTIFACT_RUN_ID" \
+              --repo "$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY" \
+              --name wechatdb-native-linux-x64-source-public \
+              --dir "$artifact_dir"
+            then
+              downloaded=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep "$((attempt * 15))"
+            fi
+          done
+          test "$downloaded" = 1
+
+      - name: Validate the pinned native core against the production policy
+        shell: bash
+        env:
+          WCE_NATIVE_CORE_ARTIFACT_DIR: ${{ runner.temp }}/wechatdb-native-linux-x64-source-public
+        run: |
+          set -euo pipefail
+          node -e "require('./desktop/scripts/linux-native-core-packaging.cjs').resolveLinuxNativeCoreArtifacts({ platform: 'linux' })"
+          node -e "
+            const resolved = require('./desktop/scripts/linux-native-core-packaging.cjs')
+              .resolveLinuxNativeCoreArtifacts({ platform: 'linux' });
+            const manifest = resolved.manifest;
+            console.log(JSON.stringify({
+              buildId: manifest.buildId,
+              expiresAtUnix: manifest.buildExpiresAtUnix,
+              clientSha256: manifest.linuxClientSha256,
+              brokerSha256: manifest.linuxBrokerSha256,
+              hostVerification: manifest.linuxHostVerification,
+              sourceRuntime: manifest.sourceRuntime === true,
+            }, null, 2));
+          "
+          printf 'WCE_NATIVE_CORE_ARTIFACT_DIR=%s\n' "$WCE_NATIVE_CORE_ARTIFACT_DIR" >> "$GITHUB_ENV"
+
+      - name: Checkout the pinned private integrity source
+        timeout-minutes: 15
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WCE_LINUX_PRODUCER_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "WCE_LINUX_PRODUCER_READ_TOKEN is required to fetch the pinned private integrity source." >&2
+            exit 1
+          fi
+          # wce_integrity 把 Nuxt 的 CSS 编进导出物里，所以它必须在 UI 构建之后、
+          # 在同一个工作目录里编译（macOS 那份 prebuilt dylib 之所以要记
+          # uiSourceRevision，就是因为这个耦合）。这里改为按 revision 取源码，
+          # 用构建密钥（一次性 P-256 私钥）现编，语义与官方
+          # `-GenerateEphemeralSigningKey` 一致：该密钥只用于导出物自身封签，
+          # 权威封印是原生核心产出的 WES2 sidecar。
+          work="$RUNNER_TEMP/wce-integrity-source"
+          archive="$RUNNER_TEMP/wce-integrity-source.tar.gz"
+          rm -rf "$work"
+          mkdir -p "$work"
+          rm -f "$archive"
+          gh api "repos/$LINUX_INTEGRITY_SOURCE_REPOSITORY/tarball/$LINUX_INTEGRITY_SOURCE_REVISION" > "$archive"
+          test -s "$archive"
+          tar -xzf "$archive" -C "$work"
+          root="$(find "$work" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          test -n "$root"
+          source_dir="$root/private/wce_integrity"
+          test -f "$source_dir/Cargo.toml"
+          test -f "$source_dir/build.rs"
+          rm -rf native/wce_integrity
+          mkdir -p native
+          mv "$source_dir" native/wce_integrity
+          rm -rf "$work" "$archive"
+          test -f native/wce_integrity/Cargo.toml
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+
+      - name: Run focused Python release tests
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          # 只跑在 Linux 上成立的用例：Windows 专属的原生核心用例（
+          # test_wcdb_realtime_native_core_required / test_native_core_broker_lifecycle）
+          # 依赖 win32 的 PE 与 trust-mode 语义，在这里必然失败，不应作为门禁。
+          # test_linux_native_core_policy.py 钉住 Linux 的授权矩阵：冻结应用必须接受
+          # 发布工作流实际发的 source-public 产物（与 Windows 同一原则）。
+          uv run pytest -q \
+            tests/test_linux_db_key_flow.py \
+            tests/test_linux_db_key_frontend.py \
+            tests/test_linux_native_core_policy.py \
+            tests/test_native_core_device_credential.py
+
+      - name: Run focused desktop release tests
+        working-directory: desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 只跑与 Linux 打包契约直接相关的用例。windows-* 那几个在 Linux 上必然
+          # 失败（依赖 PE 与 Windows trust-mode 语义），不能当门禁。
+          # native-core-runtime 是桌面启动后端的门禁：Linux 的 schema v4 判定错了，
+          # 打出来的包一启动就会崩，所以它必须在这里跑。
+          node --test \
+            tests/native-core-runtime.test.cjs \
+            tests/native-core-packaging.test.cjs \
+            tests/native-core-before-pack.test.cjs \
+            tests/package-config.test.cjs
+
+      - name: Set desktop app version
+        working-directory: desktop
+        shell: bash
+        run: npm version "$PACKAGE_VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Build the Linux package
+        working-directory: desktop
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          set -euo pipefail
+          npm run dist:linux
+
+      - name: Verify the packaged Linux runtime
+        working-directory: desktop
+        shell: bash
+        env:
+          WCE_NATIVE_CORE_ARTIFACT_DIR: ${{ runner.temp }}/wechatdb-native-linux-x64-source-public
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const childProcess = require("node:child_process");
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const {
+            inspectElf,
+            linuxContentPinErrors,
+          } = require("./scripts/linux-native-core-packaging.cjs");
+
+          const artifactDir = process.env.WCE_NATIVE_CORE_ARTIFACT_DIR;
+          const payload = path.resolve("dist", "linux-unpacked");
+          const backendRoot = path.join(payload, "resources", "backend");
+          const nativeDir = path.join(backendRoot, "native");
+
+          const requireFile = (filePath, { executable = false } = {}) => {
+            const stat = fs.statSync(filePath);
+            if (!stat.isFile() || stat.size <= 0) throw new Error(`not a file: ${filePath}`);
+            if (executable && (stat.mode & 0o111) === 0) throw new Error(`not executable: ${filePath}`);
+            return stat;
+          };
+          const digest = (filePath) =>
+            require("node:crypto").createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+
+          // 应用本体与后端可执行文件。
+          requireFile(path.join(payload, "wechat-data-analysis"), { executable: true });
+          requireFile(path.join(backendRoot, "wechat-backend"), { executable: true });
+
+          // 原生三件套必须与 pin 过的产物逐字节一致：打包过程不允许「顺手重编」。
+          for (const name of ["libwechatdb_client.so", "wechatdb_broker", "wechatdb_native_build.json"]) {
+            const packaged = path.join(nativeDir, name);
+            requireFile(packaged);
+            const expected = digest(path.join(artifactDir, name));
+            const actual = digest(packaged);
+            if (actual !== expected) {
+              throw new Error(`packaged ${name} differs from the reviewed native artifact`);
+            }
+          }
+
+          // manifest 声明的内容哈希必须描述打包后的这两个文件本身。
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(nativeDir, "wechatdb_native_build.json"), "utf8")
+          );
+          const pinErrors = linuxContentPinErrors({ directory: nativeDir, manifest });
+          if (pinErrors.length > 0) {
+            throw new Error(`packaged native core failed its own content pins: ${pinErrors.join("; ")}`);
+          }
+          if (manifest.sourceRuntime !== true || manifest.linuxHostVerification !== "same-user-direct-parent") {
+            throw new Error("packaged native core is not the source-public profile");
+          }
+          if (manifest.buildExpiresAtUnix * 1000 <= Date.now()) {
+            throw new Error("packaged native core build window has already expired");
+          }
+
+          // 桌面应用启动后端时要走的同一条策略判定，必须在**打包后的产物**上通过：
+          // 这里是「装完能用」的唯一自动化门禁（Release 发布前就拦下 schema 漂移）。
+          const { resolveNativeCoreRuntimePolicy, applyNativeCoreRuntimePolicy } =
+            require("./src/native-core-runtime.cjs");
+          const packagedPolicy = resolveNativeCoreRuntimePolicy({
+            env: {},
+            isPackaged: true,
+            nativeDir,
+            platform: "linux",
+          });
+          if (packagedPolicy.mode !== "required" || packagedPolicy.artifactState !== "production") {
+            throw new Error(
+              `packaged native core did not resolve a required production runtime policy: ${JSON.stringify({ mode: packagedPolicy.mode, artifactState: packagedPolicy.artifactState })}`
+            );
+          }
+          const backendEnv = {};
+          applyNativeCoreRuntimePolicy(backendEnv, {
+            isPackaged: true,
+            nativeDir,
+            platform: "linux",
+          });
+          if (backendEnv.WECHAT_TOOL_NATIVE_CORE_MODE !== "required") {
+            throw new Error("packaged native core did not enforce the required native-core mode");
+          }
+
+          // ELF 身份：客户端/完整性模块是共享对象，broker 是 x86-64 可执行文件。
+          const clientElf = inspectElf(path.join(nativeDir, "libwechatdb_client.so"));
+          if (!clientElf.isSharedObject) throw new Error("packaged native client is not an ELF shared object");
+          const brokerElf = inspectElf(path.join(nativeDir, "wechatdb_broker"));
+          if (!brokerElf.isExecutable) throw new Error("packaged broker is not an ELF executable");
+          const integrity = path.join(nativeDir, "libwce_integrity.so");
+          requireFile(integrity);
+          if (!inspectElf(integrity).isSharedObject) {
+            throw new Error("packaged wce_integrity module is not an ELF shared object");
+          }
+
+          // 一键安装素材：归档里必须有应用本体与原生核心，install.sh 必须内嵌归档摘要。
+          const productName = JSON.parse(fs.readFileSync("package.json", "utf8")).build.productName;
+          const version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+          const archiveName = `${productName}-${version}-linux-x86_64.tar.gz`;
+          const archivePath = path.join("dist", archiveName);
+          requireFile(archivePath);
+          const installerPath = path.join("dist", "install.sh");
+          requireFile(installerPath, { executable: true });
+          const installer = fs.readFileSync(installerPath, "utf8");
+          const archiveDigest = digest(archivePath);
+          if (!installer.includes(archiveDigest)) {
+            throw new Error("install.sh does not embed the payload archive digest");
+          }
+          const members = childProcess
+            .execFileSync("tar", ["-tzf", archivePath], { encoding: "utf8" })
+            .split("\n")
+            .map((name) => name.replace(/^\.\//, ""))
+            .filter(Boolean);
+          for (const name of [
+            "wechat-data-analysis",
+            "resources/backend/wechat-backend",
+            "resources/backend/native/libwechatdb_client.so",
+            "resources/backend/native/wechatdb_broker",
+          ]) {
+            if (!members.includes(name)) throw new Error(`payload archive is missing ${name}`);
+          }
+          console.log(`verified Linux payload ${archiveName} (${archiveDigest})`);
+          NODE
+
+      - name: Prepare Linux release checksums and provenance
+        working-directory: desktop
+        shell: bash
+        env:
+          WDA_REPOSITORY: ${{ github.repository }}
+          WDA_REVISION: ${{ github.sha }}
+          WDA_TAG: ${{ github.ref_name }}
+          NATIVE_REPOSITORY: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_REPOSITORY }}
+          NATIVE_RUN_ID: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_RUN_ID }}
+          NATIVE_REVISION: ${{ vars.WCE_LINUX_NATIVE_CORE_SOURCE_REVISION }}
+          NATIVE_BUILD_ID: ${{ vars.WCE_LINUX_NATIVE_CORE_BUILD_ID }}
+          NATIVE_ASSET_SHA256: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_SHA256 }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          cd dist
+          # Windows 那份叫 SHA256SUMS.txt / release-provenance.json；Linux 用带后缀的
+          # 名字，避免两个作业的产物在 merge-multiple 下载时互相覆盖。
+          test -f SHA256SUMS.txt
+          mv SHA256SUMS.txt SHA256SUMS-linux.txt
+          sha256sum -c SHA256SUMS-linux.txt
+
+          node - <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const digest = (filePath) =>
+            crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+          const positiveInteger = (name) => {
+            const value = Number(process.env[name]);
+            if (!Number.isSafeInteger(value) || value <= 0) {
+              throw new Error(`${name} is not a positive integer`);
+            }
+            return value;
+          };
+
+          const nativeDir = path.resolve(
+            "linux-unpacked",
+            "resources",
+            "backend",
+            "native"
+          );
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(nativeDir, "wechatdb_native_build.json"), "utf8")
+          );
+
+          const assets = fs
+            .readdirSync(".")
+            .filter((name) => name.endsWith("-linux-x86_64.tar.gz") || name === "install.sh")
+            .sort();
+          if (assets.length !== 2) {
+            throw new Error(`expected exactly one payload archive and install.sh: ${assets.join(", ")}`);
+          }
+          const artifacts = assets.map((name) => ({
+            path: name,
+            sha256: digest(name),
+            size: fs.statSync(name).size,
+          }));
+
+          const provenance = {
+            schemaVersion: 1,
+            artifactName: "release-linux-x64",
+            source: {
+              repository: process.env.WDA_REPOSITORY,
+              revision: process.env.WDA_REVISION,
+              tag: process.env.WDA_TAG,
+            },
+            native: {
+              repository: process.env.NATIVE_REPOSITORY,
+              workflowRunId: positiveInteger("NATIVE_RUN_ID"),
+              sourceRevision: process.env.NATIVE_REVISION,
+              buildId: process.env.NATIVE_BUILD_ID,
+              artifactSha256: process.env.NATIVE_ASSET_SHA256,
+              distributionMode: manifest.distributionMode,
+              integrityMode: manifest.linuxIntegrityMode,
+              linuxClientSha256: manifest.linuxClientSha256,
+              linuxBrokerSha256: manifest.linuxBrokerSha256,
+              linuxPeerVerification: manifest.linuxPeerVerification,
+              linuxHostVerification: manifest.linuxHostVerification,
+              sourceRuntime: manifest.sourceRuntime === true,
+              offlineBootstrapFeatureBits: manifest.offlineBootstrapFeatureBits,
+              offlineExportSealFormat: manifest.offlineExportSealFormat,
+              securityNoticeId: manifest.securityNoticeId,
+              securityNoticeSha256: manifest.securityNoticeSha256,
+              securityCheckpointSetId: manifest.securityCheckpointSetId,
+              securityCheckpointCount: manifest.securityCheckpointCount,
+              securityCheckpointSetSha256: manifest.securityCheckpointSetSha256,
+            },
+            integrity: {
+              sourceRepository: process.env.LINUX_INTEGRITY_SOURCE_REPOSITORY,
+              sourceRevision: process.env.LINUX_INTEGRITY_SOURCE_REVISION,
+              binarySha256: digest(path.join(nativeDir, "libwce_integrity.so")),
+              signingKey: "ephemeral-build-key",
+            },
+            build: {
+              workflowRunId: positiveInteger("WORKFLOW_RUN_ID"),
+              workflowRunAttempt: positiveInteger("WORKFLOW_RUN_ATTEMPT"),
+            },
+            artifacts,
+          };
+          fs.writeFileSync(
+            "release-provenance-linux.json",
+            `${JSON.stringify(provenance, null, 2)}\n`
+          );
+          console.log(JSON.stringify(provenance, null, 2));
+          NODE
+
+      - name: Upload Linux release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-linux-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            desktop/dist/*-linux-x86_64.tar.gz
+            desktop/dist/install.sh
+            desktop/dist/SHA256SUMS-linux.txt
+            desktop/dist/release-provenance-linux.json
