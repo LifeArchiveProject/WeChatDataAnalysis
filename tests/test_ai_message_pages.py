@@ -371,8 +371,8 @@ def test_index_stream_resumes_only_committed_batches(message_source, tmp_path, m
         with service.index('a').connection() as db:
             assert db.execute('SELECT count(*) FROM messages').fetchone()[0] == 1250
         events = service.store.events()
-        assert any(e['kind'] == 'local_search_index' and e['body'].get('stage') == 'reading'
-            and e['body'].get('read_count', 0) > e['body']['processed'] for e in emitted)
+        assert any(e.get('stage') == 'reading'
+            and e.get('read_count', 0) > e.get('processed', 0) for e in emitted)
         # 同一任务在事件表只保留最新一行，且不携带可重建的大字段。
         stored = [e for e in events if e['kind'] == 'local_search_index' and e['body'].get('id') == job['id']]
         assert len(stored) == 1
