@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import hashlib
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import TypedDict
@@ -79,6 +80,8 @@ class AIService:
         self.active_id = None
         self.stopping = False
         self.deleted_accounts = set()
+        # 删除账号与重新接入后的首次写入必须互斥。
+        self.account_lifecycle_lock = threading.Lock()
         self.rule_locks = {}
 
     def check(self, id):

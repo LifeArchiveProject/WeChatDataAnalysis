@@ -240,14 +240,15 @@ def conversations(account: str):
 @router.post("/tasks")
 def create_task(body: TaskInput):
     service = get_ai_service()
-    data = body.model_dump()
-    data["account"] = account_name(body.account)
-    service.deleted_accounts.discard(data["account"])
-    service.store.revoked_accounts.discard(data["account"])
-    try:
-        return service.create_task(data)
-    except ProviderFailure as exc:
-        raise HTTPException(422, str(exc)) from None
+    with service.account_lifecycle_lock:
+        data = body.model_dump()
+        data["account"] = account_name(body.account)
+        service.deleted_accounts.discard(data["account"])
+        service.store.revoked_accounts.discard(data["account"])
+        try:
+            return service.create_task(data)
+        except ProviderFailure as exc:
+            raise HTTPException(422, str(exc)) from None
 
 
 @router.get("/tasks")
