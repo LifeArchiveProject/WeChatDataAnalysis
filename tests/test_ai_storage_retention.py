@@ -1,6 +1,7 @@
 """回归：进度事件必须原地替换、按 TTL 回收并可压缩，避免 ai.sqlite3 无界膨胀。"""
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +9,24 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from wechat_decrypt_tool.ai.storage import AIStore
 from wechat_decrypt_tool.local_search.service import LocalSearch
+
+
+def test_periodic_maintenance_runs_until_shutdown():
+    from wechat_decrypt_tool.ai.lifecycle import _maintenance_loop
+
+    calls = []
+    stopped = threading.Event()
+
+    class Store:
+        def maintain(self):
+            calls.append(time.monotonic())
+            if len(calls) >= 2:
+                stopped.set()
+            return 0, 0, 0
+
+    _maintenance_loop(Store(), 'test', stopped, interval=0.01)
+    assert len(calls) == 2
+    assert calls[1] >= calls[0]
 
 
 def test_local_search_update_emits_compact_deduplicated_event(tmp_path):
