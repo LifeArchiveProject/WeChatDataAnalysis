@@ -919,7 +919,7 @@ def _resolve_general_contacts(
     return out
 
 
-def _load_friend_verification_contact_flags(
+def _load_friend_verification_contact_memberships(
     ctx: Any,
     *,
     source: str,
@@ -942,14 +942,17 @@ def _load_friend_verification_contact_flags(
             )
         with conn:
             names_sql = ",".join("'" + username.replace("'", "''") + "'" for username in targets)
-            rows = conn.execute(f"SELECT username, flag FROM contact WHERE username IN ({names_sql})").fetchall()
+            rows = conn.execute(
+                f"SELECT username, local_type FROM contact WHERE username IN ({names_sql})"
+            ).fetchall()
     except Exception:
         return {}, False
 
     out: dict[str, bool] = {}
     for row in rows:
         username = _text(row["username"])
-        out[username] = bool(_safe_int(row["flag"], 0) & 1)
+        # Keep this aligned with the contact list: regular address-book friends use local_type=1.
+        out[username] = _safe_int(row["local_type"], 0) == 1
     return out, True
 
 
@@ -959,11 +962,11 @@ def _friend_verification_state(
     type_value: int,
     timestamp: int,
     detail_expired: bool | None,
-    contact_flags_available: bool,
+    contact_membership_available: bool,
     contact_added: bool,
     now_ts: float,
 ) -> tuple[str, bool]:
-    if type_value != 37 or not contact_flags_available:
+    if type_value != 37 or not contact_membership_available:
         return "unknown", False
     if contact_added:
         return "accepted", False
@@ -1482,10 +1485,12 @@ def list_friend_verifications(
                 (item, _parse_friend_verification_detail_expired(r["fmessage_detail_hex_"]))
             )
 
-    contact_flags, contact_flags_available = _load_friend_verification_contact_flags(
-        ctx,
-        source=_text(meta.get("dataSource")) or "decrypted",
-        usernames=usernames,
+    contact_memberships, contact_membership_available = (
+        _load_friend_verification_contact_memberships(
+            ctx,
+            source=_text(meta.get("dataSource")) or "decrypted",
+            usernames=usernames,
+        )
     )
     now_ts = datetime.now().timestamp()
     for item, detail_expired in verification_details:
@@ -1494,10 +1499,10 @@ def list_friend_verifications(
             type_value=_safe_int(item.get("type"), 0),
             timestamp=_safe_int(item.get("timestamp"), 0),
             detail_expired=detail_expired,
-            contact_flags_available=(
-                contact_flags_available and _text(item.get("userName")) in contact_flags
+            contact_membership_available=(
+                contact_membership_available and _text(item.get("userName")) in contact_memberships
             ),
-            contact_added=contact_flags.get(_text(item.get("userName")), False),
+            contact_added=contact_memberships.get(_text(item.get("userName")), False),
             now_ts=now_ts,
         )
         item["verificationState"] = verification_state
