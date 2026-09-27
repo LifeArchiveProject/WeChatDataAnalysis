@@ -309,10 +309,29 @@ class AgentService(DeepAgentRuntime, DeepProjection, AgentTimeline):
 
     @observed('agent.cancel_account', id_field='run_id')
     def cancel_account(self, account):
+        workers = []
         for run in self.store.list('agent_run', account):
             worker = self.workers.get(run['id'])
-            if worker:
+            if worker and not worker.done():
+                workers.append(worker)
+        if not workers:
+            return
+        loop = workers[0].get_loop()
+        if not loop.is_running():
+            raise RuntimeError('Agent 事件循环已停止，无法确认任务退出')
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if current_loop is loop:
+            raise RuntimeError('账号清理不能在 Agent 事件循环中同步等待')
+
+        async def stop_workers():
+            for worker in workers:
                 worker.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+
+        asyncio.run_coroutine_threadsafe(stop_workers(), loop).result(timeout=30)
 
 
 _agent = None
