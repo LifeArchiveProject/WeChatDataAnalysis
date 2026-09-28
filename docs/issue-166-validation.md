@@ -38,48 +38,33 @@ A second local account was discovered but not decrypted because none of its
 stored keys passed cross-database authentication. This is an untested account,
 not a successful test or a decryption regression.
 
-## Application startup limitation
+## Desktop startup follow-up
 
-The complete application was attempted but could not start: the latest upstream
-macOS source runtime pin is expired, and the official bootstrap rejects it.
-No expiry or native-runtime checks were bypassed. HTTP testing instead served
-the **unmodified production decrypt and chat routers** in a minimal FastAPI
-harness, with actual source snapshots, filesystem output, key persistence and
-SQLite queries. No decrypt, database, WAL, key-store, or chat-reader mocks were
-used for those real-data tests. A full Electron/desktop end-to-end pass is **not**
-claimed.
+The original expired-runtime blocker was resolved upstream in `1b516cf`, merged
+into this branch. The new official macOS source runtime is
+`macos-source-runtime-20260928-1790594550`, with expiry
+`2026-11-12T11:22:30Z`. The standard `npm run dev` entry point downloaded it,
+verified its pinned artifacts, accepted the `source-public` profile, and launched
+Nuxt and Electron. A subsequent launch verified and reused the cache. No expiry,
+signature or native-runtime checks were bypassed.
 
-Re-running the standard desktop entry point, `cd desktop && npm run dev`,
-exited with status 1 before launching Electron:
+The first launch exceeded the desktop's default 30-second readiness timeout
+while setting up a fresh Python environment. After dependencies were installed,
+a retry with a longer desktop startup timeout exposed a separate local wait:
+the native broker remained inside macOS `SecItemCopyMatching`, called by
+`load_or_create_device_identity`. The backend did not reach its health endpoint
+before the broker startup timeout. A process sample established this wait;
+it is not evidence that the renewed runtime is expired or incompatible.
 
-```text
-当前 WCDA 固定的 macOS 源码运行时已过期，请先拉取最新代码后再启动。
-```
-
-The pin in both public branches (`main` and `codex/rebuild-native-per-release`)
-still refers to `macos-source-runtime-20260809-71122b5b-8e355001`, with expiry
-`2026-09-22T06:48:28Z`. The latest successful public source-runtime promotion
-is [run 31300268967](https://github.com/LifeArchiveProject/WeChatDataAnalysis/actions/runs/31300268967).
-No newer public macOS source-runtime release was available when checked.
-This is distinct from the packaged application: [PR #158](https://github.com/LifeArchiveProject/WeChatDataAnalysis/pull/158)
-added fresh production builds for each release, and the official v2.7.0 macOS
-ZIP was downloaded and checked against its published SHA-256
-(`017eb54fa210c04f5b1acecab1cb64d2d2d21a28059b64689c441d7020c43f17`).
-Its native-core manifest identifies `wcda-36122918297-1-macos-native`, issued
-`2026-09-25T10:15:05Z` and expiring `2026-11-09T10:15:05Z`.
-That production component is renewed; the public source-runtime pin is not.
-Packaged production components are not accepted by the macOS source startup
-policy, so substituting an application bundle is not a supported repair.
-
-Desktop acceptance remains pending. It requires a newly built, signed,
-unexpired source-public runtime from the private producer and an updated
-official pin, followed by the complete Electron decryption and chat-reading
-flow using the same private input copies. The testing account has read-only
-access to the upstream repository and cannot access the private producer.
-The PR is kept in draft until that desktop verification is completed.
+Keychain authorization requires local user interaction and remains pending.
+Full Electron decryption and chat-reading acceptance is therefore **not yet
+claimed**, and the PR stays in draft. The earlier real-data HTTP tests used
+unmodified production decrypt and chat routers in a minimal FastAPI harness;
+they are not counted as full desktop acceptance.
 
 The frontend production static build (`npm run generate`) passed, generating
-34 routes.
+34 routes. After merging `1b516cf`, all 76 focused Python tests and 3 frontend
+feedback tests passed again.
 
 ## Regression tests
 
