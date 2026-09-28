@@ -80,8 +80,10 @@ class Workspace:
                 SELECT source,max(hi) covered_end FROM ordered GROUP BY source
                 HAVING min(lo)=0 AND sum(CASE WHEN lo>coalesce(previous_end,0) THEN 1 ELSE 0 END)=0
             )
-            SELECT m.username,count(*) FROM whole w JOIN agent_material m ON m.source=w.source
-            WHERE m.run_id=? AND w.covered_end>=length(coalesce(json_extract(m.body,'$.text'),''))
+            -- 先遍历已覆盖来源，再按 (run_id,source) 主键找原文，避免反向逐行扫描 whole。
+            SELECT m.username,count(*) FROM whole w CROSS JOIN agent_material m
+            WHERE m.run_id=? AND m.source=w.source
+              AND w.covered_end>=length(coalesce(json_extract(m.body,'$.text'),''))
             GROUP BY m.username
         ''', (run_id, version, run_id)).fetchall()
         count = db.execute("SELECT count(*) FROM agent_piece WHERE run_id=? AND version=? AND kind='stage_note'",
