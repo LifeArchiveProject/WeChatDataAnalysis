@@ -61,6 +61,13 @@ still refers to `macos-source-runtime-20260809-71122b5b-8e355001`, with expiry
 `2026-09-22T06:48:28Z`. The latest successful public source-runtime promotion
 is [run 31300268967](https://github.com/LifeArchiveProject/WeChatDataAnalysis/actions/runs/31300268967).
 No newer public macOS source-runtime release was available when checked.
+This is distinct from the packaged application: [PR #158](https://github.com/LifeArchiveProject/WeChatDataAnalysis/pull/158)
+added fresh production builds for each release, and the official v2.7.0 macOS
+ZIP was downloaded and checked against its published SHA-256
+(`017eb54fa210c04f5b1acecab1cb64d2d2d21a28059b64689c441d7020c43f17`).
+Its native-core manifest identifies `wcda-36122918297-1-macos-native`, issued
+`2026-09-25T10:15:05Z` and expiring `2026-11-09T10:15:05Z`.
+That production component is renewed; the public source-runtime pin is not.
 Packaged production components are not accepted by the macOS source startup
 policy, so substituting an application bundle is not a supported repair.
 
