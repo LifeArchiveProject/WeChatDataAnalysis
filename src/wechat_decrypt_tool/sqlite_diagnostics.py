@@ -182,3 +182,41 @@ def format_sqlite_diagnostics(diagnostics: Mapping[str, Any]) -> str:
             continue
         compact[str(key)] = value
     return json.dumps(compact, ensure_ascii=False, sort_keys=True)
+
+
+def repair_sqlite_indexes(path: str | Path) -> dict[str, Any]:
+    """Repair index-only damage on a disposable output, never on the source.
+
+    Do not attempt salvage of table/page corruption. A full integrity check must
+    pass after rebuilding every affected named index before output is accepted.
+    """
+    import re
+
+    result: dict[str, Any] = {"attempted": False, "success": False}
+    conn = None
+    try:
+        conn = sqlite3.connect(str(path))
+        conn.execute("PRAGMA trusted_schema=OFF")
+        errors = [str(row[0]) for row in conn.execute("PRAGMA integrity_check(1000)")]
+        if not errors or errors == ["ok"] or len(errors) >= 1000:
+            return result
+        indexes = set()
+        for error in errors:
+            match = re.fullmatch(r"(?:wrong # of entries in index|row \d+ missing from index) (.+)", error)
+            if match is None:
+                return result
+            indexes.add(match.group(1))
+        names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        if not indexes or not indexes <= names:
+            return result
+        result.update(attempted=True, indexes=sorted(indexes), original_errors=errors[:5])
+        for name in sorted(indexes):
+            conn.execute(f"REINDEX {_quote_ident(name)}")
+        conn.commit()
+        result['success'] = conn.execute("PRAGMA integrity_check").fetchall() == [('ok',)]
+    except sqlite3.Error as exc:
+        result['error'] = _clean_error(exc)
+    finally:
+        if conn is not None:
+            conn.close()
+    return result

@@ -15,6 +15,7 @@ import os
 import json
 import struct
 import time
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,8 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .app_paths import get_output_databases_dir
 from .database_filters import should_skip_source_database
-from .sqlite_diagnostics import collect_sqlite_diagnostics, sqlite_diagnostics_status
+from .sqlite_diagnostics import collect_sqlite_diagnostics, sqlite_diagnostics_status, repair_sqlite_indexes
+from .sqlite_wal import merge_wal_snapshot
 
 # 注意：不再支持默认密钥，所有密钥必须通过参数传入
 
@@ -101,6 +103,7 @@ def _safe_file_snapshot(path: str | Path) -> dict[str, Any]:
             {
                 "exists": True,
                 "size": int(st.st_size),
+                "inode": int(st.st_ino),
                 "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
             }
         )
@@ -115,6 +118,7 @@ def _safe_file_snapshot(path: str | Path) -> dict[str, Any]:
             siblings[suffix] = {
                 "exists": True,
                 "size": int(st.st_size),
+                "inode": int(st.st_ino),
                 "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
             }
         except FileNotFoundError:
@@ -483,7 +487,7 @@ def build_decrypt_summary_message(*, success_count: int, total_databases: int, d
 
     if success_count <= 0:
         if diagnostic_warning_count > 0:
-            return "解密失败：数据库校验未通过，密钥可能不匹配当前账号。"
+            return "解密失败：数据库校验未通过，请查看各文件的密钥认证、WAL 或完整性诊断。"
         return "解密失败：未能成功解密任何数据库。"
 
     if success_count < total_databases:
@@ -721,6 +725,9 @@ class WeChatDatabaseDecryptor:
             "source_changed_during_read": False,
             "read_ms": 0,
             "key_mode": "",
+            "key_authenticated": False,
+            "wal": {},
+            "index_repair": {},
             "input_layout": {},
             "expected_output_size": 0,
             "output_header_debug": {},
@@ -729,6 +736,20 @@ class WeChatDatabaseDecryptor:
             "error": "",
         }
         self.last_result = result
+        working_output: Path | None = None
+
+        def _write_output(data: bytes) -> None:
+            nonlocal working_output
+            with tempfile.NamedTemporaryFile(dir=Path(output_path).parent, prefix=".decrypt-", suffix=".db", delete=False) as stream:
+                working_output = Path(stream.name)
+                # A materialized snapshot is standalone; do not leave WAL mode
+                # enabled and let readers create new sidecars beside the export.
+                if data.startswith(SQLITE_HEADER) and data[18:20] == b"\x02\x02":
+                    stream.write(memoryview(data)[:18])
+                    stream.write(b"\x01\x01")
+                    stream.write(memoryview(data)[20:])
+                else:
+                    stream.write(data)
 
         def _append_failed_page(page_num: int, reason: str, error: str = "") -> None:
             result["failure_reasons"][reason] = int(result["failure_reasons"].get(reason) or 0) + 1
@@ -754,17 +775,26 @@ class WeChatDatabaseDecryptor:
             if error:
                 result["error"] = " ".join(str(error).split()).strip()
 
-            output_file = Path(str(output_path))
-            if output_file.exists():
+            output_file = working_output
+            if output_file is not None and output_file.exists():
                 try:
                     result["output_size"] = int(output_file.stat().st_size)
                 except Exception:
                     pass
 
                 diagnostics = collect_sqlite_diagnostics(output_file, quick_check=True)
+                if (normalized_success and diagnostics.get("quick_check_ok") is False
+                        and result["key_authenticated"] and result["failed_pages"] == 0
+                        and result["hmac_warning_pages"] == 0):
+                    result["index_repair"] = repair_sqlite_indexes(output_file)
+                    if result["index_repair"].get("success"):
+                        diagnostics = collect_sqlite_diagnostics(output_file, quick_check=True)
+                result["output_size"] = output_file.stat().st_size
+                diagnostics["path"] = str(output_path)
                 result["diagnostics"] = diagnostics
                 result["diagnostic_status"] = sqlite_diagnostics_status(diagnostics)
                 result["output_header_debug"] = _read_plain_sqlite_header_debug(output_file)
+                result["output_header_debug"]["path"] = str(output_path)
 
             if normalized_success:
                 failure_message = _build_decrypt_failure_message(result)
@@ -773,13 +803,21 @@ class WeChatDatabaseDecryptor:
                     result["success"] = False
                     if not result["error"]:
                         result["error"] = failure_message
-                    if output_file.exists():
+                    if output_file is not None and output_file.exists():
                         try:
                             output_file.unlink()
                         except Exception as exc:
                             logger.warning("删除无效解密输出失败: %s, 错误: %s", output_file, exc)
 
+            if normalized_success and output_file is not None:
+                # Never let an old output WAL override a freshly decrypted main file.
+                if any(Path(str(output_path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+                    raise ValueError("输出数据库正在使用或遗留日志文件，请关闭读取连接后重试")
+                os.replace(output_file, output_path)
             payload = {
+                "key_authenticated": result["key_authenticated"],
+                "wal": result["wal"],
+                "index_repair": result["index_repair"],
                 "db_name": result["db_name"],
                 "db_path": result["db_path"],
                 "output_path": result["output_path"],
@@ -823,6 +861,10 @@ class WeChatDatabaseDecryptor:
         logger.info(f"开始解密数据库: {db_path}")
         
         try:
+            if Path(db_path).resolve() == Path(output_path).resolve() or (
+                Path(output_path).exists() and os.path.samefile(db_path, output_path)
+            ):
+                raise ValueError("解密输出不能覆盖源数据库")
             source_snapshot_before = _safe_file_snapshot(db_path)
             result["source_snapshot_before"] = source_snapshot_before
             logger.info(
@@ -840,6 +882,18 @@ class WeChatDatabaseDecryptor:
             read_t0 = time.perf_counter()
             with open(db_path, 'rb') as f:
                 encrypted_data = f.read()
+            wal_path = Path(str(db_path) + "-wal")
+            try:
+                wal_data = wal_path.read_bytes()
+            except FileNotFoundError:
+                wal_data = b""
+            journal_path = Path(str(db_path) + "-journal")
+            try:
+                with journal_path.open('rb') as journal:
+                    if journal.read(8) == bytes.fromhex('d9d505f920a163d7'):
+                        raise ValueError("源数据库存在待恢复的回滚日志，请先通过微信完成恢复")
+            except FileNotFoundError:
+                pass
             result["read_ms"] = round((time.perf_counter() - read_t0) * 1000.0, 1)
 
             source_snapshot_after = _safe_file_snapshot(db_path)
@@ -848,7 +902,13 @@ class WeChatDatabaseDecryptor:
             after_size = int(source_snapshot_after.get("size") or 0)
             before_mtime = int(source_snapshot_before.get("mtime_ns") or 0)
             after_mtime = int(source_snapshot_after.get("mtime_ns") or 0)
-            source_changed = bool(before_size != after_size or before_mtime != after_mtime)
+            source_changed = bool(
+                before_size != after_size or before_mtime != after_mtime
+                or source_snapshot_before.get("inode") != source_snapshot_after.get("inode")
+                or any(source_snapshot_before.get("siblings", {}).get(suffix) !=
+                       source_snapshot_after.get("siblings", {}).get(suffix)
+                       for suffix in ("-wal", "-journal"))
+            )
             result["source_changed_during_read"] = source_changed
             logger.info(
                 "[decrypt.pipeline] source_snapshot_after %s",
@@ -872,6 +932,9 @@ class WeChatDatabaseDecryptor:
                     before_mtime,
                     after_mtime,
                 )
+
+            if source_changed:
+                return _finalize(False, "源数据库或 WAL 在读取期间发生变化，请退出微信后重试")
 
             logger.info(f"读取文件大小: {len(encrypted_data)} bytes")
             result["input_size"] = int(len(encrypted_data))
@@ -906,8 +969,17 @@ class WeChatDatabaseDecryptor:
             # 检查是否已经是解密的数据库
             if encrypted_data.startswith(SQLITE_HEADER):
                 logger.info(f"文件已是SQLite格式，直接复制: {db_path}")
-                with open(output_path, 'wb') as f:
-                    f.write(encrypted_data)
+                plain_page_size = int.from_bytes(encrypted_data[16:18], 'big')
+                if plain_page_size == 1:
+                    plain_page_size = 65536
+                if plain_page_size < 512 or plain_page_size > 65536 or plain_page_size & (plain_page_size - 1):
+                    raise ValueError("SQLite 页大小无效")
+                encrypted_data, result["wal"] = merge_wal_snapshot(encrypted_data, wal_data, plain_page_size)
+                if result["wal"]["committed_frames"]:
+                    merged = bytearray(encrypted_data)
+                    merged[28:32] = result["wal"]["database_pages"].to_bytes(4, "big")
+                    encrypted_data = bytes(merged)
+                _write_output(encrypted_data)
                 result["copied_as_sqlite"] = True
                 return _finalize(True)
             
@@ -922,6 +994,7 @@ class WeChatDatabaseDecryptor:
 
             enc_key, mac_key, key_mode = resolved_key_material
             result["key_mode"] = key_mode
+            result["key_authenticated"] = True
             logger.info("Page 1 HMAC verification passed: mode=%s path=%s", key_mode, db_path)
             logger.info(
                 "[decrypt.pipeline] key_material_resolved %s",
@@ -938,6 +1011,11 @@ class WeChatDatabaseDecryptor:
                 ),
             )
 
+            encrypted_data, result["wal"] = merge_wal_snapshot(
+                encrypted_data, wal_data, PAGE_SIZE,
+                verify_page=lambda page, pgno: hmac.compare_digest(
+                    page[-HMAC_SIZE:], _compute_page_hmac(mac_key, page, pgno)),
+            )
             decrypted_data = bytearray()
             total_pages = (len(encrypted_data) + PAGE_SIZE - 1) // PAGE_SIZE
             successful_pages = 0
@@ -1042,9 +1120,11 @@ class WeChatDatabaseDecryptor:
             result["successful_pages"] = int(successful_pages)
             result["failed_pages"] = int(failed_pages)
 
-            # 写入解密后的文件
-            with open(output_path, 'wb') as f:
-                f.write(decrypted_data)
+            # WAL commit size is authoritative even if page 1 was not in the WAL.
+            if result["wal"]["committed_frames"]:
+                decrypted_data[28:32] = result["wal"]["database_pages"].to_bytes(4, "big")
+            # 写入待校验的临时文件，验证成功后原子替换输出。
+            _write_output(decrypted_data)
 
             logger.info(f"解密文件大小: {len(decrypted_data)} bytes")
             if int(len(decrypted_data)) != int(result["expected_output_size"]):
@@ -1077,6 +1157,13 @@ class WeChatDatabaseDecryptor:
         except Exception as e:
             logger.error(f"解密失败: {db_path}, 错误: {e}")
             return _finalize(False, str(e))
+        finally:
+            if working_output is not None:
+                for suffix in ("", "-wal", "-shm", "-journal"):
+                    try:
+                        Path(str(working_output) + suffix).unlink(missing_ok=True)
+                    except OSError as exc:
+                        logger.warning("清理解密临时文件失败: %s", exc)
 
 def decrypt_wechat_databases(db_storage_path: str = None, key: str = None) -> dict:
     """
