@@ -1,6 +1,6 @@
 # Issue #166: offline decryption validation
 
-Validated on 2026-09-28 against upstream `63c8985` plus this fix, on macOS arm64
+Validated on 2026-09-28 against upstream `1b516cf` plus this fix, on macOS arm64
 (macOS 26.3.1, Python 3.11.15). No private databases, keys, account identifiers,
 message content, or raw application logs are included in this report.
 
@@ -56,11 +56,46 @@ the native broker remained inside macOS `SecItemCopyMatching`, called by
 before the broker startup timeout. A process sample established this wait;
 it is not evidence that the renewed runtime is expired or incompatible.
 
-Keychain authorization requires local user interaction and remains pending.
-Full Electron decryption and chat-reading acceptance is therefore **not yet
-claimed**, and the PR stays in draft. The earlier real-data HTTP tests used
-unmodified production decrypt and chat routers in a minimal FastAPI harness;
-they are not counted as full desktop acceptance.
+The user completed the macOS keychain prompt and the application's first-use
+agreement. The standard Electron-launched backend then returned HTTP 200 with
+`status=healthy`, and the actual Electron window displayed the application and
+existing chat data.
+
+### Issue-specific desktop backend regression
+
+The existing encrypted regression fixture generator was reused for two
+snapshots with the exact named-index entry-count error from #166. The same
+input bytes were tested against the unfixed code and the running desktop
+backend. The baseline checkout is `b70da36`; its decrypt implementation,
+SQLite diagnostics and decrypt router are unchanged through upstream `1b516cf`.
+
+| Same-input comparison | Unfixed code | Fixed desktop backend |
+| --- | --- | --- |
+| Page authentication | 3/3 pages, no HMAC warnings | Authenticated |
+| Named-index mismatch without WAL | `wrong # of entries in index SessionUnreadListTable_1_NameId_CreateTime`; session fails | Rebuilds only the affected index; full integrity check passes |
+| Same mismatch with a correcting committed WAL page | Same index failure; WAL omitted | 1 committed frame replayed; full integrity check passes without REINDEX |
+| Key persistence | Rejected because session did not verify | Saved after session/message authentication |
+| Records in repaired session fixture | Output rejected | Both expected records present |
+
+Each fixture included an authenticated message database. Both POST requests to
+the actual desktop backend completed with 2 successes and 0 failures. The WAL
+case also passed the actual SSE endpoint used by the decrypt page, ending in
+`complete`, 2 successes, 0 failures and `db_key_persisted=true`. Input hashes
+were unchanged. These are encrypted SQLite fixtures, not the reporter's
+unavailable 734-page original database.
+
+The already prepared real-account snapshot was then tested through this same
+Electron-launched backend: **20/20 successful, 0 failures, 20/20 independent
+integrity checks passed, key persisted, and source-copy hashes unchanged**.
+The POST request took 6.82 seconds. Explicit `source=decrypted` chat requests
+returned 5 sessions and 5 messages from these outputs. The visible Electron
+chat page was also inspected; private content and screenshots are not published.
+
+This is targeted regression testing against the complete desktop application's
+backend plus a visible desktop startup/chat check. It does not claim automated
+click-through of the entire first-use/key-capture/decrypt wizard. The earlier
+minimal-router HTTP tests remain supplementary evidence. No new account-key
+capture or modification of original WeChat databases was needed.
 
 The frontend production static build (`npm run generate`) passed, generating
 34 routes. After merging `1b516cf`, all 76 focused Python tests and 3 frontend
