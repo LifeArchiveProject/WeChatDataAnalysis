@@ -1,5 +1,6 @@
 """Real SQLite pages and encrypted fixtures for issue #166 (no mocked diagnostics)."""
 import hashlib
+from contextlib import closing
 import hmac
 import sqlite3
 import struct
@@ -39,7 +40,7 @@ def wal_bytes(frames, endian='<'):
 
 
 def plain_database(path):
-    with sqlite3.connect(path) as c:
+    with closing(sqlite3.connect(path)) as c:
         c.execute('PRAGMA page_size=4096')
         c.execute('VACUUM')
     # Reserve SQLCipher's 80-byte IV/MAC region before creating any records.
@@ -110,7 +111,7 @@ def test_real_sqlite_wal_commits_are_exported(tmp_path, keys, encrypted):
     assert result['wal']['committed_frames'] > 0
     assert result['key_authenticated'] is encrypted
     assert out.read_bytes()[18:20] == b'\x01\x01'
-    with sqlite3.connect(out) as conn:
+    with closing(sqlite3.connect(out)) as conn:
         assert conn.execute('SELECT name FROM records ORDER BY id').fetchall() == [('latest commit',), ('second row',)]
         assert conn.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
     assert src.read_bytes() == main
@@ -150,7 +151,7 @@ def test_issue166_authenticated_index_mismatch_recovers(tmp_path, keys, with_wal
     else:
         assert result['index_repair']['success']
         assert result['index_repair']['indexes'] == [INDEX]
-    with sqlite3.connect(out) as c:
+    with closing(sqlite3.connect(out)) as c:
         assert c.execute('SELECT COUNT(*) FROM records').fetchone() == (2,)
         assert c.execute('PRAGMA integrity_check').fetchone() == ('ok',)
     assert src.read_bytes() == encrypted
@@ -267,7 +268,11 @@ def test_source_is_never_overwritten(tmp_path, alias):
     src = tmp_path/'source.db'; c = plain_database(src); c.close()
     original = src.read_bytes(); out = tmp_path/'out.db'
     if alias == 'hardlink': out.hardlink_to(src)
-    elif alias == 'symlink': out.symlink_to(src)
+    elif alias == 'symlink':
+        try:
+            out.symlink_to(src)
+        except OSError:
+            pytest.skip('Creating symlinks is unavailable on this platform')
     else: out = src
     ok, result = run_decrypt(src,out)
     assert not ok and '源数据库' in result['error']
@@ -303,15 +308,14 @@ def test_real_sqlite_wal_growth_and_vacuum(tmp_path):
     expected = c.execute('SELECT COUNT(*) FROM records').fetchone()
     ok, result = run_decrypt(src,out)
     assert ok, result
-    with sqlite3.connect(out) as reader:
+    with closing(sqlite3.connect(out)) as reader:
         assert reader.execute('SELECT COUNT(*) FROM records').fetchone() == expected
         assert reader.execute('PRAGMA integrity_check').fetchone() == ('ok',)
-    reader.close()
     c.execute('DELETE FROM records WHERE id > 2'); c.commit()
     c.execute('VACUUM')
     ok, result = run_decrypt(src,out)
     assert ok, result
-    with sqlite3.connect(out) as reader:
+    with closing(sqlite3.connect(out)) as reader:
         assert reader.execute('SELECT COUNT(*) FROM records').fetchone() == (2,)
         assert reader.execute('PRAGMA integrity_check').fetchone() == ('ok',)
     c.close()
