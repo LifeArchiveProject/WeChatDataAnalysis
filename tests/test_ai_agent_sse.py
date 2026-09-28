@@ -71,10 +71,12 @@ def test_stream_waits_for_notification_instead_of_polling_and_uses_low_frequency
                 # 空闲期间只查询一次后等待通知，不再每 100ms 查询 SQLite。
                 assert await asyncio.wait_for(anext(response.body_iterator), 0.5) == ': heartbeat\n\n'
                 assert calls == 1
-                pending = asyncio.create_task(anext(response.body_iterator))
-                await asyncio.sleep(0)
-                service.store.event('account', 'agent', {'type': 'live'})
-                event = await asyncio.wait_for(pending, 0.5)
-                assert json.loads(event.split('data: ', 1)[1]) == {'type': 'live'}
+                # 通知验证的心跳要晚于断言截止时间；通知失效时应超时，而非靠心跳重查通过。
+                with patch.object(ai_agent, 'SSE_HEARTBEAT_SECONDS', 2.0):
+                    pending = asyncio.create_task(anext(response.body_iterator))
+                    await asyncio.sleep(0)
+                    service.store.event('account', 'agent', {'type': 'live'})
+                    event = await asyncio.wait_for(pending, 0.5)
+                    assert json.loads(event.split('data: ', 1)[1]) == {'type': 'live'}
             await response.body_iterator.aclose()
     asyncio.run(run())
