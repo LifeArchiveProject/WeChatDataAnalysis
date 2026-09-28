@@ -49,6 +49,28 @@ SQLite queries. No decrypt, database, WAL, key-store, or chat-reader mocks were
 used for those real-data tests. A full Electron/desktop end-to-end pass is **not**
 claimed.
 
+Re-running the standard desktop entry point, `cd desktop && npm run dev`,
+exited with status 1 before launching Electron:
+
+```text
+当前 WCDA 固定的 macOS 源码运行时已过期，请先拉取最新代码后再启动。
+```
+
+The pin in both public branches (`main` and `codex/rebuild-native-per-release`)
+still refers to `macos-source-runtime-20260809-71122b5b-8e355001`, with expiry
+`2026-09-22T06:48:28Z`. The latest successful public source-runtime promotion
+is [run 31300268967](https://github.com/LifeArchiveProject/WeChatDataAnalysis/actions/runs/31300268967).
+No newer public macOS source-runtime release was available when checked.
+Packaged production components are not accepted by the macOS source startup
+policy, so substituting an application bundle is not a supported repair.
+
+Desktop acceptance remains pending. It requires a newly built, signed,
+unexpired source-public runtime from the private producer and an updated
+official pin, followed by the complete Electron decryption and chat-reading
+flow using the same private input copies. The testing account has read-only
+access to the upstream repository and cannot access the private producer.
+The PR is kept in draft until that desktop verification is completed.
+
 The frontend production static build (`npm run generate`) passed, generating
 34 routes.
 
