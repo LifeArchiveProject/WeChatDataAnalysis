@@ -1,4 +1,5 @@
 name: macOS public source runtime promotion
+run-name: macOS source runtime ${{ inputs.release_tag }}
 
 on:
   workflow_dispatch:
@@ -31,6 +32,22 @@ on:
         description: Exact XKey build ID
         required: true
         type: string
+      integrity_run_id:
+        description: Exact private Producer run containing production export integrity
+        required: true
+        type: string
+      integrity_source_revision:
+        description: Exact export-integrity Producer revision
+        required: true
+        type: string
+      integrity_build_id:
+        description: Exact export-integrity build ID
+        required: true
+        type: string
+      integrity_binary_sha256:
+        description: SHA-256 of the exact export-integrity binary
+        required: true
+        type: string
       integrity_ui_source_revision:
         description: WCDA revision pinned by the existing integrity artifact
         required: true
@@ -61,11 +78,11 @@ jobs:
       WCE_NATIVE_CORE_HOST_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_HOST_SIGNER_SHA256 }}
       WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256: ${{ vars.WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256 }}
       WCE_MACOS_XKEY_ARTIFACT_REPOSITORY: ${{ vars.WCE_MACOS_XKEY_ARTIFACT_REPOSITORY }}
-      WCE_INTEGRITY_ARTIFACT_REPOSITORY: ${{ vars.WCE_INTEGRITY_ARTIFACT_REPOSITORY }}
-      WCE_INTEGRITY_ARTIFACT_RUN_ID: ${{ vars.WCE_INTEGRITY_ARTIFACT_RUN_ID }}
-      WCE_INTEGRITY_SOURCE_REVISION: ${{ vars.WCE_INTEGRITY_SOURCE_REVISION }}
-      WCE_INTEGRITY_BUILD_ID: ${{ vars.WCE_INTEGRITY_BUILD_ID }}
-      WCE_INTEGRITY_BINARY_SHA256: ${{ vars.WCE_INTEGRITY_BINARY_SHA256 }}
+      WCE_INTEGRITY_ARTIFACT_REPOSITORY: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_REPOSITORY }}
+      WCE_INTEGRITY_ARTIFACT_RUN_ID: ${{ inputs.integrity_run_id }}
+      WCE_INTEGRITY_SOURCE_REVISION: ${{ inputs.integrity_source_revision }}
+      WCE_INTEGRITY_BUILD_ID: ${{ inputs.integrity_build_id }}
+      WCE_INTEGRITY_BINARY_SHA256: ${{ inputs.integrity_binary_sha256 }}
       WCE_INTEGRITY_UI_SOURCE_REPOSITORY: ${{ github.repository }}
       WCE_INTEGRITY_UI_SOURCE_REVISION: ${{ inputs.integrity_ui_source_revision }}
 
@@ -120,34 +137,72 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WCE_MACOS_PRODUCER_READ_TOKEN }}
           NATIVE_RUN_ID: ${{ inputs.native_core_run_id }}
+          NATIVE_REVISION: ${{ inputs.native_core_source_revision }}
+          NATIVE_BUILD_ID: ${{ inputs.native_core_build_id }}
           XKEY_RUN_ID: ${{ inputs.xkey_run_id }}
+          XKEY_REVISION: ${{ inputs.xkey_source_revision }}
+          XKEY_BUILD_ID: ${{ inputs.xkey_build_id }}
+          INTEGRITY_RUN_ID: ${{ inputs.integrity_run_id }}
+          INTEGRITY_REVISION: ${{ inputs.integrity_source_revision }}
+          INTEGRITY_BUILD_ID: ${{ inputs.integrity_build_id }}
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
-          download_artifact() {
+          download_release() {
             local repository="$1"
             local run_id="$2"
-            local artifact_name="$3"
-            local destination="$4"
-            local downloaded=0
-            for attempt in 1 2 3; do
-              rm -rf "$destination"
-              mkdir -p "$destination"
-              if gh run download "$run_id" --repo "$repository" \
-                  --name "$artifact_name" --dir "$destination"; then
-                downloaded=1
-                break
-              fi
-              sleep "$((attempt * 10))"
-            done
-            test "$downloaded" = 1
+            local revision="$3"
+            local build_id="$4"
+            local workflow="$5"
+            local release_tag="$6"
+            local asset_name="$7"
+            local destination="$8"
+            local executable="$9"
+            local run_meta
+            local head_sha head_branch event status conclusion path display_title
+            local digest archive actual
+            run_meta="$(gh api "repos/$repository/actions/runs/$run_id" \
+              --jq '[.head_sha,.head_branch,.event,.status,.conclusion,.path,.display_title] | @tsv')"
+            IFS=$'\t' read -r head_sha head_branch event status conclusion path display_title <<< "$run_meta"
+            test "$head_sha" = "$revision"
+            test "$head_branch" = main
+            test "$event" = workflow_dispatch
+            test "$status" = completed
+            test "$conclusion" = success
+            test "$path" = "$workflow"
+            test "$display_title" = "WCDB $build_id"
+            test "$(gh api "repos/$repository/releases/tags/$release_tag" --jq '.target_commitish')" = "$revision"
+            digest="$(gh api "repos/$repository/releases/tags/$release_tag" \
+              --jq "[.assets[] | select(.name == \"$asset_name\") | .digest] | if length == 1 then .[0] else \"\" end")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            archive="$RUNNER_TEMP/$asset_name"
+            rm -f "$archive"
+            rm -rf "$destination"
+            gh release download "$release_tag" --repo "$repository" \
+              --pattern "$asset_name" --dir "$RUNNER_TEMP"
+            test -s "$archive"
+            actual="$(shasum -a 256 "$archive" | awk '{print tolower($1)}')"
+            test "sha256:$actual" = "$digest"
+            mkdir -p "$destination"
+            /usr/bin/unzip -q "$archive" -d "$destination"
+            test -f "$destination/$executable" || test -z "$executable"
+            if [[ -n "$executable" ]]; then chmod 0755 "$destination/$executable"; fi
           }
-          download_artifact "$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY" "$NATIVE_RUN_ID" \
-            wechatdb-native-macos-arm64-source-public "$RUNNER_TEMP/source-native-core"
-          download_artifact "$WCE_MACOS_XKEY_ARTIFACT_REPOSITORY" "$XKEY_RUN_ID" \
-            wda-xkey-macos-universal-source-public "$RUNNER_TEMP/source-xkey"
-          download_artifact "$WCE_INTEGRITY_ARTIFACT_REPOSITORY" "$WCE_INTEGRITY_ARTIFACT_RUN_ID" \
-            wce-integrity-macos-arm64-production "$RUNNER_TEMP/source-integrity"
+          download_release "$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY" "$NATIVE_RUN_ID" "$NATIVE_REVISION" "$NATIVE_BUILD_ID" \
+            .github/workflows/macos-native-production.yml "macos-native-$NATIVE_BUILD_ID" \
+            "wechatdb-native-macos-arm64-source-public-$NATIVE_BUILD_ID.zip" "$RUNNER_TEMP/source-native-core" wechatdb_broker
+          download_release "$WCE_MACOS_XKEY_ARTIFACT_REPOSITORY" "$XKEY_RUN_ID" "$XKEY_REVISION" "$XKEY_BUILD_ID" \
+            .github/workflows/macos-key-capture-production.yml "macos-xkey-$XKEY_BUILD_ID" \
+            "wda-xkey-macos-universal-source-public-$XKEY_BUILD_ID.zip" "$RUNNER_TEMP/source-xkey" wda_xkey_helper
+          download_release "$WCE_INTEGRITY_ARTIFACT_REPOSITORY" "$INTEGRITY_RUN_ID" "$INTEGRITY_REVISION" "$INTEGRITY_BUILD_ID" \
+            .github/workflows/macos-integrity-production.yml "macos-integrity-$INTEGRITY_BUILD_ID" \
+            "wce-integrity-macos-arm64-production-$INTEGRITY_BUILD_ID.zip" "$RUNNER_TEMP/source-integrity" ""
+          test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["buildId"])' \
+            "$RUNNER_TEMP/source-native-core/wechatdb_native_build.json")" = "$NATIVE_BUILD_ID"
+          test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["build"]["id"])' \
+            "$RUNNER_TEMP/source-xkey/wda_xkey_build.json")" = "$XKEY_BUILD_ID"
+          test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["buildId"])' \
+            "$RUNNER_TEMP/source-integrity/wce_integrity_build.json")" = "$INTEGRITY_BUILD_ID"
           echo "WCE_SOURCE_PUBLIC_NATIVE_CORE_DIR=$RUNNER_TEMP/source-native-core" >> "$GITHUB_ENV"
           echo "WCE_SOURCE_PUBLIC_XKEY_DIR=$RUNNER_TEMP/source-xkey" >> "$GITHUB_ENV"
           echo "WCE_INTEGRITY_ARTIFACT_DIR=$RUNNER_TEMP/source-integrity" >> "$GITHUB_ENV"
@@ -166,7 +221,8 @@ jobs:
             --client-signer-sha256 "$WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256" \
             --broker-signer-sha256 "$WCE_NATIVE_CORE_BROKER_SIGNER_SHA256" \
             --host-signer-sha256 "$WCE_NATIVE_CORE_HOST_SIGNER_SHA256" \
-            --private-root-sha256 "$WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256"
+            --private-root-sha256 "$WCE_NATIVE_CORE_PRIVATE_ROOT_SHA256" \
+            --read-only
 
       - name: Verify source-public XKey producer artifact
         shell: bash
@@ -237,13 +293,49 @@ jobs:
           actual="$(shasum -a 256 "$public_asset" | awk '{print tolower($1)}')"
           test "$actual" = "$expected"
 
-      - name: Upload promotion evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: macos-source-runtime-promotion-${{ inputs.release_tag }}
-          path: |
-            ${{ runner.temp }}/macos-source-runtime-promotion/promotion-output.json
-            ${{ runner.temp }}/macos-source-runtime-promotion/SHA256SUMS-macos-source-runtime.txt
-            ${{ runner.temp }}/macos-source-runtime-promotion/wechatdataanalysis-macos-source-runtime-arm64-v1.manifest.json
-          if-no-files-found: error
-          retention-days: 90
+      - name: Update macOS source-runtime pin on main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current="$(gh api \
+            --header "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/contents/desktop/resources/native-core-source-macos.json?ref=main")"
+          request="$(
+            WCE_SOURCE_RUNTIME_CURRENT_RESPONSE="$current" \
+            WCE_SOURCE_RUNTIME_PROMOTION_JSON="$WCE_SOURCE_RUNTIME_OUTPUT_DIR/promotion-output.json" \
+            node <<'NODE'
+          const fs = require("node:fs");
+
+          const currentResponse = JSON.parse(process.env.WCE_SOURCE_RUNTIME_CURRENT_RESPONSE);
+          const currentPin = JSON.parse(
+            Buffer.from(currentResponse.content.replace(/\s/g, ""), "base64").toString("utf8")
+          );
+          const promotion = JSON.parse(
+            fs.readFileSync(process.env.WCE_SOURCE_RUNTIME_PROMOTION_JSON, "utf8")
+          );
+          if (currentPin.expiresAtUnix >= promotion.expiresAtUnix) process.exit(0);
+          for (const field of [
+            "releaseTag",
+            "assetSha256",
+            "runtimeManifestSha256",
+            "expiresAtUnix",
+          ]) currentPin[field] = promotion[field];
+          process.stdout.write(JSON.stringify({
+            message: "ci: refresh macOS source runtime pin",
+            content: Buffer.from(`${JSON.stringify(currentPin, null, 2)}\n`).toString("base64"),
+            sha: currentResponse.sha,
+            branch: "main",
+          }));
+          NODE
+          )"
+          if [[ -z "$request" ]]; then
+            echo "main already has a source-runtime pin with an equal or newer expiry"
+            exit 0
+          fi
+          gh api \
+            --method PUT \
+            --header "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/contents/desktop/resources/native-core-source-macos.json" \
+            --input - <<< "$request" > /dev/null

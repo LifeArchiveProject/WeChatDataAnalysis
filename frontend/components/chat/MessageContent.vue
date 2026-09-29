@@ -694,7 +694,7 @@ export default defineComponent({
       const source = voiceTranscriptSourceKey(message)
       if (source === 'wechat') return '文字由微信客户端原生语音转文字能力生成'
       const model = String(message?.voiceTranscriptModel || '').trim()
-      if (source === 'project') return `文字由本项目本地 Whisper 转写（模型：${model}）`
+      if (source === 'project') return `文字由本项目本地模型转写（模型：${model}）`
       return '该转写记录没有来源标记'
     }
 

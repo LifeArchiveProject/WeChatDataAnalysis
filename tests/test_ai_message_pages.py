@@ -337,6 +337,13 @@ def test_index_stream_resumes_only_committed_batches(message_source, tmp_path, m
 
     async def run():
         service = LocalSearch(tmp_path / 'state', tmp_path / 'models', engine=engine)
+        emitted = []
+        original_event = service.store.event
+        def record(account, kind, body, unique_key=None, replace=False):
+            if kind == 'local_search_index':
+                emitted.append(body)
+            return original_event(account, kind, body, unique_key, replace)
+        monkeypatch.setattr(service.store, 'event', record)
         root = model_dir(service.downloads.root, 'bge-small-zh')
         root.mkdir(parents=True)
         Tokenizer(models.WordLevel({'[UNK]': 0}, unk_token='[UNK]')).save(str(root / 'tokenizer.json'))
@@ -364,8 +371,12 @@ def test_index_stream_resumes_only_committed_batches(message_source, tmp_path, m
         with service.index('a').connection() as db:
             assert db.execute('SELECT count(*) FROM messages').fetchone()[0] == 1250
         events = service.store.events()
-        assert any(e['kind'] == 'local_search_index' and e['body'].get('stage') == 'reading'
-            and e['body'].get('read_count', 0) > e['body']['processed'] for e in events)
+        assert any(e.get('stage') == 'reading'
+            and e.get('read_count', 0) > e.get('processed', 0) for e in emitted)
+        # 同一任务在事件表只保留最新一行，且不携带可重建的大字段。
+        stored = [e for e in events if e['kind'] == 'local_search_index' and e['body'].get('id') == job['id']]
+        assert len(stored) == 1
+        assert 'config' not in stored[0]['body'] and 'segments' not in stored[0]['body'] and 'coverage' not in stored[0]['body']
         await service.stop()
 
     asyncio.run(run())

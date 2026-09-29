@@ -11,7 +11,7 @@ class MessageTotals:
     def save_message_total(self, job, **values):
         total = {'job_id': job['id'], 'updated': time.time(), **values}
         self.store.put('index_message_total', total, id=job['id'], account=job['account'])
-        self.store.event(job['account'], 'local_search_total', total)
+        self.store.event(job['account'], 'local_search_total', total, unique_key=f'index_total:{job["id"]}', replace=True)
 
     def message_plan(self, job):
         account_key = hashlib.sha256(job['account'].encode()).hexdigest()

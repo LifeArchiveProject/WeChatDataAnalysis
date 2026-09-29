@@ -106,6 +106,28 @@ afterEach(() => {
 })
 
 describe('聊天页语音转文字侧栏', () => {
+  it('新后端限制并发与设备，缺少 GPU 组件时不能选择该模型', () => {
+    const state = makeState({
+      voiceBatchJob: ref({ status: 'idle', percent: 0 }),
+      voiceTranscriptionStatus: ref({
+        available: true, backend: 'zipformer', model: 'zipformer-small-ctc-int8',
+        modelReady: true, requestedDevice: 'cpu', supportedDevices: ['cpu'],
+        cuda: { available: true },
+        models: [
+          { id: 'zipformer-small-ctc-int8', name: 'Zipformer CTC', downloaded: true, runtimeAvailable: true },
+          { id: 'qwen3-asr-06b-hf', name: 'Qwen GPU', downloaded: true, runtimeAvailable: false },
+        ],
+      }),
+    })
+    const wrapper = mount(VoiceTranscriptionSidebar, { props: { state } })
+    expect(wrapper.get('.voice-concurrency-select').element.disabled).toBe(true)
+    expect(wrapper.get('.voice-device-cuda').element.disabled).toBe(true)
+    expect(wrapper.get('.voice-device-cpu').element.disabled).toBe(false)
+    expect(wrapper.get('option[value="qwen3-asr-06b-hf"]').element.disabled).toBe(true)
+    expect(wrapper.text()).toContain('缺少运行组件')
+    expect(wrapper.text()).not.toContain('CUDA 失败自动回退 CPU')
+  })
+
   it('快速切换多个账号时保留最后一次选择', () => {
     const accountChangeSource = chatPageSource.slice(
       chatPageSource.indexOf('const onAccountChange = async () =>'),
@@ -373,7 +395,7 @@ describe('聊天页语音转文字侧栏', () => {
     expect(settingsDialogSource).toContain('删除全部本项目转写结果')
     expect(settingsDialogSource).toContain(':disabled="voiceTranscriptDeleteBusy"')
     expect(settingsDialogSource).toContain('此操作不可撤销')
-    expect(settingsDialogSource).toContain('所有账号中由本项目 Whisper 生成的全部转写文字')
+    expect(settingsDialogSource).toContain('所有账号中由本项目本地模型生成的全部转写文字')
     expect(settingsDialogSource).toContain('微信原生转写、原始语音和已下载模型都会保留')
     expect(settingsDialogSource).toContain('await api.deleteAllVoiceTranscriptionCache()')
     expect(settingsDialogSource).toContain('notifyProjectVoiceTranscriptsInvalidated(result)')

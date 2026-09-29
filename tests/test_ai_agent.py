@@ -1,21 +1,23 @@
 import asyncio
 import sys
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from wechat_decrypt_tool.ai.agent_service import AgentService, Revised
 from wechat_decrypt_tool.ai.agent_schemas import AgentControl
 from wechat_decrypt_tool.ai.agent_schemas import AgentAction
+from wechat_decrypt_tool.ai.agent_schemas import ThreadInput
 from wechat_decrypt_tool.ai.providers import ModelService, ProviderFailure, model_attempt_hook
 from wechat_decrypt_tool.ai.service import AIService
 from wechat_decrypt_tool.ai.storage import AIStore
-from wechat_decrypt_tool.routers import ai_agent
+from wechat_decrypt_tool.routers import ai_agent, chat
 from langchain_core.messages import AIMessageChunk
 
 SOURCE = 'a' * 24
@@ -336,6 +338,93 @@ def test_router_settings_submit_and_account_guard(service):
             assert settings.json()['unlimited'] is True
             assert (await client.get('/api/ai/agent/settings', headers={'Origin':'https://untrusted.example'})).status_code == 403
     with patch.object(ai_agent, 'get_agent_service', return_value=service), patch.object(ai_agent, 'account_name', side_effect=lambda x: x):
+        asyncio.run(run())
+
+
+def test_reimported_account_can_create_and_send_agent_thread(service, tmp_path):
+    from wechat_decrypt_tool.ai import agent_service
+
+    account_dir = tmp_path / 'account'
+    account_dir.mkdir()
+
+    def resolve_account(account):
+        if not account_dir.exists():
+            raise HTTPException(404, '账号不存在')
+        return account
+
+    async def run():
+        original = await service.create_thread('account', 'friend', '旧对话')
+        service.ai.purge_account('account')
+        assert service.store.get('agent_thread', original['id']) is None
+        assert 'account' in service.store.revoked_accounts
+        account_dir.rmdir()
+        account_dir.mkdir()  # 重新导入同名账号后，目录再次出现。
+
+        app = FastAPI(); app.include_router(ai_agent.router)
+        transport = httpx.ASGITransport(app=app, client=('127.0.0.1', 100))
+        async with httpx.AsyncClient(transport=transport, base_url='http://localhost') as client:
+            created = await client.post('/api/ai/agent/threads',
+                                        json={'account': 'account', 'username': 'friend'})
+            assert created.status_code == 200, created.text
+            thread_id = created.json()['id']
+            assert service.store.get('agent_thread', thread_id) is not None
+            sent = await client.post(f'/api/ai/agent/threads/{thread_id}/messages',
+                                     params={'account': 'account'},
+                                     json={'text': '找报价', 'request_id': 'first'})
+            assert sent.status_code == 200, sent.text
+            await service.workers[sent.json()['id']]
+            assert service.run(sent.json()['id'])['status'] == 'completed'
+
+    with patch.object(agent_service, '_agent', service), \
+         patch.object(ai_agent, 'get_agent_service', return_value=service), \
+         patch.object(ai_agent, 'account_name', side_effect=resolve_account):
+        asyncio.run(run())
+
+
+def test_create_thread_waits_until_account_deletion_finishes(service, tmp_path):
+    from wechat_decrypt_tool.ai import agent_service
+    from wechat_decrypt_tool.ai import service as ai_service_module
+
+    account_dir = tmp_path / 'account'
+    account_dir.mkdir()
+    purged = threading.Event()
+    finish_delete = threading.Event()
+
+    def delete_account(_account):
+        service.ai.purge_account('account')
+        purged.set()
+        if not finish_delete.wait(5):
+            raise RuntimeError('删除流程未被释放')
+        account_dir.rmdir()
+        return {'status': 'success'}
+
+    def resolve_account(account):
+        if not account_dir.exists():
+            raise HTTPException(404, '账号不存在')
+        return account
+
+    async def run():
+        deleting = asyncio.create_task(asyncio.to_thread(chat.delete_chat_account, 'account'))
+        try:
+            assert await asyncio.to_thread(purged.wait, 5)
+            creating = asyncio.create_task(ai_agent.create_thread(
+                ThreadInput(account='account', username='friend')))
+            await asyncio.sleep(.05)
+            assert not creating.done()
+            assert 'account' in service.store.revoked_accounts
+        finally:
+            finish_delete.set()
+        await deleting
+        with pytest.raises(HTTPException) as error:
+            await creating
+        assert error.value.status_code == 404
+        assert service.store.list('agent_thread', 'account') == []
+
+    with patch.object(agent_service, '_agent', service), \
+         patch.object(ai_service_module, 'get_ai_service', return_value=service.ai), \
+         patch.object(chat, '_delete_chat_account', side_effect=delete_account), \
+         patch.object(ai_agent, 'get_agent_service', return_value=service), \
+         patch.object(ai_agent, 'account_name', side_effect=resolve_account):
         asyncio.run(run())
 
 

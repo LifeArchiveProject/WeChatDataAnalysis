@@ -56,7 +56,7 @@ class GPUComponent:
     def update(self, **values):
         job={**(self.store.get('gpu_component','global') or {}),**values,'updated':time.time()}
         self.store.put('gpu_component',job,id='global')
-        self.store.event('','local_search_gpu',job)
+        self.store.event('','local_search_gpu',job, unique_key='local_search_gpu', replace=True)
 
     @observed('gpu.start')
     async def start(self, source=None):

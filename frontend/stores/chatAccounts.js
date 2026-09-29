@@ -252,7 +252,8 @@ export const useChatAccountsStore = defineStore('chatAccounts', () => {
         sourceStatusByAccount.value = {}
         selectedAccount.value = null
         writeSelectedAccount(null)
-        loaded.value = true
+        // 失败时保持未加载状态，后续进入页面或手动刷新可以重试。
+        loaded.value = false
         error.value = e?.message || '加载账号失败'
       } finally {
         loading.value = false

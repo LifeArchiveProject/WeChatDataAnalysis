@@ -180,7 +180,8 @@ def test_unexposed_tool_calls_retry_without_duplicate_fragments(tmp_path, monkey
         gateway = await prepared(service)
         attempts = []
         if fault == 'timeout':
-            monkeypatch.setattr('wechat_decrypt_tool.ai.deep_model.MODEL_ATTEMPT_SECONDS', .5)
+            # 首次请求挂起以触发真实超时；不能要求 CI 上的 SQLite 和正常重试在半秒内完成。
+            monkeypatch.setattr('wechat_decrypt_tool.ai.deep_model.MODEL_ATTEMPT_SECONDS', 5)
         async def stream(messages, **kwargs):
             attempts.append(1)
             if len(attempts) == 1:
@@ -191,11 +192,16 @@ def test_unexposed_tool_calls_retry_without_duplicate_fragments(tmp_path, monkey
                     import httpx2
                     raise httpx2.RemoteProtocolError('SDK 传输层断流')
                 if fault == 'timeout':
-                    await asyncio.sleep(.6)
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        # 当前尝试的截止时间已经固定，下一次尝试应获得独立且充足的期限。
+                        monkeypatch.setattr('wechat_decrypt_tool.ai.deep_model.MODEL_ATTEMPT_SECONDS', 30)
                 yield AIMessageChunk(content='', tool_call_chunks=[{'name': None, 'args': 'invalid', 'id': None, 'index': 0}])
                 return
             if fault == 'timeout':
-                await asyncio.sleep(.2)
+                # 正常重试也允许超过旧的 0.5 秒阈值，模拟慢速 CI 的调度及持久化开销。
+                await asyncio.sleep(.6)
             yield AIMessageChunk(content='', tool_calls=[{'name': 'select_chat_scope', 'args': {}, 'id': 'good', 'type': 'tool_call'}])
         client.astream = stream
         model = DeepChatModel(service=service, run_id=gateway.id, input_version=gateway.version).bind_tools(gateway.tools())
@@ -205,6 +211,8 @@ def test_unexposed_tool_calls_retry_without_duplicate_fragments(tmp_path, monkey
         assert not response.invalid_tool_calls
         audits = service.store.list('usage', 'account')
         assert any(a.get('status') == 'failed' and a.get('output_exposed') is False for a in audits)
+        if fault == 'timeout':
+            assert any(a.get('error_type') == 'TimeoutError' for a in audits)
     asyncio.run(check())
 
 

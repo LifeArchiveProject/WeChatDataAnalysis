@@ -70,8 +70,8 @@
             >
               {{ voiceCurrentModelInfo?.name || voiceCurrentModel }} · 未下载
             </option>
-            <option v-for="model in voiceSelectableModels" :key="model.id" :value="model.id">
-              {{ model.name || model.id }} · 已下载
+            <option v-for="model in voiceSelectableModels" :key="model.id" :value="model.id" :disabled="model.runtimeAvailable === false">
+              {{ model.name || model.id }} · {{ model.runtimeAvailable === false ? '缺少运行组件' : '已下载' }}
             </option>
           </select>
           <div class="mt-1.5 flex items-start justify-between gap-2">
@@ -96,7 +96,7 @@
           <div class="flex items-center justify-between gap-2">
             <div>
               <h3 id="voice-device-title" class="voice-panel-heading">推理设备</h3>
-              <p class="voice-panel-muted mt-0.5">CUDA 失败自动回退 CPU</p>
+              <p class="voice-panel-muted mt-0.5">{{ voiceModelSerial ? '设备由所选模型决定' : 'CUDA 失败自动回退 CPU' }}</p>
             </div>
             <span class="voice-panel-device-label">{{ voiceActiveDeviceLabel }}</span>
           </div>
@@ -106,7 +106,7 @@
               class="voice-device-cpu rounded-[5px] px-2 py-1.5 text-[11px] font-medium"
               :class="{ 'is-active': voiceRequestedDevice === 'cpu' }"
               :aria-checked="voiceRequestedDevice === 'cpu'"
-              :disabled="voicePanelBusy || voiceBatchActive || voiceDeviceLocked"
+              :disabled="voicePanelBusy || voiceBatchActive || voiceDeviceLocked || !voiceSupportedDevices.includes('cpu')"
               role="radio"
               @click="setVoicePanelDevice('cpu')"
             >CPU</button>
@@ -115,7 +115,7 @@
               class="voice-device-cuda rounded-[5px] px-2 py-1.5 text-[11px] font-medium"
               :class="{ 'is-active': voiceRequestedDevice === 'cuda' }"
               :aria-checked="voiceRequestedDevice === 'cuda'"
-              :disabled="voicePanelBusy || voiceBatchActive || voiceDeviceLocked || !voiceCudaAvailable"
+              :disabled="voicePanelBusy || voiceBatchActive || voiceDeviceLocked || !voiceCudaAvailable || !voiceSupportedDevices.includes('cuda')"
               role="radio"
               @click="setVoicePanelDevice('cuda')"
             >NVIDIA GPU</button>
@@ -150,7 +150,7 @@
                   step="1"
                   inputmode="numeric"
                   :value="voiceBatchConcurrencyDraft"
-                  :disabled="voicePanelBusy || voiceBatchActive"
+                  :disabled="voicePanelBusy || voiceBatchActive || voiceModelSerial"
                   :aria-invalid="voiceBatchConcurrencyError ? 'true' : 'false'"
                   :aria-describedby="voiceBatchConcurrencyError ? 'voice-batch-concurrency-hint voice-batch-concurrency-error' : 'voice-batch-concurrency-hint'"
                   title="0 自动，输入正整数"
@@ -158,7 +158,7 @@
                   @blur="commitConcurrencyDraft"
                   @keydown.enter.prevent="commitConcurrencyDraft"
                 >
-                <span id="voice-batch-concurrency-hint" class="voice-panel-muted whitespace-nowrap">0 自动，输入正整数</span>
+                <span id="voice-batch-concurrency-hint" class="voice-panel-muted">{{ voiceModelSerial ? '此模型逐条识别，控制内存占用' : '0 自动，输入正整数' }}</span>
               </div>
               <p v-if="voiceBatchConcurrencyError" id="voice-batch-concurrency-error" class="voice-concurrency-error mt-1 text-[10px]" role="alert">
                 {{ voiceBatchConcurrencyError }}
@@ -246,6 +246,8 @@ export default defineComponent({
       || ''
     ).trim())
     const voiceModels = computed(() => Array.isArray(voiceStatus.value.models) ? voiceStatus.value.models : [])
+    const voiceModelSerial = computed(() => !!voiceStatus.value.backend && voiceStatus.value.backend !== 'whisper')
+    const voiceSupportedDevices = computed(() => voiceStatus.value.supportedDevices || ['cpu', 'cuda'])
     const voiceSelectableModels = computed(() => voiceModels.value.filter((model) => model?.downloaded === true))
     const voiceCurrentModel = computed(() => String(voiceStatus.value.model || '').trim())
     const voiceCurrentModelInfo = computed(() => {
@@ -363,6 +365,8 @@ export default defineComponent({
       voiceNativeAvailable,
       voiceNativeReason,
       voiceModels,
+      voiceModelSerial,
+      voiceSupportedDevices,
       voiceSelectableModels,
       voiceCurrentModel,
       voiceCurrentModelInfo,

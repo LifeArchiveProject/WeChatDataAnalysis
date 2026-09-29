@@ -4494,6 +4494,12 @@ def get_chat_account_info(account: Optional[str] = None):
 
 @router.delete("/api/chat/account", summary="删除当前账号在本项目中的数据")
 def delete_chat_account(account: str):
+    from ..ai.service import get_ai_service
+    with get_ai_service().account_lifecycle_lock:
+        return _delete_chat_account(account)
+
+
+def _delete_chat_account(account: str):
     requested_account_name = str(account or "").strip()
     if not requested_account_name:
         raise HTTPException(status_code=400, detail="Missing account.")

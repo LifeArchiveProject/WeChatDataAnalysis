@@ -491,7 +491,10 @@ class TestDecryptStreamSSE(unittest.TestCase):
                 self.assertEqual(events[-1].get("status"), "failed")
                 self.assertEqual(events[-1].get("success_count"), 0)
                 self.assertEqual(events[-1].get("failure_count"), 1)
-                self.assertIn("密钥可能不匹配", str(events[-1].get("message") or ""))
+                self.assertIn("数据库校验未通过", str(events[-1].get("message") or ""))
+                diagnostic = next(iter(events[-1]["account_results"].values()))["db_diagnostics"]["MSG0.db"]
+                self.assertEqual(diagnostic["error"], "key_mismatch")
+                self.assertIs(diagnostic["key_authenticated"], False)
                 upsert_mock.assert_not_called()
 
                 out = root / "output" / "databases" / "wxid_bad" / "MSG0.db"

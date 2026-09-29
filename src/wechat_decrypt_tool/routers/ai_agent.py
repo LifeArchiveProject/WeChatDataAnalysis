@@ -52,7 +52,18 @@ def threads(account: str, username: str = '', unassigned: bool = False):
 @router.post('/threads')
 async def create_thread(body: ThreadInput):
     try:
-        return await get_agent_service().create_thread(account_name(body.account), body.username, body.title)
+        service = get_agent_service()
+        lock = service.ai.account_lifecycle_lock
+        while not lock.acquire(blocking=False):
+            await asyncio.sleep(.05)
+        try:
+            owner = account_name(body.account)
+            # 删除完成后再验证账号；重新导入的同名账号可恢复写入。
+            service.ai.deleted_accounts.discard(owner)
+            service.store.revoked_accounts.discard(owner)
+            return await service.create_thread(owner, body.username, body.title)
+        finally:
+            lock.release()
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
 

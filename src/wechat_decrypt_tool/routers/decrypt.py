@@ -211,12 +211,17 @@ def _database_diagnostic_role(diagnostic: dict[str, Any]) -> str:
 
 def _database_diagnostic_verified(diagnostic: dict[str, Any]) -> bool:
     return bool(
-        diagnostic.get("success") is True
-        and not bool(diagnostic.get("copied_as_sqlite"))
+        not bool(diagnostic.get("copied_as_sqlite"))
         and str(diagnostic.get("key_mode") or "").strip()
         in {"raw_enc_key", "sqlcipher_passphrase"}
-        and int(diagnostic.get("failed_pages") or 0) == 0
-        and str(diagnostic.get("diagnostic_status") or "").strip() == "ok"
+        # Key authentication is independent of WAL/page/index integrity.
+        # Retain compatibility with results produced before key_authenticated.
+        and (diagnostic.get("key_authenticated") is True or (
+            "key_authenticated" not in diagnostic
+            and diagnostic.get("success") is True
+            and int(diagnostic.get("failed_pages") or 0) == 0
+            and str(diagnostic.get("diagnostic_status") or "").strip() == "ok"
+        ))
     )
 
 

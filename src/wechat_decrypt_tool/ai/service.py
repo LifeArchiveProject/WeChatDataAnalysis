@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import hashlib
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import TypedDict
@@ -79,6 +80,8 @@ class AIService:
         self.active_id = None
         self.stopping = False
         self.deleted_accounts = set()
+        # 删除账号与重新接入后的首次写入必须互斥。
+        self.account_lifecycle_lock = threading.Lock()
         self.rule_locks = {}
 
     def check(self, id):
@@ -558,17 +561,21 @@ class AIService:
     @observed('summary.purge_account', id_field='task_id')
     def purge_account(self, account):
         import sqlite3
+        was_deleted = account in self.deleted_accounts
+        self.deleted_accounts.add(account)
+        from . import agent_service
+        try:
+            if agent_service._agent is not None:
+                agent_service._agent.cancel_account(account)
+        except Exception:
+            if not was_deleted:
+                self.deleted_accounts.discard(account)
+            raise
         from ..local_search import service as local_search_service
         if local_search_service._service is not None:
             local_search_service._service.purge(account)
-        self.deleted_accounts.add(account)
         ids = [t["id"] for t in self.store.list("task", account)]
         agent_ids = [r['id'] for r in self.store.list('agent_run', account)]
-        deep_ids = [f'{account}:{r["id"]}:v{version}' for r in self.store.list('agent_run', account)
-                    if r.get('engine_version') == 3 for version in range(1, r['version'] + 1)]
-        from . import agent_service
-        if agent_service._agent is not None:
-            agent_service._agent.cancel_account(account)
         self.store.purge_account(account)
         path = self.store.root / "checkpoints.sqlite3"
         if path.exists():
@@ -586,11 +593,13 @@ class AIService:
                         db.executemany(f'DELETE FROM {table} WHERE thread_id=?', [(id,) for id in agent_ids])
         deep_path = self.store.root / 'deepagents_checkpoints.sqlite3'
         if deep_path.exists():
+            # 历史清理可能已删掉 agent_run，只留下以账号开头的孤儿检查点。
+            prefix = f'{account}:'
             with sqlite3.connect(deep_path, timeout=30) as db:
                 tables = {x[0] for x in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 for table in ('checkpoints', 'writes'):
                     if table in tables:
-                        db.executemany(f'DELETE FROM {table} WHERE thread_id=?', [(id,) for id in deep_ids])
+                        db.execute(f'DELETE FROM {table} WHERE substr(thread_id,1,?)=?', (len(prefix), prefix))
 
 
 _service = None

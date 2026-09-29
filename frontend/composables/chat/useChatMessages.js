@@ -169,7 +169,7 @@ export const useChatMessages = ({
   const voiceTranscriptionStatusKnown = computed(() => !!voiceTranscriptionStatus.value)
   const voiceTranscriptionAvailable = computed(() => voiceTranscriptionStatus.value?.available === true)
   const voiceTranscriptionUnavailableReason = computed(() => String(
-    voiceTranscriptionStatus.value?.reason || '本地 Whisper 模型尚未准备好。'
+    voiceTranscriptionStatus.value?.reason || '本地语音模型尚未准备好。'
   ).trim())
 
   const refreshVoiceTranscriptionStatus = async ({ force = false } = {}) => {
@@ -1693,7 +1693,7 @@ export const useChatMessages = ({
     }
   }
 
-  // 本地 Whisper 是用户显式选择的备用路径；原生转写失败时不要静默切换来源。
+  // 本地模型是用户显式选择的备用路径；原生转写失败时不要静默切换来源。
   const transcribeVoiceLocally = async (message, { force = false } = {}) => {
     const transcriptRevision = projectTranscriptRevision
     const accountAtStart = String(selectedAccount.value || '').trim()
@@ -1749,8 +1749,8 @@ export const useChatMessages = ({
       if (!requestIsCurrent()) return
       if (!capability?.available) {
         setVoiceError(
-          { message: String(capability?.reason || '本地 Whisper 模型尚未准备好。').trim() },
-          '本地 Whisper 模型尚未准备好。'
+          { message: String(capability?.reason || '本地语音模型尚未准备好。').trim() },
+          '本地语音模型尚未准备好。'
         )
         return
       }

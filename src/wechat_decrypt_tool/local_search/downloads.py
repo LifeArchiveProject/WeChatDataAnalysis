@@ -131,7 +131,7 @@ class ModelDownloads:
         job.update(values)
         job['updated'] = time.time()
         self.store.put('download', job, id=job['id'])
-        self.store.event('', 'local_search_download', job)
+        self.store.event('', 'local_search_download', job, unique_key=f'download:{job["id"]}', replace=True)
         if changed:
             diagnostic_event('download.state', level=logging.ERROR if job.get('status')=='error' else logging.INFO,
                              model=job['id'], status=job.get('status'), phase=job.get('stage'), bytes=job.get('bytes'), attempt=job.get('attempt'))

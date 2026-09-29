@@ -368,18 +368,26 @@ class TestChatMediaImageCacheUpgrade(unittest.TestCase):
                     ),
                     patch.object(chat_media.cdn_image_service, "download_original_image", downloader),
                 ):
-                    resp = client.get(
-                        "/api/chat/media/image",
-                        params={
-                            "account": account,
-                            "md5": md5,
-                            "server_id": server_id,
-                            "username": username,
-                            "prefer_live": "true",
-                            "deep_scan": "true",
-                            "fetch_remote": "true",
-                        },
-                    )
+                    # 走完整 MCP 调用和返回链接，防止链接构造时再次丢失补图参数。
+                    from wechat_decrypt_tool.routers.mcp import router as mcp_router
+
+                    client.app.include_router(mcp_router)
+                    token = "test-image-mcp-token-1234567890"
+                    with patch.dict(os.environ, {"WECHAT_TOOL_MCP_TOKEN": token}):
+                        result = client.post("/mcp", headers={"Authorization": f"Bearer {token}"}, json={
+                            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                            "params": {
+                                "name": "wechat.media.get_chat_image_url",
+                                "arguments": {
+                                    "account": account, "md5": md5,
+                                    "server_id": server_id, "username": username,
+                                    "fetch_remote": True,
+                                },
+                            },
+                        })
+                        self.assertEqual(result.status_code, 200)
+                        image_url = result.json()["result"]["structuredContent"]["url"]
+                        resp = client.get(image_url)
 
                 self.assertEqual(resp.status_code, 200)
                 self.assertEqual(resp.content, remote_original)

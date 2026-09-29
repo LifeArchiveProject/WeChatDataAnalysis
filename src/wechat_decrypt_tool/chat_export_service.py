@@ -1441,7 +1441,7 @@ def _media_kinds_from_selected_types(selected_render_types: Optional[set[str]]) 
     # even when users only select `chatHistory` in the renderType filter.
     if "chathistory" in selected_render_types:
         out.update({"image", "emoji", "video", "video_thumb", "voice", "file"})
-    if "image" in selected_render_types:
+    if "image" in selected_render_types or "link" in selected_render_types:
         out.add("image")
     if "emoji" in selected_render_types:
         out.add("emoji")
@@ -7227,8 +7227,8 @@ def _write_conversation_html(
                         heading = str(msg.get("title") or msg.get("content") or safe_url).strip()
                         abstract = str(msg.get("content") or "").strip()
                         preview = str(msg.get("thumbUrl") or "").strip()
-                        preview_url = ""
-                        if is_http_url(preview):
+                        preview_url = offline_path(msg, "image")
+                        if not preview_url and is_http_url(preview):
                             local = maybe_download_remote_image(preview)
                             preview_url = local or preview
                         variant = str(msg.get("linkStyle") or "").strip().lower()
@@ -8279,6 +8279,40 @@ def _attach_offline_media(
 
     offline: list[dict[str, Any]] = []
 
+    if rt == "link" and "image" in media_kinds:
+        thumbnail = str(msg.get("thumbUrl") or "").strip()
+        # CDN 缩略图标识不是可访问的网址；优先查找该消息在会话附件目录中的本地图片。
+        if thumbnail and not thumbnail.lower().startswith(("http://", "https://")):
+            candidates: list[str] = []
+            try:
+                local_id, created = int(msg.get("localId") or 0), int(msg.get("createTime") or 0)
+                if local_id > 0 and created > 0:
+                    candidates.append(f"{local_id}_{created}")
+            except (TypeError, ValueError):
+                pass
+            if re.fullmatch(r"[0-9a-fA-F]{32,512}", thumbnail):
+                candidates.append(thumbnail)
+            arc, is_new, used_id = "", False, ""
+            for candidate in candidates:
+                arc, is_new = _materialize_media(
+                    zf=zf, account_dir=account_dir, conv_username=conv_username,
+                    kind="image", md5=candidate if _is_md5(candidate) else "", file_id=candidate,
+                    media_written=media_written, suggested_name="", media_index=media_index,
+                    require_image=True, cache_namespace=conv_username,
+                )
+                if arc:
+                    used_id = candidate
+                    break
+            if arc:
+                # 与 offlineMedia 一致，路径相对导出根目录；不写入用户机器的绝对路径。
+                msg["thumbUrl"] = arc
+                offline.append({"kind": "image", "path": arc, "fileId": used_id})
+                if is_new:
+                    with lock:
+                        job.progress.media_copied += 1
+            else:
+                record_missing("image", candidates[0] if candidates else thumbnail)
+
     if rt == "image" and "image" in media_kinds:
         primary_md5 = str(msg.get("imageMd5") or "").strip().lower()
         primary_file_id = str(msg.get("imageFileId") or "").strip()
@@ -8683,11 +8717,16 @@ def _materialize_media(
     media_written: dict[str, str],
     suggested_name: str,
     media_index: Optional[MediaPathIndex],
+    require_image: bool = False,
+    cache_namespace: str = "",
 ) -> tuple[str, bool]:
     started_at = time.perf_counter()
     ident = md5 or file_id
     if not ident:
         return "", False
+    if require_image:
+        # local_id 与时间戳可能跨会话重复；缩略图缓存和文件名都按会话隔离。
+        ident = "thumb_" + hashlib.sha256(f"{cache_namespace}\0{ident}".encode("utf-8")).hexdigest()[:32]
 
     key = f"{kind}:{ident}"
     if key in media_written:
@@ -8867,6 +8906,15 @@ def _materialize_media(
         except Exception:
             pass
 
+    if require_image and src is not None and re.fullmatch(r"\d+_\d+", file_id) and conv_username:
+        # 同秒本地消息编号不是全局唯一键，禁止索引兜底命中另一会话的附件目录。
+        parts = [part.lower() for part in Path(src).parts]
+        if "attach" in parts:
+            index = parts.index("attach")
+            expected = hashlib.md5(conv_username.encode("utf-8")).hexdigest()
+            if index + 1 >= len(parts) or parts[index + 1] != expected:
+                return "", False
+
     if not src:
         if media_index is not None:
             try:
@@ -8968,6 +9016,8 @@ def _materialize_media(
         try:
             data, mt = _read_and_maybe_decrypt_media(src, account_dir=account_dir)
         except Exception:
+            if require_image:
+                return "", False
             try:
                 zf.write(src, arcname=arc)
             except Exception:
@@ -8976,6 +9026,8 @@ def _materialize_media(
             return arc, True
 
         mt = str(mt or "").strip()
+        if require_image and _detect_image_media_type(data[:32]) not in {"image/png", "image/jpeg", "image/gif", "image/webp"}:
+            return "", False
         if mt == "image/png":
             ext2 = "png"
         elif mt == "image/jpeg":

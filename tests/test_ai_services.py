@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -224,6 +225,91 @@ def test_account_isolation_and_cleanup(service):
     service.purge_account("account")
     assert service.store.get("task", task["id"]) is None
     assert len(service.store.list("alert", "other")) == 1
+
+
+def test_purge_account_removes_deepagent_checkpoints_including_orphans(service, monkeypatch):
+    from wechat_decrypt_tool.ai import agent_service
+
+    monkeypatch.setattr(agent_service, '_agent', None)
+    service.store.put('agent_run', {
+        'account': 'account', 'thread_id': 'thread', 'engine_version': 3,
+        'checkpoint_schema': 2, 'version': 2,
+    }, id='current')
+    service.store.put('agent_run', {
+        'account': 'account', 'thread_id': 'old-thread', 'engine_version': 3,
+        'version': 1,
+    }, id='legacy')
+    thread_ids = [
+        'account:thread:current:v1', 'account:thread:current:v2',
+        'account:legacy:v1', 'account:orphan-thread:orphan:v1',
+        'account2:thread:run:v1', 'other:thread:run:v1',
+    ]
+    path = service.store.root / 'deepagents_checkpoints.sqlite3'
+    with sqlite3.connect(path) as db:
+        for table in ('checkpoints', 'writes'):
+            db.execute(f'CREATE TABLE {table} (thread_id TEXT PRIMARY KEY)')
+            db.executemany(f'INSERT INTO {table} (thread_id) VALUES (?)',
+                           [(thread_id,) for thread_id in thread_ids])
+
+    service.purge_account('account')
+
+    with sqlite3.connect(path) as db:
+        for table in ('checkpoints', 'writes'):
+            assert db.execute(f'SELECT thread_id FROM {table}').fetchall() == [
+                ('account2:thread:run:v1',), ('other:thread:run:v1',)]
+
+
+def test_purge_account_waits_for_agent_checkpoint_writer(service, monkeypatch):
+    from wechat_decrypt_tool.ai import agent_service
+
+    agent = agent_service.AgentService(service)
+    monkeypatch.setattr(agent_service, '_agent', agent)
+    service.store.put('agent_run', {
+        'account': 'account', 'thread_id': 'thread', 'engine_version': 3,
+        'checkpoint_schema': 2, 'version': 1,
+    }, id='running')
+    path = service.store.root / 'deepagents_checkpoints.sqlite3'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE checkpoints (thread_id TEXT PRIMARY KEY)')
+        db.execute('CREATE TABLE writes (thread_id TEXT PRIMARY KEY)')
+
+    async def run():
+        started = asyncio.Event()
+
+        async def worker():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await asyncio.sleep(.05)
+                with sqlite3.connect(path) as db:
+                    db.execute('INSERT INTO checkpoints VALUES (?)',
+                               ('account:thread:running:v1',))
+
+        task = asyncio.create_task(worker())
+        agent.workers['running'] = task
+        await started.wait()
+        await asyncio.to_thread(service.purge_account, 'account')
+        assert task.done()
+        with sqlite3.connect(path) as db:
+            assert db.execute('SELECT count(*) FROM checkpoints').fetchone()[0] == 0
+
+    asyncio.run(run())
+
+
+def test_deleted_account_does_not_start_new_agent_run(service):
+    from wechat_decrypt_tool.ai.agent_service import AgentService
+
+    agent = AgentService(service)
+    service.store.put('agent_run', {
+        'account': 'account', 'thread_id': 'thread', 'engine_version': 3,
+        'checkpoint_schema': 2, 'version': 1,
+    }, id='late')
+    service.deleted_accounts.add('account')
+
+    asyncio.run(agent.execute('late'))
+
+    assert not (service.store.root / 'deepagents_checkpoints.sqlite3').exists()
 
 
 def test_docx_xlsx_pptx_and_pdf_parsers():

@@ -206,6 +206,16 @@
                 <span>{{ opt.label }}</span>
               </label>
             </div>
+            <label v-if="exportFormat === 'html'" class="chat-export-type-option chat-export-transcription-option">
+              <input v-model="exportDownloadRemoteMedia" type="checkbox" :disabled="privacyMode" />
+              <span>下载远程缩略图（需联网；关闭可显著加快导出）</span>
+            </label>
+            <label class="chat-export-type-option chat-export-transcription-option"
+              :class="{ 'chat-export-type-option--selected': exportTranscribeVoice && !privacyMode && exportMessageTypes.includes('voice') }">
+              <input v-model="exportTranscribeVoice" type="checkbox"
+                :disabled="privacyMode || !exportMessageTypes.includes('voice')" />
+              <span>导出时将语音转为文字（使用设置中选择的本地模型）</span>
+            </label>
           </section>
 
           <section
@@ -684,6 +694,17 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.chat-export-transcription-option {
+  margin-top: 12px;
+}
+.chat-export-transcription-option:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chat-export-transcription-option input {
+  accent-color: var(--app-accent);
+}
+
 .chat-export-backdrop {
   position: fixed;
   inset: 0;

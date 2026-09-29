@@ -755,7 +755,7 @@ class DeepAgentRuntime(ParallelAnalysis):
 
     async def execute(self, id):
         run = self.run(id)
-        if run.get('engine_version') != 3:
+        if run.get('engine_version') != 3 or run['account'] in self.ai.deleted_accounts:
             return
         priority = model_priority.set(0 if not run.get('parent_run_id') else 1)
         group = model_group.set(run.get('parent_run_id') or id)

@@ -378,7 +378,8 @@ function subscribe(){
     if(event?.kind==='local_search_index' && event.account===current){
       const incoming=event.body, existing=state.value.jobs?.find(j=>j.id===incoming?.id)
       if(existing && incoming.updated>=existing.updated){
-        state.value.jobs=state.value.jobs.map(j=>j.id===incoming.id ? incoming : j)
+        // 进度事件只带高频字段；合并保留首次加载时拿到的 config/segments 等快照。
+        state.value.jobs=state.value.jobs.map(j=>j.id===incoming.id ? {...j, ...incoming} : j)
         now.value=Date.now()/1000
         if(incoming.status==='done')refresh()
       }else if(!existing){refresh()}else{api.diagnostic?.('response.stale',{task_id:incoming.id,component:'search'})}

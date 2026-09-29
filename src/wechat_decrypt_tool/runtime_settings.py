@@ -315,7 +315,7 @@ def write_voice_transcription_model_setting(model: str | None) -> None:
         return
 
 
-def read_effective_voice_transcription_model(default: str = "medium") -> tuple[str, str]:
+def read_effective_voice_transcription_model(default: str = "zipformer-small-ctc-int8") -> tuple[str, str]:
     """Return the Whisper model preference and its source: env | settings | default."""
 
     env_model = _normalize_voice_transcription_model(os.environ.get(ENV_VOICE_TRANSCRIPTION_MODEL_KEY, ""))
@@ -326,7 +326,7 @@ def read_effective_voice_transcription_model(default: str = "medium") -> tuple[s
     if settings_model is not None:
         return settings_model, "settings"
 
-    return _normalize_voice_transcription_model(default) or "medium", "default"
+    return _normalize_voice_transcription_model(default) or "zipformer-small-ctc-int8", "default"
 
 
 def ensure_mcp_token() -> tuple[str, str]:

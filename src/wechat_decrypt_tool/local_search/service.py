@@ -24,12 +24,15 @@ DEFAULTS = {'enabled': False, 'model': None, 'usernames': [], 'days': 90,
             'start': None, 'end': None, 'device': 'auto', 'device_id': 0, 'auto_update': True,
             'read_batch_size': 0, 'agent_global': False}
 
+# 进度事件里体积大且很少变化、或可从权威记录重建的字段，不随每次进度写入事件表。
+EVENT_OMITTED_FIELDS = frozenset({'config', 'coverage', 'segments', 'read_starts'})
+
 
 class LocalSearch(ProgressiveIndex, MessageTotals):
     def __init__(self, root=None, model_root=None, reader=None, engine=None):
         self.root = Path(root or get_output_dir() / 'local_search')
         self.store = AIStore(self.root)
-        self.engine = engine or LocalInference(callback=lambda status: self.store.event('', 'local_search_device', status))
+        self.engine = engine or LocalInference(callback=lambda status: self.store.event('', 'local_search_device', status, unique_key='local_search_device', replace=True))
         self.downloads = ModelDownloads(model_root or get_data_dir() / 'local_search_models', self.store, self.engine)
         from .gpu import GPUComponent
         self.gpu = GPUComponent(self.downloads.root.parent / 'local_search_gpu', self.store, self.engine)
@@ -103,7 +106,9 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
         if job['id'] in self.restarting: job['resume_on_start']=True
         if job['account'] in self.revoked: return
         self.store.put('index_job', job, id=job['id'], account=job['account'])
-        self.store.event(job['account'], 'local_search_index', job)
+        # 事件表只保留每个任务的最新进度；完整快照以 records 表为准。
+        progress = {key: value for key, value in job.items() if key not in EVENT_OMITTED_FIELDS}
+        self.store.event(job['account'], 'local_search_index', progress, unique_key=f'index_job:{job["id"]}', replace=True)
 
     def enrichment_version(self, account):
         """只检查本地提取缓存，不触发媒体分析或网络访问。"""

@@ -67,7 +67,11 @@ jobs:
       - name: AI and local search regression
         shell: bash
         # 首次失败立即输出具体断言，避免超时取消后只留下进度标记。
-        run: uv run pytest -x -vv --tb=short --durations=15 tests/test_ai*.py tests/test_local_search*.py
+        # 由 Python 展开 glob，避免 Windows 默认 PowerShell 将通配符原样传给 pytest。
+        run: >-
+          uv run python -c
+          "import glob, pytest; raise SystemExit(pytest.main(['-x', '-vv', '--tb=short', '--durations=15',
+          *sorted(glob.glob('tests/test_ai*.py') + glob.glob('tests/test_local_search*.py'))]))"
       - name: Chat calendar and date navigation regression
         run: >-
           uv run pytest -q
