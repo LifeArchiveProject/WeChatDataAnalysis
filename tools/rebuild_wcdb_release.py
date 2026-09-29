@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tarfile
 import tempfile
 import time
 import zipfile
@@ -17,6 +18,8 @@ import zipfile
 
 REPOSITORY = "2977094657/WCDB"
 LIFETIME_SECONDS = 45 * 24 * 60 * 60
+# component -> (workflow, artifact name, directory name, env prefix, manifest name,
+#               archive suffix)
 COMPONENTS = {
     "windows-native": (
         "windows-native-production.yml",
@@ -24,6 +27,7 @@ COMPONENTS = {
         "wechatdb-native-windows-x64-source-public",
         "WCE_NATIVE_CORE",
         "wechatdb_native_build.json",
+        ".zip",
     ),
     "macos-native": (
         "macos-native-production.yml",
@@ -31,6 +35,7 @@ COMPONENTS = {
         "wechatdb-native-macos-arm64-production",
         "WCE_NATIVE_CORE",
         "wechatdb_native_build.json",
+        ".zip",
     ),
     "macos-xkey": (
         "macos-key-capture-production.yml",
@@ -38,6 +43,7 @@ COMPONENTS = {
         "wda-xkey",
         "WCE_MACOS_XKEY",
         "wda_xkey_build.json",
+        ".zip",
     ),
     "macos-integrity": (
         "macos-integrity-production.yml",
@@ -45,6 +51,17 @@ COMPONENTS = {
         "wce-integrity-macos-arm64-production",
         "WCE_INTEGRITY",
         "wce_integrity_build.json",
+        ".zip",
+    ),
+    # Linux 没有代码签名，身份是内容哈希；发布形态是 source-public tar.gz，
+    # 与 Windows/macOS 的 source-public zip 同一条自动重建路线。
+    "linux-native": (
+        "linux-native-production.yml",
+        "wechatdb-native-linux-x64-source-public",
+        "wechatdb-native-linux-x64-source-public",
+        "WCE_NATIVE_CORE",
+        "wechatdb_native_build.json",
+        ".tar.gz",
     ),
 }
 
@@ -118,10 +135,10 @@ def wait_for_build(build: dict, revision: str) -> int:
 
 def download(build: dict, run_id: int, revision: str, issued_at: int, output_root: Path) -> dict:
     component = build["component"]
-    _, artifact_name, directory_name, prefix, manifest_name = COMPONENTS[component]
+    _, artifact_name, directory_name, prefix, manifest_name, suffix = COMPONENTS[component]
     build_id = build["build_id"]
     tag = f"{component}-{build_id}"
-    asset_name = f"{artifact_name}-{build_id}.zip"
+    asset_name = f"{artifact_name}-{build_id}{suffix}"
     release = api(f"releases/tags/{tag}")
     if release.get("target_commitish") != revision:
         raise RuntimeError(f"Producer Release target does not match {revision}: {tag}")
@@ -151,10 +168,24 @@ def download(build: dict, run_id: int, revision: str, issued_at: int, output_roo
         if f"sha256:{digest}" != expected_digest:
             raise RuntimeError(f"Producer Release asset digest mismatch: {asset_name}")
         archive.seek(0)
-        with zipfile.ZipFile(archive) as package:
-            package.extractall(destination)
-    if component in ("macos-native", "macos-xkey"):
-        executable = "wechatdb_broker" if component == "macos-native" else "wda_xkey_helper"
+        if suffix == ".tar.gz":
+            # Linux 的 producer 用可复现的 tar.gz 封装同一份严格目录，
+            # 所以解包时沿用 tar 里记录的成员权限。
+            expand = getattr(tarfile, "data_filter", None)
+            with tarfile.open(fileobj=archive, mode="r:gz") as package:
+                if expand is None:
+                    package.extractall(destination)
+                else:
+                    package.extractall(destination, filter="data")
+        else:
+            with zipfile.ZipFile(archive) as package:
+                package.extractall(destination)
+    if component in ("macos-native", "macos-xkey", "linux-native"):
+        executable = {
+            "macos-native": "wechatdb_broker",
+            "macos-xkey": "wda_xkey_helper",
+            "linux-native": "wechatdb_broker",
+        }[component]
         (destination / executable).chmod(0o755)
     manifest = json.loads((destination / manifest_name).read_text(encoding="utf-8"))
     if component.endswith("native"):
@@ -166,6 +197,20 @@ def download(build: dict, run_id: int, revision: str, issued_at: int, output_roo
                 or manifest.get("databaseWriteBuild") is not False
                 or manifest.get("wechatActions") != []):
             raise RuntimeError("Release native core must be read-only")
+        if component == "linux-native":
+            # Linux 的唯一产物身份是这两组内容哈希，必须由 manifest 声明并逐字节成立。
+            for field in ("linuxClientSha256", "linuxBrokerSha256"):
+                if not re.fullmatch(r"[0-9a-f]{64}", str(manifest.get(field) or "")):
+                    raise RuntimeError(f"Release Linux native core has no {field}")
+            for name, field in (
+                ("libwechatdb_client.so", "linuxClientSha256"),
+                ("wechatdb_broker", "linuxBrokerSha256"),
+            ):
+                with (destination / name).open("rb") as binary:
+                    if hashlib.file_digest(binary, "sha256").hexdigest() != manifest[field]:
+                        raise RuntimeError(f"Release Linux native core failed its {field} pin")
+            if manifest.get("linuxIntegrityMode") != "content-hash-pin":
+                raise RuntimeError("Release Linux native core is not content-hash-pin")
     elif component == "macos-xkey":
         identity = manifest["build"]["id"]
         issued = manifest["build"]["issuedAtUnix"]
@@ -188,6 +233,11 @@ def download(build: dict, run_id: int, revision: str, issued_at: int, output_roo
         f"{prefix}_BUILD_ID": identity,
         f"{prefix}_ARTIFACT_DIR": str(destination),
     }
+    if component == "linux-native":
+        # 消费方按平台顺序重新解析这两份内容哈希（linux-private-build.yml 也把它们
+        # 当成受保护 pin 再核一遍）。
+        values[f"{prefix}_CLIENT_SHA256"] = manifest["linuxClientSha256"]
+        values[f"{prefix}_BROKER_SHA256"] = manifest["linuxBrokerSha256"]
     if component == "macos-integrity":
         with (destination / "libwce_integrity.dylib").open("rb") as binary:
             values["WCE_INTEGRITY_BINARY_SHA256"] = hashlib.file_digest(binary, "sha256").hexdigest()

@@ -1,7 +1,11 @@
 # Linux 发布流程（x64）
 
-Linux 与 Windows / macOS 一起发在同一个 tag Release 里，并且是**必需平台**：原生组件的 pin
-没配齐时，`release.yml` 会直接失败，而不是静默少发一个平台。
+Linux 与 Windows / macOS 一起发在同一个 tag Release 里，并且是**必需平台**：原生组件重建
+失败时，`release.yml` 会直接失败，而不是静默少发一个平台。
+
+Linux 与 Windows / macOS 走**同一条**原生组件路线：发版当下现产一份 source-public 原生核心，
+所以不需要任何仓库变量 pin，也不需要额外 secret（只复用发版已有的
+`WCE_NATIVE_CORE_PRODUCER_TOKEN`）。45 天有效期由「每次发版重建」自然续上。
 
 产物形态刻意不做 AppImage / deb：Linux 走「用户级、免 root 的 `tar.gz` + `install.sh`」。
 
@@ -9,42 +13,29 @@ Linux 与 Windows / macOS 一起发在同一个 tag Release 里，并且是**必
 
 | 工作流 | 位置 | 作用 |
 | --- | --- | --- |
-| `linux-native-production.yml` | **WCDB**（私藏 producer 仓） | 手工 dispatch：构建 + 自检 + 把原生核心发成不可变 Release 资产，并把消费方要的 pin 打到 run summary |
-| `linux-private-build.yml` | 本仓 | 可复用构建：下载 pin 产物 → 校验 → 编译 integrity → `dist:linux` → 打包校验 → 上传 |
+| `linux-native-production.yml` | **WCDB**（私藏 producer 仓） | 被 `rebuild_wcdb_release.py` dispatch：构建 + 自检 + 把原生核心发成不可变 Release 资产 |
+| `tools/rebuild_wcdb_release.py` | 本仓 | 发版当下 dispatch producer，等它跑完，按 Release 摘要下载并核对 45 天窗口 |
+| `linux-private-build.yml` | 本仓 | 可复用构建：重建原生核心 → 校验 → 编译 integrity → `dist:linux` → 打包校验 → 上传 |
 | `release.yml` | 本仓 | `push tag v*` 触发；`build-linux-x64` 调用上面的可复用工作流，`publish-release` 汇总三个平台 |
 
 ## 操作顺序
 
-1. **产原生核心**（在 WCDB producer 仓）：Actions → `Linux native production` → Run workflow。
-   - `profile` = `source-public`（WCDA 只收这个 profile）
-   - `build_id` 留空 → 取 `linux-x64-<run id>`；**重跑必须显式传新 ID**，已发布的 ID 不允许复用
-   - `publish_release` = true
-   - 需要 secret/var `WCE_ROOT_PUBLIC_KEY_HEX`（128 hex，P-256 **公钥**，不是私钥）
-   - 结束后在 run summary 里复制那段 `WCE_LINUX_NATIVE_CORE_*` 变量清单
-2. **配本仓变量**（Settings → Secrets and variables → Actions）：
+1. **配 producer**（WCDB 私藏仓，一次性）：
 
-   | 类型 | 名称 | 说明 |
-   | --- | --- | --- |
-   | variable | `WCE_LINUX_NATIVE_CORE_ARTIFACT_REPOSITORY` | producer 仓 `owner/repo`（= 运行工作流的那个仓） |
-   | variable | `WCE_LINUX_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY` | 资产当前托管在哪；留空则同上 |
-   | variable | `WCE_LINUX_NATIVE_CORE_ARTIFACT_RUN_ID` | producer 的 run id |
-   | variable | `WCE_LINUX_NATIVE_CORE_ARTIFACT_SHA256` | 资产 tar.gz 的摘要 |
-   | variable | `WCE_LINUX_NATIVE_CORE_SOURCE_REVISION` | 40 hex 的 WCDB revision |
-   | variable | `WCE_LINUX_NATIVE_CORE_BUILD_ID` | 构建 ID |
-   | variable | `WCE_LINUX_NATIVE_CORE_CLIENT_SHA256` / `..._BROKER_SHA256` | 可选的内容 pin；一旦填就必须与 manifest 一致 |
-   | variable | `WCE_LINUX_INTEGRITY_SOURCE_REPOSITORY` / `..._SOURCE_REVISION` | 可选；默认取原生核心的仓库/revision（`private/wce_integrity` 在同一棵树里） |
-   | secret | `WCE_LINUX_PRODUCER_READ_TOKEN` | 对 producer 仓有读权限的 token（资产下载 + 取 integrity 源码） |
+   - 仓库级 variable `WCE_ROOT_PUBLIC_KEY_HEX`：128 hex，P-256 **公钥**（不是私钥），
+     与 macOS / Windows environment 里那把一致。
+   - 其余什么都不用配：Linux 没有代码签名，不需要任何私钥 / 证书 / 时间戳 secret
+     （Windows 的 PFX、macOS 的 P12 在 Linux 上都不存在）。
 
-   Linux 只需要上面这一个 secret：没有代码签名，所以不需要任何私钥 / 证书 / 时间戳
-   相关的 secret（Windows 的 PFX、macOS 的 P12 那套在 Linux 上都不存在）。
+2. **发版**：推 tag `v*`。tag 必须在 `origin/main` 上。
 
-   注意 `build-linux-x64` 是 `release.yml` 用 `secrets: inherit` 调起来的，而 reusable
-   workflow **不会**继承调用方的 *environment* 级 secret。Windows / macOS 的 job 各自
-   声明了 `environment:`（`windows-private-pki-production` / `macos-private-pki-production`），
-   Linux 没有可保护的签名材料，因此**刻意不声明 environment**：`WCE_LINUX_PRODUCER_READ_TOKEN`
-   必须建在**仓库级** secret 上，否则 `test -n "$GH_TOKEN"` 会直接失败。
+   发版里 `build-linux-x64` 会自动 `tools/rebuild_wcdb_release.py --component linux-native`：
+   dispatch WCDB 的 `Linux native production`，等它产出一份带唯一 build id 的不可变 Release，
+   核对 Release target / 资产摘要 / 45 天窗口后才继续打包。
 
-3. **发版**：推 tag `v*`。tag 必须在 `origin/main` 上。
+3. **本仓需要的唯一配置**：仓库级 secret `WCE_NATIVE_CORE_PRODUCER_TOKEN`
+   （对 `2977094657/WCDB` 有 Actions read/write 与 Contents read）。Windows / macOS 发版
+   已经在用同一个 secret，Linux 直接复用，**不需要新增任何配置**。
 
 ## 为什么可以不做代码签名
 
@@ -65,13 +56,17 @@ WES2 sidecar。之所以不在 producer 侧预编，是因为 `wce_integrity` �
 
 ## 会踩的坑
 
-- **45 天有效期**：pin 的 manifest 固定 45 天窗口，到期后 `build-linux-x64` 会在校验阶段
-  明确报 `build has reached its fixed expiration time`。到期必须重新产一份并更新 pin。
+- **45 天有效期**：manifest 固定 45 天窗口。因为每次发版都重建，安装包自带的组件始终是
+  当次构建；旧安装包到期后需要装新版本（与 Windows / macOS 同一行为）。
 - **构建 ID 不可复用**：producer 在发布前会检查 `linux-native-<build-id>` 是否已存在，存在即拒绝。
 - **校验失败就是失败**：`build-linux-x64` 不设 `continue-on-error`，`publish-release.needs` 包含它，
-  所以 pin 缺失 / 摘要不符 / 哈希漂移都会让 release 停在半路而不是发出去。
+  所以重建失败 / 摘要不符 / 哈希漂移都会让 release 停在半路而不是发出去。
+- **重跑要用新的 run attempt**：build id 由 WCDA 的 run id + attempt 派生，同一次发版重跑
+  会拿到新 id，不会撞上已发布的 tag。
 - **产物名不能重**：Linux 用 `SHA256SUMS-linux.txt` / `release-provenance-linux.json`，
   避免与 Windows 的 `SHA256SUMS.txt` / `release-provenance.json` 在 `merge-multiple` 下载时互相覆盖。
+- **producer 不占用 Actions artifact 配额**：Linux producer 只发不可变 Release 资产，
+  没有 `upload-artifact` 步骤，所以 artifact 配额爆掉不会影响发版。
 
 ## 桌面运行时的 Linux 判定（已修，别再回退）
 

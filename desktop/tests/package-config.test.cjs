@@ -224,9 +224,15 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
     /"windows-native":\s*\(\s*"windows-native-production\.yml",\s*"wechatdb-native-windows-x64-source-public"/
   );
   assert.match(rebuildRelease, /tag = f"\{component\}-\{build_id\}"/);
-  assert.match(rebuildRelease, /asset_name = f"\{artifact_name\}-\{build_id\}\.zip"/);
+  assert.match(rebuildRelease, /asset_name = f"\{artifact_name\}-\{build_id\}\{suffix\}"/);
   assert.match(rebuildRelease, /release\.get\("target_commitish"\) != revision/);
   assert.match(rebuildRelease, /expected_digest = asset\.get\("digest"\)/);
+  // Linux 走同一条自动重建路线，只是资产换成可复现的 tar.gz。
+  assert.match(
+    rebuildRelease,
+    /"linux-native":\s*\(\s*"linux-native-production\.yml",\s*"wechatdb-native-linux-x64-source-public"/
+  );
+  assert.match(rebuildRelease, /WCE_NATIVE_CORE_CLIENT_SHA256|f"\{prefix\}_CLIENT_SHA256"/);
   assert.match(windowsJob, /WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH/);
   assert.match(windowsJob, /WCE_WINDOWS_PRIVATE_ROOT_SHA256/);
   assert.match(windowsJob, /WCE_RFC3161_TIMESTAMP_URL/);
@@ -364,7 +370,7 @@ test("the tag release requires and publishes the Linux x64 package", () => {
   assert.match(publishJob, /- build-linux-x64/);
 });
 
-test("Linux release workflow consumes the pinned native core and publishes the unrooted payload", () => {
+test("Linux release workflow rebuilds the native core and publishes the unrooted payload", () => {
   const workflow = readWorkflow("linux-private-build.yml");
   const job = workflow.match(
     /\n  build-linux-x64:\n([\s\S]*?)$/
@@ -375,32 +381,21 @@ test("Linux release workflow consumes the pinned native core and publishes the u
   assert.match(job, /runs-on:\s*ubuntu-22\.04/);
   assert.match(job, /if:\s*github\.ref == 'refs\/heads\/main' \|\| startsWith\(github\.ref, 'refs\/tags\/v'\)/);
 
-  // The repository variables live in the WCE_LINUX_ namespace while the
-  // consumer module keeps reading the platform-neutral WCE_NATIVE_CORE_ names.
-  for (const [variable, envName] of [
-    ["WCE_LINUX_NATIVE_CORE_ARTIFACT_REPOSITORY", "WCE_NATIVE_CORE_ARTIFACT_REPOSITORY"],
-    ["WCE_LINUX_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY", "WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY"],
-    ["WCE_LINUX_NATIVE_CORE_ARTIFACT_SHA256", "WCE_NATIVE_CORE_ARTIFACT_SHA256"],
-    ["WCE_LINUX_NATIVE_CORE_ARTIFACT_RUN_ID", "WCE_NATIVE_CORE_ARTIFACT_RUN_ID"],
-    ["WCE_LINUX_NATIVE_CORE_SOURCE_REVISION", "WCE_NATIVE_CORE_SOURCE_REVISION"],
-    ["WCE_LINUX_NATIVE_CORE_BUILD_ID", "WCE_NATIVE_CORE_BUILD_ID"],
-    ["WCE_LINUX_NATIVE_CORE_CLIENT_SHA256", "WCE_NATIVE_CORE_CLIENT_SHA256"],
-    ["WCE_LINUX_NATIVE_CORE_BROKER_SHA256", "WCE_NATIVE_CORE_BROKER_SHA256"],
-  ]) {
-    assert.match(
-      job,
-      new RegExp(`${envName}:\\s*\\$\\{\\{\\s*vars\\.${variable}\\s*\\}\\}`),
-      `${variable} is not wired`
-    );
-  }
-  assert.match(job, /secrets\.WCE_LINUX_PRODUCER_READ_TOKEN/);
+  // Linux 与 Windows / macOS 同一条自动重建路线：发版当下现产 source-public 原生核心，
+  // 所以消费工作流里不许再出现任何仓库变量 pin，也不再需要额外的读取 secret——
+  // 只用发版已有的 WCE_NATIVE_CORE_PRODUCER_TOKEN。
+  assert.doesNotMatch(job, /\$\{\{\s*vars\.WCE_LINUX_/);
+  assert.doesNotMatch(job, /WCE_LINUX_PRODUCER_READ_TOKEN/);
+  assert.match(job, /python3 tools\/rebuild_wcdb_release\.py/);
+  assert.match(job, /--component linux-native/);
+  assert.match(job, /secrets\.WCE_NATIVE_CORE_PRODUCER_TOKEN/);
   assert.doesNotMatch(job, /WCE_INTEGRITY_ARTIFACT_DIR/);
 
   const order = [
-    "Verify immutable source and protected pins",
-    "Download the pinned Producer native-core artifact",
+    "Verify immutable source and release coordinates",
+    "Rebuild the Linux native core for this release",
     "Validate the pinned native core against the production policy",
-    "Checkout the pinned private integrity source",
+    "Checkout the private integrity source at the producer revision",
     "Build the Linux package",
     "Verify the packaged Linux runtime",
     "Prepare Linux release checksums and provenance",
@@ -414,11 +409,16 @@ test("Linux release workflow consumes the pinned native core and publishes the u
     previous = index;
   }
 
-  assert.match(job, /gh release download "\$release_tag"/);
-  assert.match(job, /gh run download "\$WCE_NATIVE_CORE_ARTIFACT_RUN_ID"/);
-  assert.match(job, /test "\$actual_sha256" = "\$WCE_NATIVE_CORE_ARTIFACT_SHA256"/);
+  // 重建脚本自己核对不可变 Release 资产摘要、revision 与 45 天窗口，
+  // 工作流不再有 Download / 回退到 Actions artifact 的分支。
+  assert.doesNotMatch(job, /gh release download/);
+  assert.doesNotMatch(job, /gh run download/);
   assert.match(job, /resolveLinuxNativeCoreArtifacts\(\{ platform: 'linux' \}\)/);
-  assert.match(job, /repos\/\$LINUX_INTEGRITY_SOURCE_REPOSITORY\/tarball\/\$LINUX_INTEGRITY_SOURCE_REVISION/);
+  // integrity 源码按当次重建出来的 producer revision 取，不再依赖仓库变量。
+  assert.match(
+    job,
+    /repos\/\$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY\/tarball\/\$WCE_NATIVE_CORE_SOURCE_REVISION/
+  );
   assert.match(job, /native\/wce_integrity\/Cargo\.toml/);
   assert.doesNotMatch(job, /cargo build/);
   assert.match(job, /tests\/test_linux_db_key_flow\.py/);

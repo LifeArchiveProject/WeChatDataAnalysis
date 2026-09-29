@@ -4,8 +4,13 @@ name: Linux Private Build
 # Linux 没有代码签名，原生组件的身份 = 内容哈希（linuxIntegrityMode: content-hash-pin）。
 #
 # 整个链路只有两个外部输入：
-#   1. 私藏仓产出的 source-public 原生核心（五元组 pin）；
-#   2. 私藏仓 private/wce_integrity 的源码 revision（用于编译导出完整性模块）。
+#   1. 私藏仓 `2977094657/WCDB` 的 main revision（发版当下由
+#      tools/rebuild_wcdb_release.py 现产一份 source-public 原生核心）；
+#   2. 同一个 revision 里的 private/wce_integrity 源码（用于编译导出完整性模块）。
+#
+# 也就是说，与 Windows / macOS 同一条路线：**不需要任何仓库变量或额外的读取
+# secret**，只复用发版已有的 `WCE_NATIVE_CORE_PRODUCER_TOKEN`。45 天有效期由
+# 「每次发版重建」自然续上，不再有手工 pin 会过期。
 #
 # 产物形态刻意不做 AppImage / deb：作者的分发形态只有 Windows 安装包与 macOS dmg，
 # Linux 走「用户级、免 root 的 tar.gz + install.sh」。electron-builder 只出 dir 目标。
@@ -35,20 +40,8 @@ jobs:
     timeout-minutes: 150
     env:
       UV_MANAGED_PYTHON: "true"
-      # The artifact repository identifies the producer; the download repository
-      # identifies where the immutable asset is currently hosted.
-      WCE_NATIVE_CORE_ARTIFACT_REPOSITORY: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_REPOSITORY }}
-      WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY }}
-      WCE_NATIVE_CORE_ARTIFACT_SHA256: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_SHA256 }}
-      WCE_NATIVE_CORE_ARTIFACT_RUN_ID: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_RUN_ID }}
-      WCE_NATIVE_CORE_SOURCE_REVISION: ${{ vars.WCE_LINUX_NATIVE_CORE_SOURCE_REVISION }}
-      WCE_NATIVE_CORE_BUILD_ID: ${{ vars.WCE_LINUX_NATIVE_CORE_BUILD_ID }}
-      WCE_NATIVE_CORE_CLIENT_SHA256: ${{ vars.WCE_LINUX_NATIVE_CORE_CLIENT_SHA256 }}
-      WCE_NATIVE_CORE_BROKER_SHA256: ${{ vars.WCE_LINUX_NATIVE_CORE_BROKER_SHA256 }}
-      # 可选：完整性模块的源码默认与被 pin 的原生核心同一个仓库/revision
-      # （producer 工作流就在那个 checkout 上跑，所以 private/wce_integrity 也在同一棵树里）。
-      WCE_LINUX_INTEGRITY_SOURCE_REPOSITORY: ${{ vars.WCE_LINUX_INTEGRITY_SOURCE_REPOSITORY }}
-      WCE_LINUX_INTEGRITY_SOURCE_REVISION: ${{ vars.WCE_LINUX_INTEGRITY_SOURCE_REVISION }}
+      # 原生核心的 producer 仓是常量；发版当下由 rebuild_wcdb_release.py 现产一份。
+      WCE_LINUX_NATIVE_REPOSITORY: "2977094657/WCDB"
       WCE_NATIVE_CORE_REQUIRED: "1"
       WCE_NATIVE_CORE_ALLOW_DEVELOPMENT_ARTIFACTS: "0"
       CI: "true"
@@ -61,7 +54,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify immutable source and protected pins
+      - name: Verify immutable source and release coordinates
         shell: bash
         env:
           WORKFLOW_REF: ${{ github.ref }}
@@ -98,37 +91,15 @@ jobs:
           [[ "$package_version" =~ ^[0-9]+(\.[0-9]+)+([.-][A-Za-z0-9.-]+)?$ ]]
           printf 'PACKAGE_VERSION=%s\n' "$package_version" >> "$GITHUB_ENV"
 
-          [[ "$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-          download_repository="${WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY:-}"
-          if [[ -n "$download_repository" ]]; then
-            [[ "$download_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-          else
-            download_repository="$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY"
-          fi
-          [[ "$WCE_NATIVE_CORE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$WCE_NATIVE_CORE_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ ! "$WCE_NATIVE_CORE_ARTIFACT_SHA256" =~ ^0{64}$ ]]
-          [[ "$WCE_NATIVE_CORE_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$WCE_NATIVE_CORE_BUILD_ID" =~ ^[A-Za-z0-9._-]{8,128}$ ]]
-          [[ ! "$WCE_NATIVE_CORE_BUILD_ID" =~ (^|[._-])(dev|debug|test|local|snapshot|staging)([._-]|$) ]]
-          # 内容哈希 pin 是可选的（缺省时以 manifest 声明为准），但一旦给出就必须是
-          # 非零摘要——发布构建不允许「声明了却不校验」。
-          for name in WCE_NATIVE_CORE_CLIENT_SHA256 WCE_NATIVE_CORE_BROKER_SHA256; do
-            value="${!name:-}"
-            if [[ -n "$value" ]]; then
-              [[ "$value" =~ ^[0-9a-f]{64}$ ]]
-              [[ ! "$value" =~ ^0{64}$ ]]
-            fi
-          done
-
-          integrity_repository="${WCE_LINUX_INTEGRITY_SOURCE_REPOSITORY:-$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY}"
-          integrity_revision="${WCE_LINUX_INTEGRITY_SOURCE_REVISION:-$WCE_NATIVE_CORE_SOURCE_REVISION}"
-          [[ "$integrity_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-          [[ "$integrity_revision" =~ ^[0-9a-f]{40}$ ]]
-
-          printf 'LINUX_NATIVE_DOWNLOAD_REPOSITORY=%s\n' "$download_repository" >> "$GITHUB_ENV"
-          printf 'LINUX_INTEGRITY_SOURCE_REPOSITORY=%s\n' "$integrity_repository" >> "$GITHUB_ENV"
-          printf 'LINUX_INTEGRITY_SOURCE_REVISION=%s\n' "$integrity_revision" >> "$GITHUB_ENV"
+          # 原生核心与 integrity 源码都来自同一个 producer 仓，不需要任何仓库变量；
+          # 下面这一步会现产一份 source-public 核心并把五元组写进 GITHUB_ENV。
+          # 生产仓必须是 rebuild 脚本里写死的那个，不允许被变量悄悄换掉。
+          [[ "$WCE_LINUX_NATIVE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          script_repository="$(
+            python3 -c 'import re,sys;print(re.search(r"^REPOSITORY = \"([^\"]+)\"", open(sys.argv[1], encoding="utf-8").read(), re.M).group(1))' \
+              tools/rebuild_wcdb_release.py
+          )"
+          test "$script_repository" = "$WCE_LINUX_NATIVE_REPOSITORY"
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -153,58 +124,29 @@ jobs:
           npm ci --prefix frontend
           npm ci --prefix desktop
 
-      - name: Download the pinned Producer native-core artifact
-        timeout-minutes: 20
+      - name: Rebuild the Linux native core for this release
+        timeout-minutes: 45
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.WCE_LINUX_PRODUCER_READ_TOKEN }}
+          GH_TOKEN: ${{ secrets.WCE_NATIVE_CORE_PRODUCER_TOKEN }}
         run: |
           set -euo pipefail
-          # 与 Windows 的 native-artifact 步骤同一条错误提示：secret 缺失时给出可执行的信息，
-          # 而不是一个裸的 test 失败（Linux 没有 environment，所以它必须是仓库级 secret）。
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "WCE_LINUX_PRODUCER_READ_TOKEN is required to download the private native Release." >&2
+            echo "WCE_NATIVE_CORE_PRODUCER_TOKEN is required to rebuild the WCDB native core." >&2
             exit 1
           fi
-          artifact_dir="$RUNNER_TEMP/wechatdb-native-linux-x64-source-public"
-          release_tag="linux-native-$WCE_NATIVE_CORE_BUILD_ID"
-          release_asset="wechatdb-native-linux-x64-source-public-$WCE_NATIVE_CORE_BUILD_ID.tar.gz"
-          release_archive="$RUNNER_TEMP/$release_asset"
-          downloaded=0
-          for attempt in 1 2 3; do
-            rm -rf "$artifact_dir"
-            mkdir -p "$artifact_dir"
-            rm -f "$release_archive"
-            # 首选不可变 Release 资产（核对 pin 过的 tar.gz 摘要），退路是精确 run id
-            # 的工作流产物。退路拿不到 tar.gz，所以它靠 workflow 产物内部的
-            # provenance.json / SHA256SUMS.txt / manifest 落到同一份五元组上：
-            # run id、revision、build id 与两组内容哈希 pin 都会被
-            # resolveLinuxNativeCoreArtifacts 重新核对，未被核对过的只剩 tar.gz
-            # 这个外层封装的摘要本身。
-            if [[ -n "$LINUX_NATIVE_DOWNLOAD_REPOSITORY" ]] && \
-              gh release download "$release_tag" \
-                --repo "$LINUX_NATIVE_DOWNLOAD_REPOSITORY" \
-                --pattern "$release_asset" \
-                --dir "$RUNNER_TEMP"
-            then
-              actual_sha256="$(sha256sum "$release_archive" | awk '{print $1}')"
-              test "$actual_sha256" = "$WCE_NATIVE_CORE_ARTIFACT_SHA256"
-              tar -xzf "$release_archive" -C "$artifact_dir"
-              downloaded=1
-              break
-            elif gh run download "$WCE_NATIVE_CORE_ARTIFACT_RUN_ID" \
-              --repo "$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY" \
-              --name wechatdb-native-linux-x64-source-public \
-              --dir "$artifact_dir"
-            then
-              downloaded=1
-              break
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              sleep "$((attempt * 15))"
-            fi
-          done
-          test "$downloaded" = 1
+          # 与 Windows / macOS 同一条路线：现产一份 source-public 原生核心，把五元组写进
+          # GITHUB_ENV（WCE_NATIVE_CORE_ARTIFACT_REPOSITORY / _RUN_ID / _SHA256 /
+          # _SOURCE_REVISION / _BUILD_ID / _CLIENT_SHA256 / _BROKER_SHA256 /
+          # _ARTIFACT_DIR），供后面的策略校验与打包步骤核对。这里不依赖任何仓库变量，
+          # 也不依赖 Actions artifact 存储（资产只走不可变 Release）。
+          python3 tools/rebuild_wcdb_release.py \
+            --component linux-native \
+            --output-root "$RUNNER_TEMP"
+          # 注意：脚本写进 GITHUB_ENV 的变量只对**后续 step** 可见，本 step 的 shell
+          # 读不到，所以这里只用常量拼路径；其余坐标交给后面的步骤用。
+          core_dir="$RUNNER_TEMP/wechatdb-native-linux-x64-source-public"
+          test -f "$core_dir/wechatdb_native_build.json"
 
       - name: Validate the pinned native core against the production policy
         shell: bash
@@ -228,15 +170,15 @@ jobs:
           "
           printf 'WCE_NATIVE_CORE_ARTIFACT_DIR=%s\n' "$WCE_NATIVE_CORE_ARTIFACT_DIR" >> "$GITHUB_ENV"
 
-      - name: Checkout the pinned private integrity source
+      - name: Checkout the private integrity source at the producer revision
         timeout-minutes: 15
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.WCE_LINUX_PRODUCER_READ_TOKEN }}
+          GH_TOKEN: ${{ secrets.WCE_NATIVE_CORE_PRODUCER_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "WCE_LINUX_PRODUCER_READ_TOKEN is required to fetch the pinned private integrity source." >&2
+            echo "WCE_NATIVE_CORE_PRODUCER_TOKEN is required to fetch the private integrity source." >&2
             exit 1
           fi
           # wce_integrity 把 Nuxt 的 CSS 编进导出物里，所以它必须在 UI 构建之后、
@@ -250,7 +192,8 @@ jobs:
           rm -rf "$work"
           mkdir -p "$work"
           rm -f "$archive"
-          gh api "repos/$LINUX_INTEGRITY_SOURCE_REPOSITORY/tarball/$LINUX_INTEGRITY_SOURCE_REVISION" > "$archive"
+          # integrity 源码与当次被钉的核心同源同 revision（都由重建步骤写进环境）。
+          gh api "repos/$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY/tarball/$WCE_NATIVE_CORE_SOURCE_REVISION" > "$archive"
           test -s "$archive"
           tar -xzf "$archive" -C "$work"
           root="$(find "$work" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
@@ -447,15 +390,21 @@ jobs:
           WDA_REPOSITORY: ${{ github.repository }}
           WDA_REVISION: ${{ github.sha }}
           WDA_TAG: ${{ github.ref_name }}
-          NATIVE_REPOSITORY: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_REPOSITORY }}
-          NATIVE_RUN_ID: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_RUN_ID }}
-          NATIVE_REVISION: ${{ vars.WCE_LINUX_NATIVE_CORE_SOURCE_REVISION }}
-          NATIVE_BUILD_ID: ${{ vars.WCE_LINUX_NATIVE_CORE_BUILD_ID }}
-          NATIVE_ASSET_SHA256: ${{ vars.WCE_LINUX_NATIVE_CORE_ARTIFACT_SHA256 }}
           WORKFLOW_RUN_ID: ${{ github.run_id }}
           WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          # 原生核心坐标来自上面重建步骤写进 GITHUB_ENV 的变量（不是仓库变量）；
+          # 也不能写进 step 的 env: 里用表达式读，那种展开发生在解析期，看不到本
+          # 作业运行时才写入的值。
+          export NATIVE_REPOSITORY="$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY"
+          export NATIVE_RUN_ID="$WCE_NATIVE_CORE_ARTIFACT_RUN_ID"
+          export NATIVE_REVISION="$WCE_NATIVE_CORE_SOURCE_REVISION"
+          export NATIVE_BUILD_ID="$WCE_NATIVE_CORE_BUILD_ID"
+          export NATIVE_ASSET_SHA256="$WCE_NATIVE_CORE_ARTIFACT_SHA256"
+          # integrity 源码来自同一个 producer revision，所以溯源字段与原生核心同源。
+          export LINUX_INTEGRITY_SOURCE_REPOSITORY="$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY"
+          export LINUX_INTEGRITY_SOURCE_REVISION="$WCE_NATIVE_CORE_SOURCE_REVISION"
           cd dist
           # Windows 那份叫 SHA256SUMS.txt / release-provenance.json；Linux 用带后缀的
           # 名字，避免两个作业的产物在 merge-multiple 下载时互相覆盖。
