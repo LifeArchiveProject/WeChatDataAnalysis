@@ -567,6 +567,7 @@ export const useApi = () => {
     const body = {}
     if (data.device != null) body.device = String(data.device || '').trim().toLowerCase()
     if (data.model != null) body.model = String(data.model || '').trim()
+    if (data.download_source != null) body.download_source = String(data.download_source || '').trim()
     return await request('/chat/media/voice/transcription/settings', {
       method: 'PUT',
       body
