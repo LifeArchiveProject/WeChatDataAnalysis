@@ -793,7 +793,7 @@ const goMiniPrograms = async () => { await navigateTo('/mini-programs') }
 const goFinder = async () => { await navigateTo('/finder') }
 const goPayments = async () => { await navigateTo('/payments') }
 const goWrapped = async () => { await navigateTo('/wrapped') }
-const goGuide = async () => { await navigateTo('/') }
+const goGuide = async () => { await navigateTo({ path: '/', query: { guide: '1' } }) }
 const goSettings = () => { openSettingsDialog() }
 
 const onWindowKeydown = (event) => {

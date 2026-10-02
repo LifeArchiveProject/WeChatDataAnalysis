@@ -9,7 +9,7 @@ const script = parse(source).descriptor.scriptSetup.content.replace(/^import .*$
 const settings = readFileSync(new URL('../lib/desktop-settings.js', import.meta.url), 'utf8')
   .replace(/^export /gm, '')
 
-const runStartup = async ({ stored = null, accounts = ['ready-account'], accepted = true, fails = false } = {}) => {
+const runStartup = async ({ stored = null, accounts = ['ready-account'], accepted = true, fails = false, query = {} } = {}) => {
   let mounted
   let contextAvailable = true
   const paths = []
@@ -25,6 +25,7 @@ const runStartup = async ({ stored = null, accounts = ['ready-account'], accepte
     ref: value => ({ value }),
     onMounted: callback => { mounted = callback },
     useRouter: getRouter,
+    useRoute: () => ({ query }),
     navigateTo: path => getRouter().replace(path),
     isFirstUseAgreementAccepted: () => accepted,
     console: { warn: (...args) => warnings.push(args) },
@@ -56,4 +57,10 @@ test('账号请求失败时留在首页并记录原因', async () => {
   const result = await runStartup({ fails: true })
   assert.deepEqual(result.paths, [])
   assert.equal(result.warnings.length, 1)
+})
+
+test('有数据且默认跳转开启时，主动进入引导页仍停留在引导页', async () => {
+  const result = await runStartup({ query: { guide: '1' } })
+  assert.deepEqual(result.paths, [])
+  assert.equal(result.warnings.length, 0)
 })
