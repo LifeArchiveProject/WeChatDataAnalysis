@@ -142,11 +142,14 @@ import { isFirstUseAgreementAccepted } from '~/lib/first-use-agreement'
 
 const { listChatAccounts } = useApi()
 const router = useRouter()
+const route = useRoute()
 const exportDialogOpen = ref(false)
 
 onMounted(async () => {
   if (!process.client || typeof window === 'undefined') return
   if (!isFirstUseAgreementAccepted()) return
+  // 用户主动打开引导页时，保留当前页面，不执行启动时的自动跳转。
+  if (route.query.guide === '1') return
 
   const enabled = readLocalBoolSetting(DESKTOP_SETTING_DEFAULT_TO_CHAT_KEY, true)
   if (!enabled) return
