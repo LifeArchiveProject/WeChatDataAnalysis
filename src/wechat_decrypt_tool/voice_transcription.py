@@ -61,12 +61,15 @@ def _prepare_whisper_cuda_libraries() -> None:
             logger.debug("可选 CUDA 库目录不可用，继续使用系统运行库。", exc_info=True)
 
 from .runtime_settings import (
+    VOICE_MODEL_DOWNLOAD_ENDPOINTS,
     VOICE_TRANSCRIPTION_DEVICE_CPU,
     VOICE_TRANSCRIPTION_DEVICE_CUDA,
     read_effective_voice_transcription_device,
     read_effective_voice_transcription_model,
+    read_voice_model_download_source,
     write_voice_transcription_device_setting,
     write_voice_transcription_model_setting,
+    write_voice_model_download_source,
 )
 from .app_paths import get_data_dir, get_output_databases_dir, get_output_dir
 from .asr_models import (
@@ -1571,6 +1574,7 @@ class VoiceTranscriptionService:
             "supportedDevices": spec["devices"] if spec else ["cpu", "cuda"],
             "modelSettingSource": self.config.model_source,
             "models": get_voice_model_catalog(selected_model=self.config.model),
+            "modelDownloadSource": read_voice_model_download_source(),
             "language": self.config.language,
             "device": self.config.device,
             "computeType": self.config.compute_type,
@@ -2324,6 +2328,24 @@ class VoiceTranscriptionService:
         return True
 
 
+def _voice_model_download_endpoint(source: str, repo_id: str) -> str:
+    """兼容镜像站在部分网络下永久跳转至官方站的行为。"""
+    endpoint = VOICE_MODEL_DOWNLOAD_ENDPOINTS[source]
+    if source == "hf-mirror":
+        path = f"/api/models/{repo_id}"
+        official = VOICE_MODEL_DOWNLOAD_ENDPOINTS["huggingface"]
+        try:
+            # SDK 不跟随跨站的 HEAD 跳转；仅接受镜像明确返回的同仓库官方地址。
+            response = httpx.head(endpoint + path, follow_redirects=False, timeout=5.0)
+            if response.status_code in {301, 308} and response.headers.get("location") == official + path:
+                logger.info("[voice-model-download] mirror redirected to official host repo=%s", repo_id)
+                return official
+        except httpx.HTTPError:
+            # 探测失败仍交给原下载流程处理，不自动更换用户选择的源。
+            pass
+    return endpoint
+
+
 def _download_voice_model_snapshot(
     model_id: str,
     *,
@@ -2339,6 +2361,10 @@ def _download_voice_model_snapshot(
     repo_id = VOICE_MODEL_REPOSITORIES[model_id]
     common = {
         "local_dir": str(output_dir),
+        # 单次任务固定下载源，元数据与文件请求保持一致，不修改全局 HF_ENDPOINT。
+        "endpoint": _voice_model_download_endpoint(read_voice_model_download_source(), repo_id),
+        # 内置模型均为公开仓库，避免将本机 Hugging Face 凭据发送给镜像站。
+        "token": False,
         "allow_patterns": list(VOICE_MODEL_DOWNLOAD_ALLOW_PATTERNS),
         # A cancelled worker must not wait for other executor workers to drain.
         "max_workers": 1,
@@ -3496,6 +3522,17 @@ def _reset_voice_transcription_service() -> VoiceTranscriptionService:
             _VOICE_TRANSCRIPTION_SERVICE = replacement
             _VOICE_TRANSCRIPTION_SERVICE_RESETTING = False
             _VOICE_TRANSCRIPTION_SERVICE_CONDITION.notify_all()
+
+
+def set_voice_model_download_source(source: str) -> dict[str, Any]:
+    """切换后续下载的来源，无需重建推理服务或中断当前下载。"""
+    if source not in VOICE_MODEL_DOWNLOAD_ENDPOINTS:
+        raise VoiceTranscriptionError("invalid_download_source", "不支持该模型下载源。")
+    try:
+        write_voice_model_download_source(source)
+    except OSError as exc:
+        raise VoiceTranscriptionError("download_source_save_failed", "下载源保存失败，请重试。") from exc
+    return get_voice_transcription_service().status()
 
 
 def set_voice_transcription_device(device: str) -> dict[str, Any]:

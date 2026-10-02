@@ -14,6 +14,11 @@ BACKEND_HOST_KEY = "backend_host"
 MCP_TOKEN_KEY = "mcp_token"
 VOICE_TRANSCRIPTION_DEVICE_KEY = "voice_transcription_device"
 VOICE_TRANSCRIPTION_MODEL_KEY = "voice_transcription_model"
+VOICE_MODEL_DOWNLOAD_SOURCE_KEY = "voice_model_download_source"
+VOICE_MODEL_DOWNLOAD_ENDPOINTS = {
+    "huggingface": "https://huggingface.co",
+    "hf-mirror": "https://hf-mirror.com",
+}
 ENV_PORT_KEY = "WECHAT_TOOL_PORT"
 ENV_HOST_KEY = "WECHAT_TOOL_HOST"
 ENV_ALLOW_REMOTE_CALLS_KEY = "WECHAT_TOOL_ALLOW_REMOTE_CALLS"
@@ -327,6 +332,23 @@ def read_effective_voice_transcription_model(default: str = "zipformer-small-ctc
         return settings_model, "settings"
 
     return _normalize_voice_transcription_model(default) or "zipformer-small-ctc-int8", "default"
+
+
+def read_voice_model_download_source() -> str:
+    """读取语音模型下载源；旧配置或无效配置使用官方源。"""
+    source = _read_runtime_settings().get(VOICE_MODEL_DOWNLOAD_SOURCE_KEY)
+    return source if isinstance(source, str) and source in VOICE_MODEL_DOWNLOAD_ENDPOINTS else "huggingface"
+
+
+def write_voice_model_download_source(source: str) -> None:
+    """仅持久化预设下载源，不接受任意网址。"""
+    if source not in VOICE_MODEL_DOWNLOAD_ENDPOINTS:
+        raise ValueError("不支持的语音模型下载源")
+    data = _read_runtime_settings()
+    data[VOICE_MODEL_DOWNLOAD_SOURCE_KEY] = source
+    _write_runtime_settings(data)
+    if read_voice_model_download_source() != source:
+        raise OSError("语音模型下载源保存失败")
 
 
 def ensure_mcp_token() -> tuple[str, str]:

@@ -12,7 +12,7 @@ import sys
 import time
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -89,6 +89,7 @@ from ..voice_transcription import (
     load_voice_data,
     set_voice_transcription_device,
     set_voice_transcription_model,
+    set_voice_model_download_source,
 )
 from ..native_voice_transcription import (
     NativeVoiceTriggerError,
@@ -126,6 +127,7 @@ class VoiceTranscriptionCacheLookupRequest(BaseModel):
 class VoiceTranscriptionSettingsRequest(BaseModel):
     device: Optional[str] = Field(None, description="推理设备：cpu 或 cuda")
     model: Optional[str] = Field(None, description="本地语音模型")
+    download_source: Optional[Literal["huggingface", "hf-mirror"]] = Field(None, description="语音模型下载源")
 
 
 class VoiceTranscriptionBatchRequest(BaseModel):
@@ -3747,19 +3749,22 @@ async def get_chat_voice_transcription_status():
     return await asyncio.to_thread(get_voice_transcription_service().status)
 
 
-@router.put("/api/chat/media/voice/transcription/settings", summary="设置本地语音模型或推理设备")
+@router.put("/api/chat/media/voice/transcription/settings", summary="设置本地语音模型、推理设备或下载源")
 async def set_chat_voice_transcription_settings(req: VoiceTranscriptionSettingsRequest, request: Request):
     _require_local_voice_mutation(request)
     device = str(req.device or "").strip()
     model = str(req.model or "").strip()
-    if int(bool(device)) + int(bool(model)) != 1:
-        raise HTTPException(status_code=400, detail="每次只能修改 device 或 model 中的一项。")
+    download_source = req.download_source
+    if sum(bool(value) for value in (device, model, download_source)) != 1:
+        raise HTTPException(status_code=400, detail="每次只能修改 device、model 或 download_source 中的一项。")
     try:
         configuration = None
         if model:
             configuration = await asyncio.to_thread(set_voice_transcription_model, model)
         if device:
             configuration = await asyncio.to_thread(set_voice_transcription_device, device)
+        if download_source:
+            configuration = await asyncio.to_thread(set_voice_model_download_source, download_source)
     except VoiceTranscriptionError as exc:
         status_code = 409 if exc.code in {"device_locked", "model_locked", "model_busy"} else 400
         raise HTTPException(
