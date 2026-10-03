@@ -57,6 +57,7 @@ def api(path: str, payload: dict | None = None):
         command,
         input=json.dumps(payload) if payload is not None else None,
         stdout=subprocess.PIPE,
+        encoding="utf-8",
         text=True,
         check=True,
     )
