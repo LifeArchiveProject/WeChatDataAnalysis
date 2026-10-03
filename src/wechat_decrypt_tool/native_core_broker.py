@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 
+from .app_paths import get_data_dir
 from .native_core_client import (
     ENV_NATIVE_CORE_ENDPOINT,
     ENV_NATIVE_CORE_LIBRARY,
@@ -117,13 +118,19 @@ class NativeCoreManagedOperation:
 def _broker_name() -> str:
     if sys.platform.startswith("win"):
         return "wechatdb_broker.exe"
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" or sys.platform.startswith("linux"):
         return "wechatdb_broker"
-    raise NativeCoreComponentMissingError("wechatdb native broker supports Windows and macOS only.")
+    raise NativeCoreComponentMissingError(
+        "wechatdb native broker supports Windows, macOS and Linux only."
+    )
 
 
 def _client_name() -> str:
-    return "wechatdb_client.dll" if sys.platform.startswith("win") else "libwechatdb_client.dylib"
+    if sys.platform.startswith("win"):
+        return "wechatdb_client.dll"
+    if sys.platform.startswith("linux"):
+        return "libwechatdb_client.so"
+    return "libwechatdb_client.dylib"
 
 
 def _candidate_broker_paths() -> tuple[Path, ...]:
@@ -143,6 +150,8 @@ def _candidate_broker_paths() -> tuple[Path, ...]:
             repo_root.parent / "wechatdb-native" / "build" / "windows-vs" / "Debug" / name,
             repo_root.parent / "wechatdb-native" / "build" / "windows-msvc-debug" / name,
             repo_root.parent / "wechatdb-native" / "build" / "macos-arm64-debug" / name,
+            repo_root.parent / "wechatdb-native" / "build" / "linux-x64-debug" / name,
+            repo_root.parent / "wechatdb-native" / "build" / "linux-x64-release" / name,
         )
     )
     result: list[Path] = []
@@ -169,8 +178,59 @@ def _new_endpoint() -> str:
     token = secrets.token_hex(12)
     if sys.platform.startswith("win"):
         return rf"\\.\pipe\LifeArchiveProject.WeChatDB.Native.{os.getpid()}.{token}"
-    directory = tempfile.gettempdir().rstrip("/\\")
+    directory = os.fspath(_endpoint_directory()).rstrip("/\\")
     return f"{directory}/lap-wce-{os.getpid()}-{token}.sock"
+
+
+def _endpoint_directory() -> Path:
+    """broker 会校验 socket 所在目录必须"本人拥有 + 组/他人不可写"。
+
+    macOS 的 TMPDIR 天生是 per-user 0700 目录，所以历史上直接用 gettempdir()；
+    Linux 的 /tmp 是 sticky + world-writable（任何人都能占位这个 socket 名），
+    原生侧会直接判 tamper 拒服务，因此优先用 $XDG_RUNTIME_DIR
+    （systemd 登录会话的 /run/user/<uid>，0700），缺失时退回一个自建 0700 目录。
+    """
+    if sys.platform == "darwin" or sys.platform.startswith("win"):
+        return Path(tempfile.gettempdir())
+    candidates: list[Path] = []
+    runtime_dir = str(os.environ.get("XDG_RUNTIME_DIR", "") or "").strip()
+    if runtime_dir:
+        candidates.append(Path(runtime_dir))
+    candidates.append(Path(get_data_dir()) / "native-core-run")
+    euid = os.geteuid()
+    for candidate in candidates:
+        # sun_path 只有 108 字节，给 socket 文件名（lap-wce-<pid>-<token>.sock）留余量。
+        if len(os.fspath(candidate)) > 60:
+            continue
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            os.chmod(candidate, 0o700)
+            status = candidate.stat()
+        except OSError:
+            continue
+        if status.st_uid != euid or (status.st_mode & 0o022) != 0:
+            continue
+        if (status.st_mode & 0o300) != 0o300:
+            continue
+        return candidate
+    raise NativeCoreUnavailableError(
+        "Cannot locate a private directory for the native core broker socket."
+    )
+
+
+def _unlink_unix_socket(endpoint: str) -> None:
+    """清理 unix socket 与它的 flock 锁文件（broker 用 <endpoint>.lock 互斥）。
+
+    只应在确认 broker 进程已退出后调用（否则会破坏原生侧的单实例互斥）。
+    Windows 用的是命名管道，没有文件系统路径要删。
+    """
+    if not endpoint or sys.platform.startswith("win"):
+        return
+    for suffix in ("", ".lock"):
+        try:
+            Path(endpoint + suffix).unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def _startup_timeout_seconds() -> float:
@@ -521,8 +581,9 @@ def ensure_native_core_broker(
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=2)
-            if sys.platform == "darwin":
-                Path(endpoint).unlink(missing_ok=True)
+            # broker 用的是 unix socket（macOS/Linux），失败路径也要清掉这个 socket 文件，
+            # 否则下次启动会撞上残留路径。Windows 是命名管道，没有文件要清。
+            _unlink_unix_socket(endpoint)
             if isinstance(exc, NativeCoreUnavailableError) and log_path is not None:
                 tail = _broker_log_tail(log_path, log_start_offset)
                 detail = f" Broker log: {log_path}."
@@ -594,8 +655,7 @@ def stop_native_core_broker(*, _force: bool = False) -> None:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=3)
-    if endpoint and sys.platform == "darwin":
-        Path(endpoint).unlink(missing_ok=True)
+    _unlink_unix_socket(endpoint)
 
 
 atexit.register(stop_native_core_broker, _force=True)

@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -3189,7 +3189,7 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "watchfiles" },
-    { name = "wx-key", marker = "sys_platform == 'win32'" },
+    { name = "wx-key", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "yara-python", marker = "sys_platform == 'win32'" },
     { name = "zstandard" },
 ]
@@ -3261,7 +3261,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.8.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
     { name = "watchfiles", specifier = ">=1.1.0" },
-    { name = "wx-key", marker = "sys_platform == 'win32'", specifier = ">=2.0.1" },
+    { name = "wx-key", marker = "sys_platform == 'linux' or sys_platform == 'win32'", specifier = ">=2.1.1" },
     { name = "yara-python", marker = "sys_platform == 'win32'", specifier = ">=4.5.2" },
     { name = "zstandard", specifier = ">=0.23.0" },
 ]
@@ -3281,13 +3281,17 @@ wheels = [
 
 [[package]]
 name = "wx-key"
-version = "2.0.1"
+version = "2.1.1"
 source = { registry = "tools/key_wheels" }
 wheels = [
-    { path = "wx_key-2.0.1-cp311-cp311-win_amd64.whl" },
-    { path = "wx_key-2.0.1-cp312-cp312-win_amd64.whl" },
-    { path = "wx_key-2.0.1-cp313-cp313-win_amd64.whl" },
-    { path = "wx_key-2.0.1-cp314-cp314-win_amd64.whl" },
+    { path = "wx_key-2.1.1-cp311-cp311-linux_x86_64.whl" },
+    { path = "wx_key-2.1.1-cp311-cp311-win_amd64.whl" },
+    { path = "wx_key-2.1.1-cp312-cp312-linux_x86_64.whl" },
+    { path = "wx_key-2.1.1-cp312-cp312-win_amd64.whl" },
+    { path = "wx_key-2.1.1-cp313-cp313-linux_x86_64.whl" },
+    { path = "wx_key-2.1.1-cp313-cp313-win_amd64.whl" },
+    { path = "wx_key-2.1.1-cp314-cp314-linux_x86_64.whl" },
+    { path = "wx_key-2.1.1-cp314-cp314-win_amd64.whl" },
 ]
 
 [[package]]

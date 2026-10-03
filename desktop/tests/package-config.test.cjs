@@ -10,6 +10,41 @@ const desktopRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(desktopRoot, "..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(desktopRoot, "package.json"), "utf8"));
 
+// Every remote action a release workflow may reference, pinned to an approved
+// commit. Both the tag-triggered release workflow and the platform build
+// workflows it calls are checked against this single list.
+const APPROVED_ACTIONS = new Map([
+  ["actions/checkout", "11d5960a326750d5838078e36cf38b85af677262"],
+  ["actions/setup-node", "49933ea5288caeca8642d1e84afbd3f7d6820020"],
+  ["actions/setup-python", "a26af69be951a213d495a4c3e4e4022e16d87065"],
+  ["actions/cache", "0057852bfaa89a56745cba8c7296529d2fc39830"],
+  ["actions/download-artifact", "d3f86a106a0bac45b974a628896c90dbdf5c8093"],
+  ["actions/upload-artifact", "ea165f8d65b6e75b540449e92b4886f43607fa02"],
+  ["dtolnay/rust-toolchain", "4cda84d5c5c54efe2404f9d843567869ab1699d4"],
+  ["softprops/action-gh-release", "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65"],
+]);
+
+function assertRemoteActionsPinned(workflow) {
+  const remoteUses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)]
+    .map((match) => match[1])
+    .filter((use) => !use.startsWith("./"));
+  assert.ok(remoteUses.length > 0);
+  for (const use of remoteUses) {
+    const separator = use.lastIndexOf("@");
+    const action = use.slice(0, separator);
+    const revision = use.slice(separator + 1);
+    assert.match(revision, /^[0-9a-f]{40}$/, `${use} is not pinned to a commit`);
+    assert.equal(revision, APPROVED_ACTIONS.get(action), `${action} uses an unapproved commit`);
+  }
+  return remoteUses;
+}
+
+function readWorkflow(name) {
+  return fs
+    .readFileSync(path.join(repoRoot, ".github", "workflows", name), "utf8")
+    .replace(/\r\n/g, "\n");
+}
+
 test("desktop package excludes the retired Koffi and WCDB sidecar runtime", () => {
   const nodeModulesRule = packageJson.build.files.find(
     (item) => item && typeof item === "object" && item.from === "node_modules"
@@ -189,9 +224,15 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
     /"windows-native":\s*\(\s*"windows-native-production\.yml",\s*"wechatdb-native-windows-x64-source-public"/
   );
   assert.match(rebuildRelease, /tag = f"\{component\}-\{build_id\}"/);
-  assert.match(rebuildRelease, /asset_name = f"\{artifact_name\}-\{build_id\}\.zip"/);
+  assert.match(rebuildRelease, /asset_name = f"\{artifact_name\}-\{build_id\}\{suffix\}"/);
   assert.match(rebuildRelease, /release\.get\("target_commitish"\) != revision/);
   assert.match(rebuildRelease, /expected_digest = asset\.get\("digest"\)/);
+  // Linux 走同一条自动重建路线，只是资产换成可复现的 tar.gz。
+  assert.match(
+    rebuildRelease,
+    /"linux-native":\s*\(\s*"linux-native-production\.yml",\s*"wechatdb-native-linux-x64-source-public"/
+  );
+  assert.match(rebuildRelease, /WCE_NATIVE_CORE_CLIENT_SHA256|f"\{prefix\}_CLIENT_SHA256"/);
   assert.match(windowsJob, /WCE_WINDOWS_PRIVATE_ROOT_CERT_PATH/);
   assert.match(windowsJob, /WCE_WINDOWS_PRIVATE_ROOT_SHA256/);
   assert.match(windowsJob, /WCE_RFC3161_TIMESTAMP_URL/);
@@ -295,32 +336,7 @@ test("Windows release uses protected cloud private-PKI signing and installer smo
 });
 
 test("release workflow pins every remote action to an approved commit", () => {
-  const workflow = fs
-    .readFileSync(path.join(repoRoot, ".github", "workflows", "release.yml"), "utf8")
-    .replace(/\r\n/g, "\n");
-  const approved = new Map([
-    ["actions/checkout", "11d5960a326750d5838078e36cf38b85af677262"],
-    ["actions/setup-node", "49933ea5288caeca8642d1e84afbd3f7d6820020"],
-    ["actions/setup-python", "a26af69be951a213d495a4c3e4e4022e16d87065"],
-    ["actions/cache", "0057852bfaa89a56745cba8c7296529d2fc39830"],
-    ["actions/download-artifact", "d3f86a106a0bac45b974a628896c90dbdf5c8093"],
-    ["actions/upload-artifact", "ea165f8d65b6e75b540449e92b4886f43607fa02"],
-    ["dtolnay/rust-toolchain", "4cda84d5c5c54efe2404f9d843567869ab1699d4"],
-    ["softprops/action-gh-release", "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65"],
-    ["H3CoF6/qq-notify-action", "50d180981e7c7b8552a3331b981e3f8cfcf40c44"],
-  ]);
-  const remoteUses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)]
-    .map((match) => match[1])
-    .filter((use) => !use.startsWith("./"));
-
-  assert.ok(remoteUses.length > 0);
-  for (const use of remoteUses) {
-    const separator = use.lastIndexOf("@");
-    const action = use.slice(0, separator);
-    const revision = use.slice(separator + 1);
-    assert.match(revision, /^[0-9a-f]{40}$/, `${use} is not pinned to a commit`);
-    assert.equal(revision, approved.get(action), `${action} uses an unapproved commit`);
-  }
+  const remoteUses = assertRemoteActionsPinned(readWorkflow("release.yml"));
   for (const action of [
     "actions/checkout",
     "actions/setup-node",
@@ -329,7 +345,107 @@ test("release workflow pins every remote action to an approved commit", () => {
     "actions/upload-artifact",
     "softprops/action-gh-release",
   ]) {
-    assert.ok(remoteUses.includes(`${action}@${approved.get(action)}`), `${action} is missing`);
+    assert.ok(
+      remoteUses.includes(`${action}@${APPROVED_ACTIONS.get(action)}`),
+      `${action} is missing`
+    );
+  }
+});
+
+test("the tag release requires and publishes the Linux x64 package", () => {
+  const workflow = readWorkflow("release.yml");
+  const releaseJob = workflow.match(
+    /\n  build-linux-x64:\n([\s\S]*?)(?=\n  [A-Za-z0-9_-]+:\n|$)/
+  )?.[1] || "";
+  assert.match(releaseJob, /uses:\s*\.\/\.github\/workflows\/linux-private-build\.yml/);
+  assert.match(releaseJob, /secrets:\s*inherit/);
+
+  const publishJob = workflow.match(
+    /\n  publish-release:\n([\s\S]*?)(?=\n  [A-Za-z0-9_-]+:\n|$)/
+  )?.[1] || "";
+  assert.match(publishJob, /- build-windows/);
+  assert.match(publishJob, /- build-macos-arm64/);
+  // Linux is a required platform: a missing native-core pin fails the release
+  // instead of silently publishing without it.
+  assert.match(publishJob, /- build-linux-x64/);
+});
+
+test("Linux release workflow rebuilds the native core and publishes the unrooted payload", () => {
+  const workflow = readWorkflow("linux-private-build.yml");
+  const job = workflow.match(
+    /\n  build-linux-x64:\n([\s\S]*?)$/
+  )?.[1] || "";
+  assert.ok(job, "build-linux-x64 job is missing");
+  assert.match(workflow, /workflow_call:/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(job, /runs-on:\s*ubuntu-22\.04/);
+  assert.match(job, /if:\s*github\.ref == 'refs\/heads\/main' \|\| startsWith\(github\.ref, 'refs\/tags\/v'\)/);
+
+  // Linux 与 Windows / macOS 同一条自动重建路线：发版当下现产 source-public 原生核心，
+  // 所以消费工作流里不许再出现任何仓库变量 pin，也不再需要额外的读取 secret——
+  // 只用发版已有的 WCE_NATIVE_CORE_PRODUCER_TOKEN。
+  assert.doesNotMatch(job, /\$\{\{\s*vars\.WCE_LINUX_/);
+  assert.doesNotMatch(job, /WCE_LINUX_PRODUCER_READ_TOKEN/);
+  assert.match(job, /python3 tools\/rebuild_wcdb_release\.py/);
+  assert.match(job, /--component linux-native/);
+  assert.match(job, /secrets\.WCE_NATIVE_CORE_PRODUCER_TOKEN/);
+  assert.doesNotMatch(job, /WCE_INTEGRITY_ARTIFACT_DIR/);
+
+  const order = [
+    "Verify immutable source and release coordinates",
+    "Rebuild the Linux native core for this release",
+    "Validate the pinned native core against the production policy",
+    "Checkout the private integrity source at the producer revision",
+    "Build the Linux package",
+    "Verify the packaged Linux runtime",
+    "Prepare Linux release checksums and provenance",
+    "Upload Linux release files",
+  ];
+  let previous = -1;
+  for (const step of order) {
+    const index = job.indexOf(step);
+    assert.ok(index >= 0, `${step} is missing`);
+    assert.ok(index > previous, `${step} is out of order`);
+    previous = index;
+  }
+
+  // 重建脚本自己核对不可变 Release 资产摘要、revision 与 45 天窗口，
+  // 工作流不再有 Download / 回退到 Actions artifact 的分支。
+  assert.doesNotMatch(job, /gh release download/);
+  assert.doesNotMatch(job, /gh run download/);
+  assert.match(job, /resolveLinuxNativeCoreArtifacts\(\{ platform: 'linux' \}\)/);
+  // integrity 源码按当次重建出来的 producer revision 取，不再依赖仓库变量。
+  assert.match(
+    job,
+    /repos\/\$WCE_NATIVE_CORE_ARTIFACT_REPOSITORY\/tarball\/\$WCE_NATIVE_CORE_SOURCE_REVISION/
+  );
+  assert.match(job, /native\/wce_integrity\/Cargo\.toml/);
+  assert.doesNotMatch(job, /cargo build/);
+  assert.match(job, /tests\/test_linux_db_key_flow\.py/);
+  assert.match(job, /tests\/test_linux_native_core_policy\.py/);
+  assert.doesNotMatch(job, /test_wcdb_realtime_native_core_required\.py/);
+  assert.doesNotMatch(job, /test_native_core_broker_lifecycle\.py/);
+  // 桌面门禁必须覆盖「启动后端」那一步的策略判定：曾经它只认 win32/darwin，
+  // 于是 Linux 包能出包、一启动就崩。
+  assert.match(job, /tests\/native-core-runtime\.test\.cjs/);
+  assert.match(job, /resolveNativeCoreRuntimePolicy/);
+  assert.match(job, /WECHAT_TOOL_NATIVE_CORE_MODE/);
+  assert.match(job, /npm run dist:linux/);
+  assert.match(job, /differs from the reviewed native artifact/);
+  assert.match(job, /linuxContentPinErrors/);
+  assert.match(job, /SHA256SUMS-linux\.txt/);
+  assert.match(job, /release-provenance-linux\.json/);
+  assert.match(job, /desktop\/dist\/\*-linux-x86_64\.tar\.gz/);
+  assert.match(job, /name:\s*release-linux-x64/);
+});
+
+test("the Linux release workflow pins every remote action to an approved commit", () => {
+  const remoteUses = assertRemoteActionsPinned(readWorkflow("linux-private-build.yml"));
+  for (const action of ["actions/checkout", "actions/upload-artifact"]) {
+    assert.ok(
+      remoteUses.includes(`${action}@${APPROVED_ACTIONS.get(action)}`),
+      `${action} is missing`
+    );
   }
 });
 
@@ -643,13 +759,13 @@ test("macOS DMG cleanup preserves both detach failures", () => {
   );
 });
 
-test("tag release reuses the protected macOS build and publishes both platforms", () => {
+test("tag release reuses the protected platform builds and publishes every platform", () => {
   const workflow = fs
     .readFileSync(path.join(repoRoot, ".github", "workflows", "release.yml"), "utf8")
     .replace(/\r\n/g, "\n");
   const publishJob = workflow.split("\n  publish-release:\n", 2)[1] || "";
 
-  assert.match(workflow, /^name: Release \(Windows and macOS ARM64\)$/m);
+  assert.match(workflow, /^name: Release \(Windows, macOS ARM64 and Linux x64\)$/m);
   assert.match(
     workflow,
     /\n  build-macos-arm64:\n\s+uses: \.\/\.github\/workflows\/macos-private-build\.yml\n\s+secrets: inherit/
@@ -703,4 +819,41 @@ test("frontend joins copied output paths using the native path style", async () 
   assert.equal(joinNativePath("/Users/demo/output/", "wxid_demo"), "/Users/demo/output/wxid_demo");
   assert.equal(joinNativePath("D:\\wechat\\output\\", "wxid_demo"), "D:\\wechat\\output\\wxid_demo");
   assert.equal(joinNativePath("\\\\server\\share\\output", "wxid_demo"), "\\\\server\\share\\output\\wxid_demo");
+});
+
+test("Linux ships as an unpacked directory plus a checksum-verified install script", async () => {
+  // 刻意不做 AppImage / deb：Linux 的形态是 dist/linux-unpacked + install.sh。
+  assert.deepEqual(packageJson.build.linux.target, ["dir"]);
+  assert.equal(packageJson.build.linux.executableName, "wechat-data-analysis");
+  assert.equal(packageJson.build.linux.icon, "src/icon.png");
+  assert.match(packageJson.scripts["dist:linux"], /electron-builder --linux dir --x64/);
+  assert.match(packageJson.scripts["dist:linux"], /build-linux-installer\.cjs/);
+
+  const os = require("os");
+  const { spawnSync } = require("child_process");
+  const { buildLinuxInstaller } = require("../scripts/build-linux-installer.cjs");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wda-linux-installer-"));
+  try {
+    const payloadDir = path.join(root, "linux-unpacked");
+    fs.mkdirSync(path.join(payloadDir, "resources"), { recursive: true });
+    fs.writeFileSync(path.join(payloadDir, "wechat-data-analysis"), "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(path.join(payloadDir, "wechat-data-analysis"), 0o755);
+
+    const result = buildLinuxInstaller({ payloadDir, outputDir: path.join(root, "dist") });
+    assert.ok(fs.existsSync(result.archivePath));
+    assert.ok(fs.existsSync(result.installerPath));
+    assert.equal(result.sha256, crypto.createHash("sha256").update(fs.readFileSync(result.archivePath)).digest("hex"));
+
+    const installer = fs.readFileSync(result.installerPath, "utf8");
+    assert.equal(installer.includes("@@"), false, "installer must not keep template placeholders");
+    assert.match(installer, new RegExp(result.sha256));
+    assert.match(installer, /PAYLOAD_SHA256=/);
+    assert.match(installer, /--uninstall/);
+    assert.match(installer, /wechat-data-analysis\.desktop/);
+
+    const syntax = spawnSync("sh", ["-n", result.installerPath], { encoding: "utf8" });
+    assert.equal(syntax.status, 0, syntax.stderr);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

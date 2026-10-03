@@ -1,4 +1,5 @@
 const { aiPackagingArgs, runPackagedAiSmoke } = require('./ai-packaging.cjs');
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -11,6 +12,10 @@ const {
   macosNativeManifestErrors,
   resolveMacosNativeCoreArtifacts,
 } = require("./macos-native-core-packaging.cjs");
+const {
+  linuxNativeManifestErrors,
+  resolveLinuxNativeCoreArtifacts,
+} = require("./linux-native-core-packaging.cjs");
 const {
   resolveIntegrityNativeArtifact,
 } = require("./integrity-native-packaging.cjs");
@@ -40,6 +45,8 @@ const NATIVE_CORE_MANIFEST = "wechatdb_native_build.json";
 const NATIVE_CORE_ARTIFACTS = Object.freeze({
   win32: ["wechatdb_client.dll", "wechatdb_broker.exe", NATIVE_CORE_MANIFEST],
   darwin: ["libwechatdb_client.dylib", "wechatdb_broker", NATIVE_CORE_MANIFEST],
+  // Linux 与 macOS 共用同名 broker，客户端是 ELF 共享库；身份靠内容哈希而不是代码签名。
+  linux: ["libwechatdb_client.so", "wechatdb_broker", NATIVE_CORE_MANIFEST],
 });
 const NATIVE_CORE_FILE_NAMES = new Set(Object.values(NATIVE_CORE_ARTIFACTS).flat());
 const LEGACY_WCDB_FILE_NAMES = new Set([
@@ -90,11 +97,14 @@ function nativeCoreManifestErrors(manifest) {
   if (!manifest || Array.isArray(manifest) || typeof manifest !== "object") {
     return ["manifest must be a JSON object"];
   }
-  if (!new Set([2, 3]).has(manifest.schemaVersion)) {
-    errors.push("schemaVersion must equal 2 or 3");
+  if (!new Set([2, 3, 4]).has(manifest.schemaVersion)) {
+    errors.push("schemaVersion must equal 2, 3 or 4");
   }
   if (manifest.schemaVersion === 3 && manifest.platform !== "macos") {
     errors.push("schemaVersion 3 requires platform macos");
+  }
+  if (manifest.schemaVersion === 4 && manifest.platform !== "linux") {
+    errors.push("schemaVersion 4 requires platform linux");
   }
   if (manifest.schemaVersion === 2 && Object.prototype.hasOwnProperty.call(manifest, "platform")) {
     errors.push("schemaVersion 2 must not declare platform");
@@ -144,6 +154,10 @@ function nativeCoreProductionManifestErrors(
 ) {
   if (manifest?.schemaVersion === 3) {
     return macosNativeManifestErrors(manifest, { nowUnix });
+  }
+  // schema v4 是 Linux 的完整契约（含内容哈希 pin 与 45 天窗口），不能走下面 Windows 那套。
+  if (manifest?.schemaVersion === 4) {
+    return linuxNativeManifestErrors(manifest, { nowUnix });
   }
   const errors = nativeCoreManifestErrors(manifest);
   const buildIssuedAtUnix = manifest?.buildIssuedAtUnix;
@@ -271,6 +285,11 @@ function resolveNativeCoreArtifacts({ env = process.env, platform = process.plat
     return { ...resolved, allowDevelopment: false, required: true };
   }
 
+  if (platform === "linux" && !allowDevelopment) {
+    const resolved = resolveLinuxNativeCoreArtifacts({ env, platform });
+    return { ...resolved, allowDevelopment: false, required: true };
+  }
+
   const artifactDir = path.resolve(explicitValue);
   let directoryStat;
   try {
@@ -370,6 +389,17 @@ function buildIntegrityNativeBinary({ env = process.env, platform = process.plat
   }
   const integrityTargetDir = path.join(repoRoot, "native", "wce_integrity", "target", "release");
   const fileName = platform === "darwin" ? "libwce_integrity.dylib" : "libwce_integrity.so";
+  // 构建密钥 = 编译 wce_integrity 时注入的 P-256 私钥（WCE_SIGNING_KEY_HEX），只用来给导出物封签，
+  // 公钥随模块一起编译进去，没有任何外部预注册，所以「每次构建现生成一把」是安全的。
+  // 这与 Windows 官方入口 tools/build_wce_integrity.ps1 -GenerateEphemeralSigningKey 语义一致：
+  // 有注入就用注入的（可复现），没注入就现生成一把临时的（Linux/macOS 本地构建的默认）。
+  const providedSigningKey = String(env.WCE_SIGNING_KEY_HEX || "").trim();
+  const signingKeyHex = providedSigningKey || crypto.randomBytes(32).toString("hex");
+  if (!providedSigningKey) {
+    process.stdout.write(
+      `wce_integrity: generated an ephemeral build signing key for ${platform} (set WCE_SIGNING_KEY_HEX to pin it)\n`
+    );
+  }
   const result = spawnSync(
     "cargo",
     ["build", "--manifest-path", integrityManifest, "--release"],
@@ -377,6 +407,7 @@ function buildIntegrityNativeBinary({ env = process.env, platform = process.plat
       cwd: repoRoot,
       env: {
         ...env,
+        WCE_SIGNING_KEY_HEX: signingKeyHex,
         WCE_UI_PUBLIC_DIR: path.join(repoRoot, "frontend", ".output", "public"),
       },
       stdio: "inherit",

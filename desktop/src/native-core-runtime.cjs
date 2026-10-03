@@ -15,6 +15,44 @@ const NATIVE_CORE_MODES = new Set(["required"]);
 const NATIVE_CORE_SECURITY_NOTICE_ID = "WCE-AUTOMATED-ANALYSIS-NOTICE-V2";
 const NATIVE_CORE_SECURITY_CHECKPOINT_SET_ID = "WCE-AI-CHECKPOINT-SET-V3";
 const NATIVE_CORE_SECURITY_CHECKPOINT_COUNT = 7;
+const ZERO_SHA256_HEX = "0".repeat(64);
+const LINUX_MANIFEST_FIELDS = [
+  "linuxIntegrityMode",
+  "linuxClientSha256",
+  "linuxBrokerSha256",
+  "linuxPeerVerification",
+  "linuxHostVerification",
+];
+// Linux 清单是纯内容哈希身份：不得夹带任何代码签名身份字段，与 native_core_client
+// 的字段隔离约束一致（在那里由 NativeCoreProtocolError 拒绝）。
+const CODE_SIGNING_IDENTITY_FIELDS = [
+  "windowsSignerTrustMode",
+  "windowsPrivatePkiLeafRevocation",
+  "windowsClientSignerSha256",
+  "windowsBrokerSignerSha256",
+  "windowsPrivateRootSha256",
+  "windowsHostVerification",
+  "macosSigningMode",
+  "macosSignerTrustMode",
+  "macosPrivatePkiLeafRevocation",
+  "macosClientSigningIdentifier",
+  "macosBrokerSigningIdentifier",
+  "macosHostSigningIdentifier",
+  "macosClientSignerSha256",
+  "macosBrokerSignerSha256",
+  "macosHostSignerSha256",
+  "macosPrivateRootSha256",
+  "macosHostVerification",
+];
+// Linux 的发布形态（schema v4）没有代码签名：身份 = 两组内容哈希 pin + 直接父进程的
+// 宿主校验。发布工作流发的就是这一份受限 source-public 产物，所以冻结应用必须消费它
+// ——与 Windows（schema v2）同一原则。macOS（schema v3）走真正的签名 production，
+// 冻结态只认 production。
+const PACKAGED_SOURCE_PUBLIC_SCHEMAS = new Set([2, 4]);
+
+function hasOwnField(value, name) {
+  return Object.prototype.hasOwnProperty.call(value || {}, name);
+}
 
 function isNonZeroSha256(value) {
   const text = String(value || "");
@@ -27,6 +65,9 @@ function nativeCoreArtifactNames(platform = process.platform) {
   }
   if (platform === "darwin") {
     return ["libwechatdb_client.dylib", "wechatdb_broker", NATIVE_CORE_MANIFEST];
+  }
+  if (platform === "linux") {
+    return ["libwechatdb_client.so", "wechatdb_broker", NATIVE_CORE_MANIFEST];
   }
   return [];
 }
@@ -56,12 +97,51 @@ function hasCompleteNativeCore(nativeDir, platform = process.platform, fsImpl = 
 }
 
 function hasValidManifestIdentity(manifest) {
+  const identityMatches =
+    (manifest?.schemaVersion === 2 && !hasOwnField(manifest, "platform")) ||
+    (manifest?.schemaVersion === 3 && manifest?.platform === "macos") ||
+    (manifest?.schemaVersion === 4 && manifest?.platform === "linux");
+  if (!identityMatches) return false;
+  if (typeof manifest.buildId !== "string" || !BUILD_ID_PATTERN.test(manifest.buildId)) {
+    return false;
+  }
+  // Linux 的内容哈希身份字段属于 Linux 清单专有：schema v2/v3 不得夹带，
+  // schema v4 必须完整声明且不得混入签名身份字段。与 native_core_client 的字段
+  // 隔离约束一致，避免出现「桌面放行、后端拒绝」的半可用状态。
+  const declaredLinuxFields = LINUX_MANIFEST_FIELDS.filter((name) =>
+    hasOwnField(manifest, name)
+  ).length;
+  if (manifest.schemaVersion === 4) {
+    return (
+      declaredLinuxFields === LINUX_MANIFEST_FIELDS.length &&
+      !CODE_SIGNING_IDENTITY_FIELDS.some((name) => hasOwnField(manifest, name))
+    );
+  }
+  return declaredLinuxFields === 0;
+}
+
+function hasLinuxContentHashIdentity(manifest) {
+  const clientPin = String(manifest?.linuxClientSha256 || "").toLowerCase();
+  const brokerPin = String(manifest?.linuxBrokerSha256 || "").toLowerCase();
   return (
-    ((manifest?.schemaVersion === 2 && !Object.prototype.hasOwnProperty.call(manifest, "platform")) ||
-      (manifest?.schemaVersion === 3 && manifest?.platform === "macos")) &&
-    typeof manifest?.buildId === "string" &&
-    BUILD_ID_PATTERN.test(manifest.buildId)
+    manifest?.platform === "linux" &&
+    manifest.linuxIntegrityMode === "content-hash-pin" &&
+    manifest.linuxPeerVerification === "same-user-peer-credentials" &&
+    isNonZeroSha256(clientPin) &&
+    isNonZeroSha256(brokerPin) &&
+    clientPin !== brokerPin
   );
+}
+
+// 宿主校验强度必须与 sourceRuntime 自洽（与 native_core_client 的授权矩阵同一条规则）：
+// 源码分发只认「直接父进程」，其余情况用「内容哈希 pin」；development 构建不带
+// sourceRuntime，所以这里只覆盖两种签发态。
+function hasLinuxHostVerificationPairing(manifest) {
+  const expected =
+    manifest?.sourceRuntime === true
+      ? "same-user-direct-parent"
+      : "content-hash-pin";
+  return manifest?.linuxHostVerification === expected;
 }
 
 function hasActiveProductionBuildWindow(
@@ -156,6 +236,9 @@ function isProductionNativeCoreManifestBase(manifest, options = {}) {
       new Set(pins.map((value) => String(value).toLowerCase())).size === 4
     );
   }
+  if (manifest.schemaVersion === 4) {
+    return hasLinuxContentHashIdentity(manifest) && hasLinuxHostVerificationPairing(manifest);
+  }
   return (
     isNonZeroSha256(manifest.windowsClientSignerSha256) &&
     isNonZeroSha256(manifest.windowsBrokerSignerSha256) &&
@@ -194,6 +277,9 @@ function isSourcePublicNativeCoreManifest(manifest, options = {}) {
   }
   if (manifest.schemaVersion === 3) {
     return manifest.macosHostVerification === "same-user-direct-parent";
+  }
+  if (manifest.schemaVersion === 4) {
+    return manifest.linuxHostVerification === "same-user-direct-parent";
   }
   return (
     manifest.schemaVersion === 2 &&
@@ -240,7 +326,21 @@ function isDevelopmentNativeCoreManifest(manifest) {
       hasExpectedLeafRevocation(manifest) &&
       identifiers.every((value) => /^[A-Za-z0-9.-]+$/.test(String(value || ""))) &&
       new Set(identifiers).size === 3 &&
-      pins.every((value) => String(value || "") === "0".repeat(64))
+      pins.every((value) => String(value || "") === ZERO_SHA256_HEX)
+    );
+  }
+  if (manifest.schemaVersion === 4) {
+    // dev-local 的 Linux 构建不携带任何内容哈希身份，且不声明 sourceRuntime。
+    return (
+      manifest.platform === "linux" &&
+      manifest.linuxIntegrityMode === "development" &&
+      manifest.linuxPeerVerification === "same-user-peer-credentials" &&
+      manifest.sourceRuntime !== true &&
+      new Set(["content-hash-pin", "same-user-direct-parent"]).has(
+        manifest.linuxHostVerification
+      ) &&
+      String(manifest.linuxClientSha256 || "") === ZERO_SHA256_HEX &&
+      String(manifest.linuxBrokerSha256 || "") === ZERO_SHA256_HEX
     );
   }
   return manifest.windowsSignerTrustMode === "public" && hasExpectedLeafRevocation(manifest);
@@ -249,7 +349,8 @@ function isDevelopmentNativeCoreManifest(manifest) {
 function manifestMatchesPlatform(manifest, platform) {
   return (
     (platform === "win32" && manifest?.schemaVersion === 2) ||
-    (platform === "darwin" && manifest?.schemaVersion === 3 && manifest?.platform === "macos")
+    (platform === "darwin" && manifest?.schemaVersion === 3 && manifest?.platform === "macos") ||
+    (platform === "linux" && manifest?.schemaVersion === 4 && manifest?.platform === "linux")
   );
 }
 
@@ -272,7 +373,8 @@ function resolveNativeCoreRuntimePolicy({
   const platformMatch = complete && manifestMatchesPlatform(manifest, platform);
   const production = platformMatch && (
     isProductionNativeCoreManifest(manifest, { nowUnix }) ||
-    (isPackaged && manifest?.schemaVersion === 2 &&
+    (isPackaged &&
+      PACKAGED_SOURCE_PUBLIC_SCHEMAS.has(manifest?.schemaVersion) &&
       isSourcePublicNativeCoreManifest(manifest, { nowUnix }))
   );
   const sourcePublic =
@@ -299,7 +401,15 @@ function resolveNativeCoreRuntimePolicy({
       "Source WeChatDataAnalysis on macOS requires the exact restricted source-public wechatdb native core"
     );
   }
-  if (!isPackaged && platform !== "darwin" && !sourcePublic && !development) {
+  // Linux 与 macOS 同一条规则：源码态只接受受限 source-public 产物（发布工作流发的就是
+  // 这一份）。后端 native_core_client 在 Linux 上同样只授权 source-public，两边必须一致，
+  // 否则出现「桌面放行、后端拒绝」的半可用状态。
+  if (!isPackaged && platform === "linux" && !sourcePublic) {
+    throw new Error(
+      "Source WeChatDataAnalysis on Linux requires the exact restricted source-public wechatdb native core"
+    );
+  }
+  if (!isPackaged && platform === "win32" && !sourcePublic && !development) {
     throw new Error(
       "Source WeChatDataAnalysis on Windows requires the exact restricted source-public or dev-local wechatdb native core"
     );

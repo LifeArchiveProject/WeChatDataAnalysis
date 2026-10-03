@@ -475,7 +475,12 @@ class WCDBRealtimeManager:
                 client_path = native_dir / "wechatdb_client.dll"
                 broker_path = native_dir / "wechatdb_broker.exe"
             else:
-                client_path = native_dir / "libwechatdb_client.dylib"
+                client_path = native_dir / (
+                    "libwechatdb_client.so"
+                    if sys.platform.startswith("linux")
+                    else "libwechatdb_client.dylib"
+                )
+                # macOS 与 Linux 的 broker 可执行文件名相同。
                 broker_path = native_dir / "wechatdb_broker"
         manifest_path = client_path.with_name("wechatdb_native_build.json")
         components_present = all(

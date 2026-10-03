@@ -1,7 +1,7 @@
 # import sys
 # import requests
 
-from .platform_support import is_macos, is_windows
+from .platform_support import is_linux, is_macos, is_windows
 
 try:
     import wx_key
@@ -49,6 +49,19 @@ from .media_helpers import _resolve_account_dir, _resolve_account_wxid_dir
 logger = logging.getLogger(__name__)
 
 WECHAT_EXECUTABLE_NAMES = ("Weixin.exe", "WeChat.exe")
+# Linux 版微信的可执行文件名：发行版包一般是 /usr/bin/wechat（符号链接到
+# /opt/wechat/wechat），本地安装则可能在 ~/.local/bin，AppImage 用户是 *.AppImage。
+LINUX_WECHAT_EXECUTABLE_NAMES = ("wechat", "wechat-bin")
+LINUX_WECHAT_EXECUTABLE_PATHS = (
+    "/usr/bin/wechat",
+    "/opt/wechat/wechat",
+    "/usr/local/bin/wechat",
+    "~/.local/bin/wechat",
+)
+
+
+def _wechat_executable_names() -> tuple[str, ...]:
+    return LINUX_WECHAT_EXECUTABLE_NAMES if is_linux() else WECHAT_EXECUTABLE_NAMES
 KEY_SIZE = 32
 V4_DB_NAME_PRIORITY = (
     "msg0.db",
@@ -170,6 +183,10 @@ def _read_wechat_version_from_exe(exe_path: str) -> str:
     normalized = _normalize_user_path(exe_path)
     if not normalized:
         return ""
+    if is_linux():
+        # Linux 侧没有 PE 版本资源可读，版本号不是必需信息（只用于展示/日志），
+        # 因此这里不编造，调用方按"未知版本"处理。
+        return ""
     try:
         import win32api
 
@@ -188,6 +205,27 @@ def _resolve_manual_wechat_exe_path(wechat_install_path: Optional[str] = None) -
     normalized = _normalize_user_path(wechat_install_path)
     if not normalized:
         return ""
+
+    if is_linux():
+        # Linux 上"安装目录"这个概念很弱（发行版包 / AppImage / 解包目录都行），
+        # 因此只要求：是个可执行文件，或者目录里能找到标准的 wechat 可执行文件。
+        candidate = Path(normalized).expanduser()
+        if candidate.is_file():
+            if not os.access(candidate, os.X_OK):
+                raise RuntimeError(f"手动指定的微信文件不可执行: {candidate}")
+            return str(candidate)
+        if candidate.is_dir():
+            for exe_name in LINUX_WECHAT_EXECUTABLE_NAMES:
+                exe_path = candidate / exe_name
+                if exe_path.is_file():
+                    return str(exe_path)
+            for exe_path in sorted(candidate.glob("*.AppImage")):
+                if exe_path.is_file():
+                    return str(exe_path)
+            raise RuntimeError(
+                f"手动指定的目录中没有可用的微信可执行文件: {candidate}"
+            )
+        raise RuntimeError(f"手动指定的微信路径不存在: {candidate}")
 
     candidate = Path(normalized).expanduser()
     executable_names = {name.lower() for name in WECHAT_EXECUTABLE_NAMES}
@@ -546,7 +584,7 @@ def _get_db_key_with_v4(
 
 class WeChatKeyFetcher:
     def __init__(self):
-        self.process_names = {name.lower() for name in WECHAT_EXECUTABLE_NAMES}
+        self.process_names = {name.lower() for name in _wechat_executable_names()}
         self.timeout_seconds = 60
 
     def _is_wechat_process(self, name: Any) -> bool:
@@ -629,12 +667,33 @@ class WeChatKeyFetcher:
 
         logger.info(f"Detect WeChat: {version or 'unknown'} at {exe_path}")
 
-        self.kill_wechat()
-        pid = self.launch_wechat(exe_path)
-        logger.info(f"WeChat launched, PID: {pid}")
+        if is_linux():
+            # Linux 的 wx_key ABI 与 Windows 不同：第一个参数是**微信可执行文件路径**，
+            # 由 wx_key 自己 fork + PTRACE_TRACEME 拉起微信，我们绝不能先自己 launch。
+            #
+            # 为什么能免提权：TRACEME 场景下 ptrace 的规则是"父进程追踪自己的子进程"，
+            # Yama/ptrace_scope=1 也放行；而 attach 一个已在运行的微信则会被拦下、必须
+            # 提权（这也正是 Linux 不提供 v4 内存扫描的原因）。
+            #
+            # 提权边界必须干净：本进程若以 root 运行，被拉起的 AppImage 会因为
+            # **FUSE 对 root 不可见**而挂载失败（表现是"微信没有窗口"），所以在提权
+            # 发生之前就拒绝，而不是让用户面对一个静默失败的微信。
+            if os.geteuid() == 0:
+                raise RuntimeError(
+                    "请以普通用户身份运行本程序后再获取密钥：root 环境无法挂载 "
+                    "AppImage 版微信（FUSE 对 root 不可见），会表现为微信没有窗口。"
+                )
+            self.kill_wechat()
+            logger.info("[db_key] Linux hook：交给 wx_key 拉起微信: %s", exe_path)
+            armed = wx_key.initialize_hook(exe_path)
+        else:
+            self.kill_wechat()
+            pid = self.launch_wechat(exe_path)
+            logger.info(f"WeChat launched, PID: {pid}")
+            # 仅传入 PID，触发数据库密钥自动 Hook
+            armed = wx_key.initialize_hook(pid)
 
-        # 仅传入 PID，触发数据库密钥自动 Hook
-        if not wx_key.initialize_hook(pid):
+        if not armed:
             err = wx_key.get_last_error_msg()
             raise RuntimeError(f"数据库 Hook 初始化失败: {err}")
 
@@ -647,9 +706,21 @@ class WeChatKeyFetcher:
                     raise TimeoutError("获取数据库密钥超时 (60s)，请确保在弹出的微信中完成登录。")
 
                 key_data = wx_key.poll_key_data()
-                if key_data and 'key' in key_data:
-                    found_db_key = key_data['key']
-                    break
+                # 注意：wx_key 布防成功后可能先返回"带空 key 的占位结构"（Linux 上
+                # 实测如此），因此必须要求 key 非空；用 `'key' in key_data` 会把空值
+                # 当成结果立刻返回。py_wx_key 自己的 Linux 自测同样是判非空。
+                candidate_key = ""
+                if isinstance(key_data, dict):
+                    candidate_key = str(key_data.get("key") or "").strip()
+                if candidate_key:
+                    if not re.fullmatch(r"[0-9a-fA-F]{64}", candidate_key):
+                        logger.warning(
+                            "[db_key] hook 返回了非 64-hex 的候选密钥（len=%s），继续等待",
+                            len(candidate_key),
+                        )
+                    else:
+                        found_db_key = candidate_key
+                        break
 
                 while True:
                     msg, level = wx_key.get_status_message()
@@ -717,6 +788,24 @@ def get_db_key_workflow(
             dict(validation.get("modes") or {}),
         )
         return result
+    if is_linux():
+        # Linux 只提供 Hook 模式：wx_key 的 fork + TRACEME 免提权路径。
+        # Windows 那套 v4 内存扫描需要 attach 已运行的微信进程，在 Linux 上会被
+        # Yama/ptrace_scope 拦下、必须提权，且稳定性不如 fork 路径，因此不提供
+        # （与 py_wx_key 的 Linux 能力保持一致）。
+        mode = str(key_mode or "auto").strip().lower()
+        if mode in {"v4", "key_v4", "memory", "memory_scan"}:
+            raise RuntimeError(
+                "Linux 暂不支持 V4 内存扫描获取密钥（需要提权 attach 微信进程），"
+                "请使用 hook 模式。"
+            )
+        if mode not in {"auto", "hook"}:
+            raise RuntimeError(f"未知密钥获取模式: {key_mode}")
+        fetcher = WeChatKeyFetcher()
+        result = fetcher.fetch_db_key(wechat_install_path=wechat_install_path)
+        result["method"] = "hook"
+        return result
+
     if not is_windows():
         raise RuntimeError("当前平台不支持自动获取数据库密钥，请使用同类工具获取后手动填写。")
 
@@ -887,6 +976,29 @@ def _get_image_key_kvcomm_dirs(account_dir: Optional[Path] = None) -> tuple[Path
                     break
 
             cursor = account_path
+            for _ in range(6):
+                candidates.append(cursor / "net" / "kvcomm")
+                if cursor.parent == cursor:
+                    break
+                cursor = cursor.parent
+    elif is_linux():
+        # Linux 版微信的 kvcomm 在 ~/.xwechat/net/kvcomm；换网络/重启后会留下
+        # net_1 / net_2 / net_3 … 历史目录，它们同样可能有可用的 code，因此都作为
+        # 候选（当前 net/ 优先，其余按 mtime 从新到旧）。
+        xwechat_root = Path.home() / ".xwechat"
+        candidates = [xwechat_root / "net" / "kvcomm"]
+        try:
+            historical = sorted(
+                (item for item in xwechat_root.glob("net_*") if item.is_dir()),
+                key=lambda item: item.stat().st_mtime_ns,
+                reverse=True,
+            )
+        except OSError:
+            historical = []
+        candidates.extend(item / "kvcomm" for item in historical)
+
+        if account_dir is not None:
+            cursor = Path(account_dir).expanduser()
             for _ in range(6):
                 candidates.append(cursor / "net" / "kvcomm")
                 if cursor.parent == cursor:
