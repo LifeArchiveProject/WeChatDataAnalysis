@@ -3,12 +3,15 @@ import datetime
 import glob
 import hashlib
 import ipaddress
+import io
 import json
 import mimetypes
 import os
 import re
 import sqlite3
 import struct
+import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -26,6 +29,210 @@ from .logging_config import get_logger
 from .sqlite_diagnostics import is_usable_sqlite_db
 
 logger = get_logger(__name__)
+
+# 条带锁限制内存占用，同一资源的比较、写入和预解密状态更新必须串行完成。
+_IMAGE_RESOURCE_LOCKS = tuple(threading.RLock() for _ in range(64))
+
+
+def _image_payload_score(data: bytes, media_type: str = "") -> tuple[int, int]:
+    """按解码后的像素面积比较图片，兼容 JPEG、PNG、GIF 和 WebP。"""
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as image:
+            width, height = image.size
+        return int(width) * int(height), len(data)
+    except Exception:
+        # 保留旧数据的启发式读取能力，无法读出尺寸的文件不能压过有效大图。
+        return 0, len(data or b"")
+
+
+def _image_resource_lock(account_dir: Path, md5: str):
+    key = f"{account_dir.resolve()}:{md5.lower()}".encode("utf-8")
+    return _IMAGE_RESOURCE_LOCKS[int.from_bytes(hashlib.sha256(key).digest()[:2], "big") % 64]
+
+
+def _image_file_signature(path: Path) -> list:
+    stat = path.stat()
+    return [path.name, stat.st_size, stat.st_mtime_ns]
+
+
+def _image_source_identity(path: Path, source_key: str) -> str:
+    stat = path.stat()
+    value = f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{source_key}"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _image_source_state_path(account_dir: Path, md5: str) -> Path:
+    return _get_decrypted_resource_path(account_dir, md5, "sources.json")
+
+
+def _read_image_source_state(account_dir: Path, md5: str, cached: Optional[Path]) -> dict:
+    try:
+        state = json.loads(_image_source_state_path(account_dir, md5).read_text(encoding="utf-8"))
+        if cached and state.get("cache") == _image_file_signature(cached):
+            return state
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return {"sources": []}
+
+
+def _is_current_image_resource_source(account_dir: Path, md5: str, source: Path, source_key: str) -> bool:
+    """仅跳过已比较过且没有变化的源文件；旧缩略图缓存不能跳过新发现的大图。"""
+    try:
+        with _image_resource_lock(account_dir, md5):
+            cached = _try_find_decrypted_resource(account_dir, md5)
+            state = _read_image_source_state(account_dir, md5, cached)
+            return _image_source_identity(source, source_key) in state.get("sources", [])
+    except OSError:
+        return False
+
+
+def _read_cached_image_resource(account_dir: Path, md5: str) -> tuple[Optional[Path], bytes, str]:
+    """将查找和读取放在同一把锁内，避免并发换格式时旧路径已被清理。"""
+    with _image_resource_lock(account_dir, md5):
+        path = _try_find_decrypted_resource(account_dir, md5)
+        if path is None:
+            return None, b"", "application/octet-stream"
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return None, b"", "application/octet-stream"
+        media_type = _detect_image_media_type(data[:32])
+        valid = media_type.startswith("image/") and _is_probably_valid_image(data, media_type) and len(data) >= 16
+        if not valid and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return path, data, media_type
+
+
+def _atomic_write_image_file(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".image-", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(data)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _save_best_image_resource(
+    account_dir: Path, md5: str, data: bytes, *, source: Optional[Path] = None, source_key: str = ""
+) -> Path:
+    """原子地保存质量最高的缓存，防止并发预解密或后续缩略图请求降低分辨率。"""
+    md5 = str(md5).strip().lower()
+    if not _EMOTICON_MD5_RE.fullmatch(md5):
+        raise ValueError("无效的图片 MD5")
+    media_type = _detect_image_media_type(data[:32])
+    if not media_type.startswith("image/") or not _is_probably_valid_image(data, media_type):
+        raise ValueError("无效的图片内容")
+    with _image_resource_lock(account_dir, md5):
+        existing = _try_find_decrypted_resource(account_dir, md5)
+        state = _read_image_source_state(account_dir, md5, existing)
+        previous_state = json.dumps(state, sort_keys=True)
+        output = _get_decrypted_resource_path(account_dir, md5, _detect_image_extension(data))
+        previous = None
+        if existing:
+            try:
+                previous = existing.read_bytes()
+                previous_type = _detect_image_media_type(previous[:32])
+                if previous_type.startswith("image/") and _is_probably_valid_image(previous, previous_type) and _image_payload_score(previous) >= _image_payload_score(data):
+                    output = existing
+                    data = previous
+            except OSError:
+                pass
+        if output != existing or not existing or data != previous:
+            _atomic_write_image_file(output, data)
+        # 写入完成后再清理旧格式，避免读者看到半写文件或暂时找不到缓存。
+        for ext in ("jpg", "png", "gif", "webp", "dat"):
+            stale = _get_decrypted_resource_path(account_dir, md5, ext)
+            if stale != output:
+                try:
+                    stale.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        if source is not None:
+            identity = _image_source_identity(source, source_key)
+            sources = list(state.get("sources", []))
+            if identity not in sources:
+                sources.append(identity)
+            state["sources"] = sources[-64:]
+        state["cache"] = _image_file_signature(output)
+        if json.dumps(state, sort_keys=True) != previous_state:
+            try:
+                _atomic_write_image_file(_image_source_state_path(account_dir, md5), json.dumps(state).encode("utf-8"))
+            except OSError:
+                # 状态只用于避免重复解密，写入失败不能让已保存的大图不可用。
+                logger.warning("图片质量缓存已保存，但源文件状态未能保存")
+        return output
+
+
+def _prefer_local_image_resource(
+    account_dir: Path, md5: str, *, source: Optional[Path] = None, username: str = ""
+) -> Optional[Path]:
+    """在 hardlink 与当前会话目录内比较本地图片，不联网、不扫描整个账号。"""
+    cached = _try_find_decrypted_resource(account_dir, md5) if _EMOTICON_MD5_RE.fullmatch(md5 or "") else None
+    root = _resolve_account_wxid_dir(account_dir)
+    keys = _load_media_keys(account_dir)
+    xor_key = keys.get("xor")
+    source_key = ""
+    if isinstance(xor_key, int) and 0 <= xor_key <= 255:
+        aes_key = str(keys.get("aes") or "").encode("utf-8")[:16]
+        source_key = hashlib.sha256(bytes([xor_key]) + aes_key).hexdigest()
+    live = _resolve_media_path_for_kind(account_dir, "image", md5, username, False, prefer_cache=False) if md5 else None
+    candidates = []
+    for path in (cached, source, live):
+        if path:
+            candidates.extend(_iter_media_source_candidates(path))
+    if not live and root and username and _EMOTICON_MD5_RE.fullmatch(md5 or ""):
+        # 按月目录直接探测文件名，避免每张缓存图片都递归扫描该会话的所有附件。
+        attach = root / "msg" / "attach" / hashlib.md5(username.encode("utf-8")).hexdigest()
+        if attach.is_dir():
+            folders = [attach / "Img", attach / "img", attach]
+            folders.extend(child / "Img" for child in attach.iterdir() if child.is_dir() and re.fullmatch(r"\d{4}-\d{2}", child.name))
+            for folder in folders:
+                if not folder.is_dir():
+                    continue
+                for variant in ("_b", "_h", "", "_c", "_t", ".b", ".h", ".c", ".t"):
+                    found = None
+                    for extension in ("dat", "jpg", "png", "gif", "webp", "jpeg"):
+                        path = folder / f"{md5}{variant}.{extension}"
+                        if path.is_file():
+                            found = path
+                            break
+                    if found:
+                        candidates.extend(_iter_media_source_candidates(found))
+                        break
+    best_path, best_data, best_score = cached, b"", (-1, -1)
+    for path in dict.fromkeys(candidates):
+        try:
+            if cached and path != cached and source_key and _is_current_image_resource_source(account_dir, md5, path, source_key):
+                # 该原始文件已比较过且缓存未被替换，避免滚动聊天时重复解密数 MB 的 DAT。
+                continue
+            data, media_type = _read_and_maybe_decrypt_media(path, account_dir=account_dir, weixin_root=root)
+            if not media_type.startswith("image/") or not _is_probably_valid_image(data, media_type):
+                continue
+            score = _image_payload_score(data, media_type)
+            if score > best_score:
+                best_path, best_data, best_score = path, data, score
+        except Exception:
+            continue
+    if best_data and _EMOTICON_MD5_RE.fullmatch(md5 or ""):
+        try:
+            return _save_best_image_resource(
+                account_dir, md5, best_data,
+                source=best_path if source_key and best_path != cached else None,
+                source_key=source_key,
+            )
+        except OSError:
+            # 缓存目录不可写时仍可读取或导出本地原图。
+            return best_path
+    return best_path
 
 _MEDIA_INDEX_FILE_EXTS = {
     ".dat",
@@ -159,7 +366,7 @@ def _normalize_variant_basename(name: str) -> str:
     if not v:
         return ""
     lower = v.lower()
-    for suf in ("_b", "_h", "_c", "_t", ".b", ".h", ".c", ".t"):
+    for suf in ("_thumbnail", ".thumbnail", "_thumb", ".thumb", "_b", "_h", "_c", "_t", ".b", ".h", ".c", ".t"):
         if lower.endswith(suf) and len(lower) > len(suf):
             return lower[: -len(suf)]
     return lower
@@ -239,11 +446,18 @@ def _iter_media_source_candidates(source: Path, *, limit: int = 30) -> list[Path
         except Exception:
             continue
 
+    # 历史缓存也可能按变体命名，必须一起比较，而不能固定先选无后缀的缩略图。
+    for variant in ("", "_b", "_h", "_c", "_t", ".b", ".h", ".c", ".t"):
+        for extension in ("jpg", "jpeg", "png", "gif", "webp"):
+            p = parent / f"{base}{variant}.{extension}"
+            if p.is_file():
+                out.append(p.resolve())
+
     # Add any other local .dat siblings with the same normalized base (limit to avoid explosion).
     try:
         for p in parent.glob(f"{base}*.dat"):
             try:
-                if p.exists() and p.is_file():
+                if p.exists() and p.is_file() and _normalize_variant_basename(p.stem) == base:
                     out.append(p.resolve())
             except Exception:
                 continue
@@ -3614,7 +3828,7 @@ def _collect_all_dat_files(wxid_dir: Path) -> list[tuple[Path, str]]:
                 # 从文件名提取MD5
                 stem = dat_file.stem
                 # 文件名格式可能是: md5.dat, md5_t.dat, md5_h.dat 等
-                md5 = stem.split("_")[0] if "_" in stem else stem
+                md5 = _normalize_variant_basename(stem)
                 # 验证是否是有效的MD5（32位十六进制）
                 if len(md5) == 32 and all(c in "0123456789abcdefABCDEF" for c in md5):
                     results.append((dat_file, md5.lower()))
@@ -3673,16 +3887,16 @@ def _decrypt_and_save_resource(
                 decrypted = converted
 
         # 检测图片类型
-        ext = _detect_image_extension(decrypted)
         mt = _detect_image_media_type(decrypted[:32])
         if mt == "application/octet-stream":
             # 解密可能失败，跳过
             return False, "解密后非有效图片"
 
         # 保存到resource目录
-        output_path = _get_decrypted_resource_path(account_dir, md5, ext)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(decrypted)
+        source_key = hashlib.sha256(bytes([xor_key]) + (aes_key or b"")).hexdigest()
+        output_path = _save_best_image_resource(
+            account_dir, md5, decrypted, source=dat_path, source_key=source_key
+        )
 
         return True, str(output_path)
     except Exception as e:
@@ -3843,6 +4057,8 @@ def _resolve_media_path_for_kind(
     md5: str,
     username: Optional[str],
     allow_fallback_scan: bool = True,
+    *,
+    prefer_cache: bool = True,
 ) -> Optional[Path]:
     if not md5:
         return None
@@ -3850,7 +4066,7 @@ def _resolve_media_path_for_kind(
     kind_key = str(kind or "").strip().lower()
 
     # 优先查找解密后的资源目录（图片、表情、视频缩略图）
-    if kind_key in {"image", "emoji", "video_thumb"}:
+    if prefer_cache and kind_key in {"image", "emoji", "video_thumb"}:
         decrypted_path = _try_find_decrypted_resource(account_dir, md5.lower())
         if decrypted_path:
             logger.debug(f"找到解密资源: {decrypted_path}")

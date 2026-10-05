@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 class TestChatMediaImageCacheUpgrade(unittest.TestCase):
     def assert_cacheable_chat_image_response(self, resp) -> None:
-        self.assertEqual(resp.headers.get("cache-control"), "private, max-age=86400")
+        self.assertEqual(resp.headers.get("cache-control"), "private, max-age=0, must-revalidate")
         self.assertTrue(str(resp.headers.get("etag") or "").strip())
 
     def _seed_contact_db(self, path: Path, *, account: str, username: str) -> None:
@@ -157,8 +157,9 @@ class TestChatMediaImageCacheUpgrade(unittest.TestCase):
             self._seed_session_db(account_dir / "session.db", username=username)
             self._seed_source_info(account_dir, wxid_dir=wxid_dir)
 
-            cached_thumb = b"\xff\xd8\xff\xd9"
-            live_original = b"\xff\xd8\xff\xe0" + (b"\x00" * 48) + b"\xff\xd9"
+            # 使用真正有效的缩略图，避免被损坏缓存分支提前删除而掩盖问题。
+            cached_thumb = self._png_payload(120, 120)
+            live_original = self._png_payload(800, 600)
             cache_path = self._seed_cached_resource(account_dir, md5=md5, payload=cached_thumb)
             self._seed_live_variant(wxid_dir, username=username, md5=md5, suffix="_h", payload=live_original)
 
@@ -174,7 +175,7 @@ class TestChatMediaImageCacheUpgrade(unittest.TestCase):
                 self.assertEqual(resp.status_code, 200)
                 self.assertEqual(resp.content, live_original)
                 self.assert_cacheable_chat_image_response(resp)
-                self.assertEqual(cache_path.read_bytes(), live_original)
+                self.assertEqual(cache_path.with_suffix(".png").read_bytes(), live_original)
             finally:
                 try:
                     client.close()
@@ -316,7 +317,7 @@ class TestChatMediaImageCacheUpgrade(unittest.TestCase):
                 self.assertEqual(second.status_code, 304)
                 self.assertEqual(second.content, b"")
                 self.assertEqual(second.headers.get("etag"), etag)
-                self.assertEqual(second.headers.get("cache-control"), "private, max-age=86400")
+                self.assertEqual(second.headers.get("cache-control"), "private, max-age=0, must-revalidate")
             finally:
                 try:
                     client.close()

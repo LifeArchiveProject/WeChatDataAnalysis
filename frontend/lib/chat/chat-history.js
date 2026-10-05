@@ -307,7 +307,7 @@ export const createChatHistoryRecordNormalizer = ({ apiBase, getSelectedAccount,
       })()
       if (fileId) {
         previewCandidates.push(
-          `${apiBase}/chat/media/image?account=${account}&file_id=${encodeURIComponent(fileId)}&username=${username}`
+          `${apiBase}/chat/media/image?account=${account}&file_id=${encodeURIComponent(fileId)}&username=${username}&v=local-quality-1`
         )
       }
 
@@ -320,7 +320,7 @@ export const createChatHistoryRecordNormalizer = ({ apiBase, getSelectedAccount,
           srcServerId ? `server_id=${encodeURIComponent(srcServerId)}` : '',
           `username=${username}`
         ].filter(Boolean)
-        previewCandidates.push(`${apiBase}/chat/media/image?${previewParts.join('&')}`)
+        previewCandidates.push(`${apiBase}/chat/media/image?${previewParts.join('&')}&v=local-quality-1`)
       }
 
       output._linkPreviewCandidates = previewCandidates
@@ -416,7 +416,7 @@ export const createChatHistoryRecordNormalizer = ({ apiBase, getSelectedAccount,
         recordAttachKey ? `record_attach=${encodeURIComponent(recordAttachKey)}` : '',
         `username=${username}`
       ].filter(Boolean)
-      output.imageUrl = imageParts.length ? `${apiBase}/chat/media/image?${imageParts.join('&')}` : ''
+      output.imageUrl = imageParts.length ? `${apiBase}/chat/media/image?${imageParts.join('&')}&v=local-quality-1` : ''
       if (!output.content || /^\[.+\]$/.test(String(output.content || '').trim())) output.content = '[图片]'
     }
 

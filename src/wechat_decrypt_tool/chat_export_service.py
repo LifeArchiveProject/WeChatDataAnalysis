@@ -79,6 +79,8 @@ from .media_helpers import (
     _detect_image_media_type,
     _fallback_search_media_by_file_id,
     _read_and_maybe_decrypt_media,
+    _prefer_local_image_resource,
+    _image_resource_lock,
     _resolve_account_db_storage_dir,
     _resolve_account_wxid_dir,
     _resolve_media_path_for_kind,
@@ -8706,6 +8708,19 @@ def _materialize_voice(
     return arc, True
 
 
+def _guard_image_materialization(function):
+    @functools.wraps(function)
+    def guarded(*args, **kwargs):
+        md5 = str(kwargs.get("md5") or "")
+        if kwargs.get("kind") == "image" and _is_md5(md5):
+            # 预解密可能同时升级缓存格式，导出复制期间必须保护当前路径。
+            with _image_resource_lock(kwargs["account_dir"], md5):
+                return function(*args, **kwargs)
+        return function(*args, **kwargs)
+    return guarded
+
+
+@_guard_image_materialization
 def _materialize_media(
     *,
     zf: zipfile.ZipFile,
@@ -8914,6 +8929,10 @@ def _materialize_media(
             expected = hashlib.md5(conv_username.encode("utf-8")).hexdigest()
             if index + 1 >= len(parts) or parts[index + 1] != expected:
                 return "", False
+
+    if src and kind == "image":
+        # 导出也要独立修复旧缩略图缓存，不能依赖用户先在聊天页逐张加载大图。
+        src = _prefer_local_image_resource(account_dir, md5, source=src, username=conv_username) or src
 
     if not src:
         if media_index is not None:
