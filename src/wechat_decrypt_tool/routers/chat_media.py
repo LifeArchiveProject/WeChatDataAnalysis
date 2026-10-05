@@ -2602,7 +2602,7 @@ async def get_chat_image(
         cachedMediaType=cached_media_type,
     )
 
-    if cached_path and (not prefer_live) and (not fetch_remote) and not (record_attach or record_index_path):
+    if md5 and (not prefer_live) and (not fetch_remote) and not (record_attach or record_index_path):
         # 旧预解密缓存可能只有 120×120；先比较当前会话或 hardlink 指向的本地变体。
         upgraded = await asyncio.to_thread(
             _prefer_local_image_resource, account_dir, str(md5), source=cached_path, username=str(username or "")
@@ -2610,19 +2610,21 @@ async def get_chat_image(
         if upgraded:
             if upgraded.is_relative_to(_get_resource_dir(account_dir)):
                 _, latest_data, latest_type = await asyncio.to_thread(_read_cached_image_resource, account_dir, str(md5))
-                if latest_data:
-                    cached_data, cached_media_type = latest_data, latest_type
             else:
-                cached_data, cached_media_type = await asyncio.to_thread(
+                latest_data, latest_type = await asyncio.to_thread(
                     _read_and_maybe_decrypt_media, upgraded, account_dir=account_dir
                 )
-        trace(
-            "response:ready",
-            result="decrypted-cache-hit",
-            mediaType=cached_media_type,
-            bytes=len(cached_data or b""),
-        )
-        return _build_cached_media_response(request, cached_data, cached_media_type)
+            if latest_type.startswith("image/") and _is_probably_valid_image(latest_data, latest_type):
+                cached_path = upgraded
+                cached_data, cached_media_type = latest_data, latest_type
+        if cached_path:
+            trace(
+                "response:ready",
+                result="decrypted-cache-hit",
+                mediaType=cached_media_type,
+                bytes=len(cached_data or b""),
+            )
+            return _build_cached_media_response(request, cached_data, cached_media_type)
 
     # 回退：从微信数据目录实时定位并解密
     roots_started_at = time.perf_counter()

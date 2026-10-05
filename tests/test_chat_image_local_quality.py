@@ -96,6 +96,22 @@ def test_default_uncached_request_compares_all_decoded_variants(local_images):
     assert dimensions(response.content) == (800, 600)
 
 
+@pytest.mark.parametrize("cached", [False, True])
+def test_hardlink_thumbnail_does_not_hide_original_in_chat_attach(local_images, cached):
+    if cached:
+        seed_cache(local_images, image_bytes(120, 120))
+    seed_variant(local_images, "_h", image_bytes(800, 600))
+    thumbnail = local_images[2] / "cache" / "Thumb" / f"{MD5}_t.dat"
+    thumbnail.parent.mkdir(parents=True)
+    thumbnail.write_bytes(image_bytes(120, 120))
+    with patch.object(local_images[4], "_resolve_media_path_from_hardlink", return_value=thumbnail), patch.object(
+        local_images[5], "_resolve_media_path_from_hardlink", return_value=thumbnail
+    ):
+        response = get_image(local_images)
+    assert response.status_code == 200
+    assert dimensions(response.content) == (800, 600)
+
+
 def test_only_cache_still_works_without_source_directory(local_images):
     original = image_bytes(900, 700)
     seed_cache(local_images, original)
