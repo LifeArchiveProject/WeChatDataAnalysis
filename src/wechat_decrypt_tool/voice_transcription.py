@@ -734,7 +734,8 @@ def _public_model_name(value: str) -> str:
     if not raw:
         return ""
     if "/" in raw or "\\" in raw:
-        return Path(raw.rstrip("/\\")).name or "local-model"
+        # 缓存或配置可能来自另一平台，统一分隔符后仅公开模型文件名。
+        return Path(raw.replace("\\", "/").rstrip("/")).name or "local-model"
     return raw
 
 
