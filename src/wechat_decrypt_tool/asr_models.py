@@ -60,6 +60,10 @@ def verify_model_files(path: Path, model: str, checkpoint: Callable[[], None] = 
 
 def dependency_status(model: str) -> tuple[bool, str]:
     backend = SPECS.get(model, {}).get("backend", "whisper")
+    if backend == "qwen-hf":
+        from .qwen_gpu_runtime import installed
+        if installed():
+            return True, ""
     packages = {
         "whisper": ("faster_whisper",),
         "zipformer": ("sherpa_onnx", "av", "numpy"),
@@ -73,5 +77,5 @@ def dependency_status(model: str) -> tuple[bool, str]:
     if ready:
         return True, ""
     if backend == "qwen-hf":
-        return False, "当前未安装 Qwen GPU 运行组件，请使用含 Qwen GPU 组件的版本，或选择 CPU 模型 / Turbo。"
+        return False, "缺少 Qwen GPU 运行组件，点击安装并启用；需要 NVIDIA 显卡，也可选择 CPU 模型 / Turbo。"
     return False, "缺少语音识别运行组件，请安装语音转文字可选依赖或更新应用。"

@@ -3787,6 +3787,27 @@ async def download_chat_voice_transcription_model(model: str, request: Request):
         ) from exc
 
 
+@router.post("/api/chat/media/voice/transcription/qwen-gpu/{action}", summary="安装或暂停 Qwen GPU 组件并启用模型")
+async def prepare_qwen_gpu(action: str, request: Request):
+    _require_local_voice_mutation(request)
+    from ..qwen_gpu_runtime import get_qwen_runtime
+    manager = get_qwen_runtime()
+    try:
+        if action == "prepare":
+            return await asyncio.to_thread(manager.start)
+        if action == "pause":
+            return manager.pause()
+        raise ValueError("不支持的 GPU 组件操作。")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "qwen_runtime_unavailable", "message": str(exc)}) from None
+
+
+@router.get("/api/chat/media/voice/transcription/qwen-gpu/status", summary="查询 Qwen GPU 组件安装进度")
+async def qwen_gpu_status():
+    from ..qwen_gpu_runtime import get_qwen_runtime
+    return get_qwen_runtime().status()
+
+
 @router.get("/api/chat/media/voice/transcription/models/downloads/{job_id}", summary="查询语音模型下载任务")
 async def get_chat_voice_transcription_model_download(job_id: str):
     try:

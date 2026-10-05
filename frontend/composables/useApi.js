@@ -589,6 +589,10 @@ export const useApi = () => {
     })
   }
 
+  const prepareQwenGpu = async () => await request('/chat/media/voice/transcription/qwen-gpu/prepare', { method: 'POST' })
+  const pauseQwenGpu = async () => await request('/chat/media/voice/transcription/qwen-gpu/pause', { method: 'POST' })
+  const getQwenGpuStatus = async () => await request('/chat/media/voice/transcription/qwen-gpu/status')
+
   const getVoiceTranscriptionModelDownload = async (jobId) => {
     const id = encodeURIComponent(String(jobId || '').trim())
     return await request(`/chat/media/voice/transcription/models/downloads/${id}`)
@@ -1242,6 +1246,9 @@ export const useApi = () => {
     setVoiceTranscriptionDevice,
     setVoiceTranscriptionModel,
     downloadVoiceTranscriptionModel,
+    prepareQwenGpu,
+    pauseQwenGpu,
+    getQwenGpuStatus,
     getVoiceTranscriptionModelDownload,
     deleteVoiceTranscriptionModel,
     transcribeChatVoice,

@@ -655,6 +655,8 @@ function main() {
     "sherpa_onnx",
     "--add-data",
     pyInstallerAddData(path.join(repoRoot, "src/wechat_decrypt_tool/resources/voice_models.json"), "wechat_decrypt_tool/resources"),
+    "--add-data",
+    pyInstallerAddData(path.join(repoRoot, "src/wechat_decrypt_tool/resources/qwen_gpu_runtime.json"), "wechat_decrypt_tool/resources"),
     "--collect-all",
     "watchfiles",
     ...aiPackagingArgs(repoRoot),
@@ -666,6 +668,12 @@ function main() {
     args.splice(args.length - 1, 0, "--collect-all", "torch", "--collect-all", "transformers");
   } else {
     args.splice(args.length - 1, 0, "--exclude-module", "torch", "--exclude-module", "transformers");
+  }
+  // 下载后的推理库会动态导入标准库，冻结分析无法从排除的 Torch 源码推导这些依赖。
+  if (process.platform === "win32") {
+    const stdlib = spawnSync("uv", ["run", "--no-sync", "python", path.join(repoRoot, "tools/qwen_runtime_stdlib.py")], { cwd: repoRoot, encoding: "utf8", windowsHide: true });
+    if (stdlib.status !== 0) throw new Error(`Qwen runtime standard library discovery failed: ${stdlib.stderr}`);
+    for (const moduleName of JSON.parse(stdlib.stdout)) args.splice(args.length - 1, 0, "--hidden-import", moduleName);
   }
 
   if (process.platform === "win32") {
