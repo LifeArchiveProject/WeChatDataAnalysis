@@ -172,5 +172,3 @@ def test_missing_model_is_downloaded_and_checked_before_selection(manager, monke
     manager.run()
     assert calls == ['download', 'check_model', 'select']
     assert manager.status()['job']['status'] == 'done'
-
-
