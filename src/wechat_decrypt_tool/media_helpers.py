@@ -172,10 +172,47 @@ def _save_best_image_resource(
         return output
 
 
+@lru_cache(maxsize=16)
+def _index_image_directory(folder: str, modified_ns: int) -> tuple[dict[str, tuple[str, ...]], bool]:
+    """缓存标准图片目录的文件名索引；目录变化后重建，限制目录数及文件数。"""
+    groups: dict[str, list[str]] = {}
+    truncated = False
+    try:
+        with os.scandir(folder) as entries:
+            for index, entry in enumerate(entries):
+                if index >= 5000:
+                    truncated = True
+                    break
+                path = Path(entry.name)
+                match = re.match(r"(?i)^([0-9a-f]{32})(?:[_.-]|$)", path.stem)
+                if match and path.suffix.lower() in {".dat", ".jpg", ".jpeg", ".png", ".gif", ".webp"} and entry.is_file():
+                    groups.setdefault(match.group(1).lower(), []).append(entry.name)
+    except OSError:
+        pass
+    return {md5: tuple(names) for md5, names in groups.items()}, truncated
+
+
+def _scoped_image_directory_candidates(folder: Path, md5: str) -> list[Path]:
+    try:
+        names, truncated = _index_image_directory(str(folder.resolve()), folder.stat().st_mtime_ns)
+        hits = [folder / name for name in names.get(md5, ())]
+        if truncated:
+            # 极大的单月目录不全部驻留内存，只对当前 MD5 做非递归匹配。
+            hits.extend(
+                path for path in folder.glob(f"{md5}*")
+                if path.suffix.lower() in {".dat", ".jpg", ".jpeg", ".png", ".gif", ".webp"} and path.is_file()
+            )
+        return _order_media_candidates(list(dict.fromkeys(hits)))[:30]
+    except OSError:
+        return []
+
+
 def _prefer_local_image_resource(
     account_dir: Path, md5: str, *, source: Optional[Path] = None, username: str = ""
 ) -> Optional[Path]:
     """在 hardlink 与当前会话目录内比较本地图片，不联网、不扫描整个账号。"""
+    md5 = str(md5 or "").strip().lower()
+    username = str(username or "").strip()
     cached = _try_find_decrypted_resource(account_dir, md5) if _EMOTICON_MD5_RE.fullmatch(md5 or "") else None
     root = _resolve_account_wxid_dir(account_dir)
     keys = _load_media_keys(account_dir)
@@ -190,7 +227,7 @@ def _prefer_local_image_resource(
         if path:
             candidates.extend(_iter_media_source_candidates(path))
     if root and username and _EMOTICON_MD5_RE.fullmatch(md5 or ""):
-        # 按月目录直接探测文件名，避免每张缓存图片都递归扫描该会话的所有附件。
+        # 按月使用文件名索引，避免每张缓存图片都递归扫描该会话的所有附件。
         attach = root / "msg" / "attach" / hashlib.md5(username.encode("utf-8")).hexdigest()
         if attach.is_dir():
             folders = [attach / "Img", attach / "img", attach]
@@ -198,16 +235,8 @@ def _prefer_local_image_resource(
             for folder in folders:
                 if not folder.is_dir():
                     continue
-                for variant in ("_b", "_h", "", "_c", "_t", ".b", ".h", ".c", ".t"):
-                    found = None
-                    for extension in ("dat", "jpg", "png", "gif", "webp", "jpeg"):
-                        path = folder / f"{md5}{variant}.{extension}"
-                        if path.is_file():
-                            found = path
-                            break
-                    if found:
-                        candidates.extend(_iter_media_source_candidates(found))
-                        break
+                for path in _scoped_image_directory_candidates(folder, md5):
+                    candidates.extend(_iter_media_source_candidates(path))
     best_path, best_data, best_score = cached, b"", (-1, -1)
     for path in dict.fromkeys(candidates):
         try:
@@ -3829,6 +3858,9 @@ def _collect_all_dat_files(wxid_dir: Path) -> list[tuple[Path, str]]:
                 stem = dat_file.stem
                 # 文件名格式可能是: md5.dat, md5_t.dat, md5_h.dat 等
                 md5 = _normalize_variant_basename(stem)
+                if not _EMOTICON_MD5_RE.fullmatch(md5):
+                    # 保留旧版对 MD5_序号/其他后缀的支持，同时识别新增的点号变体。
+                    md5 = stem.split("_", 1)[0]
                 # 验证是否是有效的MD5（32位十六进制）
                 if len(md5) == 32 and all(c in "0123456789abcdefABCDEF" for c in md5):
                     results.append((dat_file, md5.lower()))
