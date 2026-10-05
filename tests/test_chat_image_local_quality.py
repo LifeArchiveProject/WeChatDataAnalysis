@@ -149,6 +149,34 @@ def test_etag_changes_when_original_arrives_after_thumbnail(local_images):
     assert third.status_code == 304
 
 
+def test_extra_filename_suffix_and_uppercase_md5_still_find_original(local_images):
+    seed_cache(local_images, image_bytes(120, 120))
+    seed_variant(local_images, "_123_t", image_bytes(120, 120))
+    seed_variant(local_images, "_123_h", image_bytes(800, 600))
+    response = get_image(local_images, md5=MD5.upper())
+    assert response.status_code == 200
+    assert dimensions(response.content) == (800, 600)
+
+
+def test_directory_index_refreshes_when_another_variant_arrives(local_images):
+    seed_cache(local_images, image_bytes(120, 120))
+    seed_variant(local_images, "_123_t", image_bytes(120, 120))
+    assert dimensions(get_image(local_images).content) == (120, 120)
+    seed_variant(local_images, "_123_h", image_bytes(800, 600))
+    assert dimensions(get_image(local_images).content) == (800, 600)
+
+
+def test_predecrypt_keeps_legacy_filename_suffixes_and_dot_variants(local_images):
+    seed_variant(local_images, "_123_t", bytes(byte ^ 0xA5 for byte in image_bytes(120, 120)))
+    seed_variant(local_images, ".h", bytes(byte ^ 0xA5 for byte in image_bytes(800, 600)))
+    response = local_images[3].post("/api/media/decrypt_all", json={"account": ACCOUNT})
+    response.raise_for_status()
+    assert response.json()["total"] == 2
+    assert response.json()["success_count"] == 2
+    path = local_images[4]._try_find_decrypted_resource(local_images[1], MD5)
+    assert dimensions(path.read_bytes()) == (800, 600)
+
+
 @pytest.mark.parametrize("stream", [False, True])
 def test_predecrypt_repairs_valid_thumbnail_then_skips_unchanged_sources(local_images, stream):
     seed_cache(local_images, image_bytes(120, 120))
