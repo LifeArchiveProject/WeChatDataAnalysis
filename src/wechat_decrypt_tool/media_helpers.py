@@ -189,7 +189,7 @@ def _prefer_local_image_resource(
     for path in (cached, source, live):
         if path:
             candidates.extend(_iter_media_source_candidates(path))
-    if not live and root and username and _EMOTICON_MD5_RE.fullmatch(md5 or ""):
+    if root and username and _EMOTICON_MD5_RE.fullmatch(md5 or ""):
         # 按月目录直接探测文件名，避免每张缓存图片都递归扫描该会话的所有附件。
         attach = root / "msg" / "attach" / hashlib.md5(username.encode("utf-8")).hexdigest()
         if attach.is_dir():
