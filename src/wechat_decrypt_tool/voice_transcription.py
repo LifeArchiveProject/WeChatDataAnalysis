@@ -734,7 +734,8 @@ def _public_model_name(value: str) -> str:
     if not raw:
         return ""
     if "/" in raw or "\\" in raw:
-        return Path(raw.rstrip("/\\")).name or "local-model"
+        # 缓存或配置可能来自另一平台，统一分隔符后仅公开模型文件名。
+        return Path(raw.replace("\\", "/").rstrip("/")).name or "local-model"
     return raw
 
 
@@ -969,6 +970,10 @@ def get_voice_model_catalog(*, selected_model: Optional[str] = None) -> list[dic
         job = jobs.get(model_id) or {}
         item = dict(definition)
         runtime_ready, runtime_reason = dependency_status(model_id)
+        qwen_runtime = None
+        if model_id == "qwen3-asr-06b-hf":
+            from .qwen_gpu_runtime import get_qwen_runtime
+            qwen_runtime = get_qwen_runtime().status()
         spec = ASR_MODEL_SPECS.get(model_id, {})
         item.update(
             {
@@ -976,6 +981,7 @@ def get_voice_model_catalog(*, selected_model: Optional[str] = None) -> list[dic
                 "devices": spec.get("devices", ["cpu", "cuda"]),
                 "runtimeAvailable": runtime_ready,
                 "runtimeReason": runtime_reason,
+                "runtimeComponent": qwen_runtime,
                 "selected": model_id == selected,
                 "downloaded": bool(readiness.get("ready")),
                 "downloadable": bool(readiness.get("downloadable")),

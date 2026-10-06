@@ -4053,12 +4053,12 @@ def _postprocess_full_messages(
                     if md5:
                         m["imageUrl"] = (
                             base_url
-                            + f"/api/chat/media/image?account={quote(account_dir.name)}&md5={quote(md5)}&username={quote(username)}"
+                            + f"/api/chat/media/image?account={quote(account_dir.name)}&md5={quote(md5)}&username={quote(username)}&v=local-quality-1"
                         )
                     elif file_id:
                         m["imageUrl"] = (
                             base_url
-                            + f"/api/chat/media/image?account={quote(account_dir.name)}&file_id={quote(file_id)}&username={quote(username)}"
+                            + f"/api/chat/media/image?account={quote(account_dir.name)}&file_id={quote(file_id)}&username={quote(username)}&v=local-quality-1"
                         )
             elif rt == "emoji":
                 md5 = str(m.get("emojiMd5") or "")
@@ -4141,7 +4141,7 @@ def _postprocess_full_messages(
                         file_id = f"{lid}_{ct}"
                         m["thumbUrl"] = (
                             base_url
-                            + f"/api/chat/media/image?account={quote(account_dir.name)}&file_id={quote(file_id)}&username={quote(username)}"
+                            + f"/api/chat/media/image?account={quote(account_dir.name)}&file_id={quote(file_id)}&username={quote(username)}&v=local-quality-1"
                         )
             elif rt == "voice":
                 if str(m.get("serverId") or ""):
@@ -7449,12 +7449,12 @@ def list_chat_messages(
                     if md5:
                         m["imageUrl"] = (
                             base_url
-                            + f"/api/chat/media/image?account={quote(account_dir.name)}&md5={quote(md5)}&username={quote(username)}"
+                            + f"/api/chat/media/image?account={quote(account_dir.name)}&md5={quote(md5)}&username={quote(username)}&v=local-quality-1"
                         )
                     elif file_id:
                         m["imageUrl"] = (
                             base_url
-                            + f"/api/chat/media/image?account={quote(account_dir.name)}&file_id={quote(file_id)}&username={quote(username)}"
+                            + f"/api/chat/media/image?account={quote(account_dir.name)}&file_id={quote(file_id)}&username={quote(username)}&v=local-quality-1"
                         )
             elif rt == "emoji":
                 md5 = str(m.get("emojiMd5") or "")
@@ -7532,7 +7532,7 @@ def list_chat_messages(
                         file_id = f"{lid}_{ct}"
                         m["thumbUrl"] = (
                             base_url
-                            + f"/api/chat/media/image?account={quote(account_dir.name)}&file_id={quote(file_id)}&username={quote(username)}"
+                            + f"/api/chat/media/image?account={quote(account_dir.name)}&file_id={quote(file_id)}&username={quote(username)}&v=local-quality-1"
                         )
             elif rt == "voice":
                 if str(m.get("serverId") or ""):

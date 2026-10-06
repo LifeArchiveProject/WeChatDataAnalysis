@@ -51,6 +51,10 @@ from ..media_helpers import (
     _get_resource_dir,
     _guess_media_type_by_path,
     _is_probably_valid_image,
+    _image_payload_score,
+    _prefer_local_image_resource,
+    _save_best_image_resource,
+    _read_cached_image_resource,
     _iter_emoji_source_candidates,
     _iter_media_source_candidates,
     _order_media_candidates,
@@ -445,6 +449,9 @@ def _build_cached_media_response(request: Optional[Request], data: bytes, media_
     payload = bytes(data or b"")
     etag = f'"{hashlib.sha1(payload).hexdigest()}"'
     cache_control = f"private, max-age={CHAT_MEDIA_BROWSER_CACHE_SECONDS}"
+    if media_type.startswith("image/"):
+        # ETag 保留浏览器缓存，但每次重新显示都验证本地是否已有更高分辨率版本。
+        cache_control = "private, max-age=0, must-revalidate"
     headers = {
         "Cache-Control": cache_control,
         "ETag": etag,
@@ -485,105 +492,12 @@ def _is_probable_large_image_source(path: Path) -> bool:
     return _image_candidate_variant_rank(path) <= 2
 
 
-def _image_candidate_stat(path: Optional[Path]) -> tuple[int, float]:
-    if not path:
-        return 0, 0.0
-    try:
-        st = path.stat()
-        return int(st.st_size), float(st.st_mtime)
-    except Exception:
-        return 0, 0.0
-
-
-def _should_prefer_live_image_candidates(
-    *,
-    cached_path: Optional[Path],
-    live_candidates: list[Path],
-) -> bool:
-    if not live_candidates:
-        return False
-    if not cached_path:
-        return True
-
-    best_live = live_candidates[0]
-    live_rank = _image_candidate_variant_rank(best_live)
-    if live_rank < 2:
-        return True
-
-    cache_size, cache_mtime = _image_candidate_stat(cached_path)
-    live_size, live_mtime = _image_candidate_stat(best_live)
-    if live_rank == 2 and live_size > cache_size:
-        return True
-    if live_rank == 2 and live_size >= cache_size and live_mtime > cache_mtime:
-        return True
-    return False
-
-
-def _detect_image_payload_dimensions(data: bytes, media_type: str) -> tuple[int, int]:
-    payload = bytes(data or b"")
-    mt = str(media_type or "").strip().lower()
-    try:
-        if mt == "image/png" and len(payload) >= 24 and payload.startswith(b"\x89PNG\r\n\x1a\n"):
-            return int.from_bytes(payload[16:20], "big"), int.from_bytes(payload[20:24], "big")
-        if mt == "image/gif" and len(payload) >= 10 and payload.startswith((b"GIF87a", b"GIF89a")):
-            return int.from_bytes(payload[6:8], "little"), int.from_bytes(payload[8:10], "little")
-        if mt == "image/jpeg" and len(payload) >= 4 and payload.startswith(b"\xff\xd8"):
-            i = 2
-            while i < len(payload) - 9:
-                if payload[i] != 0xFF:
-                    i += 1
-                    continue
-                marker = payload[i + 1]
-                i += 2
-                if marker in (0xD8, 0xD9):
-                    continue
-                if i + 2 > len(payload):
-                    break
-                seg_len = int.from_bytes(payload[i : i + 2], "big")
-                if seg_len < 2:
-                    break
-                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
-                    if i + 7 <= len(payload):
-                        return int.from_bytes(payload[i + 5 : i + 7], "big"), int.from_bytes(payload[i + 3 : i + 5], "big")
-                    break
-                i += seg_len
-    except Exception:
-        return 0, 0
-    return 0, 0
-
-
-def _image_payload_score(data: bytes, media_type: str) -> tuple[int, int]:
-    width, height = _detect_image_payload_dimensions(data, media_type)
-    area = int(width or 0) * int(height or 0)
-    return area, len(data or b"")
-
-
 def _write_cached_chat_image(account_dir: Path, md5: str, data: bytes) -> None:
     md5_norm = str(md5 or "").strip().lower()
     if (not md5_norm) or (not data):
         return
 
-    ext = _detect_image_extension(data)
-    out_path = _get_decrypted_resource_path(account_dir, md5_norm, ext)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    for stale_ext in ("jpg", "png", "gif", "webp", "dat"):
-        stale_path = _get_decrypted_resource_path(account_dir, md5_norm, stale_ext)
-        if stale_path == out_path:
-            continue
-        try:
-            if stale_path.exists():
-                stale_path.unlink()
-        except Exception:
-            pass
-
-    try:
-        if out_path.exists() and out_path.read_bytes() == data:
-            return
-    except Exception:
-        pass
-
-    out_path.write_bytes(data)
+    _save_best_image_resource(account_dir, md5_norm, data)
 
 
 def _resolve_avatar_remote_url(
@@ -2653,7 +2567,9 @@ async def get_chat_image(
     # md5 模式：优先检查解密资源目录；如果微信目录里已经有更高质量版本，会在后面自动升级。
     if md5:
         cache_started_at = time.perf_counter()
-        decrypted_path = _try_find_decrypted_resource(account_dir, str(md5).lower())
+        decrypted_path, data, media_type = await asyncio.to_thread(
+            _read_cached_image_resource, account_dir, str(md5).lower()
+        )
         trace(
             "decrypted-cache:path-lookup",
             hasPath=bool(decrypted_path),
@@ -2662,8 +2578,6 @@ async def get_chat_image(
         )
         if decrypted_path:
             read_started_at = time.perf_counter()
-            data = decrypted_path.read_bytes()
-            media_type = _detect_image_media_type(data[:32])
             valid_image = bool(
                 media_type != "application/octet-stream"
                 and _is_probably_valid_image(data, media_type)
@@ -2681,12 +2595,6 @@ async def get_chat_image(
                 cached_path = decrypted_path
                 cached_data = data
                 cached_media_type = media_type
-            # Corrupted cached file (e.g. wrong ext / partial data): remove and regenerate from source.
-            elif decrypted_path.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
-                try:
-                    decrypted_path.unlink()
-                except Exception:
-                    pass
     trace(
         "decrypted-cache:checked",
         hasCachedPath=bool(cached_path),
@@ -2694,14 +2602,29 @@ async def get_chat_image(
         cachedMediaType=cached_media_type,
     )
 
-    if cached_path and (not prefer_live) and (not fetch_remote):
-        trace(
-            "response:ready",
-            result="decrypted-cache-hit",
-            mediaType=cached_media_type,
-            bytes=len(cached_data or b""),
+    if md5 and (not prefer_live) and (not fetch_remote) and not (record_attach or record_index_path):
+        # 旧预解密缓存可能只有 120×120；先比较当前会话或 hardlink 指向的本地变体。
+        upgraded = await asyncio.to_thread(
+            _prefer_local_image_resource, account_dir, str(md5), source=cached_path, username=str(username or "")
         )
-        return _build_cached_media_response(request, cached_data, cached_media_type)
+        if upgraded:
+            if upgraded.is_relative_to(_get_resource_dir(account_dir)):
+                _, latest_data, latest_type = await asyncio.to_thread(_read_cached_image_resource, account_dir, str(md5))
+            else:
+                latest_data, latest_type = await asyncio.to_thread(
+                    _read_and_maybe_decrypt_media, upgraded, account_dir=account_dir
+                )
+            if latest_type.startswith("image/") and _is_probably_valid_image(latest_data, latest_type):
+                cached_path = upgraded
+                cached_data, cached_media_type = latest_data, latest_type
+        if cached_path:
+            trace(
+                "response:ready",
+                result="decrypted-cache-hit",
+                mediaType=cached_media_type,
+                bytes=len(cached_data or b""),
+            )
+            return _build_cached_media_response(request, cached_data, cached_media_type)
 
     # 回退：从微信数据目录实时定位并解密
     roots_started_at = time.perf_counter()
@@ -2728,6 +2651,8 @@ async def get_chat_image(
         roots.append(db_storage_dir)
 
     if not roots:
+        if cached_path and not fetch_remote:
+            return _build_cached_media_response(request, cached_data, cached_media_type)
         raise HTTPException(
             status_code=404,
             detail="wxid_dir/db_storage_path not found. Please decrypt with db_storage_path to enable media lookup.",
@@ -3009,10 +2934,7 @@ async def get_chat_image(
             seen_live.add(key)
             live_candidates.append(candidate)
 
-        if _should_prefer_live_image_candidates(cached_path=cached_path, live_candidates=live_candidates):
-            candidates = [*live_candidates, cached_path]
-        else:
-            candidates = [cached_path, *live_candidates]
+        candidates = [cached_path, *live_candidates]
 
     logger.info(f"chat_image: md5={md5} file_id={file_id} candidates={len(candidates)} first={p}")
 
@@ -3077,7 +2999,7 @@ async def get_chat_image(
                 source_key = str(src_path)
             if source_key != cached_candidate_key and _is_probable_large_image_source(src_path):
                 local_large_found = True
-            if prefer_live or fetch_remote:
+            if media_type.startswith("image/"):
                 score = _image_payload_score(data, media_type)
                 if best_score is None or score > best_score:
                     best_score = score
@@ -3088,7 +3010,7 @@ async def get_chat_image(
             chosen = src_path
             break
 
-    if (prefer_live or fetch_remote) and best_chosen is not None:
+    if best_chosen is not None:
         chosen = best_chosen
         data = best_data
         media_type = best_media_type
@@ -3785,6 +3707,27 @@ async def download_chat_voice_transcription_model(model: str, request: Request):
             status_code=status_code,
             detail={"code": exc.code, "message": exc.user_message},
         ) from exc
+
+
+@router.post("/api/chat/media/voice/transcription/qwen-gpu/{action}", summary="安装或暂停 Qwen GPU 组件并启用模型")
+async def prepare_qwen_gpu(action: str, request: Request):
+    _require_local_voice_mutation(request)
+    from ..qwen_gpu_runtime import get_qwen_runtime
+    manager = get_qwen_runtime()
+    try:
+        if action == "prepare":
+            return await asyncio.to_thread(manager.start)
+        if action == "pause":
+            return manager.pause()
+        raise ValueError("不支持的 GPU 组件操作。")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "qwen_runtime_unavailable", "message": str(exc)}) from None
+
+
+@router.get("/api/chat/media/voice/transcription/qwen-gpu/status", summary="查询 Qwen GPU 组件安装进度")
+async def qwen_gpu_status():
+    from ..qwen_gpu_runtime import get_qwen_runtime
+    return get_qwen_runtime().status()
 
 
 @router.get("/api/chat/media/voice/transcription/models/downloads/{job_id}", summary="查询语音模型下载任务")

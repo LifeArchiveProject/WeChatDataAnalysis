@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ from ..media_helpers import (
     _detect_image_extension,
     _detect_image_media_type,
     _is_probably_valid_image,
+    _is_current_image_resource_source,
     _get_resource_dir,
     _load_media_keys,
     _resolve_account_dir,
@@ -296,9 +298,9 @@ async def decrypt_all_media(request: MediaDecryptRequest):
     resource_dir.mkdir(parents=True, exist_ok=True)
 
     for dat_path, md5 in dat_files:
-        # 检查是否已解密
-        existing = _try_find_decrypted_resource(account_dir, md5)
-        if existing:
+        # 只有该源文件已经参与质量比较且未变化时才能跳过，旧缓存不代表原图已处理。
+        source_key = hashlib.sha256(bytes([xor_key_int]) + (aes_key16 or b"")).hexdigest()
+        if _is_current_image_resource_source(account_dir, md5, dat_path, source_key):
             skip_count += 1
             continue
 
@@ -546,8 +548,8 @@ async def decrypt_all_media_stream(
                 file_name = dat_path.name
                 item_started_at = time.perf_counter()
                 cache_started_at = time.perf_counter()
-                existing = _try_find_decrypted_resource(account_dir, md5)
-                if existing and _is_valid_cached_image(existing):
+                source_key = hashlib.sha256(bytes([xor_key_int]) + (aes_key16 or b"")).hexdigest()
+                if _is_current_image_resource_source(account_dir, md5, dat_path, source_key):
                     return {
                         "item_index": item_index,
                         "worker_id": worker_id,
@@ -559,11 +561,6 @@ async def decrypt_all_media_stream(
                         "decrypt_ms": 0.0,
                         "elapsed_ms": round((time.perf_counter() - item_started_at) * 1000, 1),
                     }
-                if existing:
-                    try:
-                        existing.unlink(missing_ok=True)
-                    except Exception:
-                        pass
                 cache_elapsed_ms = round((time.perf_counter() - cache_started_at) * 1000, 1)
 
                 decrypt_started_at = time.perf_counter()

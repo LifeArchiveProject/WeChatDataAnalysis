@@ -364,6 +364,16 @@
 
                     <div class="mt-1.5 line-clamp-2 text-[10px] leading-relaxed text-[var(--app-text-secondary)]">{{ model.description }}</div>
                     <div v-if="!model.runtimeAvailable" class="mt-1.5 text-[11px] leading-relaxed text-[var(--app-text-secondary)]">{{ model.runtimeReason }}</div>
+                    <div v-if="model.runtimeComponent && !model.runtimeComponent.installed && !model.runtimeAvailable" class="mt-1 text-[11px] text-[var(--app-text-muted)]">
+                      运行组件约 {{ formatBytes(model.runtimeComponent.size) }}，下载和解压需约 9 GB 可用空间。
+                    </div>
+                    <div v-if="qwenIsActive(model) || ['paused', 'error'].includes(model.runtimeComponent?.job?.status)" class="mt-2 text-[11px] leading-relaxed" data-qwen-runtime-status>
+                      <p role="status" class="text-[var(--app-text-secondary)]">{{ qwenStageText(model) }}</p>
+                      <p v-if="qwenIsActive(model) && model.runtimeComponent.job.stage !== 'downloading_model'" class="tabular-nums text-[var(--app-text-muted)]">
+                        {{ formatBytes(model.runtimeComponent.job.bytes || 0) }} / {{ formatBytes(model.runtimeComponent.job.total || model.runtimeComponent.size) }}
+                      </p>
+                      <p v-if="model.runtimeComponent.job.error" role="alert" class="break-words text-[var(--danger-color)]">{{ model.runtimeComponent.job.error }}</p>
+                    </div>
                     <div v-if="isVoiceModelDownloading(model)" class="mt-2" data-voice-model-progress>
                       <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[10px] leading-relaxed">
                         <span class="text-[var(--app-text-secondary)]">{{ voiceModelDownloadStageText(model) }}</span>
@@ -390,17 +400,32 @@
 
                     <div class="mt-auto flex flex-wrap items-center justify-end gap-1.5 pt-2">
                       <button
-                        v-if="model.downloaded && !model.selected"
+                        v-if="qwenNeedsPreparation(model)"
+                        type="button"
+                        class="voice-setting-focus whitespace-normal rounded-[5px] bg-[var(--app-accent)] px-2 py-1 text-[11px] font-medium text-white transition hover:bg-[var(--app-accent-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                        :disabled="voiceModelLocked || !model.runtimeComponent.supported || qwenIsActive(model) || isVoiceModelActionBusy(model.id)"
+                        :title="voiceModelLocked ? '模型由启动环境变量固定' : model.runtimeComponent.reason || '安装所需运行组件和模型，检查显卡后启用'"
+                        @click="prepareQwenModel(model)"
+                      >{{ qwenButtonText(model) }}</button>
+                      <button
+                        v-if="qwenIsActive(model)"
+                        type="button"
+                        class="voice-setting-focus rounded-[5px] border border-[var(--app-border)] px-2 py-1 text-[11px] text-[var(--app-text-secondary)] disabled:opacity-50"
+                        :disabled="isVoiceModelActionBusy(model.id)"
+                        @click="pauseQwenModel(model)"
+                      >暂停</button>
+                      <button
+                        v-if="model.downloaded && !model.selected && !qwenNeedsPreparation(model)"
                         type="button"
                         class="voice-setting-focus rounded-[5px] border border-[var(--app-border)] bg-[var(--app-surface-bg)] px-2 py-1 text-[10px] font-medium text-[var(--app-accent)] transition hover:bg-[var(--app-neutral-btn-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-                        :disabled="voiceModelLocked || !model.runtimeAvailable || isVoiceModelActionBusy(model.id)"
+                        :disabled="voiceModelLocked || !model.runtimeAvailable || qwenPreparationActive || isVoiceModelActionBusy(model.id)"
                         :title="voiceModelLocked ? '模型由启动环境变量固定' : !model.runtimeAvailable ? model.runtimeReason : `选择 ${model.name}`"
                         @click="selectVoiceModel(model)"
                       >
                         {{ isVoiceModelActionBusy(model.id, 'select') ? '选择中...' : '选择' }}
                       </button>
                       <button
-                        v-if="!model.downloaded && !isVoiceModelDeletePending(model.id)"
+                        v-if="!model.downloaded && !isVoiceModelDeletePending(model.id) && !qwenNeedsPreparation(model)"
                         type="button"
                         class="voice-setting-focus whitespace-nowrap rounded-[5px] bg-[var(--app-accent)] px-2 py-1 text-[10px] font-medium text-white transition hover:bg-[var(--app-accent-hover)] disabled:cursor-not-allowed disabled:opacity-40"
                         :disabled="voiceDownloadSourceBusy || !model.downloadable || isVoiceModelDownloading(model) || isVoiceModelActionBusy(model.id)"
@@ -413,7 +438,7 @@
                         v-if="canDeleteVoiceModel(model)"
                         type="button"
                         class="voice-setting-focus rounded-[5px] border border-[var(--app-border)] px-2 py-1 text-[10px] text-[var(--danger-color)] transition hover:bg-[var(--app-neutral-btn-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-                        :disabled="isVoiceModelDeletePending(model.id)"
+                        :disabled="isVoiceModelDeletePending(model.id) || qwenIsActive(model)"
                         :title="isVoiceModelDownloading(model) || isVoiceModelActionBusy(model.id, 'download') ? `停止下载并删除 ${model.name}` : `删除本机上的 ${model.name}`"
                         @click="removeVoiceModel(model)"
                       >
@@ -1292,6 +1317,7 @@ const applyVoiceTranscriptionStatus = (status) => {
       recommended: item?.recommended === true,
       runtimeAvailable: item?.runtimeAvailable !== false,
       runtimeReason: String(item?.runtimeReason || '缺少运行组件，请更新应用或选择其他模型。'),
+      runtimeComponent: item?.runtimeComponent || null,
       selected: item?.selected === true || id === voiceModel.value,
       downloaded,
       downloadable: item?.downloadable !== false,
@@ -1317,6 +1343,49 @@ const applyVoiceTranscriptionStatus = (status) => {
 }
 
 const isVoiceModelDownloading = (model) => ['queued', 'running'].includes(String(model?.downloadStatus || '').toLowerCase())
+
+const qwenIsActive = (model) => ['queued', 'running'].includes(model?.runtimeComponent?.job?.status)
+const qwenPreparationActive = computed(() => voiceModels.value.some(qwenIsActive))
+const qwenNeedsPreparation = (model) => !!model?.runtimeComponent && (
+  !model.downloaded || !model.runtimeAvailable || qwenIsActive(model)
+  || ['paused', 'error'].includes(model.runtimeComponent.job?.status)
+)
+const qwenStageText = (model) => {
+  const job = model?.runtimeComponent?.job || {}
+  if (job.stage === 'downloading_model') return `正在下载模型 ${job.modelPercent || 0}%`
+  return ({ preparing: '准备安装', downloading: '正在下载 GPU 组件', retry_wait: '网络中断，正在重试',
+    verifying: '正在校验组件', installing: '正在安装组件', checking_runtime: '正在检查显卡和组件',
+    checking_model: '正在检查模型', paused: '安装已暂停，可继续', error: '安装或启用失败', done: '已启用' })[job.stage] || '等待安装'
+}
+const qwenButtonText = (model) => {
+  if (qwenIsActive(model)) return qwenStageText(model)
+  if (model.runtimeComponent?.job?.status === 'paused') return '继续安装并启用'
+  if (model.runtimeComponent?.job?.status === 'error') return '重试并启用'
+  return model.downloaded ? '安装 GPU 组件并启用' : '下载并启用'
+}
+const updateQwenComponent = (component) => {
+  voiceModels.value = voiceModels.value.map((model) => model.id === 'qwen3-asr-06b-hf'
+    ? { ...model, runtimeComponent: component } : model)
+}
+const prepareQwenModel = async (model) => {
+  if (voiceModelLocked.value || qwenIsActive(model) || isVoiceModelActionBusy(model.id)) return
+  voiceModelAction.value = { id: model.id, type: 'prepare' }
+  voiceModelError.value = ''
+  try {
+    updateQwenComponent(await api.prepareQwenGpu())
+    scheduleVoiceModelDownloadPolling()
+  } catch (e) {
+    voiceModelError.value = e?.message || 'GPU 组件安装无法启动，请重试。'
+  } finally {
+    voiceModelAction.value = { id: '', type: '' }
+  }
+}
+const pauseQwenModel = async (model) => {
+  voiceModelAction.value = { id: model.id, type: 'pause' }
+  try { updateQwenComponent(await api.pauseQwenGpu()) }
+  catch (e) { voiceModelError.value = e?.message || '暂停失败，请重试。' }
+  finally { voiceModelAction.value = { id: '', type: '' } }
+}
 
 const voiceModelDownloadPercent = (model) => normalizeVoiceModelDownloadPercent(model?.downloadPercent)
 
@@ -1355,6 +1424,9 @@ const isVoiceModelActionBusy = (modelId, type = '') => {
 }
 
 const voiceModelStateText = (model) => {
+  if (qwenIsActive(model)) return '准备启用'
+  if (model.runtimeComponent?.job?.status === 'error') return '启用失败'
+  if (!model.runtimeAvailable) return model.downloaded ? '模型已下载 · 缺少组件' : '缺少组件'
   const status = String(model?.downloadStatus || '').toLowerCase()
   if (status === 'queued') return '等待下载'
   if (status === 'running') return `正在下载 ${voiceModelDownloadPercent(model)}%`
@@ -1364,6 +1436,7 @@ const voiceModelStateText = (model) => {
 }
 
 const voiceModelStateClass = (model) => {
+  if (!model.runtimeAvailable || model.runtimeComponent?.job?.status === 'error') return 'text-[var(--app-text-secondary)]'
   const status = String(model?.downloadStatus || '').toLowerCase()
   if (isVoiceModelDownloading(model) || model?.downloaded) return 'text-[var(--app-accent)]'
   if (status === 'error') return 'text-[var(--danger-color)]'
@@ -1418,9 +1491,18 @@ const pollVoiceModelDownloads = async () => {
     && model.downloadJobId
     && !isVoiceModelDeletePending(model.id)
   ))
-  if (!active.length) return
+  if (!active.length && !qwenPreparationActive.value) return
 
   let terminalJobSeen = false
+  if (qwenPreparationActive.value) {
+    try {
+      const component = await api.getQwenGpuStatus()
+      updateQwenComponent(component)
+      terminalJobSeen = !['queued', 'running'].includes(component.job?.status)
+    } catch (e) {
+      voiceModelError.value = e?.message || '读取 GPU 组件安装进度失败，将继续重试。'
+    }
+  }
   await Promise.all(active.map(async (model) => {
     const generation = voiceModelDownloadGeneration(model.id)
     try {
@@ -1452,7 +1534,7 @@ function scheduleVoiceModelDownloadPolling() {
     isVoiceModelDownloading(model)
     && model.downloadJobId
     && !isVoiceModelDeletePending(model.id)
-  ))) return
+  )) && !qwenPreparationActive.value) return
   voiceModelDownloadTimer = setTimeout(async () => {
     voiceModelDownloadTimer = null
     await pollVoiceModelDownloads()

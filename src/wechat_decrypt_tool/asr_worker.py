@@ -23,6 +23,9 @@ def _worker(connection, backend: str, folder: str, threads: int):
                       MKL_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads))
     model = None
     try:
+        if backend == "qwen-hf":
+            from .qwen_gpu_runtime import activate_for_worker
+            activate_for_worker()
         from .asr_backends import audio_chunks, load_backend, read_audio
         import numpy as np
         while connection.poll(120):
@@ -118,6 +121,8 @@ class ProcessBackend:
 
 def _torch_probe(connection):
     try:
+        from .qwen_gpu_runtime import activate_for_worker
+        activate_for_worker()
         import torch
         count = torch.cuda.device_count() if torch.cuda.is_available() else 0
         connection.send(dict(available=count > 0, deviceCount=count,
@@ -131,6 +136,69 @@ def _torch_probe(connection):
 
 _PROBE_LOCK = threading.Lock()
 _PROBE_CACHE = None
+
+
+def invalidate_qwen_probe():
+    global _PROBE_CACHE
+    with _PROBE_LOCK:
+        _PROBE_CACHE = None
+
+
+def _runtime_probe(connection, root, folder):
+    try:
+        from .qwen_gpu_runtime import activate_for_worker
+        activate_for_worker(root)
+        import torch
+        from transformers import AutoProcessor, AutoModelForMultimodalLM
+        if not torch.cuda.is_available():
+            raise ValueError("GPU 组件已安装，但 NVIDIA 显卡不可用，请检查显卡驱动。")
+        # 实际执行 CUDA 运算，发现驱动或架构不兼容，而非只检查设备列表。
+        value = (torch.ones(4, device="cuda") * 2).sum().item()
+        if value != 8:
+            raise ValueError("GPU 运算检查未通过，请检查显卡驱动。")
+        if folder:
+            os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+            from .asr_backends import QwenGpuBackend
+            model = QwenGpuBackend(__import__("pathlib").Path(folder), 2)
+            del model
+        connection.send(dict(available=True, reason="", device=torch.cuda.get_device_name(0),
+                             torchVersion=str(torch.__version__), torchModule=str(torch.__file__), modelLoaded=bool(folder)))
+    except Exception as exc:
+        connection.send(dict(available=False, reason=f"GPU 组件检查失败：{str(exc)[:300]}。请重试或选择 CPU 模型。"))
+    finally:
+        connection.close()
+
+
+def check_qwen_runtime(root=None, folder=None, cancel_event=None):
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe(duplex=False)
+    process = context.Process(target=_runtime_probe, args=(child, root, folder), daemon=True)
+    result = dict(available=False, reason="GPU 组件检查超时或进程退出，请重试或选择 CPU 模型。")
+    try:
+        process.start()
+        child.close()
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            if cancel_event is not None and cancel_event.is_set():
+                from .qwen_gpu_runtime import Paused
+                raise Paused()
+            if parent.poll(.1):
+                result = parent.recv()
+                break
+            if not process.is_alive():
+                break
+    except (EOFError, OSError, RuntimeError):
+        pass
+    finally:
+        parent.close()
+        child.close()
+        if process.pid is not None:
+            process.join(timeout=1)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=2)
+            process.close()
+    return result
 
 
 def probe_qwen_cuda():
