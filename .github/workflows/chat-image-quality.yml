@@ -1,0 +1,62 @@
+name: Chat Image Quality Checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/chat-image-quality.yml'
+      - 'src/wechat_decrypt_tool/media_helpers.py'
+      - 'src/wechat_decrypt_tool/chat_export_service.py'
+      - 'src/wechat_decrypt_tool/routers/media.py'
+      - 'src/wechat_decrypt_tool/routers/chat*.py'
+      - 'tests/test_chat_image_local_quality.py'
+      - 'tests/test_chat_media_image_cache_upgrade.py'
+      - 'tests/test_media_decrypt_stream_cancel.py'
+      - 'frontend/lib/chat/chat-history.js'
+      - 'frontend/lib/chat/message-normalizer.js'
+      - 'frontend/tests/chat-image-quality.test.js'
+      - 'pyproject.toml'
+      - 'uv.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - run: python -m pip install uv
+      - run: uv sync --locked
+      # 使用实际编码的 PNG/JPEG/WebP 与 XOR DAT，不需要真实账号、显卡或 CDN。
+      - name: Local image display, export and predecryption regression
+        run: >-
+          uv run --no-sync pytest -q
+          tests/test_chat_image_local_quality.py
+          tests/test_chat_media_image_cache_upgrade.py
+          tests/test_media_decrypt_stream_cancel.py
+          tests/test_chat_media_file_id_scope.py
+          tests/test_chat_media_record_video.py
+          tests/test_chat_large_image_frontend.py
+          tests/test_chat_image_group_info.py
+          tests/test_image_key_verified_store.py
+          tests/test_image_key_resolver.py
+          tests/test_media_emoticon_catalog.py
+          tests/test_media_emoji_download_stream.py
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Image browser cache regression
+        working-directory: frontend
+        run: npx vitest run tests/chat-image-quality.test.js

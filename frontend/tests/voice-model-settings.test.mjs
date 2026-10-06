@@ -36,8 +36,8 @@ test('settings renders model cards and keeps active downloads observable', () =>
 
 test('download-time deletion stays available and supersedes stale download work', () => {
   assert.match(voiceSectionSource, /v-if="canDeleteVoiceModel\(model\)"/)
-  assert.match(voiceSectionSource, /:disabled="isVoiceModelDeletePending\(model\.id\)"/)
-  assert.match(voiceSectionSource, /v-if="!model\.downloaded && !isVoiceModelDeletePending\(model\.id\)"/)
+  assert.match(voiceSectionSource, /:disabled="isVoiceModelDeletePending\(model\.id\) \|\| qwenIsActive\(model\)"/)
+  assert.match(voiceSectionSource, /v-if="!model\.downloaded && !isVoiceModelDeletePending\(model\.id\) && !qwenNeedsPreparation\(model\)"/)
   assert.match(voiceSectionSource, /停止并删除/)
 
   const deleteButtonStart = voiceSectionSource.indexOf('v-if="canDeleteVoiceModel(model)"')
