@@ -387,7 +387,7 @@
           <div v-else-if="!switchableAccountItems.length" class="space-y-1 px-1 py-2">
             <div class="text-[12px] text-[#666]">暂无可切换账号</div>
             <div class="text-[11px] leading-relaxed text-[#8a8a8a]">
-              只有已经获取并保存“数据库密钥 + 图片密钥”的账号会出现在这里。
+              获取并保存数据库密钥，或导入已解密的聊天数据后即可切换账号。
             </div>
             <ErrorNotice v-if="chatAccounts.error" :message="chatAccounts.error" compact class="text-[11px] text-red-600" />
           </div>
@@ -423,8 +423,8 @@
                 <div v-if="item.displayName" class="truncate text-[10px] text-[#8a8a8a]">{{ item.account }}</div>
               </div>
               <div class="flex shrink-0 items-center gap-1">
-                <span class="rounded-full bg-[#eefbf4] px-1.5 py-0.5 text-[10px] font-medium text-[#07964c]">DB</span>
-                <span class="rounded-full bg-[#eefbf4] px-1.5 py-0.5 text-[10px] font-medium text-[#07964c]">图片</span>
+                <span v-if="item.dbReady" class="rounded-full bg-[#eefbf4] px-1.5 py-0.5 text-[10px] font-medium text-[#07964c]">DB</span>
+                <span v-if="item.imageKeyPresent" class="rounded-full bg-[#eefbf4] px-1.5 py-0.5 text-[10px] font-medium text-[#07964c]">图片</span>
               </div>
             </button>
           </div>
@@ -609,6 +609,8 @@ const switchableAccountItems = computed(() => {
         active: account === normalizeAccountName(selectedAccount.value),
         displayName: accountDisplayName(account, info),
         avatarUrl: accountAvatarUrl(account, info),
+        dbReady: !!(info?.dbKeyPresent || info?.hasDecryptedDbs),
+        imageKeyPresent: !!info?.imageKeyPresent,
       }
     })
 })

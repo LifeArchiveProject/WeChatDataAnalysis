@@ -4167,7 +4167,11 @@ async def list_chat_accounts():
             SNS_REALTIME_AUTOSYNC.ensure_account(ctx.name, schedule_startup=True)
     accounts = [ctx.name for ctx in contexts]
     account_infos = [_chat_account_context_public(ctx) for ctx in contexts]
-    switchable_accounts = [ctx.name for ctx in contexts if bool(getattr(ctx, "keys_ready", False))]
+    switchable_accounts = [
+        ctx.name for ctx in contexts
+        if ctx.db_key_present or bool(getattr(ctx, "has_decrypted_dbs", False))
+    ]
+    key_ready_accounts = [ctx.name for ctx in contexts if bool(getattr(ctx, "keys_ready", False))]
     switchable_account_set = set(switchable_accounts)
     switchable_account_infos = [
         info for info in account_infos if str(info.get("account") or "").strip() in switchable_account_set
@@ -4194,7 +4198,7 @@ async def list_chat_accounts():
         "default_account": accounts[0],
         "switchable_accounts": switchable_accounts,
         "switchableAccounts": switchable_accounts,
-        "keyReadyAccounts": switchable_accounts,
+        "keyReadyAccounts": key_ready_accounts,
         "default_switchable_account": switchable_accounts[0] if switchable_accounts else None,
         "defaultSwitchableAccount": switchable_accounts[0] if switchable_accounts else None,
         "accountInfos": account_infos,
@@ -4434,7 +4438,7 @@ def _chat_account_context_public(
         "imageAesKeyPresent": bool(getattr(ctx, "image_aes_key_present", False)),
         "keysReady": bool(getattr(ctx, "keys_ready", False)),
         "keyReady": bool(getattr(ctx, "keys_ready", False)),
-        "switchable": bool(getattr(ctx, "keys_ready", False)),
+        "switchable": bool(getattr(ctx, "db_key_present", False) or has_decrypted_dbs),
         "keysUpdatedAt": str(getattr(ctx, "keys_updated_at", "") or ""),
         "realtimeAvailable": bool(realtime_available),
         "realtime": {
