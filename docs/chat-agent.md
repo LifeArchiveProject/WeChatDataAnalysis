@@ -78,7 +78,7 @@ AI 助手的搜索步骤显示实际返回的检索方式：关键词与语义�
 
 自动验收见 `tests/test_ai_agent_context.py`、`tests/test_ai_message_pages.py` 和 `frontend/tests/agent-materials.test.js`，覆盖多会话、多页、范围修改、原文引用、附件长文本、重启恢复、超限缩小、8K 窗口、接口隔离及十万条合成消息。十万条流式读取包含重复消息，测试断言 Python 分配峰值低于 8 MiB、首批读取后的进程常驻内存增长低于 32 MiB；十万条原文落库另与确定性计数基准对照。这些数值是测试输入下的工作集约束，不代表所有附件解析库的内存上限。
 
-真实验收工具为 `tools/verify_agent_context.py`：读取现有模型配置，在独立状态目录保存任务与用量；支持 `--resume-run` 和连续 `--followup`，不会将密钥复制到验收记录，也不会修改用户的 AI 自动任务。
+真实验收工具为 `tools/verify_agent_context.py`：读取现有模型配置，在独立状态目录保存任务与用量；支持 `--resume-run` 和连续 `--followup`，不会将密钥复制到验收记录，也不会修改用户的 AI 自动任务。（该脚本已从仓库删除，可从 git 历史取回。）
 
 ### 本次验收结果
 
