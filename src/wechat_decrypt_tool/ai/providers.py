@@ -3,6 +3,7 @@ from .diagnostics import observed, event as diagnostic_event, context as diagnos
 import logging
 
 import asyncio
+import ipaddress
 import json
 import re
 import time
@@ -74,12 +75,28 @@ def public_profile(profile):
     return {k: v for k, v in profile.items() if k != "api_key"} | {"has_key": bool(profile.get("api_key"))}
 
 
+# 明文 HTTP 的局域网例外只列 RFC 1918 私有网段和 IPv6 唯一本地地址。不用 is_private：
+# 它还包含 0.0.0.0/8、链路本地（含 169.254.169.254）和文档保留网段。
+LAN_NETWORKS = tuple(ipaddress.ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"))
+
+
+def is_lan_address(host):
+    """只认 IP 字面量：不解析域名，不展开 IPv4 映射等嵌入地址，也不接受带 zone id 的写法。"""
+    if not isinstance(host, str) or "%" in host:
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(address in network for network in LAN_NETWORKS)
+
+
 def validate_url(value):
     url = urlparse(value)
     if url.scheme not in {"https", "http"} or not url.hostname or url.username or url.password or url.query or url.fragment:
         raise ValueError("请输入有效的 HTTP(S) 服务地址，不要在地址中包含密钥")
-    if url.scheme == "http" and url.hostname not in {"localhost", "127.0.0.1", "::1"}:
-        raise ValueError("远程模型服务必须使用 HTTPS")
+    if url.scheme == "http" and url.hostname not in {"localhost", "127.0.0.1", "::1"} and not is_lan_address(url.hostname):
+        raise ValueError("明文 HTTP 仅支持本机（localhost、127.0.0.1、[::1]）和局域网 IP（10.x、172.16-31.x、192.168.x、IPv6 fc/fd 开头），域名等其他地址必须使用 HTTPS")
 
 
 def model_base_url(value):

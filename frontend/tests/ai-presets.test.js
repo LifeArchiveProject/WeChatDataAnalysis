@@ -119,6 +119,29 @@ describe('AI 服务预设', () => {
     expect(request.mock.calls.find(([path]) => path === '/profiles')[1].body).toMatchObject({ provider, model: 'local-model', api_key: '' })
   })
 
+  it.each(['ollama', 'lmstudio'])('%s 改填局域网 HTTP 地址后仍免密钥自动获取，并提示明文传输', async provider => {
+    await open(); await choose(provider)
+    const dialogText = () => wrapper.find('[role=dialog]').text()
+    const fetches = () => request.mock.calls.filter(([path]) => path === '/models')
+    const fillAddress = async value => {
+      await wrapper.find('input[type=url]').setValue(value)
+      await wrapper.find('input[type=url]').trigger('blur'); await flushPromises()
+    }
+    expect(fetches()).toHaveLength(1)
+    expect(dialogText()).not.toContain('明文 HTTP')
+    await fillAddress('http://192.168.1.5:11434/v1')
+    expect(fetches()).toHaveLength(2)
+    expect(fetches().at(-1)[1].body).toMatchObject({ base_url: 'http://192.168.1.5:11434/v1', api_key: '' })
+    expect(dialogText()).toContain('API 密钥可留空')
+    expect(dialogText()).toContain('明文 HTTP')
+    // 同一预设改填 HTTPS 远程地址时，仍需先填写密钥。
+    await fillAddress('https://ollama.example.com/v1')
+    expect(wrapper.find('input[type=url]').element.value).toBe('https://ollama.example.com/v1')
+    expect(fetches()).toHaveLength(2)
+    expect(dialogText()).not.toContain('API 密钥可留空')
+    expect(dialogText()).not.toContain('明文 HTTP')
+  })
+
   it('已有云端配置切换到本地时明确清空保存的密钥', async () => {
     const original = request.getMockImplementation()
     const profile = { ...presets[0], id: 'saved', has_key: true, model: 'cloud-model', vision: false }

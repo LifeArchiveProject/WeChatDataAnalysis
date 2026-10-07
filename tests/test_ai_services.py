@@ -128,6 +128,71 @@ def test_profile_mask_and_url_validation(service):
     validate_url("http://localhost:11434/v1")
 
 
+@pytest.mark.parametrize("value", [
+    "http://127.0.0.1:11434/v1",
+    "http://[::1]:11434/v1",
+    # RFC 1918 私有网段及 IPv6 唯一本地地址的首尾。
+    "http://10.0.0.1:11434/v1",
+    "http://10.255.255.254:8000/v1",
+    "http://172.16.0.1:1234/v1",
+    "http://172.31.255.254:1234/v1",
+    "http://192.168.0.1:11434/v1",
+    "http://192.168.255.254:4646/v1",
+    "http://[fc00::1]:11434/v1",
+    "http://[fdff:ffff::1]:11434/v1",
+    # HTTPS 不受网段限制。
+    "https://192.168.1.5:8443/v1",
+])
+def test_url_accepted_for_loopback_lan_ip_literals_and_https(value):
+    validate_url(value)
+
+
+@pytest.mark.parametrize("value", [
+    # 域名不解析，即使看起来指向局域网。
+    "http://example.com/v1",
+    "http://nas.local:11434/v1",
+    "http://192.168.1.5.nip.io/v1",
+    # 公网地址及紧邻私有网段的地址。
+    "http://8.8.8.8/v1",
+    "http://9.255.255.255/v1",
+    "http://11.0.0.1/v1",
+    "http://172.15.255.255/v1",
+    "http://172.32.0.1/v1",
+    "http://192.167.255.255/v1",
+    "http://192.169.0.1/v1",
+    "http://[2606:4700:4700::1111]/v1",
+    "http://[fe00::1]/v1",
+    "http://[fd::1]/v1",
+    # 本机只认三个固定写法，其余回环地址不放行。
+    "http://127.0.0.2/v1",
+    "http://[::ffff:127.0.0.1]/v1",
+    # 未指定、链路本地（含云元数据地址）、运营商级 NAT、文档与测试保留网段。
+    "http://0.0.0.0:11434/v1",
+    "http://169.254.169.254/latest",
+    "http://100.64.0.1/v1",
+    "http://192.0.2.1/v1",
+    "http://198.18.0.1/v1",
+    "http://[::]/v1",
+    "http://[fe80::1]/v1",
+    "http://[2001:db8::1]/v1",
+    # 嵌入 IPv4 的 IPv6 地址不展开，带 zone id 的写法不接受。
+    "http://[::ffff:192.168.1.5]/v1",
+    "http://[::ffff:c0a8:105]/v1",
+    "http://[::ffff:8.8.8.8]/v1",
+    "http://[64:ff9b::a00:1]/v1",
+    "http://[fd00::1%25eth0]:11434/v1",
+    "http://[fd00::1%eth0]:11434/v1",
+    # 非规范 IPv4 写法在不同解析器下含义不一致。
+    "http://010.0.0.1/v1",
+    "http://10.1/v1",
+    "http://167772161/v1",
+])
+def test_http_rejected_outside_loopback_and_lan_ip_literals(value):
+    # 同时确认报错来自这条规则，并向用户说明了局域网例外。
+    with pytest.raises(ValueError, match="局域网 IP.*必须使用 HTTPS"):
+        validate_url(value)
+
+
 def test_summary_graph_and_checkpoint_replay(service):
     async def run():
         task = service.create_task(task_options())
