@@ -111,6 +111,6 @@ uv run python tools/verify_ai_runtime.py
 node tools/build_ai_smoke.cjs
 ```
 
-前端使用 Node 22 或支持当前 Vite 的更新版本，在 `frontend` 运行 `npm ci`、`npx vitest run`、`npm run generate`。真实模型验收工具为 `tools/verify_deepagents_real.py`；独立原文基线为 `tools/verify_deepagents_coverage.py`。这些命令可能产生模型费用，真实数据参数需使用本机有效配置。不会自动重新执行旧生产任务。
+前端使用 Node 22 或支持当前 Vite 的更新版本，在 `frontend` 运行 `npm ci`、`npx vitest run`、`npm run generate`。真实模型验收工具为 `tools/verify_deepagents_real.py`；独立原文基线为 `tools/verify_deepagents_coverage.py`（这两个脚本已从仓库删除，可从 git 历史取回）。这些命令可能产生模型费用，真实数据参数需使用本机有效配置。不会自动重新执行旧生产任务。
 
 尚未交付生产安装包；macOS 当前实跑、界面绘制时延以及完整报告最终事实质量是不能用模拟结果代替的验收项。未满足的项目必须保留为未通过，不应据此发布。

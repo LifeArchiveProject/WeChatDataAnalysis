@@ -103,7 +103,7 @@ GPU 进程故障、超时、缺库或显存不足时销毁故障进程，在独�
 
 ## 2026-09-08 验收记录
 
-> 本节提到的 `tools/verify_local_search_*.py` 验收脚本已从仓库删除，可从 git 历史取回。
+> 本节提到的 `tools/verify_local_search_*.py` 验收脚本和 `tools/benchmark_local_search_reading.py` 已从仓库删除，可从 git 历史取回。
 
 ### 真实账号完整流程复测（效率与完成状态修复后）
 
