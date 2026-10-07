@@ -566,10 +566,7 @@ const startExport = async () => {
     } else {
       task.value.message = '正在保存到浏览器目录...'
       task.value.progress = 98
-      const zipPath = String(finalJob.zipPath || '').trim()
-      const query = new URLSearchParams()
-      query.set('path', zipPath)
-      const downloadUrl = `${apiBase}/account/archive_export/download?${query.toString()}`
+      const downloadUrl = `${apiBase}/account/archive_export/${encodeURIComponent(currentExportId.value)}/download`
       const downloadResponse = await fetch(downloadUrl)
       if (!downloadResponse.ok) {
         throw new Error(`下载导出文件失败（${downloadResponse.status}）。`)
