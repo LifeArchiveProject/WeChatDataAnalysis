@@ -291,6 +291,47 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     return value
 
 
+def ordered_conversation_keys(state: dict[str, Any]) -> list[str]:
+    """Restore presentation order independently of JSON object key sorting."""
+
+    conversations = state.get("conversations") if isinstance(state.get("conversations"), dict) else {}
+    saved_order = state.get("conversationOrder")
+    if not isinstance(saved_order, list):
+        saved_order = state.get("legacyConversationOrder")
+    result: dict[str, None] = {}
+    for key in saved_order if isinstance(saved_order, list) else []:
+        if isinstance(key, str) and isinstance(conversations.get(key), dict):
+            result[key] = None
+    for key, value in conversations.items():
+        if isinstance(value, dict):
+            result[str(key)] = None
+    return list(result)
+
+
+def _restore_legacy_conversation_order(state: dict[str, Any], target_root: Path) -> None:
+    """Use the existing HTML catalog when an older baseline lacks order."""
+
+    if isinstance(state.get("conversationOrder"), list):
+        return
+    try:
+        text = (target_root / "assets/chat-sessions.js").read_text(encoding="utf-8").strip()
+        prefix = "window.__WCE_FOLDER_SESSIONS__="
+        if not text.startswith(prefix):
+            return
+        catalog = json.loads(text[len(prefix):].rstrip(";\r\n"))
+        by_directory = {
+            str(value.get("directory") or ""): key
+            for key, value in state["conversations"].items()
+        }
+        order = [by_directory[item["convDir"]] for item in catalog["items"]
+                 if isinstance(item, dict) and item.get("convDir") in by_directory]
+        if order:
+            state["legacyConversationOrder"] = order
+    except (OSError, ValueError, KeyError, TypeError):
+        # Missing/old catalogs must not prevent an otherwise valid export.
+        return
+
+
 def _baseline_is_owned(value: dict[str, Any]) -> bool:
     return (
         int(value.get("schemaVersion") or 0) == SCHEMA_VERSION
@@ -359,6 +400,8 @@ def prepare_folder_context(
         raise ChatIncrementalError("incremental_baseline_invalid", "增量基线损坏或不属于聊天导出，请选择新目录。")
     if owned:
         _validate_baseline_paths(old_state)
+        if desktop_output and target_root is not None:
+            _restore_legacy_conversation_order(old_state, target_root)
 
     desired_hash = config_fingerprint(config)
     if owned:
@@ -827,9 +870,15 @@ def materialize_folder_archive(
             else generated_at
         ),
         "conversations": persisted_conversations,
+        "conversationOrder": ordered_conversation_keys({
+            "conversations": persisted_conversations,
+            "conversationOrder": ordered_conversation_keys(context.old_state),
+        }),
         "files": current_files,
     }
     state_bytes = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+    # Persist an order migration even when no message/media files changed.
+    state_unchanged = quiet_noop and context.old_state.get("conversationOrder") == state["conversationOrder"]
     state_path = _write_staged_file(staging_dir, STATE_FILE_NAME, state_bytes)
     state_file_id = uuid.uuid4().hex
     job.staged_files[state_file_id] = state_path
@@ -863,7 +912,7 @@ def materialize_folder_archive(
             "path": STATE_FILE_NAME,
             "size": len(state_bytes),
             "sha256": hashlib.sha256(state_bytes).hexdigest(),
-            "unchanged": quiet_noop,
+            "unchanged": state_unchanged,
         },
         "stats": dict(job.incremental),
     }
@@ -892,7 +941,7 @@ def materialize_folder_archive(
         destination.unlink(missing_ok=True)
 
     state_destination = target_root / STATE_FILE_NAME
-    if not quiet_noop or not state_destination.is_file():
+    if not state_unchanged or not state_destination.is_file():
         os.replace(state_path, state_destination)
     job.folder_path = target_root
     job.staged_files = {}
@@ -915,6 +964,7 @@ __all__ = [
     "materialize_folder_archive",
     "missing_conversation_keys",
     "normalize_pending_media",
+    "ordered_conversation_keys",
     "normalize_relative_path",
     "prepare_folder_context",
     "privacy_account_token",
