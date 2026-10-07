@@ -1,5 +1,6 @@
 import datetime
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -119,6 +120,14 @@ def _same_complete_image_key_pair(
 def _atomic_write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
+    # 密钥文件只允许属主读写：先把临时文件建成 0600（残留的旧临时文件也收紧）再写入内容，
+    # 替换后目标路径沿用这个权限，密钥不会以更宽的权限落盘。Windows 没有这套权限位，不处理。
+    if os.name == "posix":
+        try:
+            tmp.touch(mode=0o600, exist_ok=True)
+            os.chmod(tmp, 0o600)
+        except Exception:
+            pass
     tmp.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",

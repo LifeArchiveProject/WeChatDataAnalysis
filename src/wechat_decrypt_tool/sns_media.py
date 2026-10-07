@@ -179,6 +179,16 @@ def _sns_cdn_media_source(url: str) -> str:
     return "video-or-unknown"
 
 
+# These hosts resolve via CNAME to socwxsns.video.qq.com and serve its
+# *.video.qq.com certificate, so https only passes verification under the CNAME
+# target. Checked 2026-10 (SAN has no *.tc.qq.com); re-check with
+# `openssl s_client -connect <host>:443 -verify_hostname <host>` before removing.
+_SNS_CDN_TLS_HOST_ALIASES = {
+    "vweixinthumb.tc.qq.com": "socwxsns.video.qq.com",
+    "vweixinf.tc.qq.com": "socwxsns.video.qq.com",
+}
+
+
 def fix_sns_cdn_url(
     url: str,
     *,
@@ -189,6 +199,7 @@ def fix_sns_cdn_url(
     """WeFlow-compatible SNS CDN URL normalization.
 
     - Force https for Tencent CDNs.
+    - Swap hosts whose certificate does not cover them for their CNAME target.
     - Preserve image size variants by default because Tencent binds `/60`, `/150`,
       `/200`, `/480`, and `/0` to their matching credentials.
     - Only an explicit original-image request may replace a size suffix with `/0`.
@@ -209,6 +220,10 @@ def fix_sns_cdn_url(
 
     # http -> https
     u = re.sub(r"^http://", "https://", u, flags=re.I)
+
+    tls_alias = _SNS_CDN_TLS_HOST_ALIASES.get(host)
+    if tls_alias:
+        u = re.sub(r"^https://[^/?#]+", f"https://{tls_alias}", u, flags=re.I)
 
     if force_original and not is_video:
         u = re.sub(r"/(?:60|150|200|480)(?=($|\?))", "/0", u)

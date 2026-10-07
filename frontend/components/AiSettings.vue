@@ -62,6 +62,7 @@
           </div>
           <label class="ais-key-label"><span>API 密钥 <span v-if="editId && form.has_key && !key" class="ais-tag">已保存</span></span><input v-model="key" type="password" autocomplete="new-password" :placeholder="editId && !credentialsReset ? '留空保留已有密钥' : '输入 API 密钥，本地服务可留空'" @blur="autoFetchModels" /></label>
           <p v-if="isLocalService" class="ais-muted">请先启动本地服务并准备好模型；未启用鉴权时，API 密钥可留空。</p>
+          <p v-if="isLanHttp" class="ais-muted">此地址使用明文 HTTP，聊天内容和密钥不加密传输，请仅在可信的局域网中使用。</p>
 
           </div>
           <div class="ais-model-config">
@@ -247,10 +248,15 @@ const blank = () => ({ provider: 'deepseek', name: 'DeepSeek', protocol: 'openai
 const form = reactive(blank())
 // 切换预设后明确清空凭据，不让后端复用原配置的密钥。
 const credentialsReset = ref(false)
-const isLocalService = computed(() => {
-  if (!['ollama', 'lmstudio'].includes(form.provider)) return false
-  try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(form.base_url).hostname) } catch { return false }
+// 后端只对本机和局域网 IP 放行明文 HTTP，这里按协议判断，不重复网段规则。
+const serviceAddress = computed(() => {
+  try {
+    const url = new URL(form.base_url)
+    return { http: url.protocol === 'http:', loopback: ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) }
+  } catch { return {} }
 })
+const isLocalService = computed(() => ['ollama', 'lmstudio'].includes(form.provider) && Boolean(serviceAddress.value.http || serviceAddress.value.loopback))
+const isLanHttp = computed(() => Boolean(serviceAddress.value.http && !serviceAddress.value.loopback))
 const manualModel = ref(false), modelDetails = ref([]), modelError = ref(''), modelsLoading = ref(false)
 const manualMetadata = ref(null)
 const selectedMetadata = computed(() => {

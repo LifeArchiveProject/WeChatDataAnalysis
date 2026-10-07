@@ -207,6 +207,47 @@ class TestWechatDetectionAutoDetect(unittest.TestCase):
             self.assertEqual(accounts[0]["data_dir"], str(account_dir))
             self.assertEqual(accounts[0]["database_count"], 1)
 
+    def test_macos_generic_user_roots_are_not_reported_as_data_roots(self):
+        from wechat_decrypt_tool import wechat_detection as wd
+
+        with TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            # 与微信无关、但直接包含 *.db 的目录（例如 ~/.hermes/state.db）
+            for unrelated_dir in (
+                home / ".hermes",
+                home / "Documents" / "notes",
+                home / "Desktop" / "project",
+                home / "Downloads" / "tool",
+            ):
+                unrelated_dir.mkdir(parents=True)
+                (unrelated_dir / "state.db").write_bytes(b"not-wechat")
+
+            container_root = home / "Library" / "Containers" / "com.tencent.xinWeChat" / "Data"
+            xwechat_root = container_root / "Documents" / "xwechat_files"
+            container_db_storage = xwechat_root / "wxid_demo_abcd" / "db_storage"
+            container_db_storage.mkdir(parents=True)
+            (container_db_storage / "contact.db").write_bytes(b"demo")
+
+            # 通用目录下名称匹配的子目录仍然要能识别
+            copied_root = home / "Documents" / "WeChat Files"
+            copied_db_storage = copied_root / "wxid_copied" / "db_storage"
+            copied_db_storage.mkdir(parents=True)
+            (copied_db_storage / "contact.db").write_bytes(b"demo")
+
+            with (
+                patch.object(wd.sys, "platform", "darwin"),
+                patch.object(wd.Path, "home", return_value=home),
+                patch.object(wd, "get_process_list", return_value=[]),
+            ):
+                detected_dirs = wd.auto_detect_wechat_data_dirs()
+                accounts = wd.detect_wechat_accounts_from_data_root()
+
+            self.assertEqual(detected_dirs, [str(copied_root), str(xwechat_root)])
+            self.assertEqual(
+                sorted(item["account_name"] for item in accounts),
+                ["wxid_copied", "wxid_demo_abcd"],
+            )
+
 
     def test_xwechat_config_ini_real_path_returns_data_root(self):
         import hashlib

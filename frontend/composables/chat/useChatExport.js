@@ -22,6 +22,7 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     { value: 'emoji', label: '表情' },
     { value: 'video', label: '视频' },
     { value: 'voice', label: '语音' },
+    { value: 'location', label: '位置' },
     { value: 'chatHistory', label: '聊天记录' },
     { value: 'transfer', label: '转账' },
     { value: 'redPacket', label: '红包' },

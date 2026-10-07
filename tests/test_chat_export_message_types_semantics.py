@@ -1,6 +1,7 @@
 import os
 import json
 import hashlib
+import re
 import sqlite3
 import sys
 import unittest
@@ -12,6 +13,14 @@ from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+
+
+def _dialog_message_types() -> list[str]:
+    """导出面板默认勾选并提交的消息类型。"""
+
+    source = (ROOT / "frontend" / "composables" / "chat" / "useChatExport.js").read_text(encoding="utf-8")
+    options = source.split("const exportMessageTypeOptions = [", 1)[1].split("]", 1)[0]
+    return re.findall(r"value: '([^']+)'", options)
 
 
 class TestChatExportMessageTypesSemantics(unittest.TestCase):
@@ -397,6 +406,47 @@ class TestChatExportMessageTypesSemantics(unittest.TestCase):
                 self.assertAlmostEqual(float(location_msg.get("locationLat") or 0), 39.9042, places=4)
                 self.assertAlmostEqual(float(location_msg.get("locationLng") or 0), 116.4074, places=4)
                 self.assertEqual(manifest.get("filters", {}).get("messageTypes"), ["location"])
+            finally:
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_export_request_accepts_every_dialog_message_type(self):
+        from wechat_decrypt_tool.routers.chat_export import ChatExportCreateRequest
+
+        dialog_types = _dialog_message_types()
+        self.assertIn("location", dialog_types)
+        self.assertEqual(len(dialog_types), len(set(dialog_types)))
+        self.assertEqual(ChatExportCreateRequest(message_types=dialog_types).message_types, dialog_types)
+
+    def test_dialog_default_types_export_location_message(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            self._prepare_account(root, account=account, username=username)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+                job = self._create_job(
+                    svc.CHAT_EXPORT_MANAGER,
+                    account=account,
+                    username=username,
+                    message_types=_dialog_message_types(),
+                    include_media=False,
+                )
+                self.assertEqual(job.status, "done", msg=job.error)
+
+                payload, manifest, _ = self._load_export_payload(job.zip_path)
+                location_msg = next((m for m in payload.get("messages", []) if int(m.get("type") or 0) == 48), None)
+                self.assertIsNotNone(location_msg)
+                self.assertEqual(str(location_msg.get("renderType") or ""), "location")
+                self.assertEqual(str(location_msg.get("locationPoiname") or ""), "天安门")
+                self.assertEqual(len(payload.get("messages", [])), 7)
+                self.assertIn("location", manifest.get("filters", {}).get("messageTypes") or [])
             finally:
                 if prev_data is None:
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)

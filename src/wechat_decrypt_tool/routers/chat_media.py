@@ -3086,11 +3086,14 @@ async def get_chat_emoji(
     data = b""
     media_type = "application/octet-stream"
     if p:
-        data, media_type = _read_and_maybe_decrypt_media(p, account_dir=account_dir, weixin_root=wxid_dir)
+        # 本地 wxgf 在非 Windows 上要启动 ffmpeg 解码，放到线程里，不阻塞事件循环。
+        data, media_type = await asyncio.to_thread(
+            _read_and_maybe_decrypt_media, p, account_dir=account_dir, weixin_root=wxid_dir
+        )
 
     if media_type == "application/octet-stream":
         # Some emojis are stored encrypted (see emoticon.db); try remote fetch as fallback.
-        data2, mt2 = _try_fetch_emoticon_from_remote(account_dir, str(md5).lower())
+        data2, mt2 = await asyncio.to_thread(_try_fetch_emoticon_from_remote, account_dir, str(md5).lower())
         if data2 is not None and mt2:
             data, media_type = data2, mt2
 
@@ -3113,7 +3116,7 @@ async def get_chat_emoji(
                 if not blob:
                     continue
                 try:
-                    data2, mt = _try_strip_media_prefix(blob)
+                    data2, mt = await asyncio.to_thread(_try_strip_media_prefix, blob)
                 except Exception:
                     data2, mt = blob, "application/octet-stream"
 

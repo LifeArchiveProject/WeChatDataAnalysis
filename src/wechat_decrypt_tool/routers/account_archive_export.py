@@ -538,9 +538,16 @@ async def export_account_archive(req: AccountArchiveExportRequest):
     return {"status": "success", "job": job.to_public_dict()}
 
 
-@router.get("/api/account/archive_export/download", summary="Download account archive by file path")
-async def download_account_archive(path: str):
-    zip_path = Path(str(path or "").strip()).expanduser().resolve()
+@router.get("/api/account/archive_export/{export_id}/download", summary="Download account archive export file")
+async def download_account_archive(export_id: str):
+    job = _get_job(export_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Export not found.")
+    # zip_path 由请求里的 output_dir/file_name 拼出，任务一开始就已写入；只有任务完成后它才是本次导出的产物，
+    # 这里的 done 判断不能放宽成“文件存在即可”。
+    if job.status != "done" or not job.zip_path:
+        raise HTTPException(status_code=409, detail="Export not ready.")
+    zip_path = Path(job.zip_path)
     if not zip_path.exists() or not zip_path.is_file():
         raise HTTPException(status_code=404, detail="Export file not found.")
     if zip_path.suffix.lower() not in {".zip", ".wec"}:

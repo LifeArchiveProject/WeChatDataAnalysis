@@ -2166,6 +2166,13 @@ class ChatExportManager:
                 missing_files=list(opts.get("missingFiles") or []),
                 reset_baseline=bool(opts.get("resetBaseline")),
             )
+            if folder_context.location_type_skipped:
+                # 探测、渲染都要和基线用同一份类型清单，否则已导出的历史会被误判为有差异。
+                want_types = set(folder_context.config.get("messageTypes") or [])
+                job.options["messageTypes"] = [
+                    value for value in message_types_raw if _normalize_render_type_key(value) in want_types
+                ]
+                _safe_trace(trace, "incremental_location_type_skipped", messageTypes=sorted(want_types))
             preferred_missing_owner_keys = {
                 incremental_conversation_key(salt=folder_context.salt, username=username)
                 for username in target_usernames
@@ -3652,6 +3659,10 @@ class ChatExportManager:
                 warning_parts: list[str] = []
                 if folder_context.reset_baseline:
                     warning_parts.append("已重置基线并完整重建本次选择的会话。")
+                if folder_context.location_type_skipped:
+                    warning_parts.append(
+                        "该增量目录的基线不含“位置”类型，本次仍按基线的消息类型更新，未导出位置消息；需要时请重置增量基线或改用新目录。"
+                    )
                 recovered_files = int(job.incremental.get("filesRecovered") or 0)
                 if recovered_files:
                     warning_parts.append(f"已补回 {recovered_files} 个缺失或异常的受管理文件。")

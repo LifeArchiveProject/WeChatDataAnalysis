@@ -85,6 +85,30 @@ class TestMcpRouter(unittest.TestCase):
         "wechat.media.download_chat_emoji",
         "wechat.media.open_chat_media_folder",
     }
+    UNSAFE_INTEGER_ID = "9007199254740993"
+    MEDIA_LINK_KINDS = (
+        "avatar", "chat_image", "chat_emoji", "chat_video_thumb", "chat_video",
+        "chat_voice", "moments_image", "moments_video", "favicon", "proxy_image",
+    )
+    MEDIA_TOOL_ARGUMENTS = {
+        "wechat.moments.get_media_url": {
+            "account", "post_id", "tid", "media_id", "create_time", "width", "height", "total_size",
+            "idx", "post_type", "media_type", "md5", "token", "url", "key",
+        },
+        "wechat.moments.get_remote_video_url": {"account", "url", "token", "key"},
+        "wechat.media.get_chat_emoji_url": {"account", "username", "md5", "emoji_url", "aes_key"},
+        "wechat.media.get_chat_video_thumb_url": {"account", "username", "md5", "file_id", "deep_scan"},
+        "wechat.media.get_chat_video_url": {"account", "username", "md5", "file_id", "deep_scan"},
+        "wechat.media.get_chat_voice_url": {"account", "server_id", "msg_svr_id"},
+        "wechat.mobile.get_media_links": {
+            "account", "kind", "max_items", "username", "md5", "file_id", "server_id", "msg_svr_id",
+            "emoji_url", "aes_key", "post_id", "media_id", "token", "key", "url",
+        },
+        "wechat.mobile.get_message_media_bundle": {
+            "account", "username", "session_id", "server_id", "msg_svr_id", "md5", "file_id",
+            "emoji_url", "aes_key", "url", "link_url",
+        },
+    }
 
     def setUp(self):
         self._old_mcp_token = os.environ.get("WECHAT_TOOL_MCP_TOKEN")
@@ -766,6 +790,59 @@ class TestMcpRouter(unittest.TestCase):
                     else:
                         self.assertNotIn("fetch_remote", query)
 
+    def test_media_tools_advertise_arguments_their_handlers_read(self):
+        client = self._client()
+        tools = {tool["name"]: tool for tool in client.post("/mcp", json=self._rpc("tools/list")).json()["result"]["tools"]}
+
+        def call(name, arguments):
+            result = client.post("/mcp", json=self._rpc("tools/call", {"name": name, "arguments": arguments})).json()["result"]
+            self.assertFalse(result["isError"])
+            return result["structuredContent"]
+
+        for name, expected in self.MEDIA_TOOL_ARGUMENTS.items():
+            schema = tools[name]["inputSchema"]
+            with self.subTest(tool=name):
+                self.assertTrue(schema["additionalProperties"])
+                self.assertEqual(set(schema["properties"]), expected)
+            contexts = [{}, {"md5": "0" * 32}]
+            if name == "wechat.mobile.get_media_links":
+                contexts.append({"kind": "moments_image"})
+            for key, prop in schema["properties"].items():
+                # server_id 会按整数解析，字符串参数也用十进制数字探测。
+                value = {"boolean": True, "integer": 1}.get(prop["type"], self.UNSAFE_INTEGER_ID)
+                with self.subTest(tool=name, argument=key):
+                    self.assertTrue(
+                        any(call(name, {**context, key: value}) != call(name, context) for context in contexts),
+                        f"{name} advertises {key}, but it changes nothing in {contexts}",
+                    )
+
+        kind_description = tools["wechat.mobile.get_media_links"]["inputSchema"]["properties"]["kind"]["description"]
+        for kind in self.MEDIA_LINK_KINDS:
+            with self.subTest(kind=kind):
+                self.assertIn(kind, kind_description)
+                resources = call("wechat.mobile.get_media_links", {"kind": kind, "username": "wxid_a", "url": "https://example.com/a"})["resources"]
+                self.assertEqual([item["kind"] for item in resources], [kind])
+
+    def test_media_tools_take_server_ids_as_exact_strings(self):
+        client = self._client()
+        tools = {tool["name"]: tool for tool in client.post("/mcp", json=self._rpc("tools/list")).json()["result"]["tools"]}
+        server_id = self.UNSAFE_INTEGER_ID
+
+        for name in ("wechat.media.get_chat_voice_url", "wechat.mobile.get_media_links", "wechat.mobile.get_message_media_bundle"):
+            properties = tools[name]["inputSchema"]["properties"]
+            for key in ("server_id", "msg_svr_id"):
+                with self.subTest(tool=name, argument=key):
+                    self.assertEqual(properties.get(key, {}).get("type"), "string")
+                    structured = client.post("/mcp", json=self._rpc(name, {key: server_id})).json()["result"]["structuredContent"]
+                    if name == "wechat.media.get_chat_voice_url":
+                        voice = structured
+                    elif name == "wechat.mobile.get_media_links":
+                        voice = next(item for item in structured["resources"] if item["kind"] == "chat_voice")
+                    else:
+                        self.assertEqual(structured["serverId"], server_id)
+                        voice = structured["urls"]["voice"]
+                    self.assertEqual(parse_qs(urlsplit(voice["url"]).query)["server_id"], [server_id])
+
     def test_completed_mcp_packages_and_mobile_facade_are_listed(self):
         client = self._client()
 
@@ -960,6 +1037,96 @@ class TestMcpRouter(unittest.TestCase):
         self.assertEqual(structured["status"], "success")
         self.assertEqual(structured["best"]["username"], "wxid_friend")
         self.assertEqual(structured["best"]["kind"], "contact")
+
+    def test_resolve_contact_scores_query_case_insensitively(self):
+        client = self._client()
+
+        class FakeContactsRouter:
+            def list_chat_contacts(self, _request, **_kwargs):
+                return {
+                    "status": "success",
+                    "contacts": [
+                        {"username": "wxid_aaron", "displayName": "Aaron", "remark": "", "nickname": "Aaron", "alias": "", "region": "Alice Springs"},
+                        {"username": "wxid_friend", "displayName": "Alice", "remark": "Alice", "nickname": "ali", "alias": ""},
+                    ],
+                }
+
+        with patch("wechat_decrypt_tool.mcp.tools._contacts_router", return_value=FakeContactsRouter()):
+            for query in ("alice", "Alice", "ALICE"):
+                with self.subTest(query=query):
+                    resp = client.post("/mcp", json=self._rpc("wechat.contacts.resolve_contact", {"query": query}))
+                    self.assertEqual(resp.status_code, 200)
+                    candidates = resp.json()["result"]["structuredContent"]["candidates"]
+                    self.assertEqual(
+                        [(c["username"], c["confidence"]) for c in candidates],
+                        [("wxid_friend", 60), ("wxid_aaron", 20)],
+                    )
+
+    def test_mobile_resolve_target_scores_unscored_candidates_by_match(self):
+        client = self._client()
+        sns_users = []
+
+        class FakeContactsRouter:
+            def list_chat_contacts(self, _request, **_kwargs):
+                return {
+                    "status": "success",
+                    "contacts": [{"username": "wxid_friend", "displayName": "Alice", "remark": "Alice", "nickname": "ali", "alias": ""}],
+                }
+
+        class FakeChatRouter:
+            def list_chat_sessions(self, _request, **_kwargs):
+                return {"status": "success", "sessions": []}
+
+        class FakeSnsRouter:
+            def list_sns_users(self, **_kwargs):
+                return {"items": list(sns_users), "count": len(sns_users), "limit": 5}
+
+        class FakeBizRouter:
+            def get_biz_account_list(self, **_kwargs):
+                return {"status": "success", "total": 0, "data": []}
+
+        def resolve(arguments):
+            resp = client.post("/mcp", json=self._rpc("wechat.mobile.resolve_target", {"limit": 5, **arguments}))
+            self.assertEqual(resp.status_code, 200)
+            return resp.json()["result"]["structuredContent"]
+
+        with patch("wechat_decrypt_tool.mcp.tools._contacts_router", return_value=FakeContactsRouter()), patch(
+            "wechat_decrypt_tool.mcp.tools._chat_router", return_value=FakeChatRouter()
+        ), patch("wechat_decrypt_tool.mcp.tools._sns_router", return_value=FakeSnsRouter()), patch(
+            "wechat_decrypt_tool.mcp.tools._biz_router", return_value=FakeBizRouter()
+        ):
+            sns_users[:] = [
+                {"username": "wxid_poster", "displayName": "Malice Daily", "postCount": 900},
+                {"username": "wxid_reader", "displayName": "Palace Alice Tea", "postCount": 300},
+            ]
+            for query in ("alice", "Alice"):
+                with self.subTest(query=query):
+                    structured = resolve({"query": query})
+                    self.assertEqual(structured["warnings"], [])
+                    self.assertEqual(
+                        [(c["kind"], c["username"], c["confidence"]) for c in structured["candidates"]],
+                        [("contact", "wxid_friend", 60), ("moments_user", "wxid_poster", 60), ("moments_user", "wxid_reader", 60)],
+                    )
+                    self.assertTrue(structured["ambiguous"])
+
+            sns_users[:] = [{"username": "wxid_friend", "displayName": "Alice", "postCount": 3}]
+            for query in ("alice", "wxid_friend"):
+                with self.subTest(same_person=query):
+                    structured = resolve({"query": query})
+                    self.assertEqual([c["kind"] for c in structured["candidates"]], ["contact", "moments_user"])
+                    self.assertEqual(structured["best"]["kind"], "contact")
+                    self.assertFalse(structured["ambiguous"])
+
+            sns_users[:] = [
+                {"username": "wxid_friend_fan", "displayName": "Fan", "postCount": 900},
+                {"username": "wxid_friend", "displayName": "Alice", "postCount": 3},
+            ]
+            structured = resolve({"query": "wxid_friend", "target_type": "moments_user"})
+            self.assertEqual(
+                [(c["username"], c["confidence"]) for c in structured["candidates"]],
+                [("wxid_friend", 100), ("wxid_friend_fan", 80)],
+            )
+            self.assertFalse(structured["ambiguous"])
 
     def test_mobile_media_links_does_not_fetch_binary_content(self):
         client = self._client()

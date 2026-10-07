@@ -31,6 +31,7 @@ MessageType = Literal[
     "link",
     "transfer",
     "redPacket",
+    "location",
     "system",
     "quote",
     "voip",

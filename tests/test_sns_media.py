@@ -864,6 +864,82 @@ class TestSnsMedia(unittest.TestCase):
         out = sns_media.fix_sns_cdn_url(u, token="tkn", is_video=False)
         self.assertEqual(out, u)
 
+    def test_fix_sns_cdn_url_uses_tls_alias_for_cert_mismatched_hosts(self):
+        # Both hosts are CNAMEs of socwxsns.video.qq.com and serve its *.video.qq.com
+        # certificate, so https only verifies under the CNAME target.
+        for host in ("vweixinthumb.tc.qq.com", "vweixinf.tc.qq.com"):
+            for scheme in ("http", "https"):
+                with self.subTest(host=host, scheme=scheme):
+                    out = sns_media.fix_sns_cdn_url(
+                        f"{scheme}://{host}/150/20250/snsvideodownload?filekey=abc&bizid=1023",
+                        token="tkn",
+                    )
+                    self.assertEqual(
+                        out,
+                        "https://socwxsns.video.qq.com/150/20250/snsvideodownload"
+                        "?filekey=abc&bizid=1023&token=tkn&idx=1",
+                    )
+
+        video = sns_media.fix_sns_cdn_url(
+            "http://vweixinf.tc.qq.com/102/20202/snsvideodownload?filekey=abc&bizid=1023",
+            token="tkn",
+            is_video=True,
+        )
+        self.assertEqual(
+            video,
+            "https://socwxsns.video.qq.com/102/20202/snsvideodownload"
+            "?token=tkn&idx=1&filekey=abc&bizid=1023",
+        )
+        for alias_host in sns_media._SNS_CDN_TLS_HOST_ALIASES.values():
+            self.assertTrue(sns_media.is_allowed_sns_media_host(alias_host), alias_host)
+
+    def test_remote_fetch_uses_tls_alias_host_and_keeps_cache_consistent(self):
+        requests: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url.host))
+            if "/102/" in request.url.path:
+                return httpx.Response(200, content=b"\x00\x00\x00\x18ftypmp42", request=request)
+            return httpx.Response(200, content=b"\xff\xd8\xff\x00jpeg", request=request)
+
+        async def run(account_dir: Path):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                images = [
+                    await sns_media.try_fetch_and_decrypt_sns_image_remote(
+                        account_dir=account_dir,
+                        url="http://vweixinthumb.tc.qq.com/150/20250/snsvideodownload?filekey=abc",
+                        key="",
+                        token="thumb-token",
+                        use_cache=True,
+                        client=client,
+                    )
+                    for _ in range(2)
+                ]
+                video = await sns_media.materialize_sns_remote_video(
+                    account_dir=account_dir,
+                    url="http://vweixinf.tc.qq.com/102/20202/snsvideodownload?filekey=abc",
+                    key="",
+                    token="video-token",
+                    use_cache=True,
+                    client=client,
+                )
+                return images, video
+
+        with TemporaryDirectory() as td:
+            account_dir = Path(td)
+            images, video = asyncio.run(run(account_dir))
+            cached_video = sns_media.get_cached_sns_remote_video(
+                account_dir=account_dir,
+                url="http://vweixinf.tc.qq.com/102/20202/snsvideodownload?filekey=abc",
+                key="",
+                token="rotated-token",
+            )
+
+        self.assertEqual(requests, ["socwxsns.video.qq.com", "socwxsns.video.qq.com"])
+        self.assertEqual([image.source for image in images], ["remote", "remote-cache"])
+        self.assertIsNotNone(video)
+        self.assertEqual(cached_video, video)
+
     def test_cdn_capture_keeps_thumbnail_and_original_credentials_paired(self):
         requests: list[str] = []
 
