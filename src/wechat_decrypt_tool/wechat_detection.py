@@ -614,11 +614,6 @@ def auto_detect_wechat_data_dirs():
             _append_detected_dir(detected_dirs, item_path)
             logger.debug("目录扫描检测成功: %s", item_path)
 
-        # macOS default candidates can already point at the data root even when
-        # its version name is unfamiliar to this release.
-        if sys.platform == "darwin" and _contains_wechat_account_dirs(Path(scan_path)):
-            _append_detected_dir(detected_dirs, scan_path)
-
     # 策略2：进程内存分析（简化版）
     try:
         process_list = get_process_list()
