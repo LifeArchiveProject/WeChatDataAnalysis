@@ -283,7 +283,7 @@ def _normalize_db_key(value: Any) -> str:
 
 
 def _normalize_internal_db_key(value: Any) -> bytes:
-    """把 scan.py 里扫出来的 32 字节 DLL key 规范化成 bytes。"""
+    """把 DLL 扫描（dll_key_scan）得到的 32 字节 DLL key 规范化成 bytes。"""
     if value is None:
         return b""
 
@@ -327,7 +327,7 @@ def _normalize_internal_db_key(value: Any) -> bytes:
 
 
 def _load_internal_db_key_candidates(wechat_install_path: Optional[str] = None) -> list[bytes]:
-    """自动扫描 Weixin.dll，提取 scan.py 需要的 internal_db_key 候选。"""
+    """自动扫描 Weixin.dll，提取 V4 密钥恢复需要的 internal_db_key 候选。"""
     dll_path = _resolve_wechat_dll_path(wechat_install_path)
     logger.info("[db_key_v4] 准备扫描 DLL key: dll_path=%s", str(dll_path))
 
