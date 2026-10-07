@@ -519,6 +519,65 @@ def _build_contact_pinyin_initial(name: str) -> str:
     return "#"
 
 
+# pypinyin 把 ü 记作 v。lüe / nüe 另接受输入法同样支持的 lue / nue；lü / nü 与输入法一致，只有 lv / nv。
+_PINYIN_UE_SPELLINGS = {"lve": "lue", "nve": "nue"}
+
+
+# 关键词筛选每次都按相同顺序查询全部联系人的备注/昵称，名称数一旦超过容量，缓存就会整体失效
+# （每个请求都全部重新转换），所以容量要比上面两个缓存大得多。
+@lru_cache(maxsize=65536)
+def _build_contact_pinyin_search_forms(name: str) -> tuple[tuple[str, str, tuple[int, ...]], ...]:
+    # 返回若干组 (首字母串, 全拼串, 各音节在全拼串中的起始下标)，供关键词按拼音匹配。
+    text = _normalize_text(name)
+    if not text:
+        return ()
+
+    # errors=list 让非汉字逐字符原样返回。一个汉字都没转换出来的名称（如 "Li Wei🌸"）不做拼音匹配，
+    # 否则去掉分隔符后会比普通子串匹配更宽松。
+    parts = lazy_pinyin(text, style=Style.NORMAL, errors=list)
+    if "".join(parts) == text:
+        return ()
+
+    # 汉字取拼音，ASCII 字母各算一个音节；数字、空格、标点、表情、全角字母等都丢弃（关键词只含 ASCII 字母）。
+    syllables = ["".join(_PINYIN_ALPHA_RE.findall(part)).lower() for part in parts]
+    syllables = [syllable for syllable in syllables if syllable]
+    if not syllables:
+        return ()
+
+    # 首字是多音字姓氏时同时保留姓氏读音与默认读音（“曾国藩”按 zeng，“乐乐”仍可按 le 搜到）。
+    readings = [syllables]
+    override = _SURNAME_PINYIN_OVERRIDES.get(text[0])
+    if override and override != syllables[0]:
+        readings.append([override, *syllables[1:]])
+    for reading in list(readings):
+        respelled = [_PINYIN_UE_SPELLINGS.get(syllable, syllable) for syllable in reading]
+        if respelled != reading:
+            readings.append(respelled)
+
+    forms: list[tuple[str, str, tuple[int, ...]]] = []
+    for reading in readings:
+        starts: list[int] = []
+        offset = 0
+        for syllable in reading:
+            starts.append(offset)
+            offset += len(syllable)
+        forms.append(("".join(syllable[0] for syllable in reading), "".join(reading), tuple(starts)))
+    return tuple(forms)
+
+
+def _matches_pinyin_keyword(name: str, keyword: str) -> bool:
+    # 纯 ASCII 名称不含汉字，直接跳过，也不占用缓存。
+    if (not name) or name.isascii():
+        return False
+    for initials, full, starts in _build_contact_pinyin_search_forms(name):
+        if keyword in initials:
+            return True
+        # 全拼只从音节边界起匹配，避免 "an" 命中 "zhangwei"。
+        if any(full.startswith(keyword, start) for start in starts):
+            return True
+    return False
+
+
 def _decode_varint(raw: bytes, offset: int) -> tuple[Optional[int], int]:
     value = 0
     shift = 0
@@ -1417,7 +1476,7 @@ def _infer_contact_type(username: str, row: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _matches_keyword(contact: dict[str, Any], keyword: str) -> bool:
+def _matches_keyword(contact: dict[str, Any], keyword: str, *, pinyin: bool = True) -> bool:
     kw = _normalize_text(keyword).lower()
     if not kw:
         return True
@@ -1437,6 +1496,11 @@ def _matches_keyword(contact: dict[str, Any], keyword: str) -> bool:
     for field in fields:
         if kw in _normalize_text(field).lower():
             return True
+
+    # 纯字母关键词再按拼音匹配名称：首字母（zw -> 张伟）或从任一音节起的全拼前缀（zhangw / wei）。
+    if pinyin and kw.isascii() and kw.isalpha():
+        names = {_normalize_text(contact.get(key)) for key in ("displayName", "remark", "nickname")}
+        return any(_matches_pinyin_keyword(name, kw) for name in names)
     return False
 
 
@@ -2141,6 +2205,8 @@ def _collect_contacts_for_account_realtime(
 
     contacts.sort(
         key=lambda x: (
+            # 字段子串命中的排在仅拼音命中的之前，按条数截取结果的调用方（如 MCP）不会因拼音命中而丢掉原有结果。
+            not _matches_keyword(x, keyword or "", pinyin=False),
             -_to_int(x.get("_sortTs", 0)),
             _normalize_text(x.get("displayName", "")).lower(),
             _normalize_text(x.get("username", "")).lower(),
@@ -2344,6 +2410,8 @@ def _collect_contacts_for_account(
 
     contacts.sort(
         key=lambda x: (
+            # 字段子串命中的排在仅拼音命中的之前，按条数截取结果的调用方（如 MCP）不会因拼音命中而丢掉原有结果。
+            not _matches_keyword(x, keyword or "", pinyin=False),
             -_to_int(x.get("_sortTs", 0)),
             _normalize_text(x.get("displayName", "")).lower(),
             _normalize_text(x.get("username", "")).lower(),
