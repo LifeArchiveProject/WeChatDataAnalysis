@@ -81,8 +81,8 @@
       <button
         type="button"
         class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
-        title="高级功能演示"
-        aria-label="高级功能演示"
+        :title="`高级版功能 · ${PRO_TOTAL} 项`"
+        :aria-label="`高级版功能介绍 · ${PRO_TOTAL} 项`"
         @click="openAdvancedFeaturesDialog"
       >
         <span class="sidebar-rail-plate advanced-features-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center">
@@ -498,6 +498,7 @@
 </template>
 
 <script setup>
+import { PRO_TOTAL } from '@website/js/pro-demos/catalog.js'
 import { storeToRefs } from 'pinia'
 import { buildAccountAvatarUrl } from '~/lib/account-avatar'
 import { useChatAccountsStore } from '~/stores/chatAccounts'

@@ -1,16 +1,15 @@
 /* ════════════════════════════════════════════════════════════
-   scenes / action.js — 微信动作（11 项）
+   scenes / action.js — 微信动作演示
    每个场景：({ gsap, kit, tl, root, reduced, item }) => 把动画编进 tl（可返回 tl）。
    约定：所有补间都挂在 tl 上（不要裸调 gsap.to），舞台切换时靠 kill(tl) 清场。
    时长 4.5–7.5 秒，结尾用 kit.ok() 盖印章并停留 ≥0.9 秒。
 
    ── 这组的两个世界（别搞混）──
-   ① 发送 9 项（文字 / @ / 图片 / 视频 / 表情 / 文件 / 链接 / 语音 / 拍一拍）是**经微信客户端的真实动作**：
+   ① 消息发送与拍一拍通过高级版连接执行：
       一律 kit.workflow 立一条底轨（触发 → 取件或 AI → 自动执行），全程**没有人在点**：
       不用 kit.cursor，内容自己出现、自己发出；自动产生的那条挂一枚 kit.tag，静止帧里也看得出不是手打的。
       核心表达仍是 kit.twin 双窗 + twin.fly：左窗是本应用，右窗是真实微信，光点飞过去 = 那边真的收到了。
-   ② chat-mark-read / chat-set-mute 直接改**你本机微信的会话状态**，可随时还原：
-      情境条必须 kit.scenario(text, { local: true })，画面里是人在整理自己的会话，光标操作是合理的。
+   ② 已读/未读与免打扰通过高级版连接同步会话状态，使用同一控件切换互斥状态。
    ════════════════════════════════════════════════════════════ */
 
 /* ── 起手：情境条 + 双窗口 + 两边同一段业务上下文 ── */
@@ -597,7 +596,7 @@ function sendPat({ gsap, kit, tl }) {
 /* 一屏红点堆着 → 处理完的那个会话按一下「标记已读」→ 红点清零 */
 function markRead({ gsap, kit, tl }) {
   const chat = kit.chat({ title: "客户 · 王总" });
-  const strip = kit.scenario("48 条未读堆着", { local: true });
+  const strip = kit.scenario("会话状态同步");
   strip.classList.add("pd-action-strip");
   chat.time("今天 14:02");
   chat.row("l", "这批还有现货吗？", { av: "王" });
@@ -630,6 +629,7 @@ function markRead({ gsap, kit, tl }) {
     .add(c.to(action, { duration: 0.45 }), ">")
     .add(c.click(action), ">")
     .to(unread, { opacity: 0, scale: 0.5, duration: 0.3, ease: "back.in(2)" }, ">-0.05")
+    .call(() => { action.textContent = "标记未读"; }, [], "<")
     .add(kit.flash(session, { color: "neon", duration: 0.75 }), "<")
     // 印章停留 1.35s > 总长的 1/4：走片倒数两帧都要抓得到「红点清零」
     .add(kit.ok("已标记已读", { en: "READ", hold: 1.35 }), ">-0.1")
@@ -642,7 +642,7 @@ function markRead({ gsap, kit, tl }) {
 /* 广告一条接一条往里灌 → 同一个开关拨到免打扰 → 会话名旁挂上静音图标、计数由红转灰 */
 function setMute({ gsap, kit, tl }) {
   const chat = kit.chat({ title: "广告推广群", group: true });
-  const strip = kit.scenario("广告群一直响", { local: true });
+  const strip = kit.scenario("会话提醒同步");
   strip.classList.add("pd-action-strip");
   chat.time("今天 15:20");
   chat.row("l", "【推广】今日特价，点击领券", { name: "推广助手", av: "推" });
@@ -676,7 +676,7 @@ function setMute({ gsap, kit, tl }) {
     .add(c.to(toggle, { duration: 0.45 }), ">")
     .add(c.click(toggle), ">")
     .call(() => {
-      toggle.textContent = "已免打扰";
+      toggle.textContent = "关闭免打扰";
       toggle.classList.add("is-on");
       unread.classList.add("is-mute");   // 微信里静音会话的计数是灰的，不再是红点
     }, [], "<+0.12")

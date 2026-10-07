@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════
    main.js — 滚动叙事总编排
-   loader → hero（整幕就是 61 项高级能力：清单 + 演示舞台 + 场景解说）→ manifesto → decrypt → features
+   loader → hero（高级功能：清单 + 演示舞台 + 场景解说）→ manifesto → decrypt → features
    → machine → cta，一条时间轴讲完整个故事。
    ════════════════════════════════════════════════════════════ */
 import { createStage } from "./particles.js";
@@ -369,9 +369,9 @@ function heroFlash() {
   heroFlashTw = gsap.to(o, { q: 1.12, duration: 0.75, ease: "power2.inOut", onUpdate: () => heroReveal(o.q) });
 }
 
-/* ---------- 高级版装置：61 项高级能力演示（数据来自 pro-demos/catalog.js，与应用内弹窗同源） ---------- */
+/* ---------- 高级版功能展示（数据来自 pro-demos/catalog.js，与应用内弹窗同源） ---------- */
 
-// 左栏清单：七组 61 项一次性全部摊开（CSS 多列自动平衡）；点任一项 → 右栏舞台切到它的演示
+// 左栏按功能分组排版；点任一项 → 右栏舞台切到它的说明或演示。
 function buildManifestGrid() {
   const grid = $("#hm-grid");
   if (!grid) return;
@@ -386,6 +386,8 @@ function buildManifestGrid() {
   const ops = $("#hero-pro-ops");
   if (ops) ops.textContent = `PRO — 00 / ${PRO_TOTAL}`;
   for (const el of $$(".tk-pro")) el.textContent = `高级版 — ${PRO_TOTAL} 项高级能力`;
+  const link = $("#hero-pro");
+  if (link) link.setAttribute("aria-label", `高级版功能介绍：${PRO_TOTAL} 项本地整理、在线操作与自动化能力；在线功能不依赖本机微信客户端版本，进 QQ 3 群 1109365501 私聊咨询群主获取`);
   grid.addEventListener("click", (e) => {
     const li = e.target.closest(".hm__item[data-key]");
     if (li && heroStage) { proExecOn = true; heroStage.select(li.dataset.key); }
@@ -440,7 +442,7 @@ function fitHeroStage() {
   fitManifestGrid();
 }
 
-// 清单栏数：61 项多列排版不会自己收进容器高度，栏数不够就会漫过底下的取件台。
+// 清单栏数按实际条目与可用高度计算。
 // 按「清单顶边 → 取件台顶边」这段真实可用高度往上加栏，加到装得下为止（3→5 栏封顶，再多就该缩字号了）。
 function fitManifestGrid() {
   const man = $(".hero__manifest"), grid = $("#hm-grid"), cta = $(".hero__cta");
@@ -458,10 +460,12 @@ function fitManifestGrid() {
 const SCENE_EDGE = {
   edit: "直接改进微信 · 改动可随时一键还原",
   add: "直接补进微信 · 补录随时可删除还原",
-  action: "经微信客户端真实发送 · 对方会收到",
-  moments: "经微信客户端真实互动 · 对方会看到",
-  group: "经微信客户端真实操作 · 群成员会看到",
-  contact: "经微信客户端真实操作 · 结果以微信为准",
+  action: "通过高级版独立连接操作 · 不依赖本机微信版本",
+  moments: "通过高级版连接管理朋友圈 · 结果以账号权限为准",
+  group: "通过高级版连接管理群聊 · 按当前群权限处理",
+  contact: "通过高级版连接管理联系人 · 本地变化记录另行读取",
+  search: "通过高级版连接搜索 · 结果分页加载",
+  "red-packet": "读取领取记录 · 不执行领取或支付",
   automation: "任务由你配置并手动启动 · 可随时暂停",
 };
 
@@ -481,7 +485,7 @@ function renderScene(item, { animate = true } = {}) {
   gsap.fromTo([use, flow, edge], { opacity: 0, y: 6 }, { opacity: 1, y: 0, duration: 0.4, ease: "flow", stagger: 0.06, overwrite: "auto" });
 }
 
-// 舞台切到某项：刊头计数器 PRO — NN / 61、清单对应项点亮、场景解说换页、标题行尾演示读数乱码落定；场景播完（印章落下）时 ✓ 弹出
+// 舞台切到某项：计数器、清单与场景解说同步切换。
 function heroOnChange(item) {
   if (proExecOn) { const idx = $("#hero-pro-ops"); if (idx) idx.textContent = "PRO — " + String(item.index).padStart(2, "0") + " / " + PRO_TOTAL; }
   for (const el of $$("#hm-grid .hm__item.is-live")) el.classList.remove("is-live");
@@ -613,7 +617,7 @@ function heroIntro() {
       });
     }, [], SCAN_AT + SCAN_DUR);
 
-  // ── 权限清单下半场：61 项从四面八方飞进各自格位，舞台与场景解说随后接管首屏
+  // ── 功能清单入场，舞台与场景解说随后接管首屏
   const PRO_AT = SCAN_AT + SCAN_DUR + 0.1;
   tl.call(() => stage.setOpacity(0.6, 1.2), [], PRO_AT)
     .fromTo("#hm-grid .hm__mod", { opacity: 0, y: -10 }, { opacity: 1, y: 0, duration: 0.5, ease: "flow", stagger: 0.06 }, PRO_AT + 0.05)
@@ -629,7 +633,7 @@ function heroIntro() {
     .to(".hero__cta-txt", { opacity: 1, y: 0, duration: 0.7 }, PRO_AT + 1.05)
     .to(".hm__exec", { opacity: 1, duration: 0.5 }, PRO_AT + 1.2)
     .call(() => {
-      gsap.killTweensOf(ops);   // 光刃收尾那条「PRO — 00」乱码若因掉帧还没收，别让它在舞台写入 01 / 61 之后再盖回去
+      gsap.killTweensOf(ops);
       startProExec();
       heroScrollOut();
       // hover 快闪重解密：入场收尾后才绑（早绑会和光刃扫描的 decUpdate 同时驱动 heroReveal，抢同一批字符）

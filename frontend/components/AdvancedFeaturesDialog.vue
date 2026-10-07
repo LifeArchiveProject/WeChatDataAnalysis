@@ -25,7 +25,7 @@
               <h2 :id="titleId" class="afd-title">不止能读，<em>还能写</em></h2>
               <span class="afd-badge afd-mono">暂时不可用</span>
             </div>
-            <p :id="descId" class="afd-desc">{{ FEATURE_UNAVAILABLE_MESSAGE }}</p>
+            <p :id="descId" class="afd-desc">{{ FEATURE_UNAVAILABLE_MESSAGE }} {{ PRO_ONLINE_DESCRIPTION }}</p>
             <button
               ref="closeBtn"
               type="button"
@@ -42,7 +42,7 @@
           </div>
 
           <footer class="afd-foot">
-            <p class="afd-foot__meta afd-mono">{{ PRO_TOTAL }} 项 · 写入 / 动作 / 自动化</p>
+            <p class="afd-foot__meta afd-mono">{{ PRO_TOTAL }} 项 · 本地整理 / 在线操作 / 自动化</p>
             <button type="button" class="afd-get afd-mono" @click="openDeveloperContact">
               获取 — {{ DEVELOPER_CONTACT_LABEL }} · 私聊群主 <i aria-hidden="true">↗</i>
             </button>
@@ -56,7 +56,7 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { gsap } from 'gsap'
-import { PRO_TOTAL } from '@website/js/pro-demos/catalog.js'
+import { PRO_TOTAL, PRO_ONLINE_DESCRIPTION } from '@website/js/pro-demos/catalog.js'
 import { DEVELOPER_CONTACT_LABEL, FEATURE_UNAVAILABLE_MESSAGE, openDeveloperContact } from '~/lib/developer-support'
 
 const props = defineProps({

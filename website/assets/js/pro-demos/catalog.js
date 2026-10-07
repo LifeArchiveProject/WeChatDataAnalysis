@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════
-   pro-demos / catalog.js — 高级版 61 项能力的唯一清单
+   pro-demos / catalog.js — 高级版功能的唯一清单
    官网首屏清单、官网首屏舞台、官网首屏场景解说、应用内「高级功能」弹窗都从这里取数据。
    每项字段（edge 可选，local 自动算出）：
      name    做什么
@@ -15,11 +15,13 @@
    改一处四处同步。key 是场景文件的索引，别随手改。
 
    ⚠️ 两类能力的世界观不通用（见 README「场景优先」）：
-   - 回写类 27 项（消息修改 8 + 消息补录 17 + 标记已读 + 免打扰）：直接写进你本机的微信数据库，
+    - 回写类 25 项（消息修改 8 + 消息补录 17）：直接写进你本机的微信数据库，
      改动随时可一键还原。语境是私人的——一气之下清空了和 TA 的聊天记录，事后一条条找回。
-   - 真实动作类 34 项（发送 9 + 朋友圈 5 + 群聊 9 + 联系人 8 + 自动化 3）：经微信客户端执行或读取
-     （联系人变化记录只比对本机快照），多数对方可见。语境是做客户获取与维护的人，文案里的时刻与数字都取自真实业务场景。
+    - 其余功能包含独立连接的在线操作、本地数据查看与应用组合任务，按各自的功能边界展示。
+      联系人变化记录只比对本机快照；在线操作与本地消息整理不共用版本要求。
    ════════════════════════════════════════════════════════════ */
+
+export const PRO_ONLINE_DESCRIPTION = "高级版在线功能独立登录微信账号，不依赖本机微信客户端版本；本地消息修改、补录及依赖本地数据的任务按对应数据环境支持。";
 
 export const PRO_GROUPS = [
   {
@@ -106,12 +108,25 @@ export const PRO_GROUPS = [
         story: "社区通知发一整天，老人一半没点开——录成三十秒语音，后面再补一条同内容的文字兜底。", flow: ["录好三十秒通知", "挑出该收的人", "逐个发语音"] },
       { key: "send-pat", name: "发送拍一拍", caption: "隔空拍一拍对方。", use: "轻提醒", need: "不打扰地戳一下，比发消息更轻",
         story: "对方三天没回，再发一条消息像催债，拍一拍只是戳一下，进退都留了余地。", flow: ["久未回复", "隔空拍一拍", "不留催促痕迹"] },
-      { key: "chat-mark-read", name: "会话标记已读", caption: "将当前会话标记为本地已读。", use: "红点清理", need: "本地未读红点清掉，不发已读回执",
-        story: "广告群和通知号顶着一排小红点，在本地标成已读，对方那边收不到任何已读回执。", flow: ["选中会话", "本地标记已读", "红点清零"],
-        edge: "直接标记为已读 · 可随时还原" },
-      { key: "chat-set-mute", name: "会话免打扰", caption: "用同一个开关打开或关闭会话免打扰。", use: "免打扰", need: "本地给广告群静音，正事不被淹没",
-        story: "那个五百人的群一天刷两百条，在本地把它静音，正事才不会被它冲下去。", flow: ["选中会话", "本地打开免打扰", "随时再关掉"],
-        edge: "直接开关免打扰 · 可随时还原" },
+      { key: "chat-mark-read", name: "会话已读 / 未读", caption: "将指定会话标记为已读或未读，按当前状态切换。", use: "会话整理", need: "已处理的标为已读，待处理的保留未读",
+        story: "按处理进度管理会话的已读和未读状态。", flow: ["选择会话", "切换已读状态", "同步会话状态"],
+        edge: "通过高级版连接同步 · 已读与未读使用同一控件" },
+      { key: "chat-set-mute", name: "会话免打扰", caption: "用同一个开关打开或关闭会话免打扰。", use: "免打扰", need: "调整会话提醒，保留重要消息的通知",
+        story: "为指定会话调整免打扰状态。", flow: ["选择会话", "切换免打扰", "同步会话状态"],
+        edge: "通过高级版连接同步 · 开启与关闭使用同一控件" },
+      { key: "send-location", name: "发送位置消息", caption: "将选定地点发送为位置消息。", use: "地点分享", need: "把地点发进会话，便于对方查看", overview: true,
+        story: "在指定的聊天会话中分享选定的地点。", flow: ["选择接收会话", "填写地点信息", "发送位置消息"] },
+      { key: "send-contact-card", name: "发送联系人名片", caption: "将选定联系人的名片发送到会话。", use: "联系人分享", need: "分享联系人名片，便于对方查看资料", overview: true,
+        story: "将联系人资料以名片形式分享。", flow: ["选择联系人", "选择接收会话", "发送名片"] },
+      { key: "send-quote", name: "引用回复", caption: "引用选定消息回复，保留原消息的上下文。", use: "回复有上下文", need: "针对一条具体消息回复，减少误解", overview: true,
+        story: "针对选定消息进行引用回复。", flow: ["选择原消息", "填写回复内容", "发送引用回复"] },
+      { key: "send-favorite-emoji", name: "收藏表情浏览与发送", caption: "分页查看账号收藏的表情，并发送到指定会话。", use: "收藏表情", need: "直接使用账号收藏的表情", overview: true,
+        story: "查看并发送账号收藏的表情。", flow: ["滚动查看收藏", "选择表情", "发送到会话"] },
+      { key: "receive-messages", name: "消息接收与历史补拉", caption: "登录后分页补齐消息，再继续接收新消息；拉取中显示实际进度。", use: "消息同步", need: "补齐历史记录并继续接收新消息", overview: true,
+        story: "通过独立连接同步历史和新消息。", flow: ["独立登录账号", "分页补拉历史", "继续接收新消息"],
+        edge: "显示已拉取页数和消息数 · 历史总量由实际返回决定" },
+      { key: "profile-qrcode", name: "个人二维码", caption: "读取当前登录账号的个人二维码。", use: "分享个人名片", need: "取得当前账号的个人二维码", overview: true,
+        story: "查看当前账号的个人二维码。", flow: ["登录微信账号", "读取个人二维码", "查看二维码"] },
     ],
   },
   {
@@ -128,6 +143,10 @@ export const PRO_GROUPS = [
         story: "半年没说过话的客户突然发了条动态，评一句具体的，话头就重新接上了。", flow: ["命中新动态", "AI 拟一句评论", "发出评论"] },
       { key: "sns-post", name: "发布朋友圈", caption: "文字加图片，直接发布一条朋友圈。", use: "定时发圈", need: "每天固定时段发一条产品动态",
         story: "每天中午十二点半那一条产品动态，前一晚就编好，到点自己发出去。", flow: ["提前编好图文", "到点触发", "自动发布"] },
+      { key: "sns-delete-post", name: "删除自己的朋友圈动态", caption: "删除当前账号发布的指定朋友圈动态。", use: "动态管理", need: "管理自己发布的朋友圈内容", overview: true,
+        story: "删除自己发布的指定动态。", flow: ["选择自己的动态", "确认删除", "核对动态列表"], edge: "仅可删除自己发布的动态" },
+      { key: "sns-delete-comment", name: "删除朋友圈评论", caption: "删除自己的评论，或自己动态下允许管理的评论。", use: "评论管理", need: "管理权限范围内的朋友圈评论", overview: true,
+        story: "管理自己有权删除的评论。", flow: ["选择动态与评论", "核对删除权限", "确认删除"], edge: "按当前账号的评论管理权限处理" },
     ],
   },
   {
@@ -173,12 +192,38 @@ export const PRO_GROUPS = [
         story: "九月这批地推加进来的家长得先有个去处——建一个「渠道-地推-9月场」，人再往里归。", flow: ["想清楚怎么分", "新建标签", "留给后续归类"] },
       { key: "contact-set-labels", name: "设置联系人标签", caption: "选择联系人的完整标签集合，确认后保存。", use: "批量打标", need: "一个人往往不止一个身份，标签得叠着加",
         story: "这位家长既是「9月场」也是「已试听」，原来的标签保留，再叠上新的那一档。", flow: ["选中联系人", "勾选完整标签集", "确认保存"] },
+      { key: "contact-list-labels", name: "读取联系人标签", caption: "分页查看当前账号的联系人标签。", use: "标签整理", need: "查看当前可使用的联系人标签", overview: true,
+        story: "查看当前账号的标签列表。", flow: ["连接微信账号", "滚动读取标签", "查看标签列表"] },
+      { key: "contact-rename-label", name: "重命名联系人标签", caption: "修改选定联系人标签的名称。", use: "标签整理", need: "调整标签名称，保持分组清晰", overview: true,
+        story: "为指定的联系人标签修改展示名称。", flow: ["选择标签", "填写新名称", "保存并核对"] },
+      { key: "contact-delete-label", name: "删除联系人标签", caption: "删除当前账号中的选定标签。", use: "标签整理", need: "清理不再使用的联系人标签", overview: true,
+        story: "删除当前账号中不再需要的联系人标签。", flow: ["选择标签", "确认删除", "核对标签列表"] },
       { key: "contact-search", name: "手机号 / 微信号找人", caption: "经当前登录的微信查找联系人，先出结果，不自动添加。", use: "只有手机号", need: "名单里只有号码，先找到人才谈加不加",
         story: "电话里对方报了一串手机号，先查出来是不是他本人，再决定要不要发申请。", flow: ["输入手机号或微信号", "经微信查找", "先看结果再决定"],
         edge: "查找需登录微信并联网 · 只出结果，不自动发申请" },
       { key: "contact-insights", name: "联系人变化记录", caption: "按周期对比本地联系人快照：新增、资料变化、不在列表。", use: "变化回顾", need: "换机迁移之后总觉得少了人，几千人没法用眼睛核",
         story: "换完新手机，几千人的通讯录没法一个个核——两份快照一对，新增、改过资料、不在列表里的各成一册。", flow: ["按周期存快照", "两份逐条比对", "列出三类变化"],
         edge: "只读本机快照 · 只说「不在当前列表中」，不替你推断原因" },
+    ],
+  },
+  {
+    key: "search", label: "内容搜索", tag: "SEARCH", icon: "fa-magnifying-glass",
+    items: [
+      { key: "search-article", name: "搜索公众号文章", caption: "按关键词搜索公众号文章，并打开原文。", use: "文章查找", need: "查找公众号发布的文章", overview: true,
+        story: "按关键词查找公众号文章。", flow: ["输入关键词", "滚动查看结果", "打开文章原文"] },
+      { key: "search-official-account", name: "搜索公众号", caption: "按关键词搜索公众号账号。", use: "账号查找", need: "查找需要的公众号账号", overview: true,
+        story: "按关键词查看公众号搜索结果。", flow: ["输入关键词", "分页读取结果", "查看账号资料"] },
+      { key: "search-channel-account", name: "搜索视频号账号", caption: "按关键词搜索视频号账号。", use: "账号查找", need: "查找需要的视频号账号", overview: true,
+        story: "按关键词查看视频号账号。", flow: ["输入关键词", "滚动查看结果", "查看视频号资料"] },
+      { key: "search-channel-video", name: "搜索视频号内容", caption: "按关键词搜索视频号内容。", use: "内容查找", need: "查找视频号发布的内容", overview: true,
+        story: "按关键词查看视频号内容。", flow: ["输入关键词", "分页读取结果", "查看搜索内容"] },
+    ],
+  },
+  {
+    key: "red-packet", label: "红包", tag: "DETAILS", icon: "fa-envelope",
+    items: [
+      { key: "red-packet-detail", name: "群红包领取明细", caption: "读取指定群红包的领取记录，滚动查看后续明细。", use: "领取记录", need: "查看指定群红包的领取情况", overview: true,
+        story: "查看指定红包的领取明细。", flow: ["选择群红包", "分页读取明细", "查看领取记录"], edge: "仅查询领取明细 · 不执行领取或支付" },
     ],
   },
   {
@@ -197,15 +242,12 @@ export const PRO_GROUPS = [
   },
 ];
 
-// 直接回写微信本地库、可还原的 27 项：消息修改 8 + 消息补录 17 + 这两项会话状态
-const LOCAL_ONLY = new Set(["chat-mark-read", "chat-set-mute"]);
-
 // 每项就地补上所属分组、全局序号（1 起）与「是否回写微信本地库」；PRO_ITEMS 与分组里的是同一批对象
 let _n = 0;
 for (const g of PRO_GROUPS) for (const it of g.items) Object.assign(it, {
   index: ++_n, group: g.key, groupLabel: g.label, groupTag: g.tag,
-  // local：直接回写微信本地库、可随时还原（消息修改 / 补录 / 标记已读 / 免打扰）
-  local: g.key === "edit" || g.key === "add" || LOCAL_ONLY.has(it.key),
+   // local：回写本地消息数据（消息修改 / 补录）
+   local: g.key === "edit" || g.key === "add",
 });
 export const PRO_ITEMS = PRO_GROUPS.flatMap((g) => g.items);
 
@@ -213,5 +255,5 @@ export const PRO_TOTAL = PRO_ITEMS.length;
 
 export const PRO_BY_KEY = Object.fromEntries(PRO_ITEMS.map((it) => [it.key, it]));
 
-// 直接回写微信、可还原的那批（27 项）：写场景、写文案、做校验时用它对边界
+// 本地消息整理条目用于与在线功能区分。
 export const PRO_LOCAL_ITEMS = PRO_ITEMS.filter((it) => it.local);

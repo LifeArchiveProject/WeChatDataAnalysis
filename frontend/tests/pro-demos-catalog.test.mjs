@@ -10,9 +10,9 @@ import {
   PRO_TOTAL
 } from '../../website/assets/js/pro-demos/catalog.js'
 
-test('高级版清单：共 61 项，key 唯一，每项带 name / caption / index / group', () => {
-  assert.equal(PRO_TOTAL, 61)
-  assert.equal(PRO_ITEMS.length, 61)
+test('高级版清单：共 77 项，key 唯一，每项带 name / caption / index / group', () => {
+  assert.equal(PRO_TOTAL, 77)
+  assert.equal(PRO_ITEMS.length, 77)
 
   const keys = PRO_ITEMS.map((it) => it.key)
   assert.equal(new Set(keys).size, keys.length, 'key 有重复')
@@ -28,10 +28,10 @@ test('高级版清单：共 61 项，key 唯一，每项带 name / caption / ind
   })
 })
 
-test('分组顺序固定为 edit / add / action / moments / group / contact / automation，且每项 group 与所在分组一致', () => {
+test('功能清单分组顺序固定，且每项 group 与所在分组一致', () => {
   assert.deepEqual(
     PRO_GROUPS.map((g) => g.key),
-    ['edit', 'add', 'action', 'moments', 'group', 'contact', 'automation']
+    ['edit', 'add', 'action', 'moments', 'group', 'contact', 'search', 'red-packet', 'automation']
   )
   for (const g of PRO_GROUPS) {
     assert.ok(g.label && g.tag, `${g.key} 缺 label / tag`)
@@ -65,14 +65,14 @@ test('每项都带 story（场景编写依据，首屏不显示）、flow（首�
   }
 })
 
-test('回写类与真实动作的边界：直接回写微信本地库、可还原的恰好 27 项', () => {
-  assert.equal(PRO_LOCAL_ITEMS.length, 27)
+test('本地消息整理条目与在线功能分开，共 25 项', () => {
+  assert.equal(PRO_LOCAL_ITEMS.length, 25)
   const localKeys = PRO_LOCAL_ITEMS.map((it) => it.key)
-  // 消息修改 8 + 消息补录 17 + 这两项会话状态
-  assert.ok(localKeys.includes('chat-mark-read'))
-  assert.ok(localKeys.includes('chat-set-mute'))
+  // 消息修改 8 + 消息补录 17。
+  assert.ok(!localKeys.includes('chat-mark-read'))
+  assert.ok(!localKeys.includes('chat-set-mute'))
   for (const it of PRO_ITEMS) {
-    const expected = it.group === 'edit' || it.group === 'add' || it.key === 'chat-mark-read' || it.key === 'chat-set-mute'
+    const expected = it.group === 'edit' || it.group === 'add'
     assert.equal(it.local, expected, `${it.key} 的本地/真实归类不对`)
   }
 })
