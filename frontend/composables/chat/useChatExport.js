@@ -1,6 +1,7 @@
 import { computed, ref, watch } from 'vue'
 import { reportServerErrorFromResponse } from '~/lib/server-error-logging'
 import { toUnixSeconds } from '~/lib/chat/formatters'
+import { restoreLegacyChatExportOrder } from '~/utils/chatExportOrder'
 
 export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selectedContact, privacyMode }) => {
   const exportModalOpen = ref(false)
@@ -440,7 +441,18 @@ export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selecte
     try {
       const handle = await root.getFileHandle(CHAT_EXPORT_BASELINE_FILE)
       const file = await handle.getFile()
-      return { found: true, baseline: JSON.parse(await file.text()) }
+      let baseline = JSON.parse(await file.text())
+      if (baseline && !Array.isArray(baseline.conversationOrder)) {
+        try {
+          const assets = await root.getDirectoryHandle('assets', { create: false })
+          const catalogHandle = await assets.getFileHandle('chat-sessions.js')
+          const catalogFile = await catalogHandle.getFile()
+          baseline = restoreLegacyChatExportOrder(baseline, await catalogFile.text())
+        } catch {
+          // A missing legacy catalog must not invalidate the baseline.
+        }
+      }
+      return { found: true, baseline }
     } catch (error) {
       if (error?.name === 'NotFoundError') return { found: false, baseline: null }
       return { found: true, baseline: { invalid: true } }
