@@ -85,6 +85,30 @@ class TestMcpRouter(unittest.TestCase):
         "wechat.media.download_chat_emoji",
         "wechat.media.open_chat_media_folder",
     }
+    UNSAFE_INTEGER_ID = "9007199254740993"
+    MEDIA_LINK_KINDS = (
+        "avatar", "chat_image", "chat_emoji", "chat_video_thumb", "chat_video",
+        "chat_voice", "moments_image", "moments_video", "favicon", "proxy_image",
+    )
+    MEDIA_TOOL_ARGUMENTS = {
+        "wechat.moments.get_media_url": {
+            "account", "post_id", "tid", "media_id", "create_time", "width", "height", "total_size",
+            "idx", "post_type", "media_type", "md5", "token", "url", "key",
+        },
+        "wechat.moments.get_remote_video_url": {"account", "url", "token", "key"},
+        "wechat.media.get_chat_emoji_url": {"account", "username", "md5", "emoji_url", "aes_key"},
+        "wechat.media.get_chat_video_thumb_url": {"account", "username", "md5", "file_id", "deep_scan"},
+        "wechat.media.get_chat_video_url": {"account", "username", "md5", "file_id", "deep_scan"},
+        "wechat.media.get_chat_voice_url": {"account", "server_id", "msg_svr_id"},
+        "wechat.mobile.get_media_links": {
+            "account", "kind", "max_items", "username", "md5", "file_id", "server_id", "msg_svr_id",
+            "emoji_url", "aes_key", "post_id", "media_id", "token", "key", "url",
+        },
+        "wechat.mobile.get_message_media_bundle": {
+            "account", "username", "session_id", "server_id", "msg_svr_id", "md5", "file_id",
+            "emoji_url", "aes_key", "url", "link_url",
+        },
+    }
 
     def setUp(self):
         self._old_mcp_token = os.environ.get("WECHAT_TOOL_MCP_TOKEN")
@@ -765,6 +789,59 @@ class TestMcpRouter(unittest.TestCase):
                         self.assertEqual(query["fetch_remote"], ["False"])
                     else:
                         self.assertNotIn("fetch_remote", query)
+
+    def test_media_tools_advertise_arguments_their_handlers_read(self):
+        client = self._client()
+        tools = {tool["name"]: tool for tool in client.post("/mcp", json=self._rpc("tools/list")).json()["result"]["tools"]}
+
+        def call(name, arguments):
+            result = client.post("/mcp", json=self._rpc("tools/call", {"name": name, "arguments": arguments})).json()["result"]
+            self.assertFalse(result["isError"])
+            return result["structuredContent"]
+
+        for name, expected in self.MEDIA_TOOL_ARGUMENTS.items():
+            schema = tools[name]["inputSchema"]
+            with self.subTest(tool=name):
+                self.assertTrue(schema["additionalProperties"])
+                self.assertEqual(set(schema["properties"]), expected)
+            contexts = [{}, {"md5": "0" * 32}]
+            if name == "wechat.mobile.get_media_links":
+                contexts.append({"kind": "moments_image"})
+            for key, prop in schema["properties"].items():
+                # server_id 会按整数解析，字符串参数也用十进制数字探测。
+                value = {"boolean": True, "integer": 1}.get(prop["type"], self.UNSAFE_INTEGER_ID)
+                with self.subTest(tool=name, argument=key):
+                    self.assertTrue(
+                        any(call(name, {**context, key: value}) != call(name, context) for context in contexts),
+                        f"{name} advertises {key}, but it changes nothing in {contexts}",
+                    )
+
+        kind_description = tools["wechat.mobile.get_media_links"]["inputSchema"]["properties"]["kind"]["description"]
+        for kind in self.MEDIA_LINK_KINDS:
+            with self.subTest(kind=kind):
+                self.assertIn(kind, kind_description)
+                resources = call("wechat.mobile.get_media_links", {"kind": kind, "username": "wxid_a", "url": "https://example.com/a"})["resources"]
+                self.assertEqual([item["kind"] for item in resources], [kind])
+
+    def test_media_tools_take_server_ids_as_exact_strings(self):
+        client = self._client()
+        tools = {tool["name"]: tool for tool in client.post("/mcp", json=self._rpc("tools/list")).json()["result"]["tools"]}
+        server_id = self.UNSAFE_INTEGER_ID
+
+        for name in ("wechat.media.get_chat_voice_url", "wechat.mobile.get_media_links", "wechat.mobile.get_message_media_bundle"):
+            properties = tools[name]["inputSchema"]["properties"]
+            for key in ("server_id", "msg_svr_id"):
+                with self.subTest(tool=name, argument=key):
+                    self.assertEqual(properties.get(key, {}).get("type"), "string")
+                    structured = client.post("/mcp", json=self._rpc(name, {key: server_id})).json()["result"]["structuredContent"]
+                    if name == "wechat.media.get_chat_voice_url":
+                        voice = structured
+                    elif name == "wechat.mobile.get_media_links":
+                        voice = next(item for item in structured["resources"] if item["kind"] == "chat_voice")
+                    else:
+                        self.assertEqual(structured["serverId"], server_id)
+                        voice = structured["urls"]["voice"]
+                    self.assertEqual(parse_qs(urlsplit(voice["url"]).query)["server_id"], [server_id])
 
     def test_completed_mcp_packages_and_mobile_facade_are_listed(self):
         client = self._client()
