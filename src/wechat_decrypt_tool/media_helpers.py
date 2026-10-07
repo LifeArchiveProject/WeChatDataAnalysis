@@ -13,6 +13,7 @@ import struct
 import tempfile
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -1277,12 +1278,167 @@ def _get_wxam_decoder():
         return None
 
 
+# wxgf 容器里的每个分区都是独立的 Annex-B HEVC 码流，以「起始码 + VPS」开头。
+_WXGF_HEVC_PARTITION_START = b"\x00\x00\x00\x01\x40\x01"
+_WXGF_FFMPEG_TIMEOUT_SECONDS = 20
+# 数据可能来自远程地址，体积很小的文件也能声明任意多的分区、NAL 或极大的画面，所以都设上限：
+# 真实文件至多两个分区（[alpha, 画面]），单帧图片只有少量 NAL，画面尺寸也远小于这个像素数。
+_WXGF_MAX_PARTITIONS = 2
+_WXGF_MAX_NAL_UNITS = 4096
+_WXGF_FFMPEG_MAX_PIXELS = 50_000_000
+# 同一份 wxgf 会被反复送进来（一次读取内的多次重试、每次图片请求重新比较各个变体），
+# 按内容记住转换结果（包括失败），不为同样的数据再启动 ffmpeg。
+_WXGF_FFMPEG_CACHE_BYTES = 16 * 1024 * 1024
+_WXGF_FFMPEG_CACHE_ENTRIES = 512
+_WXGF_FFMPEG_CACHE: "OrderedDict[bytes, Optional[bytes]]" = OrderedDict()
+_WXGF_FFMPEG_CACHE_LOCK = threading.Lock()
+
+
+def _wxgf_hevc_partitions(data: bytes) -> list[bytes]:
+    """按「起始码 + VPS」切出 wxgf 里的各个 HEVC 分区。
+
+    头部与码流之间的元数据（如 ICC）里会出现形似起始码的字节，所以不能直接取第一个起始码。
+    """
+    starts: list[int] = []
+    pos = data.find(_WXGF_HEVC_PARTITION_START, 4)
+    while pos >= 0:
+        if len(starts) >= _WXGF_MAX_PARTITIONS:
+            return []
+        starts.append(pos)
+        pos = data.find(_WXGF_HEVC_PARTITION_START, pos + len(_WXGF_HEVC_PARTITION_START))
+
+    partitions: list[bytes] = []
+    for start, limit in zip(starts, starts[1:] + [len(data)]):
+        # 分区前是 4 字节大端长度，按它截断（后面还跟着下一个长度前缀或容器尾部数据）；
+        # 长度对不上说明文件被截断或不是这种布局，整个放弃，不把残缺的码流交给解码器。
+        size = int.from_bytes(data[start - 4 : start], "big")
+        if not 0 < size <= limit - start:
+            return []
+        partitions.append(data[start : start + size])
+    return partitions
+
+
+def _hevc_picture_count(stream: bytes) -> int:
+    """数出码流里的编码图像：VCL NAL 且 first_slice_segment_in_pic_flag 为 1。
+
+    NAL 多到不像一张图片时不再往下数，按多帧处理。
+    """
+    count = 0
+    nal_units = 0
+    pos = stream.find(b"\x00\x00\x01")
+    while 0 <= pos < len(stream) - 5:
+        nal_units += 1
+        if nal_units > _WXGF_MAX_NAL_UNITS:
+            return max(count, 2)
+        if (stream[pos + 3] >> 1) & 0x3F < 32 and stream[pos + 5] & 0x80:
+            count += 1
+        pos = stream.find(b"\x00\x00\x01", pos + 3)
+    return count
+
+
+def _wxgf_ffmpeg_first_frame(ffmpeg_exe: str, stream: bytes, output_args: list[str], deadline: float) -> bytes:
+    """把一段 HEVC 码流经 stdin 交给 ffmpeg，从 stdout 取回首帧；失败返回 b""。"""
+    import subprocess
+
+    # 各分区共用一个截止时间，一份文件的总耗时不超过 _WXGF_FFMPEG_TIMEOUT_SECONDS。
+    timeout = deadline - time.monotonic()
+    if timeout <= 0:
+        logger.warning(f"wxgf ffmpeg decode timed out after {_WXGF_FFMPEG_TIMEOUT_SECONDS}s")
+        return b""
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg_exe,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                # 解码器一报错就整体失败，尽量不把残缺的画面当成有效图片交给调用方缓存。
+                "-xerror",
+                "-err_detect",
+                "explode",
+                # 超出像素上限的画面在分配解码缓冲之前就被拒绝。
+                "-max_pixels",
+                str(_WXGF_FFMPEG_MAX_PIXELS),
+                "-f",
+                "hevc",
+                "-i",
+                "pipe:0",
+                "-frames:v",
+                "1",
+                *output_args,
+                "pipe:1",
+            ],
+            input=stream,
+            check=False,
+            capture_output=True,
+            timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(f"wxgf ffmpeg decode timed out after {_WXGF_FFMPEG_TIMEOUT_SECONDS}s")
+        return b""
+    if proc.returncode == 0 and proc.stdout:
+        return proc.stdout
+    # 损坏的码流能让 ffmpeg 输出上千行错误，只记录结尾一小段。
+    err = (proc.stderr or b"")[-400:].decode("utf-8", errors="ignore").strip()
+    logger.warning(f"wxgf ffmpeg decode failed (rc={proc.returncode}): {err or 'no output'}")
+    return b""
+
+
+def _wxgf_partitions_to_jpeg(ffmpeg_exe: str, partitions: list[bytes]) -> Optional[bytes]:
+    deadline = time.monotonic() + _WXGF_FFMPEG_TIMEOUT_SECONDS
+    for alpha in partitions[:-1]:
+        plane = _wxgf_ffmpeg_first_frame(ffmpeg_exe, alpha, ["-f", "rawvideo", "-pix_fmt", "gray"], deadline)
+        if not plane or plane.count(b"\xff") != len(plane):
+            return None
+    out = _wxgf_ffmpeg_first_frame(
+        ffmpeg_exe, partitions[-1], ["-f", "image2pipe", "-codec:v", "mjpeg", "-q:v", "3"], deadline
+    )
+    return out if _detect_image_media_type(out[:32]) == "image/jpeg" else None
+
+
+def _wxgf_to_jpeg_with_ffmpeg(data: bytes) -> Optional[bytes]:
+    """没有 WxAM 解码器时（非 Windows，或 DLL 缺失），用 ffmpeg 把静态、不透明的 wxgf 转成 JPEG。
+
+    带透明度的 wxgf 有两个分区，实测顺序固定为 [alpha, 画面]：取最后一个分区为画面，
+    它之前的分区必须解出来全不透明。单帧 JPEG 表示不了的情况（多帧动图、alpha 不是
+    全不透明）返回 None，调用方照旧走原有的回退（如远程表情），不会缓存降级后的画面。
+    输出不带容器里的 ICC；边长为奇数时按 HEVC 编码尺寸多出 1 像素。
+    """
+    try:
+        ffmpeg_exe = _find_ffmpeg_executable()
+        if not ffmpeg_exe:
+            return None
+        # 调用方只要在数据里扫到 "wxgf" 就会进来，没有可解码的单帧码流时不启动进程。
+        partitions = _wxgf_hevc_partitions(data)
+        if not partitions or _hevc_picture_count(partitions[-1]) != 1:
+            return None
+
+        key = hashlib.sha256(data).digest()
+        with _WXGF_FFMPEG_CACHE_LOCK:
+            if key in _WXGF_FFMPEG_CACHE:
+                _WXGF_FFMPEG_CACHE.move_to_end(key)
+                return _WXGF_FFMPEG_CACHE[key]
+        converted = _wxgf_partitions_to_jpeg(ffmpeg_exe, partitions)
+        with _WXGF_FFMPEG_CACHE_LOCK:
+            _WXGF_FFMPEG_CACHE[key] = converted
+            while (
+                len(_WXGF_FFMPEG_CACHE) > _WXGF_FFMPEG_CACHE_ENTRIES
+                or sum(len(value or b"") for value in _WXGF_FFMPEG_CACHE.values()) > _WXGF_FFMPEG_CACHE_BYTES
+            ):
+                _WXGF_FFMPEG_CACHE.popitem(last=False)
+        return converted
+    except Exception as e:
+        logger.warning(f"wxgf to JPEG conversion failed: {e}")
+        return None
+
+
 def _wxgf_to_image_bytes(data: bytes) -> Optional[bytes]:
     if not data or not data.startswith(b"wxgf"):
         return None
     fn = _get_wxam_decoder()
     if fn is None:
-        return None
+        return _wxgf_to_jpeg_with_ffmpeg(data)
 
     max_output_size = 52 * 1024 * 1024
     for mode in (0, 3):
