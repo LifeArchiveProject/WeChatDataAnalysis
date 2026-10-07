@@ -3157,6 +3157,16 @@ def _guess_media_type_by_path(path: Path, fallback: str = "application/octet-str
     return fallback
 
 
+@lru_cache(maxsize=256)
+def _xor_table(key: int) -> bytes:
+    return bytes(b ^ key for b in range(256))
+
+
+def _xor_bytes(data: bytes, key: int) -> bytes:
+    """单字节 XOR：查表交给 bytes.translate，避免对整个文件逐字节跑 Python 循环。"""
+    return bytes(data).translate(_xor_table(key))
+
+
 def _try_xor_decrypt_by_magic(data: bytes) -> tuple[Optional[bytes], Optional[str]]:
     if not data:
         return None, None
@@ -3200,7 +3210,7 @@ def _try_xor_decrypt_by_magic(data: bytes) -> tuple[Optional[bytes], Optional[st
         if not ok:
             continue
 
-        decoded = bytes(b ^ key for b in data)
+        decoded = _xor_bytes(data, key)
 
         if magic == b"wxgf":
             try:
@@ -3244,7 +3254,7 @@ def _try_xor_decrypt_by_magic(data: bytes) -> tuple[Optional[bytes], Optional[st
     if preview_len > 0:
         for key in range(256):
             try:
-                pv = bytes(b ^ key for b in data[:preview_len])
+                pv = _xor_bytes(data[:preview_len], key)
             except Exception:
                 continue
             try:
@@ -3258,7 +3268,7 @@ def _try_xor_decrypt_by_magic(data: bytes) -> tuple[Optional[bytes], Optional[st
                     or (scan.find(b"RIFF") >= 0)
                     or (scan.find(b"ftyp") >= 0)
                 ):
-                    decoded = bytes(b ^ key for b in data)
+                    decoded = _xor_bytes(data, key)
                     dec2, mt2 = _try_strip_media_prefix(decoded)
                     if mt2 != "application/octet-stream":
                         if mt2.startswith("image/") and (not _is_probably_valid_image(dec2, mt2)):
@@ -3446,7 +3456,7 @@ def _save_media_keys(account_dir: Path, xor_key: int, aes_key16: Optional[bytes]
 
 
 def _decrypt_wechat_dat_v3(data: bytes, xor_key: int) -> bytes:
-    return bytes(b ^ xor_key for b in data)
+    return _xor_bytes(data, xor_key)
 
 
 def _decrypt_wechat_dat_v4(data: bytes, xor_key: int, aes_key: bytes) -> bytes:
@@ -3466,7 +3476,7 @@ def _decrypt_wechat_dat_v4(data: bytes, xor_key: int, aes_key: bytes) -> bytes:
     if xor_size > 0:
         raw_data = rest[aes_size:-xor_size]
         xor_data = rest[-xor_size:]
-        xored_data = bytes(b ^ xor_key for b in xor_data)
+        xored_data = _xor_bytes(xor_data, xor_key)
     else:
         xored_data = b""
 
