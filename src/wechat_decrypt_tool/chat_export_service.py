@@ -70,6 +70,7 @@ from .chat_incremental_export import (
     materialize_folder_archive,
     missing_conversation_keys,
     normalize_pending_media,
+    ordered_conversation_keys,
     prepare_folder_context,
 )
 from .logging_config import get_logger
@@ -1224,16 +1225,9 @@ def _replace_ordered_export_index_item(
     index: dict[str, dict[str, Any]],
     item: dict[str, Any],
 ) -> None:
-    """Replace an index item while retaining the old remove-then-append order.
-
-    ``dict`` preserves insertion order.  Removing the existing conversation
-    before assigning it again is therefore equivalent to the previous
-    ``[... if convDir != current]`` plus ``append`` implementation, without
-    rescanning the complete index for every conversation.
-    """
+    """Update existing entries in place and append newly exported conversations."""
 
     conv_dir = str(item.get("convDir") or "")
-    index.pop(conv_dir, None)
     index[conv_dir] = item
 
 
@@ -2491,10 +2485,8 @@ class ChatExportManager:
                 )
                 _safe_trace(trace, "zip_opened", durationMs=_elapsed_ms(phase_started))
                 # Keep the indexes keyed by conversation directory while the
-                # export is running.  Folder exports replace existing entries
-                # and intentionally move them to the end; dict pop+assign
-                # preserves that order in O(1), unlike filtering a growing
-                # list for every conversation.
+                # export is running. Assignment preserves existing positions
+                # in O(1), and new conversations are appended at the end.
                 html_index_by_conv_dir: dict[str, dict[str, Any]] = {}
                 excel_index_by_conv_dir: dict[str, dict[str, Any]] = {}
                 html_index_items: list[dict[str, Any]] = []
@@ -2508,7 +2500,8 @@ class ChatExportManager:
                         if isinstance(folder_context.old_state.get("conversations"), dict)
                         else {}
                     )
-                    for old_value in old_conversations.values():
+                    for old_key in ordered_conversation_keys(folder_context.old_state):
+                        old_value = old_conversations[old_key]
                         if not isinstance(old_value, dict):
                             continue
                         old_session = old_value.get("session")
@@ -2751,7 +2744,11 @@ class ChatExportManager:
 
                         session_value = {
                             "username": "" if privacy_mode else conv_username,
-                            "displayName": (f"会话 {idx:04d}" if privacy_mode else conv_name),
+                            "displayName": (
+                                str((session_items_by_conv_dir.get(conv_dir) or {}).get("displayName")
+                                    or f"会话 {len(session_items_by_conv_dir) + 1:04d}")
+                                if privacy_mode else conv_name
+                            ),
                             "isGroup": bool(conv_is_group),
                             "convDir": conv_dir,
                             "avatarPath": "" if privacy_mode else conv_avatar_path,

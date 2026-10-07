@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -587,6 +588,124 @@ class TestChatIncrementalExport(unittest.TestCase):
                     os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
                 else:
                     os.environ["WECHAT_TOOL_DATA_DIR"] = previous
+
+    def test_html_folder_preserves_contact_order_across_incremental_exports(self):
+        for privacy_mode in (False, True):
+            with self.subTest(privacy_mode=privacy_mode), TemporaryDirectory() as td:
+                root = Path(td)
+                account = "wxid_order_account"
+                usernames = ["wxid_first", "wxid_second", "wxid_third"]
+                account_dir = self._prepare_account(root, account=account, username=usernames[0])
+                for index, username in enumerate(usernames[1:], start=20):
+                    self._add_conversation(account_dir, username=username, display_name=username, local_id=index)
+                with mock.patch.dict(os.environ, {"WECHAT_TOOL_DATA_DIR": str(root)}):
+                    service = self._reload_export_modules()
+
+                    def export(selected):
+                        job = self._create_folder_job(
+                            service.CHAT_EXPORT_MANAGER, account=account, usernames=selected,
+                            output_dir=root / "exports", export_format="html", privacy_mode=privacy_mode,
+                        )
+                        self.assertEqual(job.status, "done", msg=job.error)
+                        return job
+
+                    def catalog(folder):
+                        return json.loads((folder / "assets/chat-sessions.js").read_text(encoding="utf-8")
+                                          .removeprefix("window.__WCE_FOLDER_SESSIONS__=").rstrip(";\r\n"))["items"]
+
+                    first = export(usernames)
+                    folder = first.folder_path
+                    expected = [item["convDir"] for item in catalog(folder)]
+                    first_names = [item["displayName"] for item in catalog(folder)]
+                    state_path = folder / ".wechat-chat-export.json"
+                    baseline = json.loads(state_path.read_text(encoding="utf-8"))
+                    # Make the baseline dictionary order disagree with the visible catalog.
+                    baseline["conversations"] = dict(reversed(list(baseline["conversations"].items())))
+                    state_path.write_text(json.dumps(baseline), encoding="utf-8")
+
+                    export(list(reversed(usernames)))
+                    self.assertEqual([item["convDir"] for item in catalog(folder)], expected)
+                    self.assertEqual([item["displayName"] for item in catalog(folder)], first_names)
+                    export([usernames[0]])
+                    self.assertEqual([item["convDir"] for item in catalog(folder)], expected)
+
+                    # Appending real messages also updates the existing entry in place.
+                    with sqlite3.connect(str(account_dir / "message_0.db")) as connection:
+                        connection.execute(
+                            f"INSERT INTO {self._message_table(usernames[0])} VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            (8, 1008, 1, 8, 2, 1735689800, "新增消息不改变联系人位置", None),
+                        )
+                    appended = export([usernames[0]])
+                    self.assertEqual(appended.incremental.get("messagesAdded"), 1)
+                    self.assertEqual([item["convDir"] for item in catalog(folder)], expected)
+
+                    # Migrate old baselines which predate the explicit order field.
+                    baseline = json.loads(state_path.read_text(encoding="utf-8"))
+                    baseline.pop("conversationOrder", None)
+                    baseline["conversations"] = dict(reversed(list(baseline["conversations"].items())))
+                    state_path.write_text(json.dumps(baseline), encoding="utf-8")
+                    migrated = export([usernames[1]])
+                    self.assertEqual([item["convDir"] for item in catalog(folder)], expected)
+                    self.assertIn("conversationOrder", json.loads(state_path.read_text(encoding="utf-8")))
+                    self.assertEqual(migrated.incremental.get("filesChanged"), 0)
+
+                    new_username = "wxid_new"
+                    self._add_conversation(account_dir, username=new_username, display_name="新增联系人", local_id=30)
+                    export([new_username, usernames[0]])
+                    items = catalog(folder)
+                    expected.append(items[-1]["convDir"])
+                    self.assertEqual([item["convDir"] for item in items], expected)
+                    self.assertEqual(len(set(expected)), 4)
+                    index_html = (folder / "index.html").read_text(encoding="utf-8")
+                    self.assertEqual(re.findall(r'class="wce-index-item" href="(.*?)/messages.html"', index_html), expected)
+                    baseline = json.loads(state_path.read_text(encoding="utf-8"))
+                    self.assertEqual([baseline["conversations"][key]["directory"]
+                                      for key in baseline["conversationOrder"]], expected)
+                    no_change = export([usernames[0], new_username])
+                    self.assertEqual(no_change.incremental.get("filesChanged"), 0)
+                    self.assertEqual([item["convDir"] for item in catalog(folder)], expected)
+
+    def test_browser_html_folder_preserves_saved_order(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_browser_order"
+            usernames = ["wxid_first", "wxid_second"]
+            account_dir = self._prepare_account(root, account=account, username=usernames[0])
+            self._add_conversation(account_dir, username=usernames[1], display_name="第二个联系人")
+            with mock.patch.dict(os.environ, {"WECHAT_TOOL_DATA_DIR": str(root)}):
+                service = self._reload_export_modules()
+                browser_files = {}
+
+                def export(selected, baseline=None):
+                    job = self._create_folder_job(
+                        service.CHAT_EXPORT_MANAGER, account=account, usernames=selected,
+                        output_dir=None, export_format="html", baseline=baseline,
+                    )
+                    self.assertEqual(job.status, "done", msg=job.error)
+                    if baseline and "conversationOrder" not in baseline:
+                        self.assertFalse(job.change_manifest["state"]["unchanged"])
+                    state = json.loads((job.staging_dir / ".wechat-chat-export.json").read_text(encoding="utf-8"))
+                    for entry in job.change_manifest["files"]:
+                        if entry["path"] == "assets/chat-sessions.js":
+                            browser_files[entry["path"]] = job.staged_files[entry["fileId"]].read_text(encoding="utf-8")
+                    text = browser_files["assets/chat-sessions.js"]
+                    items = json.loads(text.removeprefix("window.__WCE_FOLDER_SESSIONS__=").rstrip(";\r\n"))["items"]
+                    service.CHAT_EXPORT_MANAGER.commit_staged_files(job.export_id)
+                    return state, [item["convDir"] for item in items]
+
+                baseline, expected = export(usernames)
+                # The transported JSON still sorts hashes; the explicit list controls order.
+                baseline = json.loads(json.dumps(baseline, sort_keys=True))
+                baseline, actual = export(list(reversed(usernames)), baseline)
+                self.assertEqual(actual, expected)
+                _, actual = export([usernames[0]], baseline)
+                self.assertEqual(actual, expected)
+                legacy_order = baseline.pop("conversationOrder")
+                baseline["legacyConversationOrder"] = legacy_order
+                migrated, actual = export([usernames[0]], baseline)
+                self.assertEqual(actual, expected)
+                self.assertEqual(migrated["conversationOrder"], legacy_order)
+                self.assertNotIn("legacyConversationOrder", migrated)
 
     def test_html_folder_shared_session_catalog_respects_privacy_mode(self):
         with TemporaryDirectory() as td:
