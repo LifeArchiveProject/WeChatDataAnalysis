@@ -1,6 +1,6 @@
 """Scan Weixin.dll for the 32-byte internal DB key used by V4 key recovery.
 
-This is the project-integrated version of the root-level ``scan.py`` helper.
+This is the project-integrated version of the former standalone ``scan.py`` helper.
 It keeps the original pattern/parallel scanning approach, but returns structured
 results instead of writing JSONL files from a hard-coded path.
 """
@@ -38,7 +38,7 @@ def _format_spaced_hex(key_bytes: bytes) -> str:
 
 
 def worker_search(task: tuple[str, int, int, int, int]) -> list[dict[str, Any]]:
-    """Search one file chunk for the scan.py signature."""
+    """Search one file chunk for the DLL key signature."""
     file_path, file_offset, chunk_size, overlap, base_va = task
     results: list[dict[str, Any]] = []
 
