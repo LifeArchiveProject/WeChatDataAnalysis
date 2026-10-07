@@ -3248,16 +3248,6 @@ def _detect_mp4_ftyp(head: bytes) -> bool:
     return bool(head) and len(head) >= 8 and head[4:8] == b"ftyp"
 
 
-@lru_cache(maxsize=1)
-def _weflow_wxisaac64_script_path() -> str:
-    """Locate the Node helper that wraps WeFlow's wasm_video_decode.* assets."""
-    repo_root = Path(__file__).resolve().parents[3]
-    script = repo_root / "tools" / "weflow_wasm_keystream.js"
-    if script.exists() and script.is_file():
-        return str(script)
-    return ""
-
-
 @lru_cache(maxsize=64)
 def _weflow_wxisaac64_keystream(key: str, size: int) -> bytes:
     return _sns_media.weflow_wxisaac64_keystream(key, size)
