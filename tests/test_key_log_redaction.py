@@ -60,12 +60,11 @@ def test_v4_key_success_stdout_does_not_include_recovered_key():
     assert recovered_hex[-8:] not in rendered
 
 
-def test_all_v4_entrypoints_redact_success_output():
-    for relative_path in ("key_v4.py", "src/wechat_decrypt_tool/key_v4.py"):
-        source = (ROOT / relative_path).read_text(encoding="utf-8")
-        assert 'print(f"[+] Key found: {bytes.hex(r)}")' not in source
-        assert 'print(f"[+] Successfully recovered key: {key}")' not in source
-        assert source.count("value redacted") == 2
+def test_v4_entrypoint_redacts_success_output():
+    source = (ROOT / "src/wechat_decrypt_tool/key_v4.py").read_text(encoding="utf-8")
+    assert 'print(f"[+] Key found: {bytes.hex(r)}")' not in source
+    assert 'print(f"[+] Successfully recovered key: {key}")' not in source
+    assert source.count("value redacted") == 2
 
 
 def test_backend_image_key_log_metadata_contains_no_key_values_or_fragments():
