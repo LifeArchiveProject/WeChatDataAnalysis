@@ -109,7 +109,7 @@
 | AI Elements Vue、Tailwind 4、D01～D04 | `components/ai-elements/`、`agent.css`、输入框/来源/图片组件 | 320px、大视图、主题、中文输入、Enter 补充、停止与窗口切回 |
 | 发送者与被谈论者分离、同名、旧来源与图片恢复 | `agent_references.py`、`agentMarkdown.js`、`AgentAnswer.vue` | 甲谈乙、多来源、半截引用、缺图、当前回答图片集合与零视觉副作用 |
 | 报告/程序统计、阅读复制、旧总结/任务/提醒 | `agent_continuous.py`、`agent_workspace.py`、`AiSidebar.vue`、`AgentCopyAction.vue` | 原文一致性、分类与结论、旧 AI 功能回归 |
-| 同版本 Mac 与源码/锁文件/脚本/记录交付 | `prepare_ai_acceptance.py`、`run_ai_acceptance.py`、`launch_ai_macos_acceptance.py` | Windows 全项通过后进入 Mac 独立目录；不默认签名和公开发布 |
+| 同版本 Mac 与源码/锁文件/脚本/记录交付 | `prepare_ai_acceptance.py`、`run_ai_acceptance.py`、`launch_ai_macos_acceptance.py`（脚本已从仓库删除，可从 git 历史取回） | Windows 全项通过后进入 Mac 独立目录；不默认签名和公开发布 |
 
 ## 代码检查结果
 

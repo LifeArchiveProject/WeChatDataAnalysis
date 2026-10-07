@@ -103,6 +103,8 @@ GPU 进程故障、超时、缺库或显存不足时销毁故障进程，在独�
 
 ## 2026-09-08 验收记录
 
+> 本节提到的 `tools/verify_local_search_*.py` 验收脚本和 `tools/benchmark_local_search_reading.py` 已从仓库删除，可从 git 历史取回。
+
 ### 真实账号完整流程复测（效率与完成状态修复后）
 
 - 使用用户已选择的两个聊天、最近 30 天、BGE Small 中文和 CUDA，通过正在运行的桌面应用本地后端完成重建；未扩大聊天范围。`tools/verify_local_search_live.py` 可复测重建、暂停继续、检索与重复检查，报告仅记录统计量，不保存聊天正文。
