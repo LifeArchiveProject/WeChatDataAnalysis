@@ -285,24 +285,28 @@ def start_chat_search_index_build(account_dir: Path, *, rebuild: bool = False, s
     now = int(time.time())
     with _BUILD_LOCK:
         st = _BUILD_STATE.get(key)
-        if st and st.get("status") == "building":
-            return get_chat_search_index_status(account_dir, source=source_norm)
-        _BUILD_STATE[key] = {
-            "status": "building",
-            "rebuild": bool(rebuild),
-            "source": source_norm,
-            "startedAt": now,
-            "finishedAt": None,
-            "indexedMessages": 0,
-            "fetchedMessages": 0,
-            "fetchCalls": 0,
-            "totalConversations": 0,
-            "completedConversations": 0,
-            "messagesPerSec": 0,
-            "currentDb": "",
-            "currentConversation": "",
-            "error": "",
-        }
+        already_building = bool(st and st.get("status") == "building")
+        if not already_building:
+            _BUILD_STATE[key] = {
+                "status": "building",
+                "rebuild": bool(rebuild),
+                "source": source_norm,
+                "startedAt": now,
+                "finishedAt": None,
+                "indexedMessages": 0,
+                "fetchedMessages": 0,
+                "fetchCalls": 0,
+                "totalConversations": 0,
+                "completedConversations": 0,
+                "messagesPerSec": 0,
+                "currentDb": "",
+                "currentConversation": "",
+                "error": "",
+            }
+
+    # get_chat_search_index_status 会再次获取 _BUILD_LOCK（不可重入），只能在锁外调用。
+    if already_building:
+        return get_chat_search_index_status(account_dir, source=source_norm)
 
     t = threading.Thread(
         target=_build_worker,

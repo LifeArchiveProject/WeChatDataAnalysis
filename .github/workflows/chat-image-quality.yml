@@ -5,12 +5,16 @@ on:
     paths:
       - '.github/workflows/chat-image-quality.yml'
       - 'src/wechat_decrypt_tool/media_helpers.py'
+      - 'src/wechat_decrypt_tool/key_store.py'
       - 'src/wechat_decrypt_tool/chat_export_service.py'
       - 'src/wechat_decrypt_tool/routers/media.py'
       - 'src/wechat_decrypt_tool/routers/chat*.py'
       - 'tests/test_chat_image_local_quality.py'
       - 'tests/test_chat_media_image_cache_upgrade.py'
       - 'tests/test_media_decrypt_stream_cancel.py'
+      - 'tests/test_media_xor_decode.py'
+      - 'tests/test_media_wxgf_ffmpeg_fallback.py'
+      - 'tests/test_key_file_permissions.py'
       - 'frontend/lib/chat/chat-history.js'
       - 'frontend/lib/chat/message-normalizer.js'
       - 'frontend/tests/chat-image-quality.test.js'
@@ -54,6 +58,9 @@ jobs:
           tests/test_image_key_resolver.py
           tests/test_media_emoticon_catalog.py
           tests/test_media_emoji_download_stream.py
+          tests/test_media_xor_decode.py
+          tests/test_media_wxgf_ffmpeg_fallback.py
+          tests/test_key_file_permissions.py
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci

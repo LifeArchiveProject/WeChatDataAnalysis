@@ -16,7 +16,7 @@ function setup({ types = ['link'], privacy = false, transcribe = false, availabl
     selectedAccount: ref('test-account'), selectedContact: ref(null), privacyMode: ref(privacy) }))
   state.exportSelectedUsernames.value = ['friend']
   state.exportFolderHandle.value = {}
-  state.exportMessageTypes.value = types
+  if (types) state.exportMessageTypes.value = types
   state.exportTranscribeVoice.value = transcribe
   return { state, api }
 }
@@ -58,5 +58,16 @@ describe('导出媒体与语音模型选项', () => {
     await state.startChatExport()
     expect(api.createChatExport).not.toHaveBeenCalled()
     expect(state.exportError.value).toBe('请先下载模型')
+  })
+
+  it('位置消息默认勾选并随导出请求提交', async () => {
+    const { state, api } = setup({ types: null })
+    expect(state.exportMessageTypeOptions).toContainEqual({ value: 'location', label: '位置' })
+    expect(state.areAllExportMessageTypesSelected.value).toBe(true)
+    await state.startChatExport()
+    expect(api.createChatExport).toHaveBeenCalledWith(expect.objectContaining({
+      message_types: state.exportMessageTypeOptions.map(item => item.value),
+    }))
+    expect(api.createChatExport.mock.calls[0][0].message_types).toContain('location')
   })
 })

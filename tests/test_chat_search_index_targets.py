@@ -283,6 +283,59 @@ class TestChatSearchIndexTargets(unittest.TestCase):
             self.assertEqual(status["index"]["build"].get("status"), "error")
             self.assertIn("No sessions found", str(status["index"]["build"].get("error") or ""))
 
+    def test_start_build_returns_status_without_deadlock_when_already_building(self):
+        import wechat_decrypt_tool.chat_search_index as idx
+
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "wxid_account"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            running_build = {"status": "building", "source": "decrypted", "startedAt": 123}
+            result = {}
+
+            def request_build():
+                try:
+                    result["status"] = idx.start_chat_search_index_build(account_dir, source="decrypted")
+                except Exception as exc:
+                    result["error"] = exc
+
+            # Private lock/state: a regression leaves the caller stuck on these, not on the module's real lock.
+            with (
+                patch.object(idx, "_BUILD_LOCK", threading.Lock()),
+                patch.object(idx, "_BUILD_STATE", {idx._account_key(account_dir): dict(running_build)}),
+                patch.object(idx, "_build_worker") as build_worker,
+            ):
+                caller = threading.Thread(target=request_build, daemon=True)
+                caller.start()
+                caller.join(timeout=5)
+
+                self.assertFalse(caller.is_alive(), "start_chat_search_index_build deadlocked on _BUILD_LOCK")
+                self.assertIsNone(result.get("error"))
+                self.assertEqual(result["status"]["index"]["build"], running_build)
+                self.assertEqual(idx._BUILD_STATE[idx._account_key(account_dir)], running_build)
+                build_worker.assert_not_called()
+
+    def test_start_build_registers_state_and_starts_one_worker(self):
+        import wechat_decrypt_tool.chat_search_index as idx
+
+        with TemporaryDirectory() as td:
+            account_dir = Path(td) / "wxid_account"
+            account_dir.mkdir(parents=True, exist_ok=True)
+
+            worker_started = threading.Event()
+            with (
+                patch.object(idx, "_BUILD_LOCK", threading.Lock()),
+                patch.object(idx, "_BUILD_STATE", {}),
+                patch.object(idx, "_build_worker", side_effect=lambda *_args: worker_started.set()) as build_worker,
+            ):
+                status = idx.start_chat_search_index_build(account_dir, rebuild=True, source="decrypted")
+                registered = dict(idx._BUILD_STATE[idx._account_key(account_dir)])
+                self.assertTrue(worker_started.wait(5), "build worker thread was not started")
+
+            self.assertEqual(status["index"]["build"].get("status"), "building")
+            self.assertEqual(registered.get("status"), "building")
+            self.assertTrue(registered.get("rebuild"))
+            build_worker.assert_called_once_with(account_dir, True, "decrypted")
+
     def test_auto_search_uses_decrypted_index_for_single_character(self):
         import wechat_decrypt_tool.chat_search_index as idx
         from wechat_decrypt_tool.routers import chat as chat_router
