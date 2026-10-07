@@ -451,7 +451,7 @@
               </div>
 
               <div
-                v-if="exportJob.repairCandidates?.length || exportJob.unresolvedMedia?.conversations?.length"
+                v-if="exportJob.repairCandidates?.length || exportJob.unresolvedMedia?.conversations?.length || exportJob.incremental?.locationTypeSkipped"
                 class="chat-export-folder-result__followups"
                 aria-label="差异与媒体状态"
               >
@@ -496,6 +496,16 @@
                     <i class="fa-solid fa-rotate" aria-hidden="true"></i>
                     重新探测缺失媒体
                   </button>
+                </div>
+
+                <div v-if="exportJob.incremental?.locationTypeSkipped" class="chat-export-followup">
+                  <span class="chat-export-followup__icon" aria-hidden="true">
+                    <i class="fa-solid fa-location-dot"></i>
+                  </span>
+                  <div class="chat-export-followup__copy">
+                    <strong>本次未导出位置消息</strong>
+                    <span>该目录的基线不含“位置”类型，已按基线的消息类型更新；需要时请重置增量基线或改用新目录。</span>
+                  </div>
                 </div>
               </div>
 
