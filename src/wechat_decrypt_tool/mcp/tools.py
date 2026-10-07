@@ -289,23 +289,27 @@ def _list_contacts(args: dict[str, Any], ctx: McpToolContext) -> dict[str, Any]:
     return {**result, "contacts": _clip_deep(page), "offset": offset, "limit": limit, "hasMore": offset + limit < len(contacts)}
 
 
+def _match_confidence(query: str, item: dict[str, Any]) -> int:
+    q_lower = query.lower()
+    hay = " ".join(str(item.get(k) or "") for k in ("username", "remark", "nickname", "name", "displayName", "alias")).lower()
+    score = 0
+    if q_lower in hay:
+        score += 60
+    if hay.startswith(q_lower):
+        score += 20
+    if str(item.get("username") or "") == query:
+        score += 30
+    return min(100, score or 20)
+
+
 def _resolve_contact(args: dict[str, Any], ctx: McpToolContext) -> dict[str, Any]:
     query = _str(args, "query")
     if not query:
         raise ValueError("query is required.")
     base = _list_contacts({**args, "keyword": query, "limit": _int(args, "limit", 10, minimum=1, maximum=50)}, ctx)
     candidates = []
-    q_lower = query.lower()
     for item in list(base.get("contacts") or []):
-        hay = " ".join(str(item.get(k) or "") for k in ("username", "remark", "nickname", "name", "displayName", "alias")).lower()
-        score = 0
-        if query in hay:
-            score += 60
-        if hay.startswith(q_lower):
-            score += 20
-        if str(item.get("username") or "") == query:
-            score += 30
-        candidates.append({**item, "confidence": min(100, score or 20)})
+        candidates.append({**item, "confidence": _match_confidence(query, item)})
     candidates.sort(key=lambda x: int(x.get("confidence") or 0), reverse=True)
     return {"status": "success", "query": query, "count": len(candidates), "candidates": _clip_deep(candidates, max_items=50)}
 
@@ -1087,12 +1091,13 @@ def _mobile_resolve_target(args: dict[str, Any], ctx: McpToolContext) -> dict[st
     warnings: list[dict[str, Any]] = []
 
     def extend(kind: str, result: dict[str, Any]) -> None:
-        for idx, item in enumerate(_first_list(result, ("candidates", "users", "accounts", "sessions", "contacts", "items"))[:limit]):
+        for item in _first_list(result, ("candidates", "users", "accounts", "sessions", "contacts", "items"))[:limit]:
             if not isinstance(item, dict):
                 continue
             username = str(item.get("username") or item.get("id") or item.get("userName") or "").strip()
             display = _candidate_display(item)
-            confidence = int(item.get("confidence") or max(20, 80 - idx * 8))
+            # 朋友圈用户等结果不带 confidence：沿用联系人的打分规则，不按返回位置给分。
+            confidence = int(item.get("confidence") or _match_confidence(query, item))
             candidates.append(
                 {
                     "kind": kind,
@@ -1133,7 +1138,9 @@ def _mobile_resolve_target(args: dict[str, Any], ctx: McpToolContext) -> dict[st
     candidates.sort(key=lambda x: int(x.get("confidence") or 0), reverse=True)
     candidates = candidates[:limit]
     best = candidates[0] if candidates else None
-    ambiguous = len(candidates) > 1 and best is not None and int(best.get("confidence") or 0) - int(candidates[1].get("confidence") or 0) < 15
+    # 同一个人会同时以联系人、会话、朋友圈用户出现，歧义只和另一个目标比。
+    rival = next((c for c in candidates[1:] if c["id"] != best["id"]), None)
+    ambiguous = rival is not None and int(best.get("confidence") or 0) - int(rival.get("confidence") or 0) < 15
     return {"status": "success", "ok": True, "query": query, "targetType": target_type, "count": len(candidates), "best": best, "ambiguous": ambiguous, "candidates": candidates, "warnings": warnings}
 
 

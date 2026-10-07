@@ -961,6 +961,96 @@ class TestMcpRouter(unittest.TestCase):
         self.assertEqual(structured["best"]["username"], "wxid_friend")
         self.assertEqual(structured["best"]["kind"], "contact")
 
+    def test_resolve_contact_scores_query_case_insensitively(self):
+        client = self._client()
+
+        class FakeContactsRouter:
+            def list_chat_contacts(self, _request, **_kwargs):
+                return {
+                    "status": "success",
+                    "contacts": [
+                        {"username": "wxid_aaron", "displayName": "Aaron", "remark": "", "nickname": "Aaron", "alias": "", "region": "Alice Springs"},
+                        {"username": "wxid_friend", "displayName": "Alice", "remark": "Alice", "nickname": "ali", "alias": ""},
+                    ],
+                }
+
+        with patch("wechat_decrypt_tool.mcp.tools._contacts_router", return_value=FakeContactsRouter()):
+            for query in ("alice", "Alice", "ALICE"):
+                with self.subTest(query=query):
+                    resp = client.post("/mcp", json=self._rpc("wechat.contacts.resolve_contact", {"query": query}))
+                    self.assertEqual(resp.status_code, 200)
+                    candidates = resp.json()["result"]["structuredContent"]["candidates"]
+                    self.assertEqual(
+                        [(c["username"], c["confidence"]) for c in candidates],
+                        [("wxid_friend", 60), ("wxid_aaron", 20)],
+                    )
+
+    def test_mobile_resolve_target_scores_unscored_candidates_by_match(self):
+        client = self._client()
+        sns_users = []
+
+        class FakeContactsRouter:
+            def list_chat_contacts(self, _request, **_kwargs):
+                return {
+                    "status": "success",
+                    "contacts": [{"username": "wxid_friend", "displayName": "Alice", "remark": "Alice", "nickname": "ali", "alias": ""}],
+                }
+
+        class FakeChatRouter:
+            def list_chat_sessions(self, _request, **_kwargs):
+                return {"status": "success", "sessions": []}
+
+        class FakeSnsRouter:
+            def list_sns_users(self, **_kwargs):
+                return {"items": list(sns_users), "count": len(sns_users), "limit": 5}
+
+        class FakeBizRouter:
+            def get_biz_account_list(self, **_kwargs):
+                return {"status": "success", "total": 0, "data": []}
+
+        def resolve(arguments):
+            resp = client.post("/mcp", json=self._rpc("wechat.mobile.resolve_target", {"limit": 5, **arguments}))
+            self.assertEqual(resp.status_code, 200)
+            return resp.json()["result"]["structuredContent"]
+
+        with patch("wechat_decrypt_tool.mcp.tools._contacts_router", return_value=FakeContactsRouter()), patch(
+            "wechat_decrypt_tool.mcp.tools._chat_router", return_value=FakeChatRouter()
+        ), patch("wechat_decrypt_tool.mcp.tools._sns_router", return_value=FakeSnsRouter()), patch(
+            "wechat_decrypt_tool.mcp.tools._biz_router", return_value=FakeBizRouter()
+        ):
+            sns_users[:] = [
+                {"username": "wxid_poster", "displayName": "Malice Daily", "postCount": 900},
+                {"username": "wxid_reader", "displayName": "Palace Alice Tea", "postCount": 300},
+            ]
+            for query in ("alice", "Alice"):
+                with self.subTest(query=query):
+                    structured = resolve({"query": query})
+                    self.assertEqual(structured["warnings"], [])
+                    self.assertEqual(
+                        [(c["kind"], c["username"], c["confidence"]) for c in structured["candidates"]],
+                        [("contact", "wxid_friend", 60), ("moments_user", "wxid_poster", 60), ("moments_user", "wxid_reader", 60)],
+                    )
+                    self.assertTrue(structured["ambiguous"])
+
+            sns_users[:] = [{"username": "wxid_friend", "displayName": "Alice", "postCount": 3}]
+            for query in ("alice", "wxid_friend"):
+                with self.subTest(same_person=query):
+                    structured = resolve({"query": query})
+                    self.assertEqual([c["kind"] for c in structured["candidates"]], ["contact", "moments_user"])
+                    self.assertEqual(structured["best"]["kind"], "contact")
+                    self.assertFalse(structured["ambiguous"])
+
+            sns_users[:] = [
+                {"username": "wxid_friend_fan", "displayName": "Fan", "postCount": 900},
+                {"username": "wxid_friend", "displayName": "Alice", "postCount": 3},
+            ]
+            structured = resolve({"query": "wxid_friend", "target_type": "moments_user"})
+            self.assertEqual(
+                [(c["username"], c["confidence"]) for c in structured["candidates"]],
+                [("wxid_friend", 100), ("wxid_friend_fan", 80)],
+            )
+            self.assertFalse(structured["ambiguous"])
+
     def test_mobile_media_links_does_not_fetch_binary_content(self):
         client = self._client()
 
