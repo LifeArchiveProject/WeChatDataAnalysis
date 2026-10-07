@@ -135,6 +135,17 @@ def config_fingerprint(config: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(config)).hexdigest()
 
 
+def _config_without_location(config: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """返回去掉“位置”后的配置；本次没有勾选位置，或只勾选了位置时返回 None。"""
+
+    requested = list(config.get("messageTypes") or [])
+    kept = [value for value in requested if value != "location"]
+    # 空清单在基线里表示“不过滤、导出全部类型”，不能把“只勾选位置”当成它。
+    if not kept or len(kept) == len(requested):
+        return None
+    return {**config, "messageTypes": kept}
+
+
 def conversation_key(*, salt: str, username: str) -> str:
     payload = f"{str(salt or '')}\0{str(username or '')}".encode("utf-8", errors="replace")
     return hashlib.sha256(payload).hexdigest()
@@ -275,6 +286,7 @@ class ChatFolderContext:
     unresolved_media_conversations: list[dict[str, Any]] = field(default_factory=list)
     unresolved_missing_owner_keys: set[str] = field(default_factory=set)
     metadata_changed: bool = False
+    location_type_skipped: bool = False
 
     @property
     def export_runtime_id(self) -> str:
@@ -361,6 +373,7 @@ def prepare_folder_context(
         _validate_baseline_paths(old_state)
 
     desired_hash = config_fingerprint(config)
+    location_type_skipped = False
     if owned:
         baseline_account = str(old_state.get("account") or "")
         baseline_account_fingerprint = str(old_state.get("accountFingerprint") or "")
@@ -371,11 +384,19 @@ def prepare_folder_context(
         )
         if not account_matches:
             raise ChatIncrementalError("incremental_account_mismatch", "该增量目录属于其他微信账号，请选择新目录。")
-        if str(old_state.get("configFingerprint") or "") != desired_hash and not reset_baseline:
-            raise ChatIncrementalError(
-                "incremental_config_mismatch",
-                "导出格式或筛选配置与该增量目录不一致，请选择新目录或重置后完整重建。",
-            )
+        baseline_hash = str(old_state.get("configFingerprint") or "")
+        if baseline_hash != desired_hash and not reset_baseline:
+            # “位置”是导出面板后来补上的类型，而且默认勾选。基线只差这一项时沿用基线的类型清单，
+            # 已导出的历史与后续追加保持同一口径；需要位置消息时重置基线即可。
+            baseline_config = _config_without_location(config)
+            if baseline_config is None or config_fingerprint(baseline_config) != baseline_hash:
+                raise ChatIncrementalError(
+                    "incremental_config_mismatch",
+                    "导出格式或筛选配置与该增量目录不一致，请选择新目录或重置后完整重建。",
+                )
+            config = baseline_config
+            desired_hash = baseline_hash
+            location_type_skipped = True
 
     if reset_baseline:
         if old_state and not owned:
@@ -421,6 +442,7 @@ def prepare_folder_context(
         salt=salt,
         missing_files=missing,
         reset_baseline=bool(reset_baseline),
+        location_type_skipped=location_type_skipped,
     )
 
 
@@ -848,6 +870,7 @@ def materialize_folder_archive(
         "filesReused": max(0, len(current_files) - len(staged_entries)),
         "filesRemoved": len(stale),
         "filesRecovered": recovered_count,
+        "locationTypeSkipped": bool(context.location_type_skipped),
     }
     job.repair_candidates = list(context.repair_candidates)
     job.unresolved_media = {

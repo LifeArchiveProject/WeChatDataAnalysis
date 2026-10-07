@@ -79,6 +79,19 @@ class TestChatExportPanelFrontend(unittest.TestCase):
         self.assertIn("源端暂不可用，重复修复不会改变结果。", dialog)
         self.assertIn("查看完整任务说明", dialog)
 
+    def test_location_type_is_offered_and_folder_result_shows_when_it_is_skipped(self):
+        dialog = (ROOT / "frontend" / "components" / "chat" / "ChatExportDialog.vue").read_text(encoding="utf-8")
+        export_state = (ROOT / "frontend" / "composables" / "chat" / "useChatExport.js").read_text(encoding="utf-8")
+
+        self.assertIn("{ value: 'location', label: '位置' }", export_state)
+        # 目录沿用不含位置的基线时，提示要放在折叠的任务说明之外。
+        followups = dialog.index('class="chat-export-folder-result__followups"')
+        notice = dialog.index("本次未导出位置消息")
+        details = dialog.index('class="chat-export-folder-result__details"')
+        self.assertLess(followups, notice)
+        self.assertLess(notice, details)
+        self.assertIn('v-if="exportJob.incremental?.locationTypeSkipped"', dialog)
+
     def test_incremental_baseline_card_uses_compact_status_and_custom_checkbox(self):
         dialog = (ROOT / "frontend" / "components" / "chat" / "ChatExportDialog.vue").read_text(encoding="utf-8")
 
