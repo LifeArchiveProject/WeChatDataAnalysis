@@ -3603,7 +3603,15 @@ def _save_media_keys(account_dir: Path, xor_key: int, aes_key16: Optional[bytes]
             "xor": int(xor_key),
             "aes": aes_str,
         }
-        (account_dir / "_media_keys.json").write_text(
+        path = account_dir / "_media_keys.json"
+        # 密钥文件只允许属主读写：先建成/收紧到 0600 再写入内容。Windows 没有这套权限位，不处理。
+        if os.name == "posix":
+            try:
+                path.touch(mode=0o600, exist_ok=True)
+                os.chmod(path, 0o600)
+            except Exception:
+                pass
+        path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
