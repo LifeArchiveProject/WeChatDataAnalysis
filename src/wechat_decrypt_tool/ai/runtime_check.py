@@ -4,6 +4,7 @@ import io
 import platform
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 
@@ -40,26 +41,28 @@ async def _checkpoint(root):
     from .providers import ModelService
     from .service import AIService
     from .agent_service import AgentService
-    store = AIStore(root / 'application')
-    store.put('profile', {'model': 'synthetic', 'name': '冻结验收', 'protocol': 'openai',
-        'base_url': 'http://127.0.0.1:1/v1', 'api_key': 'synthetic-unused-key',
-        'model_overrides': {'context_window': 32768}}, id='synthetic')
-    store.put('defaults', {'text': 'synthetic'}, id='global')
-    models = ModelService(store)
-    models.client = lambda profile: RuntimeModel(messages=iter([AIMessage(content='运行正常')]))
-    class NoQueries:
-        async def conversations(self, account):
-            raise AssertionError('冻结问候检查不能读取聊天目录')
-    service = AgentService(AIService(store, models), tools=NoQueries())
-    thread = await service.create_thread('synthetic', '', '运行检查')
-    run = await service.submit(thread['id'], 'synthetic', {'text': '你好', 'request_id': 'smoke'})
-    await service.workers[run['id']]
-    result = service.public_run(run['id'], 'synthetic')
-    assert result['status'] == 'completed', result.get('error')
-    assert result['answer'] == '运行正常'
-    assert result['used']['models'] == 1 and result['used']['tools'] == 0
-    assert result['engine'] == 'deepagents' and result['engine_version'] == 3
-    await service.stop()
+    with closing(AIStore(root / 'application')) as store:
+        store.put('profile', {'model': 'synthetic', 'name': '冻结验收', 'protocol': 'openai',
+            'base_url': 'http://127.0.0.1:1/v1', 'api_key': 'synthetic-unused-key',
+            'model_overrides': {'context_window': 32768}}, id='synthetic')
+        store.put('defaults', {'text': 'synthetic'}, id='global')
+        models = ModelService(store)
+        models.client = lambda profile: RuntimeModel(messages=iter([AIMessage(content='运行正常')]))
+        class NoQueries:
+            async def conversations(self, account):
+                raise AssertionError('冻结问候检查不能读取聊天目录')
+        service = AgentService(AIService(store, models), tools=NoQueries())
+        try:
+            thread = await service.create_thread('synthetic', '', '运行检查')
+            run = await service.submit(thread['id'], 'synthetic', {'text': '你好', 'request_id': 'smoke'})
+            await service.workers[run['id']]
+            result = service.public_run(run['id'], 'synthetic')
+            assert result['status'] == 'completed', result.get('error')
+            assert result['answer'] == '运行正常'
+            assert result['used']['models'] == 1 and result['used']['tools'] == 0
+            assert result['engine'] == 'deepagents' and result['engine_version'] == 3
+        finally:
+            await service.stop()
 
 
 def check_runtime(model_root=None):
@@ -90,9 +93,10 @@ def check_runtime(model_root=None):
     assert 'cl100k_base' in tiktoken.list_encoding_names()
     with tempfile.TemporaryDirectory(prefix='wechat-ai-runtime-') as directory:
         root = Path(directory)
-        store = AIStore(root / 'business')
-        store.put('runtime_check', {'ok': True}, id='check', account='synthetic')
-        assert store.get('runtime_check', 'check')['ok']
+        # 自检持有的业务连接必须在删除临时目录前释放，Windows 不允许删除打开的库。
+        with closing(AIStore(root / 'business')) as store:
+            store.put('runtime_check', {'ok': True}, id='check', account='synthetic')
+            assert store.get('runtime_check', 'check')['ok']
         asyncio.run(_checkpoint(root))
         report['application_graph'] = 'deepagents-v3-one-call-no-query'
         index = SemanticIndex(root / 'vectors.sqlite3')
