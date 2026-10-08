@@ -42,6 +42,7 @@ class AgentService(DeepAgentRuntime, DeepProjection, AgentTimeline):
         self.readers = {}
         self.index_workers = {}
         self.reference_contacts = {}
+        self._draft_saved_at = {}
         from .deep_subtasks import DeepSubtasks
         self.subtasks = DeepSubtasks(self)
 
@@ -68,14 +69,20 @@ class AgentService(DeepAgentRuntime, DeepProjection, AgentTimeline):
         return record
 
     @serialized
-    def update(self, id, **fields):
+    def update(self, id, *, transient=False, emit=True, **fields):
+        with self.store.lock if transient else self.store.connection():
+            return self._update(id, transient=transient, emit=emit, **fields)
+
+    def _update(self, id, *, transient, emit, **fields):
         record = self.run(id)
         values = fields.pop('evidence',None)
         if values is not None and not isinstance(values,Evidence):
             record['evidence'].replace(values)
         record.pop('evidence',None)
+        if all(record.get(key) == value for key, value in fields.items()) and not self.store.has_live_record('agent_run', id):
+            return self.run(id)
         record.update(fields, updated_at=time.time())
-        self.store.put('agent_run', record)
+        self.store.put('agent_run', record, transient=transient)
         if 'version' in fields or 'status' in fields:
             diagnostic_event('agent.run.state', run_id=id, thread_id=record['thread_id'], version=record['version'], status=record['status'])
         event = {'type': 'run_patch', 'run_id': id, 'thread_id': record['thread_id'], 'status': record['status'],
@@ -104,8 +111,23 @@ class AgentService(DeepAgentRuntime, DeepProjection, AgentTimeline):
             }
         if patch:
             event['patch'] = patch
-        self.store.event(record['account'], 'agent', event)
+        if emit and (patch or any(key in fields for key in ('context_budget', 'analysis', 'status', 'version'))):
+            self.store.event(record['account'], 'agent', event, transient=transient,
+                             unique_key=f'run_patch:{id}' if transient else None)
         return self.run(id)
+
+    @serialized
+    def stream_answer(self, id, text, stage):
+        """实时正文只推送内存事件；每两秒及终态保存可恢复草稿。"""
+        run = self.guard(id)
+        now = time.monotonic()
+        key = (id, run['version'])
+        saved_at = self._draft_saved_at.setdefault(key, now)
+        persist = now - saved_at >= 2.0
+        self.timeline_item(id, 'answer', text, item_id='answer:' + id, status='running',
+                           persist=persist, transient_event=True, run_fields={'answer': text, 'stage': stage})
+        if persist:
+            self._draft_saved_at[key] = now
 
     def guard(self, id):
         run = self.run(id)
@@ -190,10 +212,16 @@ class AgentService(DeepAgentRuntime, DeepProjection, AgentTimeline):
         return snapshot | {'api_key': live.get('api_key', '')}
 
     @observed('agent.finish', id_field='run_id')
+    @serialized
     def finish(self, id, status, error='', error_info=None):
+        with self.store.connection():
+            return self._finish(id, status, error, error_info)
+
+    def _finish(self, id, status, error, error_info):
         run = self.store.get('agent_run', id)
         if not run:
             return
+        self._draft_saved_at = {key: value for key, value in self._draft_saved_at.items() if key[0] != id}
         if status == 'completed' and run.get('delegation_partial'):
             status = 'interrupted'
             error = '部分子任务未完成，当前为阶段结果，可继续分析。'

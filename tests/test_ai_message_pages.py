@@ -339,10 +339,10 @@ def test_index_stream_resumes_only_committed_batches(message_source, tmp_path, m
         service = LocalSearch(tmp_path / 'state', tmp_path / 'models', engine=engine)
         emitted = []
         original_event = service.store.event
-        def record(account, kind, body, unique_key=None, replace=False):
+        def record(account, kind, body, unique_key=None, replace=False, transient=False):
             if kind == 'local_search_index':
                 emitted.append(body)
-            return original_event(account, kind, body, unique_key, replace)
+            return original_event(account, kind, body, unique_key, replace, transient=transient)
         monkeypatch.setattr(service.store, 'event', record)
         root = model_dir(service.downloads.root, 'bge-small-zh')
         root.mkdir(parents=True)

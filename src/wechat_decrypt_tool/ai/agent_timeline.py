@@ -2,15 +2,33 @@
 import time
 import uuid
 import re
+from contextlib import nullcontext
+from .deep_synchronization import serialized
 
 
 class AgentTimeline:
-    def timeline_item(self, id, kind, text, *, item_id=None, status='completed', **fields):
+    @serialized
+    def timeline_item(self, id, kind, text, *, item_id=None, status='completed', persist=True,
+                      transient_event=False, run_fields=None, **fields):
+        # 业务时间线、任务快照和持久事件在同一事务提交，避免一个动作多次刷盘。
+        with self.store.connection() if persist else nullcontext():
+            return self._timeline_item(id, kind, text, item_id=item_id, status=status, persist=persist,
+                                       transient_event=transient_event, run_fields=run_fields, **fields)
+
+    def _timeline_item(self, id, kind, text, *, item_id, status, persist, transient_event, run_fields, **fields):
         run = self.run(id)
         items = run.get('timeline') or [dict(x, seq=i+1, revision=1, kind='status') for i,x in enumerate(run.get('activity', []))]
         now = time.time()
         item = next((x for x in items if x['id'] == item_id), None)
         previous_text = item.get('text', '') if item else ''
+        if (item and item.get('text') == text and item.get('status') == status
+                and all(item.get(k) == v for k, v in fields.items())
+                and all(run.get(k) == v for k, v in (run_fields or {}).items())):
+            if persist and self.store.has_live_record('agent_run', id):
+                self.update(id, emit=False, **(run_fields or {}))
+                if hasattr(self, 'workspace'):
+                    self.workspace.put(id, run['version'], f'timeline:{item["seq"]:012d}', 'timeline', item)
+            return item['id']
         if item is None:
             item = dict(id=item_id or uuid.uuid4().hex, seq=max(run.get('timeline_seq',0),max((x.get('seq',0) for x in items),default=0)) + 1, revision=0,
                         kind=kind, started_at=now, input_version=run['version'])
@@ -19,12 +37,18 @@ class AgentTimeline:
         if status not in ('running', 'received'):
             item['finished_at'] = now
         # 普通过程保留最近 200 步；压缩节点是持久的对话分隔，不能随步骤淘汰。
-        if hasattr(self,'workspace'):
+        if persist and hasattr(self,'workspace'):
             self.workspace.put(id,run['version'],f'timeline:{item["seq"]:012d}','timeline',item)
         retained = [x for i, x in enumerate(items) if i >= len(items) - 200 or
                     (x.get('kind') == 'notice' and x.get('context_job', {}).get('before') is not None)]
-        self.update(id, timeline=retained,timeline_seq=max(x.get('seq',0) for x in items))
+        self.update(id, transient=not persist, emit=False, timeline=retained,
+                    timeline_seq=max(x.get('seq',0) for x in items), **(run_fields or {}))
         event = {'type':'timeline_item', 'run_id':id, 'thread_id':run['thread_id'], 'version':run['version'], 'timeline_item':item}
+        if run_fields:
+            current = self.run(id)
+            event['updated_at'] = current['updated_at']
+            # 正文仍从时间线合并，阶段信息同一个事件送达，避免额外写入 run_patch。
+            event['patch'] = {key: current[key] for key in run_fields if key != 'answer'}
         if kind in ('answer', 'progress'):
             # 新标记与已校验身份同时送达，避免正文先出现、来源等待慢速快照。
             # 只发送本次新增标记，完整映射仍由运行快照和历史保存负责。
@@ -35,7 +59,8 @@ class AgentTimeline:
                 from .agent_references import cited_references
                 event['citations'] = self.citations({**run, 'answer': added, 'timeline': [], 'answer_context': {}})
                 event['references'] = cited_references(added, run.get('references', {}))
-        self.store.event(run['account'], 'agent', event)
+        self.store.event(run['account'], 'agent', event, transient=transient_event,
+                         unique_key=f'timeline:{id}:{item["id"]}' if transient_event else None)
         return item['id']
 
     def close_activity(self, id, status='completed'):

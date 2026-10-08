@@ -802,8 +802,7 @@ class DeepAgentRuntime(ParallelAnalysis):
                                 text = delta.get('text', '') if delta.get('type') == 'text-delta' else ''
                                 partial += text
                                 if text and time.monotonic() - last_emit >= .08:
-                                    self.update(id, answer=partial, stage='提取局部事实' if run.get('parent_run_id') and run.get('subtask_plan_version') == REVISION else '正在回答')
-                                    self.timeline_item(id, 'answer', partial, item_id='answer:' + id, status='running')
+                                    self.stream_answer(id, partial, '提取局部事实' if run.get('parent_run_id') and run.get('subtask_plan_version') == REVISION else '正在回答')
                                     last_emit = time.monotonic()
                 final = await agent.aget_state(config)
                 answer = next((m for m in reversed(final.values.get('messages', [])) if isinstance(m, AIMessage) and not m.tool_calls), None)

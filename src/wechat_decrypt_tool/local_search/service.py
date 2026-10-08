@@ -102,13 +102,23 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
         return cfg
 
     def update(self, job, **changes):
+        # 纯展示计数不推进断点；索引数据和游标仍由 index.commit 原子保存。
+        transient = bool(changes) and set(changes) <= {'read_count', 'embedded_count', 'read_batch_size_effective'}
+        dirty = self.store.has_live_record('index_job', job['id'])
+        if changes and all(job.get(key) == value for key, value in changes.items()) and (transient or not dirty):
+            return
+        if not changes and not dirty:
+            previous = self.store.get('index_job', job['id'])
+            if previous and {k: v for k, v in previous.items() if k != 'updated'} == {k: v for k, v in job.items() if k != 'updated'}:
+                return
         job.update(changes, updated=time.time())
         if job['id'] in self.restarting: job['resume_on_start']=True
         if job['account'] in self.revoked: return
-        self.store.put('index_job', job, id=job['id'], account=job['account'])
-        # 事件表只保留每个任务的最新进度；完整快照以 records 表为准。
-        progress = {key: value for key, value in job.items() if key not in EVENT_OMITTED_FIELDS}
-        self.store.event(job['account'], 'local_search_index', progress, unique_key=f'index_job:{job["id"]}', replace=True)
+        with self.store.connection() if not transient else self.store.lock:
+            self.store.put('index_job', job, id=job['id'], account=job['account'], transient=transient)
+            progress = {key: value for key, value in job.items() if key not in EVENT_OMITTED_FIELDS}
+            self.store.event(job['account'], 'local_search_index', progress,
+                             unique_key=f'index_job:{job["id"]}', replace=True, transient=transient)
 
     def enrichment_version(self, account):
         """只检查本地提取缓存，不触发媒体分析或网络访问。"""
