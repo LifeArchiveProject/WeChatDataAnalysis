@@ -6,6 +6,7 @@ import json
 import multiprocessing as mp
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import threading
@@ -32,16 +33,64 @@ def is_lan_endpoint(endpoint):
     host = host.strip('[]').lower()
     if host == 'localhost' or host.endswith('.local'):
         return True
-    from ..ai.providers import is_lan_address
-    if is_lan_address(host):
+    from ..ai.providers import is_proxy_bypass_host
+    # 私有网段、Tailscale 等 100.64/10 覆盖网络、链路本地都直连；只有真正对外的
+    # 地址才让代理参与。
+    if is_proxy_bypass_host(host):
         return True
     try:
-        address = ipaddress.ip_address(host)
+        ipaddress.ip_address(host)
     except ValueError:
         # 单标签主机名（如 gpu-server）按局域网处理。
         return '.' not in host
-    # 代理只服务对外请求，回环与链路本地一律直连。
-    return address.is_loopback or address.is_link_local
+    return False
+
+
+def remote_api_base(endpoint):
+    """OpenAI 兼容服务的基地址：接受 .../v1、.../v1/embeddings 或裸主机地址。
+
+    用户填的地址形态不统一，这里统一归一到 `.../v1`，再拼 /embeddings 与 /models。
+    """
+    endpoint = str(endpoint or '').strip().rstrip('/')
+    if not endpoint:
+        return ''
+    if endpoint.endswith('/embeddings'):
+        endpoint = endpoint[:-len('/embeddings')]
+    if not re.search(r'/v\d+$', endpoint):
+        endpoint += '/v1'
+    return endpoint
+
+
+def decode_remote_vector(value):
+    """向量既可能是浮点数组，也可能是 base64 编码的 float32 小端数据。"""
+    if isinstance(value, list):
+        return [float(item) for item in value]
+    if isinstance(value, str):
+        import base64
+        import struct
+        raw = base64.b64decode(value)
+        if not raw or len(raw) % 4:
+            raise InferenceFailure('远端返回的 base64 向量长度不合法', 'remote')
+        return list(struct.unpack('<%df' % (len(raw) // 4), raw))
+    raise InferenceFailure('远端返回的向量格式无法识别', 'remote')
+
+
+def parse_remote_vectors(data, expected, dimension=None):
+    """按 OpenAI 规范的 index 排序取向量：不能假设服务端按返回顺序对齐请求顺序。"""
+    items = data.get('data') if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise InferenceFailure('远端返回不是 OpenAI 兼容的向量结构', 'remote')
+    ordered = sorted(items, key=lambda item: item.get('index', 0) if isinstance(item, dict) else 0)
+    vectors = []
+    for item in ordered:
+        value = item.get('embedding') if isinstance(item, dict) else item
+        vector = decode_remote_vector(value)
+        if dimension and len(vector) != dimension:
+            raise InferenceFailure('远端向量维度与索引不一致（%d ≠ %d），请重新建立索引' % (len(vector), dimension), 'remote')
+        vectors.append(vector)
+    if len(vectors) != expected:
+        raise InferenceFailure('远端向量数量不匹配', 'remote')
+    return vectors
 
 
 def inference_worker(pipe, root, spec, device, device_id, gpu_root):
@@ -186,26 +235,74 @@ class LocalInference:
                 raise InferenceFailure('推理进程已退出', 'process')
         raise InferenceFailure('模型响应超时', 'timeout')
 
+    QUERY_MAX_CHARS = 2000
+
     def _remote_encode(self, spec, texts, query=False, cancelled=None):
+        """调用 OpenAI 兼容的 /v1/embeddings。
+
+        协议固定为 `{model, input, encoding_format}` → `data[].embedding`，Ollama、LM Studio、
+        vLLM 等服务都提供这个入口，不需要用户另行为本工具实现一套接口。
+        """
         import httpx
-        endpoint = str(spec.get('endpoint') or '').strip().rstrip('/')
-        if not endpoint:
+
+        def status_message(exc):
+            response = getattr(exc, 'response', None)
+            status = getattr(response, 'status_code', 0)
+            detail = ''
+            try:
+                body = (response.text or '').strip()
+                if body:
+                    detail = '：' + body[:180]
+            except Exception:
+                detail = ''
+            if status in (401, 403):
+                return '远端服务拒绝访问（密钥无效或未授权）%s' % detail
+            if status == 404:
+                return '远端服务没有 /v1/embeddings（检查地址是否缺少 /v1，或该服务不提供向量接口）%s' % detail
+            if status == 400:
+                return '远端服务拒绝了这批文本（模型名不存在或文本超出上下文）%s' % detail
+            if status == 429:
+                return '远端服务限流，请稍后重试%s' % detail
+            if status >= 500:
+                return '远端服务返回 %d%s' % (status, detail)
+            return '远端服务返回 %d%s' % (status, detail)
+
+        endpoint = str(spec.get('endpoint') or '').strip()
+        base = remote_api_base(endpoint)
+        if not base:
             raise InferenceFailure('远端模型未配置服务地址', 'remote')
-        url = endpoint if endpoint.endswith('/embed') else endpoint + '/embed'
-        payload = {'texts': list(texts), 'query': bool(query)}
-        timeout = httpx.Timeout(300.0, connect=10.0)
+        model = str(spec.get('model') or '').strip()
+        if not model:
+            raise InferenceFailure('远端模型未配置模型名', 'remote')
+        if cancelled and cancelled():
+            raise InferenceFailure('处理已暂停', 'cancelled')
+        values = [str(text) for text in texts]
+        if query:
+            # 查询串按字符上界收口：上下文小的模型遇到长句会直接 400。
+            values = [text[:self.QUERY_MAX_CHARS] for text in values]
+        headers = {}
+        key = str(spec.get('api_key') or '').strip()
+        if key:
+            headers['Authorization'] = 'Bearer ' + key
+        payload = {'model': model, 'input': values, 'encoding_format': 'float'}
+        timeout = httpx.Timeout(float(spec.get('timeout') or 300.0), connect=10.0)
         try:
-            # 局域网地址绕过系统代理，否则请求会被本机代理拦成 502。
-            with httpx.Client(timeout=timeout, trust_env=not is_lan_endpoint(endpoint)) as client:
-                response = client.post(url, json=payload)
+            # 局域网与覆盖网络地址绕过系统代理，否则请求会被本机代理拦下；
+            # 自签名证书只在用户显式允许时跳过校验。
+            with httpx.Client(timeout=timeout, trust_env=not is_lan_endpoint(endpoint),
+                              verify=not bool(spec.get('allow_self_signed'))) as client:
+                response = client.post(base + '/embeddings', json=payload, headers=headers)
                 response.raise_for_status()
                 data = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise InferenceFailure(status_message(exc), 'remote') from None
         except httpx.HTTPError as exc:
-            raise InferenceFailure('无法连接远程向量服务：%s' % exc, 'remote') from None
-        vectors = data['vectors'] if isinstance(data, dict) else data
-        if len(vectors) != len(texts):
-            raise InferenceFailure('远程向量数量不匹配', 'remote')
-        return vectors
+            raise InferenceFailure('无法连接远端向量服务：%s' % exc, 'remote') from None
+        except ValueError as exc:
+            raise InferenceFailure('远端返回不是有效 JSON：%s' % exc, 'remote') from None
+        if cancelled and cancelled():
+            raise InferenceFailure('处理已暂停', 'cancelled')
+        return parse_remote_vectors(data, len(values), spec.get('dimension') or None)
 
     @observed('inference.encode')
     def encode(self, root, spec, texts, strategy='auto', device_id=0, query=False, cancelled=None):
