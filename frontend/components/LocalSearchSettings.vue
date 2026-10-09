@@ -119,19 +119,28 @@
           <details v-if="state.audit?.length" class="lss-section"><summary>本地处理记录</summary><p v-for="a in state.audit" :key="a.id" class="lss-note">{{ a.kind==='search' ? '检索' : '整理聊天' }} · {{ a.model }} · {{ a.actual_device==='cuda' ? 'NVIDIA GPU' : 'CPU' }} · {{ Number(a.seconds).toFixed(1) }} 秒</p></details>
         </div>
       </details>
-      <div class="lss-bottom-note"><Laptop :size="16" :stroke-width="1.8" aria-hidden="true" /><span>本地搜索不上传聊天。AI 助手回答时，引用的内容仍会发送至你配置的模型服务。</span></div>
+      <div class="lss-bottom-note"><Laptop :size="16" :stroke-width="1.8" aria-hidden="true" /><span>{{ selectedModel?.backend==='remote' ? '检索由你配置的远端服务执行：建立索引和搜索时，聊天文本会发送到该服务。AI 助手回答时，引用的内容仍会发送至你配置的模型服务。' : '本地搜索不上传聊天。AI 助手回答时，引用的内容仍会发送至你配置的模型服务。' }}</span></div>
     </div>
 
     <Teleport to="body"><div v-if="dialog" class="lss-overlay" @click.self="closeDialog" @keydown.esc.stop="closeDialog" @keydown.tab="trapFocus">
       <section ref="dialogRef" class="lss-dialog local-search-settings" :class="{ 'lss-model-dialog':dialog==='models', 'lss-scope-dialog':dialog==='scope' }" role="dialog" aria-modal="true" :aria-label="dialogTitle" tabindex="-1">
-        <header class="lss-dialog-heading"><div><h4>{{ dialogTitle }}</h4><p>{{ dialog==='models' ? '按语言和电脑配置选择，下载完成后点击「使用此模型」；局域网模型无需下载，填好服务地址后直接使用。' : dialog==='scope' ? '按分类选择要检索的聊天' : '导入后会校验版本和文件完整性。' }}</p></div><button type="button" aria-label="关闭" :disabled="busy" @click="closeDialog"><X :size="16" :stroke-width="1.8" aria-hidden="true" /></button></header>
+        <header class="lss-dialog-heading"><div><h4>{{ dialogTitle }}</h4><p>{{ dialog==='models' ? '按语言和电脑配置选择，下载完成后点击「使用此模型」；远端模型无需下载，填好服务地址和模型名后直接使用。' : dialog==='scope' ? '按分类选择要检索的聊天' : '导入后会校验版本和文件完整性。' }}</p></div><button type="button" aria-label="关闭" :disabled="busy" @click="closeDialog"><X :size="16" :stroke-width="1.8" aria-hidden="true" /></button></header>
         <p v-if="dialogError" class="lss-feedback lss-error" role="alert">{{ dialogError }}</p>
         <template v-if="dialog==='models'">    <div class="lss-models" role="list" aria-label="可用检索模型">
       <article v-for="m in state.models || []" :key="m.id" class="lss-card lss-model" :class="{selected: form.model===m.id}" role="listitem">
         <div class="lss-row"><h5>{{ m.name }} <small v-if="m.recommended">推荐</small></h5><span class="lss-note">{{ m.backend==='remote' ? '局域网服务' : m.downloaded ? '已下载' : stage(m.job) }}</span></div>
-        <p>{{ m.description }}</p><p class="lss-note">{{ m.backend==='remote' ? '远端运行' : bytes(m.size)+' · 本地运行' }} · {{ m.license }}</p>
-        <div v-if="m.backend==='remote'" class="lss-endpoint"><span>服务地址</span><input v-model="form.remote_endpoint" type="text" inputmode="url" placeholder="http://192.168.1.10:8100" aria-label="远端向量服务地址" /><small>留空则使用 {{ m.endpoint || '目录默认地址' }}；保存后生效，需与本机在同一局域网。</small></div>
-        <details class="lss-source"><summary>模型来源</summary><a v-if="m.repo" :href="`https://huggingface.co/${m.repo}`" target="_blank" rel="noopener noreferrer">{{ m.repo }}</a><p>{{ m.backend==='remote' ? '原作者 腾讯 WeChat · 向量推理在远端执行' : m.id.startsWith('bge') ? '原作者 BAAI · ONNX 转换 Xenova' : '原作者 intfloat' }}</p><p v-if="m.revision">固定版本 {{ m.revision.slice(0, 12) }}</p></details>
+        <p>{{ m.description }}</p><p class="lss-note">{{ m.backend==='remote' ? '远端运行' : bytes(m.size)+' · 本地运行' }}{{ m.license ? ' · '+m.license : '' }}</p>
+        <div v-if="m.backend==='remote'" class="lss-endpoint">
+          <div class="lss-presets"><span>快速预设</span><button v-for="preset in remotePresets" :key="preset.label" type="button" :disabled="busy" @click="applyPreset(preset)">{{ preset.label }}</button></div>
+          <span>服务地址</span><input v-model="form.remote_endpoint" type="text" inputmode="url" placeholder="https://192.168.1.10:11434/v1" aria-label="远端向量服务地址" />
+          <span>模型名</span><input v-model="form.remote_model" type="text" placeholder="tencent/WeMM-Embedding-2B" aria-label="远端服务模型名" />
+          <span>API Key（可选）</span><input v-model="form.remote_api_key" type="password" autocomplete="off" placeholder="服务不校验密钥时留空" aria-label="远端服务 API Key" />
+          <label class="lss-check"><input v-model="form.remote_allow_self_signed" type="checkbox" />允许自签名证书</label>
+          <div class="lss-actions"><button type="button" :disabled="busy || !form.remote_endpoint" @click="testRemote">测试连接</button></div>
+          <p v-if="remoteTestText" class="lss-note" :class="{ 'lss-error': remoteTest && remoteTest.status !== 'success' }">{{ remoteTestText }}</p>
+          <small>地址填到 /v1 即可（也接受完整的 /v1/embeddings）；服务需提供 OpenAI 兼容的向量接口。建立索引和搜索时，文本会发送到该服务。</small>
+        </div>
+        <details class="lss-source"><summary>模型来源</summary><a v-if="m.repo" :href="`https://huggingface.co/${m.repo}`" target="_blank" rel="noopener noreferrer">{{ m.repo }}</a><p>{{ m.backend==='remote' ? '向量推理由你填写的服务提供，本工具只按 OpenAI 兼容协议调用' : m.id.startsWith('bge') ? '原作者 BAAI · ONNX 转换 Xenova' : '原作者 intfloat' }}</p><p v-if="m.revision">固定版本 {{ m.revision.slice(0, 12) }}</p></details>
         <template v-if="m.job && !['done','error'].includes(m.job.status)"><progress :value="m.job.total ? m.job.bytes : undefined" :max="m.job.total || undefined" :aria-label="`${m.name} 下载进度`" /><p class="lss-note">{{ stage(m.job) }} · {{ bytes(m.job.bytes) }} / {{ bytes(m.job.total) }}<span v-if="m.job.speed"> · {{ bytes(m.job.speed) }}/s</span><span v-if="m.job.stage==='retry_wait'"> · {{ Math.max(0,Math.ceil(m.job.next_retry-now)) }} 秒后重试</span></p></template>
         <p v-if="m.job?.error" class="lss-error">{{ m.job.error }}</p>
         <div class="lss-actions lss-model-actions">
@@ -179,7 +188,7 @@ import UiSelect from './UiSelect.vue'
 const props=defineProps({accountWide:{type:Boolean,default:false}})
 const { selectedAccount: account }=storeToRefs(useChatAccountsStore())
 const api=useAiApi(), route=useRoute()
-const state=ref({}), form=reactive({enabled:false,model:null,usernames:[],days:90,start:null,end:null,device:'auto',device_id:0,auto_update:true,read_batch_size:0,remote_endpoint:null})
+const state=ref({}), form=reactive({enabled:false,model:null,usernames:[],days:90,start:null,end:null,device:'auto',device_id:0,auto_update:true,read_batch_size:0,remote_endpoint:null,remote_model:null,remote_api_key:null,remote_allow_self_signed:false})
 const statusRef=ref(null)
 const advancedOpen=ref(false),busy=ref(false),dialogError=ref(''),error=ref(''),notice=ref(''),now=ref(Date.now()/1000),gpuDevices=ref([])
 const dialog=ref(''),dialogRef=ref(null),scopeSearch=ref(''),scopeDraft=ref([]),chats=ref([]),importId=ref(''),importPath=ref('')
@@ -283,6 +292,33 @@ const date=n=>n ? new Date(n*1000).toLocaleString() : '—'
 const elapsed=j=>`${Math.max(0,Math.floor((j.finished || (['paused','done','error'].includes(j.status) ? j.updated : now.value) || now.value)-j.started))} 秒`
 const stage=j=>!j ? '未下载' : ({counting:'正在统计消息总量',importing:'导入中',pausing:'正在暂停',queued:'等待整理',connecting:'连接中',downloading:'下载中',retry_wait:'等待重试',paused:'已暂停',verifying:'校验中',verified:'校验完成',loading:'测试模型',done:'已完成',error:'处理失败',reading:'读取聊天记录',organizing:'整理消息片段',embedding:'正在理解聊天内容',saving:'正在保存搜索数据',installing:'安装加速组件'}[j.status==='error' || j.status==='paused' ? j.status : j.stage] || '处理中')
 const request=(path,options={},scoped=false)=>api.request(`/local-search${path}${scoped && account.value ? `${path.includes('?')?'&':'?'}account=${encodeURIComponent(account.value)}`:''}`,options)
+// 远端模型只按 OpenAI 兼容协议调用，常见服务用预设把地址和模型名一次填好。
+const remotePresets=[
+  {label:'WeMM 2B',endpoint:'',model:'tencent/WeMM-Embedding-2B'},
+  {label:'Ollama',endpoint:'http://127.0.0.1:11434/v1',model:'bge-m3'},
+  {label:'LM Studio',endpoint:'http://127.0.0.1:1234/v1',model:'text-embedding-bge-m3'},
+]
+const remoteTest=ref(null)
+function applyPreset(preset){
+  if(preset.endpoint)form.remote_endpoint=preset.endpoint
+  if(preset.model)form.remote_model=preset.model
+  remoteTest.value=null
+}
+const remoteTestText=computed(()=>{
+  const result=remoteTest.value
+  if(!result)return ''
+  if(result.status!=='success')return result.error || '连接失败'
+  const parts=[`连接成功，向量维度 ${result.dimension}`]
+  // 服务端不会校验模型名（写错也会返回向量），所以清单里没有就一定要提醒。
+  if(result.model_listed===false)parts.push(`但服务的模型清单里没有「${form.remote_model}」`)
+  else if(result.models?.length)parts.push(`服务提供 ${result.models.length} 个模型：${result.models.slice(0,5).join('、')}`)
+  return parts.join('；')
+})
+async function testRemote(){
+  await act(async()=>{
+    remoteTest.value=await request('/remote/test',{method:'POST',body:{endpoint:form.remote_endpoint || '',model:form.remote_model || '',api_key:form.remote_api_key || '',allow_self_signed:!!form.remote_allow_self_signed}})
+  })
+}
 let refreshDone=Promise.resolve()
 let timer, loading=false, version=0, gpuVersion=0, needsReset=false, previousFocus, stopEvents
 const defaults={...form,usernames:[]}
@@ -524,6 +560,9 @@ summary{cursor:pointer}
 .lss-endpoint{display:grid;gap:4px;margin-top:10px}
 .lss-endpoint>span{font-size:11px;font-weight:500}
 .lss-endpoint small{color:var(--app-text-secondary);font-size:10px;line-height:1.5}
+.lss-presets{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:10px;color:var(--app-text-secondary)}
+.lss-presets button{font-size:10px;padding:2px 8px;border-radius:999px;border:1px solid var(--app-border,#d8e1da);background:transparent;color:inherit;cursor:pointer}
+.lss-presets button:disabled{opacity:.5;cursor:default}
 @container (max-width:600px){.lss-heading{flex-wrap:wrap}.lss-start{align-items:stretch;flex-direction:column}.lss-start>button{width:100%}.lss-time-row{flex-wrap:wrap}.lss-time-row>.lss-note{width:100%}.lss-model-summary{flex-wrap:wrap}.lss-model-summary>.lss-grow{min-width:180px}.lss-step{padding:15px}.lss-advanced>summary>.lss-note{font-size:9px}.lss-advanced .lss-row{flex-wrap:wrap}}
 @media(max-width:600px){.lss-models,.lss-grid{grid-template-columns:1fr}.lss-row{flex-wrap:wrap}.lss-dialog{padding:16px}.lss-model-dialog{width:100%}}
 @media(prefers-reduced-motion:reduce){.agent-icon-spin{animation:none}}

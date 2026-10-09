@@ -3,7 +3,7 @@
     <header class="ais-heading">
       <div class="ais-heading-icon"><WandSparkles :size="16" :stroke-width="1.8" aria-hidden="true" /></div>
       <div><h3>AI 服务</h3><p>管理 AI 模型、本地搜索与对话体验。</p></div>
-      <span class="ais-local"><Lock :size="16" :stroke-width="1.8" aria-hidden="true" /> {{ activeTab==='local' ? '搜索在本机运行' : '密钥本机保存' }}</span>
+      <span class="ais-local"><Lock :size="16" :stroke-width="1.8" aria-hidden="true" /> {{ activeTab==='local' ? '本机或你指定的服务' : '密钥本机保存' }}</span>
     </header>
 
     <div class="ais-tabs" role="tablist" aria-label="AI 服务页面">
