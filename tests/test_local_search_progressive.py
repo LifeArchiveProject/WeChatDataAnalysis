@@ -136,7 +136,7 @@ def test_recent_chats_precede_older_history_without_boundary_overlap():
 
 def test_partial_publication_exposes_only_committed_coverage(tmp_path):
     service = LocalSearch(root=tmp_path)
-    cfg = {**service.config('a'), 'enabled': True, 'agent_global': True, 'revision': 1, 'model': 'test', 'usernames': ['a', 'b']}
+    cfg = {**service.config('a'), 'enabled': True, 'agent_global': True, 'revision': 1, 'model': 'bge-small-zh', 'usernames': ['a', 'b']}
     service.store.put('config', cfg, id='a')
     service.publish_partial({'account': 'a', 'config': cfg, 'generation': 'g', 'start': 0, 'end': 100,
                              'coverage': {'0': {'username': 'a', 'start': 90, 'end': 100, 'complete': False}}})
