@@ -15,7 +15,7 @@ from ..app_paths import get_data_dir, get_output_dir
 from .catalog import model_dir, model_spec, remote_spec
 from .downloads import ModelDownloads
 from .index import SemanticIndex, make_chunks, fuse
-from .inference import LocalInference, InferenceFailure
+from .inference import LocalInference, InferenceFailure, is_lan_endpoint
 from .progressive import ProgressiveIndex, reading_segments, committed_coverage, coverage_complete
 from .totals import MessageTotals
 
@@ -300,7 +300,8 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
         url = endpoint + '/tokenizer.json'
         import httpx
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+            # 局域网地址绕过系统代理，否则请求会被本机代理拦成 502。
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0), trust_env=not is_lan_endpoint(endpoint)) as client:
                 response = await client.get(url, follow_redirects=True)
                 response.raise_for_status()
                 data = response.content

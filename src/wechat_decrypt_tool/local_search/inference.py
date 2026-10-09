@@ -1,5 +1,6 @@
 """隔离推理进程：CUDA 故障后销毁进程，再用 CPU 重放未提交批次。"""
 from ..ai.diagnostics import observed, event as diagnostic_event
+import ipaddress
 import logging
 import json
 import multiprocessing as mp
@@ -10,12 +11,37 @@ import tempfile
 import threading
 import time
 from ..ai.diagnostics import exception_fields
+from urllib.parse import urlparse
 
 
 class InferenceFailure(RuntimeError):
     def __init__(self, message, category='runtime'):
         super().__init__(message)
         self.category = category
+
+
+def is_lan_endpoint(endpoint):
+    """判断远端向量服务地址是否属于局域网/回环，用于决定要不要绕过系统代理。
+
+    Windows 上代理客户端会把代理写进注册表，httpx 会自动读取并使用它；不绕过的话，
+    发往局域网 GPU 的请求会被本机代理拦下，表现为 502 或超时，报错看不出真正原因。
+    """
+    host = urlparse(str(endpoint or '')).hostname
+    if not host:
+        return False
+    host = host.strip('[]').lower()
+    if host == 'localhost' or host.endswith('.local'):
+        return True
+    from ..ai.providers import is_lan_address
+    if is_lan_address(host):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        # 单标签主机名（如 gpu-server）按局域网处理。
+        return '.' not in host
+    # 代理只服务对外请求，回环与链路本地一律直连。
+    return address.is_loopback or address.is_link_local
 
 
 def inference_worker(pipe, root, spec, device, device_id, gpu_root):
@@ -169,7 +195,8 @@ class LocalInference:
         payload = {'texts': list(texts), 'query': bool(query)}
         timeout = httpx.Timeout(300.0, connect=10.0)
         try:
-            with httpx.Client(timeout=timeout) as client:
+            # 局域网地址绕过系统代理，否则请求会被本机代理拦成 502。
+            with httpx.Client(timeout=timeout, trust_env=not is_lan_endpoint(endpoint)) as client:
                 response = client.post(url, json=payload)
                 response.raise_for_status()
                 data = response.json()
