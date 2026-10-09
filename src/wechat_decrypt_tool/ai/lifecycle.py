@@ -92,3 +92,6 @@ async def stop_services():
             await factory().stop()
         except Exception as error:
             event('lifecycle.service.stop_failed', level=logging.ERROR, component=name, error=error)
+    # Agent 与摘要共享业务库，全部工作线程退出后才关闭持久连接。
+    for store in (get_ai_service().store, get_local_search().store):
+        store.close()

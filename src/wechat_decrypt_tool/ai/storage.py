@@ -1,6 +1,8 @@
 from __future__ import annotations
 from .diagnostics import observed, event as diagnostic_event
 import logging
+import copy
+from collections import OrderedDict
 
 import json
 import os
@@ -44,45 +46,133 @@ class AIStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "ai.sqlite3"
         self.lock = threading.RLock()
+        self._db = None
+        self._depth = 0
+        self._live_records = {}
+        self._live_events = OrderedDict()
+        self._live_event_bytes = 0
+        self._last_event_id = 0
         self.revoked_accounts = set()
-        # SSE 订阅者通过条件变量等待新事件；SQLite 仍是断线重放的权威来源。
+        # SSE 订阅者通过条件变量等待新事件；持久事件及内存快照共同支持断线重放。
         # 使用按账号修订号，避免其他账号的高频事件无谓唤醒当前连接。
         self._event_condition = threading.Condition()
         self._event_revisions = {}
         with self.connection() as db:
             db.executescript(SCHEMA_SQL)
+        self._reserve_event_ids()
+
+    def _reserve_event_ids(self):
+        """低频预留事件编号，内存事件无需写盘也能跨重启保持游标递增。"""
+        with self.connection() as db:
+            sequence = db.execute("SELECT coalesce(max(seq),0) FROM sqlite_sequence WHERE name='events'").fetchone()[0]
+            maximum = db.execute('SELECT coalesce(max(id),0) FROM events').fetchone()[0]
+            self._next_event_id = max(sequence, maximum, self._last_event_id) + 1
+            self._event_id_limit = self._next_event_id + 1_000_000
+            if not db.execute("UPDATE sqlite_sequence SET seq=? WHERE name='events'", (self._event_id_limit,)).rowcount:
+                db.execute("INSERT INTO sqlite_sequence(name,seq) VALUES('events',?)", (self._event_id_limit,))
+
+    def _allocate_event_id(self):
+        id = max(self._next_event_id, self.latest_event_id() + 1)
+        if id >= self._event_id_limit:
+            self._reserve_event_ids()
+            id = self._next_event_id
+        self._next_event_id = id + 1
+        self._last_event_id = id
+        return id
 
     @contextmanager
     def connection(self):
         with self.lock:
-            db = sqlite3.connect(self.path, timeout=30)
-            db.row_factory = sqlite3.Row
-            db.execute("PRAGMA journal_mode=WAL")
+            if self._db is None:
+                self._db = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+                self._db.row_factory = sqlite3.Row
+                self._db.execute("PRAGMA journal_mode=WAL")
+            db = self._db
+            depth = self._depth
+            live_records = self._live_records.copy()
+            live_events = self._live_events.copy()
+            live_bytes = self._live_event_bytes
+            event_range = (getattr(self, '_next_event_id', None), getattr(self, '_event_id_limit', None))
+            if depth:
+                db.execute(f'SAVEPOINT nested_{depth}')
+            else:
+                db.execute('BEGIN')
+            self._depth += 1
             try:
-                with db:
+                if depth:
                     yield db
-            except Exception as error:
+                    db.execute(f'RELEASE nested_{depth}')
+                else:
+                    with db:
+                        yield db
+            except BaseException as error:
+                if depth:
+                    db.execute(f'ROLLBACK TO nested_{depth}')
+                    db.execute(f'RELEASE nested_{depth}')
+                self._live_records = live_records
+                self._live_events = live_events
+                self._live_event_bytes = live_bytes
+                if event_range[0] is not None:
+                    self._next_event_id, self._event_id_limit = event_range
                 diagnostic_event('storage.transaction.failed', level=logging.ERROR, error=error, committed=False)
                 raise
             finally:
-                db.close()
+                self._depth -= 1
 
-    def put(self, kind, body, id=None, account=""):
+    def close(self):
+        """工作线程退出后关闭连接；提交仍保持 SQLite 默认的持久性级别。"""
+        with self.lock:
+            if self._depth:
+                raise RuntimeError('不能在事务中关闭 AI 存储')
+            if self._db is not None:
+                self._db.close()
+                self._db = None
+
+    def has_live_record(self, kind, id):
+        with self.lock:
+            return (kind, id) in self._live_records
+
+    def put(self, kind, body, id=None, account="", transient=False):
         id = id or body.get("id") or uuid.uuid4().hex
         body = {**body, "id": id}
+        owner = account or body.get("account", "")
+        with self.lock:
+            if owner in self.revoked_accounts:
+                return body
+            if transient:
+                self._live_records[kind, id] = (copy.deepcopy(body), owner, time.time())
+                return body
         with self.connection() as db:
             if (account or body.get("account", "")) in self.revoked_accounts:
                 return body
-            db.execute("INSERT INTO records VALUES(?,?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body, account=excluded.account, updated=excluded.updated",
+            db.execute("INSERT INTO records VALUES(?,?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body, account=excluded.account, updated=excluded.updated WHERE records.body<>excluded.body OR records.account<>excluded.account",
                        (kind, id, account or body.get("account", ""), json.dumps(body, ensure_ascii=False), time.time()))
+            self._live_records.pop((kind, id), None)
         return body
 
     def get(self, kind, id):
+        with self.lock:
+            if (kind, id) in self._live_records:
+                return copy.deepcopy(self._live_records[kind, id][0])
         with self.connection() as db:
             row = db.execute("SELECT body FROM records WHERE kind=? AND id=?", (kind, id)).fetchone()
         return json.loads(row[0]) if row else None
 
     def list(self, kind, account=None, limit=None, offset=0, compact=False):
+        with self.lock:
+            live = {id: entry for (entry_kind, id), entry in self._live_records.items()
+                    if entry_kind == kind and (account is None or entry[1] == account)}
+            if live:
+                with self.connection() as db:
+                    rows = db.execute('SELECT id,body,updated FROM records WHERE kind=?' +
+                                      (' AND account=?' if account is not None else ''),
+                                      [kind] if account is None else [kind, account]).fetchall()
+                merged = {row['id']: (json.loads(row['body']), row['updated']) for row in rows}
+                merged.update({id: (copy.deepcopy(entry[0]), entry[2]) for id, entry in live.items()})
+                bodies = [body for body, _ in sorted(merged.values(), key=lambda entry: entry[1], reverse=True)]
+                bodies = bodies[offset:offset + limit if limit is not None else None]
+                return [{k: v for k, v in body.items() if not compact or k not in
+                         ('results', 'overview', 'models', 'cursors')} for body in bodies]
         column = "json_remove(body,'$.results','$.overview','$.models','$.cursors')" if compact else "body"
         args = [kind] if account is None else [kind, account]
         sql = f"SELECT {column} FROM records WHERE kind=?" + (" AND account=?" if account is not None else "") + " ORDER BY updated DESC"
@@ -114,41 +204,94 @@ class AIStore:
 
     def latest_event_id(self):
         with self.connection() as db:
-            return db.execute("SELECT coalesce(max(id),0) FROM events").fetchone()[0]
+            return max(self._last_event_id, db.execute("SELECT coalesce(max(id),0) FROM events").fetchone()[0])
 
     def delete(self, kind, id):
         with self.connection() as db:
             db.execute("DELETE FROM records WHERE kind=? AND id=?", (kind, id))
+            self._live_records.pop((kind, id), None)
+            if kind in ('agent_run', 'agent_thread'):
+                field = 'run_id' if kind == 'agent_run' else 'thread_id'
+                self.discard_live_events(field, id)
 
-    def event(self, account, kind, body, unique_key=None, replace=False):
+    def discard_live_events(self, field, value):
+        """删除任务或账号时同步移除内存重放，避免已删内容再次送达。"""
+        with self.lock:
+            for key, (row, size) in list(self._live_events.items()):
+                if row['body'].get(field) == value:
+                    del self._live_events[key]
+                    self._live_event_bytes -= size
+
+    def event(self, account, kind, body, unique_key=None, replace=False, transient=False):
         """写入事件供 SSE 重放。
 
         默认行为保持不变：提供 `unique_key` 时按去重语义写入（同 key 已存在则忽略），
         用于提醒等只应投递一次的事件。`replace=True` 时改为用最新快照替换旧行，
         让高频进度事件每个逻辑任务只保留一行，同时因 INSERT OR REPLACE 会删除旧行、
-        新行仍获得递增的自增 id，断线重连的 EventSource 依然能收到最新状态。
+        新行仍获得递增 id，断线重连的 EventSource 依然能收到最新状态。
+        `transient=True` 仅在有界内存缓存中合并展示快照，不写 SQLite；通知仍使用默认持久化。
         """
+        with self.lock:
+            if account in self.revoked_accounts:
+                return
+            if transient:
+                id = self._allocate_event_id()
+                key = (account, kind, unique_key) if unique_key is not None else id
+                old = self._live_events.pop(key, None)
+                if old:
+                    self._live_event_bytes -= old[1]
+                    # 累计正文快照被合并后，早先送达的引用映射也必须随最新快照保留。
+                    if old[0]['body'].get('version') == body.get('version'):
+                        body = dict(body)
+                        for field, identity in (('citations', 'source'), ('references', 'id')):
+                            if old[0]['body'].get(field):
+                                merged = {item[identity]: item for item in old[0]['body'][field]}
+                                merged.update({item[identity]: item for item in body.get(field, [])})
+                                body[field] = list(merged.values())
+                payload = json.dumps(body, ensure_ascii=False)
+                row = dict(id=id, account=account, kind=kind, body=json.loads(payload),
+                           unique_key=unique_key, delivered=0, created=time.time())
+                size = len(payload.encode('utf-8'))
+                self._live_events[key] = (row, size)
+                self._live_event_bytes += size
+                # 短暂断线重放最新快照；长断线由前端已有的重连 GET 补齐权威状态。
+                while len(self._live_events) > 1 and (
+                        len(self._live_events) > 256 or self._live_event_bytes > 8 * 1024 * 1024):
+                    _, (_, removed_size) = self._live_events.popitem(last=False)
+                    self._live_event_bytes -= removed_size
+                self._notify_event(account)
+                return
         with self.connection() as db:
             if account in self.revoked_accounts:
                 return
             payload = json.dumps(body, ensure_ascii=False)
+            id = self._allocate_event_id()
             if unique_key is None:
                 cursor = db.execute(
-                    "INSERT INTO events(account,kind,body,created) VALUES(?,?,?,?)",
-                    (account, kind, payload, time.time()))
+                    "INSERT INTO events(id,account,kind,body,created) VALUES(?,?,?,?,?)",
+                    (id, account, kind, payload, time.time()))
             elif replace:
                 cursor = db.execute(
-                    "INSERT OR REPLACE INTO events(account,kind,body,unique_key,created) VALUES(?,?,?,?,?)",
-                    (account, kind, payload, unique_key, time.time()))
+                    "INSERT OR REPLACE INTO events(id,account,kind,body,unique_key,created) VALUES(?,?,?,?,?,?)",
+                    (id, account, kind, payload, unique_key, time.time()))
             else:
                 cursor = db.execute(
-                    "INSERT OR IGNORE INTO events(account,kind,body,unique_key,created) VALUES(?,?,?,?,?)",
-                    (account, kind, payload, unique_key, time.time()))
+                    "INSERT OR IGNORE INTO events(id,account,kind,body,unique_key,created) VALUES(?,?,?,?,?,?)",
+                    (id, account, kind, payload, unique_key, time.time()))
             inserted = cursor.rowcount > 0
+            if inserted:
+                self._last_event_id = id
+                if replace:
+                    old = self._live_events.pop((account, kind, unique_key), None)
+                    if old:
+                        self._live_event_bytes -= old[1]
         if inserted:
-            with self._event_condition:
-                self._event_revisions[account] = self._event_revisions.get(account, 0) + 1
-                self._event_condition.notify_all()
+            self._notify_event(account)
+
+    def _notify_event(self, account):
+        with self._event_condition:
+            self._event_revisions[account] = self._event_revisions.get(account, 0) + 1
+            self._event_condition.notify_all()
 
     def event_revision(self, account):
         """返回进程内事件修订号，用于无竞态地建立 SSE 等待点。"""
@@ -173,7 +316,11 @@ class AIStore:
             sql += " AND delivered=0 AND kind='notification'"
         with self.connection() as db:
             rows = db.execute(sql + " ORDER BY id LIMIT 100", args).fetchall()
-        return [{**dict(row), "body": json.loads(row["body"])} for row in rows]
+            result = [{**dict(row), "body": json.loads(row["body"])} for row in rows]
+            if not pending:
+                result.extend(copy.deepcopy(row) for row, _ in self._live_events.values()
+                              if row['id'] > after and (account is None or row['account'] == account))
+        return sorted(result, key=lambda row: row['id'])[:100]
 
     @observed('storage.acknowledge')
     def acknowledge(self, id):
@@ -237,6 +384,7 @@ class AIStore:
     def compact(self, minimum_bytes=COMPACT_MINIMUM_BYTES):
         """回收已删除行遗留的空闲页；空闲空间不多时不做全库重写。"""
         with self.lock:
+            self.close()
             probe = sqlite3.connect(self.path, timeout=30)
             try:
                 page_size = probe.execute('PRAGMA page_size').fetchone()[0]
@@ -266,6 +414,7 @@ class AIStore:
         """
         with self.lock:
             try:
+                self.close()
                 probe = sqlite3.connect(self.path, timeout=30)
                 try:
                     database_bytes = self._database_bytes(probe)
@@ -357,3 +506,8 @@ class AIStore:
             self.revoked_accounts.add(account)
             db.execute("DELETE FROM records WHERE account=?", (account,))
             db.execute("DELETE FROM events WHERE account=?", (account,))
+            self._live_records = {key: value for key, value in self._live_records.items() if value[1] != account}
+            for key, (row, size) in list(self._live_events.items()):
+                if row['account'] == account:
+                    del self._live_events[key]
+                    self._live_event_bytes -= size
