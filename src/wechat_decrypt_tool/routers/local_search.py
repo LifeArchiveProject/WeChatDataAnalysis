@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .ai import local_only, account_name
 from ..local_search.service import get_local_search
-from ..local_search.catalog import model_dir
+from ..local_search.catalog import model_dir, remote_spec
 
 router = APIRouter(prefix='/api/ai/local-search', dependencies=[Depends(local_only)])
 
@@ -16,6 +16,8 @@ class Settings(BaseModel):
     enabled: bool = False
     agent_global: bool = False
     model: Literal['bge-small-zh','bge-base-zh','e5-small','wemm-2b-remote'] | None = None
+    # 仅远端模型使用；留空表示沿用目录里的默认地址。
+    remote_endpoint: str | None = Field(default=None, max_length=2048)
     usernames: list[str] = Field(default_factory=list, max_length=2000)
     days: Literal[0,30,90] = 90
     start: int | None = Field(default=None, ge=0)
@@ -86,14 +88,13 @@ async def index_action(action: Literal['build','rebuild','pause','resume','clear
 async def recheck(account: str):
     service = get_local_search()
     cfg = service.config(account_name(account))
-    from ..local_search.catalog import model_dir, model_spec
     def reset():
         with service.engine.lock:
             service.engine.close()
             service.engine.gpu_failed = False
     await asyncio.to_thread(reset)
     try:
-        await asyncio.to_thread(service.engine.encode, model_dir(service.downloads.root,cfg['model']), model_spec(cfg['model']), ['设备检测'],cfg['device'],cfg['device_id'])
+        await asyncio.to_thread(service.engine.encode, model_dir(service.downloads.root,cfg['model']), remote_spec(cfg['model'],cfg.get('remote_endpoint')), ['设备检测'],cfg['device'],cfg['device_id'])
     except Exception: raise HTTPException(400,'设备检测未完成，请先准备模型和运行组件') from None
     return service.engine.status
 

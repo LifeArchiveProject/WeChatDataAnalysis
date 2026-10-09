@@ -124,13 +124,14 @@
 
     <Teleport to="body"><div v-if="dialog" class="lss-overlay" @click.self="closeDialog" @keydown.esc.stop="closeDialog" @keydown.tab="trapFocus">
       <section ref="dialogRef" class="lss-dialog local-search-settings" :class="{ 'lss-model-dialog':dialog==='models', 'lss-scope-dialog':dialog==='scope' }" role="dialog" aria-modal="true" :aria-label="dialogTitle" tabindex="-1">
-        <header class="lss-dialog-heading"><div><h4>{{ dialogTitle }}</h4><p>{{ dialog==='models' ? '按语言和电脑配置选择，下载完成后点击「使用此模型」。' : dialog==='scope' ? '按分类选择要检索的聊天' : '导入后会校验版本和文件完整性。' }}</p></div><button type="button" aria-label="关闭" :disabled="busy" @click="closeDialog"><X :size="16" :stroke-width="1.8" aria-hidden="true" /></button></header>
+        <header class="lss-dialog-heading"><div><h4>{{ dialogTitle }}</h4><p>{{ dialog==='models' ? '按语言和电脑配置选择，下载完成后点击「使用此模型」；局域网模型无需下载，填好服务地址后直接使用。' : dialog==='scope' ? '按分类选择要检索的聊天' : '导入后会校验版本和文件完整性。' }}</p></div><button type="button" aria-label="关闭" :disabled="busy" @click="closeDialog"><X :size="16" :stroke-width="1.8" aria-hidden="true" /></button></header>
         <p v-if="dialogError" class="lss-feedback lss-error" role="alert">{{ dialogError }}</p>
         <template v-if="dialog==='models'">    <div class="lss-models" role="list" aria-label="可用检索模型">
       <article v-for="m in state.models || []" :key="m.id" class="lss-card lss-model" :class="{selected: form.model===m.id}" role="listitem">
-        <div class="lss-row"><h5>{{ m.name }} <small v-if="m.recommended">推荐</small></h5><span class="lss-note">{{ m.downloaded ? '已下载' : stage(m.job) }}</span></div>
-        <p>{{ m.description }}</p><p class="lss-note">{{ bytes(m.size) }} · 本地运行 · {{ m.license }}</p>
-        <details class="lss-source"><summary>模型来源</summary><a :href="`https://huggingface.co/${m.repo}`" target="_blank" rel="noopener noreferrer">{{ m.repo }}</a><p>{{ m.id.startsWith('bge') ? '原作者 BAAI · ONNX 转换 Xenova' : '原作者 intfloat' }}</p><p>固定版本 {{ m.revision.slice(0, 12) }}</p></details>
+        <div class="lss-row"><h5>{{ m.name }} <small v-if="m.recommended">推荐</small></h5><span class="lss-note">{{ m.backend==='remote' ? '局域网服务' : m.downloaded ? '已下载' : stage(m.job) }}</span></div>
+        <p>{{ m.description }}</p><p class="lss-note">{{ m.backend==='remote' ? '远端运行' : bytes(m.size)+' · 本地运行' }} · {{ m.license }}</p>
+        <div v-if="m.backend==='remote'" class="lss-endpoint"><span>服务地址</span><input v-model="form.remote_endpoint" type="text" inputmode="url" placeholder="http://192.168.1.10:8100" aria-label="远端向量服务地址" /><small>留空则使用 {{ m.endpoint || '目录默认地址' }}；保存后生效，需与本机在同一局域网。</small></div>
+        <details class="lss-source"><summary>模型来源</summary><a v-if="m.repo" :href="`https://huggingface.co/${m.repo}`" target="_blank" rel="noopener noreferrer">{{ m.repo }}</a><p>{{ m.backend==='remote' ? '原作者 腾讯 WeChat · 向量推理在远端执行' : m.id.startsWith('bge') ? '原作者 BAAI · ONNX 转换 Xenova' : '原作者 intfloat' }}</p><p v-if="m.revision">固定版本 {{ m.revision.slice(0, 12) }}</p></details>
         <template v-if="m.job && !['done','error'].includes(m.job.status)"><progress :value="m.job.total ? m.job.bytes : undefined" :max="m.job.total || undefined" :aria-label="`${m.name} 下载进度`" /><p class="lss-note">{{ stage(m.job) }} · {{ bytes(m.job.bytes) }} / {{ bytes(m.job.total) }}<span v-if="m.job.speed"> · {{ bytes(m.job.speed) }}/s</span><span v-if="m.job.stage==='retry_wait'"> · {{ Math.max(0,Math.ceil(m.job.next_retry-now)) }} 秒后重试</span></p></template>
         <p v-if="m.job?.error" class="lss-error">{{ m.job.error }}</p>
         <div class="lss-actions lss-model-actions">
@@ -138,7 +139,7 @@
           <button v-else-if="!['running','queued'].includes(m.job?.status)" type="button" class="lss-primary" :disabled="busy" @click="act(()=>request(`/models/${m.id}/download`,{method:'POST'}))">{{ m.job ? '继续 / 重试' : '下载' }}</button>
           <button v-else type="button" :disabled="busy" @click="act(()=>request(`/models/${m.id}/pause`,{method:'POST'}))">暂停</button>
           <button v-if="!m.downloaded" type="button" :disabled="busy || modelActive(m.id)" @click="openImport(m.id)">离线导入</button>
-          <button v-if="m.downloaded || m.job" type="button" :disabled="busy || form.model===m.id" @click="removeModel(m)">{{ m.downloaded ? '删除' : '取消并清理' }}</button>
+          <button v-if="m.backend!=='remote' && (m.downloaded || m.job)" type="button" :disabled="busy || form.model===m.id" @click="removeModel(m)">{{ m.downloaded ? '删除' : '取消并清理' }}</button>
         </div>
       </article>
     </div>
@@ -178,7 +179,7 @@ import UiSelect from './UiSelect.vue'
 const props=defineProps({accountWide:{type:Boolean,default:false}})
 const { selectedAccount: account }=storeToRefs(useChatAccountsStore())
 const api=useAiApi(), route=useRoute()
-const state=ref({}), form=reactive({enabled:false,model:null,usernames:[],days:90,start:null,end:null,device:'auto',device_id:0,auto_update:true,read_batch_size:0})
+const state=ref({}), form=reactive({enabled:false,model:null,usernames:[],days:90,start:null,end:null,device:'auto',device_id:0,auto_update:true,read_batch_size:0,remote_endpoint:null})
 const statusRef=ref(null)
 const advancedOpen=ref(false),busy=ref(false),dialogError=ref(''),error=ref(''),notice=ref(''),now=ref(Date.now()/1000),gpuDevices=ref([])
 const dialog=ref(''),dialogRef=ref(null),scopeSearch=ref(''),scopeDraft=ref([]),chats=ref([]),importId=ref(''),importPath=ref('')
@@ -520,6 +521,9 @@ summary{cursor:pointer}
 .lss-model small{color:#079b57;font-size:10px;font-weight:400}.lss-model p{font-size:11px}
 .lss-model .lss-row{align-items:flex-start}.lss-model-actions{margin-top:auto;padding-top:12px}
 .lss-source{font-size:10px;color:var(--app-text-secondary);margin-top:10px;overflow-wrap:anywhere}.lss-source a{color:#079b57}
+.lss-endpoint{display:grid;gap:4px;margin-top:10px}
+.lss-endpoint>span{font-size:11px;font-weight:500}
+.lss-endpoint small{color:var(--app-text-secondary);font-size:10px;line-height:1.5}
 @container (max-width:600px){.lss-heading{flex-wrap:wrap}.lss-start{align-items:stretch;flex-direction:column}.lss-start>button{width:100%}.lss-time-row{flex-wrap:wrap}.lss-time-row>.lss-note{width:100%}.lss-model-summary{flex-wrap:wrap}.lss-model-summary>.lss-grow{min-width:180px}.lss-step{padding:15px}.lss-advanced>summary>.lss-note{font-size:9px}.lss-advanced .lss-row{flex-wrap:wrap}}
 @media(max-width:600px){.lss-models,.lss-grid{grid-template-columns:1fr}.lss-row{flex-wrap:wrap}.lss-dialog{padding:16px}.lss-model-dialog{width:100%}}
 @media(prefers-reduced-motion:reduce){.agent-icon-spin{animation:none}}

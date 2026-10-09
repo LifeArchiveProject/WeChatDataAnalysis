@@ -162,7 +162,9 @@ class LocalInference:
 
     def _remote_encode(self, spec, texts, query=False, cancelled=None):
         import httpx
-        endpoint = str(spec['endpoint']).rstrip('/')
+        endpoint = str(spec.get('endpoint') or '').strip().rstrip('/')
+        if not endpoint:
+            raise InferenceFailure('远端模型未配置服务地址', 'remote')
         url = endpoint if endpoint.endswith('/embed') else endpoint + '/embed'
         payload = {'texts': list(texts), 'query': bool(query)}
         timeout = httpx.Timeout(300.0, connect=10.0)

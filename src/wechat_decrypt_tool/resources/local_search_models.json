@@ -151,6 +151,7 @@
     "recommended": false,
     "backend": "remote",
     "endpoint": "http://127.0.0.1:8100",
-    "files": []
+    "files": [],
+    "description": "由局域网内的 GPU 服务提供向量推理，本机不下载权重"
   }
 ]

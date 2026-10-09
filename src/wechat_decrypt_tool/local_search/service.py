@@ -12,7 +12,7 @@ import uuid
 
 from ..ai.storage import AIStore
 from ..app_paths import get_data_dir, get_output_dir
-from .catalog import model_dir, model_spec
+from .catalog import model_dir, model_spec, remote_spec
 from .downloads import ModelDownloads
 from .index import SemanticIndex, make_chunks, fuse
 from .inference import LocalInference, InferenceFailure
@@ -22,7 +22,10 @@ from .totals import MessageTotals
 
 DEFAULTS = {'enabled': False, 'model': None, 'usernames': [], 'days': 90,
             'start': None, 'end': None, 'device': 'auto', 'device_id': 0, 'auto_update': True,
-            'read_batch_size': 0, 'agent_global': False}
+            'read_batch_size': 0, 'agent_global': False,
+            # 远端模型的局域网服务地址。必须列在 DEFAULTS 里，否则「只改地址」会被
+            # _configure 的无变化判断吞掉，保存静默失效。
+            'remote_endpoint': None}
 
 # 进度事件里体积大且很少变化、或可从权威记录重建的字段，不随每次进度写入事件表。
 EVENT_OMITTED_FIELDS = frozenset({'config', 'coverage', 'segments', 'read_starts'})
@@ -76,6 +79,11 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
         old = self.config(account)
         cfg = {**old, **values, 'account': account}
         if cfg['model'] is not None: model_spec(cfg['model'])
+        # 留空表示沿用目录里的默认地址；非法地址在这里拦下，避免拖到检索时才报错。
+        endpoint = str(cfg.get('remote_endpoint') or '').strip().rstrip('/')
+        if endpoint and not endpoint.startswith(('http://', 'https://')):
+            raise ValueError('服务地址需要以 http:// 或 https:// 开头')
+        cfg['remote_endpoint'] = endpoint or None
         if cfg['enabled'] and not self.downloads.available(cfg['model']):
             raise ValueError('请先下载并选择可用的本地模型')
         # 重复保存相同设置不使断点失效，也不打断后台任务。
@@ -280,6 +288,33 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
             finally:
                 executor.shutdown(wait=False)
 
+    async def ensure_tokenizer(self, spec, root):
+        """远端模型只在本地缓存 tokenizer：切块口径必须与远端模型一致，不能用别的模型的 tokenizer 顶替。"""
+        path = Path(root) / 'tokenizer.json'
+        if path.is_file():
+            return path
+        endpoint = str(spec.get('endpoint') or '').strip().rstrip('/')
+        if spec.get('backend') != 'remote' or not endpoint:
+            # 本地模型的缺失继续由推理层给出统一的「重新下载或导入」提示。
+            return path
+        url = endpoint + '/tokenizer.json'
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+                response = await client.get(url, follow_redirects=True)
+                response.raise_for_status()
+                data = response.content
+        except httpx.HTTPError as exc:
+            raise InferenceFailure('无法从远端服务获取 tokenizer：%s（%s）' % (url, exc), 'remote_tokenizer') from None
+        if not data.lstrip().startswith(b'{'):
+            raise InferenceFailure('远端服务返回的 tokenizer 不是有效文件：%s' % url, 'remote_tokenizer')
+        # 先写临时文件再替换，中断留下的半份文件不会被当成已缓存的 tokenizer。
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + '.part')
+        temporary.write_bytes(data)
+        temporary.replace(path)
+        return path
+
     @observed('search.run', id_field='task_id', execution=True)
     async def run(self, job):
         cfg, account = job['config'], job['account']
@@ -291,9 +326,9 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
             try:
                 check()
                 from tokenizers import Tokenizer
-                spec = model_spec(cfg['model'])
+                spec = remote_spec(cfg['model'], cfg.get('remote_endpoint'))
                 root = model_dir(self.downloads.root, cfg['model'])
-                tokenizer = Tokenizer.from_file(str(root / 'tokenizer.json'))
+                tokenizer = Tokenizer.from_file(str(await self.ensure_tokenizer(spec, root)))
                 index = self.index(account)
                 self.update(job, status='running', read_count=job['processed'], embedded_count=job['embedded'])
                 plan = await self.count_message_total(job, check)
@@ -459,7 +494,7 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
             # 渐进索引里的新消息可能尚未进入旧全文索引，原文命中必须独立于向量召回。
             committed_keyword_hits = [as_hit(m) for m in literal]
             keyword = {**keyword, 'hits': fuse([*committed_keyword_hits, *keyword.get('hits', [])], [])}
-            spec = model_spec(active['model'])
+            spec = remote_spec(active['model'], cfg.get('remote_endpoint'))
             root = model_dir(self.downloads.root, active['model'])
             vectors = await asyncio.to_thread(self.engine.encode, root, spec, [q], cfg['device'], cfg['device_id'], True)
             rows = await asyncio.to_thread(index.search, active['generation'], vectors[0], sorted(allowed), query_start, query_end, sender, kinds, 200)

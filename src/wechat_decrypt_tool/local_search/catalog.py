@@ -12,6 +12,12 @@ def model_spec(id):
             return model
     raise ValueError('不支持的检索模型')
 
+def remote_spec(id, endpoint=None):
+    # 远端模型的地址由账号配置覆盖，目录里的地址只是默认值。
+    spec = model_spec(id)
+    endpoint = str(endpoint or '').strip().rstrip('/')
+    return {**spec, 'endpoint': endpoint} if endpoint and spec.get('backend') == 'remote' else spec
+
 def file_hash(path):
     digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
