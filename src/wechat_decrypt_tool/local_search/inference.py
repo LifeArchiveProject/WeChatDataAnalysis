@@ -2,6 +2,7 @@
 from ..ai.diagnostics import observed, event as diagnostic_event
 import ipaddress
 import logging
+import math
 import json
 import multiprocessing as mp
 import os
@@ -64,11 +65,19 @@ def remote_api_base(endpoint):
 def decode_remote_vector(value):
     """向量既可能是浮点数组，也可能是 base64 编码的 float32 小端数据。"""
     if isinstance(value, list):
-        return [float(item) for item in value]
+        if any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value):
+            raise InferenceFailure('远端向量包含非数值元素', 'remote')
+        try:
+            return [float(item) for item in value]
+        except (ValueError, OverflowError):
+            raise InferenceFailure('远端向量数值无法表示', 'remote') from None
     if isinstance(value, str):
         import base64
         import struct
-        raw = base64.b64decode(value)
+        try:
+            raw = base64.b64decode(value, validate=True)
+        except (ValueError, base64.binascii.Error):
+            raise InferenceFailure('远端返回的 base64 向量编码不合法', 'remote') from None
         if not raw or len(raw) % 4:
             raise InferenceFailure('远端返回的 base64 向量长度不合法', 'remote')
         return list(struct.unpack('<%df' % (len(raw) // 4), raw))
@@ -80,16 +89,27 @@ def parse_remote_vectors(data, expected, dimension=None):
     items = data.get('data') if isinstance(data, dict) else data
     if not isinstance(items, list):
         raise InferenceFailure('远端返回不是 OpenAI 兼容的向量结构', 'remote')
-    ordered = sorted(items, key=lambda item: item.get('index', 0) if isinstance(item, dict) else 0)
-    vectors = []
-    for item in ordered:
-        value = item.get('embedding') if isinstance(item, dict) else item
-        vector = decode_remote_vector(value)
-        if dimension and len(vector) != dimension:
-            raise InferenceFailure('远端向量维度与索引不一致（%d ≠ %d），请重新建立索引' % (len(vector), dimension), 'remote')
-        vectors.append(vector)
-    if len(vectors) != expected:
+    if len(items) != expected:
         raise InferenceFailure('远端向量数量不匹配', 'remote')
+    vectors = [None] * expected
+    batch_dimension = dimension
+    for item in items:
+        if not isinstance(item, dict):
+            raise InferenceFailure('远端返回不是 OpenAI 兼容的向量结构', 'remote')
+        position = item.get('index')
+        # 数量正确仍可能重复、缺失或越界，必须按输入序号逐项核验。
+        if type(position) is not int or not 0 <= position < expected or vectors[position] is not None:
+            raise InferenceFailure('远端向量序号缺失、重复或超出请求范围', 'remote')
+        vector = decode_remote_vector(item.get('embedding'))
+        # SQLite 使用 float32；非有限值、溢出或全零向量均不能用于余弦检索。
+        if (not vector or any(not math.isfinite(value) or abs(value) > 3.4028234663852886e38 for value in vector)
+                or not any(abs(value) >= 1.401298464324817e-45 for value in vector)):
+            raise InferenceFailure('远端向量包含无效数值或零向量', 'remote')
+        if batch_dimension is None:
+            batch_dimension = len(vector)
+        if len(vector) != batch_dimension:
+            raise InferenceFailure('远端向量维度与索引不一致（%d ≠ %d），请重新建立索引' % (len(vector), batch_dimension), 'remote')
+        vectors[position] = vector
     return vectors
 
 

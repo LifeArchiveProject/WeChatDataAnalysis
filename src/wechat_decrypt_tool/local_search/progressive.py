@@ -1,6 +1,7 @@
 """全账号渐进索引：已提交批次即可查询，覆盖记录与任务断点一起保存。"""
 import asyncio
 import time
+from .catalog import configured_spec, index_model_metadata
 
 
 def reading_segments(usernames, starts, end, recent_seconds=30 * 86400):
@@ -105,6 +106,7 @@ class ProgressiveIndex:
         existing = base.get('usernames', []) if base.get('generation') == job['generation'] else []
         usernames = set(existing) | {v['username'] for v in coverage.values()}
         current['active'] = {'generation': job['generation'], 'model': job['config']['model'],
+                             **index_model_metadata(configured_spec(job['config'])),
                              'start': job['start'], 'end': job['end'], 'updated': time.time(),
                              'usernames': [u for u in job['config'].get('usernames', []) if u in usernames],
                              'coverage': coverage, 'partial': True, 'source': job.get('source'),
