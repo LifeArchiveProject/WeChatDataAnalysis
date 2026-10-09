@@ -15,7 +15,7 @@ class Settings(BaseModel):
     model_config = ConfigDict(extra='forbid')
     enabled: bool = False
     agent_global: bool = False
-    model: Literal['bge-small-zh','bge-base-zh','e5-small'] | None = None
+    model: Literal['bge-small-zh','bge-base-zh','e5-small','wemm-2b-remote'] | None = None
     usernames: list[str] = Field(default_factory=list, max_length=2000)
     days: Literal[0,30,90] = 90
     start: int | None = Field(default=None, ge=0)

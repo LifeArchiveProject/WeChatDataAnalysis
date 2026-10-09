@@ -136,5 +136,21 @@
       }
     ],
     "description": "适合中英文及多语言聊天"
+  },
+  {
+    "id": "wemm-2b-remote",
+    "name": "WeMM Embedding 2B（局域网服务）",
+    "repo": "Tencent/WeMM-Embedding-2B",
+    "revision": "",
+    "dimension": 2048,
+    "pooling": "last",
+    "query_prefix": "",
+    "passage_prefix": "",
+    "max_tokens": 8192,
+    "license": "Apache-2.0",
+    "recommended": false,
+    "backend": "remote",
+    "endpoint": "http://127.0.0.1:8100",
+    "files": []
   }
 ]

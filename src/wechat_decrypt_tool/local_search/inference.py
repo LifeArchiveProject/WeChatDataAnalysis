@@ -160,8 +160,28 @@ class LocalInference:
                 raise InferenceFailure('推理进程已退出', 'process')
         raise InferenceFailure('模型响应超时', 'timeout')
 
+    def _remote_encode(self, spec, texts, query=False, cancelled=None):
+        import httpx
+        endpoint = str(spec['endpoint']).rstrip('/')
+        url = endpoint if endpoint.endswith('/embed') else endpoint + '/embed'
+        payload = {'texts': list(texts), 'query': bool(query)}
+        timeout = httpx.Timeout(300.0, connect=10.0)
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPError as exc:
+            raise InferenceFailure('无法连接远程向量服务：%s' % exc, 'remote') from None
+        vectors = data['vectors'] if isinstance(data, dict) else data
+        if len(vectors) != len(texts):
+            raise InferenceFailure('远程向量数量不匹配', 'remote')
+        return vectors
+
     @observed('inference.encode')
     def encode(self, root, spec, texts, strategy='auto', device_id=0, query=False, cancelled=None):
+        if spec.get('backend') == 'remote':
+            return self._remote_encode(spec, texts, query=query, cancelled=cancelled)
         queued = time.monotonic()
         with self.priority:
             if query: self.query_waiting+=1

@@ -119,7 +119,7 @@ def check_runtime(model_root=None):
         output = io.BytesIO(); picture.save(output, 'PDF')
         assert any(part.get('image') for part in parse_document(output.getvalue(), '.pdf'))
         report['media'] = parsed + ['.pdf', 'JPEG', 'PNG', 'WEBP', 'GIF']
-        report['catalog'] = [model_spec(name)['id'] for name in ['bge-small-zh', 'bge-base-zh', 'e5-small']]
+        report['catalog'] = [model_spec(name)['id'] for name in ['bge-small-zh', 'bge-base-zh', 'e5-small', 'wemm-2b-remote']]
         if model_root:
             engine = LocalInference()
             try:
