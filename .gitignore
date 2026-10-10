@@ -31,7 +31,7 @@ wheels/
 .ace-tool/
 pnpm-lock.yaml
 /tools/tmp_isaac64_compare.js
-/native/wce_integrity/
+/native/wce_integrity
 /.claude/settings.local.json
 .env
 .env.*
@@ -87,6 +87,7 @@ pnpm-lock.yaml
 /src/wechat_decrypt_tool/native/wechatdb_client.dll
 /src/wechat_decrypt_tool/native/wechatdb_broker.exe
 /src/wechat_decrypt_tool/native/libwechatdb_client.dylib
+/src/wechat_decrypt_tool/native/libwechatdb_client.so
 /src/wechat_decrypt_tool/native/wechatdb_broker
 /src/wechat_decrypt_tool/native/wechatdb_native_build.json
 /src/wechat_decrypt_tool/native/macos/db-key/

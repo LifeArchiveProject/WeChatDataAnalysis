@@ -168,7 +168,8 @@ test("macOS private workflow verifies the pinned integrity Release before extrac
     /"macos-integrity":\s*\(\s*"macos-integrity-production\.yml",\s*"wce-integrity-macos-arm64-production"/
   );
   assert.match(rebuildRelease, /tag = f"\{component\}-\{build_id\}"/);
-  assert.match(rebuildRelease, /asset_name = f"\{artifact_name\}-\{build_id\}\.zip"/);
+  // 资产扩展名按组件区分：macOS/Windows 是 zip，Linux 是可复现 tar.gz。
+  assert.match(rebuildRelease, /asset_name = f"\{artifact_name\}-\{build_id\}\{suffix\}"/);
   assert.match(rebuildRelease, /release = api\(f"releases\/tags\/\{tag\}"\)/);
   assert.match(rebuildRelease, /release\.get\("target_commitish"\) != revision/);
   assert.match(rebuildRelease, /releases\/assets\/\{asset\['id'\]\}/);

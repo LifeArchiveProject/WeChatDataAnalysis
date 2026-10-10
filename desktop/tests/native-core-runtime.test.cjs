@@ -8,6 +8,7 @@ const {
   ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD,
   ENV_NATIVE_CORE_MODE,
   applyNativeCoreRuntimePolicy,
+  isDevelopmentNativeCoreManifest,
   isProductionNativeCoreManifest,
   isSourcePublicNativeCoreManifest,
   nativeCoreArtifactNames,
@@ -125,6 +126,57 @@ const MACOS_SOURCE_PUBLIC_MANIFEST = Object.freeze({
   ...MACOS_PRODUCTION_MANIFEST,
   sourceRuntime: true,
   macosHostVerification: "same-user-direct-parent",
+});
+
+// Linux（schema v4）没有代码签名：身份 = 两组内容哈希 pin + 宿主校验策略。
+const ZERO_SHA256 = "00".repeat(32);
+const LINUX_PRODUCTION_MANIFEST = Object.freeze({
+  schemaVersion: 4,
+  platform: "linux",
+  distributionMode: "public",
+  buildId: "linux-x64-20260915-abcd1234",
+  buildIssuedAtUnix: BUILD_ISSUED_AT_UNIX,
+  buildExpiresAtUnix: BUILD_ISSUED_AT_UNIX + BUILD_LIFETIME_SECONDS,
+  developmentBuild: false,
+  offlineBootstrapFeatureBits: 3,
+  offlineExportSealFormat: "WES2",
+  codeSignatureEnforced: true,
+  rootPublicKeyCompiled: true,
+  testHooksEnabled: false,
+  stagingPinnedSignerTrust: false,
+  linuxIntegrityMode: "content-hash-pin",
+  linuxClientSha256: "11".repeat(32),
+  linuxBrokerSha256: "22".repeat(32),
+  linuxPeerVerification: "same-user-peer-credentials",
+  linuxHostVerification: "content-hash-pin",
+  securityNoticeId: "WCE-AUTOMATED-ANALYSIS-NOTICE-V2",
+  securityNoticeSha256: "aa".repeat(32),
+  securityCheckpointSetId: "WCE-AI-CHECKPOINT-SET-V3",
+  securityCheckpointCount: 7,
+  securityCheckpointSetSha256: "bb".repeat(32),
+});
+
+// 发布工作流（linux-private-build.yml）只收这一份受限 source-public 产物。
+const LINUX_SOURCE_PUBLIC_MANIFEST = Object.freeze({
+  ...LINUX_PRODUCTION_MANIFEST,
+  sourceRuntime: true,
+  linuxHostVerification: "same-user-direct-parent",
+});
+
+const LINUX_DEVELOPMENT_MANIFEST = Object.freeze({
+  ...LINUX_PRODUCTION_MANIFEST,
+  buildId: "dev-local",
+  buildIssuedAtUnix: 0,
+  buildExpiresAtUnix: 0,
+  developmentBuild: true,
+  offlineBootstrapFeatureBits: 0,
+  offlineExportSealFormat: "none",
+  codeSignatureEnforced: false,
+  rootPublicKeyCompiled: false,
+  testHooksEnabled: true,
+  linuxIntegrityMode: "development",
+  linuxClientSha256: ZERO_SHA256,
+  linuxBrokerSha256: ZERO_SHA256,
 });
 
 function makeArtifacts(platform, manifest, { omit = [] } = {}) {
@@ -420,6 +472,163 @@ test("Windows source-public artifacts are accepted for the read-only packaged ru
     assert.equal(packagedPolicy.artifactState, "production");
   } finally {
     cleanup(sourceDir);
+  }
+});
+
+test("Linux source-public artifacts are accepted for the packaged runtime", () => {
+  // 回归：Linux 的发布形态就是 source-public，冻结应用消费不了它就等于发不了版。
+  const sourceDir = makeArtifacts("linux", LINUX_SOURCE_PUBLIC_MANIFEST);
+  const productionDir = makeArtifacts("linux", LINUX_PRODUCTION_MANIFEST);
+  try {
+    assert.equal(isSourcePublicNativeCoreManifest(LINUX_SOURCE_PUBLIC_MANIFEST), true);
+    assert.equal(isProductionNativeCoreManifest(LINUX_SOURCE_PUBLIC_MANIFEST), false);
+    assert.equal(isProductionNativeCoreManifest(LINUX_PRODUCTION_MANIFEST), true);
+
+    const sourcePolicy = applyNativeCoreRuntimePolicy({}, {
+      isPackaged: false,
+      nativeDir: sourceDir,
+      platform: "linux",
+    });
+    assert.equal(sourcePolicy.artifactState, "source-public");
+    assert.equal(sourcePolicy.reason, "source-public-artifacts");
+    assert.equal(sourcePolicy.enableDevelopmentOverride, false);
+
+    const packagedSource = resolveNativeCoreRuntimePolicy({
+      env: {},
+      isPackaged: true,
+      nativeDir: sourceDir,
+      platform: "linux",
+    });
+    assert.equal(packagedSource.artifactState, "production");
+    assert.equal(packagedSource.mode, "required");
+
+    const packagedProduction = resolveNativeCoreRuntimePolicy({
+      env: {},
+      isPackaged: true,
+      nativeDir: productionDir,
+      platform: "linux",
+    });
+    assert.equal(packagedProduction.artifactState, "production");
+  } finally {
+    cleanup(sourceDir);
+    cleanup(productionDir);
+  }
+});
+
+test("source and packaged Linux artifact profiles cannot be swapped", () => {
+  const productionDir = makeArtifacts("linux", LINUX_PRODUCTION_MANIFEST);
+  const developmentDir = makeArtifacts("linux", LINUX_DEVELOPMENT_MANIFEST);
+  try {
+    // 源码态只接受受限 source-public（与 macOS 同一原则，也与 native_core_client 一致）。
+    assert.throws(
+      () => applyNativeCoreRuntimePolicy({}, {
+        isPackaged: false,
+        nativeDir: productionDir,
+        platform: "linux",
+      }),
+      /requires the exact restricted source-public/
+    );
+    assert.throws(
+      () => resolveNativeCoreRuntimePolicy({
+        env: {},
+        isPackaged: true,
+        nativeDir: developmentDir,
+        platform: "linux",
+      }),
+      /requires an approved production/
+    );
+    assert.equal(isDevelopmentNativeCoreManifest(LINUX_DEVELOPMENT_MANIFEST), true);
+  } finally {
+    cleanup(productionDir);
+    cleanup(developmentDir);
+  }
+});
+
+test("Linux content-hash identity substitution fails closed", () => {
+  const rejected = [
+    { ...LINUX_PRODUCTION_MANIFEST, linuxClientSha256: ZERO_SHA256 },
+    { ...LINUX_PRODUCTION_MANIFEST, linuxBrokerSha256: ZERO_SHA256 },
+    {
+      ...LINUX_PRODUCTION_MANIFEST,
+      linuxBrokerSha256: LINUX_PRODUCTION_MANIFEST.linuxClientSha256,
+    },
+    { ...LINUX_PRODUCTION_MANIFEST, linuxIntegrityMode: "development" },
+    { ...LINUX_PRODUCTION_MANIFEST, linuxPeerVerification: "same-user-any-person" },
+    // 宿主校验强度必须与 sourceRuntime 配对。
+    { ...LINUX_SOURCE_PUBLIC_MANIFEST, sourceRuntime: false },
+    {
+      ...LINUX_SOURCE_PUBLIC_MANIFEST,
+      linuxHostVerification: "content-hash-pin",
+    },
+    { ...LINUX_PRODUCTION_MANIFEST, sourceRuntime: true },
+    // Linux 清单不得夹带代码签名身份字段（后端会直接拒绝）。
+    { ...LINUX_PRODUCTION_MANIFEST, windowsClientSignerSha256: "11".repeat(32) },
+    { ...LINUX_PRODUCTION_MANIFEST, macosSignerTrustMode: "private-pki" },
+    // v2/v3 不得夹带 Linux 内容哈希字段。
+    { ...PRODUCTION_MANIFEST, linuxClientSha256: "11".repeat(32) },
+    { ...MACOS_PRODUCTION_MANIFEST, linuxPeerVerification: "same-user-peer-credentials" },
+  ];
+  for (const manifest of rejected) {
+    assert.equal(isProductionNativeCoreManifest(manifest), false);
+    assert.equal(isSourcePublicNativeCoreManifest(manifest), false);
+    const nativeDir = makeArtifacts("linux", manifest);
+    try {
+      assert.throws(
+        () => resolveNativeCoreRuntimePolicy({
+          env: {},
+          isPackaged: true,
+          nativeDir,
+          platform: "linux",
+        }),
+        /requires an approved production/
+      );
+    } finally {
+      cleanup(nativeDir);
+    }
+  }
+});
+
+test("Linux manifest schemas cannot cross platform boundaries", () => {
+  const linuxWithWindowsManifest = makeArtifacts("linux", PRODUCTION_MANIFEST);
+  const windowsWithLinuxManifest = makeArtifacts("win32", LINUX_SOURCE_PUBLIC_MANIFEST);
+  const macWithLinuxManifest = makeArtifacts("darwin", LINUX_SOURCE_PUBLIC_MANIFEST);
+  try {
+    assert.throws(
+      () => resolveNativeCoreRuntimePolicy({
+        env: {},
+        isPackaged: true,
+        nativeDir: linuxWithWindowsManifest,
+        platform: "linux",
+      }),
+      /requires an approved production/
+    );
+    assert.throws(
+      () => resolveNativeCoreRuntimePolicy({
+        env: {},
+        isPackaged: true,
+        nativeDir: windowsWithLinuxManifest,
+        platform: "win32",
+      }),
+      /requires an approved production/
+    );
+    assert.throws(
+      () => resolveNativeCoreRuntimePolicy({
+        env: {},
+        isPackaged: true,
+        nativeDir: macWithLinuxManifest,
+        platform: "darwin",
+      }),
+      /requires an approved production/
+    );
+    assert.deepEqual(nativeCoreArtifactNames("linux"), [
+      "libwechatdb_client.so",
+      "wechatdb_broker",
+      "wechatdb_native_build.json",
+    ]);
+  } finally {
+    cleanup(linuxWithWindowsManifest);
+    cleanup(windowsWithLinuxManifest);
+    cleanup(macWithLinuxManifest);
   }
 });
 

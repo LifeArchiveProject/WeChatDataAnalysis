@@ -1,8 +1,8 @@
 # Release native builds
 
-Windows and macOS packaging rebuild their WCDB components from the current
-`2977094657/WCDB` main revision. Each producer receives a unique build ID and
-the current UTC time. The signed components and their manifests expire exactly
+Windows, macOS and Linux packaging rebuild their WCDB components from the
+current `2977094657/WCDB` main revision. Each producer receives a unique build
+ID and the current UTC time. The components and their manifests expire exactly
 45 days after that time. A failed producer stops packaging.
 
 `tools/rebuild_wcdb_release.py` downloads the exact Release asset for each
@@ -14,7 +14,9 @@ the existing signature and provenance checks. It does not use Actions artifact
 storage or an older Release as a fallback.
 The macOS native core, key helper and export-integrity module are built in
 parallel. The integrity module uses the exact WeChatDataAnalysis revision being
-packaged.
+packaged. The Linux native core is the source-public profile: it is hash
+enforced rather than signed, so its producer needs no signing identities and
+its Release asset is a reproducible `tar.gz` instead of a `zip`.
 
 ## GitHub configuration
 
@@ -24,6 +26,7 @@ Deploy these production workflows to the main branch of `2977094657/WCDB`:
 - `macos-native-production.yml`
 - `macos-key-capture-production.yml`
 - `macos-integrity-production.yml`
+- `linux-native-production.yml`
 
 Configure their protected environments with the existing signing identities:
 `windows-native-production`, `macos-native-production` and
@@ -35,6 +38,10 @@ In `LifeArchiveProject/WeChatDataAnalysis`, add repository secret
 `WCE_NATIVE_CORE_PRODUCER_TOKEN`. Use a fine-grained token with access only to
 `2977094657/WCDB`, Actions read/write and Contents read. Store it directly in
 GitHub Actions secrets; do not place it in source files or build arguments.
+
+`linux-native-production.yml` does not use an environment (it has no signing
+material to protect); it reads the repository-level `WCE_ROOT_PUBLIC_KEY_HEX`
+that is also compiled into the Windows and macOS components.
 
 Keep the trusted signing pins and host signing secrets in
 `windows-private-pki-production` and `macos-private-pki-production`.

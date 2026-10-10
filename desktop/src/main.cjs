@@ -1759,15 +1759,17 @@ function checkForUpdatesOnStartup() {
 }
 
 function getTrayIconPath() {
-  if (process.platform === "darwin") {
+  // Linux 的 nativeImage 解不了 .ico（那是 Windows 的容器），托盘只能吃 PNG，
+  // 否则 createTray 直接报 Failed to load image。macOS / Linux 共用同一张 icon.png。
+  if (process.platform === "darwin" || process.platform === "linux") {
     const packaged = path.join(process.resourcesPath, "icon.png");
     try {
       if (app.isPackaged && fs.existsSync(packaged)) return packaged;
     } catch {}
 
-    const devMac = path.resolve(__dirname, "..", "src", "icon.png");
+    const devPng = path.resolve(__dirname, "..", "src", "icon.png");
     try {
-      if (fs.existsSync(devMac)) return devMac;
+      if (fs.existsSync(devPng)) return devPng;
     } catch {}
   }
 
