@@ -52,6 +52,21 @@ def remote_identity(spec):
               str(spec.get('dimension') or '')]
     return hashlib.sha256('\n'.join(fields).encode()).hexdigest()[:32]
 
+
+def configured_spec(config, model=None):
+    """从任务配置解析模型，确保查询和索引发布使用相同的远端参数。"""
+    return remote_spec(model or config['model'], config.get('remote_endpoint'), config.get('remote_model'),
+                       config.get('remote_api_key'), config.get('remote_allow_self_signed'),
+                       config.get('remote_dimension'))
+
+
+def index_model_metadata(spec):
+    """索引保存实际模型快照；重建期间旧向量只能由原模型查询。"""
+    metadata = {'identity': remote_identity(spec)}
+    if spec.get('backend') == 'remote':
+        metadata['remote_spec'] = dict(spec)
+    return metadata
+
 def file_hash(path):
     digest = hashlib.sha256()
     with Path(path).open('rb') as stream:

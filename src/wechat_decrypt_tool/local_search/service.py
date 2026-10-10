@@ -12,7 +12,7 @@ import uuid
 
 from ..ai.storage import AIStore
 from ..app_paths import get_data_dir, get_output_dir
-from .catalog import model_dir, model_spec, remote_identity, remote_spec
+from .catalog import configured_spec, index_model_metadata, model_dir, model_spec, remote_identity, remote_spec
 from .downloads import ModelDownloads
 from .index import SemanticIndex, make_chunks, fuse
 from .inference import LocalInference, InferenceFailure, is_lan_endpoint
@@ -193,9 +193,7 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
         active = cfg.get('active') or {}
         # 远端服务换了地址、模型名或维度，索引里的旧向量就不在同一个向量空间里，
         # 余弦距离只会算出无意义的数字，所以身份指纹变了必须重建。
-        identity = remote_identity(remote_spec(cfg['model'], cfg.get('remote_endpoint'), cfg.get('remote_model'),
-                                               cfg.get('remote_api_key'), cfg.get('remote_allow_self_signed'),
-                                               cfg.get('remote_dimension')))
+        identity = remote_identity(configured_spec(cfg))
         new_generation = (rebuild or active.get('model') != cfg['model'] or not active.get('generation')
                           or (identity is not None and active.get('identity') != identity))
         generation = uuid.uuid4().hex if new_generation else active['generation']
@@ -317,13 +315,23 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
         服务提供的 tokenizer.json：OpenAI、Ollama、vLLM 等通常不提供，那属于正常情况，
         不是配置错误。
         """
-        path = Path(root) / 'tokenizer.json'
-        if path.is_file():
-            return path
         endpoint = str(spec.get('endpoint') or '').strip().rstrip('/')
-        if spec.get('backend') != 'remote' or not endpoint:
+        path = Path(root) / 'tokenizer.json'
+        if spec.get('backend') != 'remote':
             # 本地模型的缺失继续由推理层给出统一的「重新下载或导入」提示。
             return path
+        # 每个远端模型独立缓存，避免账号或模型切换后使用其他服务的 tokenizer。
+        path = Path(root) / remote_identity(spec) / 'tokenizer.json'
+        from tokenizers import Tokenizer
+        if path.is_file():
+            try:
+                Tokenizer.from_file(str(path))
+                return path
+            except Exception:
+                diagnostic_event('inference.remote.tokenizer.invalid', level=logging.WARNING, url=endpoint)
+                path.unlink(missing_ok=True)
+        if not endpoint:
+            return None
         url = endpoint + '/tokenizer.json'
         import httpx
         try:
@@ -339,7 +347,9 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
             # 取不到 tokenizer 不该让整轮索引失败：字符上界切块同样能建出可用的索引。
             diagnostic_event('inference.remote.tokenizer.unavailable', level=logging.WARNING, url=url, error=exc)
             return None
-        if not data.lstrip().startswith(b'{'):
+        try:
+            Tokenizer.from_str(data.decode('utf-8'))
+        except Exception:
             diagnostic_event('inference.remote.tokenizer.invalid', level=logging.WARNING, url=url)
             return None
         # 先写临时文件再替换，中断留下的半份文件不会被当成已缓存的 tokenizer。
@@ -406,8 +416,7 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
             try:
                 check()
                 from tokenizers import Tokenizer
-                spec = remote_spec(cfg['model'], cfg.get('remote_endpoint'), cfg.get('remote_model'),
-                                   cfg.get('remote_api_key'), cfg.get('remote_allow_self_signed'), cfg.get('remote_dimension'))
+                spec = configured_spec(cfg)
                 root = model_dir(self.downloads.root, cfg['model'])
                 # 远端服务可以不提供 tokenizer：拿不到就按字符上界切块，而不是拒绝建索引。
                 tokenizer_path = await self.ensure_tokenizer(spec, root)
@@ -516,7 +525,7 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
                 current['active'] = {'generation': job['generation'], 'model': cfg['model'], 'start': job['start'],
                                      'end': job['end'], 'usernames': cfg['usernames'], 'updated': time.time(), 'source': job.get('source'),
                                      'revision': cfg['revision'], 'enrichment': job.get('enrichment'),
-                                     'identity': remote_identity(spec),
+                                     **index_model_metadata(spec),
                                      'coverage': coverage,
                                      'partial': cfg.get('agent_global', False) and not coverage_complete(coverage, cfg['usernames'], job['start'], job['end']),
                                      'reconciled': cfg.get('active',{}).get('reconciled',time.time()) if job.get('incremental') else time.time()}
@@ -579,8 +588,15 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
             # 渐进索引里的新消息可能尚未进入旧全文索引，原文命中必须独立于向量召回。
             committed_keyword_hits = [as_hit(m) for m in literal]
             keyword = {**keyword, 'hits': fuse([*committed_keyword_hits, *keyword.get('hits', [])], [])}
-            spec = remote_spec(active['model'], cfg.get('remote_endpoint'), cfg.get('remote_model'),
-                               cfg.get('remote_api_key'), cfg.get('remote_allow_self_signed'), cfg.get('remote_dimension'))
+            spec = dict(active.get('remote_spec') or configured_spec(cfg, active['model']))
+            if spec.get('backend') == 'remote':
+                # 旧版本没有模型快照时，只有身份一致才允许复用当前配置；否则安全回退关键词。
+                if active.get('identity') != remote_identity(spec):
+                    raise InferenceFailure('旧索引模型信息不完整或已改变，请重新建立索引', 'remote')
+                if spec.get('endpoint') == cfg.get('remote_endpoint'):
+                    # 同一服务的密钥轮换不改变向量空间，查询沿用最新凭据。
+                    spec['api_key'] = cfg.get('remote_api_key') or ''
+                    spec['allow_self_signed'] = bool(cfg.get('remote_allow_self_signed'))
             root = model_dir(self.downloads.root, active['model'])
             vectors = await asyncio.to_thread(self.engine.encode, root, spec, [q], cfg['device'], cfg['device_id'], True)
             rows = await asyncio.to_thread(index.search, active['generation'], vectors[0], sorted(allowed), query_start, query_end, sender, kinds, 200)
