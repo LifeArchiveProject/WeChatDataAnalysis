@@ -331,7 +331,7 @@ def test_index_stream_resumes_only_committed_batches(message_source, tmp_path, m
 
     engine = SimpleNamespace(status={'actual_device': 'cpu'}, gpu_root=None, gpu_failed=False,
         close=lambda: None, last_used=0, lock=threading.RLock(), key=None, encode=encode)
-    monkeypatch.setattr(module, 'make_chunks', lambda messages, tokenizer: [
+    monkeypatch.setattr(module, 'make_chunks', lambda messages, tokenizer, **kwargs: [
         {'text': '\n'.join(m['text'] for m in messages), 'sources': [m['source'] for m in messages], 'username': 'chat'}
     ] if messages else [])
 

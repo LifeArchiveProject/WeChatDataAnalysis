@@ -91,6 +91,23 @@ def is_lan_address(host):
     return any(address in network for network in LAN_NETWORKS)
 
 
+# 代理绕过比「明文 HTTP 例外」宽：覆盖网络（Tailscale 等用 100.64.0.0/10）和链路本地
+# 地址都只能直连。这些地址交给系统代理转发会被拦下，报错看不出真正原因，所以判定
+# 独立于上面的明文策略，不改动 HTTP 明文允许范围。
+PROXY_BYPASS_NETWORKS = (*LAN_NETWORKS, ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("169.254.0.0/16"))
+
+
+def is_proxy_bypass_host(host):
+    """必须绕过系统代理、直连的地址：私有网段、覆盖网络（CGNAT）、链路本地。只认 IP 字面量。"""
+    if not isinstance(host, str) or "%" in host:
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(address in network for network in PROXY_BYPASS_NETWORKS)
+
+
 def validate_url(value):
     url = urlparse(value)
     if url.scheme not in {"https", "http"} or not url.hostname or url.username or url.password or url.query or url.fragment:

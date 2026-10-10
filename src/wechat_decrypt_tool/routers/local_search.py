@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .ai import local_only, account_name
 from ..local_search.service import get_local_search
-from ..local_search.catalog import model_dir
+from ..local_search.catalog import model_dir, remote_spec
 
 router = APIRouter(prefix='/api/ai/local-search', dependencies=[Depends(local_only)])
 
@@ -15,7 +15,12 @@ class Settings(BaseModel):
     model_config = ConfigDict(extra='forbid')
     enabled: bool = False
     agent_global: bool = False
-    model: Literal['bge-small-zh','bge-base-zh','e5-small'] | None = None
+    model: Literal['bge-small-zh','bge-base-zh','e5-small','remote-openai'] | None = None
+    # 仅远端模型使用；地址、模型名与密钥都由账号配置覆盖目录预设。
+    remote_endpoint: str | None = Field(default=None, max_length=2048)
+    remote_model: str | None = Field(default=None, max_length=512)
+    remote_api_key: str | None = Field(default=None, max_length=2048)
+    remote_allow_self_signed: bool = False
     usernames: list[str] = Field(default_factory=list, max_length=2000)
     days: Literal[0,30,90] = 90
     start: int | None = Field(default=None, ge=0)
@@ -32,6 +37,22 @@ class Settings(BaseModel):
 
 class ImportBody(BaseModel):
     path: str
+
+class RemoteTestBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    endpoint: str = Field(max_length=2048)
+    model: str = Field(default='', max_length=512)
+    api_key: str = Field(default='', max_length=2048)
+    allow_self_signed: bool = False
+
+@router.post('/remote/test')
+async def remote_test(body: RemoteTestBody):
+    """「测试连接」：列出服务上的模型并探测向量维度，错误文案直接给用户照着改。"""
+    spec = remote_spec('remote-openai', body.endpoint, body.model, body.api_key, body.allow_self_signed)
+    probed = await asyncio.to_thread(get_local_search().remote_probe, spec)
+    if probed.get('models') and probed.get('model_listed') is False:
+        probed['hint'] = '服务上没有这个模型名，请从上面的清单里选一个'
+    return {'status': 'success' if probed.get('reachable') else 'error', **probed}
 
 @router.get('/status')
 def status(account: str | None = None):
@@ -86,14 +107,13 @@ async def index_action(action: Literal['build','rebuild','pause','resume','clear
 async def recheck(account: str):
     service = get_local_search()
     cfg = service.config(account_name(account))
-    from ..local_search.catalog import model_dir, model_spec
     def reset():
         with service.engine.lock:
             service.engine.close()
             service.engine.gpu_failed = False
     await asyncio.to_thread(reset)
     try:
-        await asyncio.to_thread(service.engine.encode, model_dir(service.downloads.root,cfg['model']), model_spec(cfg['model']), ['设备检测'],cfg['device'],cfg['device_id'])
+        await asyncio.to_thread(service.engine.encode, model_dir(service.downloads.root,cfg['model']), remote_spec(cfg['model'],cfg.get('remote_endpoint'),cfg.get('remote_model'),cfg.get('remote_api_key'),cfg.get('remote_allow_self_signed'),cfg.get('remote_dimension')), ['设备检测'],cfg['device'],cfg['device_id'])
     except Exception: raise HTTPException(400,'设备检测未完成，请先准备模型和运行组件') from None
     return service.engine.status
 

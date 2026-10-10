@@ -12,17 +12,21 @@ import uuid
 
 from ..ai.storage import AIStore
 from ..app_paths import get_data_dir, get_output_dir
-from .catalog import model_dir, model_spec
+from .catalog import model_dir, model_spec, remote_identity, remote_spec
 from .downloads import ModelDownloads
 from .index import SemanticIndex, make_chunks, fuse
-from .inference import LocalInference, InferenceFailure
+from .inference import LocalInference, InferenceFailure, is_lan_endpoint
 from .progressive import ProgressiveIndex, reading_segments, committed_coverage, coverage_complete
 from .totals import MessageTotals
 
 
 DEFAULTS = {'enabled': False, 'model': None, 'usernames': [], 'days': 90,
             'start': None, 'end': None, 'device': 'auto', 'device_id': 0, 'auto_update': True,
-            'read_batch_size': 0, 'agent_global': False}
+            'read_batch_size': 0, 'agent_global': False,
+            # 远端向量服务的四项配置。必须列在 DEFAULTS 里，否则「只改地址/模型名/密钥」
+            # 会被 _configure 的无变化判断吞掉，保存静默失效。
+            'remote_endpoint': None, 'remote_model': None, 'remote_api_key': None,
+            'remote_allow_self_signed': False, 'remote_dimension': None}
 
 # 进度事件里体积大且很少变化、或可从权威记录重建的字段，不随每次进度写入事件表。
 EVENT_OMITTED_FIELDS = frozenset({'config', 'coverage', 'segments', 'read_starts'})
@@ -76,6 +80,26 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
         old = self.config(account)
         cfg = {**old, **values, 'account': account}
         if cfg['model'] is not None: model_spec(cfg['model'])
+        # 留空表示沿用目录里的默认地址；非法地址在这里拦下，避免拖到检索时才报错。
+        endpoint = str(cfg.get('remote_endpoint') or '').strip().rstrip('/')
+        if endpoint and not endpoint.startswith(('http://', 'https://')):
+            raise ValueError('服务地址需要以 http:// 或 https:// 开头')
+        cfg['remote_endpoint'] = endpoint or None
+        cfg['remote_model'] = str(cfg.get('remote_model') or '').strip() or None
+        cfg['remote_api_key'] = str(cfg.get('remote_api_key') or '').strip() or None
+        # 还没选模型时不查目录：保存设备、范围等设置不该被「尚未选择模型」挡住。
+        spec = remote_spec(cfg['model'], cfg.get('remote_endpoint'), cfg.get('remote_model'),
+                           cfg.get('remote_api_key'), cfg.get('remote_allow_self_signed'),
+                           cfg.get('remote_dimension')) if cfg['model'] is not None else {}
+        if spec.get('backend') == 'remote':
+            if not spec.get('endpoint'): raise ValueError('请填写远端向量服务地址')
+            if not spec.get('model'): raise ValueError('请填写远端服务的模型名')
+            # 地址或模型名变化、或还没有探测到维度时探一次。服务暂时不可达不阻断保存，
+            # 只让索引身份里少一个维度约束，等下次保存或检索时再补。
+            if (endpoint != old.get('remote_endpoint') or cfg['remote_model'] != old.get('remote_model')
+                    or not cfg.get('remote_dimension')):
+                probed = await asyncio.to_thread(self.remote_probe, spec)
+                if probed.get('dimension'): cfg['remote_dimension'] = probed['dimension']
         if cfg['enabled'] and not self.downloads.available(cfg['model']):
             raise ValueError('请先下载并选择可用的本地模型')
         # 重复保存相同设置不使断点失效，也不打断后台任务。
@@ -167,7 +191,13 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
         end = min(cfg['end'] or int(time.time()), int(time.time()))
         start = cfg['start'] if cfg['start'] is not None else max(0, end - cfg['days'] * 86400) if cfg['days'] else 0
         active = cfg.get('active') or {}
-        new_generation = rebuild or active.get('model') != cfg['model'] or not active.get('generation')
+        # 远端服务换了地址、模型名或维度，索引里的旧向量就不在同一个向量空间里，
+        # 余弦距离只会算出无意义的数字，所以身份指纹变了必须重建。
+        identity = remote_identity(remote_spec(cfg['model'], cfg.get('remote_endpoint'), cfg.get('remote_model'),
+                                               cfg.get('remote_api_key'), cfg.get('remote_allow_self_signed'),
+                                               cfg.get('remote_dimension')))
+        new_generation = (rebuild or active.get('model') != cfg['model'] or not active.get('generation')
+                          or (identity is not None and active.get('identity') != identity))
         generation = uuid.uuid4().hex if new_generation else active['generation']
         enrichment = await asyncio.to_thread(self.enrichment_version, account)
         # 增量保留同秒和短期补写窗口；旧转写/附件变化或每天一次校对重读范围。
@@ -280,6 +310,91 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
             finally:
                 executor.shutdown(wait=False)
 
+    async def ensure_tokenizer(self, spec, root):
+        """尽力拿到与远端模型一致的 tokenizer；拿不到就返回 None，由切块层退化为字符上界。
+
+        切块口径必须与远端模型一致，不能用别的模型的 tokenizer 顶替，所以这里只接受远端
+        服务提供的 tokenizer.json：OpenAI、Ollama、vLLM 等通常不提供，那属于正常情况，
+        不是配置错误。
+        """
+        path = Path(root) / 'tokenizer.json'
+        if path.is_file():
+            return path
+        endpoint = str(spec.get('endpoint') or '').strip().rstrip('/')
+        if spec.get('backend') != 'remote' or not endpoint:
+            # 本地模型的缺失继续由推理层给出统一的「重新下载或导入」提示。
+            return path
+        url = endpoint + '/tokenizer.json'
+        import httpx
+        try:
+            # 局域网地址绕过系统代理，否则请求会被本机代理拦成 502。
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0), trust_env=not is_lan_endpoint(endpoint)) as client:
+                response = await client.get(url, follow_redirects=True)
+                if response.status_code == 404:
+                    diagnostic_event('inference.remote.tokenizer.absent', level=logging.INFO, url=url)
+                    return None
+                response.raise_for_status()
+                data = response.content
+        except httpx.HTTPError as exc:
+            # 取不到 tokenizer 不该让整轮索引失败：字符上界切块同样能建出可用的索引。
+            diagnostic_event('inference.remote.tokenizer.unavailable', level=logging.WARNING, url=url, error=exc)
+            return None
+        if not data.lstrip().startswith(b'{'):
+            diagnostic_event('inference.remote.tokenizer.invalid', level=logging.WARNING, url=url)
+            return None
+        # 先写临时文件再替换，中断留下的半份文件不会被当成已缓存的 tokenizer。
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + '.part')
+        temporary.write_bytes(data)
+        temporary.replace(path)
+        return path
+
+    def remote_probe(self, spec):
+        """探测 OpenAI 兼容服务：返回模型清单、探针维度与可读错误，不抛异常。
+
+        配置保存与「测试连接」共用：模型名不做强校验（各服务的命名规则不同），只把
+        清单和命中情况报给用户。
+        """
+        import httpx
+        from .inference import remote_api_base, parse_remote_vectors
+        endpoint = str(spec.get('endpoint') or '').strip()
+        base = remote_api_base(endpoint)
+        result = {'reachable': False, 'models': [], 'dimension': None, 'model_listed': None, 'error': ''}
+        if not base:
+            result['error'] = '未填写服务地址'
+            return result
+        headers = {}
+        key = str(spec.get('api_key') or '').strip()
+        if key: headers['Authorization'] = 'Bearer ' + key
+        model = str(spec.get('model') or '').strip()
+        try:
+            with httpx.Client(timeout=httpx.Timeout(30.0, connect=8.0), trust_env=not is_lan_endpoint(endpoint),
+                              verify=not bool(spec.get('allow_self_signed'))) as client:
+                try:
+                    listed = client.get(base + '/models', headers=headers)
+                    if listed.status_code == 200:
+                        items = listed.json().get('data')
+                        if isinstance(items, list):
+                            result['models'] = [str(item['id']) for item in items if isinstance(item, dict) and item.get('id')]
+                except (httpx.HTTPError, ValueError):
+                    # 有的服务不实现 /models，探针维度仍然有效。
+                    pass
+                if result['models']:
+                    result['model_listed'] = model in result['models']
+                probe = client.post(base + '/embeddings',
+                                    json={'model': model, 'input': ['ping'], 'encoding_format': 'float'}, headers=headers)
+                if probe.status_code == 200:
+                    vectors = parse_remote_vectors(probe.json(), 1)
+                    result['dimension'] = len(vectors[0])
+                    result['reachable'] = True
+                else:
+                    result['error'] = '服务返回 %d：%s' % (probe.status_code, (probe.text or '').strip()[:180])
+        except httpx.HTTPError as exc:
+            result['error'] = '无法连接：%s' % exc
+        except (ValueError, InferenceFailure) as exc:
+            result['error'] = '响应无法解析：%s' % exc
+        return result
+
     @observed('search.run', id_field='task_id', execution=True)
     async def run(self, job):
         cfg, account = job['config'], job['account']
@@ -291,9 +406,12 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
             try:
                 check()
                 from tokenizers import Tokenizer
-                spec = model_spec(cfg['model'])
+                spec = remote_spec(cfg['model'], cfg.get('remote_endpoint'), cfg.get('remote_model'),
+                                   cfg.get('remote_api_key'), cfg.get('remote_allow_self_signed'), cfg.get('remote_dimension'))
                 root = model_dir(self.downloads.root, cfg['model'])
-                tokenizer = Tokenizer.from_file(str(root / 'tokenizer.json'))
+                # 远端服务可以不提供 tokenizer：拿不到就按字符上界切块，而不是拒绝建索引。
+                tokenizer_path = await self.ensure_tokenizer(spec, root)
+                tokenizer = Tokenizer.from_file(str(tokenizer_path)) if tokenizer_path else None
                 index = self.index(account)
                 self.update(job, status='running', read_count=job['processed'], embedded_count=job['embedded'])
                 plan = await self.count_message_total(job, check)
@@ -340,7 +458,8 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
                             self.update(job, stage='organizing', read_count=job['processed'] + len(messages))
                             unchanged = await asyncio.to_thread(index.existing, job['generation'], messages)
                             changed = await asyncio.to_thread(index.affected_messages, job['generation'], [m for m in messages if m['source'] not in unchanged])
-                            chunks = await asyncio.to_thread(make_chunks, changed, tokenizer)
+                            chunks = await asyncio.to_thread(make_chunks, changed, tokenizer,
+                                                              max_chars=spec.get('max_chars'))
                             diagnostic_event('index.page.organized', count=len(changed), unchanged=len(unchanged), chunks=len(chunks))
                             vectors = []
                             last_embedding_update = time.monotonic()
@@ -397,6 +516,7 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
                 current['active'] = {'generation': job['generation'], 'model': cfg['model'], 'start': job['start'],
                                      'end': job['end'], 'usernames': cfg['usernames'], 'updated': time.time(), 'source': job.get('source'),
                                      'revision': cfg['revision'], 'enrichment': job.get('enrichment'),
+                                     'identity': remote_identity(spec),
                                      'coverage': coverage,
                                      'partial': cfg.get('agent_global', False) and not coverage_complete(coverage, cfg['usernames'], job['start'], job['end']),
                                      'reconciled': cfg.get('active',{}).get('reconciled',time.time()) if job.get('incremental') else time.time()}
@@ -459,7 +579,8 @@ class LocalSearch(ProgressiveIndex, MessageTotals):
             # 渐进索引里的新消息可能尚未进入旧全文索引，原文命中必须独立于向量召回。
             committed_keyword_hits = [as_hit(m) for m in literal]
             keyword = {**keyword, 'hits': fuse([*committed_keyword_hits, *keyword.get('hits', [])], [])}
-            spec = model_spec(active['model'])
+            spec = remote_spec(active['model'], cfg.get('remote_endpoint'), cfg.get('remote_model'),
+                               cfg.get('remote_api_key'), cfg.get('remote_allow_self_signed'), cfg.get('remote_dimension'))
             root = model_dir(self.downloads.root, active['model'])
             vectors = await asyncio.to_thread(self.engine.encode, root, spec, [q], cfg['device'], cfg['device_id'], True)
             rows = await asyncio.to_thread(index.search, active['generation'], vectors[0], sorted(allowed), query_start, query_end, sender, kinds, 200)

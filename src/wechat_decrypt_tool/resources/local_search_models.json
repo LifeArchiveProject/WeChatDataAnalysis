@@ -136,5 +136,25 @@
       }
     ],
     "description": "适合中英文及多语言聊天"
+  },
+  {
+    "id": "remote-openai",
+    "name": "远端向量服务（OpenAI 兼容）",
+    "repo": "",
+    "revision": "",
+    "dimension": null,
+    "pooling": "last",
+    "query_prefix": "",
+    "passage_prefix": "",
+    "max_tokens": 8192,
+    "max_chars": 512,
+    "license": "",
+    "recommended": false,
+    "backend": "remote",
+    "protocol": "openai",
+    "endpoint": "",
+    "model": "",
+    "files": [],
+    "description": "连接 OpenAI 兼容的 /v1/embeddings 服务（Ollama、LM Studio、vLLM、自建网关等）。向量推理在服务端执行，本机不下载权重；建立索引时聊天文本会发送到你填写的服务。"
   }
 ]

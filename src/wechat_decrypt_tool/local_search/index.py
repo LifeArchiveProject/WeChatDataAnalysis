@@ -197,22 +197,41 @@ class SemanticIndex:
             db.execute('DELETE FROM chunks WHERE NOT EXISTS (SELECT 1 FROM members WHERE chunk=chunks.id)')
 
 
-def make_chunks(messages, tokenizer, max_tokens=384, overlap=64):
+def make_chunks(messages, tokenizer, max_tokens=384, overlap=64, max_chars=None):
+    """把消息切成可嵌入的块。
+
+    有 tokenizer 时按 token 精确切；远端服务可以不提供 tokenizer，这时退化为按字符切：
+    字符数是 token 数的上界（中文 1 字≈1 token，英文更省），宁可多切几块，也不越过模型
+    上下文——溢出会变成服务端 400 或静默截断，比多几个块难排查得多。
+    """
+    if tokenizer is None:
+        window = max(32, int(max_chars or max_tokens))
+        step = max(1, window - max(1, min(overlap, window // 4)))
+    else:
+        window = max_tokens
+        step = max(1, max_tokens - overlap)
+
+    def units(text):
+        return tokenizer.encode(text + '\n', add_special_tokens=False).ids if tokenizer is not None else list(text + '\n')
+
+    def text_of(part):
+        return tokenizer.decode(part) if tokenizer is not None else ''.join(part)
+
     chunks, tokens, owners, username, last_time = [], [], [], '', 0
     def flush():
         nonlocal tokens, owners
-        for start in range(0,len(tokens),max_tokens-overlap):
-            part=tokens[start:start+max_tokens]
-            text=tokenizer.decode(part)
-            if text.strip(): chunks.append({'text':text,'sources':list(dict.fromkeys(owners[start:start+max_tokens])),'username':username})
-            if start+max_tokens>=len(tokens): break
+        for start in range(0,len(tokens),step):
+            part=tokens[start:start+window]
+            text=text_of(part)
+            if text.strip(): chunks.append({'text':text,'sources':list(dict.fromkeys(owners[start:start+window])),'username':username})
+            if start+window>=len(tokens): break
         tokens,owners=[],[]
     for message in messages:
         text = '\n'.join(filter(None,[message.get('text',''),message.get('local_attachment_text','')])).strip()
         if not text: continue
         if username and (username != message['username'] or message['time'] - last_time > 600): flush()
         username, last_time = message['username'], message['time']
-        part = tokenizer.encode(text+'\n', add_special_tokens=False).ids
+        part = units(text)
         tokens.extend(part);owners.extend([message['source']]*len(part))
     flush()
     return chunks

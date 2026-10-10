@@ -139,6 +139,10 @@ class ModelDownloads:
     def models(self):
         values = []
         for spec in CATALOG:
+            if spec.get('backend') == 'remote':
+                values.append({**spec, 'downloaded': True, 'size': 0,
+                               'job': None})
+                continue
             root = model_dir(self.root, spec['id'])
             record = self.store.get('model', spec['id']) or {}
             available = record.get('revision') == spec['revision'] and all((root / f['path']).is_file() and (root / f['path']).stat().st_size == f['size'] for f in spec['files'])

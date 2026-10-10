@@ -100,11 +100,19 @@ def test_fusion_dedup_and_matching_metadata():
 
 def test_catalog_pinned_and_hashed():
     from wechat_decrypt_tool.local_search.catalog import CATALOG
-    assert len(CATALOG)==3
-    for model in CATALOG:
+    local=[m for m in CATALOG if m.get('backend')!='remote']
+    remote=[m for m in CATALOG if m.get('backend')=='remote']
+    assert len(local)==3
+    for model in local:
         assert len(model['revision'])==40
         assert all(len(f['sha256'])==64 and f['size']>0 for f in model['files'])
         assert [f['path'] for f in model['files'] if f['path'].endswith('.onnx')]==['onnx/model.onnx']
+    # 远端模型不下载权重，所以不参与固定版本与哈希校验；它的约束是协议和切块上界。
+    assert [m['id'] for m in remote]==['remote-openai']
+    assert remote[0]['protocol']=='openai'
+    assert remote[0]['files']==[]
+    assert remote[0]['dimension'] is None
+    assert remote[0]['max_chars']>0 and remote[0]['max_tokens']>0
 
 def test_model_corruption_detected(tmp_path):
     (tmp_path/'test').write_bytes(b'wrong')
