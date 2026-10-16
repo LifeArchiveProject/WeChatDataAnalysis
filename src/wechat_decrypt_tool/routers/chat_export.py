@@ -1,0 +1,283 @@
+import asyncio
+import json
+import time
+from typing import Any, Literal, Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, Field, SecretStr
+
+from ..chat_export_service import CHAT_EXPORT_MANAGER, get_chat_export_targets_preview
+from ..chat_incremental_export import ChatIncrementalError
+from ..native_core_export import decode_export_content_key, erase_export_content_key
+from ..path_fix import PathFixRoute
+from ..voice_transcription import VoiceTranscriptionError, get_voice_transcription_service
+
+router = APIRouter(route_class=PathFixRoute)
+
+ExportFormat = Literal["json", "txt", "html", "excel"]
+ExportScope = Literal["selected", "all", "groups", "singles"]
+ExportOutputMode = Literal["zip", "folder"]
+ChatSource = Literal["auto", "decrypted", "realtime"]
+MediaKind = Literal["image", "emoji", "video", "video_thumb", "voice", "file"]
+MessageType = Literal[
+    "text",
+    "image",
+    "emoji",
+    "video",
+    "voice",
+    "chatHistory",
+    "file",
+    "link",
+    "transfer",
+    "redPacket",
+    "location",
+    "system",
+    "quote",
+    "voip",
+]
+
+
+class ChatExportCreateRequest(BaseModel):
+    account: Optional[str] = Field(None, description="账号目录名（可选，默认使用第一个）")
+    source: ChatSource = Field("auto", description="数据源：auto/realtime=直接读取原始 WCDB；decrypted=兼容旧本地解密库")
+    scope: ExportScope = Field("selected", description="导出范围：selected=指定会话；all=全部；groups=仅群聊；singles=仅单聊")
+    usernames: list[str] = Field(default_factory=list, description="会话 username 列表（scope=selected 时使用）")
+    format: ExportFormat = Field("json", description="导出格式：html/json/txt/excel（zip 内每个会话一个文件；Excel 为 .xlsx）")
+    start_time: Optional[int] = Field(None, description="起始时间（Unix 秒，含）")
+    end_time: Optional[int] = Field(None, description="结束时间（Unix 秒，含）")
+    include_hidden: bool = Field(False, description="是否包含隐藏会话（scope!=selected 时）")
+    include_official: bool = Field(False, description="是否包含公众号/官方账号会话（scope!=selected 时）")
+    include_media: bool = Field(True, description="是否允许打包离线媒体（最终仍受 message_types 与 privacy_mode 约束）")
+    media_kinds: list[MediaKind] = Field(
+        default_factory=lambda: ["image", "emoji", "video", "video_thumb", "voice", "file"],
+        description="允许打包的媒体类型（最终仍受 message_types 勾选约束）",
+    )
+    message_types: list[MessageType] = Field(
+        default_factory=list,
+        description="导出消息类型（renderType）过滤：为空=导出全部类型；不为空时，仅导出勾选类型",
+    )
+    output_dir: Optional[str] = Field(None, description="导出目录绝对路径（可选；不填时使用默认目录）")
+    allow_process_key_extract: bool = Field(
+        False,
+        description="预留字段：本项目不从微信进程提取媒体密钥，请使用 wx_key 获取并保存/批量解密",
+    )
+    download_remote_media: bool = Field(
+        False,
+        description="HTML 导出时允许联网下载链接/引用缩略图等远程媒体（提高离线完整性）",
+    )
+    html_page_size: int = Field(
+        1000,
+        description="HTML 导出分页大小（每页消息数）；<=0 表示禁用分页（单文件，打开大聊天可能很卡）",
+    )
+    privacy_mode: bool = Field(
+        False,
+        description="隐私模式导出：隐藏会话/用户名/内容，不打包头像与媒体",
+    )
+    file_name: Optional[str] = Field(None, description="导出 zip 文件名（可选，不含/含 .zip 都可）")
+    encrypt: bool = Field(False, description="是否使用 WEC1 加密最终导出文件")
+    content_key_base64: Optional[SecretStr] = Field(
+        None,
+        description="WEC1 的 32 字节 Base64 内容密钥；仅 encrypt=true 时使用",
+    )
+    transcribe_voice: bool = Field(False, description="使用本地 Whisper 将语音消息转成中文并写入导出文件")
+    output_mode: ExportOutputMode = Field("zip", description="输出方式：zip=全量压缩包；folder=可持续更新目录")
+    folder_name: Optional[str] = Field(None, description="增量导出根目录名")
+    baseline: Optional[dict[str, Any]] = Field(None, description="浏览器端读取的上轮聊天增量基线")
+    missing_files: list[str] = Field(default_factory=list, description="浏览器端发现缺失的受管理文件")
+    reset_baseline: bool = Field(False, description="明确重置基线并完整重建")
+    repair_usernames: list[str] = Field(default_factory=list, description="需要重建的可恢复差异会话")
+    recheck_media: bool = Field(False, description="明确重新探测待补媒体；不会把源端不可用项当成可修复差异")
+
+
+@router.post("/api/chat/exports", summary="创建聊天记录导出任务（ZIP 全量或增量目录）")
+async def create_chat_export(req: ChatExportCreateRequest):
+    if req.baseline is not None:
+        baseline_size = len(json.dumps(req.baseline, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        if baseline_size > 128 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail={"code": "incremental_baseline_too_large", "message": "增量基线过大。"})
+    if len(req.missing_files) > 100_000:
+        raise HTTPException(status_code=413, detail={"code": "incremental_missing_files_too_many", "message": "缺失文件清单过大。"})
+    if req.output_mode == "folder" and req.encrypt:
+        raise HTTPException(status_code=400, detail={"code": "incremental_encryption_unsupported", "message": "增量目录不支持整包加密，请使用 ZIP 全量导出。"})
+    if req.transcribe_voice and not req.privacy_mode:
+        try:
+            await asyncio.to_thread(get_voice_transcription_service().ensure_available)
+        except VoiceTranscriptionError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": exc.code, "message": exc.user_message},
+            ) from exc
+    try:
+        content_key = decode_export_content_key(
+            req.content_key_base64.get_secret_value() if req.content_key_base64 else None,
+            enabled=bool(req.encrypt),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    try:
+        job = CHAT_EXPORT_MANAGER.create_job(
+            account=req.account,
+            source=req.source,
+            scope=req.scope,
+            usernames=req.usernames,
+            export_format=req.format,
+            start_time=req.start_time,
+            end_time=req.end_time,
+            include_hidden=req.include_hidden,
+            include_official=req.include_official,
+            include_media=req.include_media,
+            media_kinds=req.media_kinds,
+            message_types=req.message_types,
+            output_dir=req.output_dir,
+            allow_process_key_extract=req.allow_process_key_extract,
+            download_remote_media=req.download_remote_media,
+            html_page_size=req.html_page_size,
+            privacy_mode=req.privacy_mode,
+            file_name=req.file_name,
+            encrypt=bool(req.encrypt),
+            content_key=content_key,
+            transcribe_voice=req.transcribe_voice,
+            output_mode=req.output_mode,
+            folder_name=req.folder_name,
+            baseline=req.baseline,
+            missing_files=req.missing_files,
+            reset_baseline=bool(req.reset_baseline),
+            repair_usernames=req.repair_usernames,
+            recheck_media=bool(req.recheck_media),
+        )
+    except ChatIncrementalError as e:
+        erase_export_content_key(content_key)
+        raise HTTPException(status_code=409, detail={"code": e.code, "message": str(e)}) from e
+    except ValueError as e:
+        erase_export_content_key(content_key)
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        erase_export_content_key(content_key)
+        raise
+    return {"status": "success", "job": job.to_public_dict()}
+
+
+@router.get("/api/chat/exports", summary="列出导出任务（内存）")
+async def list_chat_exports():
+    jobs = [j.to_public_dict() for j in CHAT_EXPORT_MANAGER.list_jobs()]
+    jobs.sort(key=lambda x: int(x.get("createdAt") or 0), reverse=True)
+    return {"status": "success", "jobs": jobs}
+
+
+@router.get("/api/chat/exports/targets", summary="获取聊天记录导出目标预览")
+async def preview_chat_export_targets(
+    request: Request,
+    account: Optional[str] = None,
+    source: ChatSource = "auto",
+    include_hidden: bool = True,
+    include_official: bool = False,
+):
+    base_url = str(request.base_url).rstrip("/")
+    try:
+        return get_chat_export_targets_preview(
+            account=account,
+            source=source,
+            include_hidden=bool(include_hidden),
+            include_official=bool(include_official),
+            base_url=base_url,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/api/chat/exports/{export_id}", summary="获取导出任务状态")
+async def get_chat_export(export_id: str):
+    job = CHAT_EXPORT_MANAGER.get_job(str(export_id or "").strip())
+    if not job:
+        raise HTTPException(status_code=404, detail="Export not found.")
+    return {"status": "success", "job": job.to_public_dict()}
+
+
+@router.get("/api/chat/exports/{export_id}/download", summary="下载导出 zip")
+async def download_chat_export(export_id: str):
+    job = CHAT_EXPORT_MANAGER.get_job(str(export_id or "").strip())
+    if not job:
+        raise HTTPException(status_code=404, detail="Export not found.")
+    if not job.zip_path or (not job.zip_path.exists()):
+        raise HTTPException(status_code=409, detail="Export not ready.")
+    return FileResponse(
+        str(job.zip_path),
+        media_type="application/octet-stream" if job.zip_path.suffix.lower() == ".wec" else "application/zip",
+        filename=job.zip_path.name,
+    )
+
+
+@router.get("/api/chat/exports/{export_id}/files", summary="获取聊天增量目录变化文件清单")
+async def list_chat_export_files(export_id: str):
+    job = CHAT_EXPORT_MANAGER.get_job(str(export_id or "").strip())
+    if not job:
+        raise HTTPException(status_code=404, detail="Export not found.")
+    if job.status != "done" or not job.change_manifest or not job.staged_files:
+        raise HTTPException(status_code=409, detail="Incremental export not ready.")
+    return {"status": "success", "manifest": job.change_manifest}
+
+
+@router.get("/api/chat/exports/{export_id}/files/{file_id}", summary="下载单个聊天增量变化文件")
+async def download_chat_export_file(export_id: str, file_id: str):
+    path = CHAT_EXPORT_MANAGER.get_staged_file(
+        str(export_id or "").strip(),
+        str(file_id or "").strip(),
+    )
+    if path is None:
+        raise HTTPException(status_code=404, detail="Export file not found.")
+    return FileResponse(str(path), media_type="application/octet-stream", filename=path.name)
+
+
+@router.post("/api/chat/exports/{export_id}/commit", summary="确认浏览器已完成聊天增量目录写入")
+async def commit_chat_export_files(export_id: str):
+    if not CHAT_EXPORT_MANAGER.commit_staged_files(str(export_id or "").strip()):
+        raise HTTPException(status_code=404, detail="Export not found.")
+    return {"status": "success"}
+
+
+@router.get("/api/chat/exports/{export_id}/events", summary="导出任务进度 SSE")
+async def stream_chat_export_events(export_id: str, request: Request):
+    export_id = str(export_id or "").strip()
+    job0 = CHAT_EXPORT_MANAGER.get_job(export_id)
+    if not job0:
+        raise HTTPException(status_code=404, detail="Export not found.")
+
+    async def gen():
+        last_payload = ""
+        last_heartbeat = 0.0
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            job = CHAT_EXPORT_MANAGER.get_job(export_id)
+            if not job:
+                yield "event: error\ndata: " + json.dumps({"error": "Export not found."}, ensure_ascii=False) + "\n\n"
+                break
+
+            payload = json.dumps(job.to_public_dict(), ensure_ascii=False)
+            if payload != last_payload:
+                last_payload = payload
+                yield f"data: {payload}\n\n"
+
+            now = time.time()
+            if now - last_heartbeat > 15:
+                last_heartbeat = now
+                yield ": ping\n\n"
+
+            if job.status in {"done", "error", "cancelled"}:
+                break
+
+            await asyncio.sleep(0.6)
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+
+
+@router.delete("/api/chat/exports/{export_id}", summary="取消导出任务")
+async def cancel_chat_export(export_id: str):
+    ok = CHAT_EXPORT_MANAGER.cancel_job(str(export_id or "").strip())
+    if not ok:
+        raise HTTPException(status_code=404, detail="Export not found.")
+    return {"status": "success"}

@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>WeChatDataAnalysis — 你的微信数据，由你留存</title>
+<meta name="description" content="微信 4.x 数据库解密与分析工具：高仿微信界面、实时消息、朋友圈、全文搜索、聊天记录导出与年度总结，100% 本地离线运行，Windows 与 macOS 双平台。">
+<meta property="og:title" content="WeChatDataAnalysis — 你的微信数据，由你留存">
+<meta property="og:description" content="解密 · 浏览 · 搜索 · 导出 · 年度总结，全部在你自己的电脑上完成。Windows &amp; macOS 双平台。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://lifearchiveproject.github.io/WeChatDataAnalysis/">
+<meta property="og:image" content="https://lifearchiveproject.github.io/WeChatDataAnalysis/assets/img/og.jpg">
+<meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://lifearchiveproject.github.io/WeChatDataAnalysis/">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#f4f4f7">
+<!-- 主题（浅 / 深）：放在样式表之前，首帧前就定好 <html data-theme>——先看记住的选择（localStorage wda.theme：light | dark），没有就跟随系统；
+     同步改上面两个 meta（地址栏颜色、默认画布与滚动条），深色访客不先闪一下白。点击切换、跟随系统变化见 main.js 第 6b 节；读不到存储就跟随系统 -->
+<script>(function () { var t = null, r = document.documentElement, m; try { t = localStorage.getItem("wda.theme"); } catch (e) { t = null; } if (t !== "light" && t !== "dark") { try { t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; } catch (e) { t = "light"; } } r.setAttribute("data-theme", t); m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute("content", t === "dark" ? "#0c0e18" : "#f4f4f7"); m = document.querySelector('meta[name="color-scheme"]'); if (m) m.setAttribute("content", t); })();</script>
+<link rel="icon" href="favicon.ico" sizes="32x32">
+<link rel="icon" href="assets/img/logo-96.webp" type="image/webp">
+<link rel="apple-touch-icon" href="assets/img/logo-180.png">
+<!-- 字体自托管（Geist / Geist Mono，SIL OFL 1.1，见 assets/fonts/OFL.txt）：不依赖境外字体服务，渲染也不等它 -->
+<link rel="preload" href="assets/fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/css/main.css">
+<link rel="modulepreload" href="assets/js/data.js">
+<link rel="modulepreload" href="assets/js/card.js">
+<link rel="modulepreload" href="assets/js/compare.js">
+<script>window.__errs = []; addEventListener("error", function (e) { __errs.push(String(e.message)); }); addEventListener("unhandledrejection", function (e) { __errs.push(String(e.reason)); });</script>
+<script type="module" src="assets/js/main.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<!-- 状态符号与图标（不用 display:none，否则 <use> 和渐变取不到） -->
+<svg class="sprite" aria-hidden="true" width="0" height="0" focusable="false">
+  <defs>
+    <!-- 状态符号（照权益对比样张）：支持 = 蓝色光泽圆勾（顶部一道高光）；部分 = 琥珀圆 + 白横杠；不支持 = 浅灰实心圆 + 深灰粗叉。
+         不支持的两色走 --st-no / --st-no-x（没定义时就是原来的浅灰与深灰）：<use> 的实例只继承自定义属性，按 #st-no 写的选择器够不着，深色值见 main.css「权益对比」的深色段 -->
+    <linearGradient id="g-yes" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7cc9ff"/><stop offset="1" stop-color="#2f86f0"/></linearGradient>
+    <linearGradient id="g-part" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#f2a52e"/></linearGradient>
+    <symbol id="st-yes" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="url(#g-yes)"/><ellipse cx="12" cy="6.4" rx="6.6" ry="3.4" fill="#fff" opacity=".28"/><path d="M7.3 12.4l3.1 3.1 6.2-6.7" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="st-part" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="url(#g-part)"/><ellipse cx="12" cy="6.4" rx="6.6" ry="3.4" fill="#fff" opacity=".26"/><path d="M7.4 12h9.2" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/></symbol>
+    <symbol id="st-no" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#e3e5ec" style="fill: var(--st-no, #e3e5ec)"/><path d="M8.6 8.6l6.8 6.8M15.4 8.6l-6.8 6.8" stroke="#5c6075" stroke-width="2.4" stroke-linecap="round" style="stroke: var(--st-no-x, #5c6075)"/></symbol>
+    <symbol id="i-gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></symbol>
+    <symbol id="i-tg" viewBox="0 0 24 24"><path fill="currentColor" d="M21.9 4.3 18.7 19.4c-.24 1.06-.87 1.32-1.76.82l-4.86-3.58-2.35 2.26c-.26.26-.48.48-.98.48l.35-4.96 9.02-8.15c.39-.35-.09-.54-.61-.2L6.36 13.1l-4.8-1.5c-1.04-.33-1.06-1.04.22-1.54L20.55 2.8c.87-.32 1.63.2 1.35 1.5z"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.8l2.5 5.1 5.6.8-4.05 3.95.96 5.6L12 16.6l-5.01 2.64.96-5.6L3.9 9.7l5.6-.8z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 24 24"><path d="M8 16 16 8M9.5 8H16v6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <!-- 红包与转账：红包（信封 + 金色封口圆章）、转账（圆圈里一对来回箭头），配色由所在卡片给 currentColor -->
+    <symbol id="i-rp" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="4.5" y="2.5" width="15" height="19" rx="2.4"/><path d="M4.8 7.6c2.2 1.9 4.6 2.8 7.2 2.8s5-.9 7.2-2.8"/></g><circle cx="12" cy="10.6" r="2.6" fill="currentColor"/></symbol>
+    <symbol id="i-transfer" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M7.5 10h9l-2.6-2.6M16.5 14h-9l2.6 2.6"/></g></symbol>
+    <!-- 「电脑、手机都生效」小签里的电脑与手机（权益对比消息修改、消息补录两组）；同上面几只的细线画法 -->
+    <symbol id="i-pc" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="12" rx="1.5"/><path d="M12 16.5V20M8.5 20h7"/></g></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="2.8" width="11" height="18.4" rx="2.2"/><path d="M11 17.6h2"/></g></symbol>
+    <!-- 主题按钮：太阳（深色时显示，点了切浅色）、月亮（浅色时显示，点了切深色）；同上面几只的细线画法 -->
+    <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.1M12 19.3v2.1M2.6 12h2.1M19.3 12h2.1M5.35 5.35l1.5 1.5M17.15 17.15l1.5 1.5M5.35 18.65l1.5-1.5M17.15 6.85l1.5-1.5"/></g></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.2 14.6A8.4 8.4 0 0 1 9.4 3.8a8.4 8.4 0 1 0 10.8 10.8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<!-- ───────── 导航：全宽细条（品牌 | 两个锚点 + 更新日志页 | GitHub 文字链 + 主题按钮 + 主按钮），内容宽度与下方区块同一个 .wrap ───────── -->
+<header class="nav" id="nav">
+  <div class="nav__in wrap">
+    <a class="nav__brand" href="#top" aria-label="WeChatDataAnalysis 首页"><img src="assets/img/logo-96.webp" width="24" height="24" alt=""><span>WeChatDataAnalysis</span></a>
+    <nav class="nav__links" aria-label="页面导航">
+      <a href="#compare" data-nav="compare">权益对比</a>
+      <a href="#get" data-nav="get">获取</a>
+      <a href="changelog">更新日志</a>
+    </nav>
+    <div class="nav__act">
+      <a class="nav__gh" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis" target="_blank" rel="noopener" aria-label="GitHub 仓库"><svg class="ic" aria-hidden="true"><use href="#i-gh"/></svg><span class="nav__gh-t">GitHub</span><span class="nav__stars" data-gh-stars aria-hidden="true"><svg class="ic" aria-hidden="true"><use href="#i-star"/></svg><b></b></span></a>
+      <!-- 主题按钮（>900；≤900 收起，从菜单里的「深色模式」切）：两只图标都在，CSS 按 data-theme 显示其一；aria-label 由 main.js 第 6b 节随状态改 -->
+      <button class="nav__theme" type="button" data-theme-toggle aria-label="切换到深色模式"><svg class="ic ic--moon" aria-hidden="true"><use href="#i-moon"/></svg><svg class="ic ic--sun" aria-hidden="true"><use href="#i-sun"/></svg></button>
+      <a class="btn btn--pri nav__cta" href="#get">免费试用</a>
+      <button class="nav__menu" type="button" aria-expanded="false" aria-controls="menu" aria-label="打开菜单"><i></i><i></i></button>
+    </div>
+  </div>
+  <div class="menu" id="menu" hidden>
+    <nav class="menu__links wrap" aria-label="页面导航（手机）">
+      <a href="#compare" data-nav="compare"><em>01</em>权益对比<svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a href="#get" data-nav="get"><em>02</em>获取<svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a href="changelog"><em>03</em>更新日志<svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a href="https://github.com/LifeArchiveProject/WeChatDataAnalysis" target="_blank" rel="noopener"><em><svg class="ic" aria-hidden="true"><use href="#i-gh"/></svg></em>GitHub<span class="menu__stars" data-gh-stars aria-hidden="true"><svg class="ic" aria-hidden="true"><use href="#i-star"/></svg><b></b></span><svg class="ic" aria-hidden="true"><use href="#i-ext"/></svg></a>
+    </nav>
+    <div class="menu__pref wrap">
+      <button class="menu__theme" type="button" role="switch" aria-checked="false" data-theme-toggle><em><svg class="ic" aria-hidden="true"><use href="#i-moon"/></svg></em>深色模式<i aria-hidden="true"></i></button>
+    </div>
+    <div class="menu__cta wrap">
+      <a class="btn btn--pri" href="#get">免费试用高级版</a>
+      <a class="btn btn--sec" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases" target="_blank" rel="noopener">免费下载普通版</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <!-- ───────── 开场：左文右卡 ───────── -->
+  <section class="hero" id="top" aria-labelledby="hero-h">
+    <div class="hero__in wrap">
+      <p class="hero__eyebrow"><span class="pro">PRO</span>WeChatDataAnalysis 高级版<a class="hero__upd" href="changelog" data-latest hidden>最近更新 <b></b><svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></a></p>
+      <div class="hero__copy">
+        <h1 class="hero__h" id="hero-h">不止能读，<br>还能写。</h1>
+        <p class="hero__sub">比普通版多出&nbsp;<span data-pro-total data-pro-at="hero-sub">108</span>&nbsp;项高级功能，外加人工支持；注册送&nbsp;1&nbsp;天试用。</p>
+        <div class="hero__cta">
+          <!-- 主按钮光效（main.css「开场主按钮」、main.js 第 0b 节）：.fx 整块是装饰（aria-hidden），垫在文字下面；链接与行为不变 -->
+          <a class="btn btn--l btn--fx" href="#get" data-fx><span class="fx" aria-hidden="true"><span class="fx__out"><span class="fx__ref"><span class="fx__aur"><b></b><b></b><b></b></span></span></span><span class="fx__rim"></span><span class="fx__face"><span class="fx__pan"></span><span class="fx__ref"></span></span></span>免费试用高级版</a>
+          <a class="btn btn--sec btn--l" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases" target="_blank" rel="noopener" data-dl="hero"><span data-dl-t>免费下载普通版</span></a>
+        </div>
+        <p class="dl-hint" data-dl-hint="hero" hidden></p>
+      </div>
+      <div class="hero__stage">
+        <!-- 卡面照搬样张甲：assets/js/card.js 在 canvas 上画（2D，不用 WebGL），倾斜时全息章换成单独的一小块（有视差）；卡上的数字取自下面这行读屏文字。
+             跟手倾斜、光泽、柔影与扫光见 main.js「开场卡面」一节 -->
+        <figure class="card" id="card">
+          <div class="card__tilt" aria-hidden="true">
+            <span class="card__shade"></span>
+            <canvas class="card__cv" width="1024" height="646"></canvas>
+            <canvas class="card__patch" width="176" height="176"></canvas>
+            <canvas class="card__seal" width="176" height="176"></canvas>
+            <div class="card__shine"><span class="card__holo"></span><span class="card__sweep"></span></div>
+            <div class="card__glint"><span class="card__glare"></span></div>
+          </div>
+          <figcaption class="vh">WeChatDataAnalysis 高级版卡片：<span data-pro-groups>13</span> 组 <span data-pro-total data-pro-at="hero-card">108</span> 项高级功能，注册送 1 天试用</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- 全部高级版独有功能（默认折叠） -->
+  <section class="all" id="all" aria-label="全部高级版独有功能">
+    <details class="wrap" id="all-d">
+      <summary><span>全部高级版独有功能</span><em>按类别 · 每条一句</em><svg class="ic" aria-hidden="true"><use href="#i-down"/></svg></summary>
+      <div class="all__cols" id="all-cols"></div>
+    </details>
+  </section>
+
+  <!-- ───────── 权益对比 · 双卡对照（正常留白，表头吸顶） ─────────
+       左素白普通版卡、右全息卡面高级版卡（与开场卡同色系）。.cmp__duo 是两栏网格：每一行 .r 横跨两栏、用子网格取同一组列宽，
+       .r__f 落在普通版卡、.r__p 落在高级版卡，同一行在两卡上必然同高；两张卡的卡面（.vc）是垫在各自栏里的整块背景。
+       内容全部直接铺开，没有浮层、弹框、抽屉或点击展开：高级版每组的全部条目由 compare.js 从 data.js 的 PRO_GROUPS（即 catalog.js）
+       填进 data-items 列表，一行一个、按宽度分 2–4 栏。两卡卡头（.cmp__bar）吸在导航下沿；表格末尾的零高度哨兵 .cmp__end 升到
+       「卡头下只剩不到 120px 表格」时，compare.js 让卡头淡出上移（is-gone），不会孤零零悬在获取区上方。
+       窄屏（≤1000，平板与手机）改成上下排列的单列明细。这里写死的 108 / 13 / 各组条数与行结构由 tools/dev/sync-site-catalog.mjs --check 核对。 -->
+  <section class="cmp" id="compare" aria-labelledby="cmp-h">
+    <div class="cmp__in wrap">
+      <div class="cmp__top">
+        <h2 id="cmp-h">权益对比</h2>
+        <p class="cmp__p">普通版把记录读出来，高级版还能改、能补、能替你动手。</p>
+        <button class="cmp__sw cmp__sw--m" type="button" role="switch" aria-checked="false" data-diff><i aria-hidden="true"></i>只看差异</button>
+      </div>
+      <div class="cmp__tbl" id="cmp-tbl">
+        <span class="cmp__pin" aria-hidden="true"></span>
+        <div class="cmp__bar" id="cmp-bar">
+          <div class="cb cb--free">
+            <h3 class="cb__n">普通版<span class="tag">免费</span></h3>
+            <a class="btn btn--sec" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases" target="_blank" rel="noopener"><svg class="ic" aria-hidden="true"><use href="#i-gh"/></svg><span class="cb__m">普通版</span>免费下载</a>
+          </div>
+          <div class="cb cb--pro">
+            <span class="cb__face" aria-hidden="true"><span class="vc__film"></span><span class="vc__frame"></span><span class="vc__edge"></span></span>
+            <h3 class="cb__n">高级版<span class="pro">PRO</span></h3>
+            <p class="cmp__legend" aria-label="图例"><span><svg class="st" aria-hidden="true"><use href="#st-yes"/></svg>支持</span><span><svg class="st" aria-hidden="true"><use href="#st-part"/></svg>部分</span><span><svg class="st" aria-hidden="true"><use href="#st-no"/></svg>不支持</span></p>
+            <button class="cmp__sw" type="button" role="switch" aria-checked="false" data-diff><i aria-hidden="true"></i>只看差异</button>
+            <a class="btn btn--pri" href="https://t.me/+IQKBDeXtaKozZWYx" target="_blank" rel="noopener" aria-label="进 Telegram 群下载高级版，免费试用 1 天"><svg class="ic" aria-hidden="true"><use href="#i-tg"/></svg><span class="cb__m">高级版</span>免费试用<span class="cb__d">&nbsp;1 天</span></a>
+          </div>
+        </div>
+        <div class="cmp__duo" id="cmp-duo">
+          <div class="vc vc--free" aria-hidden="true"></div>
+          <div class="vc vc--pro" aria-hidden="true"><div class="vc__film"></div><div class="vc__sheen"></div><div class="vc__frame"></div></div>
+
+          <!-- 卡顶：左「免费」，右箔压大字（总数）+ 扭索纹圆环与全息章（只在这里出现一次，不压任何字） -->
+          <div class="r r--hero">
+            <div class="r__f"><p class="hk">解密、浏览、搜索与导出</p><p class="hb"><b>免费</b><span>不需要账号</span></p></div>
+            <div class="r__p"><p class="hk">在普通版全部能力之上，再加</p><p class="vc__big"><b data-pro-total data-pro-at="compare-big">108</b><span>项高级功能<small><span data-pro-groups>13</span> 组 · 注册送 1 天试用</small></span></p>
+              <div class="vc__art" aria-hidden="true"><canvas class="vc__rose" width="0" height="0"></canvas><div class="vc__seal"><div class="vc__seal-c"></div><div class="vc__seal-r"></div><svg viewBox="-50 -50 100 100"><path d="M0 -46Q6 -6 46 0Q6 6 0 46Q-6 6 -46 0Q-6 -6 0 -46Z" fill="#fff"/></svg></div></div></div>
+          </div>
+
+          <!-- 两版都有：六项名称 + 说明（「只看差异」收起这一段） -->
+          <div class="r r--both" data-i="both">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">两版都有<em>6 项</em></span><span class="f__s"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg></span><span class="f__d">高级版包含<wbr>普通版的<wbr>全部能力。</span></div>
+            <div class="r__p"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c">6</b><span class="p__n">两版都有</span><small class="p__u">项</small></p>
+              <dl class="p__defs"><div><dt>解密</dt><dd>数据库解密，支持微信 4.x。</dd></div><div><dt>浏览</dt><dd>聊天记录浏览，新消息实时同步。</dd></div><div><dt>搜索</dt><dd>聊天记录全文搜索。</dd></div><div><dt>朋友圈·收藏</dt><dd>朋友圈、收藏、小程序、视频号直播都能浏览。</dd></div><div><dt>导出</dt><dd>10 类内容导出：HTML / JSON / TXT / Excel，另有账号数据归档 ZIP。</dd></div><div><dt>年度总结</dt><dd>一年的聊天数据做成年度总结。</dd></div></dl></div>
+          </div>
+
+          <!-- 高级版独有：13 组 108 项（左 ⊖ / ✕ + 普通版短说明；右条数大字 + 组名、组说明、风险边界、全部条目） -->
+          <div class="r r--sec"><div class="r__f"><p><span>高级版独有</span><em><b data-pro-groups>13</b> 组</em></p></div><div class="r__p"><p><span>高级版独有</span><em><b data-pro-total data-pro-at="compare">108</b> 项</em></p></div></div>
+          <div class="r r--x r--g r--no" data-i="edit">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">消息修改</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版只读，不改动消息。</span></div>
+            <div class="r__p" style="--i:0"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="edit" data-pro-at="compare">8</b><span class="p__n">消息修改</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__both"><svg class="ic" aria-hidden="true"><use href="#i-pc"/></svg><svg class="ic" aria-hidden="true"><use href="#i-phone"/></svg>电脑、手机都生效</span><span class="p__t">直接改写<wbr>本机消息，改过头了<wbr>可一键恢复<wbr>原消息。</span></p><ul class="p__its" data-items="edit"></ul></div>
+          </div>
+          <div class="r r--x r--g r--no" data-i="add">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">消息补录</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版只读，不写入消息。</span></div>
+            <div class="r__p" style="--i:1"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="add" data-pro-at="compare">17</b><span class="p__n">消息补录</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__both"><svg class="ic" aria-hidden="true"><use href="#i-pc"/></svg><svg class="ic" aria-hidden="true"><use href="#i-phone"/></svg>电脑、手机都生效</span><span class="p__t">在任意位置<wbr>补录 <span data-pro-count="add" data-pro-at="compare-d">17</span>&nbsp;类消息。</span></p><ul class="p__its" data-items="add"></ul></div>
+          </div>
+          <div class="r r--x r--g r--no" data-i="ai-mcp">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">AI 与 MCP</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版没有&nbsp;AI 与&nbsp;MCP。</span></div>
+            <div class="r__p" style="--i:2"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="ai-mcp" data-pro-at="compare">2</b><span class="p__n">AI 与 MCP</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">AI 助手围绕聊天记录<wbr>问答、总结，回答<wbr>带消息出处；MCP 让&nbsp;AI 客户端<wbr>接入聊天数据。</span></p><ul class="p__its" data-items="ai-mcp"></ul></div>
+          </div>
+          <div class="r r--x r--g r--no" data-i="action">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">微信动作</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版只读<wbr>本机数据，不操作微信。</span></div>
+            <div class="r__p" style="--i:3"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="action" data-pro-at="compare">22</b><span class="p__n">微信动作</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">发消息、文件、名片<wbr>与各类卡片，引用回复、撤回、<wbr>分组发图，以及<wbr>收消息<wbr>与历史补拉。</span></p><ul class="p__its" data-items="action"></ul></div>
+          </div>
+          <div class="r r--x r--g r--no r--money" data-i="red-packet">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">红包与转账</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版只看记录，<wbr>不能领取或收款。</span></div>
+            <div class="r__p" style="--i:4"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="red-packet" data-pro-at="compare">4</b><span class="p__n">红包与转账</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">在电脑上<wbr>直接领红包、收转账，<wbr>没收的转账<wbr>可以退还；另可查看<wbr>群红包领取明细。</span></p><ul class="p__its" data-items="red-packet"></ul></div>
+          </div>
+          <div class="r r--x r--g r--part" data-i="moments">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">朋友圈</span><span class="f__s"><span class="f__note">仅浏览与导出</span><svg class="st" role="img" aria-label="部分支持"><use href="#st-part"/></svg></span><span class="f__d">普通版可<wbr>浏览与导出<wbr>朋友圈。</span></div>
+            <div class="r__p" style="--i:5"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="moments" data-pro-at="compare">8</b><span class="p__n">朋友圈</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">同步最新、点赞、评论<wbr>与回复，图文或视频<wbr>发圈与删除。</span></p><ul class="p__its" data-items="moments"></ul></div>
+          </div>
+          <div class="r r--x r--g r--no" data-i="group">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">群聊</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版只读群聊，不建群、不管理群。</span></div>
+            <div class="r__p" style="--i:6"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="group" data-pro-at="compare">14</b><span class="p__n">群聊</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">建群、改群名与备注、<wbr>发群公告与接龙、<wbr>拉人进群<wbr>与移除成员。</span></p><ul class="p__its" data-items="group"></ul></div>
+          </div>
+          <div class="r r--x r--g r--part" data-i="contact">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">联系人</span><span class="f__s"><span class="f__note">仅查看与导出</span><svg class="st" role="img" aria-label="部分支持"><use href="#st-part"/></svg></span><span class="f__d">普通版可<wbr>查看与导出<wbr>联系人。</span></div>
+            <div class="r__p" style="--i:7"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="contact" data-pro-at="compare">11</b><span class="p__n">联系人</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">改备注、加删好友、标签管理<wbr>与找人。</span></p><ul class="p__its" data-items="contact"></ul></div>
+          </div>
+          <div class="r r--x r--g r--no" data-i="search">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">内容搜索</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版只搜<wbr>本机聊天记录。</span></div>
+            <div class="r__p" style="--i:8"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="search" data-pro-at="compare">9</b><span class="p__n">内容搜索</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">在线搜索<wbr>公众号、服务号、小程序、<wbr>视频号与直播；公众号文章<wbr>可整号下载。</span></p><ul class="p__its" data-items="search"></ul></div>
+          </div>
+          <div class="r r--x r--g r--part" data-i="finder">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">视频号与直播</span><span class="f__s"><span class="f__note">仅本机记录</span><svg class="st" role="img" aria-label="部分支持"><use href="#st-part"/></svg></span><span class="f__d">普通版只能浏览<wbr>本机留下的<wbr>视频号直播记录。</span></div>
+            <div class="r__p" style="--i:9"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="finder" data-pro-at="compare">4</b><span class="p__n">视频号与直播</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">在线浏览作品、评论<wbr>与关注列表，关注、<wbr>点赞、评论，进直播间<wbr>发言点赞。</span></p><ul class="p__its" data-items="finder"></ul></div>
+          </div>
+          <div class="r r--x r--g r--part" data-i="miniapp">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">小程序</span><span class="f__s"><span class="f__note">仅本机记录</span><svg class="st" role="img" aria-label="部分支持"><use href="#st-part"/></svg></span><span class="f__d">普通版只能浏览<wbr>本机用过的<wbr>小程序记录。</span></div>
+            <div class="r__p" style="--i:10"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="miniapp" data-pro-at="compare">5</b><span class="p__n">小程序</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">发送小程序卡片，<wbr>登录授权、数据请求，<wbr>链接与小程序码<wbr>解析识别。</span></p><ul class="p__its" data-items="miniapp"></ul></div>
+          </div>
+          <div class="r r--x r--g r--no" data-i="automation">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">自动化任务</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d" aria-hidden="true">不支持</span></div>
+            <div class="r__p" style="--i:11"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="automation" data-pro-at="compare">3</b><span class="p__n">自动化任务</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">定时群发、新好友<wbr>自动处理<wbr>与朋友圈跟圈。</span></p><ul class="p__its" data-items="automation"></ul></div>
+          </div>
+          <div class="r r--x r--g r--part" data-i="mac-key">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">macOS 取密钥</span><span class="f__s"><span class="f__note">实验性</span><svg class="st" role="img" aria-label="部分支持"><use href="#st-part"/></svg></span><span class="f__d">普通版要临时重签微信、退出重登，不保证所有版本都能成功。</span></div>
+            <div class="r__p" style="--i:12"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="mac-key" data-pro-at="compare">1</b><span class="p__n">macOS 取密钥</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">100% 获取<wbr>数据库密钥，不限制<wbr>微信版本，不用关闭&nbsp;SIP。</span></p><ul class="p__its" data-items="mac-key"></ul></div>
+          </div>
+          <!-- 体验与服务：左状态 + 短说明，右完整说明 -->
+          <div class="r r--sec r--sec-e"><div class="r__f"><p><span>体验与服务</span><em><b>8</b> 项</em></p></div><div class="r__p"><p><span>体验与服务</span><em><b>8</b> 项</em></p></div></div>
+          <div class="r r--x r--e r--no" data-i="e0">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">全新界面</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版只有<wbr>经典微信式外观。</span></div>
+            <div class="r__p"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__n">全新界面</span></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">默认新版协作风格，从聊天到设置<wbr>整套重做，可切回经典。</span></p></div>
+          </div>
+          <div class="r r--x r--e r--no" data-i="e1">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">动态小黄脸</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版只有<wbr>静态表情。</span></div>
+            <div class="r__p"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__n">动态小黄脸</span></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t"><b>109</b>&nbsp;个表情动画，纯表情消息<wbr>自动播放一次，点一下重播。</span></p></div>
+          </div>
+          <div class="r r--x r--e r--no" data-i="e2">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">表情面板</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版不能发送，没有表情面板。</span></div>
+            <div class="r__p"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__n">表情面板</span></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t"><b>146</b>&nbsp;个微信表情<wbr>含老表情，点一下就能发。</span></p></div>
+          </div>
+          <div class="r r--x r--e r--no" data-i="e3">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">实况照片</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版在聊天里<wbr>按普通图片显示。</span></div>
+            <div class="r__p"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__n">实况照片</span></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">聊天里的实况照片<wbr>悬停播放原视频，可开关声音。</span></p></div>
+          </div>
+          <div class="r r--x r--e r--no" data-i="e4">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">AI 工作台</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版没有&nbsp;AI 功能。</span></div>
+            <div class="r__p"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__n">AI 工作台</span></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">整页工作台、任务中心、AI&nbsp;接管回复（按会话手动开启，回复时对方消息<wbr>会发给你选的&nbsp;AI&nbsp;服务）、执行微信动作、<b>100</b>&nbsp;个子代理、<b>40+</b>&nbsp;模型预设。</span></p></div>
+          </div>
+          <div class="r r--x r--e r--part" data-i="e5">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">实时消息接收</span><span class="f__s"><span class="f__note">读本机同步</span><svg class="st" role="img" aria-label="部分支持"><use href="#st-part"/></svg></span><span class="f__d">普通版读取<wbr>本机微信<wbr>同步来的新消息。</span></div>
+            <div class="r__p"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__n">实时消息接收</span></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">独立接收新消息，状态条显示<wbr>补拉进度与<wbr>平均接收延迟。</span></p></div>
+          </div>
+          <div class="r r--x r--e r--part" data-i="e6">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">人工支持</span><span class="f__s"><span class="f__note">联系开发者</span><svg class="st" role="img" aria-label="部分支持"><use href="#st-part"/></svg></span><span class="f__d">普通版通过&nbsp;Telegram 联系开发者。</span></div>
+            <div class="r__p"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__n">人工支持</span></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">卡住时<wbr>一键找到客服入口，订单凭订单号售后，另有<wbr>会员专属&nbsp;Telegram&nbsp;群；根据用户反馈<wbr>持续迭代。</span></p></div>
+          </div>
+          <div class="r r--x r--e r--no" data-i="e7">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">1 天试用</span><span class="f__s"><svg class="st" role="img" aria-label="不支持"><use href="#st-no"/></svg></span><span class="f__d">普通版本身免费，不需要账号。</span></div>
+            <div class="r__p"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__n">1 天试用</span></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">进&nbsp;Telegram&nbsp;群下载<wbr>对应系统的安装包，注册即送&nbsp;<b>1</b>&nbsp;天试用，期间每项高级功能<wbr>体验&nbsp;<b>1</b>&nbsp;次；每个微信账号<wbr>限领一次，同一电脑<wbr>短期领取过多<wbr>需人工确认。</span></p></div>
+          </div>
+
+          <!-- 平台与微信版本 -->
+          <div class="r r--env r--env1" data-i="v0">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">平台</span><span class="f__v">Windows · macOS 15+</span><span class="f__d">普通版提供&nbsp;Windows&nbsp;安装包，以及 macOS&nbsp;15+<wbr>（Apple&nbsp;Silicon）安装包。</span></div>
+            <div class="r__p"><p class="p__h"><span class="p__n">平台</span></p><p class="p__d"><span class="lab lab--pro">高级版</span><b class="p__v">Windows · macOS · Linux</b><span class="p__t">Linux&nbsp;版只含读取与导出，不含微信动作<wbr>和语音转文字；网页版可用 Linux&nbsp;离线包、Docker 或 nginx&nbsp;部署。</span></p></div>
+          </div>
+          <div class="r r--env r--env2" data-i="v1">
+            <div class="r__f"><span class="lab">普通版</span><span class="f__n">微信版本</span><span class="f__v">微信 4.x</span><span class="f__d">普通版解密<wbr>微信&nbsp;4.x&nbsp;数据库。</span></div>
+            <div class="r__p"><p class="p__h"><span class="p__n">微信版本</span></p><p class="p__d"><span class="lab lab--pro">高级版</span><b class="p__v">不限制微信版本</b><span class="p__t">在线功能<wbr>独立登录微信账号，不依赖<wbr>本机微信客户端版本。</span></p></div>
+          </div>
+          <div class="r r--foot"><div class="r__f"></div><div class="r__p"><p>高级版能力需在会员或试用期内使用；到期后已有记录仍可查看、搜索和导出。</p></div></div>
+        </div>
+        <span class="cmp__end" aria-hidden="true"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────── 获取 ───────── -->
+  <section class="get" id="get" aria-labelledby="get-h">
+    <div class="get__in wrap">
+      <div class="get__head">
+        <p class="eyebrow">获取</p>
+        <h2 id="get-h"><span class="nw">下载普通版，</span><span class="nw">或先试一天高级版。</span></h2>
+      </div>
+      <article class="plate">
+        <header class="plate__h"><h3>普通版</h3><span class="tag">免费</span></header>
+        <p class="plate__big">免费下载</p>
+        <p class="plate__p">解密、浏览、搜索、导出与年度总结。</p>
+        <dl class="plate__meta"><div><dt>平台</dt><dd>Windows · macOS 15+（Apple Silicon）</dd></div><div><dt>微信</dt><dd>微信 4.x</dd></div><div><dt>密钥</dt><dd>macOS 取密钥为实验性</dd></div></dl>
+        <div class="plate__foot">
+          <p class="plate__note dl-hint" data-dl-hint="get" hidden></p>
+          <a class="btn btn--sec btn--l" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases" target="_blank" rel="noopener" data-dl="get"><svg class="ic" aria-hidden="true"><use href="#i-gh"/></svg><span data-dl-t>在 GitHub 免费下载</span><svg class="ic" aria-hidden="true"><use href="#i-ext"/></svg></a>
+        </div>
+      </article>
+      <article class="plate plate--pro">
+        <header class="plate__h"><h3>高级版</h3><span class="pro">PRO</span></header>
+        <p class="plate__big"><b>1</b> 天免费试用</p>
+        <p class="plate__p">注册送 1 天试用，每项高级功能体验 1 次。</p>
+        <dl class="plate__meta"><div><dt>平台</dt><dd>Windows · macOS · Linux</dd></div><div><dt>微信</dt><dd>不限制微信版本</dd></div><div><dt>密钥</dt><dd>macOS 100% 获取，不用关闭 SIP</dd></div></dl>
+        <div class="plate__foot">
+          <p class="plate__note">进 Telegram 群，找到你所用系统的安装包，下载安装后注册即可试用 1 天。想买会员可<a href="https://t.me/knchudj" target="_blank" rel="noopener">私聊群所有者</a>。每个微信账号限领一次，同一电脑短期领取过多需人工确认。</p>
+          <a class="btn btn--pri btn--l" href="https://t.me/+IQKBDeXtaKozZWYx" target="_blank" rel="noopener"><svg class="ic" aria-hidden="true"><use href="#i-tg"/></svg>进 Telegram 群下载试用</a>
+        </div>
+      </article>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="foot__in wrap">
+    <a class="nav__brand" href="#top"><img src="assets/img/logo-96.webp" width="22" height="22" alt=""><span>WeChatDataAnalysis</span></a>
+    <nav class="foot__links" aria-label="页脚链接">
+      <a href="changelog">更新日志</a>
+      <a href="https://github.com/LifeArchiveProject/WeChatDataAnalysis" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases" target="_blank" rel="noopener">下载普通版</a>
+      <a href="https://t.me/+IQKBDeXtaKozZWYx" target="_blank" rel="noopener">Telegram 群</a>
+    </nav>
+    <p class="foot__legal">© 2026 LifeArchiveProject · 仅限处理你本人合法持有的数据，请遵守当地法律法规 · 本项目为非官方工具，与微信、腾讯及其关联主体不存在隶属、授权、合作或认可关系。</p>
+  </div>
+</footer>
+
+</body>
+</html>

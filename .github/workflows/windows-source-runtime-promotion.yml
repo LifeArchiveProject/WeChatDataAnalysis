@@ -1,0 +1,232 @@
+name: Windows public source runtime promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Immutable public Windows source-runtime Release tag
+        required: true
+        type: string
+      native_core_run_id:
+        description: Exact private Producer run containing source-public native core
+        required: true
+        type: string
+      native_core_source_revision:
+        description: Exact native-core Producer revision
+        required: true
+        type: string
+      native_core_build_id:
+        description: Exact native-core build ID
+        required: true
+        type: string
+      native_core_source_public_sha256:
+        description: SHA-256 of the exact private source-public Producer ZIP
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-source-runtime-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.ref == format('refs/tags/{0}', inputs.release_tag)
+    runs-on: windows-2022
+    environment: windows-private-pki-production
+    timeout-minutes: 30
+    env:
+      WCE_SOURCE_RUNTIME_RELEASE_TAG: ${{ inputs.release_tag }}
+      # The artifact repository identifies the producer; the download
+      # repository identifies where the immutable asset is hosted.
+      WCE_NATIVE_CORE_ARTIFACT_REPOSITORY: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_REPOSITORY }}
+      WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY: ${{ vars.WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY }}
+      WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 }}
+      WCE_NATIVE_CORE_BROKER_SIGNER_SHA256: ${{ vars.WCE_NATIVE_CORE_BROKER_SIGNER_SHA256 }}
+
+    steps:
+      - name: Check out exact public source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify immutable promotion coordinates
+        shell: powershell
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REVISION: ${{ github.sha }}
+          NATIVE_RUN_ID: ${{ inputs.native_core_run_id }}
+          NATIVE_REVISION: ${{ inputs.native_core_source_revision }}
+          NATIVE_BUILD_ID: ${{ inputs.native_core_build_id }}
+          NATIVE_SOURCE_PUBLIC_SHA256: ${{ inputs.native_core_source_public_sha256 }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $expectedRef = "refs/tags/$env:WCE_SOURCE_RUNTIME_RELEASE_TAG"
+          if ($env:WORKFLOW_REF -cne $expectedRef) {
+            throw 'Promotion must run from its exact immutable source-runtime tag.'
+          }
+          if ((git rev-parse HEAD).Trim() -cne $env:WORKFLOW_REVISION) { throw 'Checkout revision mismatch.' }
+          if (git status --porcelain=v1 --untracked-files=all) { throw 'Checkout is dirty.' }
+          if ($env:WCE_SOURCE_RUNTIME_RELEASE_TAG -cnotmatch '^windows-source-runtime-[A-Za-z0-9._-]{8,96}$') {
+            throw 'Invalid source-runtime release tag.'
+          }
+          if ($env:NATIVE_RUN_ID -cnotmatch '^[1-9][0-9]*$') { throw 'Invalid Producer run ID.' }
+          if ($env:NATIVE_REVISION -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid Producer revision.' }
+          if ($env:NATIVE_BUILD_ID -cnotmatch '^[A-Za-z0-9._-]{8,128}$') { throw 'Invalid build ID.' }
+          if ($env:NATIVE_SOURCE_PUBLIC_SHA256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw 'Invalid source-public Producer ZIP SHA-256.'
+          }
+          if ($env:NATIVE_BUILD_ID -match '(^|[._-])(dev|debug|test|local|snapshot|staging)([._-]|$)') {
+            throw 'Non-production build ID is forbidden.'
+          }
+          if ($env:WCE_NATIVE_CORE_ARTIFACT_REPOSITORY -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+            throw 'Invalid private Producer repository.'
+          }
+          $downloadRepository = ([string]$env:WCE_NATIVE_CORE_ARTIFACT_DOWNLOAD_REPOSITORY).Trim()
+          if ([string]::IsNullOrWhiteSpace($downloadRepository)) {
+            $downloadRepository = $env:WCE_NATIVE_CORE_ARTIFACT_REPOSITORY
+          } elseif ($downloadRepository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+            throw 'Invalid private Producer download repository.'
+          }
+          "WCE_NATIVE_CORE_DOWNLOAD_REPOSITORY=$downloadRepository" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          foreach ($digest in @(
+            $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256,
+            $env:WCE_NATIVE_CORE_BROKER_SIGNER_SHA256
+          )) {
+            if ($digest -cnotmatch '^[0-9A-Fa-f]{64}$') { throw 'Invalid signer pin.' }
+          }
+
+      - name: Download exact private Producer Release asset
+        shell: powershell
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ secrets.WCE_NATIVE_CORE_ARTIFACT_READ_TOKEN }}
+          NATIVE_RUN_ID: ${{ inputs.native_core_run_id }}
+          NATIVE_BUILD_ID: ${{ inputs.native_core_build_id }}
+          NATIVE_SOURCE_PUBLIC_SHA256: ${{ inputs.native_core_source_public_sha256 }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:GH_TOKEN) { throw 'Private Producer read token is required.' }
+          $releaseTag = "windows-native-$env:NATIVE_BUILD_ID"
+          $assetName = "wechatdb-native-windows-x64-source-public-$env:NATIVE_BUILD_ID.zip"
+          $archive = Join-Path $env:RUNNER_TEMP $assetName
+          $destination = Join-Path $env:RUNNER_TEMP 'source-native-core'
+          $downloaded = $false
+          foreach ($attempt in 1..3) {
+            Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+            gh release download $releaseTag `
+              --repo $env:WCE_NATIVE_CORE_DOWNLOAD_REPOSITORY `
+              --pattern $assetName `
+              --output $archive
+            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $archive -PathType Leaf)) {
+              $downloaded = $true
+              break
+            }
+            Start-Sleep -Seconds (10 * $attempt)
+          }
+          if (-not $downloaded) { throw 'Unable to download exact source-public Producer Release asset.' }
+          $actualArchiveSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualArchiveSha256 -cne $env:NATIVE_SOURCE_PUBLIC_SHA256) {
+            throw 'Source-public Producer Release asset SHA-256 does not match the pinned input.'
+          }
+          if (Test-Path -LiteralPath $destination) {
+            Remove-Item -LiteralPath $destination -Recurse -Force
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $provenancePath = Join-Path $destination 'provenance.json'
+          if (-not (Test-Path -LiteralPath $provenancePath -PathType Leaf)) {
+            throw 'Producer Release asset is missing provenance.json.'
+          }
+          $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json
+          if ([string]$provenance.build.workflowRunId -cne $env:NATIVE_RUN_ID) {
+            throw 'Producer provenance workflowRunId does not match the requested run ID.'
+          }
+          "WCE_SOURCE_PUBLIC_NATIVE_CORE_DIR=$destination" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify source-public native-core Producer artifact
+        shell: powershell
+        env:
+          NATIVE_REVISION: ${{ inputs.native_core_source_revision }}
+          NATIVE_BUILD_ID: ${{ inputs.native_core_build_id }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          & (Join-Path $env:WCE_SOURCE_PUBLIC_NATIVE_CORE_DIR 'Test-WindowsSourcePublicArtifact.ps1') `
+            -ArtifactDirectory $env:WCE_SOURCE_PUBLIC_NATIVE_CORE_DIR `
+            -ExpectedSourceRevision $env:NATIVE_REVISION `
+            -ExpectedBuildId $env:NATIVE_BUILD_ID `
+            -ExpectedClientSignerSha256 $env:WCE_NATIVE_CORE_CLIENT_SIGNER_SHA256 `
+            -ExpectedBrokerSignerSha256 $env:WCE_NATIVE_CORE_BROKER_SIGNER_SHA256 `
+            -SignerTrustMode PrivatePki
+
+      - name: Compose immutable public source runtime
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'windows-source-runtime-promotion'
+          if (Test-Path -LiteralPath $output) { Remove-Item -LiteralPath $output -Recurse -Force }
+          "WCE_SOURCE_RUNTIME_OUTPUT_DIR=$output" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $env:WCE_SOURCE_RUNTIME_OUTPUT_DIR = $output
+          node desktop/scripts/windows-source-runtime-promotion.cjs
+          Get-Content -LiteralPath (Join-Path $output 'promotion-output.json')
+
+      - name: Publish public Release assets
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference = 'SilentlyContinue'
+          gh release view $env:WCE_SOURCE_RUNTIME_RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+          $ErrorActionPreference = 'Stop'
+          if ($releaseExists) { throw "Release tag already exists: $env:WCE_SOURCE_RUNTIME_RELEASE_TAG" }
+          $output = $env:WCE_SOURCE_RUNTIME_OUTPUT_DIR
+          gh release create $env:WCE_SOURCE_RUNTIME_RELEASE_TAG `
+            "$(Join-Path $output 'wechatdataanalysis-windows-source-runtime-x64-v1.tar.gz')#Windows x64 source runtime" `
+            "$(Join-Path $output 'wechatdataanalysis-windows-source-runtime-x64-v1.manifest.json')#Source runtime manifest" `
+            "$(Join-Path $output 'SHA256SUMS-windows-source-runtime.txt')#SHA-256 checksums" `
+            --repo $env:GITHUB_REPOSITORY `
+            --verify-tag `
+            --title "Windows public source runtime $env:WCE_SOURCE_RUNTIME_RELEASE_TAG" `
+            --notes 'Restricted compiled runtime for public WCDA source checkouts. Fixed 45-day validity; not a packaged application.' `
+            --latest=false
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to publish public source runtime.' }
+
+      - name: Verify public no-auth download
+        shell: powershell
+        timeout-minutes: 10
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $output = $env:WCE_SOURCE_RUNTIME_OUTPUT_DIR
+          $promotion = Get-Content -LiteralPath (Join-Path $output 'promotion-output.json') -Raw | ConvertFrom-Json
+          $publicAsset = Join-Path $env:RUNNER_TEMP 'public-windows-source-runtime.tar.gz'
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+          Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+          curl.exe --fail --location --silent --show-error --retry 3 `
+            --output $publicAsset `
+            "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:WCE_SOURCE_RUNTIME_RELEASE_TAG/wechatdataanalysis-windows-source-runtime-x64-v1.tar.gz"
+          if ($LASTEXITCODE -ne 0) { throw 'Public no-auth download failed.' }
+          $actual = (Get-FileHash -LiteralPath $publicAsset -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $promotion.assetSha256) { throw 'Public source-runtime digest mismatch.' }
+
+      - name: Upload promotion evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-source-runtime-promotion-${{ inputs.release_tag }}
+          path: |
+            ${{ runner.temp }}/windows-source-runtime-promotion/promotion-output.json
+            ${{ runner.temp }}/windows-source-runtime-promotion/SHA256SUMS-windows-source-runtime.txt
+            ${{ runner.temp }}/windows-source-runtime-promotion/wechatdataanalysis-windows-source-runtime-x64-v1.manifest.json
+          if-no-files-found: error
+          retention-days: 90

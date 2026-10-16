@@ -1,0 +1,94 @@
+/* ═════════════ 更新日志页（changelog.html，对外地址不带后缀：/changelog） ═════════════
+   与首页同一套变量、导航、页脚、按钮（main.css），这里只有本页的版式：标题区 → 吸顶的筛选条 → 时间线。
+   扁平约定照旧：纯色 / 平滑渐变色块、1px 细线、圆角 4 / 6 / 8px，不用投影与滤镜；深色规则紧跟浅色规则，以 :root[data-theme="dark"] 开头。
+   内容一律铺开：每个版本的全部变化直接列出，不折叠、不弹层；筛选只是隐藏不符合的条目。 */
+
+.cl { padding-top: var(--nav); }
+
+/* ───────── 标题区：左边大标题 + 一句说明，右边三项计数（版本 / 变化 / 最近更新） ───────── */
+.cl-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 20px 48px; padding: clamp(40px, 8svh, 88px) 0 clamp(22px, 4svh, 36px); }
+.cl-head__eb { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; font: 500 13.5px/1 var(--lat); color: var(--ink-2); }
+.cl-head h1 { font: 650 clamp(36px, 5.2vw, 64px)/1.04 var(--lat); letter-spacing: -.03em; color: var(--ink); }
+.cl-head__sub { margin-top: 14px; max-width: 34em; font-size: 15px; line-height: 1.7; color: var(--ink-3); text-wrap: balance; }
+.cl-stats { display: grid; grid-template-columns: repeat(3, auto); gap: 0 clamp(20px, 3vw, 44px); }
+.cl-stats div { display: flex; flex-direction: column; gap: 8px; }
+.cl-stats dt { font: 500 12.5px/1 var(--cjk); color: var(--ink-3); }
+.cl-stats dd { margin: 0; font: 650 clamp(22px, 2.4vw, 30px)/1 var(--lat); letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
+.cl-stats dd small { margin-left: 3px; font: 500 13px/1 var(--cjk); letter-spacing: 0; color: var(--ink-3); }
+
+/* ───────── 筛选条：吸在导航下面；左边平台，右边变化类型；每个选项后面跟当前条件下的条数 ───────── */
+.cl-bar { position: sticky; top: var(--nav); z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); }
+.cl-bar__in { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 24px; padding: 12px 0; }
+.seg { display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--paper); }
+.seg button { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 6px; font: 500 13.5px/1 var(--cjk); color: var(--ink-2); white-space: nowrap; transition: background-color .2s, color .2s; }
+.seg button:hover { color: var(--ink); background: var(--fill); }
+.seg button[aria-checked="true"] { background: var(--ink); color: var(--on-ink); }
+.seg button i { font: 500 11.5px/1 var(--mono); font-style: normal; color: var(--ink-4); }
+.seg button[aria-checked="true"] i { color: inherit; opacity: .62; }
+.seg button[disabled] { opacity: .4; cursor: default; }
+.seg .ty { width: 8px; height: 8px; padding: 0; border-radius: 50%; }
+.seg button[aria-checked="true"] .ty { outline: 1px solid rgba(255, 255, 255, .55); }
+/* 深色 */
+/* 选中的一格反相成浅底深字（与导航实体按钮一致）；选中格里的类型色点加一圈深色细边，免得浅色点贴着浅底看不出 */
+:root[data-theme="dark"] .seg button[aria-checked="true"] .ty { outline-color: rgba(12, 14, 24, .5); }
+
+/* ───────── 类型标签：新增 = 薄荷、优化 = 冰蓝、修复 = 蜜桃（品牌四色里的三色）；宽度一样，文字左缘对齐 ───────── */
+.ty { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 22px; border-radius: 4px; font: 600 12px/1 var(--cjk); }
+.ty--feature { background: #ddf8ee; color: #0e6e4c; }
+.ty--improve { background: #e3eefc; color: #1d5bb0; }
+.ty--fix { background: #ffeddc; color: #9a4b12; }
+.seg .ty--feature { background: #34c99a; } .seg .ty--improve { background: #4b95ee; } .seg .ty--fix { background: #f0a060; }
+/* 深色 */
+/* 深底上：同色相的半透明底 + 提亮的字，对比度都 ≥ 4.5:1 */
+:root[data-theme="dark"] .ty--feature { background: rgba(127, 220, 191, .14); color: #8af0cf; }
+:root[data-theme="dark"] .ty--improve { background: rgba(108, 180, 255, .15); color: #9ccfff; }
+:root[data-theme="dark"] .ty--fix { background: rgba(255, 178, 122, .15); color: #ffc296; }
+:root[data-theme="dark"] .seg .ty--feature { background: #6fe3bf; } :root[data-theme="dark"] .seg .ty--improve { background: #7cbcff; } :root[data-theme="dark"] .seg .ty--fix { background: #ffb27a; }
+
+/* ───────── 时间线：每个版本一行两栏——左栏版本号、日期、平台、条数（桌面吸顶，跟着这一版走）；右栏全部变化，一条一行 ───────── */
+.cl-list { padding: 8px 0 clamp(64px, 10svh, 120px); }
+.rel { display: grid; grid-template-columns: clamp(180px, 18vw, 240px) minmax(0, 1fr); column-gap: clamp(28px, 4vw, 64px); }
+.rel[hidden] { display: none; }
+.rel__h { position: sticky; top: calc(var(--nav) + var(--bar, 58px) + 24px); align-self: start; padding: 28px 0 24px; }
+.rel__v { display: flex; align-items: center; gap: 8px; font: 650 22px/1.1 var(--lat); letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
+.rel__v a:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.rel__new { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 4px; background: var(--badge); color: #1b1d33; font: 600 11px/1 var(--cjk); letter-spacing: .02em; }
+.rel__d { margin-top: 10px; font: 500 13.5px/1.3 var(--cjk); color: var(--ink-2); }
+.rel__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
+.pf { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 4px; background: var(--fill); font: 500 12px/1 var(--lat); color: var(--ink-2); }
+.rel__n { font: 500 12.5px/1 var(--cjk); color: var(--ink-3); }
+/* 右栏：一条竖线穿过所有版本，每版开头一个节点（最新那版用品牌渐变）；条目之间 1px 细线 */
+.rel__c { position: relative; padding: 24px 0 26px clamp(22px, 2.4vw, 34px); border-left: 1px solid var(--line-2); }
+.rel__c::before { content: ""; position: absolute; left: -5px; top: 35px; width: 9px; height: 9px; border-radius: 50%; background: var(--bg); border: 1px solid var(--ink-4); }
+.rel--latest .rel__c::before { border: 0; background: var(--brand-d); }
+.rel + .rel { border-top: 1px solid var(--line); } /* 版本之间一条通栏细线（左右两栏连着，不在栏缝处断开） */
+.rel__c li { display: flex; align-items: flex-start; gap: 14px; padding: 9px 0; font-size: 14.5px; line-height: 1.75; color: var(--ink-2); text-wrap: pretty; }
+.rel__c li + li { border-top: 1px solid var(--line-a); }
+.rel__c li[hidden] { display: none; }
+.rel__c li .ty { margin-top: 3px; }
+.rel__c li span:last-child { min-width: 0; }
+.cl-empty { padding: 56px 0; text-align: center; font-size: 14.5px; color: var(--ink-3); }
+.cl-empty[hidden] { display: none; }
+/* 深色 */
+/* 时间线节点的空心圆：底色跟页面底走（变量已处理），描边换成深色下能看见的浅墨 */
+:root[data-theme="dark"] .rel__c::before { border-color: var(--ink-4); }
+
+/* ───────── 窄屏 ───────── */
+@media (max-width: 900px) {
+  .cl-head { grid-template-columns: minmax(0, 1fr); align-items: start; }
+  .rel { grid-template-columns: minmax(0, 1fr); }
+  .rel__h { position: static; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 22px 0 6px; }
+  .rel__d, .rel__meta { margin-top: 0; }
+  .rel__c { padding: 6px 0 18px; border-left: 0; }
+  .rel__c::before { display: none; }
+}
+@media (max-width: 640px) {
+  .cl-head { padding-top: 32px; }
+  .cl-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
+  .cl-stats dd { font-size: 21px; }
+  .cl-bar__in { gap: 8px; padding: 10px 0; }
+  .seg { width: 100%; }
+  .seg button { flex: 1; justify-content: center; padding: 0 6px; font-size: 13px; }
+  .seg button i { display: none; }
+  .rel__c li { gap: 10px; font-size: 14px; }
+}

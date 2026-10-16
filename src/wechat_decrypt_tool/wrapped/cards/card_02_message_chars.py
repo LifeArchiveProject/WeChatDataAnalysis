@@ -1,0 +1,1325 @@
+from __future__ import annotations
+
+import hashlib
+import math
+import random
+import re
+import sqlite3
+import time
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Optional
+
+from pypinyin import lazy_pinyin, Style
+
+from ...chat_helpers import (
+    _build_avatar_url,
+    _decode_message_content,
+    _decode_sqlite_text,
+    _extract_xml_attr,
+    _extract_xml_tag_text,
+    _iter_message_db_paths,
+    _load_contact_rows,
+    _pick_display_name,
+    _quote_ident,
+    _should_keep_session,
+)
+from ...chat_search_index import get_chat_search_index_db_path
+from ...logging_config import get_logger
+from .. import resolve_wrapped_self_username
+
+logger = get_logger(__name__)
+
+
+# 键盘布局中用于“磨损”展示的按键（字母 + 数字 + 常用标点）。
+# 注意：功能键（Tab/Enter/Backspace 等）不统计；空格键单独放在 spaceHits。
+_KEYBOARD_KEYS = (
+    list("`1234567890-=")
+    + list("qwertyuiop[]\\")
+    + list("asdfghjkl;\'")
+    + list("zxcvbnm,./")
+)
+_KEYBOARD_KEY_SET = set(_KEYBOARD_KEYS)
+
+# 将“显示字符”映射到键盘上的“实际按键”（用基础键位表示，如 '!' => '1', '？' => '/'）。
+_CHAR_TO_KEY: dict[str, str] = {
+    # ASCII shifted symbols
+    "~": "`",
+    "!": "1",
+    "@": "2",
+    "#": "3",
+    "$": "4",
+    "%": "5",
+    "^": "6",
+    "&": "7",
+    "*": "8",
+    "(": "9",
+    ")": "0",
+    "_": "-",
+    "+": "=",
+    "{": "[",
+    "}": "]",
+    "|": "\\",
+    ":": ";",
+    '"': "'",
+    "<": ",",
+    ">": ".",
+    "?": "/",
+    # Common fullwidth / CJK punctuation (approximate key mapping)
+    "～": "`",
+    "！": "1",
+    "＠": "2",
+    "＃": "3",
+    "＄": "4",
+    "％": "5",
+    "＾": "6",
+    "＆": "7",
+    "＊": "8",
+    "（": "9",
+    "）": "0",
+    "¥": "4",
+    "￥": "4",
+    "＿": "-",
+    "＋": "=",
+    "｛": "[",
+    "｝": "]",
+    "｜": "\\",
+    "：": ";",
+    "＂": "'",
+    "＜": ",",
+    "＞": ".",
+    "？": "/",
+    "，": ",",
+    "、": ",",
+    "。": ".",
+    "．": ".",
+    "；": ";",
+    "“": "'",
+    "”": "'",
+    "‘": "'",
+    "’": "'",
+    "【": "[",
+    "】": "]",
+    "《": ",",
+    "》": ".",
+    "—": "-",
+    "－": "-",
+    "＝": "=",
+    "／": "/",
+    "＼": "\\",
+    "·": "`",  # 常见：中文输入法下“·”常用 ` 键打出
+    "…": ".",  # 近似处理：省略号按 '.' 计
+}
+
+# 默认拼音字母频率分布（用于：有中文但采样不足时的兜底估算）
+_DEFAULT_PINYIN_FREQ = {
+    "a": 0.121,
+    "i": 0.118,
+    "n": 0.098,
+    "e": 0.089,
+    "u": 0.082,
+    "g": 0.072,
+    "h": 0.065,
+    "o": 0.052,
+    "z": 0.048,
+    "s": 0.042,
+    "x": 0.038,
+    "y": 0.036,
+    "d": 0.032,
+    "l": 0.028,
+    "j": 0.026,
+    "b": 0.022,
+    "c": 0.020,
+    "w": 0.018,
+    "m": 0.016,
+    "f": 0.014,
+    "t": 0.012,
+    "r": 0.010,
+    "p": 0.009,
+    "k": 0.007,
+    "q": 0.005,
+    "v": 0.001,
+}
+_AVG_PINYIN_LEN = 2.8
+
+# 输入法小剧场的素材：当年用户真实发出的纯中文短句（2-8 字）。
+_TYPED_PHRASE_RE = re.compile(r"^[一-鿿]{2,8}$")
+_TYPED_PHRASE_PY_RE = re.compile(r"^[a-z]+$")
+_TYPED_PHRASE_POOL_LIMIT = 4000
+
+
+def _collect_typed_phrase(
+    text: str,
+    *,
+    pool: list[str] | None,
+    seen: set[str] | None,
+) -> None:
+    """Collect one eligible IME phrase while another message scan is already running."""
+    if pool is None or seen is None or len(pool) >= _TYPED_PHRASE_POOL_LIMIT:
+        return
+    normalized = str(text or "").replace(" ", "").replace("　", "").strip()
+    if not normalized or normalized in seen or not _TYPED_PHRASE_RE.fullmatch(normalized):
+        return
+    seen.add(normalized)
+    pool.append(normalized)
+
+
+def _is_cjk_han(ch: str) -> bool:
+    """是否为中文汉字（用于拼音估算）。"""
+    if not ch:
+        return False
+    o = ord(ch)
+    return (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF)
+
+
+def _char_to_key(ch: str) -> str | None:
+    """将单个字符映射为键盘按键 code（与前端键盘布局的 code 保持一致）。"""
+    if not ch:
+        return None
+
+    # Fullwidth digits: '０'..'９'
+    if "０" <= ch <= "９":
+        return chr(ord(ch) - ord("０") + ord("0"))
+
+    if ch in _KEYBOARD_KEY_SET:
+        return ch
+
+    mapped = _CHAR_TO_KEY.get(ch)
+    if mapped is not None:
+        return mapped
+
+    if ch.isalpha():
+        low = ch.lower()
+        if low in _KEYBOARD_KEY_SET:
+            return low
+
+    return None
+
+
+def _update_keyboard_counters(
+    text: str,
+    *,
+    direct_counter: Counter,
+    pinyin_counter: Counter,
+    pinyin_cache: dict[str, str],
+    do_pinyin: bool,
+) -> tuple[int, int, int]:
+    """
+    扫描一条消息文本，累加：
+    - direct_counter: 非中文汉字部分（英文/数字/标点）可直接映射到按键的统计（精确）
+    - pinyin_counter: 中文汉字部分的拼音字母统计（仅当 do_pinyin=True 时才做；用于采样估算）
+    并返回 (nonspace_chars, cjk_han_chars, space_chars)。
+    """
+    if not text:
+        return 0, 0, 0
+
+    nonspace = 0
+    cjk = 0
+    spaces = 0
+
+    for ch in text:
+        # 真实可见空格：统计进 spaceHits（不计入 sentChars/receivedChars 的口径）
+        if ch == " " or ch == "\u3000":
+            spaces += 1
+            continue
+        if ch.isspace():
+            continue
+
+        nonspace += 1
+
+        if _is_cjk_han(ch):
+            cjk += 1
+            if do_pinyin:
+                py = pinyin_cache.get(ch)
+                if py is None:
+                    lst = lazy_pinyin(ch, style=Style.NORMAL)
+                    py = (lst[0] or "").lower() if lst else ""
+                    pinyin_cache[ch] = py
+                for letter in py:
+                    # pypinyin 在 Style.NORMAL 下通常只会给出 a-z（含 ü=>v），这里再做一次过滤。
+                    if letter in _KEYBOARD_KEY_SET:
+                        pinyin_counter[letter] += 1
+            continue
+
+        k = _char_to_key(ch)
+        if k is not None:
+            direct_counter[k] += 1
+
+    return nonspace, cjk, spaces
+
+
+def compute_keyboard_stats(
+    *,
+    account_dir: Path,
+    year: int,
+    sample_rate: float = 1.0,
+    typed_phrase_pool: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    统计键盘敲击数据。
+
+    - 英文/数字/标点：可直接从消息文本映射到按键（精确统计）
+    - 中文汉字：需要拼音转换，成本高；对“消息”做采样（sample_rate）后估算总体拼音字母分布
+    """
+    start_ts, end_ts = _year_range_epoch_seconds(year)
+    my_username = resolve_wrapped_self_username(account_dir)
+
+    sample_rate = max(0.0, min(1.0, float(sample_rate)))
+
+    direct_counter: Counter[str] = Counter()
+    pinyin_counter: Counter[str] = Counter()
+    pinyin_cache: dict[str, str] = {}
+
+    total_cjk_chars = 0
+    sampled_cjk_chars = 0
+    actual_space_chars = 0
+
+    total_messages = 0
+    sampled_messages = 0
+    used_index = False
+    typed_phrase_seen = set(typed_phrase_pool or ()) if typed_phrase_pool is not None else None
+
+    # 优先使用搜索索引（更快）
+    index_path = get_chat_search_index_db_path(account_dir)
+    if index_path.exists():
+        conn = sqlite3.connect(str(index_path))
+        try:
+            has_fts = (
+                conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_fts' LIMIT 1").fetchone()
+                is not None
+            )
+            if has_fts and my_username:
+                ts_expr = (
+                    "CASE "
+                    "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+                    "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+                    "ELSE CAST(create_time AS INTEGER) "
+                    "END"
+                )
+                where = (
+                    f"{ts_expr} >= ? AND {ts_expr} < ? "
+                    "AND db_stem NOT LIKE 'biz_message%' "
+                    "AND render_type = 'text' "
+                    "AND \"text\" IS NOT NULL "
+                    "AND TRIM(CAST(\"text\" AS TEXT)) != '' "
+                    "AND sender_username = ?"
+                )
+
+                sql = f"SELECT \"text\" FROM message_fts WHERE {where}"
+                try:
+                    cur = conn.execute(sql, (start_ts, end_ts, my_username))
+                    used_index = True
+                    for row in cur:
+                        txt = str(row[0] or "").strip()
+                        if not txt:
+                            continue
+                        total_messages += 1
+                        _collect_typed_phrase(txt, pool=typed_phrase_pool, seen=typed_phrase_seen)
+
+                        if sample_rate >= 1.0:
+                            do_sample = True
+                        elif sample_rate <= 0.0:
+                            do_sample = False
+                        else:
+                            do_sample = random.random() < sample_rate
+
+                        if do_sample:
+                            sampled_messages += 1
+
+                        _, cjk, spaces = _update_keyboard_counters(
+                            txt,
+                            direct_counter=direct_counter,
+                            pinyin_counter=pinyin_counter,
+                            pinyin_cache=pinyin_cache,
+                            do_pinyin=do_sample,
+                        )
+                        total_cjk_chars += cjk
+                        actual_space_chars += spaces
+                        if do_sample:
+                            sampled_cjk_chars += cjk
+                except Exception:
+                    used_index = False
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # 如果索引不可用，回退到直接扫描（慢，但兼容）
+    if not used_index:
+        db_paths = _iter_message_db_paths(account_dir)
+        for db_path in db_paths:
+            try:
+                if db_path.name.lower().startswith("biz_message"):
+                    continue
+            except Exception:
+                pass
+            if not db_path.exists():
+                continue
+
+            conn: sqlite3.Connection | None = None
+            try:
+                conn = sqlite3.connect(str(db_path))
+                conn.row_factory = sqlite3.Row
+                conn.text_factory = bytes
+
+                my_rowid: Optional[int]
+                try:
+                    r2 = conn.execute("SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1", (my_username,)).fetchone()
+                    my_rowid = int(r2[0]) if r2 and r2[0] is not None else None
+                except Exception:
+                    my_rowid = None
+
+                if my_rowid is None:
+                    continue
+
+                tables = _list_message_tables(conn)
+                if not tables:
+                    continue
+
+                ts_expr = (
+                    "CASE "
+                    "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+                    "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+                    "ELSE CAST(create_time AS INTEGER) "
+                    "END"
+                )
+
+                for table in tables:
+                    qt = _quote_ident(table)
+                    sql = (
+                        "SELECT real_sender_id, message_content, compress_content "
+                        f"FROM {qt} "
+                        "WHERE local_type = 1 "
+                        f"  AND {ts_expr} >= ? AND {ts_expr} < ?"
+                    )
+                    try:
+                        cur = conn.execute(sql, (start_ts, end_ts))
+                    except Exception:
+                        continue
+
+                    for r in cur:
+                        try:
+                            rsid = int(r["real_sender_id"] or 0)
+                        except Exception:
+                            rsid = 0
+
+                        if rsid != my_rowid:
+                            continue
+
+                        txt = ""
+                        try:
+                            txt = _decode_message_content(r["compress_content"], r["message_content"]).strip()
+                        except Exception:
+                            txt = ""
+                        if not txt:
+                            continue
+                        total_messages += 1
+                        _collect_typed_phrase(txt, pool=typed_phrase_pool, seen=typed_phrase_seen)
+                        if sample_rate >= 1.0:
+                            do_sample = True
+                        elif sample_rate <= 0.0:
+                            do_sample = False
+                        else:
+                            do_sample = random.random() < sample_rate
+                        if do_sample:
+                            sampled_messages += 1
+                        _, cjk, spaces = _update_keyboard_counters(
+                            txt,
+                            direct_counter=direct_counter,
+                            pinyin_counter=pinyin_counter,
+                            pinyin_cache=pinyin_cache,
+                            do_pinyin=do_sample,
+                        )
+                        total_cjk_chars += cjk
+                        actual_space_chars += spaces
+                        if do_sample:
+                            sampled_cjk_chars += cjk
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+    # 中文拼音部分：按“中文汉字数量”缩放（比按总字符缩放更合理，也能让数字/标点更准确）
+    est_pinyin_counter: Counter[str] = Counter()
+    sampled_pinyin_hits = int(sum(pinyin_counter.values()))
+    if total_cjk_chars > 0:
+        if sampled_cjk_chars > 0 and sampled_pinyin_hits > 0:
+            scale_factor = total_cjk_chars / sampled_cjk_chars
+            for k, cnt in pinyin_counter.items():
+                est_pinyin_counter[k] = int(round(cnt * scale_factor))
+        else:
+            # 兜底：有中文但采样不足（或采样中无法提取拼音），用默认分布估算
+            total_pinyin_hits = int(total_cjk_chars * _AVG_PINYIN_LEN)
+            for k, freq in _DEFAULT_PINYIN_FREQ.items():
+                est_pinyin_counter[k] = int(freq * total_pinyin_hits)
+
+    key_hits_counter: Counter[str] = Counter()
+    key_hits_counter.update(direct_counter)
+    key_hits_counter.update(est_pinyin_counter)
+
+    key_hits: dict[str, int] = {k: int(key_hits_counter.get(k, 0)) for k in _KEYBOARD_KEYS}
+    total_non_space_hits = int(sum(key_hits.values()))
+
+    # 空格键：= 真实空格（如英文句子） + 中文拼音选词带来的“隐含空格”（粗略估算）
+    implied_space_hits = int(sum(est_pinyin_counter.values()) * 0.15)
+    space_hits = int(actual_space_chars + implied_space_hits)
+
+    total_key_hits = int(total_non_space_hits + space_hits)
+
+    # 频率只对“非空格键”归一化；空格频率由 spaceHits 单独给出
+    key_frequency: dict[str, float] = {}
+    for k in _KEYBOARD_KEYS:
+        key_frequency[k] = (key_hits.get(k, 0) / total_non_space_hits) if total_non_space_hits > 0 else 0.0
+
+    logger.info(
+        "Keyboard stats computed: account=%s year=%s sample_rate=%.2f msgs=%d sampled=%d cjk=%d sampled_cjk=%d total_hits=%d",
+        my_username,
+        year,
+        float(sample_rate),
+        int(total_messages),
+        int(sampled_messages),
+        int(total_cjk_chars),
+        int(sampled_cjk_chars),
+        int(total_key_hits),
+    )
+
+    return {
+        "totalKeyHits": total_key_hits,
+        "keyHits": key_hits,
+        "keyFrequency": key_frequency,
+        "spaceHits": space_hits,
+    }
+
+
+def _year_range_epoch_seconds(year: int) -> tuple[int, int]:
+    # Use local time boundaries (same semantics as sqlite "localtime").
+    start = int(datetime(year, 1, 1).timestamp())
+    end = int(datetime(year + 1, 1, 1).timestamp())
+    return start, end
+
+
+def _list_message_tables(conn: sqlite3.Connection) -> list[str]:
+    try:
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    except Exception:
+        return []
+    names: list[str] = []
+    for r in rows:
+        if not r or not r[0]:
+            continue
+        name = _decode_sqlite_text(r[0]).strip()
+        if not name:
+            continue
+        ln = name.lower()
+        if ln.startswith(("msg_", "chat_")):
+            names.append(name)
+    return names
+
+
+# Book analogy table (for "sent chars").
+_BOOK_ANALOGIES: list[dict[str, Any]] = [
+    {"min": 1, "max": 100_000, "level": "小量级", "options": ["一本《小王子》", "一本《解忧杂货店》"]},
+    {"min": 100_000, "max": 500_000, "level": "中量级", "options": ["一本《三体Ⅰ：地球往事》", "一套《朝花夕拾+呐喊》（鲁迅经典合集）"]},
+    {"min": 500_000, "max": 1_000_000, "level": "大量级", "options": ["一本《红楼梦》（全本）", "一本《百年孤独》（全本无删减）"]},
+    {"min": 1_000_000, "max": 5_000_000, "level": "超大量级", "options": ["一套《三体》全三册", "一本《西游记》（全本白话文）"]},
+    {"min": 5_000_000, "max": 10_000_000, "level": "千万级Ⅰ", "options": ["一套金庸武侠《射雕+神雕+倚天》（经典三部曲）", "一套《平凡的世界》全三册"]},
+    {"min": 10_000_000, "max": 50_000_000, "level": "千万级Ⅱ", "options": ["一套《哈利·波特》全七册（中文版）", "一本《资治通鉴》（文白对照全本）"]},
+    {"min": 50_000_000, "max": 100_000_000, "level": "亿级Ⅰ", "options": ["一套《冰与火之歌》全系列（中文版）", "一本《史记》（全本含集解索隐正义）"]},
+    {"min": 100_000_000, "max": 500_000_000, "level": "亿级Ⅱ", "options": ["一套《中国大百科全书》（单卷本全册）", "一套《金庸武侠全集》（15部完整版）"]},
+    {"min": 500_000_000, "max": None, "level": "亿级Ⅲ", "options": ["一套《四库全书》（文津阁精选集）", "一套《大英百科全书》（国际完整版）"]},
+]
+
+
+# A4 analogy table (for "received chars").
+# Estimation assumptions:
+# - A4 (single side) holds about 1700 chars (depends on font/spacing; this is an approximation).
+# - 70g A4 paper thickness is roughly 0.1mm => 100 sheets ≈ 1cm.
+_A4_CHARS_PER_SHEET = 1700
+_A4_SHEETS_PER_CM = 100.0
+
+# "Level" is a coarse grouping by character count; the physical object analogy is picked by the
+# estimated stacked height (so the text stays self-consistent).
+_A4_LEVELS: list[dict[str, Any]] = [
+    {"min": 1, "max": 100_000, "level": "小量级"},
+    {"min": 100_000, "max": 500_000, "level": "中量级"},
+    {"min": 500_000, "max": 1_000_000, "level": "大量级"},
+    {"min": 1_000_000, "max": 5_000_000, "level": "超大量级"},
+    {"min": 5_000_000, "max": 10_000_000, "level": "千万级Ⅰ"},
+    {"min": 10_000_000, "max": 50_000_000, "level": "千万级Ⅱ"},
+    {"min": 50_000_000, "max": 100_000_000, "level": "亿级Ⅰ"},
+    {"min": 100_000_000, "max": 500_000_000, "level": "亿级Ⅱ"},
+    {"min": 500_000_000, "max": None, "level": "亿级Ⅲ"},
+]
+
+# Physical object analogies by stacked height (cm).
+_A4_HEIGHT_ANALOGIES: list[dict[str, Any]] = [
+    {"minCm": 0.0, "maxCm": 0.5, "objects": ["1枚硬币的厚度", "1张银行卡的厚度"]},
+    {"minCm": 0.5, "maxCm": 2.0, "objects": ["1叠便利贴", "1本薄款软皮笔记本"]},
+    {"minCm": 2.0, "maxCm": 6.0, "objects": ["3-5本加厚硬壳笔记本", "1本厚词典"]},
+    {"minCm": 6.0, "maxCm": 30.0, "objects": ["10本办公台账", "1个矮款文件柜单层满装"]},
+    {"minCm": 30.0, "maxCm": 60.0, "objects": ["1个标准办公文件盒", "1个登机箱（约55cm）"]},
+    {"minCm": 60.0, "maxCm": 200.0, "objects": ["1.7-1.8m成年人身高", "2个办公文件柜叠放"]},
+    {"minCm": 200.0, "maxCm": 600.0, "objects": ["2层普通住宅层高", "1棵成年矮树（枇杷树/橘子树）"]},
+    {"minCm": 600.0, "maxCm": 2500.0, "objects": ["4-8层居民楼层高", "1棵成年大树（梧桐树/樟树）"]},
+    {"minCm": 2500.0, "maxCm": 5000.0, "objects": ["10-18层小高层住宅", "1栋小型临街写字楼"]},
+    {"minCm": 5000.0, "maxCm": 25000.0, "objects": ["20-80层超高层住宅", "城市核心区小高层地标"]},
+    {"minCm": 25000.0, "maxCm": None, "objects": ["1栋城市核心超高层写字楼", "国内中型摩天大楼（约100层）"]},
+]
+
+
+def _pick_option(options: list[str], *, seed: int) -> str:
+    if not options:
+        return ""
+    idx = abs(int(seed)) % len(options)
+    return str(options[idx] or "").strip()
+
+
+def _pick_book_analogy(chars: int) -> Optional[dict[str, Any]]:
+    n = int(chars or 0)
+    if n <= 0:
+        return None
+
+    for row in _BOOK_ANALOGIES:
+        lo = int(row["min"] or 0)
+        hi = row.get("max")
+        if n < lo:
+            continue
+        if hi is None or n < int(hi):
+            picked = _pick_option(list(row.get("options") or []), seed=n)
+            return {
+                "level": str(row.get("level") or ""),
+                "book": picked,
+                "text": f"相当于写了{picked}" if picked else "",
+            }
+    return None
+
+
+def _format_height(height_cm: float) -> str:
+    try:
+        cm = float(height_cm)
+    except Exception:
+        cm = 0.0
+    if cm <= 0:
+        return "0cm"
+    if cm < 1:
+        mm = cm * 10.0
+        return f"{mm:.1f}mm"
+    if cm < 100:
+        if cm < 10:
+            return f"{cm:.1f}cm"
+        return f"{cm:.0f}cm"
+    m = cm / 100.0
+    if m < 10:
+        return f"{m:.1f}m"
+    return f"{m:.0f}m"
+
+
+def _a4_stats(chars: int) -> dict[str, Any]:
+    # Rough estimate: 1 A4 page ~ 1700 chars; 100 pages ~ 1cm thick.
+    n = int(chars or 0)
+    if n <= 0:
+        return {"sheets": 0, "heightCm": 0.0, "heightText": "0cm"}
+    sheets = int(math.ceil(n / float(_A4_CHARS_PER_SHEET)))
+    height_cm = float(sheets) / float(_A4_SHEETS_PER_CM)
+    return {"sheets": int(sheets), "heightCm": float(height_cm), "heightText": _format_height(height_cm)}
+
+
+def _pick_a4_analogy(chars: int) -> Optional[dict[str, Any]]:
+    n = int(chars or 0)
+    if n <= 0:
+        return None
+
+    a4 = _a4_stats(n)
+
+    level = ""
+    for row in _A4_LEVELS:
+        lo = int(row["min"] or 0)
+        hi = row.get("max")
+        if n < lo:
+            continue
+        if hi is None or n < int(hi):
+            level = str(row.get("level") or "")
+            break
+
+    height_cm = float(a4.get("heightCm") or 0.0)
+    picked = ""
+    for row in _A4_HEIGHT_ANALOGIES:
+        lo = float(row.get("minCm") or 0.0)
+        hi = row.get("maxCm")
+        if height_cm < lo:
+            continue
+        if hi is None or height_cm < float(hi):
+            picked = _pick_option(list(row.get("objects") or []), seed=n)
+            break
+
+    return {
+        "level": level,
+        "object": picked,
+        "a4": a4,
+        "text": (
+            f"大约 {int(a4['sheets']):,} 张 A4，堆起来约 {a4['heightText']}" + (f"，差不多是{picked}的高度" if picked else "")
+        ).strip("，"),
+    }
+
+
+def _build_typed_phrase_payload(*, pool: list[str], year: int, k: int) -> list[dict[str, str]]:
+    if not pool:
+        return []
+
+    # 种子取年份+池大小：同一年重复构建结果稳定，数据变了才换一批。
+    rng = random.Random(year * 1000003 + len(pool))
+    picked = rng.sample(pool, min(int(k), len(pool)))
+
+    out: list[dict[str, str]] = []
+    for text in picked:
+        try:
+            syllables = [str(s or "").strip().lower() for s in lazy_pinyin(text, style=Style.NORMAL)]
+        except Exception:
+            continue
+        if not syllables or any(not _TYPED_PHRASE_PY_RE.fullmatch(s) for s in syllables):
+            continue
+        pinyin = " ".join(syllables)
+        # 候选条一行放得下的长度（拼音过长的句子打起来也太拖沓）
+        if len(pinyin) > 26:
+            continue
+        out.append({"text": text, "pinyin": pinyin})
+    return out
+
+
+def sample_typed_phrases(
+    *,
+    account_dir: Path,
+    year: int,
+    k: int = 14,
+    candidates: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Sample short Chinese-only sentences the user actually sent this year, with pinyin.
+
+    Reuses candidates collected by the keyboard-stat scan when supplied. Direct callers
+    still use the search index and return [] when neither source is available.
+    """
+    if candidates is not None:
+        return _build_typed_phrase_payload(pool=candidates, year=year, k=k)
+
+    start_ts, end_ts = _year_range_epoch_seconds(year)
+    my_username = resolve_wrapped_self_username(account_dir)
+    if not my_username:
+        return []
+
+    index_path = get_chat_search_index_db_path(account_dir)
+    if not index_path.exists():
+        return []
+
+    pool: list[str] = []
+    conn = sqlite3.connect(str(index_path))
+    try:
+        has_fts = (
+            conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_fts' LIMIT 1").fetchone()
+            is not None
+        )
+        if not has_fts:
+            return []
+        ts_expr = (
+            "CASE "
+            "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+            "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+            "ELSE CAST(create_time AS INTEGER) "
+            "END"
+        )
+        sql = (
+            "SELECT \"text\" FROM message_fts "
+            f"WHERE {ts_expr} >= ? AND {ts_expr} < ? "
+            "AND db_stem NOT LIKE 'biz_message%' "
+            "AND render_type = 'text' "
+            "AND \"text\" IS NOT NULL "
+            "AND sender_username = ? "
+            # 索引把文本按字用空格分词存储（'在 吗'），长度过滤要先去掉空格
+            "AND LENGTH(REPLACE(CAST(\"text\" AS TEXT), ' ', '')) BETWEEN 2 AND 8 "
+            "LIMIT 4000"
+        )
+        seen: set[str] = set()
+        for row in conn.execute(sql, (start_ts, end_ts, my_username)):
+            _collect_typed_phrase(str(row[0] or ""), pool=pool, seen=seen)
+    except Exception:
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return _build_typed_phrase_payload(pool=pool, year=year, k=k)
+
+
+def compute_text_message_char_counts(*, account_dir: Path, year: int) -> tuple[int, int]:
+    """Return (sent_chars, received_chars) for render_type='text' messages in the year."""
+
+    start_ts, end_ts = _year_range_epoch_seconds(year)
+    my_username = resolve_wrapped_self_username(account_dir)
+
+    # Prefer search index when available.
+    index_path = get_chat_search_index_db_path(account_dir)
+    if index_path.exists():
+        conn = sqlite3.connect(str(index_path))
+        try:
+            has_fts = (
+                conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_fts' LIMIT 1").fetchone()
+                is not None
+            )
+            if has_fts:
+                ts_expr = (
+                    "CASE "
+                    "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+                    "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+                    "ELSE CAST(create_time AS INTEGER) "
+                    "END"
+                )
+                where = (
+                    f"{ts_expr} >= ? AND {ts_expr} < ? "
+                    "AND db_stem NOT LIKE 'biz_message%' "
+                    "AND render_type = 'text' "
+                    "AND \"text\" IS NOT NULL "
+                    "AND TRIM(CAST(\"text\" AS TEXT)) != ''"
+                )
+
+                sql_total = f"SELECT COALESCE(SUM(LENGTH(REPLACE(\"text\", ' ', ''))), 0) AS chars FROM message_fts WHERE {where}"
+                r_total = conn.execute(sql_total, (start_ts, end_ts)).fetchone()
+                total_chars = int((r_total[0] if r_total else 0) or 0)
+
+                if my_username:
+                    sql_sent = f"{sql_total} AND sender_username = ?"
+                    r_sent = conn.execute(sql_sent, (start_ts, end_ts, my_username)).fetchone()
+                    sent_chars = int((r_sent[0] if r_sent else 0) or 0)
+                else:
+                    sent_chars = 0
+
+                recv_chars = max(0, total_chars - sent_chars)
+                return sent_chars, recv_chars
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # Fallback: scan message shards directly (slower, but works without the index).
+    t0 = time.time()
+    sent_total = 0
+    recv_total = 0
+
+    db_paths = _iter_message_db_paths(account_dir)
+    for db_path in db_paths:
+        try:
+            if db_path.name.lower().startswith("biz_message"):
+                continue
+        except Exception:
+            pass
+        if not db_path.exists():
+            continue
+
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            conn.text_factory = bytes
+
+            my_rowid: Optional[int]
+            try:
+                r2 = conn.execute("SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1", (my_username,)).fetchone()
+                my_rowid = int(r2[0]) if r2 and r2[0] is not None else None
+            except Exception:
+                my_rowid = None
+
+            tables = _list_message_tables(conn)
+            if not tables:
+                continue
+
+            ts_expr = (
+                "CASE "
+                "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+                "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+                "ELSE CAST(create_time AS INTEGER) "
+                "END"
+            )
+
+            for table in tables:
+                qt = _quote_ident(table)
+                sql = (
+                    "SELECT real_sender_id, message_content, compress_content "
+                    f"FROM {qt} "
+                    "WHERE local_type = 1 "
+                    f"  AND {ts_expr} >= ? AND {ts_expr} < ?"
+                )
+                try:
+                    cur = conn.execute(sql, (start_ts, end_ts))
+                except Exception:
+                    continue
+
+                for r in cur:
+                    try:
+                        rsid = int(r["real_sender_id"] or 0)
+                    except Exception:
+                        rsid = 0
+                    txt = ""
+                    try:
+                        txt = _decode_message_content(r["compress_content"], r["message_content"]).strip()
+                    except Exception:
+                        txt = ""
+                    if not txt:
+                        continue
+
+                    # Match search index semantics: count non-whitespace characters.
+                    cnt = 0
+                    for ch in txt:
+                        if not ch.isspace():
+                            cnt += 1
+                    if cnt <= 0:
+                        continue
+
+                    if my_rowid is not None and rsid == my_rowid:
+                        sent_total += cnt
+                    else:
+                        recv_total += cnt
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    logger.info(
+        "Wrapped card#2 message chars computed (fallback scan): account=%s year=%s sent=%s recv=%s dbs=%s elapsed=%.2fs",
+        str(account_dir.name or "").strip(),
+        year,
+        int(sent_total),
+        int(recv_total),
+        len(db_paths),
+        time.time() - t0,
+    )
+    return int(sent_total), int(recv_total)
+
+
+# ---------------------------------------------------------------------------
+# 语音与通话统计（local_type=34 语音消息 / local_type=50 VoIP 通话）
+# ---------------------------------------------------------------------------
+
+_MD5_HEX_RE = re.compile(r"(?i)[0-9a-f]{32}")
+_VOIP_BUBBLE_RE = re.compile(r"(<VoIPBubbleMsg[^>]*>.*?</VoIPBubbleMsg>)", flags=re.IGNORECASE | re.DOTALL)
+# 兼容 时:分:秒 与 分:秒 两种格式，如 "通话时长 00:19" / "通话时长 1:02:03"。
+_VOIP_DURATION_RE = re.compile(r"通话时长\s*(\d+):(\d+)(?::(\d+))?")
+# 用不含前缀的子串以同时覆盖「已拒绝/对方已拒绝」「对方无应答」「忙线未接听」等变体。
+_VOIP_MISSED_MARKERS = ("已取消", "已拒绝", "未接听", "无应答")
+
+
+def _mask_name(name: str) -> str:
+    s = str(name or "").strip()
+    if not s:
+        return ""
+    # 全星号：不保留任何原字符，长度封顶 6，数字类信息不经过本函数
+    return "*" * max(1, min(len(s), 6))
+
+
+def _list_session_usernames(session_db_path: Path) -> list[str]:
+    if not session_db_path.exists():
+        return []
+    conn = sqlite3.connect(str(session_db_path))
+    try:
+        try:
+            rows = conn.execute("SELECT username FROM SessionTable").fetchall()
+        except sqlite3.OperationalError:
+            rows = conn.execute("SELECT username FROM Session").fetchall()
+    except Exception:
+        rows = []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    out: list[str] = []
+    for r in rows:
+        if not r or not r[0]:
+            continue
+        u = str(r[0]).strip()
+        if u:
+            out.append(u)
+    return out
+
+
+def _voicelength_to_seconds(raw: Any) -> int:
+    """
+    语音时长换算，语义与 chat_export_service.get_voice_duration_in_seconds 一致：
+    voicelength 正常口径为毫秒，四舍五入到秒。
+
+    防御：微信语音上限 60 秒，毫秒口径下有效值 >= 1000；个别历史数据直接存秒
+    （很小的值），此时按秒口径返回，避免被 /1000 抹成 0。
+    """
+    try:
+        v = int(str(raw or "0").strip() or "0")
+    except Exception:
+        v = 0
+    if v <= 0:
+        return 0
+    if v <= 60:
+        # 秒口径防御：60 以内视为已经是秒。
+        return int(v)
+    return int(round(v / 1000.0))
+
+
+def _parse_voip_duration_seconds(msg_text: str) -> Optional[int]:
+    m = _VOIP_DURATION_RE.search(str(msg_text or ""))
+    if not m:
+        return None
+    try:
+        a = int(m.group(1))
+        b = int(m.group(2))
+        c = m.group(3)
+    except Exception:
+        return None
+    if c is not None:
+        return a * 3600 + b * 60 + int(c)
+    return a * 60 + b
+
+
+def compute_voice_call_stats(*, account_dir: Path, year: int) -> dict[str, Any]:
+    """
+    扫描 message_*.db 分片（排除 biz_message*），统计单聊里的语音消息与音视频通话。
+
+    说明：message_fts 索引不含原始 XML（voicelength / VoIPBubbleMsg），必须走分片；
+    local_type IN (34, 50) 的消息量小，全年扫描成本可控。
+    """
+    start_ts, end_ts = _year_range_epoch_seconds(year)
+    my_username = resolve_wrapped_self_username(account_dir)
+
+    # 会话 username 从表名反解（msg_<md5(username)> / chat_<md5(username)>）。
+    session_usernames = _list_session_usernames(account_dir / "session.db")
+    md5_to_username: dict[str, str] = {}
+    table_to_username: dict[str, str] = {}
+    for u in session_usernames:
+        md5_hex = hashlib.md5(u.encode("utf-8")).hexdigest().lower()
+        md5_to_username[md5_hex] = u
+        table_to_username[f"msg_{md5_hex}"] = u
+        table_to_username[f"chat_{md5_hex}"] = u
+
+    def resolve_username_from_table(table_name: str) -> str:
+        ln = str(table_name or "").lower()
+        x = table_to_username.get(ln)
+        if x:
+            return x
+        m = _MD5_HEX_RE.search(ln)
+        if m:
+            return str(md5_to_username.get(m.group(0).lower()) or "")
+        return ""
+
+    voice_sent_count = 0
+    voice_sent_seconds = 0
+    voice_recv_count = 0
+    voice_recv_seconds = 0
+    voice_sent_seconds_by_user: Counter[str] = Counter()
+    voice_sent_count_by_user: Counter[str] = Counter()
+    voice_recv_seconds_by_user: Counter[str] = Counter()
+    voice_recv_count_by_user: Counter[str] = Counter()
+    # (seconds, direction, username, ts)
+    longest_voice: Optional[tuple[int, str, str, int]] = None
+
+    call_total_count = 0
+    call_video_count = 0
+    call_voice_count = 0
+    call_connected_count = 0
+    call_total_seconds = 0
+    call_missed_count = 0
+    call_seconds_by_user: Counter[str] = Counter()
+    call_count_by_user: Counter[str] = Counter()
+
+    ts_expr = (
+        "CASE "
+        "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+        "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+        "ELSE CAST(create_time AS INTEGER) "
+        "END"
+    )
+
+    db_paths = _iter_message_db_paths(account_dir)
+    for db_path in db_paths:
+        try:
+            if db_path.name.lower().startswith("biz_message"):
+                continue
+        except Exception:
+            pass
+        if not db_path.exists():
+            continue
+
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            conn.text_factory = bytes
+
+            my_rowid: Optional[int]
+            try:
+                r2 = conn.execute("SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1", (my_username,)).fetchone()
+                my_rowid = int(r2[0]) if r2 and r2[0] is not None else None
+            except Exception:
+                my_rowid = None
+
+            # 本人不在该分片 Name2Id（从未在此分片发过消息）时不跳库：
+            # 用 -1 兜底参与比较，方向恒判为 received，保证接收侧语音/通话统计不丢。
+            if my_rowid is None:
+                my_rowid = -1
+
+            tables = _list_message_tables(conn)
+            if not tables:
+                continue
+
+            for table in tables:
+                username = resolve_username_from_table(table)
+                # 只统计单聊：无法反解会话或群聊（@chatroom）一律跳过。
+                if not username or username.endswith("@chatroom"):
+                    continue
+
+                qt = _quote_ident(table)
+                sql = (
+                    "SELECT local_type, real_sender_id, create_time, message_content, compress_content "
+                    f"FROM {qt} "
+                    "WHERE CAST(local_type AS INTEGER) IN (34, 50) "
+                    f"  AND {ts_expr} >= ? AND {ts_expr} < ?"
+                )
+                try:
+                    cur = conn.execute(sql, (start_ts, end_ts))
+                except Exception:
+                    continue
+
+                for r in cur:
+                    try:
+                        local_type = int(r["local_type"] or 0)
+                    except Exception:
+                        continue
+
+                    try:
+                        rsid = int(r["real_sender_id"] or 0)
+                    except Exception:
+                        rsid = 0
+                    is_sent = rsid == my_rowid
+
+                    ts = 0
+                    try:
+                        ts = int(r["create_time"] or 0)
+                    except Exception:
+                        ts = 0
+                    if ts > 1_000_000_000_000:
+                        ts = int(ts / 1000)
+
+                    raw_text = ""
+                    try:
+                        raw_text = _decode_message_content(r["compress_content"], r["message_content"]).strip()
+                    except Exception:
+                        raw_text = ""
+
+                    if local_type == 34:
+                        duration_raw = _extract_xml_attr(raw_text, "voicelength") or _extract_xml_tag_text(
+                            raw_text, "voicelength"
+                        )
+                        seconds = _voicelength_to_seconds(duration_raw)
+                        if is_sent:
+                            voice_sent_count += 1
+                            voice_sent_seconds += seconds
+                            voice_sent_count_by_user[username] += 1
+                            voice_sent_seconds_by_user[username] += seconds
+                        else:
+                            voice_recv_count += 1
+                            voice_recv_seconds += seconds
+                            voice_recv_count_by_user[username] += 1
+                            voice_recv_seconds_by_user[username] += seconds
+                        if seconds > 0 and (longest_voice is None or seconds > longest_voice[0]):
+                            longest_voice = (
+                                int(seconds),
+                                "sent" if is_sent else "received",
+                                username,
+                                int(ts),
+                            )
+                        continue
+
+                    # local_type == 50: VoIP 通话（VoIPBubbleMsg 块）。
+                    block = raw_text
+                    m_voip = _VOIP_BUBBLE_RE.search(raw_text)
+                    if m_voip:
+                        block = m_voip.group(1) or raw_text
+                    room_type = str(_extract_xml_tag_text(block, "room_type") or "").strip()
+                    voip_msg = str(_extract_xml_tag_text(block, "msg") or "").strip()
+
+                    call_total_count += 1
+                    call_count_by_user[username] += 1
+                    if room_type == "0":
+                        call_video_count += 1
+                    elif room_type == "1":
+                        call_voice_count += 1
+
+                    if any(marker in voip_msg for marker in _VOIP_MISSED_MARKERS):
+                        call_missed_count += 1
+                        continue
+
+                    duration = _parse_voip_duration_seconds(voip_msg)
+                    if duration is not None:
+                        call_connected_count += 1
+                        call_total_seconds += int(duration)
+                        call_seconds_by_user[username] += int(duration)
+                    else:
+                        # 文案既无 marker 也无「通话时长」：视为未接通，
+                        # 保证 totalCount == connectedCount + missedOrCanceledCount 恒等。
+                        call_missed_count += 1
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def pick_top_partner(seconds_by_user: Counter[str], count_by_user: Counter[str]) -> Optional[tuple[str, int, int]]:
+        candidates = [
+            (u, int(seconds_by_user.get(u, 0)), int(count_by_user.get(u, 0)))
+            for u in set(seconds_by_user) | set(count_by_user)
+            if u and (not u.endswith("@chatroom")) and _should_keep_session(u, include_official=False)
+        ]
+        candidates = [c for c in candidates if c[1] > 0 or c[2] > 0]
+        if not candidates:
+            return None
+        return sorted(candidates, key=lambda c: (-c[1], -c[2], c[0]))[0]
+
+    top_voice_sent = pick_top_partner(voice_sent_seconds_by_user, voice_sent_count_by_user)
+    top_voice_recv = pick_top_partner(voice_recv_seconds_by_user, voice_recv_count_by_user)
+    top_call = pick_top_partner(call_seconds_by_user, call_count_by_user)
+
+    contact_usernames: list[str] = []
+    for item in (top_voice_sent, top_voice_recv, top_call):
+        if item is not None and item[0]:
+            contact_usernames.append(item[0])
+    if longest_voice is not None and longest_voice[2]:
+        contact_usernames.append(longest_voice[2])
+    contact_rows = _load_contact_rows(account_dir / "contact.db", contact_usernames)
+
+    def build_partner_obj(item: Optional[tuple[str, int, int]]) -> Optional[dict[str, Any]]:
+        if item is None:
+            return None
+        username, seconds, count = item
+        row = contact_rows.get(username)
+        display = _pick_display_name(row, username)
+        return {
+            "username": username,
+            "displayName": display,
+            "maskedName": _mask_name(display),
+            "avatarUrl": _build_avatar_url(str(account_dir.name or ""), username),
+            "seconds": int(seconds),
+            "count": int(count),
+        }
+
+    longest_obj: Optional[dict[str, Any]] = None
+    if longest_voice is not None:
+        seconds, direction, username, ts = longest_voice
+        row = contact_rows.get(username)
+        display = _pick_display_name(row, username)
+        date_str = ""
+        if ts > 0:
+            try:
+                date_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            except Exception:
+                date_str = ""
+        longest_obj = {
+            "seconds": int(seconds),
+            "direction": str(direction),
+            "username": username,
+            "displayName": display,
+            "maskedName": _mask_name(display),
+            "avatarUrl": _build_avatar_url(str(account_dir.name or ""), username),
+            "date": date_str,
+        }
+
+    voice = {
+        "sentCount": int(voice_sent_count),
+        "sentSeconds": int(voice_sent_seconds),
+        "receivedCount": int(voice_recv_count),
+        "receivedSeconds": int(voice_recv_seconds),
+        "longest": longest_obj,
+        "topSentPartner": build_partner_obj(top_voice_sent),
+        "topReceivedPartner": build_partner_obj(top_voice_recv),
+    }
+    calls = {
+        "totalCount": int(call_total_count),
+        "videoCount": int(call_video_count),
+        "voiceCount": int(call_voice_count),
+        "connectedCount": int(call_connected_count),
+        "totalSeconds": int(call_total_seconds),
+        "missedOrCanceledCount": int(call_missed_count),
+        "topPartner": build_partner_obj(top_call),
+    }
+
+    logger.info(
+        "Wrapped card#2 voice/call stats: account=%s year=%s voice_sent=%d voice_recv=%d calls=%d connected=%d missed=%d",
+        my_username,
+        year,
+        int(voice_sent_count),
+        int(voice_recv_count),
+        int(call_total_count),
+        int(call_connected_count),
+        int(call_missed_count),
+    )
+
+    return {"voice": voice, "calls": calls}
+
+
+def build_card_02_message_chars(*, account_dir: Path, year: int) -> dict[str, Any]:
+    sent_chars, recv_chars = compute_text_message_char_counts(account_dir=account_dir, year=year)
+
+    sent_book = _pick_book_analogy(sent_chars)
+    recv_a4 = _pick_a4_analogy(recv_chars)
+
+    # 计算键盘敲击统计
+    typed_phrase_candidates: list[str] = []
+    keyboard_stats = compute_keyboard_stats(
+        account_dir=account_dir,
+        year=year,
+        sample_rate=1.0,
+        typed_phrase_pool=typed_phrase_candidates,
+    )
+
+    # 输入法小剧场素材：当年真实发出的短句
+    typed_phrases = sample_typed_phrases(
+        account_dir=account_dir,
+        year=year,
+        candidates=typed_phrase_candidates,
+    )
+
+    # 计算语音与通话统计
+    voice_call_stats = compute_voice_call_stats(account_dir=account_dir, year=year)
+
+    if sent_chars > 0 and recv_chars > 0:
+        narrative = f"你今年在微信里打了 {sent_chars:,} 个字，也收到了 {recv_chars:,} 个字。"
+    elif sent_chars > 0:
+        narrative = f"你今年在微信里打了 {sent_chars:,} 个字。"
+    elif recv_chars > 0:
+        narrative = f"你今年在微信里收到了 {recv_chars:,} 个字。"
+    else:
+        narrative = "今年你还没有文字消息"
+
+    return {
+        "id": 2,
+        "title": "你今年打了多少字？够写一本书吗？",
+        "scope": "global",
+        "category": "C",
+        "status": "ok",
+        "kind": "text/message_chars",
+        "narrative": narrative,
+        "data": {
+            "year": int(year),
+            "sentChars": int(sent_chars),
+            "receivedChars": int(recv_chars),
+            "sentBook": sent_book,
+            "receivedA4": recv_a4,
+            "keyboard": keyboard_stats,
+            "typedPhrases": typed_phrases,
+            "voice": voice_call_stats["voice"],
+            "calls": voice_call_stats["calls"],
+        },
+    }

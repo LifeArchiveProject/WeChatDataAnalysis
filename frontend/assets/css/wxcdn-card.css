@@ -1,0 +1,43 @@
+/* WxCDN 套餐卡自托管字体（OFL 许可，latin 子集；中文走系统字体回退） */
+@font-face { font-family: 'Instrument Sans'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/wxcdn/InstrumentSans-400.woff2') format('woff2'); }
+@font-face { font-family: 'Instrument Sans'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/wxcdn/InstrumentSans-500.woff2') format('woff2'); }
+@font-face { font-family: 'Instrument Serif'; font-style: italic; font-weight: 400; font-display: swap; src: url('/fonts/wxcdn/InstrumentSerif-400-italic.woff2') format('woff2'); }
+@font-face { font-family: 'Instrument Serif'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/wxcdn/InstrumentSerif-400.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/wxcdn/JetBrainsMono-400.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/wxcdn/JetBrainsMono-600.woff2') format('woff2'); }
+@font-face { font-family: 'Silkscreen'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/wxcdn/Silkscreen-400.woff2') format('woff2'); }
+
+/* ── 套餐弹窗：图像下方的兑换区（输入框独占一行，按钮独占一行） ── */
+.pw-redeem { position: relative; display: flex; flex-direction: column; gap: 10px; padding: 14px 24px 16px; border-top: 1px solid rgba(27,25,23,.14); z-index: 8; }
+.pw-redeem__field { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 18px; border: 1.5px solid rgba(27,25,23,.32); background: #F4F0E8; transition: border-color .25s, box-shadow .25s; cursor: text; }
+.pw-redeem__field:focus-within { border-color: #2F5BEA; box-shadow: 0 0 0 4px rgba(47,91,234,.14); }
+.pw-redeem__field.is-ready { border-color: #2F5BEA; }
+.pw-redeem__field.is-locked { opacity: .55; cursor: default; }
+.pw-redeem__field .pre { font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace; font-size: 20px; font-weight: 600; letter-spacing: .08em; color: rgba(27,25,23,.5); }
+.pw-redeem__field input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; outline: none; font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace; font-size: 21px; font-weight: 600; letter-spacing: .16em; color: #1B1917; text-transform: uppercase; padding: 0; }
+.pw-redeem__field input::placeholder { color: rgba(27,25,23,.36); font-weight: 400; letter-spacing: .16em; }
+.pw-redeem__field .count { font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: .12em; color: rgba(27,25,23,.55); flex: none; transition: color .25s; }
+.pw-redeem__field.is-ready .count { color: #2F5BEA; }
+.pw-redeem__go { position: relative; overflow: hidden; height: 48px; width: 100%; background: linear-gradient(180deg, #23201A 0%, #0E0C0B 100%); color: #E9C97E; box-shadow: inset 0 0 0 1px rgba(233,201,126,.45); font-family: "Instrument Sans", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 16px; font-weight: 500; letter-spacing: .3em; text-indent: .3em; border: 0; cursor: pointer; transition: color .25s, box-shadow .25s, background .25s; }
+.pw-redeem__go::after { content: ""; position: absolute; inset: -1px; background: linear-gradient(100deg, transparent 38%, rgba(255,232,172,.3) 50%, transparent 62%); transform: translateX(-72%); animation: pw-gold 5s ease-in-out infinite; pointer-events: none; }
+@keyframes pw-gold { 0%, 58% { transform: translateX(-72%) } 88%, 100% { transform: translateX(72%) } }
+.pw-redeem__go:hover:not(:disabled) { color: #FAE9BE; box-shadow: inset 0 0 0 1px rgba(250,233,190,.8), 0 0 0 3px rgba(233,201,126,.14); }
+.pw-redeem__go:active:not(:disabled) { background: #0B0908; }
+.pw-redeem__go:disabled { background: transparent; color: rgba(27,25,23,.46); box-shadow: inset 0 0 0 1.5px rgba(27,25,23,.18); cursor: default; }   /* 未填码：空槽，不是一块灰板 */
+.pw-redeem__go:disabled::after { display: none; }
+.pw-redeem__go:focus-visible { outline: 1.5px solid #2F5BEA; outline-offset: 2px; }
+.pw-redeem__msg { animation: pw-msg .3s ease-out; margin: 0; font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: .06em; color: #1B1917; min-height: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pw-redeem__msg.dim { color: rgba(27,25,23,.62); } .pw-redeem__msg.err { color: #E8442B; } .pw-redeem__msg.ok { color: #2F5BEA; }
+.pw-dlg.is-dark .pw-redeem { border-top-color: rgba(233,226,210,.16); }
+.pw-dlg.is-dark .pw-redeem__field { background: #17140f; border-color: rgba(233,226,210,.3); }
+.pw-dlg.is-dark .pw-redeem__field:focus-within, .pw-dlg.is-dark .pw-redeem__field.is-ready { border-color: #2F5BEA; }
+.pw-dlg.is-dark .pw-redeem__field:focus-within { box-shadow: 0 0 0 4px rgba(47,91,234,.28); }
+.pw-dlg.is-dark .pw-redeem__field.is-ready .count { color: #7FA0F5; }
+.pw-dlg.is-dark .pw-redeem__field .pre { color: rgba(233,226,210,.5); } .pw-dlg.is-dark .pw-redeem__field input { color: #E9E2D2; } .pw-dlg.is-dark .pw-redeem__field input::placeholder { color: rgba(233,226,210,.25); } .pw-dlg.is-dark .pw-redeem__field .count { color: rgba(233,226,210,.4); }
+.pw-dlg.is-dark .pw-redeem__go { background: linear-gradient(180deg, #262019 0%, #100D09 100%); color: #F0D391; box-shadow: inset 0 0 0 1px rgba(240,211,145,.6); }
+.pw-dlg.is-dark .pw-redeem__go:disabled { background: transparent; color: rgba(233,226,210,.34); box-shadow: inset 0 0 0 1.5px rgba(233,226,210,.2); } .pw-dlg.is-dark .pw-redeem__go:hover:not(:disabled) { color: #FBEBC4; box-shadow: inset 0 0 0 1px rgba(251,235,196,.85), 0 0 0 3px rgba(240,211,145,.16); }
+.pw-dlg.is-dark .pw-redeem__msg { color: #E9E2D2; } .pw-dlg.is-dark .pw-redeem__msg.dim { color: rgba(233,226,210,.5); }
+
+@keyframes pw-msg { from { opacity: 0; transform: translateY(-3px) } to { opacity: 1; transform: none } }
+@keyframes pw-shake { 10%, 90% { transform: translateX(-2px) } 30%, 70% { transform: translateX(3px) } 50% { transform: translateX(-3px) } }
+.pw-redeem__field.is-bad { animation: pw-shake .4s ease-in-out; border-color: #E8442B !important; box-shadow: 0 0 0 4px rgba(232,68,43,.16) !important; }

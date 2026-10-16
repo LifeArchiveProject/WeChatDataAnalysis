@@ -1,0 +1,136 @@
+name: Bug 报告
+description: 报告可复现的问题；必须提供对应时段的完整日志
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请上传问题发生前后至少 1 分钟的完整日志，不要只填写最后一行错误。
+
+        默认日志位置：
+        - Windows：`%APPDATA%\wechat-data-analysis-desktop\output\logs\YYYY\MM\DD\DD_wechat_tool.log`
+        - macOS：`~/Library/Application Support/wechat-data-analysis-desktop/output/logs/YYYY/MM/DD/DD_wechat_tool.log`
+        - 也可在应用内通过“设置 → 桌面行为 → 日志文件 → 打开日志”定位。
+
+        上传前请删除数据库密钥、聊天内容及其他敏感信息；不要上传微信数据库。
+
+  - type: dropdown
+    id: distribution
+    attributes:
+      label: 运行方式
+      options:
+        - GitHub Release 安装包
+        - 源码运行
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 安装包版本或源码提交 Hash
+      description: 安装包填写版本号（例如 2.2.1）；源码运行填写 `git rev-parse HEAD` 输出的完整 40 位 Hash。
+      placeholder: 2.2.1 或 3bd0106b6cd1265fd003170cc58d41d1b58b13ce
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 系统与架构
+      description: 请填写操作系统版本和架构。
+      placeholder: Windows 11 24H2 x64 / macOS 26.4 arm64
+    validations:
+      required: true
+
+  - type: input
+    id: wechat_version
+    attributes:
+      label: 微信版本
+      placeholder: 4.0.6
+    validations:
+      required: true
+
+  - type: dropdown
+    id: module
+    attributes:
+      label: 出错功能
+      options:
+        - 安装或启动
+        - 微信与账号检测
+        - 密钥获取或数据库解密
+        - 聊天记录
+        - 图片、视频或语音
+        - 导入或导出
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: occurred_at
+    attributes:
+      label: 问题发生时间
+      description: 请包含日期、准确时间和时区，以便在日志中定位。
+      placeholder: 2026-08-26 16:30（UTC+8）
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请说明哪个操作出现了什么问题。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请按实际操作顺序逐步填写。
+      placeholder: |
+        1. 打开……
+        2. 选择……
+        3. 点击……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 请粘贴完整错误文本，不要只填写“失败”。
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 完整日志
+      description: 请把对应时段的 `.log` 文件拖入此处上传。日志是必传项；请勿上传数据库或密钥。
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或录屏
+      description: 选填；请先遮挡账号、路径和聊天内容。
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: 提交确认
+      options:
+        - label: 我已搜索现有 Issue，未发现相同问题。
+          required: true
+        - label: 我已上传问题对应时段的完整日志。
+          required: true
+        - label: 我没有上传数据库、密钥或未脱敏的聊天内容。
+          required: true

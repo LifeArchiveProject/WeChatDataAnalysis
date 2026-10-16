@@ -1,0 +1,1281 @@
+import { reportServerError } from '~/lib/server-error-logging'
+import {
+  getLatestResourceTiming,
+  isChatPerfLoggingEnabled,
+  logPerfChannel,
+  nowPerfMs,
+  resolveResourceTimingUrl
+} from '~/lib/chat/perf-logger'
+import { useChatAccountsStore } from '~/stores/chatAccounts'
+
+const chatContactsListCache = new Map()
+const CHAT_CONTACTS_LIST_CACHE_TTL_MS = 3000
+
+const isAbortRequestError = (error) => {
+  return !!(
+    error?.name === 'AbortError'
+    || error?.cause?.name === 'AbortError'
+    || error?.message === 'This operation was aborted'
+  )
+}
+
+// API请求组合式函数
+export const useApi = () => {
+  const baseURL = useApiBase()
+  const chatAccounts = useChatAccountsStore()
+
+  const responseDetailMessage = (response, fallback = '') => {
+    const detail = response?._data?.detail
+    if (typeof detail === 'string') return detail.trim() || fallback
+    if (detail && typeof detail === 'object') {
+      return String(detail.message || detail.detail || detail.code || '').trim() || fallback
+    }
+    return fallback
+  }
+
+  const responseError = (response, message) => {
+    const error = new Error(message)
+    const detail = response?._data?.detail
+    error.status = Number(response?.status || 0)
+    error.statusCode = error.status
+    error.data = response?._data
+    error.detail = detail
+    if (detail && typeof detail === 'object' && detail.code) {
+      error.code = String(detail.code).trim()
+    }
+    return error
+  }
+  
+  // 基础请求函数
+  const request = async (url, options = {}) => {
+    const fetchOptions = { ...options }
+    const perfTraceId = String(fetchOptions.perfTraceId || '').trim()
+    delete fetchOptions.perfTraceId
+    const perfEnabled = !!perfTraceId && isChatPerfLoggingEnabled()
+    const resourceUrl = perfEnabled ? resolveResourceTimingUrl(baseURL, url) : ''
+    const sentEpochMs = perfEnabled ? Date.now() : 0
+    const requestStartedAt = perfEnabled ? nowPerfMs() : 0
+    let requestError = ''
+
+    if (perfEnabled) {
+      try { performance.setResourceTimingBufferSize?.(5000) } catch {}
+      const headers = new Headers(fetchOptions.headers || undefined)
+      headers.set('X-WCDA-Perf-Trace', perfTraceId)
+      headers.set('X-WCDA-Perf-Sent-Ms', String(sentEpochMs))
+      fetchOptions.headers = headers
+      logPerfChannel('chat-api', 'request:dispatch', {
+        traceId: perfTraceId,
+        requestUrl: resourceUrl,
+        sentEpochMs,
+        requestStartedAtMs: Number(requestStartedAt.toFixed(1))
+      })
+    }
+
+    try {
+      const response = await $fetch(url, {
+        baseURL,
+        ...fetchOptions,
+        async onResponseError({ response }) {
+          if (response.status >= 400 && response.status < 500) {
+            const fallback = response.status === 400
+              ? '请求参数错误'
+              : `请求失败 (${response.status})`
+            throw responseError(response, responseDetailMessage(response, fallback))
+          } else if (response.status >= 500) {
+            const backendDetail = responseDetailMessage(response)
+            const message = backendDetail || '服务器错误，请稍后重试'
+            await reportServerError({
+              status: response.status,
+              method: options?.method || 'GET',
+              requestUrl: url,
+              message,
+              backendDetail,
+              source: 'useApi',
+              apiBase: baseURL,
+            })
+            throw responseError(response, message)
+          }
+        }
+      })
+      chatAccounts.applySourceResponse(response)
+      return response
+    } catch (error) {
+      requestError = String(error?.message || error?.name || 'request failed')
+      if (!isAbortRequestError(error)) {
+        console.error('API请求错误:', error)
+      }
+      throw error
+    } finally {
+      if (perfEnabled) {
+        const timing = getLatestResourceTiming(resourceUrl, { startedAfter: requestStartedAt })
+        logPerfChannel('chat-api', requestError ? 'request:error' : 'request:complete', {
+          traceId: perfTraceId,
+          requestUrl: resourceUrl,
+          sentEpochMs,
+          elapsedMs: Number((nowPerfMs() - requestStartedAt).toFixed(1)),
+          resourceTimingFound: Object.keys(timing).length > 0,
+          ...timing,
+          ...(requestError ? { error: requestError } : {})
+        })
+      }
+    }
+  }
+  
+  // 微信检测API
+  const detectWechat = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.data_root_path) {
+      query.set('data_root_path', params.data_root_path)
+    }
+    const url = '/wechat-detection' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+  
+  // 检测当前登录账号API
+  const detectCurrentAccount = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.data_root_path) {
+      query.set('data_root_path', params.data_root_path)
+    }
+    const url = '/current-account' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+  
+  // 数据库解密API
+  const decryptDatabase = async (data) => {
+    return await request('/decrypt', {
+      method: 'POST',
+      body: data
+    })
+  }
+
+  // 导入预览API
+  const importDecryptedPreview = async (data) => {
+    return await request('/import_decrypted/preview', {
+      method: 'POST',
+      body: data
+    })
+  }
+
+  // 导入已解密目录API
+  const importDecrypted = async (data) => {
+    return await request('/import_decrypted', {
+      method: 'POST',
+      body: data
+    })
+  }
+  
+  // 健康检查API
+  const healthCheck = async () => {
+    return await request('/health')
+  }
+
+  const getPlatformCapabilities = async () => {
+    return await request('/system/platform')
+  }
+
+  const listChatAccounts = async () => {
+    return await request('/chat/accounts')
+  }
+
+  const getChatAccountInfo = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/chat/account_info' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const deleteChatAccount = async (params = {}) => {
+    const account = String(params?.account || '').trim()
+    if (!account) throw new Error('Missing account')
+    const query = new URLSearchParams()
+    query.set('account', account)
+    const url = '/chat/account' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'DELETE' })
+  }
+
+  const listChatSessions = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.include_hidden != null) query.set('include_hidden', String(!!params.include_hidden))
+    if (params && params.include_official != null) query.set('include_official', String(!!params.include_official))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/chat/sessions' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, params?.signal ? { signal: params.signal } : {})
+  }
+
+  const listChatMessages = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    if (params && params.order) query.set('order', params.order)
+    if (params && params.render_types) query.set('render_types', params.render_types)
+    if (params && params.filter_mode) query.set('filter_mode', params.filter_mode)
+    if (params && params.scan_offset != null) query.set('scan_offset', String(params.scan_offset))
+    if (params && params.scan_limit != null) query.set('scan_limit', String(params.scan_limit))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/chat/messages' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, {
+      ...(params?.signal ? { signal: params.signal } : {}),
+      ...(params?.perfTraceId ? { perfTraceId: params.perfTraceId } : {})
+    })
+  }
+
+  const getChatMessageRaw = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.message_id) query.set('message_id', params.message_id)
+    const url = '/chat/messages/raw' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const getChatRealtimeStatus = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/chat/realtime/status' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const syncChatRealtimeMessages = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.max_scan != null) query.set('max_scan', String(params.max_scan))
+    if (params && params.backfill_limit != null) query.set('backfill_limit', String(params.backfill_limit))
+    const url = '/chat/realtime/sync' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'POST' })
+  }
+
+  const syncChatRealtimeAll = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.max_scan != null) query.set('max_scan', String(params.max_scan))
+    if (params && params.priority_username) query.set('priority_username', params.priority_username)
+    if (params && params.priority_max_scan != null) query.set('priority_max_scan', String(params.priority_max_scan))
+    if (params && params.include_hidden != null) query.set('include_hidden', String(!!params.include_hidden))
+    if (params && params.include_official != null) query.set('include_official', String(!!params.include_official))
+    if (params && params.only_official != null) query.set('only_official', String(!!params.only_official))
+    if (params && params.backfill_limit != null) query.set('backfill_limit', String(params.backfill_limit))
+    const url = '/chat/realtime/sync_all' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'POST' })
+  }
+
+  const searchChatMessages = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.q) query.set('q', params.q)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.sender) query.set('sender', params.sender)
+    if (params && params.session_type) query.set('session_type', params.session_type)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    if (params && params.start_time != null) query.set('start_time', String(params.start_time))
+    if (params && params.end_time != null) query.set('end_time', String(params.end_time))
+    if (params && params.render_types) query.set('render_types', params.render_types)
+    if (params && params.include_hidden != null) query.set('include_hidden', String(!!params.include_hidden))
+    if (params && params.include_official != null) query.set('include_official', String(!!params.include_official))
+    if (params && params.session_limit != null) query.set('session_limit', String(params.session_limit))
+    if (params && params.per_chat_scan != null) query.set('per_chat_scan', String(params.per_chat_scan))
+    if (params && params.scan_limit != null) query.set('scan_limit', String(params.scan_limit))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/chat/search' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const listChatSearchSenders = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.session_type) query.set('session_type', params.session_type)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.q) query.set('q', params.q)
+    if (params && params.message_q) query.set('message_q', params.message_q)
+    if (params && params.start_time != null) query.set('start_time', String(params.start_time))
+    if (params && params.end_time != null) query.set('end_time', String(params.end_time))
+    if (params && params.render_types) query.set('render_types', params.render_types)
+    if (params && params.include_hidden != null) query.set('include_hidden', String(!!params.include_hidden))
+    if (params && params.include_official != null) query.set('include_official', String(!!params.include_official))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/chat/search-index/senders' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const getChatSearchIndexStatus = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.source) query.set('source', params.source)
+    const url = '/chat/search-index/status' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const buildChatSearchIndex = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.rebuild != null) query.set('rebuild', String(!!params.rebuild))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/chat/search-index/build' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'POST' })
+  }
+
+
+  const getChatMessagesAround = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.anchor_id) query.set('anchor_id', params.anchor_id)
+    if (params && params.before != null) query.set('before', String(params.before))
+    if (params && params.after != null) query.set('after', String(params.after))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/chat/messages/around' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 聊天记录日历热力图：某月每日消息数
+  const getChatMessageDailyCounts = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.year != null) query.set('year', String(params.year))
+    if (params && params.month != null) query.set('month', String(params.month))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/chat/messages/daily_counts' + (query.toString() ? `?${query.toString()}` : '')
+    // 外部 signal 存在时也必须生效；部分 fetch 包装器会跳过自身的 timeout。
+    const controller = new AbortController()
+    const abort = () => controller.abort(params.signal?.reason)
+    let rejectAbort
+    const aborted = new Promise((_, reject) => { rejectAbort = reject })
+    const onAbort = () => rejectAbort(controller.signal.reason || new DOMException('请求已取消', 'AbortError'))
+    controller.signal.addEventListener('abort', onAbort, { once: true })
+    params.signal?.addEventListener('abort', abort, { once: true })
+    if (params.signal?.aborted) abort()
+    const timer = setTimeout(() => {
+      controller.abort(new DOMException('加载日历超时，请重试', 'TimeoutError'))
+    }, 20_000)
+    try {
+      if (controller.signal.aborted) return await aborted
+      return await Promise.race([
+        aborted,
+        request(url, { signal: controller.signal, timeout: 20_000, retry: 0 })
+      ])
+    } catch (error) {
+      if (controller.signal.reason?.name === 'TimeoutError') {
+        throw new Error('加载日历超时，请重试')
+      }
+      if (controller.signal.aborted) throw controller.signal.reason || error
+      // 保留后端的中文错误，网络错误使用可读的中文提示。
+      if (error?.status || error?.statusCode) throw error
+      throw new Error('加载日历失败，请检查连接后重试')
+    } finally {
+      clearTimeout(timer)
+      params.signal?.removeEventListener('abort', abort)
+      controller.signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  // 聊天记录定位锚点：某日第一条 / 会话最早一条
+  const getChatMessageAnchor = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.kind) query.set('kind', String(params.kind))
+    if (params && params.date) query.set('date', String(params.date))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/chat/messages/anchor' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 解析嵌套合并转发聊天记录（通过 server_id）
+  const resolveNestedChatHistory = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.server_id != null) query.set('server_id', String(params.server_id))
+    const url = '/chat/chat_history/resolve' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 解析卡片/小程序等 App 消息（通过 server_id）
+  const resolveAppMsg = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.server_id != null) query.set('server_id', String(params.server_id))
+    const url = '/chat/appmsg/resolve' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 朋友圈时间线
+  const listSnsTimeline = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    if (params && params.usernames && Array.isArray(params.usernames) && params.usernames.length > 0) {
+      query.set('usernames', params.usernames.join(','))
+    } else if (params && params.usernames && typeof params.usernames === 'string') {
+      query.set('usernames', params.usernames)
+    }
+    if (params && params.keyword) query.set('keyword', params.keyword)
+    if (params && params.source) query.set('source', params.source)
+    const url = '/sns/timeline' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 朋友圈联系人列表（按发圈数统计）
+  const listSnsUsers = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.keyword) query.set('keyword', String(params.keyword))
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    const url = '/sns/users' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const syncSnsRealtimeLatest = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.max_scan != null) query.set('max_scan', String(params.max_scan))
+    if (params && params.force != null) query.set('force', String(params.force))
+    if (params && params.scan_offset != null) query.set('scan_offset', String(params.scan_offset))
+    if (params && Array.isArray(params.usernames) && params.usernames.length > 0) {
+      query.set('usernames', params.usernames.join(','))
+    } else if (params && typeof params.usernames === 'string' && params.usernames) {
+      query.set('usernames', params.usernames)
+    }
+    const url = '/sns/realtime/sync_latest' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'POST' })
+  }
+
+  const getSnsSnapshotStatus = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/sns/snapshot/status' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const startSnsFullSync = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/sns/realtime/full_sync' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'POST' })
+  }
+
+  const getSnsFullSyncStatus = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    const url = '/sns/realtime/full_sync/status' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const cancelSnsFullSync = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.sync_id) query.set('sync_id', String(params.sync_id))
+    const url = '/sns/realtime/full_sync' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'DELETE' })
+  }
+
+  const openChatMediaFolder = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.kind) query.set('kind', params.kind)
+    if (params && params.md5) query.set('md5', params.md5)
+    if (params && params.file_id) query.set('file_id', params.file_id)
+    if (params && params.server_id != null) query.set('server_id', String(params.server_id))
+    const url = '/chat/media/open_folder' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, { method: 'POST' })
+  }
+
+  const downloadChatEmoji = async (data = {}) => {
+    return await request('/chat/media/emoji/download', {
+      method: 'POST',
+      body: {
+        account: data.account || null,
+        md5: data.md5 || '',
+        emoji_url: data.emoji_url || '',
+        force: !!data.force
+      }
+    })
+  }
+
+  // 保存图片解密密钥
+  const saveMediaKeys = async (params = {}) => {
+    return await request('/media/keys', {
+      method: 'POST',
+      body: {
+        account: params.account || null,
+        xor_key: params.xor_key || '',
+        aes_key: params.aes_key || null
+      }
+    })
+  }
+
+  // 获取已保存的密钥（数据库密钥 + 图片密钥）
+  const getSavedKeys = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.db_storage_path) query.set('db_storage_path', params.db_storage_path)
+    const url = '/keys' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 批量解密所有图片
+  const decryptAllMedia = async (params = {}) => {
+    return await request('/media/decrypt_all', {
+      method: 'POST',
+      body: {
+        account: params.account || null,
+        xor_key: params.xor_key || null,
+        aes_key: params.aes_key || null
+      }
+    })
+  }
+
+  const getVoiceTranscriptionStatus = async () => {
+    return await request('/chat/media/voice/transcription/status')
+  }
+
+  const setVoiceTranscriptionSettings = async (data = {}) => {
+    const body = {}
+    if (data.device != null) body.device = String(data.device || '').trim().toLowerCase()
+    if (data.model != null) body.model = String(data.model || '').trim()
+    if (data.download_source != null) body.download_source = String(data.download_source || '').trim()
+    return await request('/chat/media/voice/transcription/settings', {
+      method: 'PUT',
+      body
+    })
+  }
+
+  const setVoiceTranscriptionDevice = async (device) => {
+    return await setVoiceTranscriptionSettings({ device })
+  }
+
+  const setVoiceTranscriptionModel = async (model) => {
+    return await setVoiceTranscriptionSettings({ model })
+  }
+
+  const downloadVoiceTranscriptionModel = async (model) => {
+    const modelId = encodeURIComponent(String(model || '').trim())
+    return await request(`/chat/media/voice/transcription/models/${modelId}/download`, {
+      method: 'POST'
+    })
+  }
+
+  const prepareQwenGpu = async () => await request('/chat/media/voice/transcription/qwen-gpu/prepare', { method: 'POST' })
+  const pauseQwenGpu = async () => await request('/chat/media/voice/transcription/qwen-gpu/pause', { method: 'POST' })
+  const getQwenGpuStatus = async () => await request('/chat/media/voice/transcription/qwen-gpu/status')
+
+  const getVoiceTranscriptionModelDownload = async (jobId) => {
+    const id = encodeURIComponent(String(jobId || '').trim())
+    return await request(`/chat/media/voice/transcription/models/downloads/${id}`)
+  }
+
+  const deleteVoiceTranscriptionModel = async (model) => {
+    const modelId = encodeURIComponent(String(model || '').trim())
+    return await request(`/chat/media/voice/transcription/models/${modelId}`, {
+      method: 'DELETE'
+    })
+  }
+
+  const transcribeChatVoice = async (data = {}) => {
+    return await request('/chat/media/voice/transcription', {
+      method: 'POST',
+      body: {
+        account: data.account || null,
+        // svr_id 是 19 位大整数，超出 JS Number 安全范围，必须以字符串原样传输，
+        // 避免精度丢失导致后端查不到语音数据（后端 pydantic 会将精确字符串解析为 int）。
+        server_id: String(data.server_id ?? '').trim(),
+        force: !!data.force
+      }
+    })
+  }
+
+  const getNativeVoiceTranscript = async (data = {}) => {
+    const query = new URLSearchParams()
+    if (data.account) query.set('account', String(data.account).trim())
+    query.set('server_id', String(data.server_id ?? '').trim())
+    if (data.username) query.set('username', String(data.username).trim())
+    const localId = String(data.local_id ?? '').trim()
+    const requestId = String(data.request_id ?? '').trim()
+    if (localId && localId !== '0') query.set('local_id', localId)
+    if (requestId) query.set('request_id', requestId)
+    return await request(
+      `/chat/media/voice/transcription/native?${query.toString()}`,
+      data.signal ? { signal: data.signal } : {}
+    )
+  }
+
+  const triggerNativeVoiceTranscription = async (data = {}) => {
+    const body = {
+      account: String(data.account ?? '').trim(),
+      username: String(data.username ?? '').trim()
+    }
+    const serverId = String(data.server_id ?? '').trim()
+    const localId = String(data.local_id ?? '').trim()
+    if (serverId && serverId !== '0') body.server_id = serverId
+    if (localId && localId !== '0') body.local_id = localId
+    return await request('/chat/media/voice/transcription/native/trigger', {
+      method: 'POST',
+      body
+    })
+  }
+
+  const getNativeVoiceTranscriptionStatus = async (data = {}) => {
+    const query = new URLSearchParams()
+    if (data.account) query.set('account', String(data.account).trim())
+    return await request(
+      `/chat/media/voice/transcription/native/status${query.toString() ? `?${query.toString()}` : ''}`
+    )
+  }
+
+  const lookupNativeVoiceTranscriptionCache = async (data = {}) => {
+    const items = Array.isArray(data.items)
+      ? data.items.map((item) => ({
+          server_id: String(item?.server_id ?? '').trim(),
+          local_id: String(item?.local_id ?? '').trim()
+        })).filter((item) => item.server_id && item.local_id)
+      : []
+    return await request('/chat/media/voice/transcription/native/cache_lookup', {
+      method: 'POST',
+      body: {
+        account: String(data.account ?? '').trim(),
+        username: String(data.username ?? '').trim(),
+        items
+      }
+    })
+  }
+
+  // 批量读取语音转写缓存（仅恢复展示，不触发识别；serverIdStr 精确字符串数组）
+  const lookupChatVoiceTranscriptionCache = async (data = {}) => {
+    return await request('/chat/media/voice/transcription/cache_lookup', {
+      method: 'POST',
+      body: {
+        account: data.account || null,
+        server_ids: Array.isArray(data.server_ids)
+          ? data.server_ids.map((v) => String(v ?? '').trim()).filter(Boolean)
+          : []
+      }
+    })
+  }
+
+  const deleteAllVoiceTranscriptionCache = async () => {
+    return await request('/chat/media/voice/transcription/cache/all', {
+      method: 'DELETE'
+    })
+  }
+
+  const startVoiceTranscriptionBatch = async (data = {}) => {
+    const requestedConcurrency = data.concurrency
+    const concurrency = requestedConcurrency === null || requestedConcurrency === undefined || requestedConcurrency === ''
+      ? 0
+      : requestedConcurrency
+    if (typeof concurrency !== 'number' || !Number.isInteger(concurrency) || concurrency < 0) {
+      throw new RangeError('并发线程数必须是非负整数（0 表示自动）')
+    }
+    const engine = String(data.engine || 'local').trim().toLowerCase()
+    if (!['local', 'wechat-native'].includes(engine)) {
+      throw new RangeError('不支持的批量转写方式')
+    }
+    const body = {
+      account: data.account || null,
+      force: !!data.force,
+      concurrency
+    }
+    if (engine !== 'local') body.engine = engine
+    return await request('/chat/media/voice/transcription/batch', {
+      method: 'POST',
+      body
+    })
+  }
+
+  const getLatestVoiceTranscriptionBatch = async (account = '') => {
+    const query = new URLSearchParams()
+    if (account) query.set('account', String(account))
+    return await request(`/chat/media/voice/transcription/batch${query.toString() ? `?${query.toString()}` : ''}`)
+  }
+
+  const getVoiceTranscriptionBatch = async (jobId) => {
+    return await request(`/chat/media/voice/transcription/batch/${encodeURIComponent(String(jobId || '').trim())}`)
+  }
+
+  const cancelVoiceTranscriptionBatch = async (jobId) => {
+    return await request(`/chat/media/voice/transcription/batch/${encodeURIComponent(String(jobId || '').trim())}`, {
+      method: 'DELETE'
+    })
+  }
+
+  // 聊天记录导出（ZIP 全量或增量目录）
+  const createChatExport = async (data = {}) => {
+    return await request('/chat/exports', {
+      method: 'POST',
+      body: {
+        account: data.account || null,
+        source: data.source || 'auto',
+        scope: data.scope || 'selected',
+        usernames: Array.isArray(data.usernames) ? data.usernames : [],
+        format: data.format || 'json',
+        start_time: data.start_time != null ? Number(data.start_time) : null,
+        end_time: data.end_time != null ? Number(data.end_time) : null,
+        include_hidden: !!data.include_hidden,
+        include_official: !!data.include_official,
+        message_types: Array.isArray(data.message_types) ? data.message_types : [],
+        include_media: data.include_media == null ? true : !!data.include_media,
+        media_kinds: Array.isArray(data.media_kinds) ? data.media_kinds : ['image', 'emoji', 'video', 'video_thumb', 'voice', 'file'],
+        output_dir: data.output_dir == null ? null : String(data.output_dir || '').trim(),
+        allow_process_key_extract: !!data.allow_process_key_extract,
+        download_remote_media: !!data.download_remote_media,
+        html_page_size: data.html_page_size != null ? Number(data.html_page_size) : 1000,
+        privacy_mode: !!data.privacy_mode,
+        file_name: data.file_name || null,
+        transcribe_voice: !!data.transcribe_voice,
+        output_mode: data.output_mode === 'folder' ? 'folder' : 'zip',
+        folder_name: data.folder_name || null,
+        baseline: data.baseline && typeof data.baseline === 'object' ? data.baseline : null,
+        missing_files: Array.isArray(data.missing_files) ? data.missing_files : [],
+        reset_baseline: !!data.reset_baseline,
+        repair_usernames: Array.isArray(data.repair_usernames) ? data.repair_usernames : [],
+        recheck_media: !!data.recheck_media
+      }
+    })
+  }
+
+  const getChatExport = async (exportId) => {
+    if (!exportId) throw new Error('Missing exportId')
+    return await request(`/chat/exports/${encodeURIComponent(String(exportId))}`)
+  }
+
+  const listChatExports = async () => {
+    return await request('/chat/exports')
+  }
+
+  const getChatExportTargets = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.include_hidden != null) query.set('include_hidden', String(!!params.include_hidden))
+    if (params && params.include_official != null) query.set('include_official', String(!!params.include_official))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/chat/exports/targets' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const cancelChatExport = async (exportId) => {
+    if (!exportId) throw new Error('Missing exportId')
+    return await request(`/chat/exports/${encodeURIComponent(String(exportId))}`, { method: 'DELETE' })
+  }
+
+  // 朋友圈导出（离线 ZIP，支持 HTML / JSON / TXT）
+  const createSnsExport = async (data = {}) => {
+    return await request('/sns/exports', {
+      method: 'POST',
+      body: {
+        account: data.account || null,
+        scope: data.scope || 'selected',
+        usernames: Array.isArray(data.usernames) ? data.usernames : [],
+        format: data.format || 'html',
+        use_cache: data.use_cache == null ? true : !!data.use_cache,
+        output_dir: data.output_dir == null ? null : String(data.output_dir || '').trim(),
+        file_name: data.file_name || null,
+        output_mode: data.output_mode === 'folder' ? 'folder' : 'zip',
+        folder_name: data.folder_name || null,
+        baseline: data.baseline && typeof data.baseline === 'object' ? data.baseline : null,
+        missing_files: Array.isArray(data.missing_files) ? data.missing_files : [],
+        reset_baseline: !!data.reset_baseline
+      }
+    })
+  }
+
+  const getSnsExport = async (exportId) => {
+    if (!exportId) throw new Error('Missing exportId')
+    return await request(`/sns/exports/${encodeURIComponent(String(exportId))}`)
+  }
+
+  const cancelSnsExport = async (exportId) => {
+    if (!exportId) throw new Error('Missing exportId')
+    return await request(`/sns/exports/${encodeURIComponent(String(exportId))}`, { method: 'DELETE' })
+  }
+
+  // 联系人
+  const listChatContacts = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.source) query.set('source', params.source)
+    if (params && params.keyword) query.set('keyword', params.keyword)
+    if (params && params.include_friends != null) query.set('include_friends', String(!!params.include_friends))
+    if (params && params.include_groups != null) query.set('include_groups', String(!!params.include_groups))
+    if (params && params.include_enterprise_friends != null) query.set('include_enterprise_friends', String(!!params.include_enterprise_friends))
+    if (params && params.include_enterprise_groups != null) query.set('include_enterprise_groups', String(!!params.include_enterprise_groups))
+    if (params && params.include_officials != null) query.set('include_officials', String(!!params.include_officials))
+    if (params && params.include_official_subscriptions != null) query.set('include_official_subscriptions', String(!!params.include_official_subscriptions))
+    if (params && params.include_official_services != null) query.set('include_official_services', String(!!params.include_official_services))
+    if (params && params.include_former_friends != null) query.set('include_former_friends', String(!!params.include_former_friends))
+    if (params && params.include_blocked != null) query.set('include_blocked', String(!!params.include_blocked))
+    const url = '/chat/contacts' + (query.toString() ? `?${query.toString()}` : '')
+    const cacheKey = `${baseURL}::${url}`
+    const now = Date.now()
+    const cached = chatContactsListCache.get(cacheKey)
+    if (!params?.refresh && cached && now - cached.updatedAt < CHAT_CONTACTS_LIST_CACHE_TTL_MS) {
+      if (cached.promise) return await cached.promise
+      return cached.data
+    }
+    const promise = request(url)
+    chatContactsListCache.set(cacheKey, { updatedAt: now, promise })
+    let data
+    try {
+      data = await promise
+    } catch (error) {
+      chatContactsListCache.delete(cacheKey)
+      throw error
+    }
+    chatContactsListCache.set(cacheKey, { updatedAt: Date.now(), data })
+    if (chatContactsListCache.size > 24) {
+      const firstKey = chatContactsListCache.keys().next().value
+      if (firstKey) chatContactsListCache.delete(firstKey)
+    }
+    return data
+  }
+
+  const getChatContactProfile = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.source) query.set('source', params.source)
+    if (params && params.username) query.set('username', params.username)
+    const url = '/chat/contacts/profile' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, params?.signal ? { signal: params.signal } : {})
+  }
+
+  const getChatGroupMembers = async (params) => {
+    const query = new URLSearchParams({
+      account: params.account,
+      username: params.username,
+      limit: String(params.limit ?? 40),
+      offset: String(params.offset ?? 0),
+      source: 'auto'
+    })
+    return await request(`/chat/contacts/group_members?${query}`, { signal: params.signal })
+  }
+
+  const exportChatContacts = async (payload = {}) => {
+    return await request('/chat/contacts/export', {
+      method: 'POST',
+      body: {
+        account: payload.account || null,
+        source: payload.source || 'auto',
+        output_dir: payload.output_dir || '',
+        format: payload.format || 'json',
+        include_avatar_link: payload.include_avatar_link == null ? true : !!payload.include_avatar_link,
+        keyword: payload.keyword || null,
+        contact_types: {
+          friends: payload?.contact_types?.friends == null ? true : !!payload.contact_types.friends,
+          groups: payload?.contact_types?.groups == null ? true : !!payload.contact_types.groups,
+          enterprise_friends: payload?.contact_types?.enterprise_friends == null ? null : !!payload.contact_types.enterprise_friends,
+          enterprise_groups: payload?.contact_types?.enterprise_groups == null ? null : !!payload.contact_types.enterprise_groups,
+          officials: payload?.contact_types?.officials == null ? true : !!payload.contact_types.officials,
+          official_subscriptions: payload?.contact_types?.official_subscriptions == null ? null : !!payload.contact_types.official_subscriptions,
+          official_services: payload?.contact_types?.official_services == null ? null : !!payload.contact_types.official_services,
+          former_friends: payload?.contact_types?.former_friends == null ? false : !!payload.contact_types.former_friends,
+          blocked: payload?.contact_types?.blocked == null ? false : !!payload.contact_types.blocked,
+        }
+      }
+    })
+  }
+
+  // Account archive export (databases + resource files)
+  const createAccountArchiveExport = async (payload = {}) => {
+    return await request('/account/archive_export', {
+      method: 'POST',
+      body: {
+        account: payload.account || null,
+        output_dir: payload.output_dir == null ? null : String(payload.output_dir || '').trim(),
+        include_databases: payload.include_databases == null ? true : !!payload.include_databases,
+        include_resources: payload.include_resources == null ? true : !!payload.include_resources,
+        file_name: payload.file_name || null
+      }
+    })
+  }
+
+  const getAccountArchiveExport = async (exportId) => {
+    if (!exportId) throw new Error('Missing exportId')
+    return await request(`/account/archive_export/${encodeURIComponent(String(exportId))}`)
+  }
+
+  const cancelAccountArchiveExport = async (exportId) => {
+    if (!exportId) throw new Error('Missing exportId')
+    return await request(`/account/archive_export/${encodeURIComponent(String(exportId))}`, { method: 'DELETE' })
+  }
+
+  // WeChat Wrapped（年度总结）
+  const getWrappedAnnual = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.year != null) query.set('year', String(params.year))
+    if (params && params.account) query.set('account', String(params.account))
+    if (params && params.refresh != null) query.set('refresh', String(!!params.refresh))
+    const url = '/wrapped/annual' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // WeChat Wrapped（年度总结）- 目录/元信息（轻量，用于按页懒加载）
+  const getWrappedAnnualMeta = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.year != null) query.set('year', String(params.year))
+    if (params && params.account) query.set('account', String(params.account))
+    if (params && params.refresh != null) query.set('refresh', String(!!params.refresh))
+    const url = '/wrapped/annual/meta' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // WeChat Wrapped（年度总结）- 单张卡片（按页加载）
+  const getWrappedAnnualCard = async (cardId, params = {}) => {
+    if (cardId == null) throw new Error('Missing cardId')
+    const query = new URLSearchParams()
+    if (params && params.year != null) query.set('year', String(params.year))
+    if (params && params.account) query.set('account', String(params.account))
+    if (params && params.refresh != null) query.set('refresh', String(!!params.refresh))
+    const safeId = encodeURIComponent(String(cardId))
+    const url = `/wrapped/annual/cards/${safeId}` + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 获取微信进程状态
+  const getWxStatus = async (params = {}) => {
+    return await request('/wechat/status', params?.signal ? { signal: params.signal } : {})
+  }
+
+  // 获取数据库密钥
+  const getKeys = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.wechat_install_path) query.set('wechat_install_path', params.wechat_install_path)
+    if (params && params.db_storage_path) query.set('db_storage_path', params.db_storage_path)
+    if (params && params.key_mode) query.set('key_mode', params.key_mode)
+    const url = '/get_keys' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url, params?.signal ? { signal: params.signal } : {})
+  }
+
+  const getMacosKeyCaptureStatus = async (params = {}) => {
+    return await request('/macos-key-capture/status', { retry: 0, timeout: 3000, ...(params?.signal ? { signal: params.signal } : {}) })
+  }
+
+  const macosKeyCaptureRequest = async (action, params = {}) => {
+    const options = {
+      method: 'POST',
+      retry: 0,
+      body: {
+        wechat_install_path: params.wechat_install_path || null,
+        db_storage_path: params.db_storage_path || null,
+        timeout: params.timeout || 240
+      }
+    }
+    if (params.signal) options.signal = params.signal
+    return await request(`/macos-key-capture/${action}`, options)
+  }
+
+  const prepareMacosKeyCapture = async (params = {}) => {
+    return await macosKeyCaptureRequest('prepare', params)
+  }
+
+  const preflightMacosKeyCapture = async (params = {}) => {
+    return await macosKeyCaptureRequest('preflight', params)
+  }
+
+  const captureMacosKey = async (params = {}) => {
+    return await macosKeyCaptureRequest('capture', params)
+  }
+
+  const cancelMacosKeyCapture = async (params = {}) => {
+    return await macosKeyCaptureRequest('cancel', params)
+  }
+
+  // 获取图片密钥
+  const getImageKey = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.db_storage_path) query.set('db_storage_path', params.db_storage_path)
+    if (params && params.wxid_dir) query.set('wxid_dir', params.wxid_dir)
+    const url = '/get_image_key' + (query.toString() ? `?${query.toString()}` : '')
+
+    return await request(url)
+  }
+
+  // 扫描微信进程内存并通过本地 V2 图片校验密钥
+  const getImageKeyMemory = async (params = {}) => {
+    return await request('/get_image_key_memory', {
+      method: 'POST',
+      body: {
+        account: params.account || null,
+        db_storage_path: params.db_storage_path || null,
+        wxid_dir: params.wxid_dir || null
+      }
+    })
+  }
+
+  // 枚举服务号信息
+  const listBizAccounts = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.source) query.set('source', params.source)
+    const url = '/biz/list' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 获取普通服务号消息
+  const listBizMessages = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/biz/messages' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  // 获取微信支付记录
+  const listBizPayRecords = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    if (params && params.source) query.set('source', params.source)
+    const url = '/biz/pay_records' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const buildGeneralUrl = (path, params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.q) query.set('q', params.q)
+    if (params && params.kind) query.set('kind', params.kind)
+    if (params && params.status) query.set('status', params.status)
+    query.set('source', params?.source || 'realtime')
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    return `/general/${path}` + (query.toString() ? `?${query.toString()}` : '')
+  }
+
+  const listGeneralOverview = async (params = {}) => {
+    return await request(buildGeneralUrl('overview', params))
+  }
+
+  const listFriendVerifications = async (params = {}) => {
+    return await request(
+      buildGeneralUrl('friend-verifications', params),
+      params?.signal ? { signal: params.signal } : {}
+    )
+  }
+
+  const listMiniPrograms = async (params = {}) => {
+    return await request(buildGeneralUrl('mini-programs', params))
+  }
+
+  const listFinderRecords = async (params = {}) => {
+    return await request(buildGeneralUrl('finder', params))
+  }
+
+  const listPaymentRecords = async (params = {}) => {
+    return await request(buildGeneralUrl('payments', params))
+  }
+
+  const listRevokeRecords = async (params = {}) => {
+    return await request(buildGeneralUrl('revokes', params))
+  }
+
+  const listGeneralSearchRecords = async (params = {}) => {
+    return await request(buildGeneralUrl('search-records', params))
+  }
+
+  const listFavorites = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.q) query.set('q', params.q)
+    if (params && params.kind) query.set('kind', params.kind)
+    if (params && params.tagId) query.set('tag_id', String(params.tagId))
+    query.set('source', 'realtime')
+    if (params && params.limit != null) query.set('limit', String(params.limit))
+    if (params && params.offset != null) query.set('offset', String(params.offset))
+    return await request('/favorites' + (query.toString() ? `?${query.toString()}` : ''))
+  }
+
+  const exportRecords = async (payload = {}) => {
+    return await request('/records/export', {
+      method: 'POST',
+      body: {
+        account: payload.account || null,
+        dataset: payload.dataset || '',
+        username: payload.username || '',
+        subject_name: payload.subject_name || '',
+        format: payload.format || 'html',
+        types: Array.isArray(payload.types) ? payload.types : [],
+        query: payload.query || '',
+        output_dir: payload.output_dir || '',
+        file_name: payload.file_name || '',
+      },
+    })
+  }
+
+  const getBizProxyImageUrl = (url) => {
+    if (!url) return ''
+    if (url.startsWith('data:')) return url // 如果已经是 base64，不处理
+    const query = new URLSearchParams()
+    query.set('url', url)
+    const base = baseURL ? baseURL.replace(/\/$/, '') : ''
+    return `${base}/biz/proxy_image?${query.toString()}`
+  }
+
+  const pickSystemDirectory = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.title) query.set('title', params.title)
+    if (params && params.initial_dir) query.set('initial_dir', params.initial_dir)
+    const url = '/system/pick_directory' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const getImgHelperStatus = async () => {
+    return await request('/system/img_helper/status')
+  }
+
+  const toggleImgHelper = async (enabled) => {
+    return await request('/system/img_helper/toggle', {
+      method: 'POST',
+      body: { enabled: !!enabled }
+    })
+  }
+
+  const getCdnImageStatus = async (account = '') => {
+    const q = String(account || '').trim()
+    return await request('/system/cdn_image/status' + (q ? `?account=${encodeURIComponent(q)}` : ''))
+  }
+
+  // WxCDN 套餐 / 额度 / 兑换（后端 routers/cdn.py）
+  const getCdnPlan = async (account = '', { refresh = false } = {}) => {
+    const params = new URLSearchParams()
+    if (String(account || '').trim()) params.set('account', String(account).trim())
+    if (refresh) params.set('refresh', 'true')
+    const q = params.toString()
+    return await request('/cdn/plan' + (q ? `?${q}` : ''))
+  }
+  const connectCdn = async (account = '') => {
+    return await request('/cdn/connect', { method: 'POST', body: { account: String(account || '').trim() } })
+  }
+  const redeemCdnCode = async (account, code) => {
+    return await request('/cdn/redeem', { method: 'POST', body: { account: String(account || '').trim(), code: String(code || '') } })
+  }
+
+  const toggleCdnImage = async (enabled) => {
+    return await request('/system/cdn_image/toggle', {
+      method: 'POST',
+      body: { enabled: !!enabled }
+    })
+  }
+
+
+  return {
+    pickSystemDirectory,
+    getImgHelperStatus,
+    toggleImgHelper,
+    getCdnImageStatus,
+    toggleCdnImage,
+    getCdnPlan,
+    connectCdn,
+    redeemCdnCode,
+    detectWechat,
+    detectCurrentAccount,
+    decryptDatabase,
+    importDecryptedPreview,
+    importDecrypted,
+    healthCheck,
+    getPlatformCapabilities,
+    listChatAccounts,
+    getChatAccountInfo,
+    deleteChatAccount,
+    listChatSessions,
+    listChatMessages,
+    getChatMessageRaw,
+    getChatRealtimeStatus,
+    syncChatRealtimeMessages,
+    syncChatRealtimeAll,
+    searchChatMessages,
+    getChatSearchIndexStatus,
+    buildChatSearchIndex,
+    listChatSearchSenders,
+    getChatMessagesAround,
+    getChatMessageDailyCounts,
+    getChatMessageAnchor,
+    resolveNestedChatHistory,
+    resolveAppMsg,
+    listSnsTimeline,
+    listSnsUsers,
+    syncSnsRealtimeLatest,
+    getSnsSnapshotStatus,
+    startSnsFullSync,
+    getSnsFullSyncStatus,
+    cancelSnsFullSync,
+    openChatMediaFolder,
+    downloadChatEmoji,
+    saveMediaKeys,
+    getSavedKeys,
+    decryptAllMedia,
+    getVoiceTranscriptionStatus,
+    setVoiceTranscriptionSettings,
+    setVoiceTranscriptionDevice,
+    setVoiceTranscriptionModel,
+    downloadVoiceTranscriptionModel,
+    prepareQwenGpu,
+    pauseQwenGpu,
+    getQwenGpuStatus,
+    getVoiceTranscriptionModelDownload,
+    deleteVoiceTranscriptionModel,
+    transcribeChatVoice,
+    getNativeVoiceTranscript,
+    triggerNativeVoiceTranscription,
+    getNativeVoiceTranscriptionStatus,
+    lookupNativeVoiceTranscriptionCache,
+    lookupChatVoiceTranscriptionCache,
+    deleteAllVoiceTranscriptionCache,
+    startVoiceTranscriptionBatch,
+    getLatestVoiceTranscriptionBatch,
+    getVoiceTranscriptionBatch,
+    cancelVoiceTranscriptionBatch,
+    createChatExport,
+    getChatExport,
+    listChatExports,
+    getChatExportTargets,
+    cancelChatExport,
+    createSnsExport,
+    getSnsExport,
+    cancelSnsExport,
+    listChatContacts,
+    getChatContactProfile,
+    getChatGroupMembers,
+    exportChatContacts,
+    createAccountArchiveExport,
+    getAccountArchiveExport,
+    cancelAccountArchiveExport,
+    getWrappedAnnual,
+    getWrappedAnnualMeta,
+    getWrappedAnnualCard,
+    getKeys,
+    getMacosKeyCaptureStatus,
+    prepareMacosKeyCapture,
+    preflightMacosKeyCapture,
+    captureMacosKey,
+    cancelMacosKeyCapture,
+    getImageKey,
+    getImageKeyMemory,
+    getWxStatus,
+    listBizAccounts,
+    listBizMessages,
+    listBizPayRecords,
+    listGeneralOverview,
+    listFriendVerifications,
+    listMiniPrograms,
+    listFinderRecords,
+    listPaymentRecords,
+    listRevokeRecords,
+    listGeneralSearchRecords,
+    listFavorites,
+    exportRecords,
+    getBizProxyImageUrl,
+  }
+}

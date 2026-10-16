@@ -1,0 +1,382 @@
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Optional
+
+from fastapi import HTTPException
+
+from .account_identity import canonical_account_name, is_internal_account_directory_name
+from .account_source_policy import source_metadata_prefers_decrypted_snapshot
+from .app_paths import get_output_databases_dir
+from .key_store import get_account_keys_from_store, load_account_keys_store, normalize_key_store_path
+from .sqlite_diagnostics import is_usable_sqlite_db
+
+
+# Source aliases append a four-character discriminator to the wxid.  Wxids
+# themselves may contain underscores, so the account part must be greedy.
+_WXID_SOURCE_SUFFIX_RE = re.compile(r"^(wxid_[^\s]+)_([0-9a-f]{4})$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class ChatAccountContext:
+    name: str
+    account_dir: Path
+    has_decrypted_dbs: bool
+    source_info: dict[str, Any]
+    db_key_present: bool = False
+    image_key_present: bool = False
+    image_xor_key_present: bool = False
+    image_aes_key_present: bool = False
+    keys_updated_at: str = ""
+
+    @property
+    def db_storage_path(self) -> str:
+        return str(self.source_info.get("db_storage_path") or "").strip()
+
+    @property
+    def wxid_dir(self) -> str:
+        return str(self.source_info.get("wxid_dir") or "").strip()
+
+    @property
+    def mode(self) -> str:
+        if self.prefers_decrypted_snapshot:
+            return "decrypted"
+        if self.db_storage_path or self.wxid_dir:
+            return "direct"
+        return "decrypted" if self.has_decrypted_dbs else "unknown"
+
+    @property
+    def prefers_decrypted_snapshot(self) -> bool:
+        return bool(
+            self.has_decrypted_dbs
+            and source_metadata_prefers_decrypted_snapshot(self.source_info)
+        )
+
+    @property
+    def keys_ready(self) -> bool:
+        return bool(self.db_key_present and self.image_key_present)
+
+
+def _safe_account_name(value: Any) -> str:
+    name = str(value or "").strip()
+    if not name:
+        return ""
+    # Account names are wxids / aliases, not paths. Keep this deliberately strict
+    # so resolving key-store accounts cannot create arbitrary directories.
+    if any(ch in name for ch in ("/", "\\", ":", "\x00")):
+        return ""
+    if name in {".", ".."}:
+        return ""
+    if is_internal_account_directory_name(name):
+        return ""
+    return name
+
+
+def _is_valid_decrypted_sqlite(path: Path) -> bool:
+    return is_usable_sqlite_db(path)
+
+
+def _has_decrypted_chat_dbs(account_dir: Path) -> bool:
+    return _is_valid_decrypted_sqlite(account_dir / "session.db") and _is_valid_decrypted_sqlite(account_dir / "contact.db")
+
+
+def _load_source_json(account_dir: Path) -> dict[str, Any]:
+    p = account_dir / "_source.json"
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _source_info_from_key_store(account: str) -> tuple[dict[str, Any], bool]:
+    keys = get_account_keys_from_store(account)
+    if not isinstance(keys, dict):
+        return {}, False
+
+    db_storage_path = normalize_key_store_path(keys.get("db_key_source_db_storage_path"))
+    wxid_dir = normalize_key_store_path(keys.get("db_key_source_wxid_dir"))
+    source: dict[str, Any] = {}
+    if db_storage_path:
+        source["db_storage_path"] = db_storage_path
+    if wxid_dir:
+        source["wxid_dir"] = wxid_dir
+    return source, len(str(keys.get("db_key") or "").strip()) == 64
+
+
+def _key_state_from_key_store(account: str) -> dict[str, Any]:
+    keys = get_account_keys_from_store(account)
+    if not isinstance(keys, dict):
+        keys = {}
+
+    image_xor = str(keys.get("image_xor_key") or "").strip()
+    image_aes = str(keys.get("image_aes_key") or "").strip()
+    return {
+        "db_key_present": len(str(keys.get("db_key") or "").strip()) == 64,
+        "image_xor_key_present": bool(image_xor),
+        "image_aes_key_present": bool(image_aes),
+        "image_key_present": bool(image_xor),
+        "keys_updated_at": str(keys.get("updated_at") or "").strip(),
+    }
+
+
+def _key_state_from_media_keys_file(account_dir: Path) -> dict[str, Any]:
+    p = Path(account_dir) / "_media_keys.json"
+    if not p.exists():
+        return {
+            "image_xor_key_present": False,
+            "image_aes_key_present": False,
+            "image_key_present": False,
+        }
+
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+
+    xor_present = data.get("xor") is not None or bool(str(data.get("image_xor_key") or data.get("xor_key") or "").strip())
+    aes_present = bool(str(data.get("aes") or data.get("image_aes_key") or data.get("aes_key") or "").strip())
+    return {
+        "image_xor_key_present": bool(xor_present),
+        "image_aes_key_present": bool(aes_present),
+        "image_key_present": bool(xor_present),
+    }
+
+
+def _merge_source_info(
+    primary: dict[str, Any],
+    fallback: dict[str, Any],
+    *,
+    fallback_wins: bool = False,
+) -> dict[str, Any]:
+    out = dict(primary or {})
+    for k in ("db_storage_path", "wxid_dir"):
+        fallback_value = str((fallback or {}).get(k) or "").strip()
+        if fallback_value and (fallback_wins or not str(out.get(k) or "").strip()):
+            out[k] = fallback_value
+    return out
+
+
+def _maybe_write_source_info(account_dir: Path, source_info: dict[str, Any]) -> None:
+    db_storage_path = str((source_info or {}).get("db_storage_path") or "").strip()
+    wxid_dir = str((source_info or {}).get("wxid_dir") or "").strip()
+    if not db_storage_path and not wxid_dir:
+        return
+    payload = {}
+    if db_storage_path:
+        payload["db_storage_path"] = db_storage_path
+    if wxid_dir:
+        payload["wxid_dir"] = wxid_dir
+    try:
+        account_dir.mkdir(parents=True, exist_ok=True)
+        p = account_dir / "_source.json"
+        existing = _load_source_json(account_dir)
+        # A direct key-store source is authoritative once it is populated.
+        # This lets an account switch replace a stale marker left by the prior
+        # source while still preserving unrelated metadata in the marker.
+        merged = _merge_source_info(existing, payload, fallback_wins=True)
+        if merged != existing:
+            p.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        # Source persistence is an optimization for existing helpers; do not fail account resolution.
+        pass
+
+
+def _context_for_name(account: str) -> Optional[ChatAccountContext]:
+    account_name = _safe_account_name(account)
+    if not account_name:
+        return None
+    account_dir = (get_output_databases_dir() / account_name).resolve()
+    has_dbs = False
+    source_from_dir: dict[str, Any] = {}
+    try:
+        if account_dir.exists() and account_dir.is_dir():
+            has_dbs = _has_decrypted_chat_dbs(account_dir)
+            source_from_dir = _load_source_json(account_dir)
+    except Exception:
+        has_dbs = False
+        source_from_dir = {}
+
+    source_from_keys, key_present = _source_info_from_key_store(account_name)
+    key_state = _key_state_from_key_store(account_name)
+    media_key_state = _key_state_from_media_keys_file(account_dir)
+    # A manually imported archive is an immutable decrypted snapshot. Do not
+    # silently graft a key-store path from this computer onto it; that would
+    # make `source=auto` show the host WeChat database instead of the archive.
+    if has_dbs and source_metadata_prefers_decrypted_snapshot(source_from_dir):
+        source_info = dict(source_from_dir)
+    else:
+        # For direct accounts, the key-store source is the latest capture and
+        # must supersede a stale `_source.json`.  Imported decrypted snapshots
+        # take the branch above and remain isolated from host key-store paths.
+        source_info = _merge_source_info(source_from_dir, source_from_keys, fallback_wins=True)
+    if not has_dbs and not source_info and not key_present:
+        return None
+
+    return ChatAccountContext(
+        name=account_name,
+        account_dir=account_dir,
+        has_decrypted_dbs=bool(has_dbs),
+        source_info=source_info,
+        db_key_present=bool(key_present),
+        image_key_present=bool(key_state.get("image_key_present") or media_key_state.get("image_key_present")),
+        image_xor_key_present=bool(key_state.get("image_xor_key_present") or media_key_state.get("image_xor_key_present")),
+        image_aes_key_present=bool(key_state.get("image_aes_key_present") or media_key_state.get("image_aes_key_present")),
+        keys_updated_at=str(key_state.get("keys_updated_at") or ""),
+    )
+
+
+def _context_source_roots(ctx: ChatAccountContext) -> set[str]:
+    roots: set[str] = set()
+    for value in (ctx.db_storage_path, ctx.wxid_dir):
+        normalized = normalize_key_store_path(value)
+        if normalized:
+            roots.add(normalized)
+    return roots
+
+
+def _contexts_share_source(left: ChatAccountContext, right: ChatAccountContext) -> bool:
+    return bool(_context_source_roots(left) & _context_source_roots(right))
+
+
+def _dedupe_source_alias_contexts(
+    contexts: list[ChatAccountContext],
+) -> list[ChatAccountContext]:
+    by_name = {ctx.name.lower(): ctx for ctx in contexts}
+    output: list[ChatAccountContext] = []
+    for ctx in contexts:
+        match = _WXID_SOURCE_SUFFIX_RE.fullmatch(ctx.name)
+        if match is None:
+            output.append(ctx)
+            continue
+
+        base = by_name.get(match.group(1).lower())
+        if base is None:
+            output.append(ctx)
+            continue
+
+        base_has_canonical_data = base.has_decrypted_dbs or not ctx.has_decrypted_dbs
+        if base.prefers_decrypted_snapshot and base.has_decrypted_dbs:
+            continue
+        if _contexts_share_source(base, ctx) and base_has_canonical_data:
+            continue
+        output.append(ctx)
+    return output
+
+
+def list_chat_account_contexts() -> list[ChatAccountContext]:
+    names: set[str] = set()
+    output_databases_dir = get_output_databases_dir()
+    if output_databases_dir.exists():
+        try:
+            for p in output_databases_dir.iterdir():
+                if p.is_dir():
+                    n = _safe_account_name(p.name)
+                    if n:
+                        names.add(n)
+        except Exception:
+            pass
+
+    store = load_account_keys_store()
+    if isinstance(store, dict):
+        for name, item in store.items():
+            n = _safe_account_name(name)
+            if not n or not isinstance(item, dict):
+                continue
+            has_key = len(str(item.get("db_key") or "").strip()) == 64
+            has_image_key = bool(str(item.get("image_xor_key") or "").strip())
+            has_source = bool(
+                str(item.get("db_key_source_db_storage_path") or "").strip()
+                or str(item.get("db_key_source_wxid_dir") or "").strip()
+            )
+            if has_key or has_source or has_image_key:
+                names.add(n)
+
+    contexts: list[ChatAccountContext] = []
+    for name in sorted(names):
+        ctx = _context_for_name(name)
+        if ctx is not None:
+            contexts.append(ctx)
+    contexts = _dedupe_source_alias_contexts(contexts)
+    contexts.sort(key=lambda c: (0 if c.mode == "direct" else 1, c.name.lower()))
+    return contexts
+
+
+def list_chat_account_names() -> list[str]:
+    return [ctx.name for ctx in list_chat_account_contexts()]
+
+
+def resolve_chat_account_context(account: Optional[str]) -> ChatAccountContext:
+    contexts = list_chat_account_contexts()
+    if not contexts:
+        raise HTTPException(
+            status_code=404,
+            detail="No chat accounts found. Please save a db key/db_storage path or decrypt first.",
+        )
+
+    raw_selected = str(account or "").strip()
+    selected = _safe_account_name(raw_selected)
+    if raw_selected and not selected:
+        # Older imports exposed rollback directories as accounts. Preserve a
+        # persisted selection such as `wxid_x.backup-*` by resolving it to the
+        # canonical snapshot instead of silently selecting an unrelated first
+        # account.
+        canonical_selected = canonical_account_name(raw_selected)
+        if canonical_selected != raw_selected:
+            selected = _safe_account_name(canonical_selected)
+        if not selected:
+            raise HTTPException(status_code=400, detail="Invalid account.")
+    selected = selected or contexts[0].name
+    by_name = {ctx.name: ctx for ctx in contexts}
+    ctx = by_name.get(selected)
+    if ctx is None:
+        alias_match = _WXID_SOURCE_SUFFIX_RE.fullmatch(selected)
+        alias_ctx = _context_for_name(selected) if alias_match is not None else None
+        base_ctx = by_name.get(alias_match.group(1)) if alias_match is not None else None
+        if (
+            alias_ctx is not None
+            and base_ctx is not None
+            and (
+                base_ctx.prefers_decrypted_snapshot
+                or _contexts_share_source(alias_ctx, base_ctx)
+            )
+        ):
+            ctx = base_ctx
+    if ctx is None:
+        raise HTTPException(status_code=404, detail="Account not found.")
+
+    base = get_output_databases_dir().resolve()
+    candidate = ctx.account_dir.resolve()
+    if candidate != base and base not in candidate.parents:
+        raise HTTPException(status_code=400, detail="Invalid account path.")
+
+    if ctx.source_info:
+        _maybe_write_source_info(candidate, ctx.source_info)
+    elif ctx.has_decrypted_dbs:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+    return ChatAccountContext(
+        name=ctx.name,
+        account_dir=candidate,
+        has_decrypted_dbs=ctx.has_decrypted_dbs,
+        source_info=ctx.source_info,
+        db_key_present=ctx.db_key_present,
+        image_key_present=ctx.image_key_present,
+        image_xor_key_present=ctx.image_xor_key_present,
+        image_aes_key_present=ctx.image_aes_key_present,
+        keys_updated_at=ctx.keys_updated_at,
+    )
+
+
+def is_decrypted_chat_account_dir(account_dir: Path) -> bool:
+    return _has_decrypted_chat_dbs(Path(account_dir))
