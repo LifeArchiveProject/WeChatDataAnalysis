@@ -77,7 +77,10 @@
 .pd-list::-webkit-scrollbar { width: 4px; }
 .pd-list::-webkit-scrollbar-thumb { background: rgba(255, 194, 75, 0.28); border-radius: 2px; }
 .pd-list__groups { columns: var(--pd-list-cols, auto); column-gap: 16px; }
+.pd-list__lead { display: flow-root; break-inside: avoid; }
 .pd-root .pd-group { break-inside: avoid; margin-bottom: 8px; }
+.pd-root .pd-list__lead > .pd-group { margin-bottom: 3px; }
+.pd-root .pd-list__lead > .pd-group:last-child { margin-bottom: 0; }
 .pd-group__head {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px;
   font-size: 10.5px; letter-spacing: 0.2em; color: var(--pd-amber);
