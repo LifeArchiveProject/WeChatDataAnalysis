@@ -103,33 +103,15 @@
 .pd-item.is-active i { opacity: 1; }
 
 /* ── 媒体下载 ── */
-.pd-root .pd-media {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px 14px;
-  margin: 0 0 12px;
-  padding: 9px 14px;
-  border: 1px solid rgba(99, 179, 255, 0.5);
-  border-left: 3px solid #78c4ff;
-  border-radius: 7px;
-  background: linear-gradient(115deg, rgba(37, 97, 157, 0.34), rgba(22, 51, 78, 0.46));
+.pd-group--media .pd-group__head { color: #7bc6ff; }
+.pd-media__title {
+  appearance: none; border: 0; padding: 0; background: none;
+  color: inherit; font: inherit; cursor: pointer;
 }
-.pd-media__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.pd-media__title { color: #d8edff; font-size: 15px; line-height: 1.4; }
-.pd-media__badge { color: #91b9da; font-size: 10px; }
-.pd-media__description { grid-column: 1; color: #b8d7f0; font-size: 12px; line-height: 1.4; }
-.pd-media__types { grid-column: 1; display: flex; flex-wrap: wrap; gap: 5px; list-style: none; margin: 0; padding: 0; }
-.pd-media__types li { padding: 1px 7px; border-radius: 3px; background: rgba(112, 183, 245, 0.12); color: #d7eaff; font-size: 12px; line-height: 1.5; }
-.pd-media__action {
-  grid-column: 2; grid-row: 1 / span 3; align-self: center;
-  padding: 7px 11px; border: 1px solid rgba(121, 193, 255, 0.5); border-radius: 4px;
-  background: rgba(74, 151, 219, 0.18); color: #d7eaff; font: inherit; font-size: 12px; cursor: pointer;
-}
-.pd-media__action:hover { background: rgba(74, 151, 219, 0.32); }
-.pd-media__action:focus-visible { outline: 2px solid #a6d6ff; outline-offset: 2px; }
-@container (max-width: 460px) {
-  .pd-media__action { grid-column: 1; grid-row: auto; justify-self: start; }
-}
+.pd-media__title:hover { color: #c4e6ff; }
+.pd-media__title:focus-visible { outline: 1px solid #a6d6ff; outline-offset: 3px; }
+.pd-group--media .pd-media__description { margin: 2px 0 5px 6px; color: #80a6c3; font-size: 10.5px; line-height: 1.5; }
+.pd-group--media .pd-media__type { color: #aedbff; cursor: default; }
 
 /* ─────────────────────────── 舞台 ─────────────────────────── */
 
