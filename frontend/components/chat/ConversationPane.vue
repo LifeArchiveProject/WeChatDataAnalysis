@@ -1,0 +1,238 @@
+<template>
+  <div class="conversation-pane flex-1 flex flex-col min-h-0 min-w-0">
+    <div v-if="selectedContact" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
+      <div class="chat-header" :class="{ 'chat-header-ai': aiSidebarOpen }">
+        <div class="flex min-w-0 items-center gap-3">
+          <h2 class="chat-header-title flex min-w-0 items-center gap-1.5 text-base font-medium">
+            <span class="min-w-0 truncate" :class="{ 'privacy-blur': privacyMode }">{{ selectedContact.name }}</span>
+            <span
+              v-if="selectedContact.enterpriseName"
+              class="min-w-0 max-w-[16rem] truncate text-[14px] text-[#ff8000]"
+              :class="{ 'privacy-blur': privacyMode }"
+            >@{{ selectedContact.enterpriseName }}</span>
+            <img
+              v-if="selectedContact.isEnterpriseGroup"
+              src="/assets/images/wechat/wecom.png"
+              alt="企业微信群"
+              title="企业微信群"
+              class="h-4 w-4 shrink-0"
+            >
+          </h2>
+          <button
+            v-if="groupAnnouncement"
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-[#07C160] hover:bg-[#07C160]/10"
+            aria-haspopup="dialog"
+            title="查看群公告"
+            @click="openGroupAnnouncement"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 13V7l12-3v12L4 13Z" />
+              <path d="M8 13v6h3l1-5M19 8v4" />
+            </svg>
+            <span>群公告</span>
+          </button>
+        </div>
+        <div class="ml-auto flex shrink-0 items-center gap-2">
+          <button type="button" class="header-btn-icon" :class="{ 'header-btn-icon-active': aiSidebarOpen }" aria-label="AI 助手" title="AI 助手" :aria-pressed="aiSidebarOpen" @click="toggleAiSidebar">AI</button>
+          <button
+            type="button"
+            class="header-btn-icon"
+            title="添加消息"
+            aria-label="添加消息"
+            @click="openFeatureUnavailableDialog"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="header-btn-icon"
+            :disabled="isLoadingMessages || isJumpingToFirst"
+            :aria-busy="isJumpingToFirst"
+            aria-label="从第一条消息开始阅读"
+            title="从第一条消息开始阅读"
+            @click="jumpToConversationFirst"
+          >
+            <svg class="w-4 h-4" :class="{ 'animate-pulse': isJumpingToFirst }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" aria-hidden="true">
+              <path d="M5 4h14" />
+              <path d="M12 20V7" />
+              <path d="m7.5 11.5 4.5-4.5 4.5 4.5" />
+            </svg>
+          </button>
+          <button class="header-btn-icon" @click="refreshSelectedMessages" :disabled="isLoadingMessages" title="刷新消息">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+          </button>
+          <button class="header-btn-icon" @click="openExportModal" :disabled="isExportCreating" title="导出聊天记录">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="header-btn-icon"
+            :class="{ 'header-btn-icon-active': voiceSidebarOpen }"
+            :disabled="!selectedContact"
+            :aria-pressed="voiceSidebarOpen"
+            aria-label="语音转文字"
+            title="语音转文字"
+            @click="toggleVoiceSidebar"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="8" y="3" width="8" height="12" rx="4" />
+              <path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6" />
+            </svg>
+          </button>
+          <button class="header-btn-icon" :class="{ 'header-btn-icon-active': resourceSidebarOpen }" @click="toggleResourceSidebar" :disabled="!selectedContact" title="查看图片和视频资源">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <circle cx="8.5" cy="9" r="1.5" />
+              <path d="M21 15l-5-5L5 20" />
+              <path d="M14 7l4 2.5-4 2.5V7z" />
+            </svg>
+          </button>
+          <button class="header-btn-icon" :class="{ 'header-btn-icon-active': messageSearchOpen }" @click="toggleMessageSearch" :title="messageSearchOpen ? '关闭搜索 (Esc)' : '搜索聊天记录 (Ctrl+F)'">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 16 16">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.33333 12.6667C10.2789 12.6667 12.6667 10.2789 12.6667 7.33333C12.6667 4.38781 10.2789 2 7.33333 2C4.38781 2 2 4.38781 2 7.33333C2 10.2789 4.38781 12.6667 7.33333 12.6667Z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14 14L11.1 11.1" />
+            </svg>
+          </button>
+          <button class="header-btn-icon" :class="{ 'header-btn-icon-active': timeSidebarOpen }" @click="toggleTimeSidebar" :disabled="!selectedContact || isLoadingMessages" title="按日期定位">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M8 7V3m8 4V3M3 11h18" />
+              <rect x="4" y="5" width="16" height="16" rx="2" ry="2" stroke-width="1.8" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 14h2m3 0h2m3 0h2M7 18h2m3 0h2" />
+            </svg>
+          </button>
+          <select
+            v-model="messageTypeFilter"
+            class="message-filter-select"
+            :disabled="isLoadingMessages || searchContext.active"
+            :title="searchContext.active ? '上下文模式下暂不可筛选' : '筛选消息类型'"
+          >
+            <option v-for="opt in messageTypeFilterOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+          <button
+            v-if="selectedContact.isGroup"
+            type="button"
+            class="header-btn-icon"
+            :class="{ 'header-btn-icon-active': groupMembersSidebarOpen }"
+            :title="groupMembersSidebarOpen ? '关闭群成员' : '更多（群成员）'"
+            :aria-label="groupMembersSidebarOpen ? '关闭群成员' : '更多（群成员）'"
+            :aria-expanded="groupMembersSidebarOpen"
+            aria-controls="group-members-sidebar"
+            @click="toggleGroupMembersSidebar"
+          >
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="5" cy="12" r="1.8" />
+              <circle cx="12" cy="12" r="1.8" />
+              <circle cx="19" cy="12" r="1.8" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="searchContext.active" class="chat-context-banner px-6 py-2 border-b border-emerald-200 bg-emerald-50 flex items-center gap-3">
+        <div class="chat-context-banner-title text-sm text-emerald-900">
+          {{ searchContextBannerText }}
+        </div>
+        <div class="ml-auto flex items-center gap-2">
+          <button type="button" class="chat-context-banner-btn text-xs px-3 py-1 rounded-md bg-white border border-emerald-200 hover:bg-emerald-100" @click="exitSearchContext">
+            退出定位
+          </button>
+          <button type="button" class="chat-context-banner-btn2 text-xs px-3 py-1 rounded-md bg-white border border-gray-200 hover:bg-gray-50" @click="refreshSelectedMessages">
+            返回最新
+          </button>
+        </div>
+      </div>
+
+      <MessageList :state="state" />
+
+      <form class="chat-composer" @submit.prevent="openFeatureUnavailableDialog">
+        <textarea
+          class="chat-composer-input"
+          rows="2"
+          aria-label="输入要发送的微信消息"
+        />
+        <div class="chat-composer-toolbar">
+          <button type="submit" class="chat-composer-send">发送</button>
+        </div>
+      </form>
+
+      <button
+        v-if="showJumpToBottom"
+        type="button"
+        class="jump-to-bottom-btn absolute bottom-32 right-6 z-20 w-10 h-10 rounded-full border shadow flex items-center justify-center"
+        title="回到最新"
+        @click="scrollToBottom"
+      >
+        <svg class="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+    </div>
+
+    <div v-else class="conversation-empty flex-1 flex items-center justify-center">
+      <div class="text-center">
+        <div class="w-20 h-20 mx-auto mb-5 rounded-2xl bg-gradient-to-br from-[#03C160]/10 to-[#03C160]/5 flex items-center justify-center">
+          <svg class="w-10 h-10 text-[#03C160]/60" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 19.8C17.52 19.8 22 15.99 22 11.3C22 6.6 17.52 2.8 12 2.8C6.48 2.8 2 6.6 2 11.3C2 13.29 2.8 15.12 4.15 16.57C4.6 17.05 4.82 17.29 4.92 17.44C5.14 17.79 5.21 17.99 5.23 18.4C5.24 18.59 5.22 18.81 5.16 19.26C5.1 19.75 5.07 19.99 5.13 20.16C5.23 20.49 5.53 20.71 5.87 20.72C6.04 20.72 6.27 20.63 6.72 20.43L8.07 19.86C8.43 19.71 8.61 19.63 8.77 19.59C8.95 19.55 9.04 19.54 9.22 19.54C9.39 19.53 9.64 19.57 10.14 19.65C10.74 19.75 11.37 19.8 12 19.8Z"/>
+          </svg>
+        </div>
+        <h3 class="conversation-empty-title text-base font-medium mb-1.5">选择一个会话</h3>
+        <p class="conversation-empty-text text-sm">
+          从左侧列表选择联系人查看聊天记录
+        </p>
+        <button v-if="selectedAccount" type="button" class="mt-5 rounded-lg border px-4 py-2 text-sm" :aria-pressed="aiSidebarOpen" @click="toggleAiSidebar">向全部聊天提问</button>
+      </div>
+    </div>
+
+    <GuideDialog
+      :open="groupAnnouncementOpen"
+      eyebrow=""
+      title="群公告"
+      description=""
+      primary-label="关闭"
+      tone="info"
+      @primary="closeGroupAnnouncement"
+      @close="closeGroupAnnouncement"
+    >
+      <p
+        class="whitespace-pre-wrap break-words text-sm leading-7 text-[#3f4a44]"
+        :class="{ 'privacy-blur': privacyMode }"
+      >{{ groupAnnouncement }}</p>
+    </GuideDialog>
+  </div>
+</template>
+
+<script>
+import { defineComponent } from 'vue'
+import MessageList from '~/components/chat/MessageList.vue'
+
+export default defineComponent({
+  name: 'ConversationPane',
+  components: { MessageList },
+  props: {
+    state: { type: Object, required: true }
+  },
+  setup(props) {
+    return {
+      ...props.state
+    }
+  }
+})
+</script>
+
+<style scoped>
+/* 侧栏打开后给工具栏单独一行，保留聊天内容空间，避免会话名被挤成竖排。 */
+@media (min-width: 1001px) and (max-width: 1440px) {
+  .chat-header-ai { height: auto; min-height: 56px; flex-shrink: 0; flex-wrap: wrap; gap: 4px; padding-top: 8px; padding-bottom: 8px; }
+  .chat-header-ai > div:first-child { width: 100%; }
+  .chat-header-ai > div:last-child { margin-left: 0; flex-wrap: wrap; }
+}
+</style>
