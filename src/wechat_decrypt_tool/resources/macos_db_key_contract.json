@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "artifactName": "wda-xkey-macos-universal-production",
+  "appId": "wechat-data-analysis.macos",
+  "bundleRelativePath": "macos/db-key",
+  "helperFileName": "wda_xkey_helper",
+  "manifestFileName": "wda_xkey_build.json",
+  "trustFileName": "wda_xkey_trust.json",
+  "checksumsFileName": "SHA256SUMS.txt",
+  "provenanceFileName": "provenance.json",
+  "thirdPartyNoticeFileName": "THIRD_PARTY_NOTICES/FRIDA-COPYING.txt",
+  "bundleId": "com.lifearchive.wechatdataanalysis.xkey-helper",
+  "hostSigningIdentifier": "com.lifearchive.wechatdataanalysis.backend",
+  "requiredArchitectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "minimumTimeoutMs": 1000,
+  "maximumTimeoutMs": 180000
+}

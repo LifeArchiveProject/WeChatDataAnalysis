@@ -1,0 +1,691 @@
+import os
+import io
+import json
+import hashlib
+import logging
+import re
+import sqlite3
+import sys
+import unittest
+import zipfile
+import importlib
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+
+class TestChatExportHtmlFormat(unittest.TestCase):
+    _FILE_MD5 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    _VOICE_SERVER_ID = 2001
+
+    def _reload_export_modules(self):
+        import wechat_decrypt_tool.app_paths as app_paths
+        import wechat_decrypt_tool.chat_helpers as chat_helpers
+        import wechat_decrypt_tool.media_helpers as media_helpers
+        import wechat_decrypt_tool.chat_export_service as chat_export_service
+
+        importlib.reload(app_paths)
+        importlib.reload(chat_helpers)
+        importlib.reload(media_helpers)
+        importlib.reload(chat_export_service)
+        return chat_export_service
+
+    def test_mobile_export_assets_define_responsive_contract(self):
+        svc = self._reload_export_modules()
+        css_text = svc._minify_css_for_export(svc._MOBILE_EXPORT_CSS)
+
+        self.assertIn("@media(max-width:767px)", css_text)
+        self.assertIn(".wce-rail{display:none !important}", css_text)
+        self.assertIn(".wce-mobile-sessions-toggle:checked~.wce-session-panel", css_text)
+        self.assertIn("display:flex !important", css_text)
+        self.assertIn(".wce-mobile-tools-toggle:checked~.wce-chat-tools", css_text)
+        self.assertIn("height:48px", css_text)
+        self.assertIn("height:100dvh", css_text)
+        self.assertIn("env(safe-area-inset-bottom,0px)", css_text)
+        self.assertNotIn("calc(48px+env", css_text)
+
+    def test_html_export_runtime_keeps_native_integrity_payload_unchanged(self):
+        svc = self._reload_export_modules()
+        native_integrity = svc._load_wce_integrity_native()
+
+        self.assertEqual(
+            svc._html_export_runtime_js(native_integrity),
+            svc._native_text(native_integrity, "runtime_js"),
+        )
+
+    def _seed_contact_db(self, path: Path, *, account: str, username: str) -> None:
+        conn = sqlite3.connect(str(path))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE contact (
+                    username TEXT,
+                    remark TEXT,
+                    nick_name TEXT,
+                    alias TEXT,
+                    local_type INTEGER,
+                    verify_flag INTEGER,
+                    big_head_url TEXT,
+                    small_head_url TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE stranger (
+                    username TEXT,
+                    remark TEXT,
+                    nick_name TEXT,
+                    alias TEXT,
+                    local_type INTEGER,
+                    verify_flag INTEGER,
+                    big_head_url TEXT,
+                    small_head_url TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO contact VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (account, "", "我", "", 1, 0, "", ""),
+            )
+            conn.execute(
+                "INSERT INTO contact VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (username, "", "测试好友", "", 1, 0, "", ""),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _seed_session_db(self, path: Path, *, username: str) -> None:
+        conn = sqlite3.connect(str(path))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE SessionTable (
+                    username TEXT,
+                    is_hidden INTEGER,
+                    sort_timestamp INTEGER
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO SessionTable VALUES (?, ?, ?)",
+                (username, 0, 1735689600),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _seed_message_db(self, path: Path, *, account: str, username: str) -> None:
+        conn = sqlite3.connect(str(path))
+        try:
+            conn.execute("CREATE TABLE Name2Id (rowid INTEGER PRIMARY KEY, user_name TEXT)")
+            conn.execute("INSERT INTO Name2Id(rowid, user_name) VALUES (?, ?)", (1, account))
+            conn.execute("INSERT INTO Name2Id(rowid, user_name) VALUES (?, ?)", (2, username))
+
+            table_name = f"msg_{hashlib.md5(username.encode('utf-8')).hexdigest()}"
+            conn.execute(
+                f"""
+                CREATE TABLE {table_name} (
+                    local_id INTEGER,
+                    server_id INTEGER,
+                    local_type INTEGER,
+                    sort_seq INTEGER,
+                    real_sender_id INTEGER,
+                    create_time INTEGER,
+                    message_content TEXT,
+                    compress_content BLOB
+                )
+                """
+            )
+
+            image_xml = '<msg><img md5="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" cdnthumburl="img_file_id_1" /></msg>'
+            voice_xml = '<msg><voicemsg voicelength="3000" /></msg>'
+            file_md5 = self._FILE_MD5
+            file_xml = (
+                "<msg><appmsg>"
+                "<type>6</type>"
+                "<title>demo.pdf</title>"
+                "<totallen>2048</totallen>"
+                f"<md5>{file_md5}</md5>"
+                "</appmsg></msg>"
+            )
+            link_xml = (
+                "<msg><appmsg>"
+                "<type>5</type>"
+                "<title>示例链接</title>"
+                "<des>这是描述</des>"
+                "<url>https://example.com/</url>"
+                "<thumburl>https://example.com/thumb.jpg</thumburl>"
+                "<sourceusername>gh_test</sourceusername>"
+                "<sourcedisplayname>测试公众号</sourcedisplayname>"
+                "</appmsg></msg>"
+            )
+            chat_history_xml = (
+                "<msg><appmsg>"
+                "<type>19</type>"
+                "<title>聊天记录</title>"
+                "<des>记录预览</des>"
+                "<recorditem><desc>张三: hi\n李四: ok</desc></recorditem>"
+                "</appmsg></msg>"
+            )
+            transfer_xml = (
+                "<msg><appmsg>"
+                "<type>2000</type>"
+                "<title>微信转账</title>"
+                "<wcpayinfo>"
+                "<pay_memo>转账备注</pay_memo>"
+                "<feedesc>￥1.23</feedesc>"
+                "<paysubtype>3</paysubtype>"
+                "<transferid>transfer_123</transferid>"
+                "</wcpayinfo>"
+                "</appmsg></msg>"
+            )
+            red_packet_xml = (
+                "<msg><appmsg>"
+                "<type>2001</type>"
+                "<title>红包</title>"
+                "<wcpayinfo>"
+                "<sendertitle>恭喜发财，大吉大利</sendertitle>"
+                "<senderdes>微信红包</senderdes>"
+                "</wcpayinfo>"
+                "</appmsg></msg>"
+            )
+            voip_xml = (
+                "<msg><VoIPBubbleMsg>"
+                "<room_type>1</room_type>"
+                "<msg>语音通话</msg>"
+                "</VoIPBubbleMsg></msg>"
+            )
+            video_voip_xml = (
+                "<msg><VoIPBubbleMsg>"
+                "<room_type>0</room_type>"
+                "<msg>视频通话</msg>"
+                "</VoIPBubbleMsg></msg>"
+            )
+            quote_voice_xml = (
+                "<msg><appmsg>"
+                "<type>57</type>"
+                "<title>回复语音</title>"
+                "<refermsg>"
+                "<type>34</type>"
+                f"<svrid>{self._VOICE_SERVER_ID}</svrid>"
+                "<fromusr>wxid_friend</fromusr>"
+                "<displayname>测试好友</displayname>"
+                "<content>wxid_friend:3000:1:</content>"
+                "</refermsg>"
+                "</appmsg></msg>"
+            )
+            rows = [
+                (1, 1001, 3, 1, 2, 1735689601, image_xml, None),
+                (2, 1002, 1, 2, 2, 1735689602, "普通文本消息[微笑][叹气]", None),
+                (3, 1003, 49, 3, 1, 1735689603, transfer_xml, None),
+                (4, 1004, 49, 4, 2, 1735689604, red_packet_xml, None),
+                (5, 1005, 49, 5, 1, 1735689605, file_xml, None),
+                (6, 1006, 49, 6, 2, 1735689606, link_xml, None),
+                (7, 1007, 49, 7, 2, 1735689607, chat_history_xml, None),
+                (8, 1008, 50, 8, 2, 1735689608, voip_xml, None),
+                (9, self._VOICE_SERVER_ID, 34, 9, 1, 1735689609, voice_xml, None),
+                (10, 1010, 49, 10, 1, 1735689610, quote_voice_xml, None),
+                (11, 1011, 50, 11, 1, 1735689611, video_voip_xml, None),
+            ]
+            conn.executemany(
+                f"INSERT INTO {table_name} (local_id, server_id, local_type, sort_seq, real_sender_id, create_time, message_content, compress_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _seed_media_files(self, account_dir: Path) -> None:
+        resource_root = account_dir / "resource"
+        (resource_root / "aa").mkdir(parents=True, exist_ok=True)
+        (resource_root / "aa" / "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+        (resource_root / "bb").mkdir(parents=True, exist_ok=True)
+        (resource_root / "bb" / f"{self._FILE_MD5}.dat").write_bytes(b"dummy")
+
+        conn = sqlite3.connect(str(account_dir / "media_0.db"))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE VoiceInfo (
+                    svr_id INTEGER,
+                    create_time INTEGER,
+                    voice_data BLOB
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO VoiceInfo VALUES (?, ?, ?)",
+                (self._VOICE_SERVER_ID, 1735689609, b"SILK_VOICE_DATA"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _prepare_account(self, root: Path, *, account: str, username: str) -> Path:
+        account_dir = root / "output" / "databases" / account
+        account_dir.mkdir(parents=True, exist_ok=True)
+
+        self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
+        self._seed_session_db(account_dir / "session.db", username=username)
+        self._seed_message_db(account_dir / "message_0.db", account=account, username=username)
+        self._seed_media_files(account_dir)
+        return account_dir
+
+    def _insert_missing_voice_message(self, account_dir: Path, *, username: str, server_id: int, duration_ms: int) -> None:
+        conn = sqlite3.connect(str(account_dir / "message_0.db"))
+        try:
+            table_name = f"msg_{hashlib.md5(username.encode('utf-8')).hexdigest()}"
+            row = conn.execute(f"SELECT COALESCE(MAX(local_id), 0), COALESCE(MAX(sort_seq), 0) FROM {table_name}").fetchone()
+            next_local_id = int((row[0] or 0)) + 1
+            next_sort_seq = int((row[1] or 0)) + 1
+            voice_xml = f'<msg><voicemsg voicelength="{int(duration_ms)}" /></msg>'
+            conn.execute(
+                f"INSERT INTO {table_name} (local_id, server_id, local_type, sort_seq, real_sender_id, create_time, message_content, compress_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (next_local_id, int(server_id), 34, next_sort_seq, 2, 1735689700, voice_xml, None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _create_job(
+        self,
+        manager,
+        *,
+        account: str,
+        username: str,
+        transcribe_voice: bool = False,
+        export_format: str = "html",
+    ):
+        job = manager.create_job(
+            account=account,
+            source="decrypted",
+            scope="selected",
+            usernames=[username],
+            export_format=export_format,
+            start_time=None,
+            end_time=None,
+            include_hidden=False,
+            include_official=False,
+            include_media=True,
+            media_kinds=["image", "emoji", "video", "video_thumb", "voice", "file"],
+            message_types=[],
+            output_dir=None,
+            allow_process_key_extract=False,
+            download_remote_media=False,
+            privacy_mode=False,
+            file_name=None,
+            transcribe_voice=transcribe_voice,
+        )
+
+        for _ in range(200):
+            latest = manager.get_job(job.export_id)
+            if latest and latest.status in {"done", "error", "cancelled"}:
+                return latest
+            import time as _time
+
+            _time.sleep(0.05)
+        self.fail("export job did not finish in time")
+
+    def test_html_export_contains_index_and_conversation_page(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            self._prepare_account(root, account=account, username=username)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+                original_converter = svc._convert_silk_to_browser_audio
+                svc._convert_silk_to_browser_audio = (
+                    lambda data, preferred_format="mp3": (bytes(data or b""), "silk", "audio/silk")
+                )
+                try:
+                    job = self._create_job(svc.CHAT_EXPORT_MANAGER, account=account, username=username)
+                finally:
+                    svc._convert_silk_to_browser_audio = original_converter
+                self.assertEqual(job.status, "done", msg=job.error)
+
+                self.assertTrue(job.zip_path and job.zip_path.exists())
+                with zipfile.ZipFile(job.zip_path, "r") as zf:
+                    names = set(zf.namelist())
+
+                    self.assertIn("index.html", names)
+                    css_asset = next((n for n in names if n.startswith("assets/_wce/c-") and n.endswith(".css")), "")
+                    js_asset = next((n for n in names if n.startswith("assets/_wce/r-") and n.endswith(".js")), "")
+                    integrity_asset = next((n for n in names if n.startswith("assets/_wce/i-") and n.endswith(".js")), "")
+                    self.assertTrue(css_asset)
+                    self.assertTrue(js_asset)
+                    self.assertTrue(integrity_asset)
+                    self.assertNotIn("assets/wechat-chat-export.css", names)
+                    self.assertNotIn("assets/wechat-chat-export.js", names)
+
+                    manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                    self.assertEqual(manifest.get("format"), "html")
+
+                    html_path = next((n for n in names if n.endswith("/messages.html")), "")
+                    self.assertTrue(html_path)
+
+                    index_text = zf.read("index.html").decode("utf-8")
+                    html_text = zf.read(html_path).decode("utf-8")
+                    self.assertIn("viewport-fit=cover", index_text)
+                    self.assertIn('class="wce-index-heading"', index_text)
+                    self.assertIn("viewport-fit=cover", html_text)
+                    self.assertIn('class="wce-mobile-back"', html_text)
+                    self.assertIn('id="wceMobileSessionsToggle"', html_text)
+                    self.assertIn('id="wceSessionPanel"', html_text)
+                    self.assertIn('for="wceMobileSessionsToggle"', html_text)
+                    self.assertNotIn('class="wce-mobile-back" href=', html_text)
+                    self.assertIn('id="wceMobileToolsToggle"', html_text)
+                    self.assertIn('for="wceMobileToolsToggle"', html_text)
+                    self.assertIn('id="wceChatTools"', html_text)
+                    self.assertIn("wce-msg-content", html_text)
+                    self.assertIn('data-wce-rail-avatar="1"', html_text)
+                    self.assertIn('data-wce-session-list="1"', html_text)
+                    self.assertIn('id="sessionSearchInput"', html_text)
+                    self.assertIn('data-wce-time-divider="1"', html_text)
+                    self.assertIn('id="messageTypeFilter"', html_text)
+                    self.assertIn('value="chatHistory"', html_text)
+                    self.assertIn('data-wce-chat-history="1"', html_text)
+                    self.assertIn('data-record-item-b64="', html_text)
+                    self.assertIn('id="wceMediaIndex"', html_text)
+                    self.assertIn('data-wce-quote-voice-btn="1"', html_text)
+                    self.assertNotIn('title="刷新消息"', html_text)
+                    self.assertNotIn('title="导出聊天记录"', html_text)
+                    self.assertIn("搜索聊天记录", html_text)
+                    self.assertIn('id="wceDateJumpInput"', html_text)
+                    self.assertIn('id="wceBrandAttribution"', html_text)
+                    self.assertNotIn("校验</button>", html_text)
+                    self.assertIn(f"../../{integrity_asset}", html_text)
+                    self.assertIn("data-wce-sri=", html_text)
+                    self.assertNotIn(" integrity=", html_text)
+                    self.assertNotIn("朋友圈", html_text)
+                    self.assertNotIn("年度总结", html_text)
+                    self.assertNotIn("设置", html_text)
+                    self.assertNotIn("隐私模式", html_text)
+
+                    self.assertTrue(any(n.startswith("media/images/") for n in names))
+                    self.assertIn("../../media/images/", html_text)
+
+                    self.assertIn("wechat-transfer-card", html_text)
+                    self.assertIn("wechat-redpacket-card", html_text)
+                    self.assertIn("wechat-chat-history-card", html_text)
+                    self.assertIn("wechat-voip-bubble", html_text)
+                    self.assertIn("wechat-video-call.svg", html_text)
+                    self.assertIn("wechat-voip-icon--video", html_text)
+                    self.assertIn("wechat-voip-icon--mirrored", html_text)
+                    self.assertIn("wechat-link-card", html_text)
+                    self.assertIn("wechat-file-card", html_text)
+                    self.assertIn("wechat-voice-wrapper", html_text)
+
+                    css_text = zf.read(css_asset).decode("utf-8", errors="ignore")
+                    self.assertIn("wechat-transfer-card", css_text)
+                    self.assertRegex(css_text, re.compile(r"\.wechat-voice-sent(?::|::)after"))
+                    self.assertRegex(css_text, re.compile(r"\.wechat-voice-received(?::|::)before"))
+                    self.assertIn(".wechat-voip-icon--video", css_text)
+                    self.assertIn(".wechat-voip-icon--mirrored", css_text)
+                    self.assertNotIn("wechat-transfer-card[data-v-", css_text)
+                    self.assertIn("@media(max-width:767px)", css_text)
+                    self.assertIn('.wce-mobile-sessions-toggle:checked~.wce-session-panel', css_text)
+                    self.assertIn('.wce-mobile-tools-toggle:checked~.wce-chat-tools', css_text)
+                    self.assertIn("env(safe-area-inset-bottom,0px)", css_text)
+                    self.assertIn("height:100dvh", css_text)
+
+                    self.assertIn("assets/images/wechat/wechat-audio-call.svg", names)
+                    self.assertIn("assets/images/wechat/wechat-video-call.svg", names)
+                    self.assertNotIn("bento-container", css_text)
+
+                    js_text = zf.read(js_asset).decode("utf-8", errors="ignore")
+                    self.assertIn("Function", js_text)
+                    self.assertIn("atob", js_text)
+                    self.assertNotIn("wceMobileToolsToggle", js_text)
+                    self.assertNotIn("wechat-voice-bubble", js_text)
+                    self.assertNotIn("voice-playing", js_text)
+                    self.assertNotIn("data-wce-quote-voice-btn", js_text)
+
+                    integrity_text = zf.read(integrity_asset).decode("utf-8", errors="ignore")
+                    self.assertIn("__','WCE','_I", integrity_text)
+                    self.assertNotIn("manifest.json", integrity_text)
+                    self.assertNotIn("messages.html", integrity_text)
+
+                    self.assertIn("assets/images/wechat/wechat-trans-icon1.png", names)
+                    self.assertIn("assets/images/wechat/zip.png", names)
+                    self.assertIn("assets/images/wechat/WeChat-Icon-Logo.wine.svg", names)
+                    self.assertIn("wxemoji/wechat-emojis.json", names)
+                    self.assertIn("wxemoji/Expression_1@2x.png", names)
+                    self.assertIn("wxemoji/new/Sigh.png", names)
+                    self.assertIn("../../wxemoji/Expression_1@2x.png", html_text)
+                    self.assertIn("../../wxemoji/new/Sigh.png", html_text)
+            finally:
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_html_export_prefers_mp3_for_voice_assets(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            self._prepare_account(root, account=account, username=username)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+
+                original_converter = svc._convert_silk_to_browser_audio
+                svc._convert_silk_to_browser_audio = (
+                    lambda data, preferred_format="mp3": (b"ID3FAKE_MP3_DATA", "mp3", "audio/mpeg")
+                )
+                try:
+                    job = self._create_job(svc.CHAT_EXPORT_MANAGER, account=account, username=username)
+                finally:
+                    svc._convert_silk_to_browser_audio = original_converter
+
+                self.assertEqual(job.status, "done", msg=job.error)
+
+                self.assertTrue(job.zip_path and job.zip_path.exists())
+                with zipfile.ZipFile(job.zip_path, "r") as zf:
+                    names = set(zf.namelist())
+                    voice_path = f"media/voices/voice_{self._VOICE_SERVER_ID}.mp3"
+                    self.assertIn(voice_path, names)
+                    self.assertNotIn(f"media/voices/voice_{self._VOICE_SERVER_ID}.wav", names)
+
+                    html_path = next((n for n in names if n.endswith("/messages.html")), "")
+                    self.assertTrue(html_path)
+                    html_text = zf.read(html_path).decode("utf-8")
+                    self.assertIn(f"../../{voice_path}", html_text)
+            finally:
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_html_export_keeps_voice_audio_and_adds_whisper_transcript(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            self._prepare_account(root, account=account, username=username)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+                original_converter = svc._convert_silk_to_browser_audio
+                original_service_getter = svc.get_voice_transcription_service
+                svc._convert_silk_to_browser_audio = (
+                    lambda data, preferred_format="mp3": (b"ID3FAKE_MP3_DATA", "mp3", "audio/mpeg")
+                )
+
+                class FakeTranscriptionService:
+                    @staticmethod
+                    def transcribe_voice(**_kwargs):
+                        return {
+                            "status": "success",
+                            "text": "下午三点把资料准备好",
+                            "language": "zh",
+                            "model": "small",
+                            "duration": 3.0,
+                            "cached": False,
+                        }
+
+                svc.get_voice_transcription_service = lambda: FakeTranscriptionService()
+                try:
+                    job = self._create_job(
+                        svc.CHAT_EXPORT_MANAGER,
+                        account=account,
+                        username=username,
+                        transcribe_voice=True,
+                    )
+                finally:
+                    svc._convert_silk_to_browser_audio = original_converter
+                    svc.get_voice_transcription_service = original_service_getter
+
+                self.assertEqual(job.status, "done", msg=job.error)
+                with zipfile.ZipFile(job.zip_path, "r") as zf:
+                    names = set(zf.namelist())
+                    voice_path = f"media/voices/voice_{self._VOICE_SERVER_ID}.mp3"
+                    self.assertIn(voice_path, names)
+                    html_path = next((n for n in names if n.endswith("/messages.html")), "")
+                    html_text = zf.read(html_path).decode("utf-8")
+                    self.assertIn("下午三点把资料准备好", html_text)
+                    self.assertIn(f"../../{voice_path}", html_text)
+                    voice_wrapper_start = html_text.index('class="wechat-voice-wrapper')
+                    voice_bubble_start = html_text.index('class="wechat-voice-bubble', voice_wrapper_start)
+                    transcript_start = html_text.index('class="wechat-voice-transcript', voice_bubble_start)
+                    self.assertLess(voice_wrapper_start, voice_bubble_start)
+                    self.assertLess(voice_bubble_start, transcript_start)
+                    css_path = next((n for n in names if n.startswith("assets/_wce/c-") and n.endswith(".css")), "")
+                    self.assertTrue(css_path)
+                    css_text = zf.read(css_path).decode("utf-8")
+                    self.assertIn(".wechat-voice-transcript", css_text)
+                    self.assertIn(
+                        ".wechat-voice-wrapper{display:flex;flex-direction:column",
+                        "".join(css_text.split()),
+                    )
+                    manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                    self.assertTrue(manifest["options"]["transcribeVoice"])
+                    report = json.loads(zf.read("report.json").decode("utf-8"))
+                    self.assertEqual(report["voiceTranscription"]["success"], 1)
+            finally:
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_voice_transcript_is_shared_by_json_txt_and_excel_exports(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            self._prepare_account(root, account=account, username=username)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+                original_service_getter = svc.get_voice_transcription_service
+
+                class FakeTranscriptionService:
+                    @staticmethod
+                    def transcribe_voice(**_kwargs):
+                        return {
+                            "status": "success",
+                            "text": "后台服务已经启动",
+                            "language": "zh",
+                            "model": "small",
+                            "duration": 3.0,
+                            "cached": False,
+                        }
+
+                svc.get_voice_transcription_service = lambda: FakeTranscriptionService()
+                try:
+                    for export_format in ("json", "txt", "excel"):
+                        with self.subTest(export_format=export_format):
+                            job = self._create_job(
+                                svc.CHAT_EXPORT_MANAGER,
+                                account=account,
+                                username=username,
+                                transcribe_voice=True,
+                                export_format=export_format,
+                            )
+                            self.assertEqual(job.status, "done", msg=job.error)
+                            with zipfile.ZipFile(job.zip_path, "r") as archive:
+                                message_path = next(
+                                    name
+                                    for name in archive.namelist()
+                                    if name.endswith(f"/messages.{export_format if export_format != 'excel' else 'xlsx'}")
+                                )
+                                payload = archive.read(message_path)
+                                if export_format == "json":
+                                    messages = json.loads(payload.decode("utf-8"))["messages"]
+                                    voice = next(item for item in messages if item.get("renderType") == "voice")
+                                    rendered = str(voice.get("voiceTranscript") or "")
+                                elif export_format == "txt":
+                                    rendered = payload.decode("utf-8-sig")
+                                else:
+                                    with zipfile.ZipFile(io.BytesIO(payload), "r") as workbook:
+                                        rendered = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                                self.assertIn("后台服务已经启动", rendered)
+                                self.assertNotIn("後臺服務已經啟動", rendered)
+                finally:
+                    svc.get_voice_transcription_service = original_service_getter
+            finally:
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_html_export_keeps_voice_bubble_when_audio_file_missing(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            account_dir = self._prepare_account(root, account=account, username=username)
+            self._insert_missing_voice_message(account_dir, username=username, server_id=999999, duration_ms=6543)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                svc = self._reload_export_modules()
+                original_converter = svc._convert_silk_to_browser_audio
+                svc._convert_silk_to_browser_audio = (
+                    lambda data, preferred_format="mp3": (bytes(data or b""), "silk", "audio/silk")
+                )
+                try:
+                    job = self._create_job(svc.CHAT_EXPORT_MANAGER, account=account, username=username)
+                finally:
+                    svc._convert_silk_to_browser_audio = original_converter
+                self.assertEqual(job.status, "done", msg=job.error)
+
+                self.assertTrue(job.zip_path and job.zip_path.exists())
+                with zipfile.ZipFile(job.zip_path, "r") as zf:
+                    names = set(zf.namelist())
+                    html_path = next((n for n in names if n.endswith("/messages.html")), "")
+                    self.assertTrue(html_path)
+                    html_text = zf.read(html_path).decode("utf-8")
+                    self.assertIn("wechat-voice-wrapper", html_text)
+                    self.assertIn('data-render-type="voice"', html_text)
+                    self.assertRegex(
+                        html_text,
+                        re.compile(r'data-voice-id="message_0:msg_d5616d78f22fe35c632f66cabecfc82d:\d+"'),
+                    )
+                    self.assertIn('class="wechat-voice-duration">7"</span>', html_text)
+            finally:
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
