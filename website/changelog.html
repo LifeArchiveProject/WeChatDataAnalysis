@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>更新日志 — WeChatDataAnalysis 高级版</title>
+<meta name="description" content="WeChatDataAnalysis 高级版每次发布的变化：新增、优化与修复，按版本与平台列出。">
+<meta property="og:title" content="更新日志 — WeChatDataAnalysis 高级版">
+<meta property="og:description" content="高级版每次发布的变化：新增、优化与修复，按版本与平台列出。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://lifearchiveproject.github.io/WeChatDataAnalysis/changelog">
+<meta property="og:image" content="https://lifearchiveproject.github.io/WeChatDataAnalysis/assets/img/og.jpg">
+<link rel="canonical" href="https://lifearchiveproject.github.io/WeChatDataAnalysis/changelog">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#f4f4f7">
+<!-- 主题（浅 / 深）：放在样式表之前，首帧前就定好 <html data-theme>——先看记住的选择（localStorage wda.theme：light | dark），没有就跟随系统；
+     同步改上面两个 meta（地址栏颜色、默认画布与滚动条），深色访客不先闪一下白。点击切换、跟随系统变化见 main.js 第 6b 节；读不到存储就跟随系统 -->
+<script>(function () { var t = null, r = document.documentElement, m; try { t = localStorage.getItem("wda.theme"); } catch (e) { t = null; } if (t !== "light" && t !== "dark") { try { t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; } catch (e) { t = "light"; } } r.setAttribute("data-theme", t); m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute("content", t === "dark" ? "#0c0e18" : "#f4f4f7"); m = document.querySelector('meta[name="color-scheme"]'); if (m) m.setAttribute("content", t); })();</script>
+<link rel="icon" href="favicon.ico" sizes="32x32">
+<link rel="icon" href="assets/img/logo-96.webp" type="image/webp">
+<link rel="apple-touch-icon" href="assets/img/logo-180.png">
+<link rel="preload" href="assets/fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/css/main.css">
+<link rel="stylesheet" href="assets/css/changelog.css">
+<link rel="preload" href="assets/data/changelog.json" as="fetch" crossorigin>
+<script>window.__errs = []; addEventListener("error", function (e) { __errs.push(String(e.message)); }); addEventListener("unhandledrejection", function (e) { __errs.push(String(e.reason)); });</script>
+<script type="module" src="assets/js/changelog.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<!-- 图标（与首页同一套细线画法） -->
+<svg class="sprite" aria-hidden="true" width="0" height="0" focusable="false">
+  <defs>
+    <symbol id="i-gh" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.8l2.5 5.1 5.6.8-4.05 3.95.96 5.6L12 16.6l-5.01 2.64.96-5.6L3.9 9.7l5.6-.8z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.1M12 19.3v2.1M2.6 12h2.1M19.3 12h2.1M5.35 5.35l1.5 1.5M17.15 17.15l1.5 1.5M5.35 18.65l1.5-1.5M17.15 6.85l1.5-1.5"/></g></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.2 14.6A8.4 8.4 0 0 1 9.4 3.8a8.4 8.4 0 1 0 10.8 10.8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<!-- ───────── 导航：与首页同一条（锚点改成回首页的对应区块，「更新日志」是当前页） ───────── -->
+<header class="nav" id="nav">
+  <div class="nav__in wrap">
+    <a class="nav__brand" href="./" aria-label="WeChatDataAnalysis 首页"><img src="assets/img/logo-96.webp" width="24" height="24" alt=""><span>WeChatDataAnalysis</span></a>
+    <nav class="nav__links" aria-label="页面导航">
+      <a href="./#compare">权益对比</a>
+      <a href="./#get">获取</a>
+      <a href="changelog" class="on" aria-current="page">更新日志</a>
+    </nav>
+    <div class="nav__act">
+      <a class="nav__gh" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis" target="_blank" rel="noopener" aria-label="GitHub 仓库"><svg class="ic" aria-hidden="true"><use href="#i-gh"/></svg><span class="nav__gh-t">GitHub</span><span class="nav__stars" data-gh-stars aria-hidden="true"><svg class="ic" aria-hidden="true"><use href="#i-star"/></svg><b></b></span></a>
+      <button class="nav__theme" type="button" data-theme-toggle aria-label="切换到深色模式"><svg class="ic ic--moon" aria-hidden="true"><use href="#i-moon"/></svg><svg class="ic ic--sun" aria-hidden="true"><use href="#i-sun"/></svg></button>
+      <a class="btn btn--pri nav__cta" href="./#get">免费试用</a>
+      <button class="nav__menu" type="button" aria-expanded="false" aria-controls="menu" aria-label="打开菜单"><i></i><i></i></button>
+    </div>
+  </div>
+  <div class="menu" id="menu" hidden>
+    <nav class="menu__links wrap" aria-label="页面导航（手机）">
+      <a href="./#compare"><em>01</em>权益对比<svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a href="./#get"><em>02</em>获取<svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a href="changelog" class="on" aria-current="page"><em>03</em>更新日志<svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a href="https://github.com/LifeArchiveProject/WeChatDataAnalysis" target="_blank" rel="noopener"><em><svg class="ic" aria-hidden="true"><use href="#i-gh"/></svg></em>GitHub<span class="menu__stars" data-gh-stars aria-hidden="true"><svg class="ic" aria-hidden="true"><use href="#i-star"/></svg><b></b></span><svg class="ic" aria-hidden="true"><use href="#i-ext"/></svg></a>
+    </nav>
+    <div class="menu__pref wrap">
+      <button class="menu__theme" type="button" role="switch" aria-checked="false" data-theme-toggle><em><svg class="ic" aria-hidden="true"><use href="#i-moon"/></svg></em>深色模式<i aria-hidden="true"></i></button>
+    </div>
+    <div class="menu__cta wrap">
+      <a class="btn btn--pri" href="./#get">免费试用高级版</a>
+      <a class="btn btn--sec" href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases" target="_blank" rel="noopener">免费下载普通版</a>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="cl">
+  <!-- 标题区：左标题 + 说明，右三项计数（changelog.js 按数据填） -->
+  <header class="cl-head wrap">
+    <div>
+      <p class="cl-head__eb"><span class="pro">PRO</span>WeChatDataAnalysis 高级版</p>
+      <h1>更新日志</h1>
+      <p class="cl-head__sub">高级版每次发布的变化，从新到旧排列：新增了什么、哪里更好用、修好了什么。</p>
+    </div>
+    <dl class="cl-stats" id="cl-stats" aria-live="polite">
+      <div><dt>版本</dt><dd data-stat="releases">—</dd></div>
+      <div><dt>变化</dt><dd data-stat="changes">—</dd></div>
+      <div><dt>最近更新</dt><dd data-stat="latest">—</dd></div>
+    </dl>
+  </header>
+
+  <!-- 筛选条（吸在导航下面）：平台、变化类型；选项后的数字是当前条件下的条数 -->
+  <div class="cl-bar" id="cl-bar">
+    <div class="cl-bar__in wrap">
+      <div class="seg" role="radiogroup" aria-label="按平台筛选" data-filter="pf">
+        <button type="button" role="radio" aria-checked="true" data-v="">全部<i></i></button>
+        <button type="button" role="radio" aria-checked="false" data-v="windows">Windows<i></i></button>
+        <button type="button" role="radio" aria-checked="false" data-v="macos">macOS<i></i></button>
+        <button type="button" role="radio" aria-checked="false" data-v="linux">Linux<i></i></button>
+      </div>
+      <div class="seg" role="radiogroup" aria-label="按变化类型筛选" data-filter="t">
+        <button type="button" role="radio" aria-checked="true" data-v="">全部<i></i></button>
+        <button type="button" role="radio" aria-checked="false" data-v="feature"><span class="ty ty--feature" aria-hidden="true"></span>新增<i></i></button>
+        <button type="button" role="radio" aria-checked="false" data-v="improve"><span class="ty ty--improve" aria-hidden="true"></span>优化<i></i></button>
+        <button type="button" role="radio" aria-checked="false" data-v="fix"><span class="ty ty--fix" aria-hidden="true"></span>修复<i></i></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 时间线（changelog.js 从 assets/data/changelog.json 渲染） -->
+  <section class="cl-list wrap" id="cl-list" aria-label="版本列表"></section>
+  <p class="cl-empty wrap" id="cl-empty" hidden>没有符合条件的更新。</p>
+  <noscript><p class="cl-empty wrap">更新日志需要启用 JavaScript 才能显示。</p></noscript>
+</main>
+
+<footer class="foot">
+  <div class="foot__in wrap">
+    <a class="nav__brand" href="./"><img src="assets/img/logo-96.webp" width="22" height="22" alt=""><span>WeChatDataAnalysis</span></a>
+    <nav class="foot__links" aria-label="页脚链接">
+      <a href="changelog" aria-current="page">更新日志</a>
+      <a href="https://github.com/LifeArchiveProject/WeChatDataAnalysis" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases" target="_blank" rel="noopener">下载普通版</a>
+      <a href="https://t.me/+IQKBDeXtaKozZWYx" target="_blank" rel="noopener">Telegram 群</a>
+    </nav>
+    <p class="foot__legal">© 2026 LifeArchiveProject · 仅限处理你本人合法持有的数据，请遵守当地法律法规 · 本项目为非官方工具，与微信、腾讯及其关联主体不存在隶属、授权、合作或认可关系。</p>
+  </div>
+</footer>
+</body>
+</html>

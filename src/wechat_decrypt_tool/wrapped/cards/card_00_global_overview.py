@@ -1,0 +1,1356 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import sqlite3
+import time
+from collections import Counter
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Optional
+
+from .card_01_cyber_schedule import WeekdayHourHeatmap, compute_weekday_hour_heatmap
+from ...chat_search_index import get_chat_search_index_db_path, get_chat_search_index_status
+from ...chat_helpers import (
+    _build_avatar_url,
+    _decode_sqlite_text,
+    _iter_message_db_paths,
+    _load_contact_rows,
+    _pick_display_name,
+    _quote_ident,
+    _should_keep_session,
+    _to_char_token_text,
+)
+from ...logging_config import get_logger
+from .. import resolve_wrapped_self_username
+
+logger = get_logger(__name__)
+
+
+_MD5_HEX_RE = re.compile(r"(?i)[0-9a-f]{32}")
+# Best-effort heuristics for "new friends added" detection: WeChat system messages vary by version.
+_ADDED_FRIEND_PATTERNS: tuple[str, ...] = (
+    "你已添加了",
+    "你添加了",
+    "现在可以开始聊天了",
+    "以上是打招呼的消息",
+    "通过了你的朋友验证",
+    "通过你的朋友验证",
+)
+
+
+@dataclass(frozen=True)
+class GlobalOverviewStats:
+    year: int
+    active_days: int
+    added_friends: int
+    local_type_counts: dict[int, int]
+    kind_counts: dict[str, int]
+    latest_ts: int
+    top_phrase: Optional[tuple[str, int]]
+    top_emoji: Optional[tuple[str, int]]
+    top_contact: Optional[tuple[str, int]]
+    top_group: Optional[tuple[str, int]]
+
+
+def _year_range_epoch_seconds(year: int) -> tuple[int, int]:
+    # Keep the same semantics as other parts of the project: local time boundaries.
+    start = int(datetime(year, 1, 1).timestamp())
+    end = int(datetime(year + 1, 1, 1).timestamp())
+    return start, end
+
+
+def _days_in_year(year: int) -> int:
+    try:
+        return int((datetime(int(year) + 1, 1, 1) - datetime(int(year), 1, 1)).days)
+    except Exception:
+        return 365
+
+
+def _list_message_tables(conn: sqlite3.Connection) -> list[str]:
+    try:
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    except Exception:
+        return []
+    names: list[str] = []
+    for r in rows:
+        if not r or not r[0]:
+            continue
+        name = _decode_sqlite_text(r[0]).strip()
+        if not name:
+            continue
+        ln = name.lower()
+        if ln.startswith(("msg_", "chat_")):
+            names.append(name)
+    return names
+
+
+def _message_table_usernames(
+    conn: sqlite3.Connection, table_names: list[str]
+) -> dict[str, str]:
+    """Best-effort map from hashed message table name to conversation username."""
+
+    known_tables = {name.lower() for name in table_names}
+    rows: list[tuple[Any, ...]] = []
+    for column in ("user_name", "username"):
+        try:
+            rows = conn.execute(f"SELECT {_quote_ident(column)} FROM Name2Id").fetchall()
+            break
+        except Exception:
+            continue
+
+    result: dict[str, str] = {}
+    for row in rows:
+        if not row:
+            continue
+        username = _decode_sqlite_text(row[0]).strip()
+        if not username:
+            continue
+        digest = hashlib.md5(username.encode("utf-8")).hexdigest()
+        for prefix in ("msg_", "chat_"):
+            table_name = f"{prefix}{digest}".lower()
+            if table_name in known_tables:
+                result[table_name] = username
+    return result
+
+
+def _accumulate_db_daily_counts(
+    *,
+    db_path: Path,
+    start_ts: int,
+    end_ts: int,
+    counts: list[int],
+    sender_username: str | None = None,
+) -> int:
+    """Accumulate per-day message counts from one message shard DB into counts list.
+
+    Returns the number of messages counted.
+    """
+
+    if not db_path.exists():
+        return 0
+
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+
+        tables = _list_message_tables(conn)
+        if not tables:
+            return 0
+        table_usernames = (
+            _message_table_usernames(conn, tables) if not sender_username else {}
+        )
+
+        # Convert millisecond timestamps defensively.
+        # The expression yields epoch seconds as INTEGER.
+        ts_expr = (
+            "CASE WHEN create_time > 1000000000000 THEN CAST(create_time/1000 AS INTEGER) ELSE create_time END"
+        )
+
+        # Optional sender filter (best-effort). When provided, we only count
+        # messages whose `real_sender_id` maps to `sender_username`.
+        sender_rowid: int | None = None
+        if sender_username and str(sender_username).strip():
+            try:
+                r = conn.execute(
+                    "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
+                    (str(sender_username).strip(),),
+                ).fetchone()
+                if r is not None and r[0] is not None:
+                    sender_rowid = int(r[0])
+            except Exception:
+                sender_rowid = None
+
+        counted = 0
+        for table_name in tables:
+            conversation = table_usernames.get(table_name.lower(), "")
+            if conversation and not _should_keep_session(
+                conversation, include_official=False
+            ):
+                continue
+            qt = _quote_ident(table_name)
+            sender_where = ""
+            params: tuple[Any, ...]
+            if sender_rowid is not None:
+                sender_where = " AND real_sender_id = ?"
+                params = (start_ts, end_ts, sender_rowid)
+            else:
+                params = (start_ts, end_ts)
+
+            sql = (
+                "SELECT CAST(strftime('%j', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) - 1 AS doy, "
+                "COUNT(1) AS cnt "
+                "FROM ("
+                f"  SELECT {ts_expr} AS ts"
+                f"  FROM {qt}"
+                f"  WHERE {ts_expr} >= ? AND {ts_expr} < ?{sender_where}"
+                ") sub "
+                "GROUP BY doy"
+            )
+
+            try:
+                rows = conn.execute(sql, params).fetchall()
+            except Exception:
+                continue
+
+            for doy, cnt in rows:
+                try:
+                    d = int(doy if doy is not None else -1)
+                    c = int(cnt or 0)
+                except Exception:
+                    continue
+                if c <= 0 or d < 0 or d >= len(counts):
+                    continue
+                counts[d] += c
+                counted += c
+
+        return counted
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+def compute_annual_daily_counts(*, account_dir: Path, year: int, sender_username: str | None = None) -> list[int]:
+    """Compute per-day message counts for the given year.
+
+    The output is a 0-indexed day-of-year list (length 365/366). Counts default to
+    "messages sent by me" when sender_username is provided.
+    """
+
+    start_ts, end_ts = _year_range_epoch_seconds(year)
+    days = _days_in_year(year)
+    counts: list[int] = [0 for _ in range(days)]
+
+    sender = str(sender_username or "").strip()
+
+    # Prefer using our unified search index if available; it's much faster than scanning all msg tables.
+    index_path = get_chat_search_index_db_path(account_dir)
+    try:
+        index_status = get_chat_search_index_status(account_dir, source="auto")
+        index_up_to_date = bool((index_status.get("index") or {}).get("upToDate"))
+    except Exception:
+        index_up_to_date = False
+    if index_up_to_date and index_path.exists():
+        conn = sqlite3.connect(str(index_path))
+        try:
+            has_fts = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_fts' LIMIT 1"
+                ).fetchone()
+                is not None
+            )
+            if has_fts:
+                # Convert millisecond timestamps defensively (some datasets store ms).
+                ts_expr = (
+                    "CASE "
+                    "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+                    "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+                    "ELSE CAST(create_time AS INTEGER) "
+                    "END"
+                )
+                t0 = time.time()
+                try:
+                    if sender:
+                        sql = (
+                            "SELECT "
+                            "CAST(strftime('%j', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) - 1 AS doy, "
+                            "COUNT(1) AS cnt "
+                            "FROM ("
+                            f"  SELECT {ts_expr} AS ts"
+                            "  FROM message_fts"
+                            f"  WHERE {ts_expr} >= ? AND {ts_expr} < ?"
+                            "    AND db_stem NOT LIKE 'biz_message%'"
+                            "    AND sender_username = ?"
+                            ") sub GROUP BY doy"
+                        )
+                        rows = conn.execute(sql, (start_ts, end_ts, sender)).fetchall()
+                        rows_with_username = False
+                    else:
+                        columns = {
+                            str(row[1]).strip().lower()
+                            for row in conn.execute("PRAGMA table_info(message_fts)").fetchall()
+                            if len(row) > 1 and row[1]
+                        }
+                        rows_with_username = "username" in columns
+                        username_select = ", username" if rows_with_username else ""
+                        username_group = "username, " if rows_with_username else ""
+                        sql = (
+                            f"SELECT {username_group}"
+                            "CAST(strftime('%j', datetime(ts, 'unixepoch', 'localtime')) AS INTEGER) - 1 AS doy, "
+                            "COUNT(1) AS cnt "
+                            "FROM ("
+                            f"  SELECT {ts_expr} AS ts{username_select}"
+                            "  FROM message_fts"
+                            f"  WHERE {ts_expr} >= ? AND {ts_expr} < ?"
+                            "    AND db_stem NOT LIKE 'biz_message%'"
+                            f") sub GROUP BY {username_group}doy"
+                        )
+                        rows = conn.execute(sql, (start_ts, end_ts)).fetchall()
+                except Exception:
+                    rows = []
+                    rows_with_username = False
+
+                total = 0
+                for r in rows:
+                    if not r:
+                        continue
+                    try:
+                        if rows_with_username:
+                            username = str(r[0] or "").strip()
+                            if not _should_keep_session(username, include_official=False):
+                                continue
+                            doy = int(r[1] if r[1] is not None else -1)
+                            cnt = int(r[2] or 0)
+                        else:
+                            doy = int(r[0] if r[0] is not None else -1)
+                            cnt = int(r[1] or 0)
+                    except Exception:
+                        continue
+                    if cnt <= 0 or doy < 0 or doy >= days:
+                        continue
+                    counts[doy] += cnt
+                    total += cnt
+
+                logger.info(
+                    "Wrapped annual heatmap computed (search index): account=%s year=%s total=%s sender=%s db=%s elapsed=%.2fs",
+                    str(account_dir.name or "").strip(),
+                    year,
+                    total,
+                    sender or "*",
+                    str(index_path.name),
+                    time.time() - t0,
+                )
+
+                return counts
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    db_paths = _iter_message_db_paths(account_dir)
+    # Default: exclude official/biz shards (biz_message*.db) to reduce noise.
+    db_paths = [p for p in db_paths if not p.name.lower().startswith("biz_message")]
+    my_wxid = str(account_dir.name or "").strip()
+    t0 = time.time()
+    total = 0
+    for db_path in db_paths:
+        total += _accumulate_db_daily_counts(
+            db_path=db_path,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            counts=counts,
+            sender_username=sender or None,
+        )
+
+    logger.info(
+        "Wrapped annual heatmap computed: account=%s year=%s total=%s sender=%s dbs=%s elapsed=%.2fs",
+        my_wxid,
+        year,
+        total,
+        sender or "*",
+        len(db_paths),
+        time.time() - t0,
+    )
+
+    return counts
+
+
+def _list_session_usernames(session_db_path: Path) -> list[str]:
+    if not session_db_path.exists():
+        return []
+
+    conn = sqlite3.connect(str(session_db_path))
+    try:
+        try:
+            rows = conn.execute("SELECT username FROM SessionTable").fetchall()
+        except sqlite3.OperationalError:
+            rows = conn.execute("SELECT username FROM Session").fetchall()
+    except Exception:
+        rows = []
+    finally:
+        conn.close()
+
+    out: list[str] = []
+    for r in rows:
+        if not r or not r[0]:
+            continue
+        u = str(r[0]).strip()
+        if u:
+            out.append(u)
+    return out
+
+
+def _mask_name(name: str) -> str:
+    s = str(name or "").strip()
+    if not s:
+        return ""
+    # 全星号：不保留任何原字符，长度封顶 6，数字类信息不经过本函数
+    return "*" * max(1, min(len(s), 6))
+
+
+def _normalize_phrase(v: Any) -> str:
+    s = _decode_sqlite_text(v).strip()
+    if not s:
+        return ""
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s:
+        return ""
+    if len(s) > 12:
+        return ""
+    lower = s.lower()
+    if "http://" in lower or "https://" in lower:
+        return ""
+    if s.startswith("<"):
+        return ""
+    # Avoid pure punctuation / numbers.
+    if not re.search(r"[\u4e00-\u9fffA-Za-z]", s):
+        return ""
+    return s
+
+
+def _normalize_emoji(v: Any) -> str:
+    s = _decode_sqlite_text(v).strip()
+    if not s:
+        return ""
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s or len(s) > 48:
+        return ""
+    if s.startswith("<"):
+        return ""
+    # If it is an md5 or some opaque token, don't show it.
+    if re.fullmatch(r"(?i)[0-9a-f]{32}", s):
+        return ""
+    return s
+
+
+def _kind_from_local_type(t: int) -> str:
+    # See `_infer_local_type` in chat_helpers for known values.
+    if t == 1:
+        return "text"
+    if t == 3:
+        return "image"
+    if t == 34:
+        return "voice"
+    if t == 43:
+        return "video"
+    if t == 47:
+        return "emoji"
+    if t in (49, 17179869233, 21474836529, 154618822705, 12884901937, 270582939697):
+        return "link"
+    if t == 25769803825:
+        return "file"
+    if t == 10000:
+        return "system"
+    if t == 50:
+        return "voip"
+    if t == 244813135921:
+        return "quote"
+    if t == 8594229559345:
+        return "red_packet"
+    if t == 8589934592049:
+        return "transfer"
+    if t == 266287972401:
+        return "pat"
+    return "other"
+
+
+def _weekday_name_zh(weekday_index: int) -> str:
+    labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    if 0 <= weekday_index < len(labels):
+        return labels[weekday_index]
+    return ""
+
+
+def _readable_index_text(token_text: Any, payload_json: Any, *, max_len: int = 60) -> str:
+    """Recover readable message text from a search-index row.
+
+    `message_fts.text` stores char-tokenized text (lowercased, whitespace removed,
+    chars joined by single spaces). Prefer the original content preserved in
+    `payload_json` (newer indexes); fall back to de-tokenizing.
+    """
+
+    content = ""
+    try:
+        obj = json.loads(_decode_sqlite_text(payload_json))
+        if isinstance(obj, dict):
+            content = str(obj.get("content") or "").strip()
+    except Exception:
+        content = ""
+
+    if content:
+        s = re.sub(r"\s+", " ", content).strip()
+    else:
+        s = "".join(ch for ch in _decode_sqlite_text(token_text) if not ch.isspace())
+
+    if not s:
+        return ""
+    if len(s) > max_len:
+        s = s[:max_len]
+    return s
+
+
+def _compute_peak_day_details(
+    *,
+    account_dir: Path,
+    year: int,
+    doy: int,
+    sender_username: str | None,
+) -> dict[str, Any]:
+    """Best-effort details for the peak day (top conversation + my first/last text).
+
+    Only implemented on top of the unified search index; when the index is
+    missing, all fields stay None and the frontend hides them.
+    """
+
+    out: dict[str, Any] = {
+        "topContact": None,
+        "firstTime": None,
+        "firstText": None,
+        "lastTime": None,
+        "lastText": None,
+    }
+
+    try:
+        day_dt = datetime(int(year), 1, 1) + timedelta(days=int(doy))
+        next_dt = day_dt + timedelta(days=1)
+        day_start = int(datetime(day_dt.year, day_dt.month, day_dt.day).timestamp())
+        day_end = int(datetime(next_dt.year, next_dt.month, next_dt.day).timestamp())
+    except Exception:
+        return out
+
+    index_path = get_chat_search_index_db_path(account_dir)
+    if not index_path.exists():
+        return out
+
+    sender = str(sender_username or "").strip()
+
+    conn = sqlite3.connect(str(index_path))
+    try:
+        has_fts = (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_fts' LIMIT 1"
+            ).fetchone()
+            is not None
+        )
+        if not has_fts:
+            return out
+
+        # Convert millisecond timestamps defensively (some datasets store ms).
+        ts_expr = (
+            "CASE "
+            "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+            "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+            "ELSE CAST(create_time AS INTEGER) "
+            "END"
+        )
+        where = f"{ts_expr} >= ? AND {ts_expr} < ? AND db_stem NOT LIKE 'biz_message%'"
+        params: tuple[Any, ...] = (day_start, day_end)
+
+        # 当日消息最多的会话（含群，双向计数）。
+        try:
+            rows_u = conn.execute(
+                f"SELECT username, COUNT(1) AS cnt FROM message_fts WHERE {where} "
+                "GROUP BY username ORDER BY cnt DESC, username ASC LIMIT 50",
+                params,
+            ).fetchall()
+        except Exception:
+            rows_u = []
+
+        top_username = ""
+        top_count = 0
+        for rr in rows_u:
+            if not rr or not rr[0]:
+                continue
+            u = str(rr[0] or "").strip()
+            try:
+                cnt = int(rr[1] or 0)
+            except Exception:
+                cnt = 0
+            if not u or cnt <= 0:
+                continue
+            if not _should_keep_session(u, include_official=False):
+                continue
+            top_username, top_count = u, cnt
+            break
+
+        if top_username:
+            contact_rows = _load_contact_rows(account_dir / "contact.db", [top_username])
+            row = contact_rows.get(top_username)
+            display = _pick_display_name(row, top_username)
+            out["topContact"] = {
+                "username": top_username,
+                "displayName": display,
+                "maskedName": _mask_name(display),
+                "avatarUrl": _build_avatar_url(str(account_dir.name or ""), top_username),
+                "messages": int(top_count),
+                "isGroup": top_username.endswith("@chatroom"),
+            }
+
+        # 当日本人发出的首/末条文本消息。
+        if sender:
+            where_text = (
+                where
+                + " AND sender_username = ? AND render_type = 'text' "
+                + "AND \"text\" IS NOT NULL AND TRIM(CAST(\"text\" AS TEXT)) != ''"
+            )
+            params_text = (day_start, day_end, sender)
+
+            def fetch_edge(order: str) -> Optional[tuple[int, str]]:
+                # payload_json 仅新版索引存在；缺列时退化为只取 token text。
+                for cols in ('"text", payload_json', '"text"'):
+                    sql = (
+                        f"SELECT {ts_expr} AS ts, {cols} FROM message_fts "
+                        f"WHERE {where_text} "
+                        f"ORDER BY ts {order}, CAST(sort_seq AS INTEGER) {order} LIMIT 1"
+                    )
+                    try:
+                        r = conn.execute(sql, params_text).fetchone()
+                    except Exception:
+                        continue
+                    if not r:
+                        return None
+                    try:
+                        ts = int(r[0] or 0)
+                    except Exception:
+                        ts = 0
+                    if ts <= 0:
+                        return None
+                    text = _readable_index_text(r[1], r[2] if len(r) > 2 else None)
+                    return ts, text
+                return None
+
+            first_edge = fetch_edge("ASC")
+            last_edge = fetch_edge("DESC")
+            if first_edge:
+                out["firstTime"] = datetime.fromtimestamp(first_edge[0]).strftime("%H:%M")
+                out["firstText"] = first_edge[1] or None
+            if last_edge:
+                out["lastTime"] = datetime.fromtimestamp(last_edge[0]).strftime("%H:%M")
+                out["lastText"] = last_edge[1] or None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return out
+
+
+def _kind_label_zh(kind: str) -> str:
+    return {
+        "text": "文字",
+        "emoji": "表情包",
+        "voice": "语音",
+        "image": "图片",
+        "video": "视频",
+        "link": "链接/小程序",
+        "file": "文件",
+        "system": "系统消息",
+        "other": "其他",
+    }.get(kind, kind)
+
+
+def compute_global_overview_stats(
+    *,
+    account_dir: Path,
+    year: int,
+    sender_username: str | None = None,
+) -> GlobalOverviewStats:
+    """Compute global overview stats for wrapped.
+
+    Notes:
+    - Best-effort only. Different WeChat versions may store different message types/values.
+    - We default to excluding `biz_message*.db` to reduce noise.
+    - If `sender_username` is provided, only messages sent by that sender are counted
+      (best-effort).
+    """
+
+    start_ts, end_ts = _year_range_epoch_seconds(year)
+    sender = str(sender_username).strip() if sender_username and str(sender_username).strip() else None
+
+    # Prefer using the unified search index if available; it already merges all shards/tables.
+    index_path = get_chat_search_index_db_path(account_dir)
+    if index_path.exists():
+        conn = sqlite3.connect(str(index_path))
+        try:
+            has_fts = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_fts' LIMIT 1"
+                ).fetchone()
+                is not None
+            )
+            if has_fts:
+                t0 = time.time()
+
+                ts_expr = (
+                    "CASE "
+                    "WHEN CAST(create_time AS INTEGER) > 1000000000000 "
+                    "THEN CAST(CAST(create_time AS INTEGER)/1000 AS INTEGER) "
+                    "ELSE CAST(create_time AS INTEGER) "
+                    "END"
+                )
+                where = f"{ts_expr} >= ? AND {ts_expr} < ? AND db_stem NOT LIKE 'biz_message%'"
+                params: tuple[Any, ...] = (start_ts, end_ts)
+                if sender:
+                    where += " AND sender_username = ?"
+                    params = (start_ts, end_ts, sender)
+
+                # activeDays + latest_ts in one pass.
+                sql_meta = (
+                    "SELECT "
+                    "COUNT(DISTINCT date(datetime(ts, 'unixepoch', 'localtime'))) AS active_days, "
+                    "MAX(ts) AS latest_ts "
+                    "FROM ("
+                    f"  SELECT {ts_expr} AS ts"
+                    "  FROM message_fts"
+                    f"  WHERE {where}"
+                    ") sub"
+                )
+                r = conn.execute(sql_meta, params).fetchone()
+                active_days_i = int((r[0] if r else 0) or 0)
+                latest_ts_i = int((r[1] if r else 0) or 0)
+
+                # local_type distribution (for message kind).
+                local_type_counts_i: Counter[int] = Counter()
+                kind_counts_i: Counter[str] = Counter()
+                try:
+                    rows = conn.execute(
+                        f"SELECT CAST(local_type AS INTEGER) AS lt, COUNT(1) AS cnt "
+                        f"FROM message_fts WHERE {where} GROUP BY lt",
+                        params,
+                    ).fetchall()
+                except Exception:
+                    rows = []
+                for rr in rows:
+                    if not rr:
+                        continue
+                    try:
+                        lt = int(rr[0] or 0)
+                        cnt = int(rr[1] or 0)
+                    except Exception:
+                        continue
+                    if cnt <= 0:
+                        continue
+                    local_type_counts_i[lt] += cnt
+                    kind_counts_i[_kind_from_local_type(lt)] += cnt
+
+                # Top conversations (best-effort: only needs a small LIMIT).
+                per_username_counts_i: Counter[str] = Counter()
+                try:
+                    rows_u = conn.execute(
+                        f"SELECT username, COUNT(1) AS cnt "
+                        f"FROM message_fts WHERE {where} "
+                        "GROUP BY username ORDER BY cnt DESC LIMIT 400",
+                        params,
+                    ).fetchall()
+                except Exception:
+                    rows_u = []
+                for rr in rows_u:
+                    if not rr:
+                        continue
+                    u = str(rr[0] or "").strip()
+                    if not u:
+                        continue
+                    try:
+                        cnt = int(rr[1] or 0)
+                    except Exception:
+                        cnt = 0
+                    if cnt > 0:
+                        per_username_counts_i[u] = cnt
+
+                # Top phrases (short text only).
+                phrase_counts_i: Counter[str] = Counter()
+                try:
+                    rows_p = conn.execute(
+                        f"SELECT \"text\" AS txt, COUNT(1) AS cnt "
+                        f"FROM message_fts WHERE {where} AND render_type = 'text' "
+                        "  AND \"text\" IS NOT NULL "
+                        "  AND TRIM(\"text\") != '' "
+                        "  AND LENGTH(TRIM(\"text\")) <= 12 "
+                        "GROUP BY txt ORDER BY cnt DESC LIMIT 400",
+                        params,
+                    ).fetchall()
+                except Exception:
+                    rows_p = []
+                for rr in rows_p:
+                    if not rr:
+                        continue
+                    phrase = _normalize_phrase(rr[0])
+                    if not phrase:
+                        continue
+                    try:
+                        cnt = int(rr[1] or 0)
+                    except Exception:
+                        cnt = 0
+                    if cnt > 0:
+                        phrase_counts_i[phrase] += cnt
+
+                def pick_top(counter: Counter[Any]) -> Optional[tuple[Any, int]]:
+                    if not counter:
+                        return None
+                    best_item = max(counter.items(), key=lambda kv: (kv[1], str(kv[0])))
+                    if best_item[1] <= 0:
+                        return None
+                    return best_item[0], int(best_item[1])
+
+                def is_keep_username(u: str) -> bool:
+                    return _should_keep_session(u, include_official=False)
+
+                contact_counts_i = Counter(
+                    {
+                        u: c
+                        for u, c in per_username_counts_i.items()
+                        if (not u.endswith("@chatroom")) and is_keep_username(u)
+                    }
+                )
+                group_counts_i = Counter(
+                    {u: c for u, c in per_username_counts_i.items() if u.endswith("@chatroom") and is_keep_username(u)}
+                )
+                top_contact = pick_top(contact_counts_i)
+                top_group = pick_top(group_counts_i)
+                top_phrase = pick_top(phrase_counts_i)
+
+                # New friends added in this year (best-effort via WeChat system messages).
+                added_friend_usernames: set[str] = set()
+                try:
+                    like_patterns: list[str] = []
+                    for pat in _ADDED_FRIEND_PATTERNS:
+                        tok = _to_char_token_text(pat)
+                        if tok:
+                            like_patterns.append(f"%{tok}%")
+
+                    if like_patterns:
+                        where_added = f"{ts_expr} >= ? AND {ts_expr} < ? AND db_stem NOT LIKE 'biz_message%'"
+                        cond_added = " OR ".join(['\"text\" LIKE ?'] * len(like_patterns))
+                        rows_added = conn.execute(
+                            f"SELECT DISTINCT username FROM message_fts "
+                            f"WHERE {where_added} "
+                            "AND CAST(local_type AS INTEGER) = 10000 "
+                            f"AND ({cond_added})",
+                            (start_ts, end_ts, *like_patterns),
+                        ).fetchall()
+                        for rr in rows_added:
+                            if not rr or not rr[0]:
+                                continue
+                            u = str(rr[0] or "").strip()
+                            if not u or u.endswith("@chatroom") or (not is_keep_username(u)):
+                                continue
+                            added_friend_usernames.add(u)
+                except Exception:
+                    added_friend_usernames = set()
+
+                added_friends_i = len(added_friend_usernames)
+
+                total_messages = int(sum(local_type_counts_i.values()))
+                logger.info(
+                    "Wrapped card#0 overview computed (search index): account=%s year=%s total=%s active_days=%s sender=%s db=%s elapsed=%.2fs",
+                    str(account_dir.name or "").strip(),
+                    year,
+                    total_messages,
+                    active_days_i,
+                    sender or "*",
+                    str(index_path.name),
+                    time.time() - t0,
+                )
+
+                return GlobalOverviewStats(
+                    year=year,
+                    active_days=active_days_i,
+                    added_friends=added_friends_i,
+                    local_type_counts={int(k): int(v) for k, v in local_type_counts_i.items()},
+                    kind_counts={str(k): int(v) for k, v in kind_counts_i.items()},
+                    latest_ts=latest_ts_i,
+                    top_phrase=(str(top_phrase[0]), int(top_phrase[1])) if top_phrase else None,
+                    top_emoji=None,
+                    top_contact=(str(top_contact[0]), int(top_contact[1])) if top_contact else None,
+                    top_group=(str(top_group[0]), int(top_group[1])) if top_group else None,
+                )
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # Resolve all sessions (usernames) so we can map msg_xxx/chat_xxx tables back to usernames.
+    session_usernames = _list_session_usernames(account_dir / "session.db")
+    md5_to_username: dict[str, str] = {}
+    table_to_username: dict[str, str] = {}
+    for u in session_usernames:
+        md5_hex = hashlib.md5(u.encode("utf-8")).hexdigest().lower()
+        md5_to_username[md5_hex] = u
+        table_to_username[f"msg_{md5_hex}"] = u
+        table_to_username[f"chat_{md5_hex}"] = u
+
+    def resolve_username_from_table(table_name: str) -> Optional[str]:
+        ln = str(table_name or "").lower()
+        u = table_to_username.get(ln)
+        if u:
+            return u
+        m = _MD5_HEX_RE.search(ln)
+        if m:
+            return md5_to_username.get(m.group(0).lower())
+        return None
+
+    db_paths = _iter_message_db_paths(account_dir)
+    db_paths = [p for p in db_paths if not p.name.lower().startswith("biz_message")]
+
+    # Convert millisecond timestamps defensively.
+    ts_expr = (
+        "CASE WHEN create_time > 1000000000000 THEN CAST(create_time/1000 AS INTEGER) ELSE create_time END"
+    )
+
+    local_type_counts: Counter[int] = Counter()
+    kind_counts: Counter[str] = Counter()
+    active_days: set[str] = set()
+    per_username_counts: Counter[str] = Counter()
+    phrase_counts: Counter[str] = Counter()
+    added_friend_usernames: set[str] = set()
+    added_like_patterns = [f"%{p}%" for p in _ADDED_FRIEND_PATTERNS if str(p or "").strip()]
+
+    latest_ts = 0
+
+    t0 = time.time()
+    for db_path in db_paths:
+        if not db_path.exists():
+            continue
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            tables = _list_message_tables(conn)
+            if not tables:
+                continue
+
+            skip_sender_stats = False
+            sender_rowid: int | None = None
+            if sender:
+                try:
+                    r2 = conn.execute(
+                        "SELECT rowid FROM Name2Id WHERE user_name = ? LIMIT 1",
+                        (sender,),
+                    ).fetchone()
+                    if r2 is not None and r2[0] is not None:
+                        sender_rowid = int(r2[0])
+                except Exception:
+                    sender_rowid = None
+                # Can't reliably filter by sender for this shard; skip sender-only stats to avoid mixing directions.
+                if sender_rowid is None:
+                    skip_sender_stats = True
+
+            for table_name in tables:
+                qt = _quote_ident(table_name)
+                username = resolve_username_from_table(table_name)
+
+                # New friends added: detect common WeChat system messages within this year.
+                if (
+                    added_like_patterns
+                    and username
+                    and (not username.endswith("@chatroom"))
+                    and _should_keep_session(username, include_official=False)
+                ):
+                    cond_added = " OR ".join(["CAST(message_content AS TEXT) LIKE ?"] * len(added_like_patterns))
+                    sql_added = (
+                        f"SELECT 1 FROM {qt} "
+                        f"WHERE local_type = 10000 "
+                        f"  AND {ts_expr} >= ? AND {ts_expr} < ? "
+                        f"  AND ({cond_added}) "
+                        "LIMIT 1"
+                    )
+                    try:
+                        r_added = conn.execute(sql_added, (start_ts, end_ts, *added_like_patterns)).fetchone()
+                    except Exception:
+                        r_added = None
+                    if r_added is not None:
+                        added_friend_usernames.add(username)
+
+                if skip_sender_stats:
+                    continue
+                sender_where = " AND real_sender_id = ?" if sender_rowid is not None else ""
+                params = (start_ts, end_ts, sender_rowid) if sender_rowid is not None else (start_ts, end_ts)
+
+                # 1) local_type distribution + table total
+                sql_types = (
+                    "SELECT local_type, COUNT(1) AS cnt "
+                    "FROM ("
+                    f"  SELECT local_type, {ts_expr} AS ts "
+                    f"  FROM {qt} "
+                    f"  WHERE {ts_expr} >= ? AND {ts_expr} < ?{sender_where}"
+                    ") sub "
+                    "GROUP BY local_type"
+                )
+                try:
+                    rows = conn.execute(sql_types, params).fetchall()
+                except Exception:
+                    continue
+                if not rows:
+                    continue
+
+                table_total = 0
+                table_text_cnt = 0
+                for r in rows:
+                    if not r:
+                        continue
+                    try:
+                        lt = int(r[0] or 0)
+                    except Exception:
+                        lt = 0
+                    try:
+                        cnt = int(r[1] or 0)
+                    except Exception:
+                        cnt = 0
+                    if cnt <= 0:
+                        continue
+                    table_total += cnt
+                    local_type_counts[lt] += cnt
+                    kind_counts[_kind_from_local_type(lt)] += cnt
+                    if lt == 1:
+                        table_text_cnt = cnt
+
+                if table_total <= 0:
+                    continue
+                if username:
+                    per_username_counts[username] += table_total
+
+                # 3) active days (distinct dates)
+                sql_days = (
+                    "SELECT DISTINCT date(datetime(ts, 'unixepoch', 'localtime')) AS d "
+                    "FROM ("
+                    f"  SELECT {ts_expr} AS ts"
+                    f"  FROM {qt}"
+                    f"  WHERE {ts_expr} >= ? AND {ts_expr} < ?{sender_where}"
+                    ") sub"
+                )
+                try:
+                    rows_d = conn.execute(sql_days, params).fetchall()
+                except Exception:
+                    rows_d = []
+                for rd in rows_d:
+                    if not rd or not rd[0]:
+                        continue
+                    active_days.add(str(rd[0]))
+
+                # 4) latest timestamp within this year
+                sql_max_ts = f"SELECT MAX({ts_expr}) AS mx FROM {qt} WHERE {ts_expr} >= ? AND {ts_expr} < ?{sender_where}"
+                try:
+                    rmax = conn.execute(sql_max_ts, params).fetchone()
+                except Exception:
+                    rmax = None
+                try:
+                    mx = int((rmax[0] if rmax else 0) or 0)
+                except Exception:
+                    mx = 0
+                if mx > latest_ts:
+                    latest_ts = mx
+
+                # 5) top phrases (best-effort via short, repeated text messages)
+                if table_text_cnt > 0:
+                    sql_phrase = (
+                        "SELECT message_content AS txt, COUNT(1) AS cnt "
+                        f"FROM {qt} "
+                        f"WHERE local_type = 1 "
+                        f"  AND {ts_expr} >= ? AND {ts_expr} < ?{sender_where} "
+                        "  AND message_content IS NOT NULL "
+                        "  AND TRIM(CAST(message_content AS TEXT)) != '' "
+                        "  AND LENGTH(TRIM(CAST(message_content AS TEXT))) <= 12 "
+                        "GROUP BY txt "
+                        "ORDER BY cnt DESC "
+                        "LIMIT 60"
+                    )
+                    try:
+                        rows_p = conn.execute(sql_phrase, params).fetchall()
+                    except Exception:
+                        rows_p = []
+                    for rp in rows_p:
+                        if not rp:
+                            continue
+                        phrase = _normalize_phrase(rp[0])
+                        if not phrase:
+                            continue
+                        try:
+                            cnt = int(rp[1] or 0)
+                        except Exception:
+                            cnt = 0
+                        if cnt > 0:
+                            phrase_counts[phrase] += cnt
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def pick_top(counter: Counter[Any]) -> Optional[tuple[Any, int]]:
+        if not counter:
+            return None
+        # Deterministic tie-breaker: key string ascending.
+        best_item = max(counter.items(), key=lambda kv: (kv[1], str(kv[0])))
+        if best_item[1] <= 0:
+            return None
+        return best_item[0], int(best_item[1])
+
+    # Pick top contact & group (exclude official/service accounts by default).
+    def is_keep_username(u: str) -> bool:
+        return _should_keep_session(u, include_official=False)
+
+    contact_counts = Counter({u: c for u, c in per_username_counts.items() if (not u.endswith("@chatroom")) and is_keep_username(u)})
+    group_counts = Counter({u: c for u, c in per_username_counts.items() if u.endswith("@chatroom") and is_keep_username(u)})
+    top_contact = pick_top(contact_counts)
+    top_group = pick_top(group_counts)
+
+    top_phrase = pick_top(phrase_counts)
+
+    total_messages = int(sum(local_type_counts.values()))
+
+    logger.info(
+        "Wrapped card#0 overview computed: account=%s year=%s total=%s active_days=%s sender=%s dbs=%s elapsed=%.2fs",
+        str(account_dir.name or "").strip(),
+        year,
+        total_messages,
+        len(active_days),
+        sender or "*",
+        len(db_paths),
+        time.time() - t0,
+    )
+
+    return GlobalOverviewStats(
+        year=year,
+        active_days=len(active_days),
+        added_friends=len(added_friend_usernames),
+        local_type_counts={int(k): int(v) for k, v in local_type_counts.items()},
+        kind_counts={str(k): int(v) for k, v in kind_counts.items()},
+        latest_ts=int(latest_ts),
+        top_phrase=(str(top_phrase[0]), int(top_phrase[1])) if top_phrase else None,
+        top_emoji=None,
+        top_contact=(str(top_contact[0]), int(top_contact[1])) if top_contact else None,
+        top_group=(str(top_group[0]), int(top_group[1])) if top_group else None,
+    )
+
+
+def build_card_00_global_overview(
+    *,
+    account_dir: Path,
+    year: int,
+    heatmap: WeekdayHourHeatmap | None = None,
+) -> dict[str, Any]:
+    """Card #0: 年度全局概览（开场综合页，建议作为第2页）。"""
+
+    sender = resolve_wrapped_self_username(account_dir)
+    heatmap = heatmap or compute_weekday_hour_heatmap(account_dir=account_dir, year=year, sender_username=sender)
+    stats = compute_global_overview_stats(account_dir=account_dir, year=year, sender_username=sender)
+
+    # Resolve display names for top sessions (best-effort).
+    contact_db_path = account_dir / "contact.db"
+    top_usernames: list[str] = []
+    if stats.top_contact:
+        top_usernames.append(stats.top_contact[0])
+    if stats.top_group:
+        top_usernames.append(stats.top_group[0])
+    contact_rows = _load_contact_rows(contact_db_path, top_usernames) if top_usernames else {}
+
+    top_contact_obj = None
+    if stats.top_contact:
+        u, cnt = stats.top_contact
+        row = contact_rows.get(u)
+        display = _pick_display_name(row, u)
+        avatar = _build_avatar_url(str(account_dir.name or ""), u) if u else ""
+        top_contact_obj = {
+            "username": u,
+            "displayName": display,
+            "maskedName": _mask_name(display),
+            "avatarUrl": avatar,
+            "messages": int(cnt),
+            "isGroup": False,
+        }
+
+    top_group_obj = None
+    if stats.top_group:
+        u, cnt = stats.top_group
+        row = contact_rows.get(u)
+        display = _pick_display_name(row, u)
+        avatar = _build_avatar_url(str(account_dir.name or ""), u) if u else ""
+        top_group_obj = {
+            "username": u,
+            "displayName": display,
+            "maskedName": _mask_name(display),
+            "avatarUrl": avatar,
+            "messages": int(cnt),
+            "isGroup": True,
+        }
+
+    # Derive the top "message kind".
+    top_kind = None
+    if stats.kind_counts:
+        kc = Counter(stats.kind_counts)
+        # Exclude mostly-unhelpful kinds from the "top" pick.
+        for drop in ("system", "other"):
+            if drop in kc:
+                del kc[drop]
+        if kc:
+            kind, count = max(kc.items(), key=lambda kv: (kv[1], str(kv[0])))
+            ratio = (float(count) / float(heatmap.total_messages)) if heatmap.total_messages > 0 else 0.0
+            top_kind = {
+                "kind": str(kind),
+                "label": _kind_label_zh(str(kind)),
+                "count": int(count),
+                "ratio": ratio,
+            }
+
+    messages_per_day = 0.0
+    if stats.active_days > 0:
+        messages_per_day = heatmap.total_messages / float(stats.active_days)
+
+    most_active_hour: Optional[int] = None
+    most_active_weekday: Optional[int] = None
+    if heatmap.total_messages > 0:
+        hour_totals = [sum(heatmap.matrix[w][h] for w in range(7)) for h in range(24)]
+        most_active_hour = max(range(24), key=lambda h: (hour_totals[h], -h))
+
+        weekday_totals = [sum(heatmap.matrix[w][h] for h in range(24)) for w in range(7)]
+        most_active_weekday = max(range(7), key=lambda w: (weekday_totals[w], -w))
+
+    most_active_weekday_name = _weekday_name_zh(most_active_weekday or -1) if most_active_weekday is not None else ""
+
+    highlight = None
+    if stats.latest_ts > 0:
+        dt = datetime.fromtimestamp(int(stats.latest_ts))
+        highlight = {
+            "timestamp": int(stats.latest_ts),
+            "date": dt.strftime("%Y-%m-%d"),
+            "time": dt.strftime("%H:%M"),
+            # Keep it privacy-safe by default: no content/object here.
+            "action": "你还在微信里发送消息",
+        }
+
+    # The annual calendar represents overall chat activity, so receiving a
+    # message also makes that day active. Outgoing-only first-person metrics
+    # above intentionally keep their existing sender filter.
+    daily_counts = compute_annual_daily_counts(
+        account_dir=account_dir,
+        year=year,
+        sender_username=None,
+    )
+    activity_total_messages = sum(int(count or 0) for count in daily_counts)
+    activity_active_days = sum(1 for count in daily_counts if int(count or 0) > 0)
+    activity_messages_per_day = (
+        activity_total_messages / float(activity_active_days)
+        if activity_active_days > 0
+        else 0.0
+    )
+
+    # 年度峰值日：全年逐日计数的 argmax（并列时取更早的一天；全 0 时无峰值日）。
+    peak_day: Optional[dict[str, Any]] = None
+    peak_highlights: list[dict[str, Any]] = []
+    if daily_counts:
+        peak_doy = max(range(len(daily_counts)), key=lambda i: (daily_counts[i], -i))
+        peak_count = int(daily_counts[peak_doy])
+        if peak_count > 0:
+            peak_dt = datetime(int(year), 1, 1) + timedelta(days=int(peak_doy))
+            peak_multiple: Optional[float] = None
+            if activity_messages_per_day > 0:
+                peak_multiple = round(
+                    float(peak_count) / float(activity_messages_per_day), 1
+                )
+            details = _compute_peak_day_details(
+                account_dir=account_dir,
+                year=year,
+                doy=peak_doy,
+                sender_username=sender,
+            )
+            peak_day = {
+                "date": peak_dt.strftime("%Y-%m-%d"),
+                "weekdayName": _weekday_name_zh(peak_dt.weekday()),
+                "count": peak_count,
+                "multiple": peak_multiple,
+                **details,
+            }
+            # Shape must match AnnualCalendarHeatmap.vue highlight parsing: {key, doy, label, valueLabel}.
+            peak_highlights = [
+                {
+                    "key": "sent_messages_max",
+                    "doy": int(peak_doy),
+                    "label": "全年聊天最活跃",
+                    "valueLabel": f"{peak_count:,} 条",
+                }
+            ]
+
+    annual_heatmap = {
+        "year": int(year),
+        "startDate": f"{int(year)}-01-01",
+        "endDate": f"{int(year)}-12-31",
+        "days": int(len(daily_counts)),
+        "direction": "both",
+        "totalMessages": int(activity_total_messages),
+        "activeDays": int(activity_active_days),
+        "dailyCounts": daily_counts,
+        "highlights": peak_highlights,
+    }
+
+    lines: list[str] = []
+    if heatmap.total_messages > 0:
+        lines.append(f"今年以来，你在微信里发送了 {heatmap.total_messages:,} 条消息，平均每天 {messages_per_day:.1f} 条。")
+    else:
+        lines.append("今年以来，你在微信里还没有发出聊天消息。")
+
+    if activity_active_days > 0:
+        if most_active_hour is not None and most_active_weekday_name:
+            lines.append(f"和微信共度的 {activity_active_days} 天里，你最常在 {most_active_hour} 点出没；{most_active_weekday_name}是你最爱聊天的日子。")
+        else:
+            lines.append(f"和微信共度的 {activity_active_days} 天里，你留下了很多对话的痕迹。")
+
+    if top_contact_obj or top_group_obj:
+        parts: list[str] = []
+        if top_contact_obj:
+            parts.append(f"你发消息最多的人是「{top_contact_obj['maskedName']}」（{int(top_contact_obj['messages']):,} 条）")
+        if top_group_obj:
+            parts.append(f"你最常发言的群是「{top_group_obj['maskedName']}」（{int(top_group_obj['messages']):,} 条）")
+        if parts:
+            lines.append("，".join(parts) + "。")
+
+    if top_kind and top_kind.get("count", 0) > 0:
+        pct = float(top_kind.get("ratio") or 0.0) * 100.0
+        lines.append(f"你最常用的表达方式是{top_kind['label']}（占 {pct:.0f}%）。")
+
+    if stats.top_phrase and stats.top_phrase[0] and stats.top_phrase[1] > 0:
+        phrase, cnt = stats.top_phrase
+        lines.append(f"你今年说得最多的一句话是「{phrase}」（共 {cnt:,} 次）。")
+
+    # NOTE: We keep the `highlight` field in `data` for future use, but do not
+    # surface it in the page narrative for now (per product requirement).
+
+    narrative = "一屏读懂你的年度微信聊天画像"
+
+    return {
+        "id": 0,
+        "title": "这一年，你的微信都经历了什么？",
+        "scope": "global",
+        "category": "A",
+        "status": "ok",
+        "kind": "global/overview",
+        "narrative": narrative,
+        "data": {
+            "year": int(year),
+            "totalMessages": int(heatmap.total_messages),
+            "activeDays": int(activity_active_days),
+            "addedFriends": int(stats.added_friends),
+            "sentMediaCount": int(stats.kind_counts.get("image", 0) + stats.kind_counts.get("video", 0)),
+            "sentStickerCount": int(stats.kind_counts.get("emoji", 0)),
+            "messagesPerDay": messages_per_day,
+            "mostActiveHour": most_active_hour,
+            "mostActiveWeekday": most_active_weekday,
+            "mostActiveWeekdayName": most_active_weekday_name,
+            "topContact": top_contact_obj,
+            "topGroup": top_group_obj,
+            "topKind": top_kind,
+            "peakDay": peak_day,
+            "annualHeatmap": annual_heatmap,
+            "topPhrase": {"phrase": stats.top_phrase[0], "count": int(stats.top_phrase[1])} if stats.top_phrase else None,
+            "topEmoji": {"emoji": stats.top_emoji[0], "count": int(stats.top_emoji[1])} if stats.top_emoji else None,
+            "highlight": highlight,
+            "lines": lines,
+        },
+    }

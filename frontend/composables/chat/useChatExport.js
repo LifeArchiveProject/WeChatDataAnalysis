@@ -1,0 +1,1100 @@
+import { computed, ref, watch } from 'vue'
+import { reportServerErrorFromResponse } from '~/lib/server-error-logging'
+import { toUnixSeconds } from '~/lib/chat/formatters'
+import { restoreLegacyChatExportOrder } from '~/utils/chatExportOrder'
+
+export const useChatExport = ({ api, apiBase, contacts, selectedAccount, selectedContact, privacyMode }) => {
+  const exportModalOpen = ref(false)
+  const isExportCreating = ref(false)
+  const exportError = ref('')
+
+  const exportScope = ref('selected')
+  const exportFormat = ref('html')
+  const exportOutputMode = ref('zip')
+  const exportResetBaseline = ref(false)
+  const exportBaselineStatus = ref('unknown')
+  const exportHtmlPageSize = ref(1000)
+  const exportTranscribeVoice = ref(false)
+  const exportDownloadRemoteMedia = ref(false)
+  const exportMessageTypeOptions = [
+    { value: 'text', label: '文本' },
+    { value: 'image', label: '图片' },
+    { value: 'emoji', label: '表情' },
+    { value: 'video', label: '视频' },
+    { value: 'voice', label: '语音' },
+    { value: 'location', label: '位置' },
+    { value: 'chatHistory', label: '聊天记录' },
+    { value: 'transfer', label: '转账' },
+    { value: 'redPacket', label: '红包' },
+    { value: 'file', label: '文件' },
+    { value: 'link', label: '链接' },
+    { value: 'quote', label: '引用' },
+    { value: 'system', label: '系统' },
+    { value: 'voip', label: '通话' }
+  ]
+  const exportMessageTypes = ref(exportMessageTypeOptions.map((item) => item.value))
+  const exportMessageTypeValues = exportMessageTypeOptions.map((item) => item.value)
+  const areAllExportMessageTypesSelected = computed(() => {
+    const selected = new Set((Array.isArray(exportMessageTypes.value) ? exportMessageTypes.value : []).map((item) => String(item || '').trim()).filter(Boolean))
+    return exportMessageTypeValues.length > 0 && exportMessageTypeValues.every((value) => selected.has(value))
+  })
+  const toggleAllExportMessageTypes = () => {
+    exportMessageTypes.value = areAllExportMessageTypesSelected.value ? [] : exportMessageTypeValues.slice()
+  }
+
+  const exportStartLocal = ref('')
+  const exportEndLocal = ref('')
+  const exportFileName = ref('')
+  const exportFolder = ref('')
+  const exportFolderHandle = ref(null)
+  const exportSaveBusy = ref(false)
+  const exportSaveMsg = ref('')
+  const exportSaveError = ref('')
+  const exportSaveState = ref('idle')
+  const exportSaveBytesWritten = ref(0)
+  const exportSaveBytesTotal = ref(0)
+  const exportAutoSavedFor = ref('')
+  const exportCancelRequested = ref(false)
+  const privacyAccountToken = (value) => {
+    let hash = 0x811c9dc5
+    const text = String(value || '')
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index)
+      hash = Math.imul(hash, 0x01000193) >>> 0
+    }
+    return hash.toString(16).padStart(8, '0')
+  }
+  const exportFolderNamePreview = computed(() => {
+    const account = String(selectedAccount.value || '账号').trim() || '账号'
+    if (privacyMode.value) return `微信聊天记录_隐私_${privacyAccountToken(account)}`
+    return `微信聊天记录_${account}`.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 96)
+  })
+  const isIncrementalFolderMode = computed(() => exportOutputMode.value === 'folder')
+
+  const exportSearchQuery = ref('')
+  const exportListTab = ref('all')
+  const exportSelectedUsernames = ref([])
+  const exportTargetContacts = ref([])
+  const exportTargetsLoading = ref(false)
+  const exportTargetsLoaded = ref(false)
+  const exportTargetsError = ref('')
+
+  const exportJob = ref(null)
+  let exportPollTimer = null
+  let exportEventSource = null
+
+  const clamp01 = (value) => Math.min(1, Math.max(0, value))
+  const asNumber = (value) => {
+    const next = Number(value)
+    return Number.isFinite(next) ? next : 0
+  }
+  const formatBytes = (value) => {
+    const bytes = Number(value)
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    let size = bytes
+    let index = 0
+    while (size >= 1024 && index < units.length - 1) {
+      size /= 1024
+      index += 1
+    }
+    const digits = size >= 100 || index === 0 ? 0 : size >= 10 ? 1 : 2
+    return `${size.toFixed(digits)} ${units[index]}`
+  }
+  const resetExportSaveFeedback = ({ resetAutoSavedFor = false } = {}) => {
+    exportSaveMsg.value = ''
+    exportSaveError.value = ''
+    exportSaveState.value = 'idle'
+    exportSaveBytesWritten.value = 0
+    exportSaveBytesTotal.value = 0
+    if (resetAutoSavedFor) exportAutoSavedFor.value = ''
+  }
+
+  const exportOverallPercent = computed(() => {
+    const job = exportJob.value
+    const progress = job?.progress || {}
+    const total = asNumber(progress.conversationsTotal)
+    const done = asNumber(progress.conversationsDone)
+    if (total <= 0) return 0
+
+    const currentTotal = asNumber(progress.currentConversationMessagesTotal)
+    const currentDone = asNumber(progress.currentConversationMessagesExported)
+    const currentFraction = currentTotal > 0 ? clamp01(currentDone / currentTotal) : 0
+    const overall = clamp01((done + (job?.status === 'running' ? currentFraction : 0)) / total)
+    return Math.round(overall * 100)
+  })
+
+  const exportCurrentPercent = computed(() => {
+    const progress = exportJob.value?.progress || {}
+    const total = asNumber(progress.currentConversationMessagesTotal)
+    const done = asNumber(progress.currentConversationMessagesExported)
+    if (total <= 0) return null
+    return Math.round(clamp01(done / total) * 100)
+  })
+  const exportBackendZipPath = computed(() => {
+    return String(exportJob.value?.zipPath || '').trim()
+  })
+  const exportSaveProgressText = computed(() => {
+    if (exportSaveState.value !== 'saving') return ''
+    if (String(exportJob.value?.options?.outputMode || '') === 'folder') {
+      const progress = exportSaveBytesTotal.value > 0
+        ? `（${formatBytes(exportSaveBytesWritten.value)} / ${formatBytes(exportSaveBytesTotal.value)}）`
+        : ''
+      return `正在增量更新目录：${exportFolderNamePreview.value}${progress}`
+    }
+    const fileName = guessExportZipName(exportJob.value)
+    if (exportSaveBytesTotal.value > 0) {
+      return `正在保存到浏览器目录：${fileName}（${formatBytes(exportSaveBytesWritten.value)} / ${formatBytes(exportSaveBytesTotal.value)}）`
+    }
+    return `正在保存到浏览器目录：${fileName}（${formatBytes(exportSaveBytesWritten.value)}）`
+  })
+
+  const normalizeExportSelectedUsernames = (list) => {
+    const seen = new Set()
+    return (Array.isArray(list) ? list : []).reduce((acc, item) => {
+      const username = String(item || '').trim()
+      if (!username || seen.has(username)) return acc
+      seen.add(username)
+      acc.push(username)
+      return acc
+    }, [])
+  }
+
+  const normalizeExportTargetContact = (item) => {
+    const username = String(item?.username || '').trim()
+    const name = String(item?.name || item?.displayName || username).trim() || username
+    return {
+      ...item,
+      username,
+      name,
+      displayName: name,
+      avatar: String(item?.avatar || '').trim(),
+      isGroup: item?.isGroup != null ? !!item.isGroup : username.endsWith('@chatroom'),
+      isHidden: !!item?.isHidden,
+      inSessionList: item?.inSessionList == null ? true : !!item.inSessionList
+    }
+  }
+
+  const getLocalExportContacts = () => {
+    return (Array.isArray(contacts.value) ? contacts.value : [])
+      .map(normalizeExportTargetContact)
+      .filter((contact) => !!contact.username)
+  }
+
+  const getExportBaseContacts = () => {
+    if (exportTargetsLoaded.value) return exportTargetContacts.value
+    return getLocalExportContacts()
+  }
+
+  const getExportFilteredContacts = ({ tab = exportListTab.value, query = exportSearchQuery.value } = {}) => {
+    const normalizedQuery = String(query || '').trim().toLowerCase()
+    let list = getExportBaseContacts()
+
+    const normalizedTab = String(tab || 'all')
+    if (normalizedTab === 'current') {
+      const currentUsername = String(selectedContact.value?.username || '').trim()
+      if (!currentUsername) {
+        list = []
+      } else {
+        const found = list.find((contact) => String(contact?.username || '').trim() === currentUsername)
+        list = [found || normalizeExportTargetContact(selectedContact.value)].filter((contact) => !!contact?.username)
+      }
+    }
+    if (normalizedTab === 'groups') list = list.filter((contact) => !!contact?.isGroup)
+    if (normalizedTab === 'singles') list = list.filter((contact) => !contact?.isGroup)
+
+    if (!normalizedQuery) return list
+    return list.filter((contact) => {
+      const name = String(contact?.name || '').toLowerCase()
+      const username = String(contact?.username || '').toLowerCase()
+      return name.includes(normalizedQuery) || username.includes(normalizedQuery)
+    })
+  }
+
+  const exportFilteredContacts = computed(() => {
+    return getExportFilteredContacts()
+  })
+
+  const exportContactCounts = computed(() => {
+    const list = getExportBaseContacts()
+    const total = list.length
+    const groups = list.filter((contact) => !!contact?.isGroup).length
+    return {
+      current: selectedContact.value?.username ? 1 : 0,
+      total,
+      groups,
+      singles: total - groups
+    }
+  })
+
+  const exportSelectedUsernameSet = computed(() => {
+    return new Set(normalizeExportSelectedUsernames(exportSelectedUsernames.value))
+  })
+
+  const setExportSelectedUsernames = (list) => {
+    exportSelectedUsernames.value = normalizeExportSelectedUsernames(list)
+  }
+
+  const getExportFilteredUsernames = (tab = exportListTab.value) => {
+    return getExportFilteredContacts({ tab })
+      .map((contact) => String(contact?.username || '').trim())
+      .filter(Boolean)
+  }
+
+  const selectExportFilteredContacts = (tab = exportListTab.value) => {
+    setExportSelectedUsernames(getExportFilteredUsernames(tab))
+  }
+
+  const clearExportFilteredContacts = (tab = exportListTab.value) => {
+    const removeSet = new Set(getExportFilteredUsernames(tab))
+    if (removeSet.size === 0) return
+    setExportSelectedUsernames(
+      normalizeExportSelectedUsernames(exportSelectedUsernames.value)
+        .filter((username) => !removeSet.has(username))
+    )
+  }
+
+  const isExportFilteredContactsAllSelected = (tab = exportListTab.value) => {
+    const usernames = getExportFilteredUsernames(tab)
+    if (usernames.length === 0) return false
+    return usernames.every((username) => exportSelectedUsernameSet.value.has(username))
+  }
+
+  const areExportFilteredContactsAllSelected = computed(() => {
+    return isExportFilteredContactsAllSelected(exportListTab.value)
+  })
+
+  const toggleExportFilteredContactsSelection = () => {
+    const usernames = getExportFilteredUsernames(exportListTab.value)
+    if (usernames.length === 0) return
+    if (areExportFilteredContactsAllSelected.value) {
+      clearExportFilteredContacts(exportListTab.value)
+      return
+    }
+    setExportSelectedUsernames([
+      ...normalizeExportSelectedUsernames(exportSelectedUsernames.value),
+      ...usernames
+    ])
+  }
+
+  const onExportListTabClick = (tab) => {
+    const nextTab = String(tab || 'all')
+    const isSameTab = String(exportListTab.value || 'all') === nextTab
+    exportListTab.value = nextTab
+
+    if (isSameTab) {
+      if (isExportFilteredContactsAllSelected(nextTab)) {
+        clearExportFilteredContacts(nextTab)
+      } else {
+        selectExportFilteredContacts(nextTab)
+      }
+      return
+    }
+
+    selectExportFilteredContacts(nextTab)
+  }
+
+  const isExportContactSelected = (username) => {
+    return exportSelectedUsernameSet.value.has(String(username || '').trim())
+  }
+
+  const toggleExportContactSelection = (username) => {
+    const normalizedUsername = String(username || '').trim()
+    if (!normalizedUsername) return
+    const selected = normalizeExportSelectedUsernames(exportSelectedUsernames.value)
+    if (selected.includes(normalizedUsername)) {
+      setExportSelectedUsernames(selected.filter((item) => item !== normalizedUsername))
+      return
+    }
+    setExportSelectedUsernames([...selected, normalizedUsername])
+  }
+
+  const onExportListScopeChange = (tab) => {
+    const nextTab = String(tab || 'all')
+    exportScope.value = 'selected'
+    exportListTab.value = nextTab
+    selectExportFilteredContacts(nextTab)
+  }
+
+  const onExportBatchScopeClick = (tab) => {
+    const nextTab = String(tab || 'all')
+    exportListTab.value = nextTab
+    exportScope.value = nextTab === 'groups' || nextTab === 'singles' ? nextTab : 'all'
+    selectExportFilteredContacts(nextTab)
+  }
+
+  const onExportCustomScopeClick = () => {
+    exportScope.value = 'selected'
+    if (exportSelectedUsernames.value.length === 0) {
+      selectExportFilteredContacts(exportListTab.value)
+    }
+  }
+
+  const loadExportTargets = async ({ selectFiltered = false } = {}) => {
+    if (!selectedAccount.value) return
+    const selectedBeforeLoad = normalizeExportSelectedUsernames(exportSelectedUsernames.value)
+    const filteredBeforeLoad = getExportFilteredUsernames(exportListTab.value)
+    const selectedWasCurrentFiltered =
+      filteredBeforeLoad.length > 0 &&
+      filteredBeforeLoad.length === selectedBeforeLoad.length &&
+      filteredBeforeLoad.every((username) => selectedBeforeLoad.includes(username))
+    exportTargetsLoading.value = true
+    exportTargetsError.value = ''
+    try {
+      const response = await api.getChatExportTargets({
+        account: selectedAccount.value,
+        source: 'auto',
+        include_hidden: true,
+        include_official: false
+      })
+      const selectedNow = normalizeExportSelectedUsernames(exportSelectedUsernames.value)
+      const filteredNowBeforeLoad = getExportFilteredUsernames(exportListTab.value)
+      const selectedNowMatchesPreloadFilter =
+        filteredBeforeLoad.length > 0 &&
+        filteredBeforeLoad.length === selectedNow.length &&
+        filteredBeforeLoad.every((username) => selectedNow.includes(username))
+      const selectedNowMatchesCurrentFilter =
+        filteredNowBeforeLoad.length > 0 &&
+        filteredNowBeforeLoad.length === selectedNow.length &&
+        filteredNowBeforeLoad.every((username) => selectedNow.includes(username))
+      const targets = Array.isArray(response?.targets) ? response.targets : []
+      exportTargetContacts.value = targets
+        .map(normalizeExportTargetContact)
+        .filter((contact) => !!contact.username)
+      exportTargetsLoaded.value = true
+      if (selectFiltered || selectedWasCurrentFiltered || selectedNowMatchesPreloadFilter || selectedNowMatchesCurrentFilter) {
+        selectExportFilteredContacts(exportListTab.value)
+      }
+    } catch (error) {
+      exportTargetsLoaded.value = false
+      exportTargetContacts.value = []
+      exportTargetsError.value = error?.message || '加载导出范围失败'
+      if (!exportError.value) {
+        exportError.value = `加载导出范围失败：${exportTargetsError.value}`
+      }
+    } finally {
+      exportTargetsLoading.value = false
+    }
+  }
+
+  const isDesktopExportRuntime = () => {
+    return !!(process.client && window?.wechatDesktop?.chooseDirectory)
+  }
+
+  const isWebDirectoryPickerSupported = () => {
+    return !!(process.client && typeof window.showDirectoryPicker === 'function')
+  }
+
+  const hasWebExportFolder = computed(() => {
+    return !!(isWebDirectoryPickerSupported() && exportFolderHandle.value)
+  })
+
+  const chooseExportFolder = async () => {
+    exportError.value = ''
+    resetExportSaveFeedback()
+    try {
+      if (!process.client) {
+        exportError.value = '当前环境不支持选择导出目录'
+        return
+      }
+
+      if (isDesktopExportRuntime()) {
+        const result = await window.wechatDesktop.chooseDirectory({ title: '选择导出目录' })
+        if (result && !result.canceled && Array.isArray(result.filePaths) && result.filePaths.length > 0) {
+          exportFolder.value = String(result.filePaths[0] || '').trim()
+          exportFolderHandle.value = null
+          exportBaselineStatus.value = 'auto'
+        }
+        return
+      }
+
+      if (isWebDirectoryPickerSupported()) {
+        const handle = await window.showDirectoryPicker()
+        if (handle) {
+          exportFolderHandle.value = handle
+          exportFolder.value = `浏览器目录：${String(handle.name || '已选择')}`
+          const baseline = await readBrowserChatExportBaseline()
+          exportBaselineStatus.value = baseline?.invalid ? 'invalid' : (baseline ? 'ready' : 'new')
+        }
+        return
+      }
+
+      exportError.value = '当前浏览器不支持目录选择，请使用桌面端或 Chromium 新版浏览器'
+    } catch (error) {
+      const message = String(error?.message || '').trim()
+      if (error?.name === 'AbortError' || message.includes('The user aborted a request')) {
+        return
+      }
+      exportError.value = error?.message || '选择导出目录失败'
+    }
+  }
+
+  const CHAT_EXPORT_BASELINE_FILE = '.wechat-chat-export.json'
+
+  const normalizeManagedPath = (value) => {
+    const parts = String(value || '').replace(/\\/g, '/').split('/').filter((part) => part && part !== '.')
+    if (!parts.length || parts.some((part) => part === '..')) return ''
+    return parts.join('/')
+  }
+
+  const readBaselineFromRoot = async (root) => {
+    if (!root || typeof root.getFileHandle !== 'function') return { found: false, baseline: null }
+    try {
+      const handle = await root.getFileHandle(CHAT_EXPORT_BASELINE_FILE)
+      const file = await handle.getFile()
+      let baseline = JSON.parse(await file.text())
+      if (baseline && !Array.isArray(baseline.conversationOrder)) {
+        try {
+          const assets = await root.getDirectoryHandle('assets', { create: false })
+          const catalogHandle = await assets.getFileHandle('chat-sessions.js')
+          const catalogFile = await catalogHandle.getFile()
+          baseline = restoreLegacyChatExportOrder(baseline, await catalogFile.text())
+        } catch {
+          // A missing legacy catalog must not invalidate the baseline.
+        }
+      }
+      return { found: true, baseline }
+    } catch (error) {
+      if (error?.name === 'NotFoundError') return { found: false, baseline: null }
+      return { found: true, baseline: { invalid: true } }
+    }
+  }
+
+  const browserBaselineMatchesSelection = (baseline) => {
+    if (!baseline || typeof baseline !== 'object' || baseline.invalid) return false
+    const accountMatches = String(baseline.account || '') === String(selectedAccount.value || '')
+      || (!String(baseline.account || '') && Boolean(baseline.accountFingerprint))
+    return accountMatches
+      && String(baseline.folderName || '') === String(exportFolderNamePreview.value || '')
+  }
+
+  const getBrowserChatExportRoot = async ({ create = true } = {}) => {
+    const selected = exportFolderHandle.value
+    if (!selected || typeof selected.getDirectoryHandle !== 'function') return null
+    const direct = await readBaselineFromRoot(selected)
+    if (
+      String(selected.name || '') === String(exportFolderNamePreview.value || '')
+      || (direct.found && browserBaselineMatchesSelection(direct.baseline))
+    ) {
+      return selected
+    }
+    try {
+      return await selected.getDirectoryHandle(exportFolderNamePreview.value, { create: false })
+    } catch (error) {
+      if (error?.name !== 'NotFoundError' || !create) throw error
+      return await selected.getDirectoryHandle(exportFolderNamePreview.value, { create: true })
+    }
+  }
+
+  const readBrowserChatExportBaseline = async () => {
+    try {
+      const root = await getBrowserChatExportRoot({ create: false })
+      if (!root) return null
+      return (await readBaselineFromRoot(root)).baseline
+    } catch (error) {
+      if (error?.name === 'NotFoundError') return null
+      return { invalid: true }
+    }
+  }
+
+  const browserDirectoryHasEntries = async (root) => {
+    if (!root || typeof root.values !== 'function') return false
+    for await (const _entry of root.values()) return true
+    return false
+  }
+
+  const resolveBrowserDirectory = async (root, parts, { create = true } = {}) => {
+    let current = root
+    for (const part of parts) current = await current.getDirectoryHandle(part, { create })
+    return current
+  }
+
+  const findMissingBrowserManagedFiles = async (root, baseline) => {
+    const files = baseline?.files && typeof baseline.files === 'object' ? baseline.files : {}
+    const missing = []
+    for (const [rawPath, metadata] of Object.entries(files)) {
+      const path = normalizeManagedPath(rawPath)
+      if (!path) continue
+      const parts = path.split('/')
+      try {
+        const parent = await resolveBrowserDirectory(root, parts.slice(0, -1), { create: false })
+        const handle = await parent.getFileHandle(parts.at(-1), { create: false })
+        const file = await handle.getFile()
+        const expectedSize = Number(metadata?.size)
+        if (Number.isFinite(expectedSize) && expectedSize >= 0 && Number(file.size) !== expectedSize) missing.push(path)
+      } catch (error) {
+        if (error?.name === 'NotFoundError' || error?.name === 'TypeMismatchError') {
+          missing.push(path)
+          continue
+        }
+        throw error
+      }
+    }
+    return [...new Set(missing)].sort()
+  }
+
+  const writeResponseToBrowserFile = async (root, relativePath, response) => {
+    const path = normalizeManagedPath(relativePath)
+    if (!path) throw new Error('增量文件路径无效')
+    const parts = path.split('/')
+    const parent = await resolveBrowserDirectory(root, parts.slice(0, -1), { create: true })
+    const fileHandle = await parent.getFileHandle(parts.at(-1), { create: true })
+    const writable = await fileHandle.createWritable()
+    try {
+      if (response.body && typeof response.body.getReader === 'function') {
+        const reader = response.body.getReader()
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (!value?.byteLength) continue
+          await writable.write(value)
+          exportSaveBytesWritten.value += value.byteLength
+        }
+      } else {
+        const blob = await response.blob()
+        await writable.write(blob)
+        exportSaveBytesWritten.value += asNumber(blob.size)
+      }
+      await writable.close()
+    } catch (error) {
+      try { await writable.abort() } catch {}
+      throw error
+    }
+  }
+
+  const removeBrowserManagedFile = async (root, relativePath) => {
+    const path = normalizeManagedPath(relativePath)
+    if (!path) return
+    const parts = path.split('/')
+    try {
+      const parent = await resolveBrowserDirectory(root, parts.slice(0, -1), { create: false })
+      await parent.removeEntry(parts.at(-1))
+    } catch (error) {
+      if (error?.name !== 'NotFoundError') throw error
+    }
+  }
+
+  const getIncrementalFileUrl = (exportId, fileId) => {
+    return `${apiBase}/chat/exports/${encodeURIComponent(String(exportId || ''))}/files/${encodeURIComponent(String(fileId || ''))}`
+  }
+
+  const saveIncrementalChatExportToBrowser = async (exportId) => {
+    const manifestUrl = `${apiBase}/chat/exports/${encodeURIComponent(String(exportId))}/files`
+    const manifestResponse = await fetch(manifestUrl)
+    if (!manifestResponse.ok) throw new Error(`读取增量文件清单失败（${manifestResponse.status}）`)
+    const payload = await manifestResponse.json()
+    const manifest = payload?.manifest || {}
+    const root = await getBrowserChatExportRoot({ create: true })
+    if (!root) throw new Error('未选择浏览器导出目录')
+    const files = Array.isArray(manifest.files) ? manifest.files : []
+    const stateUnchanged = Boolean(manifest?.state?.unchanged)
+    exportSaveBytesTotal.value = files.reduce(
+      (sum, item) => sum + asNumber(item?.size),
+      stateUnchanged ? 0 : asNumber(manifest?.state?.size)
+    )
+    for (const entry of files) {
+      const response = await fetch(getIncrementalFileUrl(exportId, entry?.fileId))
+      if (!response.ok) throw new Error(`下载增量文件失败（${response.status}）`)
+      await writeResponseToBrowserFile(root, entry?.path, response)
+    }
+    for (const stalePath of Array.isArray(manifest.stale) ? manifest.stale : []) {
+      await removeBrowserManagedFile(root, stalePath)
+    }
+    if (!stateUnchanged) {
+      // 基线必须最后写入，保证中断后仍能依据上一轮状态安全重试。
+      const stateResponse = await fetch(getIncrementalFileUrl(exportId, manifest?.state?.fileId))
+      if (!stateResponse.ok) throw new Error(`下载增量基线失败（${stateResponse.status}）`)
+      await writeResponseToBrowserFile(root, CHAT_EXPORT_BASELINE_FILE, stateResponse)
+    }
+    const commit = await fetch(`${apiBase}/chat/exports/${encodeURIComponent(String(exportId))}/commit`, { method: 'POST' })
+    if (!commit.ok) throw new Error(`提交增量导出状态失败（${commit.status}）`)
+    return manifest
+  }
+
+  const guessExportZipName = (job) => {
+    const raw = String(job?.zipPath || '').trim()
+    if (raw) {
+      const name = raw.replace(/\\/g, '/').split('/').pop()
+      if (name && name.toLowerCase().endsWith('.zip')) return name
+    }
+    const exportId = String(job?.exportId || '').trim() || 'export'
+    return `wechat_chat_export_${exportId}.zip`
+  }
+
+  const getExportDownloadUrl = (exportId) => {
+    return `${apiBase}/chat/exports/${encodeURIComponent(String(exportId || ''))}/download`
+  }
+
+  const saveExportToSelectedFolder = async (options = {}) => {
+    const autoSave = !!options?.auto
+    exportError.value = ''
+    resetExportSaveFeedback()
+    if (!process.client || !isWebDirectoryPickerSupported()) {
+      exportError.value = '当前环境不支持保存到浏览器目录'
+      return
+    }
+    const handle = exportFolderHandle.value
+    if (!handle || typeof handle.getFileHandle !== 'function') {
+      exportError.value = '请先选择浏览器导出目录'
+      return
+    }
+
+    const exportId = exportJob.value?.exportId
+    if (!exportId || String(exportJob.value?.status || '') !== 'done') {
+      exportError.value = '导出任务尚未完成'
+      return
+    }
+
+    exportSaveBusy.value = true
+    exportSaveState.value = 'saving'
+    try {
+      if (String(exportJob.value?.options?.outputMode || '') === 'folder') {
+        const manifest = await saveIncrementalChatExportToBrowser(exportId)
+        const stats = manifest?.stats || {}
+        exportAutoSavedFor.value = String(exportId)
+        exportSaveState.value = 'success'
+        exportBaselineStatus.value = 'ready'
+        exportSaveMsg.value = `增量目录已更新：${manifest?.folderName || exportFolderNamePreview.value}\n新写 ${stats.filesChanged || 0} 个文件，复用 ${stats.filesReused || 0} 个文件。`
+        return
+      }
+      const response = await fetch(getExportDownloadUrl(exportId))
+      if (!response.ok) {
+        await reportServerErrorFromResponse(response, {
+          method: 'GET',
+          requestUrl: getExportDownloadUrl(exportId),
+          message: `下载导出文件失败（${response.status}）`,
+          source: 'chat.exportDownload'
+        })
+        throw new Error(`下载导出文件失败（${response.status}）`)
+      }
+      exportSaveBytesTotal.value = asNumber(response.headers.get('Content-Length'))
+      const fileName = guessExportZipName(exportJob.value)
+      const fileHandle = await handle.getFileHandle(fileName, { create: true })
+      const writable = await fileHandle.createWritable()
+      if (response.body && typeof response.body.getReader === 'function') {
+        const reader = response.body.getReader()
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            if (!value || !value.byteLength) continue
+            await writable.write(value)
+            exportSaveBytesWritten.value += value.byteLength
+          }
+          await writable.close()
+        } catch (error) {
+          try {
+            await reader.cancel()
+          } catch {}
+          try {
+            await writable.abort()
+          } catch {}
+          throw error
+        }
+      } else {
+        const blob = await response.blob()
+        exportSaveBytesWritten.value = asNumber(blob.size)
+        if (exportSaveBytesTotal.value <= 0) exportSaveBytesTotal.value = exportSaveBytesWritten.value
+        await writable.write(blob)
+        await writable.close()
+      }
+      exportAutoSavedFor.value = String(exportId)
+      exportSaveState.value = 'success'
+      const folderLabel = String(exportFolder.value || '').trim() || '已选目录'
+      exportSaveMsg.value = autoSave
+        ? `浏览器目录自动保存成功：${fileName}\n位置：${folderLabel}`
+        : `浏览器目录保存成功：${fileName}\n位置：${folderLabel}`
+    } catch (error) {
+      exportSaveState.value = 'error'
+      exportSaveError.value = `浏览器目录保存失败：${error?.message || '未知错误'}`
+    } finally {
+      exportSaveBusy.value = false
+    }
+  }
+
+  const stopExportPolling = () => {
+    if (exportEventSource) {
+      try {
+        exportEventSource.close()
+      } catch {}
+      exportEventSource = null
+    }
+    if (exportPollTimer) {
+      clearInterval(exportPollTimer)
+      exportPollTimer = null
+    }
+  }
+
+  const startExportHttpPolling = (exportId) => {
+    if (!exportId) return
+    exportPollTimer = setInterval(async () => {
+      try {
+        const response = await api.getChatExport(exportId)
+        exportJob.value = response?.job || exportJob.value
+        const status = String(exportJob.value?.status || '')
+        if (status === 'done' || status === 'error' || status === 'cancelled') {
+          stopExportPolling()
+        }
+      } catch {}
+    }, 1200)
+  }
+
+  const startExportPolling = (exportId) => {
+    stopExportPolling()
+    if (!exportId) return
+
+    if (process.client && typeof window !== 'undefined' && typeof EventSource !== 'undefined') {
+      const url = `${apiBase}/chat/exports/${encodeURIComponent(String(exportId))}/events`
+      try {
+        exportEventSource = new EventSource(url)
+        exportEventSource.onmessage = (event) => {
+          try {
+            const next = JSON.parse(String(event.data || '{}'))
+            exportJob.value = next || exportJob.value
+            const status = String(exportJob.value?.status || '')
+            if (status === 'done' || status === 'error' || status === 'cancelled') {
+              stopExportPolling()
+            }
+          } catch {}
+        }
+        exportEventSource.onerror = () => {
+          try {
+            exportEventSource?.close()
+          } catch {}
+          exportEventSource = null
+          if (!exportPollTimer) startExportHttpPolling(exportId)
+        }
+        return
+      } catch {
+        exportEventSource = null
+      }
+    }
+
+    startExportHttpPolling(exportId)
+  }
+
+  const openExportModal = () => {
+    exportModalOpen.value = true
+    exportError.value = ''
+    exportTargetsError.value = ''
+    exportTargetsLoaded.value = false
+    exportTargetContacts.value = []
+    resetExportSaveFeedback({ resetAutoSavedFor: true })
+    exportCancelRequested.value = false
+    exportSearchQuery.value = ''
+    exportListTab.value = 'all'
+    exportSelectedUsernames.value = []
+    exportStartLocal.value = ''
+    exportEndLocal.value = ''
+    exportMessageTypes.value = exportMessageTypeValues.slice()
+    exportAutoSavedFor.value = ''
+    exportFormat.value = 'html'
+    exportOutputMode.value = 'zip'
+    exportResetBaseline.value = false
+    exportBaselineStatus.value = exportFolder.value ? 'auto' : 'unknown'
+    exportHtmlPageSize.value = 1000
+    exportTranscribeVoice.value = false
+    exportDownloadRemoteMedia.value = false
+    const defaultListTab = selectedContact.value?.username ? 'current' : 'all'
+    exportScope.value = 'selected'
+    exportListTab.value = defaultListTab
+    selectExportFilteredContacts(defaultListTab)
+    loadExportTargets({ selectFiltered: true })
+  }
+
+  const closeExportModal = () => {
+    exportModalOpen.value = false
+    exportError.value = ''
+  }
+
+  const clearExportFolderSelection = () => {
+    exportFolder.value = ''
+    exportFolderHandle.value = null
+    exportBaselineStatus.value = 'unknown'
+    exportResetBaseline.value = false
+    resetExportSaveFeedback({ resetAutoSavedFor: true })
+  }
+
+  watch(exportModalOpen, (open) => {
+    if (!process.client) return
+    if (!open) {
+      stopExportPolling()
+      return
+    }
+
+    const exportId = exportJob.value?.exportId
+    const status = String(exportJob.value?.status || '')
+    if (exportId && (status === 'queued' || status === 'running')) {
+      startExportPolling(exportId)
+    }
+  })
+
+  watch(exportScope, (scope, previousScope) => {
+    if (scope !== 'selected' || previousScope === 'selected') return
+    if (exportSelectedUsernames.value.length > 0) return
+    selectExportFilteredContacts(exportListTab.value)
+  })
+
+  watch(
+    () => ({
+      exportId: String(exportJob.value?.exportId || ''),
+      status: String(exportJob.value?.status || '')
+    }),
+    async ({ exportId, status }) => {
+      if (status !== 'queued' && status !== 'running') {
+        exportCancelRequested.value = false
+      }
+      if (!process.client || status !== 'done' || !exportId) return
+      if (!hasWebExportFolder.value) return
+      if (exportAutoSavedFor.value === exportId) return
+      if (exportSaveBusy.value) return
+      await saveExportToSelectedFolder({ auto: true })
+    }
+  )
+
+  const startChatExport = async (options = {}) => {
+    exportError.value = ''
+    resetExportSaveFeedback({ resetAutoSavedFor: true })
+    exportCancelRequested.value = false
+    if (!selectedAccount.value) {
+      exportError.value = '未选择账号'
+      return
+    }
+
+    const requestedRepairUsernames = Array.isArray(options?.repairUsernames)
+      ? options.repairUsernames.map((item) => String(item || '').trim()).filter(Boolean)
+      : []
+    const requestedMediaRecheckUsernames = Array.isArray(options?.recheckUsernames)
+      ? options.recheckUsernames.map((item) => String(item || '').trim()).filter(Boolean)
+      : []
+    const requestedActionUsernames = requestedRepairUsernames.length
+      ? requestedRepairUsernames
+      : requestedMediaRecheckUsernames
+    let scope = requestedActionUsernames.length ? 'selected' : exportScope.value
+    let usernames = []
+    if (requestedActionUsernames.length) {
+      usernames = [...new Set(requestedActionUsernames)]
+    } else if (scope === 'current') {
+      scope = 'selected'
+      if (selectedContact.value?.username) {
+        usernames = [selectedContact.value.username]
+      }
+    } else if (scope === 'selected') {
+      usernames = Array.isArray(exportSelectedUsernames.value) ? exportSelectedUsernames.value.filter(Boolean) : []
+    } else if (scope !== 'all' && scope !== 'groups' && scope !== 'singles') {
+      scope = 'selected'
+      usernames = Array.isArray(exportSelectedUsernames.value) ? exportSelectedUsernames.value.filter(Boolean) : []
+    }
+
+    if (scope === 'selected' && (!usernames || usernames.length === 0)) {
+      exportError.value = '请选择至少一个会话'
+      return
+    }
+
+    const hasDesktopFolder = isDesktopExportRuntime() && !!String(exportFolder.value || '').trim()
+    const hasWebFolder = !isDesktopExportRuntime() && !!exportFolderHandle.value
+    if (!hasDesktopFolder && !hasWebFolder) {
+      exportError.value = '请先选择导出目录'
+      return
+    }
+
+    const startTime = toUnixSeconds(exportStartLocal.value)
+    const endTime = toUnixSeconds(exportEndLocal.value)
+    if (startTime && endTime && startTime > endTime) {
+      exportError.value = '时间范围不合法：开始时间不能晚于结束时间'
+      return
+    }
+
+    const messageTypes = Array.isArray(exportMessageTypes.value) ? exportMessageTypes.value.filter(Boolean) : []
+    if (messageTypes.length === 0) {
+      exportError.value = '请至少勾选一个消息类型'
+      return
+    }
+
+    const selectedTypeSet = new Set(messageTypes.map((item) => String(item || '').trim()))
+    const mediaKindSet = new Set()
+    if (selectedTypeSet.has('chatHistory')) {
+      mediaKindSet.add('image')
+      mediaKindSet.add('emoji')
+      mediaKindSet.add('video')
+      mediaKindSet.add('video_thumb')
+      mediaKindSet.add('voice')
+      mediaKindSet.add('file')
+    }
+    if (selectedTypeSet.has('image') || selectedTypeSet.has('link')) mediaKindSet.add('image')
+    if (selectedTypeSet.has('emoji')) mediaKindSet.add('emoji')
+    if (selectedTypeSet.has('video')) {
+      mediaKindSet.add('video')
+      mediaKindSet.add('video_thumb')
+    }
+    if (selectedTypeSet.has('voice')) mediaKindSet.add('voice')
+    if (selectedTypeSet.has('file')) mediaKindSet.add('file')
+
+    const mediaKinds = Array.from(mediaKindSet)
+    const includeMedia = !privacyMode.value && mediaKinds.length > 0
+    const transcribeVoice = !privacyMode.value && selectedTypeSet.has('voice') && !!exportTranscribeVoice.value
+
+    isExportCreating.value = true
+    exportAutoSavedFor.value = ''
+    try {
+      let baseline = null
+      let missingFiles = []
+      if (isIncrementalFolderMode.value && !isDesktopExportRuntime()) {
+        baseline = await readBrowserChatExportBaseline()
+        const root = await getBrowserChatExportRoot({ create: false }).catch(() => null)
+        if (!baseline && root && await browserDirectoryHasEntries(root)) {
+          throw new Error('目标增量目录非空但缺少基线，请选择新目录；为保护用户文件，不能在原目录直接重建。')
+        }
+        if (baseline && !baseline.invalid && root) {
+          missingFiles = await findMissingBrowserManagedFiles(root, baseline)
+        }
+        exportBaselineStatus.value = baseline?.invalid
+          ? 'invalid'
+          : (baseline ? (missingFiles.length ? 'repair' : 'ready') : 'new')
+      }
+      if (transcribeVoice) {
+        const status = await api.getVoiceTranscriptionStatus()
+        if (!status?.available) {
+          throw new Error(String(status?.reason || '本地语音模型当前不可用，请检查模型配置。'))
+        }
+      }
+      const response = await api.createChatExport({
+        account: selectedAccount.value,
+        source: 'auto',
+        scope,
+        usernames,
+        format: exportFormat.value,
+        start_time: startTime,
+        end_time: endTime,
+        include_hidden: scope === 'all' || scope === 'groups' || scope === 'singles',
+        include_official: false,
+        message_types: messageTypes,
+        include_media: includeMedia,
+        media_kinds: mediaKinds,
+        download_remote_media: exportFormat.value === 'html' && !!exportDownloadRemoteMedia.value && !privacyMode.value,
+        html_page_size: Math.max(0, Math.floor(Number(exportHtmlPageSize.value || 1000))),
+        output_dir: isDesktopExportRuntime() ? String(exportFolder.value || '').trim() : null,
+        privacy_mode: !!privacyMode.value,
+        file_name: isIncrementalFolderMode.value ? null : (exportFileName.value || null),
+        transcribe_voice: transcribeVoice,
+        output_mode: exportOutputMode.value,
+        folder_name: isIncrementalFolderMode.value ? exportFolderNamePreview.value : null,
+        baseline: isIncrementalFolderMode.value ? baseline : null,
+        missing_files: isIncrementalFolderMode.value ? missingFiles : [],
+        reset_baseline: isIncrementalFolderMode.value && !!exportResetBaseline.value,
+        repair_usernames: requestedRepairUsernames,
+        recheck_media: !!options?.recheckMedia
+      })
+
+      exportJob.value = response?.job || null
+      const exportId = exportJob.value?.exportId
+      if (exportId) startExportPolling(exportId)
+    } catch (error) {
+      exportError.value = error?.message || '创建导出任务失败'
+    } finally {
+      isExportCreating.value = false
+    }
+  }
+
+  const cancelCurrentExport = async () => {
+    const exportId = exportJob.value?.exportId
+    const status = String(exportJob.value?.status || '')
+    if (!exportId || (status !== 'queued' && status !== 'running') || exportCancelRequested.value) return
+
+    exportError.value = ''
+    exportCancelRequested.value = true
+    try {
+      await api.cancelChatExport(exportId)
+      const response = await api.getChatExport(exportId)
+      exportJob.value = response?.job || exportJob.value
+    } catch (error) {
+      exportCancelRequested.value = false
+      exportError.value = error?.message || '取消导出失败'
+    }
+  }
+
+  const repairIncrementalConversations = async () => {
+    const usernames = (Array.isArray(exportJob.value?.repairCandidates) ? exportJob.value.repairCandidates : [])
+      .map((item) => String(item?.username || '').trim())
+      .filter(Boolean)
+    if (!usernames.length) return
+    await startChatExport({ repairUsernames: usernames })
+  }
+
+  const recheckIncrementalMedia = async () => {
+    const usernames = (Array.isArray(exportJob.value?.unresolvedMedia?.conversations)
+      ? exportJob.value.unresolvedMedia.conversations
+      : [])
+      .map((item) => String(item?.username || '').trim())
+      .filter(Boolean)
+    if (!usernames.length) return
+    await startChatExport({
+      recheckMedia: true,
+      recheckUsernames: [...new Set(usernames)]
+    })
+  }
+
+  return {
+    exportModalOpen,
+    isExportCreating,
+    exportError,
+    exportScope,
+    exportFormat,
+    exportOutputMode,
+    exportResetBaseline,
+    exportBaselineStatus,
+    exportFolderNamePreview,
+    isIncrementalFolderMode,
+    exportHtmlPageSize,
+    exportTranscribeVoice,
+    exportDownloadRemoteMedia,
+    exportMessageTypeOptions,
+    exportMessageTypes,
+    areAllExportMessageTypesSelected,
+    toggleAllExportMessageTypes,
+    exportStartLocal,
+    exportEndLocal,
+    exportFileName,
+    exportFolder,
+    exportFolderHandle,
+    exportSaveBusy,
+    exportSaveMsg,
+    exportSaveError,
+    exportSaveState,
+    exportSaveProgressText,
+    exportBackendZipPath,
+    exportAutoSavedFor,
+    exportCancelRequested,
+    exportSearchQuery,
+    exportListTab,
+    exportSelectedUsernames,
+    areExportFilteredContactsAllSelected,
+    exportJob,
+    exportOverallPercent,
+    exportCurrentPercent,
+    exportTargetsLoading,
+    exportTargetsLoaded,
+    exportTargetsError,
+    exportFilteredContacts,
+    exportContactCounts,
+    toggleExportFilteredContactsSelection,
+    onExportListScopeChange,
+    onExportBatchScopeClick,
+    onExportCustomScopeClick,
+    onExportListTabClick,
+    isExportContactSelected,
+    toggleExportContactSelection,
+    hasWebExportFolder,
+    chooseExportFolder,
+    clearExportFolderSelection,
+    getExportDownloadUrl,
+    saveExportToSelectedFolder,
+    openExportModal,
+    closeExportModal,
+    startChatExport,
+    repairIncrementalConversations,
+    recheckIncrementalMedia,
+    cancelCurrentExport,
+    stopExportPolling
+  }
+}
