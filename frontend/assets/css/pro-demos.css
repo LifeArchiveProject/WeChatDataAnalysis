@@ -65,6 +65,7 @@
 
 .pd-list {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -78,9 +79,9 @@
 .pd-list__groups { columns: var(--pd-list-cols, auto); column-gap: 16px; }
 .pd-root .pd-group { break-inside: avoid; margin-bottom: 8px; }
 .pd-group__head {
-  display: flex; align-items: baseline; gap: 8px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px;
   font-size: 10.5px; letter-spacing: 0.2em; color: var(--pd-amber);
-  margin-bottom: 5px; white-space: nowrap;
+  margin-bottom: 5px;
 }
 .pd-group__head::before { content: "▮ "; }
 .pd-group__head i { opacity: 0.65; }
