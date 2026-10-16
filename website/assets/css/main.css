@@ -1,0 +1,861 @@
+/* ═════════════ WeChatDataAnalysis 官网 · 扁平版 ═════════════
+   浅色底 + 冰蓝 · 薰衣草 · 蜜桃 · 薄荷 品牌色；纯色块与平滑渐变色块、1px 细线、小圆角（4 / 6 / 8px，按钮可胶囊）。
+   约定：全站不用任何投影类属性（盒投影、文字投影、投影滤镜），也不用任何滤镜；焦点环一律 outline。
+   例外只有两处柔影：开场卡底下那一抹（卡面与呈现照搬样张甲，见「开场」一节），以及权益对比的高级版全息卡（照对比样张，见「权益对比」一节）；
+   动画只动 transform / opacity，滚出视口即停（.is-off），减少动态效果时静止；动态画面上不用背景模糊。
+   圆角只用 4 / 6 / 8px（按钮与圆形小件可胶囊），6px 以下的小方块与细线不做圆角。
+   网格：所有区块的外边线都是同一个 .wrap（min(100% - 2 × 槽宽, 1680px)），窄内容在 .wrap 里按 12 栏占位、左边线贴容器。 */
+
+/* 字体自托管：Geist / Geist Mono 可变字重（拉丁子集），SIL OFL 1.1；中文走系统字体 */
+@font-face { font-family: "Geist"; src: url("../fonts/geist-latin.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Geist Mono"; src: url("../fonts/geist-mono-latin.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+
+:root {
+  --bg: #f4f4f7;
+  --paper: #ffffff;
+  --ink: #16182a;
+  --ink-2: #464a60;
+  --ink-3: #6b6f84;
+  --ink-4: #a6a9ba;
+  --nav-ink: #5c6075;
+  --line: #e4e5ec;
+  --line-2: #d5d7e1;
+  --line-a: rgba(22, 24, 42, .08);
+  --blue: #2f86f0;
+  --amber: #f2b441;
+  /* 下面五个是给深色模式留的口子：浅色下的值就是原来各处写死的值（计算结果一像素不变），深色变量块里换成深色版 */
+  --raise: #ffffff;      /* 比纸面再高一档的表面（浅色下就是白纸；深色下浮层、抽屉等浮起来的面用它） */
+  --fill: #eceef4;       /* 浅灰小底：标签、菜单按钮按下、手机行首小标签 */
+  --line-h: #aeb1c2;     /* 细线悬停加深：次按钮、「全部功能清单」等描边小件 */
+  --on-ink: #fff;        /* 墨色实底上的字：主按钮、「跳到正文」 */
+  --ink-h: #2b2e47;      /* 墨色实底悬停 */
+  --brand-4: linear-gradient(90deg, #a9dcff, #c9b8ff 34%, #ffd1a1 67%, #a9ffe0);
+  --badge: linear-gradient(100deg, #bfe6ff, #d9ccff 50%, #ffe0bd);
+  /* 品牌渐变的加深版（同色相：冰蓝 → 薰衣草 → 蜜桃），对白底与页面底色都 ≥ 3:1，用来标「当前项」 */
+  --brand-d: linear-gradient(90deg, #2f86f0, #7a5cf0 50%, #d9702f);
+  --brand-dv: linear-gradient(180deg, #2f86f0, #7a5cf0 50%, #d9702f);
+  --nav: 60px;
+  --gut: clamp(16px, 2.6vw, 40px);
+  --max: 1680px;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --cjk: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --lat: "Geist", -apple-system, "Helvetica Neue", Arial, var(--cjk);
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+
+/* ═════════ 深色模式：变量 ═════════
+   开关是 <html data-theme="light | dark">：index.html <head> 里的内联脚本在样式表之前、首帧之前就定好（记住的选择优先，没有就跟随系统），
+   点击切换、记住选择、跟随系统见 main.js 第 6b 节；没开脚本的访客没有 data-theme，看浅色。
+   基调：深墨蓝底（不是纯黑，也不是霓虹），同一套扁平语言原样搬过来——平涂色块、1px 细线、小圆角；
+   层级靠三档表面明度区分（--bg 页面底 → --paper 纸面 / 格子 / 卡 → --raise 浮起来的面），不靠发光、投影、模糊。
+   品牌四色、PRO 小签（--brand-4 / --badge）深浅同值，在深底上做强调更亮眼；「当前项」的加深渐变 --brand-d 在深底上换成提亮版（对 --bg ≥ 3:1）。
+   对比度（对 --bg / --paper / --raise）：--ink-3 ≈ 6.2 / 5.7 / 5.3，正文都 ≥ 4.5；--ink-4 ≈ 3.2 / 3.0，只给图标、序号这类 ≥ 3:1 就够的小件。
+   书写约定（后面各区块照此写）：
+   - 深色规则的选择器一律以 :root[data-theme="dark"] 开头，不另写 prefers-color-scheme 的 @media 重复一套；浅色规则与取值一个都不改。
+   - 每个区块的深色覆盖紧跟在该区块的浅色规则之后，以一行只写「深色」二字的小标题注释开头；能走变量的走变量，下面这组变量盖不到的才逐条写。
+   - 浅色里写死的颜色要改成变量才好覆盖时：变量在 :root 里的浅色值必须与原值完全相同（如上面 --fill / --line-h / --on-ink 这几个）。
+   - 投影、滤镜、发光的禁令深色下照旧（例外仍只有开场卡底柔影与权益对比高级版卡，深色下可以调参数）。 */
+:root[data-theme="dark"] {
+  --bg: #0c0e18;
+  --paper: #141724;
+  --raise: #1b1e2e;
+  --ink: #eef0f8;
+  --ink-2: #b9bdd0;
+  --ink-3: #8d91a8;
+  --ink-4: #5f6379;
+  --nav-ink: #a3a7bd;
+  --line: #232637;
+  --line-2: #2e3245;
+  --line-a: rgba(238, 240, 248, .08);
+  --line-h: #4a4f68;
+  --fill: #252a3d;
+  --on-ink: #0c0e18;     /* 深色下 --ink 是浅色：主按钮反相成浅底深字 */
+  --ink-h: #d6d9e8;      /* 主按钮悬停往底色方向退一档（与浅色同一方向） */
+  --blue: #6cb4ff;
+  --amber: #f5c160;
+  --brand-d: linear-gradient(90deg, #8ccaff, #b9a6ff 50%, #ffbe91);
+  --brand-dv: linear-gradient(180deg, #8ccaff, #b9a6ff 50%, #ffbe91);
+  color-scheme: dark;    /* 滚动条、表单控件、默认画布一起变深 */
+}
+/* 切换那一瞬间（main.js 挂一帧 .is-theming）：全站暂停 transition，各处颜色直接到位，不一块块慢慢渐变 */
+:root.is-theming, :root.is-theming *, :root.is-theming *::before, :root.is-theming *::after { transition: none !important; }
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; background: var(--bg); }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 var(--lat); -webkit-font-smoothing: antialiased; overflow-x: clip; }
+body.is-locked { overflow: hidden; }
+h1, h2, h3, p, ul, dl, dd { margin: 0; }
+ul { padding: 0; list-style: none; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+img { display: block; }
+.wrap { width: min(100% - 2 * var(--gut), var(--max)); margin-inline: auto; }
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.vh { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.ic { width: 16px; height: 16px; flex: none; }
+.st { width: 20px; height: 20px; flex: none; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.skip { position: absolute; left: 12px; top: -60px; z-index: 100; padding: 8px 14px; border-radius: 6px; background: var(--ink); color: var(--on-ink); font-size: 13px; }
+.skip:focus { top: 12px; }
+/* 深色 */
+/* 页面底、正文、焦点环（--blue 提亮版）、「跳到正文」（反相成浅底深字）都走变量；选中文字用一层半透明冰蓝，字色不变 */
+:root[data-theme="dark"] ::selection { background: rgba(108, 180, 255, .32); }
+
+/* ───────── 小件：标签、PRO、按钮 ───────── */
+.pro { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 4px; background: var(--badge); color: #1b1d33; font: 600 10.5px/1 var(--mono); letter-spacing: .08em; }
+.tag { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 4px; background: var(--fill); color: var(--ink-2); font: 500 11.5px/1 var(--cjk); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 40px; padding: 0 18px; border-radius: 8px; font: 600 14px/1 var(--lat); white-space: nowrap; transition: transform .25s var(--ease); }
+.btn:active { transform: translateY(1px); }
+.btn .ic { width: 15px; height: 15px; }
+.btn--l { height: 46px; padding: 0 22px; font-size: 15px; }
+.btn--pri { background: var(--ink); color: var(--on-ink); }
+.btn--pri:hover { background: var(--ink-h); }
+.btn--sec { background: var(--paper); color: var(--ink); border: 1px solid var(--line-2); }
+.btn--sec:hover { border-color: var(--line-h); }
+.dl-hint { margin-top: 12px; font-size: 12.5px; line-height: 1.55; color: var(--ink-3); text-wrap: pretty; }
+.dl-hint[hidden] { display: none; }
+/* 深色 */
+/* 主按钮走变量自动反相成浅底深字（深底上最醒目，Linear / Vercel 的做法）；次按钮是深色纸面 + 细线，悬停再浮起一档。
+   PRO 小签深浅同样（浅色渐变 + 深字，在深底上更亮眼）；标签底换成深一档的填充色（--fill） */
+:root[data-theme="dark"] .btn--sec:hover { background: var(--raise); }
+
+/* ═════════ 导航：全宽细条 ═════════
+   左品牌 | 中三个锚点（当前项：文字转墨色 + 2px 加深品牌渐变下划线；悬停先出一条同位置的浅灰细线）| 右 GitHub 文字链（图标 名称 ☆星数）+ 主题按钮 + 唯一实体按钮。
+   高 60px；按钮 32px（和导航上下各留 14px）；滚动后实色底（= 页面底色）+ 底部 1px 细线；≤900 折叠成无框菜单按钮，菜单展开为全屏扁平面板（主题从菜单里切）。 */
+.nav { position: fixed; z-index: 50; top: 0; left: 0; right: 0; height: var(--nav); }
+.nav::before { content: ""; position: absolute; inset: 0; background: var(--bg); border-bottom: 1px solid var(--line-2); opacity: 0; transition: opacity .25s; }
+.nav.is-solid::before, .nav.is-open::before { opacity: 1; }
+/* 滚动后的实色底就是页面底色（不另起一条白带），只靠底部 1px 细线和内容分开；手机菜单展开时整页是一张白纸，顶栏跟着变白 */
+.nav.is-open::before { background: var(--paper); border-bottom-color: var(--line); }
+.nav__in { position: relative; height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; column-gap: 24px; }
+.nav__brand { justify-self: start; display: inline-flex; align-items: center; gap: 10px; min-width: 0; font: 600 14.5px/1 var(--lat); letter-spacing: -.01em; color: var(--ink); white-space: nowrap; }
+.nav__brand img { width: 24px; height: 24px; flex: none; }
+.nav__links { display: flex; height: 100%; }
+.nav__links a { position: relative; display: flex; align-items: center; height: 100%; padding: 0 16px; font: 500 14px/1 var(--cjk); color: var(--nav-ink); }
+.nav__links a:hover, .nav__links a.on { color: var(--ink); }
+.nav__links a::before, .nav__links a::after { content: ""; position: absolute; left: 16px; right: 16px; bottom: 0; height: 2px; }
+.nav__links a::before { background: var(--line-2); opacity: 0; transition: opacity .2s; }
+.nav__links a:hover:not(.on)::before { opacity: 1; }
+.nav__links a::after { background: var(--brand-d); transform: scaleX(0); transform-origin: 0 50%; transition: transform .35s var(--ease); }
+.nav__links a.on::after { transform: scaleX(1); }
+.nav__act { justify-self: end; display: flex; align-items: center; gap: 14px; }
+.nav__gh { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 2px; font: 500 14px/1 var(--lat); color: var(--nav-ink); }
+.nav__gh:hover { color: var(--ink); }
+.nav__gh > .ic { width: 18px; height: 18px; color: var(--ink); }
+/* 星数：描边小星 + 等宽数字（不用圆点分隔，免得读成「GitHub · 3.8k」这种悬空的一截）。先占好位子（异步到达时不挤动布局）；拿不到就整段收起 */
+.nav__stars { display: inline-flex; align-items: center; gap: 4px; min-width: 3.4em; margin-left: 2px; font: 500 13.5px/1 var(--lat); font-variant-numeric: tabular-nums; color: var(--ink-3); visibility: hidden; }
+.nav__stars .ic, .menu__stars .ic { width: 14px; height: 14px; color: var(--ink-4); }
+.nav__gh:hover .nav__stars, .nav__gh:hover .nav__stars .ic { color: var(--ink-2); }
+.nav__stars b, .menu__stars b { font-weight: 500; }
+.nav__stars.is-in, .menu__stars.is-in { visibility: visible; }
+.nav__stars.is-none, .menu__stars.is-none { display: none; }
+.nav__cta { height: 32px; padding: 0 14px; border-radius: 6px; font-size: 13px; transition: opacity .2s, visibility .2s; }
+/* 主题按钮（>900）：32px 见方的细线图标钮，与主按钮同高同圆角；浅色时画月亮（点了切深色）、深色时画太阳（点了切浅色），图标随 data-theme 由 CSS 换，不等脚本；
+   悬停只换线色与字色，一步到位不补间（与旁边 GitHub 链接一样；动画只动 transform / opacity）。≤900 收起，改从手机菜单里的「深色模式」一行切 */
+.nav__theme { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; border: 1px solid var(--line-2); border-radius: 6px; color: var(--nav-ink); }
+.nav__theme:hover { color: var(--ink); border-color: var(--line-h); }
+.nav__theme .ic { width: 16px; height: 16px; }
+.nav__theme .ic--sun { display: none; }
+/* 菜单按钮：无框，两道 18px 细线的右端贴容器右边线（按钮比线宽 22px，所以右边缩进 -11px） */
+.nav__menu { display: none; position: relative; width: 40px; height: 40px; margin-right: -11px; border-radius: 6px; }
+.nav__menu:active { background: var(--fill); }
+.nav__menu i { position: absolute; left: 11px; right: 11px; height: 1.5px; background: var(--ink); transition: transform .3s var(--ease); }
+.nav__menu i:first-child { top: 16px; }
+.nav__menu i:last-child { top: 22.5px; }
+.nav.is-open .nav__menu i:first-child { transform: translateY(3.25px) rotate(45deg); }
+.nav.is-open .nav__menu i:last-child { transform: translateY(-3.25px) rotate(-45deg); }
+
+.menu { position: fixed; z-index: 49; top: var(--nav); left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; padding: 8px 0 calc(20px + env(safe-area-inset-bottom)); background: var(--paper); opacity: 0; transform: translateY(-6px); transition: opacity .22s, transform .3s var(--ease); overflow: auto; }
+.menu[hidden] { display: none; }
+.nav.is-open .menu { opacity: 1; transform: none; }
+.menu__links a { position: relative; display: flex; align-items: center; gap: 14px; height: 60px; padding-left: 14px; border-bottom: 1px solid var(--line); font: 600 19px/1 var(--cjk); letter-spacing: -.01em; color: var(--ink-2); }
+.menu__links a.on { color: var(--ink); }
+.menu__links a.on::before { content: ""; position: absolute; left: 0; top: 18px; bottom: 18px; width: 2px; background: var(--brand-dv); }
+.menu__links a em { width: 26px; font: 500 12px/1 var(--mono); font-style: normal; color: var(--ink-4); }
+.menu__links a.on em { color: var(--ink-3); }
+.menu__links a em .ic { width: 18px; height: 18px; color: var(--ink); }
+.menu__links a > .ic { margin-left: auto; color: var(--ink-3); width: 18px; height: 18px; }
+.menu__stars { display: inline-flex; align-items: center; gap: 4px; margin-left: -4px; font: 500 14px/1 var(--lat); font-variant-numeric: tabular-nums; color: var(--ink-3); visibility: hidden; }
+.menu__cta { display: grid; gap: 10px; margin-top: auto; padding-top: 28px; }
+.menu__cta .btn { height: 48px; font-size: 15px; }
+/* 手机菜单里的「深色模式」一行（≤900 导航上的主题按钮收起，从这里切）：样子同上面的链接行（60px、底部细线、行首小图标），
+   右端一只小开关（role="switch"，开 = 深色；与权益对比「只看差异」的开关同一副样子）。点了不关菜单，当场看到效果 */
+.menu__theme { display: flex; align-items: center; gap: 14px; width: 100%; height: 60px; padding-left: 14px; border-bottom: 1px solid var(--line); font: 600 19px/1 var(--cjk); letter-spacing: -.01em; color: var(--ink-2); text-align: left; }
+.menu__theme em { flex: none; width: 26px; }
+.menu__theme em .ic { display: block; width: 18px; height: 18px; color: var(--ink); }
+.menu__theme > i { position: relative; flex: none; margin-left: auto; width: 34px; height: 20px; border-radius: 999px; background: var(--line-2); overflow: hidden; }
+.menu__theme > i::before { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, #7cc9ff, #a68ff4); opacity: 0; transition: opacity .25s; }
+.menu__theme > i::after { content: ""; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .3s var(--ease); }
+.menu__theme[aria-checked="true"] { color: var(--ink); }
+.menu__theme[aria-checked="true"] > i::before { opacity: 1; }
+.menu__theme[aria-checked="true"] > i::after { transform: translateX(14px); }
+/* 深色 */
+/* 导航与手机菜单全走变量：滚动后的实色底 = 深色页面底 + 细线，当前项下划线换提亮版渐变，「免费试用」随主按钮反相成浅底深字，
+   菜单面板是深色纸面。这里只换主题按钮的图标 */
+:root[data-theme="dark"] .nav__theme .ic--sun { display: block; }
+:root[data-theme="dark"] .nav__theme .ic--moon { display: none; }
+
+/* ═════════ 开场：左文右卡（文案左边线 = 导航品牌左边线；卡的可见右边线 = 导航主按钮右边线；卡的中线 = 左侧文字块的中线） ═════════ */
+.hero { --hpt: clamp(24px, 5svh, 64px); --hpb: clamp(32px, 7svh, 88px); min-height: 100svh; display: flex; align-items: center; padding: calc(var(--nav) + var(--hpt)) 0 var(--hpb); overflow-x: clip; } /* 横向裁掉卡后光晕探出视口的部分（不产生横向滚动） */
+.hero__in { --h1: clamp(44px, min(5.6vw, 9.4svh), 96px); --cwW: clamp(480px, 52vw, 920px); --cw: min(var(--cwW), (100svh - var(--nav) - 140px) * 1.385); display: grid; grid-template-columns: minmax(0, 1fr) var(--cwW); grid-template-rows: auto auto; column-gap: clamp(32px, 4.4vw, 96px); row-gap: clamp(16px, 2.6svh, 26px); }
+.hero__eyebrow { grid-area: 1 / 1; display: flex; align-items: center; gap: 10px; font: 500 13.5px/1 var(--lat); color: var(--ink-2); }
+/* 眉标后面的「最近更新」小链接：main.js 第 7c 节从更新日志快照取最新一条的日期填进来，取不到就不显示；点了去更新日志页 */
+.hero__upd { display: inline-flex; align-items: center; gap: 7px; height: 24px; margin-left: 4px; padding: 0 10px 0 9px; border: 1px solid var(--line-2); border-radius: 12px; font: 500 12.5px/1 var(--cjk); color: var(--ink-2); white-space: nowrap; transition: border-color .2s, color .2s; }
+.hero__upd[hidden] { display: none; }
+.hero__upd::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #34c99a; }
+.hero__upd b { font-weight: 600; color: var(--ink); }
+.hero__upd .ic { width: 13px; height: 13px; color: var(--ink-3); }
+.hero__upd:hover { border-color: var(--line-h); color: var(--ink); }
+.hero__copy { grid-area: 2 / 1; min-width: 0; }
+.hero__h { font: 600 var(--h1)/1.06 var(--lat); letter-spacing: -.035em; color: var(--ink); }
+.hero__sub { max-width: 25em; margin-top: clamp(16px, 2.6svh, 26px); font-size: clamp(15px, min(1.28vw, 2.2svh), 18.5px); line-height: 1.65; color: var(--ink-3); word-break: keep-all; text-wrap: balance; } /* 只在空格与标点处折行，不把「人工」拆开 */
+.hero__sub span { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.hero__cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: clamp(22px, 3.8svh, 40px); }
+.hero__stage { grid-area: 1 / 2 / 3 / 3; position: relative; }
+/* 宽屏：卡不参与撑高（倾斜后比布局框高一截），竖直居中在左侧文字块（眉标到按钮）的中线上；高度按 1.585:1 算，半高 = 卡宽 / 3.17。
+   卡栏宽 --cwW 按视口宽算；矮宽屏（如 1440×610）卡宽 --cw 被高度限住时，卡贴着卡栏左缘、向右留白，不再贴右边把空洞全留在文字和卡之间 */
+.hero__stage .card { position: absolute; left: 0; width: var(--cw); top: 50%; margin-top: calc(var(--cw) / -3.17);
+  /* 光晕往下最多探出 0.4 个卡高，且不超过开场的底边（卡中线到开场底边 = (100svh − 上内边距 + 下内边距) / 2），不漫进下一屏 */
+  --gb: calc(-1 * min(var(--cw) * .252, (100svh - var(--nav) - var(--hpt) + var(--hpb)) / 2 - var(--cw) / 3.17)); }
+
+/* 卡面照搬样张甲：明亮的 2D 全息卡（assets/js/card.js 画在 canvas 上）+ 甲的透视倾斜 + 底下一抹柔和投影 + 卡后一圈冰蓝 · 薰衣草光晕。
+   甲的海报宽 591px 时用 perspective(1400px)、投影 0 40px 70px -30px；这里按卡宽等比换算（cqw = 卡宽的 1%），卡放大缩小透视感与投影都和甲一样；
+   卡比 591px 窄（手机）时透视距离停在甲的 1400px，不让近大远小比甲更强。
+   倾斜后右侧离人更近、会探出布局框约 3% 卡宽，左侧收进约 5%：--cx 把它挪回来，让卡的可见轮廓落在栏内。画好前透明（不先露出一块空投影）。
+   交互（main.js 用弹簧写 --rx / --ry 等变量；静止时全为 0，叠出来的矩阵与原来那张静止海报完全相同）：
+   - .card__tilt 整张卡：在甲的姿态外面再绕屏幕横轴、竖轴各转 --rx / --ry 度（指针所在的那一侧朝人翘起），--lift 让它微微放大，--pop 是点击时那一下回弹；只动 transform。
+     touch-action：竖向拖动交给浏览器滚动，双指缩放照常（pinch-zoom 不认识的浏览器退回只写 pan-y 的那一行）。
+   - .card__shade 卡底柔影（全站只有它和权益对比的高级版卡允许投影）：随倾斜往翘起那一侧的反方向挪、悬起时略往下沉、放大、变淡。
+   - .card__patch / .card__seal 全息章：卡动起来时换成单独的一小块（card.js），随倾斜比卡面多挪几个像素，看着浮在扭索纹上方；静止时卡面就是底版那一整张。
+   - 光泽分两层，都只会把卡面提亮、不会压暗，都带一张遮罩（main.js 用 card.js 的 drawMask 画好设成 mask-image：深色字挖空、大字 77 挖掉一半，字不会被光泽提灰）：
+     · .card__shine 全息虹彩，以 plus-lighter（加色；不认识它的浏览器退回 screen）叠上去。里面是 .card__holo 玫瑰 / 丁香 / 冰蓝 / 薄荷四色斜条，
+       每色只加一两个通道（加的是色相，不是白），条与条之间留空不混色；随 --hx / --hy 以约 2 倍于指针的速度滑过，同一处换个角度就换个颜色；
+       指针周围一圈最浓（径向遮罩：指针处略淡、外圈 12–22cqw 最浓、再往外渐淡），就是跟着指针走的那圈虹彩光斑。.card__sweep 是空闲时扫过的一道彩色光带。
+       颜色写成 display-p3（不认识的浏览器用前一行的 sRGB）：Mac 等广色域屏上合成是在 P3 里做的，sRGB 的「纯红」换到 P3 会带上绿和蓝，
+       近白的卡面一加就三个通道一起顶满、冲成白；写成 P3 的纯色，加上去的就只有那一两个通道。几层光不叠在同一处，也是为了不凑齐三个通道。
+     · .card__glint 斜向白色高光带（.card__glare，峰值 .34），以 screen 叠：提亮的量与离白还差多少成正比，越接近白加得越少，永远不会把卡面顶成纯白，
+       主要落在章、扭索纹、77 这些有颜色的地方。
+     倾斜越大越亮（--hi，0…1）。不交互、不扫光时两层都 display: none，卡面就是原来那张 canvas。 */
+.card { position: relative; width: 100%; margin: 0; container-type: inline-size; isolation: isolate; --cx: -3.6%; }
+.card__tilt { position: relative; border-radius: 3.2% / 5%; opacity: 0; transition: opacity .6s var(--ease); touch-action: pan-y; touch-action: pan-y pinch-zoom; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none;
+  transform: translateX(var(--cx, 0%)) perspective(max(100cqw * 2.369, 1400px)) rotateX(calc(var(--rx, 0) * 1deg)) rotateY(calc(var(--ry, 0) * 1deg))
+    rotateX(9deg) rotateY(-19deg) rotateZ(-2.6deg) scale(calc(1 + var(--lift, 0) * .014 - var(--pop, 0) * .03)); }
+.card__tilt.is-drawn { opacity: 1; }
+/* 底色白 .8：原来卡上那圈 inset 1px 白描边只在卡边的抗锯齿像素里露出来（卡面不透明，盖住了其余部分），衬一层白底效果相同，又不必多一处投影 */
+.card__cv { display: block; width: 100%; height: auto; aspect-ratio: 2048 / 1292; border-radius: inherit; background: rgba(255, 255, 255, .8); }
+/* 柔影：原来是卡上的 0 6.77cqw 11.84cqw -5.08cqw。投影只画在盒子外面，盒子一挪，没有投影的盒心就会从卡边探出来（一圈发白的「第二张卡」）；
+   所以盒子四边各缩进 4cqw、扩散相应改成 -1.08cqw（4 − 5.08）、圆角 0（原来 3.2cqw 的圆角减去 5.08 的收缩也是 0）——静止时投影的形状、位置与原来一样，
+   挪动、放大时盒心始终藏在卡后面 */
+.card__shade { position: absolute; z-index: -1; inset: 4cqw; pointer-events: none; will-change: transform, opacity;
+  box-shadow: 0 6.77cqw 11.84cqw -1.08cqw rgba(60, 40, 140, .45);
+  transform: translate(calc(var(--ry, 0) * .2cqw), calc(var(--rx, 0) * -.2cqw + var(--lift, 0) * .9cqw)) scale(calc(1 + var(--lift, 0) * .02));
+  opacity: calc(1 - var(--lift, 0) * .12); }
+/* 全息章的两小块（card.js：.card__patch 只铺底色盖住底版上的章，.card__seal 是章本身）：只包住章的方块，下面的位置是卡面坐标换算的近似值，card.js 画好后按位图整像素改写。
+   只在卡动起来（.is-live）时露出，静止时卡面就是底版那一整张；章随倾斜多挪一点（每度 .09cqw，左右 ±10° 约 ±0.9 卡宽 %），看着浮在扭索纹上方。
+   带圆角：带圆角的画布在合成时与底版走同一条路径（重采样一次），不带的话章会比底版锐一点；章是圆的，50% 的圆角不会切到它 */
+.card__patch, .card__seal { position: absolute; left: 73.926%; top: 34.365%; width: 17.1875%; height: 27.245%; display: block; border-radius: 50%; pointer-events: none; visibility: hidden; }
+.card.is-live .card__patch, .card.is-live .card__seal { visibility: visible; }
+.card__seal { transform: translate(calc(var(--ry, 0) * .09cqw), calc(var(--rx, 0) * -.09cqw)); }
+.card__shine, .card__glint { position: absolute; inset: 0; display: none; overflow: hidden; border-radius: inherit; pointer-events: none;
+  -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
+.card__shine { mix-blend-mode: screen; mix-blend-mode: plus-lighter; }
+.card__glint { mix-blend-mode: screen; }
+.card.is-live .card__shine, .card.is-sweep .card__shine, .card.is-live .card__glint { display: block; }
+.card__holo, .card__glare, .card__sweep { position: absolute; will-change: transform, opacity; }
+/* 全息光带：只有一道宽而柔的虹彩（玫瑰 → 丁香 → 冰蓝 → 薄荷连续过渡），斜向穿过指针所在位置（--hb），换角度时颜色跟着走；
+   原来的重复细条纹一张卡上有十几道，用户嫌「闪光痕太多」，改成这一道 */
+.card__holo { inset: 0; will-change: opacity; opacity: var(--hi, 0);
+  background-image: linear-gradient(112deg,
+      rgba(255, 0, 90, 0) calc(var(--hb, .5) * 100% - 26%), rgba(255, 0, 90, .12) calc(var(--hb, .5) * 100% - 17%),
+      rgba(115, 0, 255, .11) calc(var(--hb, .5) * 100% - 7%), rgba(0, 128, 255, .12) calc(var(--hb, .5) * 100% + 4%),
+      rgba(0, 255, 115, .1) calc(var(--hb, .5) * 100% + 14%), rgba(0, 255, 115, 0) calc(var(--hb, .5) * 100% + 24%));
+  background-image: linear-gradient(112deg in display-p3,
+      color(display-p3 1 0 .35 / 0) calc(var(--hb, .5) * 100% - 26%), color(display-p3 1 0 .35 / .12) calc(var(--hb, .5) * 100% - 17%),
+      color(display-p3 .45 0 1 / .11) calc(var(--hb, .5) * 100% - 7%), color(display-p3 0 .5 1 / .12) calc(var(--hb, .5) * 100% + 4%),
+      color(display-p3 0 1 .45 / .1) calc(var(--hb, .5) * 100% + 14%), color(display-p3 0 1 .45 / 0) calc(var(--hb, .5) * 100% + 24%));
+  -webkit-mask-image: radial-gradient(circle 64cqw at calc(var(--hx, .5) * 100%) calc(var(--hy, .5) * 100%), rgba(0, 0, 0, .6), #000 12cqw, #000 22cqw, rgba(0, 0, 0, .3));
+  mask-image: radial-gradient(circle 64cqw at calc(var(--hx, .5) * 100%) calc(var(--hy, .5) * 100%), rgba(0, 0, 0, .6), #000 12cqw, #000 22cqw, rgba(0, 0, 0, .3)); }
+/* 高光带：斜 22°，--hb 是它在卡宽上的位置（让带子正好穿过指针） */
+.card__glare { left: -30cqw; top: -50%; width: 60cqw; height: 200%; opacity: var(--hi, 0); transform: translateX(calc(var(--hb, .5) * 100cqw)) rotate(22deg);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 30%, rgba(255, 255, 255, .12) 40%, rgba(255, 255, 255, .3) 47%, rgba(255, 255, 255, .34) 50%, rgba(255, 255, 255, .3) 53%, rgba(255, 255, 255, .12) 60%, rgba(255, 255, 255, 0) 70%); }
+/* 扫光：一道玫瑰 → 冰蓝 → 薄荷的彩色光带，色与色之间留空 */
+.card__sweep { left: -30cqw; top: -50%; width: 60cqw; height: 200%; opacity: 0; transform: translateX(-24cqw) rotate(22deg);
+  background: linear-gradient(90deg, rgba(255, 0, 90, 0) 26%, rgba(255, 0, 90, .13) 35%, rgba(255, 0, 90, 0) 42%, rgba(0, 128, 255, 0) 42%, rgba(0, 128, 255, .15) 50%, rgba(0, 128, 255, 0) 58%, rgba(0, 255, 115, 0) 58%, rgba(0, 255, 115, .12) 65%, rgba(0, 255, 115, 0) 74%);
+  background: linear-gradient(90deg in display-p3, color(display-p3 1 0 .35 / 0) 26%, color(display-p3 1 0 .35 / .13) 35%, color(display-p3 1 0 .35 / 0) 42%,
+    color(display-p3 0 .5 1 / 0) 42%, color(display-p3 0 .5 1 / .15) 50%, color(display-p3 0 .5 1 / 0) 58%, color(display-p3 0 1 .45 / 0) 58%, color(display-p3 0 1 .45 / .12) 65%, color(display-p3 0 1 .45 / 0) 74%); }
+/* 卡后的光晕：甲开场底色那组径向渐变（薰衣草 → 冰蓝主光晕偏下、左下一抹蜜桃、右侧一抹薄荷），圆心挪到卡上、尺寸按卡宽换算。
+   只是背景渐变（不是投影、不是滤镜）；收在卡四周，左侧文案区仍是纯底色，也不漫进下一屏 */
+.card::before { content: ""; position: absolute; z-index: -1; left: var(--gl, -30%); right: var(--gr, -34%); top: var(--gt, -18%); bottom: var(--gb, -25%); pointer-events: none;
+  background:
+    radial-gradient(50% 50% at 50% 50%, rgba(217, 204, 255, .5), rgba(191, 230, 255, .2) 67%, rgba(243, 242, 247, 0) 100%),
+    radial-gradient(26% 24% at 26% 74%, rgba(255, 224, 189, .35), rgba(255, 224, 189, 0) 100%),
+    radial-gradient(24% 26% at 80% 46%, rgba(169, 255, 224, .25), rgba(169, 255, 224, 0) 100%); }
+/* 深色 */
+/* 卡面（canvas）、光泽层深浅同一套，一个像素不压暗；只换卡周围两样，让亮卡在深底上立得住：
+   - 卡后光晕：浅色那组粉彩半透明叠在深底上，粉彩约等于「白 + 一点色相」，叠出来只剩一团灰雾。深色改成同色相、饱和度高、透明度低的版本
+     （薰衣草 → 冰蓝主光晕、右侧薄荷），读作亮卡在深底上映出的一圈靛蓝环境光；主光晕多加几个色标，衰减更平滑（深底上的长渐变容易看出一圈圈色阶）。
+     左下那抹蜜桃往玫瑰偏一点：暖色低透明度叠在深蓝底上发褐、像一块脏斑，偏玫瑰就落回紫调里。
+   - 卡底柔影：浅色那抹紫影在深底上几乎看不见，换成更浓的墨色，压在光晕上才看得出卡浮起来；形状、位置、随倾斜的挪动都与浅色相同。 */
+:root[data-theme="dark"] .card__shade { box-shadow: 0 6.77cqw 11.84cqw -1.08cqw rgba(2, 3, 10, .72); }
+:root[data-theme="dark"] .card::before {
+  background:
+    radial-gradient(50% 50% at 50% 50%, rgba(128, 104, 255, .38), rgba(112, 118, 255, .24) 36%, rgba(84, 150, 255, .11) 67%, rgba(84, 150, 255, .03) 86%, rgba(84, 150, 255, 0) 100%),
+    radial-gradient(26% 24% at 26% 74%, rgba(255, 128, 150, .08), rgba(255, 128, 150, 0) 100%),
+    radial-gradient(24% 26% at 80% 46%, rgba(64, 224, 176, .08), rgba(64, 224, 176, 0) 100%); }
+
+/* ───────── 开场主按钮「免费试用高级版」：珠光渐变底 + 气焰 + 悬停气流拖尾（样张对比见 output/compare-layouts/btn/，选的第 4 种「组合」；
+   原有的边框流光——两束沿边框绕行的光——用户不要，已删掉，边框是静态渐变） ─────────
+   原来纯黑实底在亮色全息卡旁边不起眼。按钮里一个 aria-hidden 的 .fx 垫在文字下面（z-index:-1，按钮自己 isolation 成层），分三层：
+     .fx__out  按钮外一圈（左、上 14px，下 10px，右 8px——次按钮在 10px 外，右边这 8px 里渐隐到 0，碰不到它），四边渐隐遮罩；
+               里面三团冰蓝 / 薰衣草 / 蜜桃气焰缓慢漂移形变
+     .fx__rim  按钮整块：加深一档的品牌渐变做边框底色
+     .fx__face 内缩 1.5px 的按钮面（盖住 rim，只露 1.5px 边框环）：品牌渐变缓慢平移（.fx__pan）、指针拖尾（一块 canvas）
+   .fx 带 contain: layout：外圈探出按钮的部分只算「墨迹溢出」，不把按钮的 scrollWidth 撑宽（权益对比自检的「文字无截断」按 scrollWidth 判断），也不产生滚动。
+   外圈与按钮面里各一个与按钮外框重合的 .fx__ref，气焰与拖尾画布相对它定位。气焰与底色平移是 CSS 关键帧，只动 transform；
+   拖尾画在 canvas 上（逐帧改十几个元素的 transform 会让整页每帧重新分层，中低配机器上悬停掉帧）。全是渐变，不用投影、滤镜。
+   文字：深墨字对底色最深处（薰衣草 #c2adff）≈ 8.9:1；拖尾的画布以加色叠上去（plus-lighter，不认识的浏览器退回 screen），只会提亮、不会压暗。
+   滚出视口挂 .is-off（CSS 动画停下）；减少动态效果时不建拖尾，只剩静态渐变边框与底。 */
+.btn--fx { --bw: 1.5px; position: relative; isolation: isolate; color: var(--ink); -webkit-tap-highlight-color: transparent; }
+.btn--fx .fx { position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none; contain: layout; }
+.fx__out, .fx__rim, .fx__face, .fx__ref { position: absolute; display: block; }
+.fx__out { inset: -14px -8px -10px -14px; overflow: hidden; opacity: .8; transition: opacity .45s var(--ease);
+  -webkit-mask: linear-gradient(90deg, transparent, #000 12px, #000 calc(100% - 12px), transparent), linear-gradient(transparent, #000 11px, #000 calc(100% - 8px), transparent);
+  -webkit-mask-composite: source-in;
+  mask: linear-gradient(90deg, transparent, #000 12px, #000 calc(100% - 12px), transparent), linear-gradient(transparent, #000 11px, #000 calc(100% - 8px), transparent);
+  mask-composite: intersect; }
+.fx__out > .fx__ref { inset: 14px 8px 10px 14px; }
+.fx__rim { inset: 0; overflow: hidden; border-radius: inherit; background: linear-gradient(100deg, #a9d4ff, #c4b5ff 52%, #ffc49c); }
+.fx__face { inset: var(--bw); overflow: hidden; border-radius: calc(8px - var(--bw)); background: #e3dbff; }
+.fx__face > .fx__ref { inset: calc(-1 * var(--bw)); }
+.fx__trail { position: absolute; left: 0; top: 0; width: 100%; height: 100%; mix-blend-mode: screen; mix-blend-mode: plus-lighter; }
+/* 底色：三倍宽的水平品牌渐变，18 秒平移两个按钮宽。必须是 90°：斜向渐变在水平方向的周期对不上平移量，循环衔接处会整块跳色 */
+.fx__pan { position: absolute; left: 0; top: 0; bottom: 0; width: 300%; will-change: transform; animation: fx-pan 18s linear infinite;
+  /* 用户嫌原来的 #a6d6ff / #c2adff / #ffc898 「颜色太深了」，改成接近 PRO 小签的浅色 */
+  background: linear-gradient(90deg, #d2ebff 0%, #e3dbff 16.6667%, #ffe5cc 33.3333%, #e3dbff 50%, #d2ebff 66.6667%, #e3dbff 83.3333%, #ffe5cc 100%); }
+@keyframes fx-pan { to { transform: translateX(-66.6667%); } }
+/* 气焰：三团大号椭圆渐变，平移 + 旋转 + 不等比缩放，周期互不整除，不会排成同一个节奏 */
+.fx__aur { position: absolute; inset: 0; opacity: .45; transition: opacity .45s var(--ease); }
+.fx__aur b { position: absolute; border-radius: 50%; will-change: transform; background: radial-gradient(closest-side, rgb(var(--c) / .8), rgb(var(--c) / .44) 45%, rgb(var(--c) / 0)); }
+.fx__aur b:nth-child(1) { --c: 120 196 255; left: -18%; top: -95%; width: 66%; height: 290%; animation: fx-d1 9s ease-in-out infinite; }
+.fx__aur b:nth-child(2) { --c: 172 148 255; left: 20%; top: -80%; width: 62%; height: 260%; animation: fx-d2 11s ease-in-out infinite; }
+.fx__aur b:nth-child(3) { --c: 255 178 128; left: 56%; top: -90%; width: 60%; height: 280%; animation: fx-d3 10s ease-in-out infinite; }
+@keyframes fx-d1 { 0%, 100% { transform: translate(0, 0) rotate(0deg) scale(1, 1); } 33% { transform: translate(22%, 6%) rotate(24deg) scale(1.18, .86); } 66% { transform: translate(-6%, -5%) rotate(-14deg) scale(.9, 1.1); } }
+@keyframes fx-d2 { 0%, 100% { transform: translate(0, 0) rotate(0deg) scale(1, 1); } 40% { transform: translate(-18%, 8%) rotate(-28deg) scale(1.15, .9); } 75% { transform: translate(14%, -6%) rotate(16deg) scale(.88, 1.12); } }
+@keyframes fx-d3 { 0%, 100% { transform: translate(0, 0) rotate(0deg) scale(1, 1); } 30% { transform: translate(-20%, -6%) rotate(20deg) scale(.86, 1.14); } 70% { transform: translate(8%, 7%) rotate(-22deg) scale(1.16, .9); } }
+/* 悬停（鼠标；键盘聚焦同样，.is-hot 由 main.js 挂）：外圈与气焰提亮 */
+.btn--fx.is-hot .fx__out { opacity: 1; }
+.btn--fx.is-hot .fx__aur { opacity: .7; }
+.btn--fx.is-off .fx *, .is-hidden .btn--fx .fx * { animation-play-state: paused !important; }
+/* 深色 */
+/* 按钮面、边框、气焰的颜色深浅同一套：浅色珠光底在深底上就是全页最醒目的一块。字钉回深墨（--ink 深色下是浅字，压在浅底上看不见），对比度同浅色 ≈ 8.9:1。
+   气焰在浅底上是一圈比底色深的彩色烟，在深底上反过来成了比底色亮的光，同样的强度就显得冲：外圈压到 .62（悬停 .9），
+   四边的渐隐从直线改成二次曲线（贴着按钮最浓、往外拖一条细尾巴，像光自然散开，不留一圈看得出的边）。拖尾画布在浅色按钮面里加色叠，深色下照样只提亮 */
+:root[data-theme="dark"] .btn--fx { color: #16182a; }
+:root[data-theme="dark"] .fx__out { opacity: .62;
+  -webkit-mask: linear-gradient(90deg, transparent, rgba(0, 0, 0, .06) 3px, rgba(0, 0, 0, .25) 6px, rgba(0, 0, 0, .56) 9px, #000 12px, #000 calc(100% - 12px), rgba(0, 0, 0, .56) calc(100% - 9px), rgba(0, 0, 0, .25) calc(100% - 6px), rgba(0, 0, 0, .06) calc(100% - 3px), transparent),
+    linear-gradient(transparent, rgba(0, 0, 0, .06) 2.75px, rgba(0, 0, 0, .25) 5.5px, rgba(0, 0, 0, .56) 8.25px, #000 11px, #000 calc(100% - 8px), rgba(0, 0, 0, .56) calc(100% - 6px), rgba(0, 0, 0, .25) calc(100% - 4px), rgba(0, 0, 0, .06) calc(100% - 2px), transparent);
+  -webkit-mask-composite: source-in;
+  mask: linear-gradient(90deg, transparent, rgba(0, 0, 0, .06) 3px, rgba(0, 0, 0, .25) 6px, rgba(0, 0, 0, .56) 9px, #000 12px, #000 calc(100% - 12px), rgba(0, 0, 0, .56) calc(100% - 9px), rgba(0, 0, 0, .25) calc(100% - 6px), rgba(0, 0, 0, .06) calc(100% - 3px), transparent),
+    linear-gradient(transparent, rgba(0, 0, 0, .06) 2.75px, rgba(0, 0, 0, .25) 5.5px, rgba(0, 0, 0, .56) 8.25px, #000 11px, #000 calc(100% - 8px), rgba(0, 0, 0, .56) calc(100% - 6px), rgba(0, 0, 0, .25) calc(100% - 4px), rgba(0, 0, 0, .06) calc(100% - 2px), transparent);
+  mask-composite: intersect; }
+:root[data-theme="dark"] .btn--fx.is-hot .fx__out { opacity: .9; }
+
+/* ═════════ 全部高级版独有功能（折叠） ═════════ */
+.all details { border-top: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2); }
+.all summary { list-style: none; display: flex; align-items: center; gap: 12px; height: 58px; cursor: pointer; font: 600 15px/1 var(--cjk); }
+.all summary::-webkit-details-marker { display: none; }
+.all summary em { font-style: normal; font-weight: 400; font-size: 13px; color: var(--ink-3); }
+.all summary .ic { margin-left: auto; transition: transform .35s var(--ease); }
+.all details[open] summary .ic { transform: rotate(180deg); }
+.all__cols { columns: 300px 4; column-gap: 40px; padding: 8px 0 40px; }
+.all__grp { break-inside: avoid; margin-bottom: 26px; }
+.all__grp h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font: 600 12px/1 var(--cjk); letter-spacing: .06em; color: var(--ink-3); }
+.all__grp h3::before { content: ""; width: 6px; height: 6px; background: var(--blue); }
+.all__grp li { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; line-height: 1.5; color: var(--ink-2); }
+.all__grp li b { font-weight: 600; color: var(--ink); margin-right: .5em; }
+/* 深色 */
+/* 全走变量：上下细线、组名、条目分隔线换深色版，组名前的小方块是提亮蓝，条目是浅字；直接铺在页面底上，不另起色块 */
+
+/* ═════════ 权益对比 · 双卡对照（正常留白，表头吸顶） ═════════
+   左：普通版素白卡（1px 细线、零投影）；右：高级版全息卡面（与开场卡同色系：同色渐变 + 珠光薄膜；卡顶放扭索纹圆环、全息章与渐变大字 77），
+   这张卡和开场卡是全页仅有的两处柔影。.cmp__duo 是两栏网格：每一行 .r 横跨两栏、用子网格（subgrid）取同一组列宽，
+   .r__f 落左栏、.r__p 落右栏，同一行在两卡上必然同高；两张卡的卡面 .vc 绝对定位在各自栏里、垫在行的下面。
+   内容全部直接铺开（没有浮层、弹框、抽屉、点击展开）：两版都有 7 项（名称 + 说明）；高级版独有 9 组 77 项——条数大字 + 组名、一句组说明、
+   琥珀色风险边界句、全部条目一行一个、按宽度分 2–4 栏（多栏布局自己平衡各栏条数）；体验与服务 8 项；平台与微信版本；会员边界说明。
+   节奏固定、舒展：条目 14px / 1.7、组名 17px、条数约 32px、组与组之间约 36px；区块高度随内容自然增长，不追求一屏。
+   两卡卡头（.cmp__bar）position: sticky 吸在导航下沿（top = --nav），包含块是 .cmp__tbl：表格滚完它就跟着离开，不盖住获取区；
+   表格快结束（卡头下只剩不到 120px 表格）时 compare.js 给它挂 .is-gone，淡出并上移到导航后面，不会孤零零悬在获取区上方。
+   卡头不透明（卡面同色）、不用模糊，底部一条细线。窄屏（≤1000，平板与手机）改成上下排列的单列明细，卡头简化成一行（两个按钮 + 图例）。
+   说明文字（组说明、风险边界、普通版短说明、体验与平台说明）按词断行：keep-all 只在标点、空格和 HTML 里写好的 <wbr> 处折行，再做 balance 均分行长，
+   不出现两三个字的孤行，也不把「一键恢复」「拉人进群」这类词拆开；overflow-wrap: anywhere 兜底防溢出。
+   动画只动 transform / opacity（「只看差异」收起那一段时补间一次高度），减少动态效果时全部静止。 */
+.cmp {
+  --lw: clamp(260px, 24vw, 400px);   /* 左卡宽 */
+  --seam: clamp(14px, 1.4vw, 24px);  /* 卡缝 */
+  --px: clamp(20px, 2vw, 32px);      /* 卡内左右边距 */
+  --ip: calc(var(--px) - 1px);       /* 行的左右内边距（行比栏左右各窄 1px，悬停底色不盖住卡边线） */
+  --hc: clamp(190px, 17vw, 280px);   /* 右卡「条数 + 组名 + 组说明」一栏 */
+  --hg: clamp(28px, 2.6vw, 44px);    /* 这一栏与条目栏的间距 */
+  --hl: 36px;                        /* 每行首行的行高：两卡的名称、状态、条数、条目第一行都落在这一行里 */
+  --rp: 18px;                        /* 行上下内边距：组与组之间约 36px */
+  --ss: 22px;                        /* 状态符号 */
+  --sd: clamp(48px, 4vw, 64px);      /* 全息章直径（扭索纹圆环外径约是它的 2.4 倍） */
+  --pl: rgba(120, 110, 175, .14);    /* 右卡行线 */
+  padding-top: clamp(64px, 10svh, 120px); scroll-margin-top: var(--nav); overflow-anchor: none; /* 「只看差异」自己补偿滚动位置 */
+}
+
+/* 标题行（不吸顶）：标题 + 一句说明；手机上「只看差异」也在这一行 */
+.cmp__top { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 18px; row-gap: 6px; margin-bottom: clamp(14px, 2.2svh, 26px); }
+.cmp__top h2 { font: 600 clamp(28px, 2.7vw, 42px)/1.15 var(--lat); letter-spacing: -.03em; white-space: nowrap; }
+.cmp__p { font-size: 15px; line-height: 1.6; color: var(--ink-3); text-wrap: pretty; }
+.cmp__legend { display: flex; align-items: center; gap: 14px; font: 500 13px/1 var(--cjk); color: var(--ink-2); white-space: nowrap; }
+.cmp__legend span { display: inline-flex; align-items: center; gap: 6px; }
+.cmp__legend .st { width: 17px; height: 17px; }
+.cmp__sw { display: inline-flex; align-items: center; gap: 9px; height: 32px; padding: 0 12px 0 8px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--paper); font: 500 13px/1 var(--cjk); color: var(--ink-2); white-space: nowrap; }
+.cmp__sw:hover { border-color: var(--line-h); color: var(--ink); }
+.cmp__sw i { position: relative; width: 28px; height: 16px; border-radius: 999px; background: #dfe1e8; overflow: hidden; }
+.cmp__sw i::before { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, #7cc9ff, #a68ff4); opacity: 0; transition: opacity .25s; }
+.cmp__sw i::after { content: ""; position: absolute; left: 2px; top: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; transition: transform .3s var(--ease); }
+.cmp__sw[aria-checked="true"] { color: var(--ink); border-color: #b9b2ee; }
+.cmp__sw[aria-checked="true"] i::before { opacity: 1; }
+.cmp__sw[aria-checked="true"] i::after { transform: translateX(12px); }
+.cmp__sw--m { display: none; }
+
+/* ═════════ 吸顶卡头：两格与下面两卡同列宽；不透明（页面底色垫底，格子是卡面同色），表格结束时随表格离开 ═════════ */
+.cmp__tbl { position: relative; transition: opacity .6s var(--ease), transform .8s var(--ease); }
+.cmp.is-pre .cmp__tbl { opacity: 0; transform: translate(0, 12px); }
+.cmp__pin, .cmp__end { display: block; height: 0; }
+/* 底色左右各往外多铺一个槽宽（内边距补回，两格位置不变）：吸住时盖住高级版卡身伸出栏外的 1px 外描边与侧边柔影，卡头上方那 12px 空隙里不再露出一条竖线 */
+.cmp__bar { position: sticky; top: var(--nav); z-index: 6; display: grid; grid-template-columns: var(--lw) minmax(0, 1fr); column-gap: var(--seam); margin-inline: calc(-1 * var(--gut)); padding: 12px var(--gut) 0; background: var(--bg); transition: opacity .2s, transform .2s var(--ease); }
+/* 表格快结束：淡出并上移到导航后面（只动 opacity / transform，不改尺寸）；键盘焦点落在卡头里时照常显示 */
+.cmp__bar.is-gone { opacity: 0; transform: translate(0, -100%); pointer-events: none; }
+.cmp__bar.is-gone:focus-within { opacity: 1; transform: none; pointer-events: auto; }
+.cb { position: relative; min-width: 0; display: flex; align-items: center; gap: clamp(14px, 1.5vw, 24px); min-height: 68px; padding: 12px var(--ip); border: 1px solid var(--line); border-radius: 8px 8px 0 0; background: var(--paper); transition: border-color .2s; }
+/* 高级版卡头：外缘对齐卡身那圈 1px 淡紫描边（卡身是白描边 + 外圈），里面再补一道白描边 */
+.cb--pro { margin-inline: -1px; padding-inline: calc(var(--ip) + 1px); isolation: isolate; overflow: hidden; border-color: rgba(120, 110, 175, .2); background: #fbfaff; }
+.cb--pro::after { content: ""; position: absolute; inset: 0; border: 1px solid rgba(255, 255, 255, .95); border-bottom: 0; border-radius: 7px 7px 0 0; pointer-events: none; }
+.cmp__bar.is-stuck .cb--free { border-bottom-color: var(--line-2); }
+.cmp__bar.is-stuck .cb--pro { border-bottom-color: rgba(120, 110, 175, .34); }
+.cb__n { display: flex; align-items: center; gap: 10px; margin-right: auto; font: 600 clamp(18px, 1.5vw, 22px)/1.2 var(--cjk); white-space: nowrap; }
+.cb .pro { height: 22px; padding: 0 9px; border: 1px solid rgba(255, 255, 255, .9); font-size: 11px; letter-spacing: .14em; }
+.cb .btn { flex: none; height: 38px; padding: 0 16px; font-size: 14px; }
+.cb__m { display: none; }
+.cb__face { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden;
+  background:
+    radial-gradient(46% 260% at 92% 0%, rgba(176, 222, 255, .72), rgba(191, 230, 255, 0) 70%),
+    radial-gradient(40% 240% at 34% 130%, rgba(210, 196, 255, .36), rgba(217, 204, 255, 0) 70%),
+    linear-gradient(150deg, #ffffff 0%, #f8f6fd 100%); }
+.cb__face .vc__frame { inset: 5px 5px -2px; border-bottom: 0; border-radius: 4px 4px 0 0; }
+
+/* ═════════ 双卡：两栏网格；卡面垫底，行（.r）横跨两栏、子网格取同一组列宽 ═════════ */
+.cmp__duo { position: relative; display: grid; grid-template-columns: var(--lw) minmax(0, 1fr); column-gap: var(--seam); }
+.vc { position: absolute; inset: 0; pointer-events: none; border-radius: 0 0 8px 8px; } /* 绝对定位的网格子项：两条列线都要写明（end 留 auto 会一直伸到容器边） */
+.vc--free { grid-column: 1 / 2; background: var(--paper); border: 1px solid var(--line); border-top: 0; }
+.vc--pro { grid-column: 2 / 3; isolation: isolate; overflow: hidden; border: 1px solid rgba(255, 255, 255, .95); border-top: 0;
+  /* 全页第二处柔影（另一处是开场卡）：照开场卡 0 40px 70px -30px 的同一比例 */
+  box-shadow: 0 34px 60px -34px rgba(60, 40, 140, .42), 0 0 0 1px rgba(120, 110, 175, .16);
+  background:
+    radial-gradient(1100px 640px at 90% 0, rgba(176, 222, 255, .62), rgba(191, 230, 255, 0) 70%),
+    radial-gradient(900px 900px at 50% 46%, rgba(210, 196, 255, .34), rgba(217, 204, 255, 0) 70%),
+    radial-gradient(1100px 760px at 4% 100%, rgba(255, 216, 176, .5), rgba(255, 224, 189, 0) 70%),
+    linear-gradient(170deg, #ffffff 0%, #f8f6fd 50%, #f0ecfa 100%); }
+/* 珠光薄膜：斜向彩虹干涉带（与卡面同四色），固定周期，卡头与卡身同一个尺度 */
+.vc__film { position: absolute; inset: 0; opacity: .85;
+  background: repeating-linear-gradient(118deg, rgba(169, 220, 255, .22) 0, rgba(201, 184, 255, .34) 110px, rgba(255, 209, 161, .22) 220px, rgba(169, 255, 224, .32) 330px, rgba(169, 220, 255, .22) 440px); }
+.vc__frame { position: absolute; inset: -2px 5px 5px; border: 1px solid rgba(120, 110, 175, .14); border-top: 0; border-radius: 0 0 4px 4px; }
+.vc__edge { position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--brand-4); }
+/* 入场扫光：只扫卡的上段（向下淡出） */
+.vc__sheen { position: absolute; left: -60%; right: -60%; top: 0; height: 640px; opacity: .9; transform: translate(-62%, 0);
+  background: linear-gradient(105deg, rgba(255, 255, 255, 0) 38%, rgba(255, 255, 255, .62) 47%, rgba(255, 255, 255, .62) 51%, rgba(255, 255, 255, 0) 60%);
+  -webkit-mask-image: linear-gradient(#000 45%, transparent); mask-image: linear-gradient(#000 45%, transparent); }
+.vc--pro.is-shine .vc__sheen { animation: vcSheen 2.4s var(--ease) .35s both; }
+@keyframes vcSheen { from { transform: translate(-62%, 0); } to { transform: translate(40%, 0); } }
+
+/* —— 行：首行对齐（左卡名称与状态、右卡条数与组名都在 --hl 这一行里），说明与条目往下排 —— */
+.r { position: relative; grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }
+.r__f, .r__p { min-width: 0; margin-inline: 1px; padding: var(--rp) var(--ip); background: no-repeat var(--ip) 0 / calc(100% - 2 * var(--ip)) 1px; transition: background-color .2s; }
+.r__f { --rl: var(--line-a); --rs: var(--line); }
+.r__p { --rl: var(--pl); --rs: rgba(120, 110, 175, .22); }
+/* 行线：两版都有、组与组、体验各项、两条平台行之间、卡脚上方是极淡的细线（两卡同一高度）；分组标题与平台行上方是实线 */
+.r--both > *, .r--x + .r--x > *, .r--env2 > *, .r--foot > .r__p { background-image: linear-gradient(var(--rl), var(--rl)); }
+.r--sec > *, .r--env1 > * { border-top: 1px solid var(--rs); }
+.r .st { width: var(--ss); height: var(--ss); }
+.lab { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } /* 「普通版」「高级版」：桌面只给读屏，手机上是行首小标签 */
+/* 悬停：两卡同一行一起亮 */
+@media (hover: hover) and (min-width: 1001px) {
+  .r[data-i]:hover > .r__f { background-color: #f6f7fb; }
+  .r[data-i]:hover > .r__p { background-color: rgba(255, 255, 255, .58); }
+}
+
+/* 左卡（普通版）：名称在左、状态贴右缘（⊖ 前带琥珀短说明）；✕ 行名称退一档；下面一句普通版说明 */
+.r__f { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: start; column-gap: 12px; }
+.f__n { min-width: 0; font: 500 16px/var(--hl) var(--cjk); color: var(--ink); }
+.f__n em { margin-left: 8px; font: 400 13.5px/1 var(--cjk); color: var(--ink-3); }
+.r--no .f__n, .r--env .f__n { color: var(--ink-3); }
+.f__s { display: flex; align-items: center; gap: 8px; height: var(--hl); }
+.f__note { font: 500 13px/1 var(--cjk); color: #b0700e; white-space: nowrap; }
+.f__v { font: 500 14px/var(--hl) var(--lat); color: var(--ink-2); white-space: nowrap; }
+.f__d { grid-column: 1 / -1; margin-top: 2px; font-size: 13.5px; line-height: 1.65; color: var(--ink-3); text-wrap: pretty; }
+/* 说明文字按词断行（见本节开头）：普通版短说明、高级版组说明与风险边界、体验与平台说明；
+   窄栏里的（普通版短说明、组说明与风险边界，手机上全部）再均分行长；桌面宽栏里的体验与平台说明保持 pretty（只避免孤行，不把两行压成各半宽） */
+.f__d, .p__d { word-break: keep-all; overflow-wrap: anywhere; }
+.f__d, .r--g .p__d { text-wrap: balance; }
+
+/* 右卡（高级版）：左栏「✓ 条数大字 组名」+ 组说明 + 风险边界；右栏全部条目，一行一个、按宽度分 2–4 栏 */
+.r__p { display: grid; grid-template-columns: var(--hc) minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "h it" "d it"; column-gap: var(--hg); align-content: start; }
+/* 首行各件都按 --hl 这一行竖直居中（左卡名称与状态同样居中），条目与说明第一行用 6px 上边距落到同一条中线上 */
+.p__h { grid-area: h; display: flex; align-items: center; gap: 10px; min-height: var(--hl); }
+/* 条数：品牌加深渐变（冰蓝 → 薰衣草 → 蜜桃）按组取一段，十一组从上到下顺着色相走 */
+.p__c { padding-right: .03em; font: 650 clamp(28px, 2.2vw, 34px)/1 var(--lat); letter-spacing: -.03em; font-variant-numeric: tabular-nums;
+  background: linear-gradient(90deg, #2f86f0, #7a5cf0 50%, #d9702f) calc(var(--i, 0) * 10%) 0 / 1100% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent; }
+.r--both .p__c { background: none; color: var(--ink-2); }
+.p__n { font: 600 17px/1.3 var(--cjk); color: var(--ink); white-space: nowrap; }
+.p__u { display: none; }
+.p__d { grid-area: d; margin-top: 2px; padding-left: calc(var(--ss) + 10px); font-size: 13.5px; line-height: 1.7; color: var(--ink-3); text-wrap: pretty; }
+.p__d > .st { display: none; }
+/* 消息修改、消息补录两组的「电脑、手机都生效」小签（用户要求特别标出）：组名下单独一行，和组名左对齐；PRO 徽标同款浅渐变底 + 深墨字，
+   电脑、手机两只细线图标；底色是固定浅色，深浅两种主题同一个样子（深色下和 PRO 徽标一样亮），不另写深色规则 */
+.p__both { display: flex; align-items: center; gap: 1px; width: fit-content; height: 22px; margin: 4px 0 8px; padding: 0 7px 0 5px; border-radius: 4px;
+  background: var(--badge); color: #1b1d33; font: 600 11.5px/1 var(--cjk); white-space: nowrap; } /* 11.5px：1001–1180 宽时右卡首栏只剩 144px，小签要放得下 */
+.p__both .ic { width: 14px; height: 14px; }
+.p__both .ic + .ic { margin-right: 3px; }
+.p__d b { font: 650 1.04em/1 var(--lat); font-variant-numeric: tabular-nums; color: var(--ink); }
+.p__its { grid-area: it; columns: 140px 4; column-gap: 24px; padding-top: 6px; }
+.p__its li { break-inside: avoid; font-size: 14px; line-height: 1.7; color: var(--ink-2); text-wrap: balance; } /* 栏窄时长条目折成两段等长，不留一个字的孤行 */
+/* 两版都有：七项「名称 说明」，按宽度分 2–3 栏 */
+.p__defs { grid-area: it; columns: 280px 3; column-gap: 36px; padding-top: 6px; }
+.p__defs div { break-inside: avoid; padding-bottom: 8px; font-size: 14px; line-height: 1.7; }
+.p__defs dt { display: inline; margin-right: .6em; font-weight: 600; color: var(--ink); }
+.p__defs dd { display: inline; color: var(--ink-3); }
+/* 体验与服务、平台：完整说明放在条目栏 */
+.r--e .p__n, .r--env .p__n { font-size: 16px; }
+.r--e .p__d, .r--env .p__d { grid-area: it; max-width: 52em; margin: 0; padding: 6px 0 0; font-size: 14px; color: var(--ink-2); }
+.r--env .p__h { padding-left: calc(var(--ss) + 10px); }
+.r--env .p__n { color: var(--ink-2); }
+.p__d .p__v { display: block; font: 600 15px/1.6 var(--lat); color: var(--ink); }
+.r--env .p__t { display: block; margin-top: 2px; font-size: 13.5px; color: var(--ink-3); }
+
+/* 分组标题、卡顶、卡脚 */
+.r--sec > *, .r--hero > *, .r--foot > * { display: block; }
+.r--sec > * { padding-top: 30px; padding-bottom: 4px; }
+.r--sec p { display: flex; align-items: baseline; gap: 8px; font: 600 13px/1.4 var(--cjk); letter-spacing: .06em; color: var(--ink-3); }
+.r--sec em { font-style: normal; font-weight: 500; letter-spacing: 0; }
+.r--sec b { font: 650 1.08em/1 var(--lat); font-variant-numeric: tabular-nums; color: var(--ink); }
+.r--foot > * { padding-top: 14px; padding-bottom: 18px; }
+.r--foot p { font-size: 13px; line-height: 1.6; color: #615e7a; text-wrap: pretty; }
+.r--hero > * { position: relative; padding-top: clamp(22px, 2.2vw, 32px); padding-bottom: clamp(22px, 2.2vw, 32px); }
+.r--hero .r__p { min-height: calc(var(--sd) * 2.4137 + 6px + 48px); }
+.hk { font-size: 14px; line-height: 1.5; color: var(--ink-3); }
+.hb { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin-top: 14px; }
+.hb b { font: 650 clamp(40px, 3.6vw, 56px)/1 var(--cjk); color: var(--ink); }
+.hb span { font-size: 15px; color: var(--ink-2); }
+/* 77 箔压大字（卡顶左侧，只出现一次） */
+.vc__big { display: flex; align-items: flex-end; gap: 14px; margin-top: 12px; white-space: nowrap; }
+.vc__big b { padding-right: .04em; font: 700 clamp(84px, 7.4vw, 124px)/.8 var(--lat); letter-spacing: -.06em;
+  background:
+    repeating-linear-gradient(118deg, rgba(255, 255, 255, 0) 0 7px, rgba(255, 255, 255, .2) 7px 8.5px),
+    linear-gradient(160deg, #7cc4fb 0%, #a68ff4 36%, #f6ae7a 68%, #5fdcb2 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent; }
+.vc__big > span { display: flex; flex-direction: column; gap: 6px; padding-bottom: .2em; font: 600 clamp(16px, 1.3vw, 20px)/1.15 var(--cjk); color: #1b1a22; }
+.vc__big small { font-size: 13px; font-weight: 500; color: #77748a; }
+/* 扭索纹圆环（canvas，照开场卡的 46 圈公式与线宽比例）+ 全息章：卡顶右侧、竖直居中，圆环整圈都在卡顶这一行里，不压任何字 */
+.vc__art { position: absolute; top: 50%; right: calc(var(--ip) + var(--sd) * .7068 + 8px); width: var(--sd); height: var(--sd); margin-top: calc(var(--sd) / -2); pointer-events: none; }
+.vc__rose { position: absolute; left: 50%; top: 50%; width: calc(var(--sd) * 2.4137 + 6px); height: calc(var(--sd) * 2.4137 + 6px); transform: translate(-50%, -50%) rotate(calc(var(--sr, 0deg) * .25)); transition: transform 1.2s var(--ease); }
+.vc__seal { position: absolute; inset: 0; border-radius: 50%; overflow: hidden; border: max(2px, calc(var(--sd) * .028)) solid #fff; }
+.vc__seal-c { position: absolute; inset: -2%; border-radius: 50%; background: conic-gradient(from 56deg, #a9dcff, #c9b8ff, #ffd1a1, #a9ffe0, #a9dcff); transform: rotate(var(--sr, 0deg)); transition: transform 1.2s var(--ease); }
+.vc__seal-r { position: absolute; inset: 0; border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 30%, rgba(255, 255, 255, .8), rgba(255, 255, 255, .12) 55%, rgba(255, 255, 255, 0) 80%),
+    repeating-radial-gradient(circle closest-side, rgba(255, 255, 255, 0) 0 calc(5.7% - 1px), rgba(255, 255, 255, .5) calc(5.7% - 1px) 5.7%),
+    repeating-conic-gradient(rgba(255, 255, 255, .24) 0 .55deg, rgba(255, 255, 255, 0) .55deg 7.5deg); }
+.vc__seal svg { position: absolute; left: 36%; top: 36%; width: 28%; height: 28%; }
+
+/* 只看差异：「两版都有」那一段收起（compare.js 先补间高度，再 display: none） */
+.cmp__duo.is-diff .r--both { display: none; }
+.r.is-anim { overflow: clip; }
+/* 深色 */
+/* 普通版卡走变量（深色纸面 + 细线）；高级版卡换成深色全息卡面：深蓝灰渐变底 + 低透明度品牌色晕染（冰蓝右上、薰衣草居中、暖色左下，同浅色的位置；暖色用玫瑰粉，见下），
+   卡头顶边那道 3px 品牌彩虹照旧（深底上就是一道高光描边）。晕染与珠光薄膜都压得很淡：再亮一点，条目说明（--ink-3）在卡面上就不到 4.5:1。
+   卡外不发光：柔影只换成更深的暗影，外圈 1px 是淡紫细线。卡头不透明（实色底 + 卡面同一套渐变），与卡身顶部同色，吸住时接得上。
+   ✓ / ⊖ 原样（蓝、琥珀在深底上更亮）；✕ 的浅灰实心圆在深底上太抢眼，换成深一档的圆 + 浅墨叉，退到勾后面但仍清楚 */
+:root[data-theme="dark"] .cmp { --pl: rgba(200, 190, 255, .09); }
+:root[data-theme="dark"] .cmp__sw i { background: #2e3347; }
+:root[data-theme="dark"] .cmp__sw[aria-checked="true"] { border-color: #5b5196; }
+:root[data-theme="dark"] .cb--pro { border-color: rgba(185, 170, 255, .2); background: #1b2036; }
+:root[data-theme="dark"] .cb--pro::after { border-color: rgba(255, 255, 255, .06); }
+:root[data-theme="dark"] .cmp__bar.is-stuck .cb--pro { border-bottom-color: rgba(185, 170, 255, .32); }
+:root[data-theme="dark"] .cb .pro { border-color: rgba(255, 255, 255, .16); }
+/* 卡头里的「只看差异」：纸面底（--paper）比全息卡头暗一档，像挖出的一个坑；换成半透明浅面 + 淡紫细线，与卡头融在一起（手机上它在页面底上，不受影响） */
+:root[data-theme="dark"] .cb .cmp__sw { background: rgba(255, 255, 255, .05); border-color: rgba(200, 190, 255, .18); }
+:root[data-theme="dark"] .cb .cmp__sw:hover { border-color: rgba(200, 190, 255, .34); }
+:root[data-theme="dark"] .cb .cmp__sw[aria-checked="true"] { border-color: #5b5196; }
+/* 晕染用饱和、偏暗的品牌色相（加色不加亮）：淡彩色的晕染压在深底上只会发白发灰；珠光薄膜同理换成饱和的四色、透明度降到一成上下 */
+:root[data-theme="dark"] .cb__face {
+  background:
+    radial-gradient(46% 260% at 92% 0%, rgba(76, 150, 255, .2), rgba(76, 150, 255, 0) 70%),
+    radial-gradient(40% 240% at 34% 130%, rgba(138, 107, 255, .12), rgba(138, 107, 255, 0) 70%),
+    linear-gradient(150deg, #1b2036 0%, #1a1e34 100%); }
+:root[data-theme="dark"] .vc--pro { border-color: rgba(255, 255, 255, .06);
+  box-shadow: 0 34px 60px -34px rgba(0, 0, 0, .72), 0 0 0 1px rgba(185, 170, 255, .2);
+  background:
+    radial-gradient(1100px 640px at 90% 0, rgba(76, 150, 255, .2), rgba(76, 150, 255, 0) 70%),
+    radial-gradient(900px 900px at 50% 46%, rgba(138, 107, 255, .12), rgba(138, 107, 255, 0) 70%),
+    radial-gradient(1100px 760px at 4% 100%, rgba(255, 120, 175, .08), rgba(255, 120, 175, 0) 70%),
+    linear-gradient(170deg, #1b2036 0%, #191c31 50%, #1a1a2d 100%); }
+/* 暖色一档（左下晕染、薄膜第三色）用偏玫瑰的粉：蜜桃橙与深蓝底互补，低透明度叠上去会中和成灰紫的脏带（开场卡后光晕同理） */
+:root[data-theme="dark"] .vc__film {
+  background: repeating-linear-gradient(118deg, rgba(76, 150, 255, .1) 0, rgba(138, 107, 255, .13) 110px, rgba(255, 120, 175, .06) 220px, rgba(70, 220, 170, .09) 330px, rgba(76, 150, 255, .1) 440px); }
+:root[data-theme="dark"] .vc__frame { border-color: rgba(200, 190, 255, .08); }
+:root[data-theme="dark"] .vc__sheen { opacity: .14; }
+/* 右栏的三级字（组说明、两版说明、体验与平台说明、卡顶小字）在晕染最浓处仍要 ≥ 4.5:1，比全站 --ink-3 提一档 */
+:root[data-theme="dark"] .r__p { --rs: rgba(200, 190, 255, .16); --ink-3: #9ea2b9; }
+@media (hover: hover) and (min-width: 1001px) {
+  :root[data-theme="dark"] .r[data-i]:hover > .r__f { background-color: #181b2a; }
+  :root[data-theme="dark"] .r[data-i]:hover > .r__p { background-color: rgba(255, 255, 255, .035); }
+}
+/* ✕ 的两色走 sprite 里预留的自定义属性（<use> 实例只继承自定义属性，按 #st-no 写选择器够不着） */
+:root[data-theme="dark"] .st { --st-no: #3a3f58; --st-no-x: #b9bdd0; }
+/* 全息章外圈的白边在深底上是一道生硬的白圈：换成卡面同色，照样把扭索纹和章隔开 */
+:root[data-theme="dark"] .vc__seal { border-color: #1c2340; }
+/* 章面上那层白色高光：浅色下白叠白看不出，深底上把粉彩色盘冲成一颗近白的亮球（比 77 大字还抢眼）；只压高光层，冰蓝、薰衣草、蜜桃透出来，读作全息贴纸 */
+:root[data-theme="dark"] .vc__seal-r {
+  background:
+    radial-gradient(circle at 34% 30%, rgba(255, 255, 255, .42), rgba(255, 255, 255, .08) 55%, rgba(255, 255, 255, 0) 80%),
+    repeating-radial-gradient(circle closest-side, rgba(255, 255, 255, 0) 0 calc(5.7% - 1px), rgba(255, 255, 255, .36) calc(5.7% - 1px) 5.7%),
+    repeating-conic-gradient(rgba(255, 255, 255, .18) 0 .55deg, rgba(255, 255, 255, 0) .55deg 7.5deg); }
+:root[data-theme="dark"] .f__note { color: #f2b95f; }
+/* 条数：浅色用的是白底上的加深渐变，深底上换成 77 大字那组亮色（冰蓝 → 薰衣草 → 蜜桃），仍按组取一段；「两版都有」的 7 照旧走 --ink-2 */
+:root[data-theme="dark"] .r--g .p__c { background-image: linear-gradient(90deg, #7cc4fb, #a68ff4 50%, #f6ae7a); }
+:root[data-theme="dark"] .r--foot p, :root[data-theme="dark"] .vc__big small { color: #9d99b8; }
+:root[data-theme="dark"] .vc__big > span { color: var(--ink); }
+
+/* ═════════ 中屏 ═════════ */
+/* ≤1180：卡头收紧间距与按钮内边距，「普通版 免费 + 免费下载」在左卡宽度里放得下，按钮右缘与下面各行的状态符号对齐 */
+@media (max-width: 1180px) {
+  .cb { gap: 10px; }
+  .cb .btn { padding: 0 12px; }
+  .cmp__legend { gap: 10px; }
+}
+/* 1001–1100：两卡收窄一点；右卡仍是「条数 + 组名 + 说明」一栏在左、条目在右（不上下堆叠，免得行变高、左卡每行下面大块留白），条目三栏 */
+@media (max-width: 1100px) and (min-width: 1001px) {
+  .cmp { --lw: clamp(268px, 26vw, 272px); --hc: 176px; --hg: 24px; }
+  .p__its { columns: 124px 4; column-gap: 20px; }
+  .p__defs { columns: 200px 2; column-gap: 28px; }
+}
+
+/* ═════════ 窄屏（≤1000，平板与手机）：上下排列的单列明细，每组一块；卡头简化成一行 ═════════
+   再宽一点的双卡在这里条目只剩两栏、行很高，左卡每行下面大块留白，所以平板宽度也用每组一块的版式。 */
+@media (max-width: 1000px) {
+  .cmp { --ip: 16px; --rp: 0px; --ss: 18px; --sd: 40px; padding-top: 52px; }
+  .cmp__top { align-items: center; margin-bottom: 12px; }
+  .cmp__top h2 { font-size: 28px; }
+  .cmp__sw--m { display: inline-flex; margin-left: auto; }
+  .cmp__p { order: 3; flex-basis: 100%; font-size: 14px; }
+  /* 卡头：普通版免费下载 / 高级版免费试用 两个按钮 + 图例 */
+  .cmp__bar { display: flex; align-items: center; gap: 6px; margin-inline: 0; padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+  .cb { display: contents; }
+  .cb--pro::after, .cb__face, .cb__n, .cb .cmp__sw, .cb .btn .ic, .cb__d { display: none; }
+  .cb .btn { flex-direction: column; justify-content: center; gap: 4px; height: 42px; padding: 0 12px; font-size: 13px; line-height: 1; }
+  .cb--free .btn { order: 1; }
+  .cb--pro .btn { order: 2; }
+  .cb__m { display: block; font-size: 11px; font-weight: 500; opacity: .66; }
+  .cmp__legend { order: 3; margin-left: auto; gap: 9px; font-size: 11.5px; }
+  .cmp__legend span { gap: 3px; }
+  .cmp__legend .st { width: 15px; height: 15px; }
+
+  .cmp__duo { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
+  .vc { display: none; }
+  .r { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+  .cmp .r > * { margin: 0; padding: 0; border: 0; background: none; }
+  .r--x > .r__p, .r--both > .r__p, .r--env > .r__p { display: contents; }
+  /* 块头：组名 + 条数 */
+  .p__h { order: -1; align-items: baseline; min-height: 0; gap: 6px; }
+  .p__h .st { display: none; }
+  .p__n, .r--e .p__n, .r--env .p__n { font-size: 16px; color: var(--ink); }
+  .r--env .p__h { padding-left: 0; }
+  .p__c { order: 1; margin-left: auto; font-size: 24px; }
+  .p__u { display: inline; order: 2; font-size: 12px; color: var(--ink-3); }
+  /* 一行「普通版 ⊖ / ✕ 短说明」、一行「高级版 ✓ 说明」：小标签 + 状态 + 文字 */
+  .cmp .r .lab { position: static; width: auto; height: 22px; overflow: visible; clip-path: none; grid-column: 1; grid-row: 1; display: inline-flex; align-items: center; padding: 0 6px; border-radius: 4px; background: var(--fill); font: 500 11px/1 var(--cjk); color: var(--ink-2); }
+  .cmp .r .lab--pro { background: var(--badge); color: #1b1d33; }
+  .cmp .r[data-i] > .r__f { display: grid; grid-template-columns: auto var(--ss) minmax(0, 1fr); column-gap: 8px; row-gap: 2px; align-items: start; }
+  .r__f .f__n { display: none; }
+  .r__f .f__s { display: contents; }
+  .r__f .f__s .st { grid-column: 2; grid-row: 1; margin-top: 2px; }
+  .f__note { grid-column: 3; grid-row: 1; line-height: 22px; }
+  .f__d { grid-column: 3; margin: 0; line-height: 22px; }
+  .r--env .f__v { grid-column: 2 / 4; grid-row: 1; font-weight: 600; line-height: 22px; color: var(--ink); }
+  .r--env .f__d { grid-column: 2 / 4; }
+  .cmp .r.r--both > .r__f { grid-template-columns: var(--ss) minmax(0, 1fr); }
+  .r--both .r__f .lab { display: none; }
+  .r--both .f__s .st { grid-column: 1; }
+  .r--both .f__d { grid-column: 2; grid-row: 1; }
+  .cmp .r .p__d { order: 1; display: grid; grid-template-columns: auto var(--ss) minmax(0, 1fr); column-gap: 8px; row-gap: 4px; align-items: start; margin: 0; padding: 0; font-size: 13.5px; line-height: 22px; color: var(--ink-2); text-wrap: balance; }
+  .p__d > .st { display: block; grid-column: 2; grid-row: 1; margin-top: 2px; }
+  .p__d .p__t { grid-column: 3; margin: 0; }
+  .p__d .p__both { grid-column: 3; grid-row: 1; margin: 0; } /* 小签与「高级版 ✓」同一行，说明落到下一行 */
+  .r--env .p__d .p__v, .r--env .p__d .p__t { grid-column: 2 / 4; margin: 0; line-height: 22px; }
+  .r--env .p__d .p__v { font-size: 14px; }
+  /* 条目：两栏一行一个 */
+  .cmp .r .p__its, .cmp .r .p__defs { order: 2; columns: 2; column-gap: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .cmp .r .p__defs { columns: 1; }
+  .p__its li { line-height: 1.75; }
+  /* 分组标题、卡顶、卡脚不是块 */
+  .cmp .r--sec { flex-direction: row; align-items: baseline; gap: 6px; padding: 18px 2px 0; border: 0; background: none; }
+  .r--sec .r__p span { display: none; }
+  .r--sec .r__p em::before { content: "· "; }
+  /* 体验与服务两边都是「8 项」：只留右格的「· 8 项」，不写成「8 项 · 8 项」 */
+  .r--sec-e .r__f em { display: none; }
+  .cmp .r--hero { display: grid; gap: 10px; padding: 0; border: 0; background: none; }
+  .cmp .r--hero > .r__f { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+  .r--hero .r__f .hk { flex-basis: 100%; }
+  .cmp .r--hero > .r__p { padding: 18px 16px; min-height: calc(var(--sd) * 2.4137 + 6px + 36px); border: 1px solid rgba(120, 110, 175, .2); border-radius: 8px; overflow: hidden;
+    background:
+      radial-gradient(70% 90% at 92% 0%, rgba(176, 222, 255, .7), rgba(191, 230, 255, 0) 70%),
+      radial-gradient(80% 90% at 0% 100%, rgba(255, 216, 176, .55), rgba(255, 224, 189, 0) 70%),
+      linear-gradient(150deg, #ffffff 0%, #f8f6fd 55%, #f0ecfa 100%); }
+  .hb { margin-top: 2px; }
+  .hb b { font-size: 32px; }
+  .vc__big { margin-top: 10px; gap: 10px; }
+  .vc__big b { font-size: 72px; }
+  .vc__big > span { font-size: 15px; gap: 4px; }
+  .vc__big small { font-size: 12px; }
+  .cmp .r--foot { padding: 2px 8px 0; border: 0; background: none; text-align: center; }
+  .r--foot .r__f { display: none; }
+  .r--foot p { font-size: 12.5px; }
+}
+/* 平板（641–1000）：块更宽，条目按宽度分 3–4 栏，两版都有分两栏 */
+@media (min-width: 641px) and (max-width: 1000px) {
+  .cmp .r .p__its { columns: 140px 4; column-gap: 20px; }
+  .cmp .r .p__defs { columns: 260px 2; column-gap: 28px; }
+}
+@media (max-width: 380px) {
+  .cmp__legend { gap: 6px; }
+  .cb .btn { padding: 0 10px; }
+}
+/* 极窄（≤350）：卡头两个按钮与图例再收紧，图例不伸进右侧槽宽；卡顶放不下扭索纹圆环与全息章，不显示 */
+@media (max-width: 350px) {
+  .cmp__bar { gap: 5px; }
+  .cb .btn { padding: 0 8px; }
+  .cmp__legend { gap: 5px; font-size: 11px; }
+  .cmp__legend span { gap: 2px; }
+  .cmp__legend .st { width: 14px; height: 14px; }
+  .vc__art { display: none; }
+  .cmp .r--hero > .r__p { min-height: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmp.is-pre .cmp__tbl { opacity: 1; transform: none; }
+}
+/* 深色 */
+/* 窄屏单列：每组一块走变量（深色纸面 + 细线），行首「普通版」小标签走 --fill；卡顶高级版那一块是桌面卡面的缩小版（同一套深蓝灰底 + 淡晕染） */
+@media (max-width: 1000px) {
+  :root[data-theme="dark"] .cmp .r--hero > .r__p { border-color: rgba(185, 170, 255, .2);
+    background:
+      radial-gradient(70% 90% at 92% 0%, rgba(76, 150, 255, .22), rgba(76, 150, 255, 0) 70%),
+      radial-gradient(80% 90% at 0% 100%, rgba(255, 120, 175, .1), rgba(255, 120, 175, 0) 70%),
+      linear-gradient(150deg, #1b2036 0%, #1a1d32 55%, #1a1a2d 100%); }
+}
+
+/* ═════════ 获取：12 栏，左 4 栏标题、右 8 栏两块版面 ═════════ */
+.get { padding: clamp(72px, 12svh, 140px) 0 clamp(72px, 11svh, 128px); }
+.get__in { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 24px; row-gap: 12px; align-items: stretch; }
+.get__head { grid-column: 1 / 5; padding-right: 12px; }
+.eyebrow { font: 600 12px/1 var(--cjk); letter-spacing: .08em; color: var(--ink-3); }
+.get h2 { margin-top: 14px; font: 600 clamp(28px, 2.7vw, 42px)/1.18 var(--lat); letter-spacing: -.03em; text-wrap: balance; }
+.nw { display: inline-block; }
+.plate { grid-column: span 4; position: relative; display: flex; flex-direction: column; gap: 14px; padding: clamp(24px, 2.4vw, 36px); border-radius: 8px; background: var(--paper); border: 1px solid var(--line); overflow: hidden; }
+.plate--pro { background: linear-gradient(160deg, #e9f4ff 0%, #f1ecff 46%, #fff1e2 100%); border-color: #e0daf3; }
+.plate--pro::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--brand-4); }
+.plate__h { display: flex; align-items: center; gap: 10px; }
+.plate__h h3 { font: 600 18px/1.2 var(--cjk); }
+.plate__big { margin-top: 6px; font: 600 clamp(30px, 3vw, 44px)/1.05 var(--cjk); letter-spacing: -.02em; }
+.plate__big b { font: 700 1.3em/0.8 var(--lat); letter-spacing: -.05em; margin-right: .08em; font-variant-numeric: tabular-nums; }
+.plate__p { font-size: 15px; color: var(--ink-2); max-width: 28em; word-break: keep-all; text-wrap: balance; }
+.plate__meta { display: grid; margin-top: 4px; border-top: 1px solid var(--line-a); }
+.plate__meta div { display: grid; grid-template-columns: 56px 1fr; align-items: center; min-height: 40px; padding: 8px 0; border-bottom: 1px solid var(--line-a); font-size: 13.5px; line-height: 1.45; }
+.plate__meta dt { color: var(--ink-3); }
+.plate__meta dd { color: var(--ink); }
+/* 版面底部：说明在上、唯一的按钮在下，两块版面的按钮落在同一条底线上 */
+.plate__foot { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; margin-top: auto; padding-top: 8px; }
+.plate__foot .btn { max-width: 100%; }
+.plate__note { margin-top: 0; font-size: 12.5px; line-height: 1.65; color: var(--ink-3); text-wrap: pretty; }
+.plate__note a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; }
+.plate__note a:hover { text-decoration-color: var(--ink); }
+/* 深色 */
+/* 普通版版面走变量（深色纸面 + 细线），按钮是次按钮；高级版版面同权益对比的高级版卡：深蓝灰渐变底 + 冰蓝右上 / 薰衣草居中 / 玫瑰粉左下（蜜桃橙叠深蓝会发灰）的淡晕染 + 淡紫细线，
+   顶边 3px 品牌彩虹照旧；Telegram 按钮随主按钮反相成浅底深字，是这一屏最亮的一块 */
+:root[data-theme="dark"] .plate--pro { border-color: rgba(185, 170, 255, .2);
+  background:
+    radial-gradient(90% 70% at 100% 0%, rgba(76, 150, 255, .18), rgba(76, 150, 255, 0) 70%),
+    radial-gradient(70% 60% at 50% 50%, rgba(138, 107, 255, .08), rgba(138, 107, 255, 0) 70%),
+    radial-gradient(90% 80% at 0% 100%, rgba(255, 120, 175, .08), rgba(255, 120, 175, 0) 70%),
+    linear-gradient(160deg, #1b2036 0%, #191c31 50%, #1a1a2d 100%); }
+
+/* ═════════ 页脚 ═════════ */
+.foot { border-top: 1px solid var(--line); background: var(--paper); }
+.foot__in { padding: 28px 0 34px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px 28px; }
+.foot .nav__brand img { width: 22px; height: 22px; }
+.foot__links { display: flex; gap: 22px; font-size: 13px; color: var(--ink-2); }
+.foot__links a:hover { color: var(--ink); }
+.foot__legal { flex-basis: 100%; font-size: 12px; line-height: 1.7; color: var(--ink-3); }
+/* 深色 */
+/* 全走变量：深色纸面比页面底高一档，顶部 1px 细线分开；链接 --ink-2、悬停 --ink，版权行 --ink-3（对纸面 ≈ 5.7:1） */
+
+/* ═════════ 断点 ═════════ */
+@media (max-width: 1180px) {
+  .get__head { grid-column: 1 / -1; padding-right: 0; margin-bottom: clamp(16px, 3svh, 28px); }
+  .plate { grid-column: span 6; }
+}
+/* 平板宽：导航的 GitHub 只留图标与星数 */
+@media (max-width: 1080px) {
+  .nav__gh-t { display: none; }
+}
+/* 导航折叠：≤900 只剩品牌、主按钮、菜单按钮（主题从菜单里切） */
+@media (max-width: 900px) {
+  .nav__links, .nav__gh, .nav__theme { display: none; }
+  .nav__menu { display: block; }
+  .nav__act { gap: 8px; }
+  .nav__in { grid-template-columns: minmax(0, 1fr) auto; }
+  .nav.is-open .nav__cta { opacity: 0; visibility: hidden; pointer-events: none; }
+  .hero__in { grid-template-columns: minmax(0, 1fr); }
+  .hero { min-height: 0; align-items: flex-start; padding-top: calc(var(--nav) + clamp(40px, 7svh, 72px)); }
+  .hero__stage { grid-area: 3 / 1; position: static; width: min(100%, 640px); margin-top: clamp(20px, 3svh, 36px); }
+  /* 叠在文字下面：回到文档流；倾斜后右上角会翘起约 6.7% 卡宽、左下角落下约 2.3% 再加投影，上下用百分比内边距（= 卡宽的百分比）留出来；
+     可见左边线对齐文字左边线（--cx 把倾斜后左侧收进去的那 5% 挪回来；卡窄于 591px 时透视停在 1400px、收进去的少一点，按差值往回补，最多 4.5px） */
+  .hero__stage .card { position: relative; width: auto; top: auto; margin-top: 0; padding: 6.5% 0 5%; --cx: calc(-5.4% + clamp(0px, (591px - 100%) * .034, 4.5px)); }
+  /* 光晕：卡几乎占满屏宽，两侧只露一窄条；主要落在卡下方，下沿正好收在开场底边（= 开场下内边距） */
+  .hero__stage .card { --gl: -10%; --gr: -10%; --gt: 0%; --gb: calc(-1 * var(--hpb)); }
+}
+
+/* ───────── 手机 ───────── */
+@media (max-width: 640px) {
+  :root { --nav: 56px; }
+  .hero__eyebrow:has(.hero__upd:not([hidden])) { flex-wrap: wrap; row-gap: 10px; } /* 放不下「最近更新」时换到下一行 */
+  .hero__upd { margin-left: 0; }
+  .nav__brand { font-size: 14px; gap: 8px; }
+  .nav__brand img { width: 22px; height: 22px; }
+  .nav__act { gap: 6px; }
+  .nav__cta { padding: 0 12px; font-size: 13px; }
+  .hero { --hpb: 40px; min-height: 0; padding-top: calc(var(--nav) + 32px); } /* 下内边距比原来多 16px：给卡下方的光晕留出淡出的地方 */
+  .hero__h { font-size: clamp(36px, 10.6vw, 46px); }
+  .hero__sub { font-size: 15px; }
+  .hero__cta .btn { height: 44px; padding: 0 16px; font-size: 14.5px; }
+  .hero__stage { margin-top: 28px; }
+
+  .get h2 { font-size: 28px; }
+  .plate { grid-column: 1 / -1; padding: 22px 18px 20px; }
+  .plate__foot { align-items: stretch; }
+}
+/* 极窄（≤340）：品牌名与主按钮会撞，主按钮收进菜单 */
+@media (max-width: 340px) {
+  .nav__cta { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  .fx__trail { display: none; } /* 开场主按钮：拖尾不显示（main.js 也不会建），只剩静态渐变边框与底 */
+}

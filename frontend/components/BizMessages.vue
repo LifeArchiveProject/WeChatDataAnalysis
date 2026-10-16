@@ -1,0 +1,444 @@
+<template>
+  <div class="biz-page h-full min-h-0 flex overflow-hidden" style="background-color: var(--app-shell-bg)">
+
+    <div class="w-[300px] lg:w-[320px] border-r flex flex-col flex-shrink-0 z-10 bg-white border-gray-200">
+      <div class="p-3 border-b border-gray-200" style="background-color: var(--app-surface-muted)">
+        <div class="contact-search-wrapper flex-1">
+          <input
+              v-model="searchQuery"
+              type="text"
+              class="contact-search-input"
+              placeholder="搜索服务号"
+          />
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto min-h-0">
+        <div v-if="loadingAccounts" class="flex justify-center py-4">
+          <span class="text-sm text-gray-400">加载中...</span>
+        </div>
+        <ErrorNotice v-else-if="accountsError" :message="accountsError" class="m-3" />
+        <div v-else class="pb-4">
+          <div
+              v-for="item in filteredAccounts"
+              :key="item.username"
+              @click="selectAccount(item)"
+              class="flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors border-b"
+              :class="[
+                'border-gray-50',
+                selectedBizAccount?.username === item.username
+                  ? 'bg-[#E5E5E5]' // 选中状态
+                  : item.username === 'gh_3dfda90e39d6'
+                    ? 'bg-[#F2F2F2] hover:bg-[#EAEAEA]' // 微信支付专门的底色
+                    : 'hover:bg-gray-50' // 普通悬浮色
+              ]"
+          >
+            <img v-if="item.avatar" :src="api.getBizProxyImageUrl(item.avatar)" class="w-10 h-10 rounded-md object-cover flex-shrink-0 bg-gray-200" alt=""/>
+            <div v-else class="w-10 h-10 rounded-md bg-[#03C160] text-white flex items-center justify-center text-lg font-medium flex-shrink-0 shadow-sm">
+              {{ (item.name || item.username).charAt(0).toUpperCase() }}
+            </div>
+
+            <div class="flex-1 min-w-0 flex flex-col justify-center gap-0.5">
+              <div class="flex justify-between items-center">
+                <h3 class="text-sm truncate text-gray-900">{{ item.name || item.username }}</h3>
+                <span v-if="item.formatted_last_time" class="text-[11px] flex-shrink-0 ml-2 text-gray-400">
+                  {{ item.formatted_last_time }}
+                </span>
+              </div>
+
+              <div
+                  class="text-[10px] px-1.5 py-0.5 rounded w-max mt-0.5"
+                  :class="[
+                      item.type === 1 ? 'text-[#03C160] bg-[#03C160]/10' : // 服务号
+                      item.type === 0 ? 'text-blue-500 bg-blue-50' :         // 公众号
+                      item.type === 2 ? 'text-orange-500 bg-orange-50' : // 企业号
+                                        'text-gray-400 bg-gray-100'          // 未知
+                  ]"
+              >
+                {{ {1: '服务号', 0: '公众号', 2: '企业号', 3: '未知'}[item.type] || '未知' }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex-1 flex flex-col min-h-0 min-w-0 bg-[#F5F5F5]">
+      <div v-if="selectedBizAccount" class="flex-1 flex flex-col min-h-0 relative">
+        <div class="h-14 border-b flex items-center justify-between gap-3 px-5 shrink-0 z-10 bg-[#F5F5F5] border-gray-200">
+          <h2 class="min-w-0 truncate text-base text-gray-900">{{ selectedBizAccount.name }}</h2>
+          <button
+            type="button"
+            class="biz-export-button text-gray-500 hover:bg-[#e9f8ef] hover:text-[#058f48]"
+            :title="`导出${selectedBizAccount.name || selectedBizAccount.username}的全部记录`"
+            :aria-label="`导出${selectedBizAccount.name || selectedBizAccount.username}的全部记录`"
+            @click="exportDialogOpen = true"
+          >
+            <i class="fa-solid fa-file-export" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto px-4 py-6 flex flex-col-reverse" @scroll="handleScroll" ref="messageListRef">
+          <div class="h-4 shrink-0" aria-hidden="true"></div>
+          <div v-if="!hasMore" class="text-center text-xs py-4 w-full text-gray-400">没有更多消息了</div>
+          <div v-if="loadingMessages" class="text-center text-xs py-4 w-full text-gray-400">正在加载...</div>
+          <ErrorNotice v-if="messagesError" :message="messagesError" class="mx-auto mb-4 w-full max-w-[400px]" />
+
+          <div class="w-full max-w-[400px] mx-auto flex flex-col-reverse gap-6">
+            <div v-for="msg in messages" :key="msg.local_id" class="w-full">
+
+              <div v-if="selectedBizAccount.username === 'gh_3dfda90e39d6'" class="rounded-xl shadow-sm p-5 border bg-white border-gray-100">
+                <div class="flex items-center text-sm mb-5 text-gray-500">
+                  <img v-if="msg.merchant_icon" :src="api.getBizProxyImageUrl(msg.merchant_icon)" class="w-6 h-6 rounded-full mr-2 object-cover"  alt=""/>
+                  <div v-else class="w-6 h-6 rounded-full mr-2 flex items-center justify-center bg-green-100 text-green-600">¥</div>
+                  <span>{{ msg.merchant_name || '微信支付' }}</span>
+                </div>
+                <div class="text-center mb-6">
+                  <h3 class="text-[22px] font-medium mb-1 text-gray-900">{{ msg.title }}</h3>
+                </div>
+                <div class="text-[13px] whitespace-pre-wrap leading-relaxed text-gray-500">
+                  {{ msg.description }}
+                </div>
+                <div class="mt-4 pt-3 border-t text-[12px] text-right border-gray-100 text-gray-400">
+                  {{ msg.formatted_time }}
+                </div>
+              </div>
+
+              <div v-else class="rounded-xl shadow-sm overflow-hidden border bg-white border-gray-100">
+                <a :href="msg.url" target="_blank" class="block relative group cursor-pointer">
+                  <img :src="msg.cover ? api.getBizProxyImageUrl(msg.cover) : defaultImage" class="w-full h-[180px] object-cover bg-gray-100"  alt=""/>
+                  <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3 pt-8">
+                    <h3 class="text-white text-[15px] font-medium leading-snug line-clamp-2 group-hover:underline">
+                      {{ msg.title }}
+                    </h3>
+                  </div>
+                </a>
+
+                <div v-if="msg.des" class="px-4 py-3 text-[13px] border-b text-gray-500 border-gray-50">
+                  {{ msg.des }}
+                </div>
+
+                <div v-if="msg.content_list && msg.content_list.length > 1" class="flex flex-col">
+                  <a
+                      v-for="(item, idx) in msg.content_list.slice(1)"
+                      :key="idx"
+                      :href="item.url"
+                      target="_blank"
+                      class="flex items-center justify-between p-3 border-t hover:bg-opacity-50 cursor-pointer group border-gray-100 hover:bg-gray-50"
+                  >
+                    <span class="text-[14px] leading-snug line-clamp-2 pr-3 group-hover:underline text-gray-800">
+                      {{ item.title }}
+                    </span>
+                    <img :src="item.cover ? api.getBizProxyImageUrl(item.cover) : defaultImage" class="w-12 h-12 rounded object-cover flex-shrink-0 border bg-gray-100 border-gray-100"  alt=""/>
+                  </a>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="flex-1 flex items-center justify-center">
+        <div class="text-center">
+          <div class="w-20 h-20 mx-auto mb-5 rounded-2xl flex items-center justify-center bg-gray-200/50">
+            <svg class="w-10 h-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9.5L18.5 7H20" />
+            </svg>
+          </div>
+          <p class="text-sm text-gray-400">请选择一个服务号查看消息</p>
+        </div>
+      </div>
+    </div>
+
+    <RecordExportDialog
+      :open="exportDialogOpen"
+      dataset="biz"
+      :title="selectedBizAccount?.name || selectedBizAccount?.username || '服务号'"
+      :account="selectedDbAccount || ''"
+      :username="selectedBizAccount?.username || ''"
+      :subject-name="selectedBizAccount?.name || selectedBizAccount?.username || ''"
+      @close="exportDialogOpen = false"
+    />
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+
+import { useApi } from '~/composables/useApi'
+const api = useApi()
+
+import { storeToRefs } from 'pinia'
+import { useChatAccountsStore } from '~/stores/chatAccounts'
+import { useChatRealtimeStore } from '~/stores/chatRealtime'
+
+const accounts = ref([])
+const loadingAccounts = ref(false)
+const accountsError = ref('')
+const searchQuery = ref('')
+const selectedBizAccount = ref(null)
+const exportDialogOpen = ref(false)
+
+const chatAccountsStore = useChatAccountsStore()
+const realtimeStore = useChatRealtimeStore()
+const { selectedAccount: selectedDbAccount } = storeToRefs(chatAccountsStore)
+const { enabled: realtimeEnabled, changeSeq } = storeToRefs(realtimeStore)
+
+const messages = ref([])
+const loadingMessages = ref(false)
+const messagesError = ref('')
+const offset = ref(0)
+const limit = 20
+const DEFAULT_BIZ_SOURCE = 'auto'
+const hasMore = ref(true)
+
+const messageListRef = ref(null)
+let realtimeRefreshFuture = null
+let realtimeRefreshQueued = false
+
+// 默认占位图
+// const defaultAvatar = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgdmlld0JveD0iMCAwIDQwIDQwIj48cmVjdCB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIGZpbGw9IiNlNWU3ZWIiLz48L3N2Zz4='
+const defaultImage = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iMTgwIj48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjE4MCIgZmlsbD0iI2Y1ZjVmNSIvPjwvc3ZnPg=='
+
+const getCurrentAccountParam = () => {
+  const account = String(selectedDbAccount.value || '').trim()
+  return account || undefined
+}
+
+const resetMessagesState = () => {
+  messages.value = []
+  messagesError.value = ''
+  offset.value = 0
+  hasMore.value = true
+}
+
+const fetchAccounts = async ({ preserveSelection = true, silent = false } = {}) => {
+  if (!silent) {
+    loadingAccounts.value = true
+    accountsError.value = ''
+  }
+  const previousUsername = preserveSelection ? String(selectedBizAccount.value?.username || '').trim() : ''
+  try {
+    const res = await api.listBizAccounts({ account: getCurrentAccountParam(), source: DEFAULT_BIZ_SOURCE })
+    const nextAccounts = Array.isArray(res?.data) ? res.data : []
+    accounts.value = nextAccounts
+
+    if (previousUsername) {
+      selectedBizAccount.value = nextAccounts.find(item => item.username === previousUsername) || null
+    } else if (!selectedBizAccount.value?.username) {
+      selectedBizAccount.value = null
+    }
+  } catch (err) {
+    if (!silent) {
+      accounts.value = []
+      selectedBizAccount.value = null
+      accountsError.value = err?.message || '获取服务号失败'
+    }
+    console.error('获取服务号失败:', err)
+  } finally {
+    if (!silent) loadingAccounts.value = false
+  }
+}
+
+// 搜索过滤
+const filteredAccounts = computed(() => {
+  if (!searchQuery.value) return accounts.value
+  const q = searchQuery.value.toLowerCase()
+  return accounts.value.filter(a =>
+      (a.name && a.name.toLowerCase().includes(q)) ||
+      (a.username && a.username.toLowerCase().includes(q))
+  )
+})
+
+// 点击选择服务号
+const selectAccount = async (account) => {
+  if (selectedBizAccount.value?.username === account.username) return
+  exportDialogOpen.value = false
+  selectedBizAccount.value = account
+
+  // 重置消息状态
+  resetMessagesState()
+
+  await loadMessages()
+}
+
+// 加载消息
+const loadMessages = async () => {
+  if (loadingMessages.value || !hasMore.value || !selectedBizAccount.value) return
+
+  loadingMessages.value = true
+  messagesError.value = ''
+  try {
+    const username = selectedBizAccount.value.username
+    const params = {
+      account: getCurrentAccountParam(),
+      username,
+      offset: offset.value,
+      limit,
+      source: DEFAULT_BIZ_SOURCE,
+    }
+
+    let res
+    if (username === 'gh_3dfda90e39d6') {
+      res = await api.listBizPayRecords(params)
+    } else {
+      res = await api.listBizMessages(params)
+    }
+
+    if (res && res.data) {
+      if (res.data.length < limit) {
+        hasMore.value = false
+      }
+      // 追加数据
+      const known = new Set(messages.value.map(message => `${message.local_id}:${message.create_time}`))
+      messages.value.push(...res.data.filter(message => !known.has(`${message.local_id}:${message.create_time}`)))
+      offset.value += Number(res.scanned ?? limit)
+      if (typeof res.hasMore === 'boolean') hasMore.value = res.hasMore
+    }
+  } catch (err) {
+    messagesError.value = err?.message || '加载消息失败'
+    console.error('加载消息失败:', err)
+  } finally {
+    loadingMessages.value = false
+  }
+}
+
+const refreshSelectedMessagesInBackground = async () => {
+  const username = String(selectedBizAccount.value?.username || '').trim()
+  if (!username) return
+  const requestedLimit = Math.min(500, Math.max(limit, messages.value.length || 0))
+  const params = {
+    account: getCurrentAccountParam(),
+    username,
+    offset: 0,
+    limit: requestedLimit,
+    source: DEFAULT_BIZ_SOURCE,
+  }
+  const res = username === 'gh_3dfda90e39d6'
+    ? await api.listBizPayRecords(params)
+    : await api.listBizMessages(params)
+  if (String(selectedBizAccount.value?.username || '').trim() !== username) return
+
+  const next = Array.isArray(res?.data) ? res.data : []
+  const byKey = new Map()
+  for (const message of [...next, ...messages.value]) {
+    const key = `${message?.local_id || 0}:${message?.create_time || 0}`
+    if (!byKey.has(key)) byKey.set(key, message)
+  }
+  const merged = [...byKey.values()].sort((left, right) => {
+    return Number(right?.create_time || 0) - Number(left?.create_time || 0)
+      || Number(right?.local_id || 0) - Number(left?.local_id || 0)
+  })
+  const previousSignature = messages.value.map(message => `${message?.local_id || 0}:${message?.create_time || 0}`).join('|')
+  const nextSignature = merged.map(message => `${message?.local_id || 0}:${message?.create_time || 0}`).join('|')
+  if (nextSignature !== previousSignature) messages.value = merged
+  if (typeof res?.hasMore === 'boolean' && messages.value.length <= requestedLimit) {
+    hasMore.value = res.hasMore
+  }
+}
+
+const syncAllBizRealtime = async () => {
+  // 服务号页面现在默认直接读取 WCDB realtime（source=auto），不再依赖先同步到本地 output 库。
+  // 因此收到 db_storage 变化后直接刷新服务号列表和当前服务号消息，避免 sync_all 没有插入本地库时漏刷。
+  try {
+    await fetchAccounts({ preserveSelection: true, silent: true })
+    if (selectedBizAccount.value?.username) {
+      await refreshSelectedMessagesInBackground()
+    }
+  } catch (err) {
+    console.error('实时刷新服务号失败:', err)
+  }
+}
+
+const queueRealtimeBizRefresh = () => {
+  if (!realtimeEnabled.value) return
+  if (realtimeRefreshFuture) {
+    realtimeRefreshQueued = true
+    return
+  }
+
+  realtimeRefreshFuture = syncAllBizRealtime().finally(() => {
+    realtimeRefreshFuture = null
+    if (realtimeRefreshQueued) {
+      realtimeRefreshQueued = false
+      queueRealtimeBizRefresh()
+    }
+  })
+}
+
+// 向上滚动加载逻辑
+// 因为容器设置了 flex-col-reverse，所以 scrollTop 越靠近负值(或0取决于浏览器)越是到了历史消息端
+// 但比较通用兼容的做法是监听 scroll，距离顶部或底部小于阈值时触发
+const handleScroll = (e) => {
+  const target = e.target
+  // 针对 flex-col-reverse: 滚动到底部实际上是视觉上的最上方(历史消息)
+  // 当 scrollHeight - Math.abs(scrollTop) - clientHeight < 50 时加载
+  if (target.scrollHeight - Math.abs(target.scrollTop) - target.clientHeight < 50) {
+    loadMessages()
+  }
+}
+
+watch(selectedDbAccount, async (next, prev) => {
+  if (String(next || '').trim() === String(prev || '').trim()) return
+  await realtimeStore.enable({ silent: true, scope: 'all' })
+  selectedBizAccount.value = null
+  resetMessagesState()
+  searchQuery.value = ''
+
+  if (!String(next || '').trim()) {
+    accounts.value = []
+    return
+  }
+  await fetchAccounts({ preserveSelection: false })
+})
+
+watch(changeSeq, (next, prev) => {
+  if (!realtimeEnabled.value) return
+  if (next === prev) return
+  queueRealtimeBizRefresh()
+})
+
+onMounted(async () => {
+  await chatAccountsStore.ensureLoaded()
+  await realtimeStore.enable({ silent: true, scope: 'all' })
+  await fetchAccounts({ preserveSelection: false })
+})
+
+onUnmounted(() => {
+  exportDialogOpen.value = false
+  void realtimeStore.disable({ silent: true })
+})
+</script>
+
+<style scoped>
+/* 隐藏滚动条但允许滚动（可选） */
+.overflow-y-auto::-webkit-scrollbar {
+  width: 6px;
+}
+.overflow-y-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+.overflow-y-auto::-webkit-scrollbar-thumb {
+  background-color: rgba(0,0,0,0.1);
+  border-radius: 10px;
+}
+
+.biz-export-button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  transition: color 150ms ease, background-color 150ms ease, transform 150ms ease;
+}
+
+.biz-export-button:active {
+  transform: translateY(1px);
+}
+</style>
