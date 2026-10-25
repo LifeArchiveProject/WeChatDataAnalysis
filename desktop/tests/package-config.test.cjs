@@ -157,14 +157,7 @@ test("release workflow pins every remote action to an approved commit", () => {
     assert.match(revision, /^[0-9a-f]{40}$/, `${use} is not pinned to a commit`);
     assert.equal(revision, approved.get(action), `${action} uses an unapproved commit`);
   }
-  for (const action of [
-    "actions/checkout",
-    "actions/setup-node",
-    "actions/setup-python",
-    "actions/download-artifact",
-    "actions/upload-artifact",
-    "softprops/action-gh-release",
-  ]) {
+  for (const action of approved.keys()) {
     assert.ok(remoteUses.includes(`${action}@${approved.get(action)}`), `${action} is missing`);
   }
 });
