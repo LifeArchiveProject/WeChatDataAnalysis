@@ -143,13 +143,7 @@ test("release workflow pins every remote action to an approved commit", () => {
     .replace(/\r\n/g, "\n");
   const approved = new Map([
     ["actions/checkout", "11d5960a326750d5838078e36cf38b85af677262"],
-    ["actions/setup-node", "49933ea5288caeca8642d1e84afbd3f7d6820020"],
-    ["actions/setup-python", "a26af69be951a213d495a4c3e4e4022e16d87065"],
-    ["actions/cache", "0057852bfaa89a56745cba8c7296529d2fc39830"],
     ["actions/download-artifact", "d3f86a106a0bac45b974a628896c90dbdf5c8093"],
-    ["actions/upload-artifact", "ea165f8d65b6e75b540449e92b4886f43607fa02"],
-    ["dtolnay/rust-toolchain", "4cda84d5c5c54efe2404f9d843567869ab1699d4"],
-    ["softprops/action-gh-release", "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65"],
   ]);
   const remoteUses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gm)]
     .map((match) => match[1])
