@@ -100,7 +100,7 @@
 
 ## 高级版
 
-常规版聚焦于**解密、读取、导出与年度总结**等只读能力；**高级版**在此基础上提供**在线动作与自动化能力**。
+开源源码提供**解密、读取、导出与年度总结**等普通功能；GitHub Releases 的桌面安装包统一使用**高级版**构建，包含普通功能以及需要会员权益的**在线动作与自动化能力**。高级版实现源码不包含在本仓库中。
 
 > **购买联系**：[https://t.me/knchudj](https://t.me/knchudj) 或者加入 [TG 群](https://t.me/+IQKBDeXtaKozZWYx)私聊群所有者。
 
@@ -139,8 +139,14 @@
 
 ### 1. 下载桌面安装包（推荐）
 
+本仓库直接分发已构建的高级版安装包，不在公开仓库编译桌面应用。每个 Release 的更新说明从官网和应用使用的同一个接口按安装包实际版本和平台获取，可在[更新日志](https://lifearchiveproject.github.io/WeChatDataAnalysis/changelog.html)查看。
+
+发布现成安装包时，设置与官网相同的 `CHANGELOG_URL`，运行 `python tools/publish-desktop-release.py --version <安装包四段版本> --platform windows --assets <产物目录> --publish`；macOS 使用 `--platform macos`。省略 `--publish` 只准备说明。GitHub Actions 的 `Publish prebuilt desktop packages` 工作流也可以接收高级版构建的 run ID 和 artifact 名称直接发布。源码、独立运行组件和构建缓存不会作为 Release 附件上传。
+
+从旧版迁移时，如果安装包实际版本低于旧版内部版本，请从 Release 手动下载安装；发布号保持与实际包体一致。
+
 1. 打开 Release 页面（最新版）：https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest
-2. Windows 下载 `Setup.exe`；macOS 15+ 的 Apple Silicon Mac 下载 `.dmg` 或 `mac.zip`
+2. Windows 下载 `Advanced-Unlimited-版本号-Setup.exe`；macOS 15+ 的 Apple Silicon Mac 下载对应版本的 `.dmg` 或 `mac-arm64.zip`
 3. 安装完成后启动 `WeChatDataAnalysis`
 
 >

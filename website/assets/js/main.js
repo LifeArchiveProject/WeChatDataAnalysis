@@ -311,9 +311,9 @@ initShell();
   ["top", "all", "compare", "get"].forEach((id) => { const el = d.getElementById(id); if (el) io.observe(el); });
 }
 
-/* ═════════ 7b. 普通版下载：按系统给出合适的字样与提示 ═════════
+/* ═════════ 7b. 桌面版下载：按系统给出合适的字样与提示 ═════════
    链接一律保留 GitHub Releases 列表页（识别失败也能自己挑），只改按钮字样、在下面补一句提示。
-   普通版只有 Windows 与 macOS 15+（Apple Silicon）安装包；Intel Mac、Linux、手机都要说清楚。 */
+   桌面安装包支持 Windows 与 macOS 15+（Apple Silicon）安装包；Intel Mac、Linux、手机都要说清楚。 */
 async function detectOS() {
   const ua = navigator.userAgent || "", uad = navigator.userAgentData;
   const ipad = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
@@ -329,13 +329,13 @@ async function detectOS() {
   return { os: "" };
 }
 const DL = {
-  win: { hero: "下载普通版（Windows）", get: "在 GitHub 下载 Windows 版" },
-  "mac-arm": { hero: "下载普通版（macOS）", get: "在 GitHub 下载 macOS 版", hint: "适用于 Apple Silicon（M 系列芯片）与 macOS 15 及以上。" },
-  mac: { hero: "下载普通版（macOS）", get: "在 GitHub 下载 macOS 版", hint: "macOS 版需要 macOS 15 及以上，且只支持 Apple Silicon（M 系列芯片）的 Mac。" },
-  "mac-intel": { hint: "普通版的 macOS 安装包只支持 Apple Silicon（M 系列芯片）与 macOS 15 及以上，这台 Intel Mac 装不上。" },
-  linux: { hint: "普通版提供 Windows 与 macOS 15+（Apple Silicon）安装包，暂无 Linux 版。" },
-  mobile: { hint: "普通版是电脑软件：支持 Windows 与 macOS 15+（Apple Silicon），请在电脑上下载。" },
-  "": { hint: "普通版支持 Windows 与 macOS 15+（Apple Silicon）。" },
+  win: { hero: "下载桌面版（Windows）", get: "在 GitHub 下载 Windows 版" },
+  "mac-arm": { hero: "下载桌面版（macOS）", get: "在 GitHub 下载 macOS 版", hint: "适用于 Apple Silicon（M 系列芯片）与 macOS 15 及以上。" },
+  mac: { hero: "下载桌面版（macOS）", get: "在 GitHub 下载 macOS 版", hint: "macOS 版需要 macOS 15 及以上，且只支持 Apple Silicon（M 系列芯片）的 Mac。" },
+  "mac-intel": { hint: "macOS 安装包只支持 Apple Silicon（M 系列芯片）与 macOS 15 及以上，这台 Intel Mac 装不上。" },
+  linux: { hint: "桌面版提供 Windows 与 macOS 15+（Apple Silicon）安装包，暂无 Linux 版。" },
+  mobile: { hint: "桌面版是电脑软件：支持 Windows 与 macOS 15+（Apple Silicon），请在电脑上下载。" },
+  "": { hint: "桌面版支持 Windows 与 macOS 15+（Apple Silicon）。" },
 };
 detectOS().then(({ os, arch }) => {
   const k = os === "mac" ? (arch === "arm" ? "mac-arm" : arch === "intel" ? "mac-intel" : "mac") : os;
