@@ -7,6 +7,7 @@
     <p>微信 4.x 数据库解密与分析，支持实时更新、聊天记录与朋友圈导出、年度总结。</p>
     <p>TG 群：<a href="https://t.me/+IQKBDeXtaKozZWYx">https://t.me/+IQKBDeXtaKozZWYx</a></p>
     <p>如果你需要 QQ 侧的数据解密、分析或年度总结类工具，欢迎体验 <a href="https://github.com/H3CoF6/WeQ">H3CoF6/WeQ</a>；WeQ 作者也是本项目开发成员之一</p>
+    <p>需要 抖音 的数据分析或年度总结类工具？欢迎体验 <a href="https://github.com/ZhangYukwiver/DouyinDataReview">DouyinDataReview</a>
 </div>
 
 ## 年度总结
