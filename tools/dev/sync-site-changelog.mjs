@@ -12,7 +12,7 @@
      node tools/dev/sync-site-changelog.mjs --soft                   取不到或校验不过时只告警、保留现有快照，退出码 0（部署用）
      node tools/dev/sync-site-changelog.mjs --check                  只校验现有快照（不联网）
 
-   校验：每条都要有版本号（数字点分）、日期（YYYY-MM-DD）、平台（windows / macos / linux 中的一个或几个）、至少一条变化；
+   校验：每条都要有版本号（数字点分）、日期（YYYY-MM-DD）、平台（windows / macos / linux 中的一个或几个）；变化条目必须为数组，空数组的版本不展示；
    变化的类型只能是 feature / improve / fix，文字非空且不超过 600 字。 */
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -37,8 +37,8 @@ function normalize(raw) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.date || ""))) throw new Error(`${at} 日期不对`);
     const platforms = Array.isArray(r.platforms) ? r.platforms.map(String) : [];
     if (!platforms.length || platforms.some((p) => !PLATFORMS.has(p))) throw new Error(`${at} 平台不对：${platforms.join(",")}`);
-    const changes = Array.isArray(r.changes) ? r.changes : [];
-    if (!changes.length) throw new Error(`${at} 没有变化条目`);
+    const changes = r.changes;
+    if (!Array.isArray(changes)) throw new Error(`${at} 变化条目必须是数组`);
     return {
       version: String(r.version), date: r.date, platforms,
       changes: changes.map((c, j) => {
@@ -48,7 +48,8 @@ function normalize(raw) {
         return { type: c.type, text };
       }),
     };
-  });
+  }).filter((item) => item.changes.length);
+  if (!items.length) throw new Error("没有可展示的版本记录");
   // 新的在前：先按日期，同一天的保持来源里的先后
   return items.map((it, i) => [it, i]).sort((a, b) => (a[0].date === b[0].date ? a[1] - b[1] : a[0].date < b[0].date ? 1 : -1)).map(([it]) => it);
 }
