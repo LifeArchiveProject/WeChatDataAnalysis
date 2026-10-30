@@ -209,8 +209,8 @@ img { display: block; }
 .hero__upd b { font-weight: 600; color: var(--ink); }
 .hero__upd .ic { width: 13px; height: 13px; color: var(--ink-3); }
 .hero__upd:hover { border-color: var(--line-h); color: var(--ink); }
-.hero__copy { grid-area: 2 / 1; min-width: 0; }
-.hero__h { font: 600 var(--h1)/1.06 var(--lat); letter-spacing: -.035em; color: var(--ink); }
+.hero__copy { grid-area: 2 / 1; min-width: 0; container-type: inline-size; }
+.hero__h { font: 600 min(var(--h1), 14cqw)/1.06 var(--lat); letter-spacing: -.035em; color: var(--ink); white-space: nowrap; }
 .hero__sub { max-width: 25em; margin-top: clamp(16px, 2.6svh, 26px); font-size: clamp(15px, min(1.28vw, 2.2svh), 18.5px); line-height: 1.65; color: var(--ink-3); word-break: keep-all; text-wrap: balance; } /* 只在空格与标点处折行，不把「人工」拆开 */
 .hero__sub span { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .hero__cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: clamp(22px, 3.8svh, 40px); }
