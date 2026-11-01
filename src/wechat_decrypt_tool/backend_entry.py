@@ -1,0 +1,111 @@
+"""Entry point for bundling the FastAPI backend into a standalone executable.
+
+This avoids dynamic import strings like "pkg.module:app" which some bundlers
+cannot detect reliably.
+"""
+
+import json
+import base64
+import hashlib
+import multiprocessing
+import sys
+from pathlib import Path
+
+# PyInstaller/frozen Windows builds re-launch this executable for
+# multiprocessing workers.  The memory/DLL key scanners use process pools; if
+# we import and start the FastAPI app before freeze_support() has a chance to
+# divert worker processes, every worker tries to bind the backend port again.
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
+
+import uvicorn
+
+from wechat_decrypt_tool.desktop_parent_watchdog import (
+    start_desktop_parent_watchdog_from_env,
+)
+from wechat_decrypt_tool.native_core_client import configure_native_core_entrypoint
+from wechat_decrypt_tool.runtime_settings import (
+    default_backend_host,
+    read_effective_backend_host,
+    read_effective_backend_port,
+)
+
+
+def _run_opencc_smoke() -> None:
+    import opencc
+    from opencc import OpenCC
+
+    converter = OpenCC("t2s")
+    payload = {
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "openccModule": str(getattr(opencc, "__file__", "") or ""),
+        "results": {
+            "繁體中文": converter.convert("繁體中文"),
+            "軟體與資料庫": converter.convert("軟體與資料庫"),
+        },
+    }
+    print(json.dumps(payload, ensure_ascii=True))
+
+
+def _run_watchfiles_smoke() -> None:
+    import watchfiles
+    import watchfiles._rust_notify as rust_notify
+
+    payload = {
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "version": str(getattr(watchfiles, "__version__", "") or ""),
+        "nativeModule": str(getattr(rust_notify, "__file__", "") or ""),
+    }
+    print(json.dumps(payload, ensure_ascii=True))
+
+
+def _run_sns_wasm_smoke() -> None:
+    from wechat_decrypt_tool import sns_media
+
+    fixture_path = (
+        Path(sns_media._weflow_wxisaac64_script_path()).resolve().parent
+        / "sns_image_fixture.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    encrypted = base64.b64decode(str(fixture["encryptedBase64"]), validate=False)
+    decoded = sns_media.weflow_decrypt_sns_image_bytes(encrypted, str(fixture["key"]))
+    executable, mode, provider = sns_media._resolve_weflow_node_runtime()
+    del executable
+    keystream = sns_media.weflow_wxisaac64_keystream(
+        str(fixture["key"]),
+        int(fixture["size"]),
+    )
+    payload = {
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "runtimeMode": mode,
+        "keystreamProvider": provider,
+        "keystreamSha256": hashlib.sha256(keystream).hexdigest(),
+        "plaintextSha256": hashlib.sha256(decoded).hexdigest(),
+        "mediaType": sns_media.detect_image_mime(decoded),
+    }
+    print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+
+
+def main() -> None:
+    if "--smoke-opencc" in sys.argv[1:]:
+        _run_opencc_smoke()
+        return
+    if "--smoke-watchfiles" in sys.argv[1:]:
+        _run_watchfiles_smoke()
+        return
+    if "--smoke-sns-wasm" in sys.argv[1:]:
+        _run_sns_wasm_smoke()
+        return
+
+    start_desktop_parent_watchdog_from_env()
+    configure_native_core_entrypoint()
+    from wechat_decrypt_tool.api import app
+
+    host, _ = read_effective_backend_host(default=default_backend_host())
+    port, _ = read_effective_backend_port(default=10392)
+    # 保留应用已经安装的文件 handler 和脱敏过滤器。
+    uvicorn.run(app, host=host, port=port, log_level="info", log_config=None)
+
+
+if __name__ == "__main__":
+    main()

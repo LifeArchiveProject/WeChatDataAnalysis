@@ -1,0 +1,128 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+.DS_Store
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+/output/
+/.native-core-cache-v1/
+/.native-core-license-v1/
+.playwright-cli/
+/.pnpm-store/
+/.pytest-tmp-*/
+/.testdeps/
+/private/
+/work/
+/.idea
+/.history/
+/.augment/
+/CLAUDE.md
+
+# Local config templates
+/wechat_db_config_template.json
+/wechat_db_config.json
+# WxCDN 运行期状态（按 wxid 存 token / 额度 / 最近下载），只属于本机
+/cdn_account_state.json
+.ace-tool/
+pnpm-lock.yaml
+/tools/tmp_isaac64_compare.js
+/native/wce_integrity/
+/.claude/
+.env
+.env.*
+
+# Local dev repos and data
+/WxDatDecrypt/
+/echotrace/
+/oh-my-wechat/
+/vue3-wechat-tool/
+/wechatDataBackup/
+/wx_key/
+/refs/
+/WeFlow/
+/WeFlow-*/
+/win95/
+/py_wx_key/
+/Xkey-main/
+/Xkey-private/
+/native/macos-xkey/
+/native/macos_xkey/
+/private-native/macos-xkey/
+
+# Electron desktop app
+/desktop/node_modules/
+/desktop/dist/
+/desktop/dist-controlled-*/
+/desktop/dist-updater-test/
+/desktop/build/
+/desktop/resources/ui/*
+!/desktop/resources/ui/.gitkeep
+/desktop/resources/backend/*
+!/desktop/resources/backend/.gitkeep
+/desktop/resources/signing/*
+!/desktop/resources/signing/.gitkeep
+/desktop/resources/icon.ico
+/desktop/.operation-auth-*/
+
+# Local dependency, diagnostic, and scratch artifacts
+/.codex-analysis/
+/node_modules/
+/logs/
+/WeQ/
+*.obj
+/cdn_image_quota.json
+/agreement-ready.yml
+/app-home.yml
+/chat-home.yml
+/group-before.yml
+/nul`r`ncl.exe
+
+# Native-core developer artifacts are supplied by the producer workflow.
+# Source mode downloads and verifies these native-core files into the per-user
+# runtime cache. Keep them out of the public source tree and local commits.
+/src/wechat_decrypt_tool/native/wechatdb_client.dll
+/src/wechat_decrypt_tool/native/wechatdb_broker.exe
+/src/wechat_decrypt_tool/native/libwechatdb_client.dylib
+/src/wechat_decrypt_tool/native/wechatdb_broker
+/src/wechat_decrypt_tool/native/wechatdb_native_build.json
+/src/wechat_decrypt_tool/native/macos/db-key/
+
+# Retired standalone WeChat ASR artifacts. The private implementation is now
+# embedded in the signed native-core client/broker artifact set.
+/native/wechat_native_asr_bridge/
+/src/wechat_decrypt_tool/native/wechat_native_asr_manifest.json
+/src/wechat_decrypt_tool/native/wechat_native_asr_python_transport.py
+/src/wechat_decrypt_tool/native/wechat_native_asr_weixin_hook.dll
+
+# Local diagnostics and rollout notes
+/*.log
+/NATIVE_CORE_ROLLOUT.md
+
+# Local scratch file accidentally generated during development
+/bento-summary.html
+/tmp/local-search-validation/
+
+# 本地跨平台验收的传输包、运行目录与远程连接辅助脚本
+/tmp/macos-ai-*
+/tmp/macos-public-manifest.json
+/tmp/mac-desktop-probe.cjs
+/tmp/mac-ui-check.cjs
+/tmp/mac-user-ui.cjs
+/tmp/mac-e2e-private.json
+/tmp/ai-frozen-check/
+/tmp/ai-macos-regression-*/
+
+# 本地演示截图
+pro-shots/
+
+# 隔离验收数据库、真实聊天资料和本地状态快照不得进入版本库。
+/tmp/deepagents-migration/
+
+# 语音验收包含真实聊天音频、转写、模型权重及本地运行环境。
+/tmp/stt-benchmark-20260921/
+/tmp/stt-integration-20260921/
