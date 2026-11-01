@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "deploymentTarget": "15.0",
+  "architectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "inputs": [
+    {
+      "path": "src/wechat_decrypt_tool/native/macos/source/image_scan_helper.c",
+      "sha256": "77d1d6fef8b0c01df4439f92a258cc8a73af6dc3400b742a9394be90438214f8"
+    },
+    {
+      "path": "src/wechat_decrypt_tool/native/macos/source/image_scan_entitlements.plist",
+      "sha256": "995277fd49b775b2daaf812369ae608f14600e1e802a6d86aecbd8bd67d7a741"
+    }
+  ],
+  "artifact": {
+    "path": "src/wechat_decrypt_tool/native/macos/universal/image_scan_helper",
+    "sha256": "7a19a0e95b8bdb638f5e4683d6972bcdfc1b76c8c93a3066cbb6294528edca66"
+  }
+}
