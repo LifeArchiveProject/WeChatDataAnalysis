@@ -1,0 +1,68 @@
+name: Deploy website to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "frontend/lib/pro-demos/catalog.js"
+      - "tools/dev/sync-site-catalog.mjs"
+      - "tools/dev/sync-site-changelog.mjs"
+      - ".github/workflows/pages.yml"
+  # 每天北京时间 09:23 重新部署一次，把高级版新发布的更新日志带上官网（不用等有人推代码）
+  schedule:
+    - cron: "23 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一次部署，新的推送取消排队中的旧任务
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 官网上的高级版条目与条数必须和 frontend/lib/pro-demos/catalog.js 一致，不一致就别发布
+      - name: Check site catalog is in sync
+        run: node tools/dev/sync-site-catalog.mjs --check
+
+      # 更新日志：从高级版的发布接口取最新的（地址在仓库机密 CHANGELOG_URL 里，不写进代码，日志里也会被遮住）；
+      # 没配机密、接口不通或数据不合格时只告警，沿用仓库里的快照 website/assets/data/changelog.json，然后校验将要上线的那份
+      - name: Refresh changelog
+        env:
+          CHANGELOG_URL: ${{ secrets.CHANGELOG_URL }}
+        run: |
+          node tools/dev/sync-site-changelog.mjs --soft
+          node tools/dev/sync-site-changelog.mjs --check
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      # 只发布页面本身：宣传片工程（website/film/，约 184MB 的分镜、音频与渲染脚本）、
+      # 不再引用的 vendor/three*.js 和本地预览用的 serve.py 都不上线
+      - name: Assemble site (exclude film/, vendor/three*, serve.py)
+        run: |
+          mkdir -p _site
+          rsync -a --delete --exclude 'film/' --exclude 'vendor/three*' --exclude 'serve.py' website/ _site/
+          du -sh _site
+
+      - name: Upload site as artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,975 @@
+import asyncio
+import ipaddress
+import threading
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, Request
+from pydantic import BaseModel, Field
+
+from ..logging_config import get_logger
+from ..app_paths import get_output_dir
+from ..macos_db_key_capture import (
+    MacOSDBKeyCaptureFailure,
+    capture_prepared_macos_passphrase,
+    cleanup_macos_passphrase_capture,
+    preflight_prepared_macos_passphrase,
+    prepare_macos_passphrase_capture,
+    save_passphrase,
+)
+from ..macos_db_key_helper import MacosDbKeyError
+from ..macos_inplace_capture import get_in_place_capture_status
+from ..key_store import get_account_keys_from_store, normalize_key_store_path
+from ..key_service import (
+    _resolve_v4_probe_db_file,
+    get_db_key_workflow,
+    get_image_key_integrated_workflow,
+    get_image_key_memory_workflow,
+)
+from ..media_helpers import _load_media_keys, _resolve_account_dir
+from ..path_fix import PathFixRoute
+from ..platform_support import current_platform, is_macos, runtime_capabilities
+
+router = APIRouter(route_class=PathFixRoute)
+logger = get_logger(__name__)
+
+_MACOS_LLDB_FALLBACK_CODES = frozenset(
+    {
+        "BUILD_EXPIRED",
+        "CAPTURE_ATTACH_NOT_SUPPORTED",
+        "CAPTURE_ATTACH_RUNTIME_ERROR",
+        "CAPTURE_FAILED",
+        "CAPTURE_KEY_MISMATCH",
+        "CAPTURE_RUNTIME_UNAVAILABLE",
+        "CAPTURE_SESSION_DETACHED",
+        "CONTRACT_MISMATCH",
+        "DEVELOPMENT_BUILD_REJECTED",
+        "HELPER_DEBUGGER_ENTITLEMENT_MISSING",
+        "HELPER_EXITED",
+        "HELPER_START_FAILED",
+        "MISSING_RESOURCE",
+        "PROCESS_ACCESS_DENIED",
+        "PROCESS_EXITED",
+        "PROCESS_NOT_FOUND",
+        "PROTOCOL_ERROR",
+        "TARGET_PROCESS_PROTECTED",
+        "TIMEOUT",
+        "UNSUPPORTED_WECHAT",
+        "WECHAT_RELOGIN_REQUIRED",
+    }
+)
+_macos_capture_state_lock = threading.Lock()
+_macos_capture_cancel_lock = threading.Lock()
+_macos_capture_active_operation = ""
+
+
+def _macos_capture_backup_root() -> Path:
+    return get_output_dir() / "macos-key-capture-backups"
+
+
+def _macos_lldb_fallback_available() -> bool:
+    try:
+        return bool(runtime_capabilities().get("macos_lldb_fallback"))
+    except Exception:
+        return False
+
+
+def _macos_lldb_fallback_allowed(error_code: str) -> bool:
+    return error_code in _MACOS_LLDB_FALLBACK_CODES and _macos_lldb_fallback_available()
+
+
+def _begin_macos_capture_operation(operation: str) -> bool:
+    global _macos_capture_active_operation
+    with _macos_capture_state_lock:
+        if _macos_capture_active_operation:
+            return False
+        _macos_capture_active_operation = operation
+        return True
+
+
+def _end_macos_capture_operation(operation: str) -> None:
+    global _macos_capture_active_operation
+    with _macos_capture_state_lock:
+        if _macos_capture_active_operation == operation:
+            _macos_capture_active_operation = ""
+
+
+def _current_macos_capture_operation() -> str:
+    with _macos_capture_state_lock:
+        return _macos_capture_active_operation
+
+
+class MacosKeyCaptureRequest(BaseModel):
+    wechat_install_path: Optional[str] = Field(None, description="微信安装路径")
+    db_storage_path: Optional[str] = Field(None, description="账号 db_storage 路径")
+    timeout: int = Field(240, ge=60, le=600, description="等待重新登录的秒数")
+
+
+def _macos_capture_error_response(error: BaseException, *, stage: str) -> dict:
+    known = isinstance(error, MacOSDBKeyCaptureFailure)
+    code = str(getattr(error, "code", "INTERNAL_ERROR") or "INTERNAL_ERROR") if known else "INTERNAL_ERROR"
+    logger.warning(
+        "[keys] experimental macOS local capture failed: stage=%s error_code=%s classified=%s",
+        stage,
+        code,
+        known,
+    )
+    try:
+        needs_cleanup = bool(get_in_place_capture_status().get("pending"))
+    except Exception:
+        needs_cleanup = bool(getattr(error, "wechat_modified", False)) if known else False
+    return {
+        "status": -1,
+        "errmsg": str(error).strip() if known else "实验性本机调试密钥获取失败，已停止本次操作。",
+        "data": {
+            "platform": "macos",
+            "method": "macos_inplace_native",
+            "stage": stage,
+            "error_code": code,
+            "wechat_modified": bool(getattr(error, "wechat_modified", False)) if known else False,
+            "needs_cleanup": needs_cleanup,
+        },
+    }
+
+
+def _macos_capture_busy_response() -> dict:
+    return {
+        "status": -1,
+        "errmsg": "另一项 macOS 密钥操作仍在进行，请等待完成或先停止当前操作。",
+        "data": {
+            "platform": "macos",
+            "method": "macos_inplace_native",
+            "stage": _current_macos_capture_operation() or "busy",
+            "error_code": "CAPTURE_BUSY",
+        },
+    }
+
+
+def _macos_capture_local_request_error(request: Request) -> dict | None:
+    client = request.client
+    host = str(getattr(client, "host", "") or "").strip()
+    try:
+        address = ipaddress.ip_address(host)
+        is_loopback = bool(
+            address.is_loopback
+            or (
+                isinstance(address, ipaddress.IPv6Address)
+                and address.ipv4_mapped is not None
+                and address.ipv4_mapped.is_loopback
+            )
+        )
+    except ValueError:
+        is_loopback = host.lower() == "localhost"
+    if is_loopback:
+        return None
+    return {
+        "status": -1,
+        "errmsg": "实验性本机密钥捕获只能在运行 WCDA 的 Mac 本机界面操作。",
+        "data": {
+            "platform": current_platform(),
+            "method": "macos_inplace_native",
+            "error_code": "REMOTE_CLIENT_FORBIDDEN",
+        },
+    }
+
+
+def _log_macos_db_key_failure(
+    error: BaseException,
+    *,
+    fallback_code: str,
+    fallback_retryable: bool,
+) -> tuple[str, bool]:
+    known_error = isinstance(error, MacosDbKeyError)
+    code = (
+        str(getattr(error, "code", fallback_code) or fallback_code)
+        if known_error
+        else fallback_code
+    )
+    retryable = (
+        bool(getattr(error, "retryable", fallback_retryable))
+        if known_error
+        else fallback_retryable
+    )
+    logger.warning(
+        "[keys] macOS db-key capture failed: error_code=%s retryable=%s classified=%s",
+        code,
+        retryable,
+        known_error,
+    )
+    return code, retryable
+
+
+class ImageKeyMemoryRequest(BaseModel):
+    account: Optional[str] = Field(None, description="账号目录名")
+    db_storage_path: Optional[str] = Field(None, description="账号的 db_storage 路径")
+    wxid_dir: Optional[str] = Field(None, description="微信原始账号目录")
+
+
+def _image_key_log_metadata(xor_value: object, aes_value: object) -> dict:
+    xor_raw = str(xor_value or "").strip()
+    aes_raw = str(aes_value or "").strip()
+    return {
+        "has_xor": bool(xor_raw),
+        "has_aes": bool(aes_raw),
+        "xor_length": len(xor_raw),
+        "aes_length": len(aes_raw),
+    }
+
+
+def _is_valid_image_key_pair(xor_value: object, aes_value: object) -> bool:
+    xor_raw = str(xor_value or "").strip()
+    aes_raw = str(aes_value or "").strip()
+    try:
+        xor_key = int(xor_raw[2:], 16) if xor_raw.lower().startswith("0x") else int(xor_raw, 16)
+        aes_key = aes_raw[:16].encode("ascii")
+    except (TypeError, ValueError, UnicodeEncodeError):
+        return False
+    return 0 <= xor_key <= 0xFF and len(aes_key) == 16
+
+
+def _resolve_requested_wxid_dir(*, db_storage_path: Optional[str] = None, wxid_dir: Optional[str] = None) -> str:
+    explicit_wxid_dir = str(wxid_dir or "").strip()
+    if explicit_wxid_dir:
+        return normalize_key_store_path(explicit_wxid_dir)
+
+    raw_db_storage_path = str(db_storage_path or "").strip()
+    if not raw_db_storage_path:
+        return ""
+
+    candidate = Path(raw_db_storage_path).expanduser()
+    try:
+        if str(candidate.name or "").lower() == "db_storage":
+            return normalize_key_store_path(str(candidate.parent))
+    except Exception:
+        pass
+
+    try:
+        if str((candidate / "db_storage").name or "").lower() == "db_storage":
+            return normalize_key_store_path(str(candidate))
+    except Exception:
+        pass
+
+    return ""
+
+
+def _build_saved_key_candidates(account_name: Optional[str], request_account: Optional[str], request_wxid_dir: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for value in [
+        Path(request_wxid_dir).name if request_wxid_dir else "",
+        str(account_name or "").strip(),
+        str(request_account or "").strip(),
+    ]:
+        key = str(value or "").strip()
+        if (not key) or (key in seen):
+            continue
+        seen.add(key)
+        out.append(key)
+
+    return out
+
+
+def _evaluate_db_key_candidate(
+    *,
+    store_account: str,
+    keys: dict,
+    account_name: Optional[str],
+    request_wxid_dir: str,
+    request_db_storage_path: str,
+) -> tuple[bool, int, str]:
+    db_key = str(keys.get("db_key") or "").strip()
+    if not db_key:
+        return False, -1, ""
+
+    source_wxid_dir = normalize_key_store_path(keys.get("db_key_source_wxid_dir"))
+    source_db_storage_path = normalize_key_store_path(keys.get("db_key_source_db_storage_path"))
+    request_wxid_dir_name = Path(request_wxid_dir).name if request_wxid_dir else ""
+    source_wxid_dir_name = Path(source_wxid_dir).name if source_wxid_dir else ""
+
+    if request_db_storage_path and source_db_storage_path:
+        if source_db_storage_path == request_db_storage_path:
+            return True, 400, ""
+        return (
+            False,
+            0,
+            f"Saved db key source does not match current db_storage_path. request={request_db_storage_path} stored={source_db_storage_path}",
+        )
+
+    if request_wxid_dir and source_wxid_dir:
+        if (source_wxid_dir == request_wxid_dir) or (
+            source_wxid_dir_name and source_wxid_dir_name == request_wxid_dir_name
+        ):
+            return True, 300, ""
+        return (
+            False,
+            0,
+            f"Saved db key source does not match current wxid_dir. request={request_wxid_dir_name} stored={source_wxid_dir_name or source_wxid_dir}",
+        )
+
+    if request_wxid_dir_name:
+        if store_account == request_wxid_dir_name:
+            return True, 200, ""
+        if account_name and request_wxid_dir_name == str(account_name or "").strip():
+            return True, 100, ""
+        return (
+            False,
+            0,
+            f"Legacy saved db key is ambiguous for current wxid_dir={request_wxid_dir_name}. Please fetch a fresh db key.",
+        )
+
+    return True, 50, ""
+
+
+@router.get("/api/keys", summary="获取账号已保存的密钥")
+async def get_saved_keys(
+    account: Optional[str] = None,
+    db_storage_path: Optional[str] = None,
+    wxid_dir: Optional[str] = None,
+):
+    """获取账号的数据库密钥与图片密钥（用于前端自动回填）"""
+    account_name: Optional[str] = None
+    account_dir = None
+
+    try:
+        account_dir = _resolve_account_dir(account)
+        account_name = account_dir.name
+    except Exception:
+        # 账号可能尚未解密；仍允许从全局 store 读取（如果传入了 account）
+        account_name = str(account or "").strip() or None
+
+    request_db_storage_path = normalize_key_store_path(db_storage_path)
+    request_wxid_dir = _resolve_requested_wxid_dir(db_storage_path=db_storage_path, wxid_dir=wxid_dir)
+    candidate_accounts = _build_saved_key_candidates(account_name, account, request_wxid_dir)
+
+    logger.info(
+        "[keys] get_saved_keys start: request_account=%s resolved_account=%s account_dir=%s db_storage_path=%s wxid_dir=%s candidates=%s",
+        str(account or "").strip(),
+        str(account_name or ""),
+        str(account_dir) if account_dir else "",
+        request_db_storage_path,
+        request_wxid_dir,
+        candidate_accounts,
+    )
+
+    keys: dict = {}
+    selected_image_keys: dict = {}
+    selected_image_key_score = -1
+    selected_db_key_account = ""
+    selected_db_key_score = -1
+    db_key_blocked_reason = ""
+    db_key_source_wxid_dir = ""
+    db_key_source_db_storage_path = ""
+
+    for candidate_account in candidate_accounts:
+        candidate_keys = get_account_keys_from_store(candidate_account)
+        if not isinstance(candidate_keys, dict) or not candidate_keys:
+            continue
+
+        image_xor_key = str(candidate_keys.get("image_xor_key") or "").strip()
+        image_aes_key = str(candidate_keys.get("image_aes_key") or "").strip()
+        has_complete_image_pair = _is_valid_image_key_pair(image_xor_key, image_aes_key)
+        image_key_source_wxid_dir = normalize_key_store_path(
+            candidate_keys.get("image_key_source_wxid_dir")
+        )
+        image_key_source_matches = not request_wxid_dir or (
+            bool(image_key_source_wxid_dir) and image_key_source_wxid_dir == request_wxid_dir
+        )
+        image_key_source_conflicts = bool(
+            request_wxid_dir
+            and image_key_source_wxid_dir
+            and image_key_source_wxid_dir != request_wxid_dir
+        )
+        image_key_verified = (
+            candidate_keys.get("image_key_verified") is True
+            and has_complete_image_pair
+            and image_key_source_matches
+        )
+        image_score = (
+            -1 if image_key_source_conflicts
+            else 300 if has_complete_image_pair and image_key_verified
+            else 200 if has_complete_image_pair
+            else 100 if image_xor_key or image_aes_key
+            else -1
+        )
+        if image_score > selected_image_key_score:
+            selected_image_key_score = image_score
+            selected_image_keys = {
+                "image_xor_key": image_xor_key,
+                "image_aes_key": image_aes_key,
+                "image_key_verified": image_key_verified,
+                "image_key_source": str(candidate_keys.get("image_key_source") or "").strip(),
+                "image_key_source_wxid_dir": image_key_source_wxid_dir,
+                "image_key_derived_wxid": str(candidate_keys.get("image_key_derived_wxid") or "").strip(),
+                "image_key_code": candidate_keys.get("image_key_code"),
+                "image_key_store_account": candidate_account,
+                "updated_at": str(candidate_keys.get("updated_at") or "").strip(),
+            }
+
+        ok, score, blocked_reason = _evaluate_db_key_candidate(
+            store_account=candidate_account,
+            keys=candidate_keys,
+            account_name=account_name,
+            request_wxid_dir=request_wxid_dir,
+            request_db_storage_path=request_db_storage_path,
+        )
+        if ok and score > selected_db_key_score:
+            selected_db_key_score = score
+            selected_db_key_account = candidate_account
+            keys["db_key"] = str(candidate_keys.get("db_key") or "").strip()
+            db_key_source_wxid_dir = normalize_key_store_path(candidate_keys.get("db_key_source_wxid_dir"))
+            db_key_source_db_storage_path = normalize_key_store_path(candidate_keys.get("db_key_source_db_storage_path"))
+            if str(candidate_keys.get("updated_at") or "").strip():
+                keys["updated_at"] = str(candidate_keys.get("updated_at") or "").strip()
+        elif (not ok) and blocked_reason and (not db_key_blocked_reason):
+            db_key_blocked_reason = blocked_reason
+
+    keys.update(selected_image_keys)
+
+    # 兼容：没有完整账号级记录时，尝试从账号目录的 _media_keys.json 读取一整对密钥。
+    if account_dir and selected_image_key_score < 200:
+        try:
+            media = _load_media_keys(account_dir)
+            media_xor = f"0x{int(media['xor']):02X}" if media.get("xor") is not None else ""
+            media_aes = str(media.get("aes") or "").strip()
+            if media_xor or media_aes:
+                keys.update({
+                    "image_xor_key": media_xor,
+                    "image_aes_key": media_aes,
+                    "image_key_verified": media.get("verified") is True and _is_valid_image_key_pair(
+                        media_xor,
+                        media_aes,
+                    ),
+                    "image_key_source": str(media.get("source") or "legacy_media_cache").strip(),
+                    "image_key_source_wxid_dir": normalize_key_store_path(media.get("source_wxid_dir")),
+                    "image_key_derived_wxid": str(media.get("derived_wxid") or "").strip(),
+                    "image_key_code": media.get("code"),
+                    "image_key_store_account": account_dir.name,
+                })
+        except Exception:
+            pass
+
+    # 仅返回需要的字段
+    result = {
+        "db_key": str(keys.get("db_key") or "").strip(),
+        "image_xor_key": str(keys.get("image_xor_key") or "").strip(),
+        "image_aes_key": str(keys.get("image_aes_key") or "").strip(),
+        "image_key_verified": bool(keys.get("image_key_verified")),
+        "image_key_source": str(keys.get("image_key_source") or "").strip(),
+        "image_key_source_wxid_dir": str(keys.get("image_key_source_wxid_dir") or "").strip(),
+        "image_key_derived_wxid": str(keys.get("image_key_derived_wxid") or "").strip(),
+        "image_key_code": keys.get("image_key_code"),
+        "image_key_store_account": str(keys.get("image_key_store_account") or "").strip(),
+        "updated_at": str(keys.get("updated_at") or "").strip(),
+        "db_key_source_wxid_dir": db_key_source_wxid_dir,
+        "db_key_source_db_storage_path": db_key_source_db_storage_path,
+        "db_key_store_account": selected_db_key_account,
+        "db_key_blocked_reason": db_key_blocked_reason,
+    }
+    logger.info(
+        "[keys] get_saved_keys done: account=%s db_key_present=%s db_key_store_account=%s db_key_source_wxid_dir=%s blocked_reason=%s image_keys=%s image_verified=%s image_source=%s updated_at=%s",
+        str(account_name or ""),
+        bool(result["db_key"]),
+        result["db_key_store_account"],
+        result["db_key_source_wxid_dir"],
+        result["db_key_blocked_reason"],
+        _image_key_log_metadata(result["image_xor_key"], result["image_aes_key"]),
+        result["image_key_verified"],
+        result["image_key_source"],
+        result["updated_at"],
+    )
+
+    return {
+        "status": "success",
+        "account": account_name,
+        "keys": result,
+    }
+
+
+@router.get("/api/get_keys", summary="自动获取微信数据库密钥")
+async def get_wechat_db_key(
+    request: Request,
+    wechat_install_path: Optional[str] = None,
+    db_storage_path: Optional[str] = None,
+    key_mode: Optional[str] = None,
+):
+    """
+    Windows 优先使用 key_v4，失败时由前端明确确认后再使用 Hook。
+    macOS 通过发行包内受控 helper 完成在线安全校验和单次获取。
+    """
+    try:
+        logger.info(
+            "[keys] get_wechat_db_key start: wechat_install_path=%s db_storage_path=%s key_mode=%s",
+            str(wechat_install_path or "").strip(),
+            str(db_storage_path or "").strip(),
+            str(key_mode or "auto").strip(),
+        )
+        if is_macos():
+            cancel_event = threading.Event()
+            async def watch_disconnect() -> None:
+                while not cancel_event.is_set():
+                    if await request.is_disconnected():
+                        cancel_event.set()
+                        return
+                    await asyncio.sleep(0.2)
+
+            worker = asyncio.create_task(
+                asyncio.to_thread(
+                    get_db_key_workflow,
+                    wechat_install_path=wechat_install_path,
+                    db_storage_path=db_storage_path,
+                    key_mode=key_mode or "macos_private_helper",
+                    cancel_event=cancel_event,
+                )
+            )
+            disconnect_watcher = asyncio.create_task(watch_disconnect())
+            try:
+                keys_data = await worker
+            except asyncio.CancelledError:
+                cancel_event.set()
+                raise
+            finally:
+                cancel_event.set()
+                disconnect_watcher.cancel()
+                try:
+                    await disconnect_watcher
+                except asyncio.CancelledError:
+                    pass
+        else:
+            keys_data = get_db_key_workflow(
+                wechat_install_path=wechat_install_path,
+                db_storage_path=db_storage_path,
+                key_mode=key_mode or "auto",
+            )
+
+        return {
+            "status": 0,
+            "errmsg": "ok",
+            "data": keys_data
+        }
+
+    except TimeoutError as e:
+        if is_macos():
+            known_error = isinstance(e, MacosDbKeyError)
+            error_code, retryable = _log_macos_db_key_failure(
+                e,
+                fallback_code="TIMEOUT",
+                fallback_retryable=True,
+            )
+            return {
+                "status": -1,
+                "errmsg": (
+                    str(e).strip()
+                    if known_error
+                    else "macOS 数据库密钥获取超时，请重新点击获取并按提示退出、重启微信。"
+                ),
+                "data": {
+                    "platform": "macos",
+                    "method": "macos_private_helper",
+                    "error_code": error_code,
+                    "retryable": retryable,
+                    "manual_input_supported": True,
+                    "can_fallback_to_macos_lldb": _macos_lldb_fallback_allowed(error_code),
+                },
+            }
+        mode = str(key_mode or "auto").strip().lower()
+        if mode in {"v4", "key_v4", "memory", "memory_scan"}:
+            return {
+                "status": -2,
+                "errmsg": f"扫内存失败: {str(e)}",
+                "data": {
+                    "method": "key_v4",
+                    "can_fallback_to_hook": True,
+                    "key_v4_error": str(e),
+                }
+            }
+        return {
+            "status": -1,
+            "errmsg": str(e).strip() or "获取超时，请确保微信没有开启自动登录并且在弹窗中完成了登录",
+            "data": {"platform": current_platform()}
+        }
+    except Exception as e:
+        if is_macos():
+            known_error = isinstance(e, MacosDbKeyError)
+            error_code, retryable = _log_macos_db_key_failure(
+                e,
+                fallback_code="INTERNAL_ERROR",
+                fallback_retryable=False,
+            )
+            return {
+                "status": -1,
+                "errmsg": (
+                    str(e).strip()
+                    if known_error
+                    else "macOS 数据库密钥获取失败，请更新或重新安装完整应用后重试。"
+                ),
+                "data": {
+                    "platform": "macos",
+                    "method": "macos_private_helper",
+                    "error_code": error_code,
+                    "retryable": retryable,
+                    "manual_input_supported": True,
+                    "can_fallback_to_macos_lldb": _macos_lldb_fallback_allowed(error_code),
+                },
+            }
+        mode = str(key_mode or "auto").strip().lower()
+        if mode in {"v4", "key_v4", "memory", "memory_scan"}:
+            return {
+                "status": -2,
+                "errmsg": f"扫内存失败: {str(e)}",
+                "data": {
+                    "method": "key_v4",
+                    "can_fallback_to_hook": True,
+                    "key_v4_error": str(e),
+                }
+            }
+        return {
+            "status": -1,
+            "errmsg": f"获取失败: {str(e)}",
+            "data": {}
+        }
+
+
+@router.get("/api/macos-key-capture/status", summary="查看实验性 macOS 本机密钥捕获状态")
+async def get_macos_key_capture_status(request: Request):
+    if local_error := _macos_capture_local_request_error(request):
+        return local_error
+    if not is_macos():
+        return {
+            "status": -1,
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
+            "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
+        }
+    persisted = await asyncio.to_thread(get_in_place_capture_status)
+    return {
+        "status": 0,
+        "errmsg": "ok",
+        "data": {
+            **persisted,
+            "method": "macos_inplace_native",
+            "active_operation": _current_macos_capture_operation(),
+        },
+    }
+
+
+@router.post("/api/macos-key-capture/prepare", summary="准备实验性 macOS 本机密钥捕获")
+async def prepare_macos_key_capture(request: Request, payload: MacosKeyCaptureRequest):
+    if local_error := _macos_capture_local_request_error(request):
+        return local_error
+    if not is_macos():
+        return {
+            "status": -1,
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
+            "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
+        }
+    if not _macos_lldb_fallback_available():
+        return {
+            "status": -1,
+            "errmsg": "当前 Mac 不满足实验性本机调试兜底条件，请确认使用 Apple Silicon 并安装 Xcode Command Line Tools。",
+            "data": {"platform": "macos", "error_code": "LLDB_FALLBACK_UNAVAILABLE"},
+        }
+    operation = "prepare"
+    if not _begin_macos_capture_operation(operation):
+        return _macos_capture_busy_response()
+    try:
+        result = await asyncio.to_thread(
+            prepare_macos_passphrase_capture,
+            payload.wechat_install_path,
+            backup_root=_macos_capture_backup_root(),
+        )
+        return {
+            "status": 0,
+            "errmsg": "ok",
+            "data": {
+                "method": "macos_inplace_native",
+                "stage": "prepared",
+                "wechat_modified": bool(result.get("wechat_modified", True)),
+                "ready_for_preflight": bool(result.get("ready_for_preflight", True)),
+            },
+        }
+    except Exception as error:
+        return _macos_capture_error_response(error, stage="prepare")
+    finally:
+        _end_macos_capture_operation(operation)
+
+
+@router.post("/api/macos-key-capture/preflight", summary="预检实验性 macOS 本机捕获点")
+async def preflight_macos_key_capture(request: Request, payload: MacosKeyCaptureRequest):
+    if local_error := _macos_capture_local_request_error(request):
+        return local_error
+    if not is_macos():
+        return {
+            "status": -1,
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
+            "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
+        }
+    operation = "preflight"
+    if not _begin_macos_capture_operation(operation):
+        return _macos_capture_busy_response()
+    try:
+        result = await asyncio.to_thread(
+            preflight_prepared_macos_passphrase,
+            payload.wechat_install_path,
+            backup_root=_macos_capture_backup_root(),
+        )
+        return {
+            "status": 0,
+            "errmsg": "ok",
+            "data": {
+                "method": "macos_inplace_native",
+                "stage": "preflight_passed",
+                "transaction_id": str(result.get("transaction_id") or ""),
+                "capture_backend": result.get("capture_backend") if result.get("capture_backend") in {"native", "lldb"} else None,
+                "wechat_modified": bool(result.get("wechat_modified", True)),
+                "process_attached": bool(result.get("process_attached", False)),
+            },
+        }
+    except Exception as error:
+        return _macos_capture_error_response(error, stage="preflight")
+    finally:
+        _end_macos_capture_operation(operation)
+
+
+@router.post("/api/macos-key-capture/capture", summary="执行实验性 macOS 本机密钥捕获")
+async def capture_macos_key(request: Request, payload: MacosKeyCaptureRequest):
+    if local_error := _macos_capture_local_request_error(request):
+        return local_error
+    if not is_macos():
+        return {
+            "status": -1,
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
+            "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
+        }
+    operation = "capture"
+    if not _begin_macos_capture_operation(operation):
+        return _macos_capture_busy_response()
+    try:
+        try:
+            probe_db_path = await asyncio.to_thread(
+                _resolve_v4_probe_db_file,
+                payload.db_storage_path,
+            )
+        except Exception as error:
+            raise MacOSDBKeyCaptureFailure(
+                "probe_database_invalid",
+                "所选账号路径中没有可用于实时校验的加密 WCDB 数据库，请重新选择该账号的 db_storage 目录。",
+                wechat_modified=True,
+            ) from error
+        result = await asyncio.to_thread(
+            capture_prepared_macos_passphrase,
+            payload.wechat_install_path,
+            backup_root=_macos_capture_backup_root(),
+            probe_db_path=probe_db_path,
+            timeout=payload.timeout,
+            save_result=False,
+        )
+        db_key = str(result.get("db_key") or "").strip().lower()
+        from ..wechat_decrypt import validate_realtime_database_key
+
+        validation = await asyncio.to_thread(
+            validate_realtime_database_key,
+            str(payload.db_storage_path or ""),
+            db_key,
+        )
+        if validation.get("valid") is not True:
+            raise MacOSDBKeyCaptureFailure(
+                "passphrase_database_mismatch",
+                "已捕获登录密钥，但未通过当前账号的完整消息与会话数据库校验。请确认选择了同一账号的数据目录。",
+            )
+        await asyncio.to_thread(save_passphrase, db_key)
+        return {
+            "status": 0,
+            "errmsg": "ok",
+            "data": {
+                "method": "macos_inplace_native",
+                "stage": "completed",
+                "validated": True,
+                "key_saved": True,
+                "db_key": db_key,
+                "wechat_modified": False,
+                "official_wechat_verified": bool(result.get("official_wechat_verified")),
+                "official_wechat_restored": bool(result.get("official_wechat_restored")),
+            },
+        }
+    except Exception as error:
+        return _macos_capture_error_response(error, stage="capture")
+    finally:
+        _end_macos_capture_operation(operation)
+
+
+@router.post("/api/macos-key-capture/cancel", summary="停止并清理实验性 macOS 本机密钥捕获")
+async def cancel_macos_key_capture(request: Request, payload: MacosKeyCaptureRequest):
+    if local_error := _macos_capture_local_request_error(request):
+        return local_error
+    if not is_macos():
+        return {
+            "status": -1,
+            "errmsg": "实验性本机密钥捕获仅支持 macOS。",
+            "data": {"platform": current_platform(), "error_code": "UNSUPPORTED_PLATFORM"},
+        }
+    if not _macos_capture_cancel_lock.acquire(blocking=False):
+        return _macos_capture_busy_response()
+    operation = "cancel"
+    active_operation = _current_macos_capture_operation()
+    if active_operation and active_operation != "capture":
+        _macos_capture_cancel_lock.release()
+        return _macos_capture_busy_response()
+    claimed = False
+    if not active_operation:
+        claimed = _begin_macos_capture_operation(operation)
+        if not claimed:
+            _macos_capture_cancel_lock.release()
+            return _macos_capture_busy_response()
+    try:
+        result = await asyncio.to_thread(
+            cleanup_macos_passphrase_capture,
+            payload.wechat_install_path,
+            backup_root=_macos_capture_backup_root(),
+        )
+        return {
+            "status": 0,
+            "errmsg": "ok",
+            "data": {
+                "method": "macos_inplace_native",
+                "stage": "cancelled",
+                "pending": False,
+                "wechat_modified": False,
+                "official_wechat_verified": bool(result.get("official_wechat_verified")),
+                "official_wechat_restored": bool(result.get("official_wechat_restored")),
+            },
+        }
+    except Exception as error:
+        return _macos_capture_error_response(error, stage="cancel")
+    finally:
+        if claimed:
+            _end_macos_capture_operation(operation)
+        _macos_capture_cancel_lock.release()
+
+
+
+@router.get("/api/get_image_key", summary="获取并保存微信图片密钥")
+async def get_image_key(
+    account: Optional[str] = None,
+    db_storage_path: Optional[str] = None,
+    wxid_dir: Optional[str] = None,
+):
+    """
+    优先使用 WeFlow 本地机制解析并验真 AES/XOR 密钥：
+
+    1. 从 kvcomm 文件名枚举候选 code
+    2. 对候选 code 与 wxid 组合确定性派生密钥
+    3. 使用账号目录内真实 V2 图片验证候选
+    4. 本地未命中时才请求远端，并在可用模板存在时再次本地验真
+    """
+    try:
+        logger.info(
+            "[keys] get_image_key start: request_account=%s db_storage_path=%s wxid_dir=%s",
+            str(account or "").strip(),
+            str(db_storage_path or "").strip(),
+            str(wxid_dir or "").strip(),
+        )
+        result = await get_image_key_integrated_workflow(
+            account,
+            db_storage_path=db_storage_path,
+            wxid_dir=wxid_dir,
+        )
+        logger.info(
+            "[keys] get_image_key done: request_account=%s response_account=%s image_keys=%s verified=%s source=%s",
+            str(account or "").strip(),
+            str(result.get("wxid") or "").strip(),
+            _image_key_log_metadata(result.get("xor_key"), result.get("aes_key")),
+            result.get("verified") is True,
+            str(result.get("source") or "").strip(),
+        )
+
+        verified = result.get("verified") is True
+        return {
+            "status": 0 if verified else -2,
+            "errmsg": "ok" if verified else "已获得候选密钥，但缺少可用于本地验真的 V2 图片",
+            "data": {
+                "xor_key": result["xor_key"],
+                "aes_key": result["aes_key"],
+                "nick_name": result.get("nick_name", ""),
+                "account": result.get("wxid", ""),
+                "matched_wxid": result.get("matched_wxid", ""),
+                "source": result.get("source", ""),
+                "verified": verified,
+                "code": result.get("code"),
+            }
+        }
+    except FileNotFoundError as e:
+        logger.exception(
+            "[keys] get_image_key file missing: request_account=%s db_storage_path=%s wxid_dir=%s",
+            str(account or "").strip(),
+            str(db_storage_path or "").strip(),
+            str(wxid_dir or "").strip(),
+        )
+        return {
+            "status": -1,
+            "errmsg": f"文件缺失: {str(e)}",
+            "data": {}
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.exception(
+            "[keys] get_image_key failed: request_account=%s db_storage_path=%s wxid_dir=%s",
+            str(account or "").strip(),
+            str(db_storage_path or "").strip(),
+            str(wxid_dir or "").strip(),
+        )
+        return {
+            "status": -1,
+            "errmsg": f"获取失败: {str(e)}",
+            "data": {}
+        }
+
+
+@router.post("/api/get_image_key_memory", summary="扫描微信内存获取图片密钥")
+async def get_image_key_memory(request: ImageKeyMemoryRequest):
+    """Explicitly scan WeChat process memory and accept only V2-verified keys."""
+    try:
+        logger.info(
+            "[keys] get_image_key_memory start: request_account=%s db_storage_path=%s wxid_dir=%s",
+            str(request.account or "").strip(),
+            str(request.db_storage_path or "").strip(),
+            str(request.wxid_dir or "").strip(),
+        )
+        result = await get_image_key_memory_workflow(
+            request.account,
+            db_storage_path=request.db_storage_path,
+            wxid_dir=request.wxid_dir,
+        )
+        logger.info(
+            "[keys] get_image_key_memory done: request_account=%s response_account=%s pid=%s image_keys=%s",
+            str(request.account or "").strip(),
+            str(result.get("wxid") or "").strip(),
+            result.get("pid"),
+            _image_key_log_metadata(result.get("xor_key"), result.get("aes_key")),
+        )
+        return {
+            "status": 0,
+            "errmsg": "ok",
+            "data": {
+                "xor_key": result["xor_key"],
+                "aes_key": result["aes_key"],
+                "account": result.get("wxid", ""),
+                "matched_wxid": result.get("matched_wxid", ""),
+                "source": result.get("source", "memory_v2_verified"),
+                "verified": result.get("verified") is True,
+                "pid": result.get("pid"),
+                "encoding": result.get("encoding", ""),
+            },
+        }
+    except FileNotFoundError as error:
+        logger.exception(
+            "[keys] get_image_key_memory account directory missing: request_account=%s",
+            str(request.account or "").strip(),
+        )
+        return {"status": -1, "errmsg": f"文件缺失: {str(error)}", "data": {}}
+    except Exception as error:
+        logger.exception(
+            "[keys] get_image_key_memory failed: request_account=%s",
+            str(request.account or "").strip(),
+        )
+        return {"status": -1, "errmsg": f"内存扫描失败: {str(error)}", "data": {}}

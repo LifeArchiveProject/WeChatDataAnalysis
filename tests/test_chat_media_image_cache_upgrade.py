@@ -1,0 +1,559 @@
+import hashlib
+import importlib
+import json
+import logging
+import os
+import sqlite3
+import sys
+import time
+import unittest
+import struct
+import zlib
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import AsyncMock, patch
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+
+class TestChatMediaImageCacheUpgrade(unittest.TestCase):
+    def assert_cacheable_chat_image_response(self, resp) -> None:
+        self.assertEqual(resp.headers.get("cache-control"), "private, max-age=0, must-revalidate")
+        self.assertTrue(str(resp.headers.get("etag") or "").strip())
+
+    def _seed_contact_db(self, path: Path, *, account: str, username: str) -> None:
+        conn = sqlite3.connect(str(path))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE contact (
+                    username TEXT,
+                    remark TEXT,
+                    nick_name TEXT,
+                    alias TEXT,
+                    local_type INTEGER,
+                    verify_flag INTEGER,
+                    big_head_url TEXT,
+                    small_head_url TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE stranger (
+                    username TEXT,
+                    remark TEXT,
+                    nick_name TEXT,
+                    alias TEXT,
+                    local_type INTEGER,
+                    verify_flag INTEGER,
+                    big_head_url TEXT,
+                    small_head_url TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO contact VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (account, "", "我", "", 1, 0, "", ""),
+            )
+            conn.execute(
+                "INSERT INTO contact VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (username, "", "测试好友", "", 1, 0, "", ""),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _seed_session_db(self, path: Path, *, username: str) -> None:
+        conn = sqlite3.connect(str(path))
+        try:
+            conn.execute(
+                """
+                CREATE TABLE SessionTable (
+                    username TEXT,
+                    is_hidden INTEGER,
+                    sort_timestamp INTEGER
+                )
+                """
+            )
+            conn.execute("INSERT INTO SessionTable VALUES (?, ?, ?)", (username, 0, 1735689600))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _seed_source_info(self, account_dir: Path, *, wxid_dir: Path) -> None:
+        payload = {
+            "wxid_dir": str(wxid_dir),
+            "db_storage_path": "",
+        }
+        (account_dir / "_source.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    def _seed_cached_resource(self, account_dir: Path, *, md5: str, payload: bytes) -> Path:
+        resource_dir = account_dir / "resource" / md5[:2]
+        resource_dir.mkdir(parents=True, exist_ok=True)
+        target = resource_dir / f"{md5}.jpg"
+        target.write_bytes(payload)
+        return target
+
+    def _seed_live_variant(self, wxid_dir: Path, *, username: str, md5: str, suffix: str, payload: bytes) -> Path:
+        chat_hash = hashlib.md5(username.encode("utf-8")).hexdigest()
+        target = wxid_dir / "msg" / "attach" / chat_hash / "2026-03" / "Img" / f"{md5}{suffix}.dat"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        return target
+
+    def _png_payload(self, width: int, height: int) -> bytes:
+        def chunk(kind: bytes, data: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(data))
+                + kind
+                + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+            )
+
+        row = b"\x00" + (b"\x00\x00\x00" * int(width))
+        raw = row * int(height)
+        return (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", int(width), int(height), 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"IEND", b"")
+        )
+
+    def _build_client(self):
+        import wechat_decrypt_tool.logging_config as logging_config
+        import wechat_decrypt_tool.app_paths as app_paths
+        import wechat_decrypt_tool.media_helpers as media_helpers
+        import wechat_decrypt_tool.routers.chat_media as chat_media
+
+        logging.shutdown()
+        importlib.reload(logging_config)
+        importlib.reload(app_paths)
+        importlib.reload(media_helpers)
+        importlib.reload(chat_media)
+
+        app = FastAPI()
+        app.include_router(chat_media.router)
+        return TestClient(app)
+
+    def test_live_high_variant_replaces_stale_cached_thumb(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            md5 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+            account_dir = root / "output" / "databases" / account
+            wxid_dir = root / "wxid_source"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            wxid_dir.mkdir(parents=True, exist_ok=True)
+
+            self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
+            self._seed_session_db(account_dir / "session.db", username=username)
+            self._seed_source_info(account_dir, wxid_dir=wxid_dir)
+
+            # 使用真正有效的缩略图，避免被损坏缓存分支提前删除而掩盖问题。
+            cached_thumb = self._png_payload(120, 120)
+            live_original = self._png_payload(800, 600)
+            cache_path = self._seed_cached_resource(account_dir, md5=md5, payload=cached_thumb)
+            self._seed_live_variant(wxid_dir, username=username, md5=md5, suffix="_h", payload=live_original)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            client = None
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                client = self._build_client()
+                resp = client.get(
+                    "/api/chat/media/image",
+                    params={"account": account, "md5": md5, "username": username},
+                )
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.content, live_original)
+                self.assert_cacheable_chat_image_response(resp)
+                self.assertEqual(cache_path.with_suffix(".png").read_bytes(), live_original)
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_cached_original_is_not_downgraded_by_live_thumb(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            md5 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+            account_dir = root / "output" / "databases" / account
+            wxid_dir = root / "wxid_source"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            wxid_dir.mkdir(parents=True, exist_ok=True)
+
+            self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
+            self._seed_session_db(account_dir / "session.db", username=username)
+            self._seed_source_info(account_dir, wxid_dir=wxid_dir)
+
+            cached_original = b"\xff\xd8\xff\xe0" + (b"\x11" * 64) + b"\xff\xd9"
+            live_thumb = b"\xff\xd8\xff\xd9"
+            cache_path = self._seed_cached_resource(account_dir, md5=md5, payload=cached_original)
+            self._seed_live_variant(wxid_dir, username=username, md5=md5, suffix="_t", payload=live_thumb)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            client = None
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                client = self._build_client()
+                resp = client.get(
+                    "/api/chat/media/image",
+                    params={"account": account, "md5": md5, "username": username},
+                )
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.content, cached_original)
+                self.assert_cacheable_chat_image_response(resp)
+                self.assertEqual(cache_path.read_bytes(), cached_original)
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_prefer_live_picks_largest_decoded_candidate_not_variant_name(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            md5 = "dddddddddddddddddddddddddddddddd"
+
+            account_dir = root / "output" / "databases" / account
+            wxid_dir = root / "wxid_source"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            wxid_dir.mkdir(parents=True, exist_ok=True)
+
+            self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
+            self._seed_session_db(account_dir / "session.db", username=username)
+            self._seed_source_info(account_dir, wxid_dir=wxid_dir)
+
+            small_bubble = self._png_payload(8, 8)
+            large_high = self._png_payload(32, 32)
+            self._seed_live_variant(wxid_dir, username=username, md5=md5, suffix="_b", payload=small_bubble)
+            self._seed_live_variant(wxid_dir, username=username, md5=md5, suffix="_h", payload=large_high)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            client = None
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                client = self._build_client()
+                resp = client.get(
+                    "/api/chat/media/image",
+                    params={"account": account, "md5": md5, "username": username, "prefer_live": "true"},
+                )
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.content, large_high)
+                self.assert_cacheable_chat_image_response(resp)
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_chat_image_supports_etag_revalidation(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            md5 = "cccccccccccccccccccccccccccccccc"
+
+            account_dir = root / "output" / "databases" / account
+            wxid_dir = root / "wxid_source"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            wxid_dir.mkdir(parents=True, exist_ok=True)
+
+            self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
+            self._seed_session_db(account_dir / "session.db", username=username)
+            self._seed_source_info(account_dir, wxid_dir=wxid_dir)
+
+            cached_original = b"\xff\xd8\xff\xe0" + (b"\x22" * 64) + b"\xff\xd9"
+            self._seed_cached_resource(account_dir, md5=md5, payload=cached_original)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            client = None
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                client = self._build_client()
+                first = client.get(
+                    "/api/chat/media/image",
+                    params={"account": account, "md5": md5, "username": username},
+                )
+                self.assertEqual(first.status_code, 200)
+                self.assertEqual(first.content, cached_original)
+                self.assert_cacheable_chat_image_response(first)
+
+                etag = str(first.headers.get("etag") or "").strip()
+                second = client.get(
+                    "/api/chat/media/image",
+                    params={"account": account, "md5": md5, "username": username},
+                    headers={"If-None-Match": etag},
+                )
+                self.assertEqual(second.status_code, 304)
+                self.assertEqual(second.content, b"")
+                self.assertEqual(second.headers.get("etag"), etag)
+                self.assertEqual(second.headers.get("cache-control"), "private, max-age=0, must-revalidate")
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_explicit_large_image_request_uses_cdn_when_only_cached_thumb_exists(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            md5 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            server_id = 70001
+
+            account_dir = root / "output" / "databases" / account
+            wxid_dir = root / "wxid_source"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            wxid_dir.mkdir(parents=True, exist_ok=True)
+
+            self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
+            self._seed_session_db(account_dir / "session.db", username=username)
+            self._seed_source_info(account_dir, wxid_dir=wxid_dir)
+
+            cached_thumb = self._png_payload(8, 8)
+            local_thumb = self._png_payload(12, 12)
+            remote_original = self._png_payload(64, 64)
+            cache_path = self._seed_cached_resource(account_dir, md5=md5, payload=cached_thumb)
+            self._seed_live_variant(wxid_dir, username=username, md5=md5, suffix="_thumb", payload=local_thumb)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            client = None
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                client = self._build_client()
+                import wechat_decrypt_tool.routers.chat_media as chat_media
+
+                downloader = AsyncMock(return_value=remote_original)
+                with (
+                    patch.object(chat_media.cdn_image_service, "is_cdn_download_enabled", return_value=False),
+                    patch.object(
+                        chat_media,
+                        "_lookup_image_cdn_download_info",
+                        return_value={"fileid": "cdn-original-file", "aeskey": "ab" * 16},
+                    ),
+                    patch.object(chat_media.cdn_image_service, "download_original_image", downloader),
+                ):
+                    resp = client.get(
+                        "/api/chat/media/image",
+                        params={
+                            "account": account, "md5": md5, "server_id": server_id,
+                            "username": username, "fetch_remote": "true",
+                        },
+                    )
+
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.content, remote_original)
+                cached_original_path = cache_path.with_suffix(".png")
+                self.assertFalse(cache_path.exists())
+                self.assertEqual(cached_original_path.read_bytes(), remote_original)
+                downloader.assert_awaited_once_with(
+                    account,
+                    "cdn-original-file",
+                    aes_key_hex="ab" * 16,
+                    image_type="orig",
+                )
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def _run_cdn_error_case(self, error, *, expected_status: int):
+        """走「显式加载大图 → 本地只有缩略图 → CDN」链路，让下载器抛出给定错误。"""
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            md5 = "dddddddddddddddddddddddddddddddd"
+            server_id = 70002
+
+            account_dir = root / "output" / "databases" / account
+            wxid_dir = root / "wxid_source"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            wxid_dir.mkdir(parents=True, exist_ok=True)
+            self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
+            self._seed_session_db(account_dir / "session.db", username=username)
+            self._seed_source_info(account_dir, wxid_dir=wxid_dir)
+            self._seed_cached_resource(account_dir, md5=md5, payload=self._png_payload(8, 8))
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            client = None
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                client = self._build_client()
+                import wechat_decrypt_tool.routers.chat_media as chat_media
+
+                downloader = AsyncMock(side_effect=error)
+                with (
+                    patch.object(chat_media.cdn_image_service, "is_cdn_download_enabled", return_value=False),
+                    patch.object(
+                        chat_media,
+                        "_lookup_image_cdn_download_info",
+                        return_value={"fileid": "cdn-original-file", "aeskey": "ab" * 16},
+                    ),
+                    patch.object(chat_media.cdn_image_service, "download_original_image", downloader),
+                ):
+                    resp = client.get(
+                        "/api/chat/media/image",
+                        params={
+                            "account": account,
+                            "md5": md5,
+                            "server_id": server_id,
+                            "username": username,
+                            "prefer_live": "true",
+                            "deep_scan": "true",
+                            "fetch_remote": "true",
+                        },
+                    )
+                self.assertEqual(resp.status_code, expected_status)
+                downloader.assert_awaited_once()
+                return resp
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+    def test_cdn_quota_exceeded_maps_to_429_with_retry_after_from_resets_at(self):
+        from wechat_decrypt_tool import cdn_image_service
+
+        quota = {"period": "day", "limitBytes": 100, "usedBytes": 100, "remainingBytes": 0, "resetsAt": int(time.time()) + 100}
+        resp = self._run_cdn_error_case(
+            cdn_image_service.CdnQuotaExceededError("额度不足", quota=quota),
+            expected_status=429,
+        )
+        detail = resp.json()["detail"]
+        self.assertEqual(detail["code"], "quota_exceeded")
+        self.assertEqual(detail["message"], "额度不足")
+        self.assertEqual(detail["quota"], quota)
+        retry_after = int(resp.headers["Retry-After"])
+        self.assertTrue(90 <= retry_after <= 100, retry_after)
+
+    def test_cdn_rate_limited_maps_to_429_with_retry_after(self):
+        from wechat_decrypt_tool import cdn_image_service
+
+        resp = self._run_cdn_error_case(
+            cdn_image_service.CdnRateLimitedError("slow down", retry_after=7),
+            expected_status=429,
+        )
+        self.assertEqual(resp.headers["Retry-After"], "7")
+        self.assertEqual(resp.json()["detail"], {"code": "rate_limited", "message": "slow down", "retryAfterSeconds": 7})
+
+    def test_cdn_account_frozen_maps_to_403(self):
+        from wechat_decrypt_tool import cdn_image_service
+
+        resp = self._run_cdn_error_case(cdn_image_service.CdnAccountFrozenError("账号已被冻结"), expected_status=403)
+        self.assertEqual(resp.json()["detail"], {"code": "account_frozen", "message": "账号已被冻结"})
+        self.assertNotIn("Retry-After", resp.headers)
+
+    def test_cdn_generic_error_falls_back_to_404(self):
+        from wechat_decrypt_tool import cdn_image_service
+
+        self._run_cdn_error_case(cdn_image_service.CdnError("boom", code="network_error"), expected_status=404)
+
+    def test_explicit_large_image_request_keeps_local_high_variant_before_cdn(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            account = "wxid_test"
+            username = "wxid_friend"
+            md5 = "ffffffffffffffffffffffffffffffff"
+
+            account_dir = root / "output" / "databases" / account
+            wxid_dir = root / "wxid_source"
+            account_dir.mkdir(parents=True, exist_ok=True)
+            wxid_dir.mkdir(parents=True, exist_ok=True)
+
+            self._seed_contact_db(account_dir / "contact.db", account=account, username=username)
+            self._seed_session_db(account_dir / "session.db", username=username)
+            self._seed_source_info(account_dir, wxid_dir=wxid_dir)
+
+            cached_thumb = self._png_payload(8, 8)
+            local_high = self._png_payload(48, 48)
+            self._seed_cached_resource(account_dir, md5=md5, payload=cached_thumb)
+            self._seed_live_variant(wxid_dir, username=username, md5=md5, suffix="_h", payload=local_high)
+
+            prev_data = os.environ.get("WECHAT_TOOL_DATA_DIR")
+            client = None
+            try:
+                os.environ["WECHAT_TOOL_DATA_DIR"] = str(root)
+                client = self._build_client()
+                import wechat_decrypt_tool.routers.chat_media as chat_media
+
+                downloader = AsyncMock(side_effect=AssertionError("CDN must not run for a local high image"))
+                with patch.object(chat_media.cdn_image_service, "download_original_image", downloader):
+                    resp = client.get(
+                        "/api/chat/media/image",
+                        params={
+                            "account": account,
+                            "md5": md5,
+                            "server_id": 70002,
+                            "username": username,
+                            "prefer_live": "true",
+                            "deep_scan": "true",
+                            "fetch_remote": "true",
+                        },
+                    )
+
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.content, local_high)
+                downloader.assert_not_awaited()
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                logging.shutdown()
+                if prev_data is None:
+                    os.environ.pop("WECHAT_TOOL_DATA_DIR", None)
+                else:
+                    os.environ["WECHAT_TOOL_DATA_DIR"] = prev_data
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,1422 @@
+"""微信数据库检测模块
+
+提供微信安装检测和数据库发现功能。
+基于PyWxDump的检测逻辑。
+"""
+
+import logging
+import os
+import plistlib
+import re
+import struct
+import psutil
+import ctypes
+import hashlib
+import sys
+from pathlib import Path
+from typing import List, Dict, Any, Union
+from ctypes import wintypes
+from datetime import datetime
+
+from .database_filters import should_skip_source_database
+
+
+logger = logging.getLogger(__name__)
+
+
+COMMON_WECHAT_PATTERNS = [
+    "WeChat Files",
+    "Weixin Files",
+    "wechat_files",
+    "xwechat_files",
+    "wechatMSG",
+    "WeChat",
+    "微信",
+    "Weixin",
+    "wechat",
+]
+
+SYSTEM_SCAN_SKIP_NAMES = {
+    "$recycle.bin",
+    "$winreagent",
+    "config.msi",
+    "documents and settings",
+    "intel",
+    "onedrivetemp",
+    "perflogs",
+    "program files",
+    "program files (x86)",
+    "programdata",
+    "recovery",
+    "system volume information",
+    "windows",
+    "windows.old",
+    "windows.old(1)",
+}
+
+
+def get_wx_db(msg_dir: str = None,
+              db_types: Union[List[str], str] = None,
+              wxids: Union[List[str], str] = None) -> List[dict]:
+    r"""
+    获取微信数据库路径（基于PyWxDump逻辑）
+    :param msg_dir:  微信数据库目录 eg: C:\Users\user\Documents\WeChat Files （非wxid目录）
+    :param db_types:  需要获取的数据库类型,如果为空,则获取所有数据库
+    :param wxids:  微信id列表,如果为空,则获取所有wxid下的数据库
+    :return: [{"wxid": wxid, "db_type": db_type, "db_path": db_path, "wxid_dir": wxid_dir}, ...]
+    """
+    result = []
+
+    if not msg_dir or not os.path.exists(msg_dir):
+        logger.warning("微信文件目录不存在: %s，将使用默认路径", msg_dir)
+        msg_dir = get_wx_dir_by_reg()
+
+    if not os.path.exists(msg_dir):
+        logger.warning("目录不存在: %s", msg_dir)
+        return result
+
+    wxids = wxids.split(";") if isinstance(wxids, str) else wxids
+    if not isinstance(wxids, list) or len(wxids) <= 0:
+        wxids = None
+    db_types = db_types.split(";") if isinstance(db_types, str) and db_types else db_types
+    if not isinstance(db_types, list) or len(db_types) <= 0:
+        db_types = None
+
+    wxid_dirs = {}  # wx用户目录
+    if wxids or "All Users" in os.listdir(msg_dir) or "Applet" in os.listdir(msg_dir) or "WMPF" in os.listdir(msg_dir):
+        for sub_dir in os.listdir(msg_dir):
+            if os.path.isdir(os.path.join(msg_dir, sub_dir)) and sub_dir not in ["All Users", "Applet", "WMPF"]:
+                wxid_dirs[os.path.basename(sub_dir)] = os.path.join(msg_dir, sub_dir)
+    else:
+        wxid_dirs[os.path.basename(msg_dir)] = msg_dir
+
+    for wxid, wxid_dir in wxid_dirs.items():
+        if wxids and wxid not in wxids:  # 如果指定wxid,则过滤掉其他wxid
+            continue
+        for root, dirs, files in os.walk(wxid_dir):
+            # 只处理db_storage目录下的数据库文件
+            if "db_storage" not in root:
+                continue
+            for file_name in files:
+                if not file_name.endswith(".db"):
+                    continue
+                if should_skip_source_database(file_name):
+                    continue
+                db_type = re.sub(r"\d*\.db$", "", file_name)
+                if db_types and db_type not in db_types:  # 如果指定db_type,则过滤掉其他db_type
+                    continue
+                db_path = os.path.join(root, file_name)
+                result.append({"wxid": wxid, "db_type": db_type, "db_path": db_path, "wxid_dir": wxid_dir})
+    return result
+
+
+# Windows API 常量和结构
+PROCESS_QUERY_INFORMATION = 0x0400
+PROCESS_VM_READ = 0x0010
+MAX_PATH = 260
+TH32CS_SNAPPROCESS = 0x00000002
+
+# Windows API 函数仅在 Windows 初始化，避免 macOS 导入模块时失败。
+if os.name == "nt":
+    kernel32 = ctypes.windll.kernel32
+    psapi = ctypes.windll.psapi
+    OpenProcess = kernel32.OpenProcess
+    CloseHandle = kernel32.CloseHandle
+    GetModuleFileNameExW = psapi.GetModuleFileNameExW
+    CreateToolhelp32Snapshot = kernel32.CreateToolhelp32Snapshot
+    Process32FirstW = kernel32.Process32FirstW
+    Process32NextW = kernel32.Process32NextW
+else:
+    kernel32 = psapi = None
+    OpenProcess = CloseHandle = GetModuleFileNameExW = None
+    CreateToolhelp32Snapshot = Process32FirstW = Process32NextW = None
+
+
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ('dwSize', wintypes.DWORD),
+        ('cntUsage', wintypes.DWORD),
+        ('th32ProcessID', wintypes.DWORD),
+        ('th32DefaultHeapID', ctypes.POINTER(wintypes.ULONG)),
+        ('th32ModuleID', wintypes.DWORD),
+        ('cntThreads', wintypes.DWORD),
+        ('th32ParentProcessID', wintypes.DWORD),
+        ('pcPriClassBase', wintypes.LONG),
+        ('dwFlags', wintypes.DWORD),
+        ('szExeFile', wintypes.WCHAR * MAX_PATH)
+    ]
+
+
+# 删除了WeChatDecryptor类，解密功能已移至独立的wechat_decrypt.py脚本
+
+
+# AES-128-CFB 解密 key（与 Rust 端 xwechat_crypt_ke 一致）
+_GLOBAL_CONFIG_CRYPT_KEY = b"xwechat_crypt_ke"
+
+
+def _decode_mmkv_varint(data: bytes, offset: int):
+    """读取 MMKV 的 varint，返回（值, 新偏移）。"""
+    shift = value = 0
+    while offset < len(data):
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if byte < 0x80:
+            return value, offset
+        shift += 7
+    return value, offset
+
+
+def _decode_mmkv_value(payload: bytes):
+    """按 MMKV 存储格式解码单条 value（字符串/数字/hex）。"""
+    value_len, offset = _decode_mmkv_varint(payload, 0)
+    if offset + value_len == len(payload):
+        try:
+            return payload[offset:].decode("utf-8")
+        except UnicodeDecodeError:
+            return payload[offset:].hex()
+    if len(payload) == 1:
+        return payload[0]
+    value_len, offset = _decode_mmkv_varint(payload, 0)
+    return value_len if offset == len(payload) else payload.hex()
+
+
+def _parse_mmkv_kv(data: bytes) -> dict:
+    """解析解密后的 MMKV 明文为 KV 字典（vlen == 0 表示删除标记）。"""
+    kv = {}
+    pos = 4  # 跳过明文头部的 4 字节
+    while pos < len(data):
+        key_len, pos = _decode_mmkv_varint(data, pos)
+        key = data[pos:pos + key_len].decode("utf-8", errors="replace")
+        pos += key_len
+        value_len, pos = _decode_mmkv_varint(data, pos)
+        payload = data[pos:pos + value_len]
+        pos += value_len
+        if value_len == 0:
+            kv.pop(key, None)
+        else:
+            kv[key] = _decode_mmkv_value(payload)
+    return kv
+
+
+def parse_global_config(base_path: str) -> dict:
+    """
+    解析 all_users/config/global_config 获取最近登录用户信息。
+
+    使用 global_config.crc 中偏移 12..28 的 m_vector 作为 AES-128-CFB IV，
+    数据长度取文件头 4 字节小端 uint32，解密后按 MMKV varint 逐条解析 KV。
+    """
+    try:
+        config_path = os.path.join(base_path, "all_users", "config", "global_config")
+        meta_path = config_path + ".crc"
+        if not os.path.isfile(config_path) or not os.path.isfile(meta_path):
+            return None
+
+        raw = Path(config_path).read_bytes()
+        if len(raw) < 8:
+            return None
+        meta = Path(meta_path).read_bytes()
+        if len(meta) < 28:
+            return None
+        iv = meta[12:28]
+
+        data_len = struct.unpack("<I", raw[:4])[0]
+        if data_len <= 0 or 4 + data_len > len(raw):
+            # 有的微信版本把文件头写成 0，真正的载荷长度在 crc 的 28..32（crc 头 4 字节是该段的 crc32）
+            if len(meta) >= 32:
+                data_len = struct.unpack("<I", meta[28:32])[0]
+            if data_len <= 0 or 4 + data_len > len(raw):
+                return None
+
+        encrypted = raw[4:4 + data_len]
+        try:
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+            decryptor = Cipher(algorithms.AES(_GLOBAL_CONFIG_CRYPT_KEY), modes.CFB(iv)).decryptor()
+            plaintext = decryptor.update(encrypted) + decryptor.finalize()
+        except ImportError:
+            from Crypto.Cipher import AES
+            # PyCryptodome 中 CFB 模式默认 segment_size 是 8，需要指定为 128
+            plaintext = AES.new(
+                _GLOBAL_CONFIG_CRYPT_KEY, AES.MODE_CFB, iv=iv, segment_size=128
+            ).decrypt(encrypted)
+
+        kv = _parse_mmkv_kv(plaintext)
+        result = {
+            "wxid": kv.get("mmkv_key_user_name"),
+            "nickname": kv.get("mmkv_key_nick_name"),
+            "avatar": kv.get("mmkv_key_head_img_url"),
+        }
+        if result["wxid"] or result["nickname"]:
+            return result
+        return None
+    except Exception as e:
+        logger.debug("解析 global_config 失败: %s", e)
+        return None
+
+
+def find_wechat_databases() -> List[str]:
+    """在新的xwechat_files目录中查找微信数据库文件
+
+    返回值:
+        数据库文件路径列表
+    """
+    db_files = []
+
+    # 获取用户的Documents目录
+    documents_dir = Path.home() / "Documents"
+
+    # 检查新的微信4.0+目录结构
+    wechat_dirs = [
+        documents_dir / "xwechat_files",  # 新版微信4.0+
+        documents_dir / "WeChat Files"  # 旧版微信
+    ]
+
+    for wechat_dir in wechat_dirs:
+        if not wechat_dir.exists():
+            continue
+
+        # 查找用户目录（wxid_*模式）
+        for user_dir in wechat_dir.iterdir():
+            if not user_dir.is_dir():
+                continue
+
+            # 跳过系统目录
+            if user_dir.name in ['All Users', 'Applet', 'WMPF']:
+                continue
+
+            # 查找Msg目录
+            msg_dir = user_dir / "Msg"
+            if msg_dir.exists():
+                # 查找数据库文件
+                for db_file in msg_dir.glob("*.db"):
+                    if db_file.is_file():
+                        db_files.append(str(db_file))
+
+                # 同时检查Multi目录
+                multi_dir = msg_dir / "Multi"
+                if multi_dir.exists():
+                    for db_file in multi_dir.glob("*.db"):
+                        if db_file.is_file():
+                            db_files.append(str(db_file))
+
+    return db_files
+
+
+def get_process_exe_path(process_id):
+    """获取进程可执行文件路径"""
+    if os.name != "nt":
+        try:
+            return psutil.Process(int(process_id)).exe()
+        except (psutil.Error, OSError, TypeError, ValueError):
+            return None
+
+    h_process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, process_id)
+    if not h_process:
+        return None
+
+    exe_path = ctypes.create_unicode_buffer(MAX_PATH)
+    if GetModuleFileNameExW(h_process, None, exe_path, MAX_PATH) > 0:
+        CloseHandle(h_process)
+        return exe_path.value
+    else:
+        CloseHandle(h_process)
+        return None
+
+
+def get_process_list():
+    """获取系统进程列表"""
+    if os.name != "nt":
+        result = []
+        for process in psutil.process_iter(("pid", "name")):
+            try:
+                result.append((int(process.info["pid"]), str(process.info.get("name") or "")))
+            except (psutil.Error, TypeError, ValueError):
+                continue
+        return result
+
+    h_process_snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if h_process_snap == ctypes.wintypes.HANDLE(-1).value:
+        return []
+
+    pe32 = PROCESSENTRY32W()
+    pe32.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+    process_list = []
+
+    if not Process32FirstW(h_process_snap, ctypes.byref(pe32)):
+        CloseHandle(h_process_snap)
+        return []
+
+    while True:
+        process_list.append((pe32.th32ProcessID, pe32.szExeFile))
+        if not Process32NextW(h_process_snap, ctypes.byref(pe32)):
+            break
+
+    CloseHandle(h_process_snap)
+    return process_list
+
+
+def _wechat_process_targets() -> set[str]:
+    return {"wechat"} if sys.platform == "darwin" else {"weixin.exe", "wechat.exe"}
+
+
+def _is_wechat_dir_candidate_name(name: str) -> bool:
+    normalized = str(name or "").strip().lower()
+    if not normalized:
+        return False
+    return any(pattern.lower() in normalized for pattern in COMMON_WECHAT_PATTERNS)
+
+
+def _is_macos_version_data_dir_name(name: str) -> bool:
+    return bool(re.fullmatch(r"\d+(?:\.\d+)+(?:b\d+(?:\.\d+)*)?", str(name or "").strip()))
+
+
+def _safe_iter_subdirs(directory: str) -> List[tuple[str, str]]:
+    items: List[tuple[str, str]] = []
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir():
+                        items.append((entry.name, entry.path))
+                except OSError:
+                    continue
+    except (PermissionError, OSError):
+        return []
+    return items
+
+
+def _append_detected_dir(detected_dirs: List[str], candidate: str) -> None:
+    if not candidate:
+        return
+    normalized = os.path.normpath(candidate)
+    if normalized not in detected_dirs:
+        detected_dirs.append(normalized)
+
+
+def _contains_wechat_accounts_within(path: Path, *, depth: int) -> bool:
+    if _contains_wechat_account_dirs(path):
+        return True
+    if depth <= 0:
+        return False
+    try:
+        children = (child for child in path.iterdir() if child.is_dir())
+        return any(_contains_wechat_accounts_within(child, depth=depth - 1) for child in children)
+    except OSError:
+        return False
+
+
+def _build_auto_detect_scan_paths() -> List[str]:
+    scan_paths: List[str] = []
+    seen_paths = set()
+
+    def add(path_value: str | None) -> None:
+        raw = str(path_value or "").strip()
+        if not raw:
+            return
+        normalized = os.path.normpath(raw)
+        key = normalized.lower()
+        if key in seen_paths:
+            return
+        seen_paths.add(key)
+        scan_paths.append(normalized)
+
+    home_dir = str(Path.home())
+    add(home_dir)
+    add(os.path.join(home_dir, "Documents"))
+    add(os.path.join(home_dir, "Desktop"))
+    add(os.path.join(home_dir, "Downloads"))
+
+    if sys.platform == "darwin":
+        container_root = Path.home() / "Library" / "Containers" / "com.tencent.xinWeChat" / "Data"
+        app_support = container_root / "Library" / "Application Support" / "com.tencent.xinWeChat"
+        add(str(app_support))
+        try:
+            version_dirs = sorted(
+                (item for item in app_support.iterdir() if item.is_dir()),
+                key=lambda item: item.stat().st_mtime_ns,
+                reverse=True,
+            )
+        except OSError:
+            version_dirs = []
+        for item in version_dirs:
+            if re.match(r"^\d+(?:\.\d+)+(?:b\d+(?:\.\d+)*)?$", item.name):
+                add(str(item))
+        add(str(container_root / "Documents" / "xwechat_files"))
+        return scan_paths
+
+    user_profile = str(os.environ.get("USERPROFILE") or "").strip()
+    if user_profile:
+        add(user_profile)
+        add(os.path.join(user_profile, "Documents"))
+        add(os.path.join(user_profile, "Desktop"))
+        add(os.path.join(user_profile, "Downloads"))
+
+    for drive in ("C:", "D:", "E:", "F:"):
+        drive_root = drive + os.sep
+        if not os.path.exists(drive_root):
+            continue
+
+        add(drive_root)
+
+        for child_name, child_path in _safe_iter_subdirs(drive_root):
+            if child_name.strip().lower() in SYSTEM_SCAN_SKIP_NAMES:
+                continue
+            add(child_path)
+
+        users_dir = os.path.join(drive_root, "Users")
+        add(users_dir)
+        for _user_name, user_dir in _safe_iter_subdirs(users_dir):
+            add(user_dir)
+            add(os.path.join(user_dir, "Documents"))
+            add(os.path.join(user_dir, "Desktop"))
+            add(os.path.join(user_dir, "Downloads"))
+
+    return scan_paths
+
+
+# 微信 4.x（Windows）通过 %APPDATA%\Tencent\xwechat\config 下的配置文件记录数据目录。
+# 文件名是配置键名的 MD5 而非随机 hex：MD5("KEY_LAST_XWEACHAT_FILE_DIR")。
+XWECHAT_CONFIG_KEY_NAME = "KEY_LAST_XWEACHAT_FILE_DIR"
+
+# CSIDL_PERSONAL（我的文档）：微信默认数据目录位于“我的文档”下。
+CSIDL_PERSONAL = 0x0005
+
+
+def _resolve_known_folder(csidl: int) -> str | None:
+    """将 Windows 已知文件夹 CSIDL 解析为真实目录（仅 Windows）。"""
+    if os.name != "nt":
+        return None
+    try:
+        buffer = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+        result = ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buffer)
+        if result == 0:
+            folder_path = buffer.value
+            if folder_path and os.path.isdir(folder_path):
+                return folder_path
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_wechat_base_dir(value: str) -> str | None:
+    """解析微信配置里的数据目录父路径。
+
+    支持两种格式：
+    - 真实绝对路径，如 C:\\Users\\xxx
+    - 系统 token，如 MyDocument / MyDocument: / MyDocument:<CSIDL>，
+      需用已知文件夹 API 解析为真实目录
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    # 真实绝对路径
+    if re.match(r"^[A-Za-z]:[\\/]", raw):
+        return raw
+
+    # 系统 token：MyDocument[:<CSIDL>]
+    token_match = re.match(r"^mydocument(?::(\d+))?$", raw, flags=re.IGNORECASE)
+    if not token_match:
+        return None
+
+    csidl = int(token_match.group(1)) if token_match.group(1) else CSIDL_PERSONAL
+    # 微信写入的 CSIDL 可能带高位标志位，只保留低 16 位的 CSIDL 值
+    csidl &= 0x0000FFFF
+    return _resolve_known_folder(csidl)
+
+
+def _get_xwechat_data_dir_from_config() -> str | None:
+    """从微信 4.x 配置文件读取数据根目录（仅 Windows）。
+
+    配置路径：%APPDATA%\\Tencent\\xwechat\\config\\MD5("KEY_LAST_XWEACHAT_FILE_DIR").ini
+    配置内容是数据目录的父路径（真实路径或系统 token），
+    实际数据根目录 = 父路径 + xwechat_files。
+    任何一步失败都返回 None，不阻塞后续的目录/进程扫描。
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            return None
+        ini_name = hashlib.md5(XWECHAT_CONFIG_KEY_NAME.encode("utf-8")).hexdigest() + ".ini"
+        ini_path = Path(appdata) / "Tencent" / "xwechat" / "config" / ini_name
+        if not ini_path.is_file():
+            return None
+
+        raw_bytes = ini_path.read_bytes()
+        if raw_bytes.startswith(b"\xff\xfe") or raw_bytes.startswith(b"\xfe\xff"):
+            raw = raw_bytes.decode("utf-16", errors="ignore")
+        else:
+            raw = raw_bytes.decode("utf-8", errors="ignore")
+
+        base_dir = _resolve_wechat_base_dir(raw)
+        if not base_dir:
+            return None
+
+        data_root = os.path.join(base_dir, "xwechat_files")
+        if not os.path.isdir(data_root):
+            return None
+        return data_root
+    except Exception:
+        return None
+
+
+def auto_detect_wechat_data_dirs():
+    """
+    自动检测微信数据目录 - 多策略组合检测
+    :return: 检测到的微信数据目录列表
+    """
+    detected_dirs = []
+
+    # 策略0（仅 Windows）：微信 4.x 配置文件记录的数据根目录，优先级最高。
+    # 自定义数据目录名可能不匹配 COMMON_WECHAT_PATTERNS，只有配置来源能拿到真实路径；
+    # 读取失败（token 无法解析、目录不存在等）时静默跳过，不阻塞后续策略。
+    if sys.platform == "win32":
+        config_data_dir = _get_xwechat_data_dir_from_config()
+        if config_data_dir:
+            _append_detected_dir(detected_dirs, config_data_dir)
+            logger.debug("配置文件检测成功: %s", config_data_dir)
+
+
+    # 策略1：常见驱动器 / 用户目录 / 自定义目录的浅层扫描。
+    # 这里既检查扫描根目录本身，也检查其直接子目录，兼容：
+    # - C:\Users\<user>\Documents\WeChat Files
+    # - D:\wechatMSG\xwechat_files
+    # - D:\abc\wechatMSG\xwechat_files
+    for scan_path in _build_auto_detect_scan_paths():
+        if not os.path.exists(scan_path):
+            continue
+
+        scan_name = os.path.basename(os.path.normpath(scan_path))
+        scan_is_candidate = _is_wechat_dir_candidate_name(scan_name) or (
+            sys.platform == "darwin" and _is_macos_version_data_dir_name(scan_name)
+        )
+        matched_scan_root = scan_is_candidate and _contains_wechat_accounts_within(
+            Path(scan_path),
+            depth=2,
+        )
+        if matched_scan_root:
+            _append_detected_dir(detected_dirs, scan_path)
+            logger.debug("目录扫描检测成功: %s", scan_path)
+
+        if matched_scan_root:
+            continue
+
+        for item_name, item_path in _safe_iter_subdirs(scan_path):
+            item_is_candidate = _is_wechat_dir_candidate_name(item_name) or (
+                sys.platform == "darwin" and _is_macos_version_data_dir_name(item_name)
+            )
+            if not item_is_candidate:
+                continue
+            if not _contains_wechat_accounts_within(Path(item_path), depth=2):
+                continue
+            _append_detected_dir(detected_dirs, item_path)
+            logger.debug("目录扫描检测成功: %s", item_path)
+
+    # 策略2：进程内存分析（简化版）
+    try:
+        process_list = get_process_list()
+        process_targets = _wechat_process_targets()
+        for pid, process_name in process_list:
+            if process_name.lower() in process_targets:
+                # 尝试获取进程的工作目录
+                try:
+                    import psutil
+                    proc = psutil.Process(pid)
+                    cwd = proc.cwd()
+                    # 从进程工作目录向上查找可能的数据目录
+                    parent_dirs = [cwd]
+                    current = cwd
+                    for _ in range(3):  # 向上查找3级目录
+                        parent = os.path.dirname(current)
+                        if parent != current:
+                            parent_dirs.append(parent)
+                            current = parent
+                        else:
+                            break
+
+                    for parent_dir in parent_dirs:
+                        for pattern in COMMON_WECHAT_PATTERNS:
+                            potential_dir = os.path.join(parent_dir, pattern)
+                            if os.path.exists(potential_dir) and has_wxid_directories(potential_dir):
+                                _append_detected_dir(detected_dirs, potential_dir)
+                                logger.debug("进程分析检测成功: %s", potential_dir)
+                except:
+                    pass
+    except:
+        pass
+
+    return detected_dirs
+
+
+# 删除了所有解密相关函数，解密功能已移至独立的wechat_decrypt.py脚本
+
+def has_wxid_directories(directory):
+    """
+    检查目录是否包含wxid格式的子目录
+    :param directory: 要检查的目录
+    :return: 是否包含wxid目录
+    """
+    try:
+        candidate = Path(directory)
+        if _is_wechat_account_dir(candidate):
+            return True
+        for item in os.listdir(directory):
+            item_path = os.path.join(directory, item)
+            if os.path.isdir(item_path) and _is_wechat_account_dir(Path(item_path)):
+                return True
+        return False
+    except:
+        return False
+
+
+def _is_wechat_account_dir(path: Path) -> bool:
+    try:
+        return path.is_dir() and path.parent.name.casefold() != "keyvalue" and (
+            (path / "db_storage").is_dir()
+            or (path / "FileStorage" / "Image").is_dir()
+            or (path / "FileStorage" / "Image2").is_dir()
+            or any(item.is_file() and item.suffix.lower() == ".db" for item in path.iterdir())
+        )
+    except OSError:
+        return False
+
+
+def _contains_wechat_account_dirs(path: Path) -> bool:
+    if _is_wechat_account_dir(path):
+        return True
+    try:
+        return any(_is_wechat_account_dir(child) for child in path.iterdir() if child.is_dir())
+    except OSError:
+        return False
+
+
+def detect_wechat_accounts_from_data_root(data_root_path: str | None = None) -> List[Dict[str, Any]]:
+    roots = [Path(data_root_path).expanduser()] if data_root_path else [Path(item) for item in auto_detect_wechat_data_dirs()]
+    accounts: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for root in roots:
+        candidates: list[Path] = [root] if _is_wechat_account_dir(root) else []
+        if not candidates:
+            try:
+                children = [child for child in root.iterdir() if child.is_dir()]
+            except OSError:
+                children = []
+            candidates = [child for child in children if _is_wechat_account_dir(child)]
+            if not candidates:
+                for child in children:
+                    try:
+                        candidates.extend(
+                            grandchild
+                            for grandchild in child.iterdir()
+                            if grandchild.is_dir() and _is_wechat_account_dir(grandchild)
+                        )
+                    except OSError:
+                        continue
+
+        for account_dir in candidates:
+            try:
+                key = os.path.normcase(str(account_dir.resolve()))
+            except OSError:
+                key = os.path.normcase(str(account_dir))
+            if key in seen:
+                continue
+            seen.add(key)
+            databases = collect_account_databases(str(account_dir), account_dir.name)
+            accounts.append(
+                {
+                    "account_name": account_dir.name,
+                    "backup_dir": None,
+                    "data_dir": str(account_dir),
+                    "databases": databases,
+                    "database_count": len(databases),
+                }
+            )
+    return accounts
+
+
+def get_wx_dir_by_reg(wxid="all"):
+    """
+    通过多种方法获取微信目录 - 改进的自动检测
+    :param wxid: 微信id，如果为"all"则返回WeChat Files目录，否则返回具体wxid目录
+    :return: 微信目录路径
+    """
+    if not wxid:
+        return None
+
+    # 使用新的自动检测方法
+    detected_dirs = auto_detect_wechat_data_dirs()
+
+    if not detected_dirs:
+        logger.debug("未检测到任何微信数据目录")
+        return None
+
+    # 返回第一个检测到的目录
+    wx_dir = detected_dirs[0]
+    logger.debug("使用检测到的微信目录: %s", wx_dir)
+
+    # 如果指定了具体的wxid，返回wxid目录
+    if wxid and wxid != "all":
+        wxid_dir = os.path.join(wx_dir, wxid)
+        return wxid_dir if os.path.exists(wxid_dir) else None
+
+    return wx_dir if os.path.exists(wx_dir) else None
+
+
+def detect_wechat_accounts_from_backup(backup_base_path: str = None) -> List[Dict[str, Any]]:
+    """
+    从指定的备份路径检测微信账号
+
+    Args:
+        backup_base_path: 微信文件基础路径，如果为None则自动检测
+
+    Returns:
+        账号信息列表，每个账号包含：
+        - account_name: 账号名
+        - backup_dir: 备份目录路径
+        - data_dir: 实际数据目录路径
+        - databases: 数据库文件列表
+    """
+    accounts = []
+
+    # 如果没有指定路径，尝试自动检测
+    if backup_base_path is None:
+        # 使用自动检测找到包含Backup的路径
+        detected_dirs = auto_detect_wechat_data_dirs()
+        for detected_dir in detected_dirs:
+            # 首先检查直接的Backup目录
+            backup_test_dir = os.path.join(detected_dir, "Backup")
+            if os.path.exists(backup_test_dir):
+                backup_base_path = detected_dir
+                break
+
+            # 然后检查子目录中的Backup目录（如xwechat_files/Backup）
+            try:
+                for subdir in os.listdir(detected_dir):
+                    subdir_path = os.path.join(detected_dir, subdir)
+                    if os.path.isdir(subdir_path):
+                        backup_test_dir = os.path.join(subdir_path, "Backup")
+                        if os.path.exists(backup_test_dir):
+                            backup_base_path = subdir_path
+                            break
+                if backup_base_path:
+                    break
+            except (PermissionError, OSError):
+                continue
+
+        # 如果还是没找到，返回空列表
+        if backup_base_path is None:
+            return accounts
+
+    # 检查备份目录
+    backup_dir = os.path.join(backup_base_path, "Backup")
+    if not os.path.exists(backup_dir):
+        return accounts
+
+    try:
+        # 遍历备份目录下的所有子文件夹（每个代表一个账号）
+        for item in os.listdir(backup_dir):
+            account_backup_path = os.path.join(backup_dir, item)
+            if not os.path.isdir(account_backup_path):
+                continue
+
+            account_name = item
+
+            # 在上级目录中查找对应的实际数据文件夹
+            # 命名规则：{账号名}_{随机字符}
+            data_dir = None
+            try:
+                for data_item in os.listdir(backup_base_path):
+                    data_item_path = os.path.join(backup_base_path, data_item)
+                    if (os.path.isdir(data_item_path) and
+                            data_item.startswith(f"{account_name}_") and
+                            data_item != "Backup"):
+                        data_dir = data_item_path
+                        break
+            except (PermissionError, OSError):
+                continue
+
+            # 收集该账号的数据库文件
+            databases = []
+            if data_dir and os.path.exists(data_dir):
+                databases = collect_account_databases(data_dir, account_name)
+
+            account_info = {
+                "account_name": account_name,
+                "backup_dir": account_backup_path,
+                "data_dir": data_dir,
+                "databases": databases,
+                "database_count": len(databases)
+            }
+
+            accounts.append(account_info)
+
+    except (PermissionError, OSError) as e:
+        # 如果无法访问备份目录，返回空列表
+        pass
+
+    return accounts
+
+
+def _resolve_login_paths_from_base(provided_path: str) -> Dict[str, str]:
+    """
+    根据用户提供的路径推断 base_path 和 login_dir。
+
+    兼容三种传入：
+    - 直接传 xwechat_files 根目录
+    - 传 xwechat_files/all_users
+    - 传 xwechat_files/all_users/login
+    """
+    base_path = provided_path
+    login_dir = os.path.join(provided_path, "all_users", "login")
+
+    try:
+        norm = os.path.normpath(provided_path)
+        last = os.path.basename(norm).lower()
+        parent = os.path.dirname(norm)
+        parent_last = os.path.basename(parent).lower() if parent else ""
+
+        if last == "login" and parent_last == "all_users":
+            # .../xwechat_files/all_users/login -> base_path 为 xwechat_files
+            base_path = os.path.dirname(parent)
+            login_dir = norm
+        elif last == "all_users":
+            # .../xwechat_files/all_users -> login_dir 追加 login
+            base_path = os.path.dirname(norm)
+            login_dir = os.path.join(norm, "login")
+        else:
+            # 认为传的是 xwechat_files 根
+            base_path = norm
+            login_dir = os.path.join(norm, "all_users", "login")
+    except Exception:
+        # 兜底：保持初始推断
+        pass
+
+    return {"base_path": base_path, "login_dir": login_dir}
+
+
+def detect_wechat_accounts_from_login(login_base_path: str = None) -> List[Dict[str, Any]]:
+    """
+    通过登录信息目录检测微信账号，并映射到实际数据目录。
+
+    Args:
+        login_base_path: 可选的微信数据根目录。
+
+    Returns:
+        账号信息列表（与 Backup 检测返回结构一致）
+    """
+    accounts: List[Dict[str, Any]] = []
+
+    # 若用户提供路径，则优先按该路径推断
+    if login_base_path:
+        paths = _resolve_login_paths_from_base(login_base_path)
+        base_path = paths["base_path"]
+        login_dir = paths["login_dir"]
+
+        if not os.path.exists(login_dir):
+            return accounts
+    else:
+        # 自动检测：遍历候选根目录，寻找登录信息目录
+        base_path = None
+        login_dir = None
+        detected_dirs = auto_detect_wechat_data_dirs()
+        for detected_dir in detected_dirs:
+            try:
+                test_login = os.path.join(detected_dir, "all_users", "login")
+                if os.path.exists(test_login):
+                    base_path = detected_dir
+                    login_dir = test_login
+                    break
+
+                # 也检查一层子目录
+                for sub in os.listdir(detected_dir):
+                    sub_path = os.path.join(detected_dir, sub)
+                    if not os.path.isdir(sub_path):
+                        continue
+                    test_login = os.path.join(sub_path, "all_users", "login")
+                    if os.path.exists(test_login):
+                        base_path = sub_path
+                        login_dir = test_login
+                        break
+                if base_path:
+                    break
+            except (PermissionError, OSError):
+                continue
+
+        if not base_path or not login_dir:
+            return accounts
+
+    # 枚举 login 目录下的子项，每个子项代表一个账号标识（可能是文件或文件夹）
+    try:
+        for item in os.listdir(login_dir):
+            account_name = item
+            account_login_item_path = os.path.join(login_dir, item)
+            # 无论是文件还是文件夹，都视为一个账号标识
+            if not os.path.exists(account_login_item_path):
+                continue
+
+            # 在 base_path 下查找以 {account_name}_ 开头的数据目录（与 Backup 规则一致）
+            data_dir = None
+            try:
+                for data_item in os.listdir(base_path):
+                    data_item_path = os.path.join(base_path, data_item)
+                    if (
+                            os.path.isdir(data_item_path)
+                            and data_item.startswith(f"{account_name}_")
+                            and data_item not in ["Backup", "all_users"]
+                    ):
+                        data_dir = data_item_path
+                        break
+            except (PermissionError, OSError):
+                pass
+
+            databases = collect_account_databases(data_dir, account_name) if data_dir else []
+
+            accounts.append(
+                {
+                    "account_name": account_name,
+                    "backup_dir": None,
+                    "data_dir": data_dir,
+                    "databases": databases,
+                    "database_count": len(databases),
+                }
+            )
+    except (PermissionError, OSError):
+        # 无权限访问时返回已收集的账号
+        return accounts
+
+    return accounts
+
+
+def collect_account_databases(data_dir: str, account_name: str) -> List[Dict[str, Any]]:
+    """
+    收集指定账号数据目录下的所有数据库文件
+
+    Args:
+        data_dir: 账号数据目录
+        account_name: 账号名
+
+    Returns:
+        数据库文件信息列表
+    """
+    databases = []
+
+    if not os.path.exists(data_dir):
+        return databases
+
+    try:
+        # 递归查找所有.db文件
+        for root, dirs, files in os.walk(data_dir):
+            for file_name in files:
+                if not file_name.endswith('.db'):
+                    continue
+
+                if should_skip_source_database(file_name):
+                    continue
+
+                db_path = os.path.join(root, file_name)
+
+                # 确定数据库类型
+                db_type = re.sub(r'\d*\.db$', '', file_name)
+
+                try:
+                    file_size = os.path.getsize(db_path)
+                except OSError:
+                    file_size = 0
+
+                db_info = {
+                    "path": db_path,
+                    "name": file_name,
+                    "type": db_type,
+                    "size": file_size,
+                    "relative_path": os.path.relpath(db_path, data_dir)
+                }
+
+                databases.append(db_info)
+
+    except (PermissionError, OSError):
+        pass
+
+    return databases
+
+
+def detect_wechat_installation(data_root_path: str | None = None) -> Dict[str, Any]:
+    """
+    检测微信安装情况 - 改进的多账户检测逻辑
+    """
+    result = {
+        "wechat_version": None,
+        "platform": "macos" if sys.platform == "darwin" else "windows" if os.name == "nt" else sys.platform,
+        "wechat_install_path": None,
+        "wechat_exe_path": None,
+        "is_running": False,
+        "accounts": [],
+        "total_accounts": 0,
+        "total_databases": 0,
+        "detection_errors": [],
+        "detection_methods": [],
+        # 保持向后兼容性的字段
+        "wechat_data_dirs": [],
+        "message_dirs": [],
+        "databases": [],
+        "user_accounts": []
+    }
+
+    # 1. 进程检测 - 检测微信是否运行
+    result["detection_methods"].append("进程检测")
+    process_list = get_process_list()
+
+    process_targets = _wechat_process_targets()
+    for pid, process_name in process_list:
+        if process_name.lower() in process_targets:
+            try:
+                exe_path = get_process_exe_path(pid)
+                if exe_path:
+                    result["wechat_exe_path"] = exe_path
+                    if sys.platform == "darwin" and ".app/Contents/MacOS/" in exe_path:
+                        result["wechat_install_path"] = exe_path.split("/Contents/MacOS/", 1)[0]
+                    else:
+                        result["wechat_install_path"] = os.path.dirname(exe_path)
+                    result["is_running"] = True
+                    result["detection_methods"].append(f"检测到微信进程: {process_name} (PID: {pid})")
+
+                    # 尝试获取版本信息
+                    try:
+                        if sys.platform == "darwin":
+                            info_plist = Path(result["wechat_install_path"]) / "Contents" / "Info.plist"
+                            with info_plist.open("rb") as stream:
+                                info = plistlib.load(stream)
+                            version = str(
+                                info.get("CFBundleShortVersionString") or info.get("CFBundleVersion") or ""
+                            ).strip()
+                        else:
+                            import win32api
+                            version_info = win32api.GetFileVersionInfo(exe_path, "\\")
+                            version = f"{version_info['FileVersionMS'] >> 16}.{version_info['FileVersionMS'] & 0xFFFF}.{version_info['FileVersionLS'] >> 16}.{version_info['FileVersionLS'] & 0xFFFF}"
+                        result["wechat_version"] = version
+                        result["detection_methods"].append(f"获取到微信版本: {version}")
+                    except ImportError:
+                        result["detection_errors"].append("win32api库未安装，无法获取版本信息")
+                    except Exception as e:
+                        result["detection_errors"].append(f"版本获取失败: {e}")
+                    break
+            except Exception as e:
+                result["detection_errors"].append(f"进程信息获取失败: {e}")
+
+    if not result["is_running"]:
+        result["detection_methods"].append("未检测到微信进程")
+        if sys.platform == "darwin":
+            for app_path in (Path("/Applications/WeChat.app"), Path.home() / "Applications" / "WeChat.app"):
+                executable = app_path / "Contents" / "MacOS" / "WeChat"
+                if not executable.is_file():
+                    continue
+                result["wechat_install_path"] = str(app_path)
+                result["wechat_exe_path"] = str(executable)
+                try:
+                    with (app_path / "Contents" / "Info.plist").open("rb") as stream:
+                        info = plistlib.load(stream)
+                    result["wechat_version"] = str(
+                        info.get("CFBundleShortVersionString") or info.get("CFBundleVersion") or ""
+                    ).strip() or None
+                except (OSError, ValueError):
+                    pass
+                break
+
+    # 2. 使用新的账号检测逻辑：同时支持 Backup 与登录信息目录，并合并结果
+    result["detection_methods"].append("多账户检测（多来源合并）")
+    try:
+        # 支持前端兜底路径：若提供 data_root_path，则两种方式都以该路径为基准
+        accounts_from_backup = detect_wechat_accounts_from_backup(
+            backup_base_path=data_root_path
+        )
+        accounts_from_login = detect_wechat_accounts_from_login(
+            login_base_path=data_root_path
+        )
+        accounts_from_data_root = detect_wechat_accounts_from_data_root(data_root_path)
+
+        # 合并账号：按 account_name 去重，优先保留信息更完整者
+        account_map: Dict[str, Dict[str, Any]] = {}
+
+        def _account_data_dir_key(value: Any) -> str:
+            raw = str(value or "").strip()
+            if not raw:
+                return ""
+            try:
+                return os.path.normcase(str(Path(raw).expanduser().resolve()))
+            except OSError:
+                return os.path.normcase(os.path.normpath(raw))
+
+        def _merge_account(acc: Dict[str, Any]):
+            name = acc.get("account_name")
+            if not name:
+                return
+            target_name = name
+            incoming_data_key = _account_data_dir_key(acc.get("data_dir"))
+            if name not in account_map and incoming_data_key:
+                for existing_name, existing in account_map.items():
+                    if _account_data_dir_key(existing.get("data_dir")) == incoming_data_key:
+                        target_name = existing_name
+                        break
+
+            if target_name not in account_map:
+                account_map[name] = {
+                    "account_name": name,
+                    "backup_dir": acc.get("backup_dir"),
+                    "data_dir": acc.get("data_dir"),
+                    "databases": list(acc.get("databases", [])),
+                    "database_count": int(acc.get("database_count", 0)),
+                }
+            else:
+                existing = account_map[target_name]
+                if not existing.get("backup_dir") and acc.get("backup_dir"):
+                    existing["backup_dir"] = acc.get("backup_dir")
+                if not existing.get("data_dir") and acc.get("data_dir"):
+                    existing["data_dir"] = acc.get("data_dir")
+                # 合并数据库（按 path 去重）
+                seen_paths = {d.get("path") for d in existing.get("databases", [])}
+                for db in acc.get("databases", []):
+                    if db.get("path") not in seen_paths:
+                        existing.setdefault("databases", []).append(db)
+                        seen_paths.add(db.get("path"))
+                existing["database_count"] = len(existing.get("databases", []))
+
+        for acc in accounts_from_backup:
+            _merge_account(acc)
+        for acc in accounts_from_login:
+            _merge_account(acc)
+        for acc in accounts_from_data_root:
+            _merge_account(acc)
+
+        accounts = list(account_map.values())
+        result["accounts"] = accounts
+        result["total_accounts"] = len(accounts)
+
+        # 统计总数据库数量
+        total_db_count = sum(account.get("database_count", 0) for account in accounts)
+        result["total_databases"] = total_db_count
+
+        if accounts:
+            result["detection_methods"].append(
+                f"检测到 {len(accounts)} 个微信账户（已合并两种来源）"
+            )
+            result["detection_methods"].append(f"总计 {total_db_count} 个数据库文件")
+
+            # 为每个账户添加详细信息
+            for account in accounts:
+                account_name = account.get("account_name")
+                db_count = account.get("database_count", 0)
+                data_dir_status = "已找到" if account.get("data_dir") else "未找到"
+                result["detection_methods"].append(
+                    f"账户 {account_name}: {db_count} 个数据库, 数据目录{data_dir_status}"
+                )
+        else:
+            result["detection_methods"].append("未检测到微信账户")
+
+        # 填充向后兼容性字段
+        for account in accounts:
+            if account.get("data_dir"):
+                result["wechat_data_dirs"].append(account["data_dir"])
+                result["message_dirs"].append(account["data_dir"])
+            result["user_accounts"].append(account.get("account_name"))
+
+            # 添加数据库到兼容性列表
+            for db in account.get("databases", []):
+                result["databases"].append({
+                    "path": db["path"],
+                    "name": db["name"],
+                    "type": db["type"],
+                    "size": db["size"],
+                    "user": account.get("account_name"),
+                    "user_dir": account.get("data_dir"),
+                })
+
+    except Exception as e:
+        result["detection_errors"].append(f"账户检测失败: {str(e)}")
+
+    # 3. 如果新检测方法没有找到账户，尝试旧的检测方法作为备用
+    if not result["accounts"]:
+        result["detection_methods"].append("备用检测方法")
+        try:
+            wx_dir = get_wx_dir_by_reg()
+            if wx_dir and os.path.exists(wx_dir):
+                result["wechat_data_dirs"].append(wx_dir)
+                result["detection_methods"].append(f"通过备用方法找到微信目录: {wx_dir}")
+
+                # 使用旧的检测逻辑
+                db_list = get_wx_db(msg_dir=wx_dir)
+
+                # 按账户组织数据库
+                account_db_map = {}
+                for db_info in db_list:
+                    wxid = db_info["wxid"]
+                    if wxid not in account_db_map:
+                        account_db_map[wxid] = {
+                            "account_name": wxid,
+                            "backup_dir": None,
+                            "data_dir": db_info["wxid_dir"],
+                            "databases": [],
+                            "database_count": 0
+                        }
+
+                    if os.path.exists(db_info["db_path"]):
+                        db_entry = {
+                            "path": db_info["db_path"],
+                            "name": os.path.basename(db_info["db_path"]),
+                            "type": db_info["db_type"],
+                            "size": os.path.getsize(db_info["db_path"]),
+                            "relative_path": os.path.relpath(db_info["db_path"], db_info["wxid_dir"])
+                        }
+                        account_db_map[wxid]["databases"].append(db_entry)
+                        account_db_map[wxid]["database_count"] += 1
+
+                result["accounts"] = list(account_db_map.values())
+                result["total_accounts"] = len(result["accounts"])
+                result["total_databases"] = sum(account["database_count"] for account in result["accounts"])
+
+                result["detection_methods"].append(f"备用方法检测到 {result['total_accounts']} 个账户")
+                result["detection_methods"].append(f"总计 {result['total_databases']} 个数据库文件")
+            else:
+                result["detection_methods"].append("备用检测方法未找到微信目录")
+        except Exception as e:
+            result["detection_errors"].append(f"备用检测失败: {str(e)}")
+
+    return result
+
+
+def detect_current_logged_in_account(base_path: str = None) -> Dict[str, Any]:
+    """
+    根据 key_info.db 最近活动时间推测账号，global_config 仅作为回退。
+
+    global_config 可能保留上一个登录账号，不能单独证明当前会话。
+    """
+    if base_path is None:
+        detected_dirs = auto_detect_wechat_data_dirs()
+        if not detected_dirs:
+            return {
+                "current_account": None,
+                "latest_time": None,
+                "source": None,
+                "confidence": None,
+                "global_config_account": None,
+                "message": "未检测到微信数据目录",
+            }
+        base_path = detected_dirs[0]
+
+    parsed_config = parse_global_config(base_path)
+    global_config_account = parsed_config.get("wxid") if parsed_config else None
+    latest_time = None
+    current_account = None
+
+    possible_login_paths = [
+        os.path.join(base_path, "all_users", "login"),
+        os.path.join(base_path, "login"),
+    ]
+
+    # 也尝试在子目录中查找
+    try:
+        for item in os.listdir(base_path):
+            item_path = os.path.join(base_path, item)
+            if os.path.isdir(item_path):
+                possible_login_paths.extend([
+                    os.path.join(item_path, "all_users", "login"),  # 子目录中的标准路径
+                    os.path.join(item_path, "login"),  # 子目录中的备选路径
+                ])
+    except (PermissionError, OSError):
+        pass
+
+    login_dirs = []
+    for path in dict.fromkeys(possible_login_paths):
+        logger.debug("检查路径: %s", path)
+        if os.path.isdir(path):
+            login_dirs.append(path)
+            logger.debug("找到登录目录: %s", path)
+
+    for login_dir in login_dirs:
+        try:
+            items = sorted(os.listdir(login_dir))
+            logger.debug("登录目录内容: %s", items)
+        except (PermissionError, OSError) as e:
+            logger.debug("无法访问登录目录: %s，错误: %s", login_dir, e)
+            continue
+
+        for item in items:
+            item_path = os.path.join(login_dir, item)
+            if not os.path.isdir(item_path):
+                continue
+
+            key_info_path = os.path.join(item_path, "key_info.db")
+            if not os.path.isfile(key_info_path):
+                continue
+
+            try:
+                activity_paths = [key_info_path, f"{key_info_path}-wal"]
+                file_time = max(
+                    os.path.getmtime(path)
+                    for path in activity_paths
+                    if os.path.isfile(path)
+                )
+                file_datetime = datetime.fromtimestamp(file_time)
+                logger.debug("找到 key_info.db 活动: %s，修改时间: %s", key_info_path, file_datetime)
+
+                if latest_time is None or file_time > latest_time:
+                    latest_time = file_time
+                    current_account = item
+                    logger.debug("更新最近活动账号: %s，时间: %s", current_account, file_datetime)
+            except OSError as e:
+                logger.debug("无法获取文件时间: %s，错误: %s", key_info_path, e)
+
+    if current_account:
+        logger.debug("最终结果: 最近活动账号 %s，时间 %s", current_account, latest_time)
+        result = {
+            "current_account": current_account,
+            "latest_time": latest_time,
+            "latest_time_formatted": datetime.fromtimestamp(latest_time).isoformat() if latest_time else None,
+            "source": "key_info_mtime",
+            "confidence": "medium",
+            "global_config_account": global_config_account,
+            "message": f"根据 key_info.db 最近活动推测账号: {current_account}",
+        }
+        if current_account == global_config_account:
+            result.update({
+                "nickname": parsed_config.get("nickname"),
+                "avatar": parsed_config.get("avatar"),
+            })
+        return result
+
+    if global_config_account:
+        logger.debug("未找到 key_info.db 活动，回退使用 global_config: %s", global_config_account)
+        return {
+            "current_account": global_config_account,
+            "nickname": parsed_config.get("nickname"),
+            "avatar": parsed_config.get("avatar"),
+            "latest_time": None,
+            "source": "global_config",
+            "confidence": "low",
+            "global_config_account": global_config_account,
+            "message": f"通过 global_config 读取到已保存账号: {global_config_account}",
+        }
+
+    logger.debug("最终结果: 未推测到账号")
+    return {
+        "current_account": None,
+        "latest_time": None,
+        "source": None,
+        "confidence": None,
+        "global_config_account": None,
+        "message": (
+            "未检测到账号活动"
+            if login_dirs
+            else f"未找到登录信息目录，尝试的路径: {possible_login_paths}"
+        ),
+    }
+
+
+def get_wechat_info() -> Dict[str, Any]:
+    """获取微信安装和数据库信息
+
+    返回值:
+        包含微信信息的字典
+    """
+    return detect_wechat_installation()
