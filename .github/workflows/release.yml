@@ -1,0 +1,97 @@
+name: Publish prebuilt packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 高级版安装包的实际四段版本号
+        required: true
+        type: string
+      platform:
+        description: 安装包平台
+        required: true
+        type: choice
+        options: [windows, windows-arm64, macos, linux-x64, linux-arm64, desktop-all, linux-all]
+      links_only:
+        description: 仅在 Release 提供官方直链，不下载或上传包体
+        required: false
+        type: boolean
+        default: false
+      source_run_id:
+        description: 高级版构建的 Actions run ID
+        required: false
+        type: string
+      artifact_name:
+        description: 该构建已上传的安装包 artifact 名称
+        required: false
+        type: string
+      download_url:
+        description: dl.fqyw.love/desktop-updates 下与版本和平台一致的官方成品直链
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate package source
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          DOWNLOAD_URL: ${{ inputs.download_url }}
+          LINKS_ONLY: ${{ inputs.links_only }}
+          RELEASE_PLATFORM: ${{ inputs.platform }}
+        run: |
+          if [[ "$LINKS_ONLY" == "true" ]]; then
+            if [[ -n "$SOURCE_RUN_ID" || -n "$ARTIFACT_NAME" || -n "$DOWNLOAD_URL" ]]; then
+              echo "::error::links_only 不接受 source_run_id、artifact_name 或 download_url"
+              exit 1
+            fi
+          elif [[ "$RELEASE_PLATFORM" == "desktop-all" || "$RELEASE_PLATFORM" == "linux-all" ]]; then
+            echo "::error::平台组仅可在 links_only 模式使用"
+            exit 1
+          elif [[ -n "$DOWNLOAD_URL" ]]; then
+            if [[ -n "$SOURCE_RUN_ID" || -n "$ARTIFACT_NAME" ]]; then
+              echo "::error::download_url 与 source_run_id/artifact_name 只能选择一种来源"
+              exit 1
+            fi
+          elif [[ -z "$SOURCE_RUN_ID" || -z "$ARTIFACT_NAME" ]]; then
+            echo "::error::请填写 download_url，或同时填写 source_run_id 和 artifact_name"
+            exit 1
+          fi
+
+      - name: Checkout publication script
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download existing Advanced package
+        if: inputs.links_only != true && inputs.download_url == ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          repository: ${{ vars.WDA_ADVANCED_REPOSITORY || 'woijfwefw/WCDB-Advanced' }}
+          run-id: ${{ inputs.source_run_id }}
+          name: ${{ inputs.artifact_name }}
+          github-token: ${{ secrets.WCE_NATIVE_CORE_PRODUCER_TOKEN }}
+          path: release-assets
+
+      - name: Publish package with API release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGELOG_URL: ${{ secrets.CHANGELOG_URL }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_PLATFORM: ${{ inputs.platform }}
+          DOWNLOAD_URL: ${{ inputs.download_url }}
+          LINKS_ONLY: ${{ inputs.links_only }}
+        run: |
+          args=(--version "$RELEASE_VERSION" --platform "$RELEASE_PLATFORM" --assets release-assets --publish)
+          if [[ "$LINKS_ONLY" == "true" ]]; then
+            args+=(--links-only)
+          elif [[ -n "$DOWNLOAD_URL" ]]; then
+            args+=(--download-url "$DOWNLOAD_URL")
+          fi
+          python3 tools/publish-desktop-release.py "${args[@]}"

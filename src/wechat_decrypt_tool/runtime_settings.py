@@ -1,0 +1,350 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+
+RUNTIME_SETTINGS_FILENAME = "runtime_settings.json"
+BACKEND_PORT_KEY = "backend_port"
+VOICE_TRANSCRIPTION_DEVICE_KEY = "voice_transcription_device"
+VOICE_TRANSCRIPTION_MODEL_KEY = "voice_transcription_model"
+VOICE_MODEL_DOWNLOAD_SOURCE_KEY = "voice_model_download_source"
+VOICE_MODEL_DOWNLOAD_ENDPOINTS = {
+    "huggingface": "https://huggingface.co",
+    "hf-mirror": "https://hf-mirror.com",
+}
+ENV_PORT_KEY = "WECHAT_TOOL_PORT"
+ENV_HOST_KEY = "WECHAT_TOOL_HOST"
+ENV_ALLOW_REMOTE_CALLS_KEY = "WECHAT_TOOL_ALLOW_REMOTE_CALLS"
+ENV_VOICE_TRANSCRIPTION_DEVICE_KEY = "WECHAT_TOOL_WHISPER_DEVICE"
+ENV_VOICE_TRANSCRIPTION_MODEL_KEY = "WECHAT_TOOL_WHISPER_MODEL"
+ENV_FILE_KEY = "WECHAT_TOOL_ENV_FILE"
+DEFAULT_ENV_FILENAME = ".env"
+LOOPBACK_BACKEND_HOST = "127.0.0.1"
+VOICE_TRANSCRIPTION_DEVICE_CPU = "cpu"
+VOICE_TRANSCRIPTION_DEVICE_CUDA = "cuda"
+
+
+def remote_calls_enabled(default: bool = False) -> bool:
+    """Return whether caller-location checks are explicitly relaxed.
+
+    This is deliberately opt-in. It does not disable native leases/build
+    expiry, feature bits, path validation, or resource limits.
+    """
+
+    raw = str(os.environ.get(ENV_ALLOW_REMOTE_CALLS_KEY, "") or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
+def default_backend_host() -> str:
+    """Choose the bind default without overriding explicit host settings."""
+
+    return LOOPBACK_BACKEND_HOST
+
+
+def _parse_port(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        raw = str(value).strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        port = int(raw, 10)
+    except Exception:
+        return None
+    if port < 1 or port > 65535:
+        return None
+    return port
+
+
+def _normalize_host(value: object) -> str | None:
+    try:
+        raw = str(value or "").strip()
+    except Exception:
+        return None
+    if raw in {LOOPBACK_BACKEND_HOST, "localhost", "::1"}:
+        return LOOPBACK_BACKEND_HOST
+    if raw in {"0.0.0.0", "::"}:
+        return "0.0.0.0"
+    return None
+
+
+def _normalize_voice_transcription_device(value: object) -> str | None:
+    try:
+        raw = str(value or "").strip().lower()
+    except Exception:
+        return None
+    if raw in {VOICE_TRANSCRIPTION_DEVICE_CPU, VOICE_TRANSCRIPTION_DEVICE_CUDA}:
+        return raw
+    return None
+
+
+def _normalize_voice_transcription_model(value: object) -> str | None:
+    try:
+        raw = str(value or "").strip()
+    except Exception:
+        return None
+    if not raw or len(raw) > 512 or any(ord(ch) < 32 for ch in raw):
+        return None
+    return raw
+
+
+def _read_runtime_settings() -> dict:
+    path = get_runtime_settings_path()
+    try:
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_runtime_settings(data: dict) -> None:
+    path = get_runtime_settings_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    try:
+        cleaned = data if isinstance(data, dict) else {}
+        if not cleaned:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return
+
+        path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        return
+
+
+def get_runtime_settings_path() -> Path:
+    from .app_paths import get_output_dir
+
+    return get_output_dir() / RUNTIME_SETTINGS_FILENAME
+
+
+def read_backend_port_setting() -> int | None:
+    try:
+        data = _read_runtime_settings()
+        return _parse_port(data.get(BACKEND_PORT_KEY))
+    except Exception:
+        return None
+
+
+def write_backend_port_setting(port: int | None) -> None:
+    safe_port = _parse_port(port)
+    try:
+        data = _read_runtime_settings()
+
+        if safe_port is None:
+            data.pop(BACKEND_PORT_KEY, None)
+        else:
+            data[BACKEND_PORT_KEY] = safe_port
+
+        _write_runtime_settings(data)
+    except Exception:
+        return
+
+
+def read_effective_backend_port(default: int) -> tuple[int, str]:
+    """Return (port, source) where source is one of: env | settings | default."""
+
+    env_raw = str(os.environ.get("WECHAT_TOOL_PORT", "") or "").strip()
+    env_port = _parse_port(env_raw)
+    if env_port is not None:
+        return env_port, "env"
+
+    settings_port = read_backend_port_setting()
+    if settings_port is not None:
+        return settings_port, "settings"
+
+    return int(default), "default"
+
+
+def read_effective_backend_host(default: str = LOOPBACK_BACKEND_HOST) -> tuple[str, str]:
+    """Return the explicit environment bind address or the loopback default."""
+
+    env_host = _normalize_host(os.environ.get(ENV_HOST_KEY, ""))
+    if env_host is not None:
+        return env_host, "env"
+
+    return _normalize_host(default) or LOOPBACK_BACKEND_HOST, "default"
+
+
+def read_voice_transcription_device_setting() -> str | None:
+    try:
+        data = _read_runtime_settings()
+        return _normalize_voice_transcription_device(data.get(VOICE_TRANSCRIPTION_DEVICE_KEY))
+    except Exception:
+        return None
+
+
+def write_voice_transcription_device_setting(device: str | None) -> None:
+    safe_device = _normalize_voice_transcription_device(device)
+    try:
+        data = _read_runtime_settings()
+        if safe_device is None:
+            data.pop(VOICE_TRANSCRIPTION_DEVICE_KEY, None)
+        else:
+            data[VOICE_TRANSCRIPTION_DEVICE_KEY] = safe_device
+        _write_runtime_settings(data)
+    except Exception:
+        return
+
+
+def read_effective_voice_transcription_device(default: str = VOICE_TRANSCRIPTION_DEVICE_CPU) -> tuple[str, str]:
+    """Return the voice device preference and its source: env | settings | default."""
+
+    env_device = _normalize_voice_transcription_device(os.environ.get(ENV_VOICE_TRANSCRIPTION_DEVICE_KEY, ""))
+    if env_device is not None:
+        return env_device, "env"
+
+    settings_device = read_voice_transcription_device_setting()
+    if settings_device is not None:
+        return settings_device, "settings"
+
+    return _normalize_voice_transcription_device(default) or VOICE_TRANSCRIPTION_DEVICE_CPU, "default"
+
+
+def read_voice_transcription_model_setting() -> str | None:
+    try:
+        data = _read_runtime_settings()
+        return _normalize_voice_transcription_model(data.get(VOICE_TRANSCRIPTION_MODEL_KEY))
+    except Exception:
+        return None
+
+
+def write_voice_transcription_model_setting(model: str | None) -> None:
+    safe_model = _normalize_voice_transcription_model(model)
+    try:
+        data = _read_runtime_settings()
+        if safe_model is None:
+            data.pop(VOICE_TRANSCRIPTION_MODEL_KEY, None)
+        else:
+            data[VOICE_TRANSCRIPTION_MODEL_KEY] = safe_model
+        _write_runtime_settings(data)
+    except Exception:
+        return
+
+
+def read_effective_voice_transcription_model(default: str = "zipformer-small-ctc-int8") -> tuple[str, str]:
+    """Return the Whisper model preference and its source: env | settings | default."""
+
+    env_model = _normalize_voice_transcription_model(os.environ.get(ENV_VOICE_TRANSCRIPTION_MODEL_KEY, ""))
+    if env_model is not None:
+        return env_model, "env"
+
+    settings_model = read_voice_transcription_model_setting()
+    if settings_model is not None:
+        return settings_model, "settings"
+
+    return _normalize_voice_transcription_model(default) or "zipformer-small-ctc-int8", "default"
+
+
+def read_voice_model_download_source() -> str:
+    """读取语音模型下载源；旧配置或无效配置使用官方源。"""
+    source = _read_runtime_settings().get(VOICE_MODEL_DOWNLOAD_SOURCE_KEY)
+    return source if isinstance(source, str) and source in VOICE_MODEL_DOWNLOAD_ENDPOINTS else "huggingface"
+
+
+def write_voice_model_download_source(source: str) -> None:
+    """仅持久化预设下载源，不接受任意网址。"""
+    if source not in VOICE_MODEL_DOWNLOAD_ENDPOINTS:
+        raise ValueError("不支持的语音模型下载源")
+    data = _read_runtime_settings()
+    data[VOICE_MODEL_DOWNLOAD_SOURCE_KEY] = source
+    _write_runtime_settings(data)
+    if read_voice_model_download_source() != source:
+        raise OSError("语音模型下载源保存失败")
+
+
+def get_env_file_path() -> Path | None:
+    """Best-effort env file path for `uv run` (defaults to repo root `.env`)."""
+
+    v = str(os.environ.get(ENV_FILE_KEY, "") or "").strip()
+    if v:
+        try:
+            return Path(v)
+        except Exception:
+            return None
+
+    # Frozen builds never load `.env`, and their cwd sits inside the install
+    # payload (on macOS the signed .app bundle, where any new file breaks
+    # codesign verification and the app refuses to start).
+    if getattr(sys, "frozen", False):
+        return None
+
+    cwd = Path.cwd()
+    # Heuristic: only write `.env` in a project root (avoid polluting random dirs).
+    try:
+        if (cwd / "pyproject.toml").is_file():
+            return cwd / DEFAULT_ENV_FILENAME
+    except Exception:
+        return None
+
+    return None
+
+
+def _set_env_var_in_file(env_file: Path, key: str, value: str | None) -> bool:
+    try:
+        env_file.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return False
+
+    pattern = re.compile(rf"^\s*(?:export\s+)?{re.escape(key)}\s*=")
+    try:
+        raw = env_file.read_text(encoding="utf-8") if env_file.is_file() else ""
+    except Exception:
+        raw = ""
+
+    lines = raw.splitlines(keepends=True) if raw else []
+    out: list[str] = []
+    replaced = False
+    for line in lines:
+        if pattern.match(line):
+            if value is None:
+                continue
+            if not replaced:
+                out.append(f"{key}={value}\n")
+                replaced = True
+            continue
+        out.append(line)
+
+    if value is not None and not replaced:
+        if out and not out[-1].endswith("\n"):
+            out[-1] = out[-1] + "\n"
+        out.append(f"{key}={value}\n")
+
+    try:
+        env_file.write_text("".join(out), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def write_backend_port_env_file(port: int | None) -> Path | None:
+    """Write `WECHAT_TOOL_PORT` into a `.env` file so `uv run main.py` picks it up on restart.
+
+    Note: `uv` doesn't override already-set env vars; `.env` only applies when the variable is not
+    present in the current shell/session.
+    """
+
+    env_file = get_env_file_path()
+    if not env_file:
+        return None
+
+    safe_port = _parse_port(port)
+    ok = _set_env_var_in_file(env_file, ENV_PORT_KEY, str(safe_port) if safe_port is not None else None)
+    return env_file if ok else None

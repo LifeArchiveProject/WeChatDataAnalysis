@@ -1,0 +1,155 @@
+name: macOS Public Source Runtime Consumer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-source-consumer:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Clone the exact public WCDA revision without credentials
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          destination="$RUNNER_TEMP/public-wcda"
+          env -u GH_TOKEN -u GITHUB_TOKEN git \
+            -c credential.helper= \
+            -c core.askPass= \
+            clone --depth 1 \
+            https://github.com/LifeArchiveProject/WeChatDataAnalysis.git \
+            "$destination"
+          test "$(git -C "$destination" rev-parse HEAD)" = "$EXPECTED_REVISION"
+          test -z "$(git -C "$destination" status --porcelain=v1 --untracked-files=all)"
+
+      - name: Download and validate the public source runtime without credentials
+        working-directory: ${{ runner.temp }}/public-wcda
+        shell: bash
+        env:
+          WCE_NATIVE_CORE_SOURCE_CACHE_DIR: ${{ runner.temp }}/source-runtime-cache
+        run: |
+          set -euo pipefail
+          env -u GH_TOKEN -u GITHUB_TOKEN node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const {
+            applySourceRuntimeEnvironment,
+            ensureSourceNativeCore,
+          } = require("./desktop/src/source-native-core-bootstrap.cjs");
+
+          const result = ensureSourceNativeCore({
+            arch: "arm64",
+            env: process.env,
+            platform: "darwin",
+          });
+          if (result.reason !== "downloaded" || result.policy.artifactState !== "source-public") {
+            throw new Error(`unexpected first bootstrap result: ${JSON.stringify(result)}`);
+          }
+          applySourceRuntimeEnvironment(process.env, result);
+          const output = {
+            runtimeDir: result.runtimeDir,
+            nativeDir: result.nativeDir,
+            dbKeyBundleDir: result.dbKeyBundleDir,
+            integrityNativePath: result.integrityNativePath,
+          };
+          fs.writeFileSync(
+            path.join(process.env.RUNNER_TEMP, "source-runtime-result.json"),
+            `${JSON.stringify(output, null, 2)}\n`
+          );
+          for (const [name, value] of Object.entries({
+            WCE_NATIVE_CORE_SOURCE_DIR: result.nativeDir,
+            WECHAT_TOOL_MACOS_DB_KEY_BUNDLE: result.dbKeyBundleDir,
+            WCE_INTEGRITY_NATIVE_PATH: result.integrityNativePath,
+          })) {
+            fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${value}\n`);
+          }
+          NODE
+
+      - name: Prove that a second launch is an offline verified-cache hit
+        working-directory: ${{ runner.temp }}/public-wcda
+        shell: bash
+        env:
+          WCE_NATIVE_CORE_SOURCE_CACHE_DIR: ${{ runner.temp }}/source-runtime-cache
+        run: |
+          set -euo pipefail
+          env -u GH_TOKEN -u GITHUB_TOKEN node <<'NODE'
+          const { ensureSourceNativeCore } = require("./desktop/src/source-native-core-bootstrap.cjs");
+          const result = ensureSourceNativeCore({
+            arch: "arm64",
+            env: process.env,
+            platform: "darwin",
+            spawnSyncImpl() {
+              throw new Error("verified cache hit attempted an external command");
+            },
+          });
+          if (result.reason !== "verified-cache" || result.policy.artifactState !== "source-public") {
+            throw new Error(`unexpected cache result: ${JSON.stringify(result)}`);
+          }
+          NODE
+
+      - name: Verify promoted binary architectures and code signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$WCE_NATIVE_CORE_SOURCE_DIR/libwechatdb_client.dylib"
+          test -f "$WCE_NATIVE_CORE_SOURCE_DIR/wechatdb_broker"
+          test -f "$WECHAT_TOOL_MACOS_DB_KEY_BUNDLE/wda_xkey_helper"
+          test -f "$WCE_INTEGRITY_NATIVE_PATH"
+          file "$WCE_NATIVE_CORE_SOURCE_DIR/libwechatdb_client.dylib" | grep -q 'arm64'
+          file "$WCE_NATIVE_CORE_SOURCE_DIR/wechatdb_broker" | grep -q 'arm64'
+          file "$WECHAT_TOOL_MACOS_DB_KEY_BUNDLE/wda_xkey_helper" | grep -q 'arm64'
+          file "$WECHAT_TOOL_MACOS_DB_KEY_BUNDLE/wda_xkey_helper" | grep -q 'x86_64'
+          file "$WCE_INTEGRITY_NATIVE_PATH" | grep -q 'arm64'
+          /usr/bin/codesign --verify --strict "$WCE_NATIVE_CORE_SOURCE_DIR/libwechatdb_client.dylib"
+          /usr/bin/codesign --verify --strict "$WCE_NATIVE_CORE_SOURCE_DIR/wechatdb_broker"
+          /usr/bin/codesign --verify --strict "$WECHAT_TOOL_MACOS_DB_KEY_BUNDLE/wda_xkey_helper"
+          /usr/bin/codesign --verify --strict "$WCE_INTEGRITY_NATIVE_PATH"
+
+      - name: Verify public runtime manifests through WCDA adapters
+        working-directory: ${{ runner.temp }}/public-wcda
+        shell: bash
+        run: |
+          set -euo pipefail
+          venv="$RUNNER_TEMP/source-runtime-consumer-venv"
+          python3 -m venv "$venv"
+          "$venv/bin/python" -m pip install --disable-pip-version-check --quiet cryptography
+          PYTHONPATH=src "$venv/bin/python" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from wechat_decrypt_tool import macos_db_key_helper, native_core_client, platform_support
+
+          native_dir = Path(os.environ["WCE_NATIVE_CORE_SOURCE_DIR"])
+          component = native_dir / "libwechatdb_client.dylib"
+          manifest = native_core_client._required_native_core_build_manifest(component)
+          assert manifest.source_runtime is True
+          assert manifest.macos_host_verification == "same-user-direct-parent"
+          entrypoint_manifest = native_core_client.configure_native_core_entrypoint()
+          assert entrypoint_manifest.build_id == manifest.build_id
+          assert Path(os.environ["WECHAT_TOOL_NATIVE_CORE_LIBRARY"]) == component.resolve()
+          assert Path(os.environ["WECHAT_TOOL_NATIVE_CORE_BROKER"]) == (
+              native_dir / "wechatdb_broker"
+          ).resolve()
+          assert platform_support._native_core_resources_ready(
+              (
+                  component,
+                  native_dir / "wechatdb_broker",
+                  native_dir / "wechatdb_native_build.json",
+              )
+          )
+          xkey = macos_db_key_helper.validate_macos_db_key_bundle()
+          assert xkey.source_runtime is True
+          result = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "source-runtime-result.json").read_text()
+          )
+          assert Path(result["integrityNativePath"]) == Path(
+              os.environ["WCE_INTEGRITY_NATIVE_PATH"]
+          )
+          PY
