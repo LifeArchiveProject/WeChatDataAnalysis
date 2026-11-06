@@ -1,10 +1,10 @@
-/* 更新日志页：导航外壳（shell.js）+ 从 assets/data/changelog.json 渲染时间线、计数与筛选。
-   数据由 tools/dev/sync-site-changelog.mjs 生成：部署时从高级版的发布接口取最新的，取不到就用仓库里的快照。
+/* 更新日志页：导航外壳（shell.js）+ 从服务器更新日志渲染时间线、计数与筛选。
    - 每个版本：版本号（可点，带锚点）、日期、平台、条数；全部变化直接列出（不折叠、不弹层）。
    - 筛选：平台（全部 / Windows / macOS / Linux）× 类型（全部 / 新增 / 优化 / 修复）；选项后的数字跟着另一项条件变；
      条件记在地址栏（?pf=macos&t=fix），可直接分享；不符合的条目与没有剩余条目的版本隐藏。
    - 文字一律用 textContent 写入，不拼 HTML。 */
 import { initShell } from "./shell.js?v=2ecd34881f36";
+import { watchReleaseNotes } from "./release-notes.js?v=ca96dd18dbeb";
 
 initShell();
 
@@ -18,6 +18,7 @@ const PF = { windows: "Windows", macos: "macOS", linux: "Linux" };
 const fmtDate = (s) => { const [y, m, dd] = s.split("-").map(Number); return { full: `${y} 年 ${m} 月 ${dd} 日`, short: `${m} 月 ${dd} 日` }; };
 
 const list = $("#cl-list"), empty = $("#cl-empty"), bar = $("#cl-bar");
+const emptyText = empty.textContent;
 let items = [];
 const state = { pf: "", t: "" };
 
@@ -78,11 +79,11 @@ function apply(push = true) {
 }
 
 function stats() {
-  const total = items.reduce((s, r) => s + r.changes.length, 0), latest = fmtDate(items[0].date);
+  const total = items.reduce((s, r) => s + r.changes.length, 0);
   const set = (k, v, small) => { const dd = $(`[data-stat="${k}"]`); dd.textContent = v; if (small) dd.append(el("small", "", small)); };
   set("releases", String(items.length), "个");
   set("changes", String(total), "项");
-  set("latest", latest.short);
+  set("latest", items.length ? fmtDate(items[0].date).short : "—");
 }
 
 /* 筛选：点选；方向键在一组里移动（radiogroup 的键盘习惯） */
@@ -100,24 +101,20 @@ $$("[data-filter]").forEach((g) => {
 const syncBar = () => d.documentElement.style.setProperty("--bar", bar.offsetHeight + "px");
 new ResizeObserver(syncBar).observe(bar); syncBar();
 
-(async () => {
-  try {
-    const r = await fetch("assets/data/changelog.json", { cache: "no-cache" });
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    items = (await r.json()).items || [];
-    if (!items.length) throw new Error("空");
-  } catch (e) {
-    empty.textContent = "更新日志暂时没加载出来，请稍后刷新再试。";
-    empty.hidden = false;
-    return;
-  }
-  const q = new URLSearchParams(location.search);
-  if (PF[q.get("pf")]) state.pf = q.get("pf");
-  if (TYPE[q.get("t")]) state.t = q.get("t");
+const q = new URLSearchParams(location.search);
+if (PF[q.get("pf")]) state.pf = q.get("pf");
+if (TYPE[q.get("t")]) state.t = q.get("t");
+
+watchReleaseNotes((next) => {
+  items = next;
+  empty.textContent = emptyText;
   render(); stats(); apply(false);
-  if (location.hash) { const t = d.getElementById(decodeURIComponent(location.hash.slice(1))); if (t) t.scrollIntoView(); }
+  if (!window.__clReady && location.hash) { const t = d.getElementById(decodeURIComponent(location.hash.slice(1))); if (t) t.scrollIntoView(); }
   window.__clReady = true;
-})();
+}, () => {
+  empty.textContent = "更新日志暂时没加载出来，请稍后刷新再试。";
+  empty.hidden = false;
+});
 
 /* 自检（截图脚本调用）：渲染数、当前可见数、横向滚动、文字是否被截断 */
 window.__cl = () => {

@@ -3,6 +3,7 @@
 import { drawCard, drawMask, CW } from "./card.js";
 import { initCompare } from "./compare.js?v=6a609d5f0fd9";
 import { initShell } from "./shell.js?v=2ecd34881f36";
+import { watchReleaseNotes } from "./release-notes.js?v=ca96dd18dbeb";
 
 const d = document;
 const $ = (s, r = d) => r.querySelector(s);
@@ -302,16 +303,16 @@ initShell();
   ["top", "compare", "get"].forEach((id) => { const el = d.getElementById(id); if (el) io.observe(el); });
 }
 
-/* ═════════ 7c. 开场眉标后的「最近更新」：取更新日志快照里最新一条的日期填进小链接（取不到就一直藏着）；点了去更新日志页 ═════════ */
+/* ═════════ 7c. 开场眉标后的「最近更新」：显示服务器日志里最近一版的日期，链接到更新日志页 ═════════ */
 {
   const a = $("[data-latest]");
-  if (a) fetch("assets/data/changelog-latest.json", { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).then((j) => {
-    if (!j || !/^\d{4}-\d{2}-\d{2}$/.test(j.date)) return;
-    const [, mm, dd] = j.date.split("-").map(Number);
+  if (a) watchReleaseNotes(([latest]) => {
+    a.hidden = !latest;
+    if (!latest) return;
+    const [, mm, dd] = latest.date.split("-").map(Number);
     $("b", a).textContent = `${mm} 月 ${dd} 日`;
-    a.setAttribute("aria-label", `更新日志，最近一次更新在 ${mm} 月 ${dd} 日（${j.version}）`);
-    a.hidden = false;
-  }).catch(() => {});
+    a.setAttribute("aria-label", `更新日志，最近一次更新在 ${mm} 月 ${dd} 日（${latest.version}）`);
+  });
 }
 
 /* ═════════ 8. 页面隐藏时给 <html> 挂 .is-hidden，开场主按钮的 CSS 动画跟着停（开场卡的倾斜与扫光在第 0 节自己管） ═════════ */

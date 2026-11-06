@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "include": ["/api/release-notes", "/api/release-notes/events"],
+  "exclude": []
+}
