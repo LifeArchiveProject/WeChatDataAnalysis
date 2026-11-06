@@ -13,6 +13,15 @@
     <td align="center" colspan="2"><img src="frontend/public/style1.png" alt="年度总结 Modern" width="800"/></td>
   </tr>
   <tr>
+    <td><img src="frontend/public/AnnualSummary1.gif" alt="AnnualSummary 1" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary2.gif" alt="AnnualSummary 2" width="400"/></td>
+  </tr>
+  <tr>
+    <td><img src="frontend/public/AnnualSummary3.gif" alt="AnnualSummary 3" width="400"/></td>
+    <td><img src="frontend/public/AnnualSummary4.gif" alt="AnnualSummary 4" width="400"/></td>
+  </tr>
+  <tr>
+    <td><img src="frontend/public/AnnualSummary5.gif" alt="AnnualSummary 5" width="400"/></td>
     <td><img src="frontend/public/AnnualSummary6.png" alt="AnnualSummary 6" width="400"/></td>
   </tr>
   <tr>
@@ -29,6 +38,18 @@
   </tr>
   <tr>
     <td colspan="2" align="center"><img src="frontend/public/message.png" alt="聊天记录页面" width="800"/></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><b>实时消息同步</b></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="frontend/public/RealTimeMessages.gif" alt="实时消息同步" width="800"/></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><b>设置面板</b></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="frontend/public/setting.png" alt="设置面板" width="800"/></td>
   </tr>
   <tr>
     <td align="center" colspan="2"><b>朋友圈</b></td>
