@@ -831,6 +831,28 @@ def _build_location_text(node: Optional[ET.Element]) -> str:
     return ""
 
 
+def _load_sns_like_contacts(names: list[str], contact_db_path: Path) -> dict[str, dict[str, Any]]:
+    contacts: dict[str, dict[str, Any]] = {}
+    unique_names = list(dict.fromkeys(names))
+    if contact_db_path.exists():
+        for start in range(0, len(unique_names), 500):
+            contacts.update(_load_contact_rows(contact_db_path, unique_names[start:start + 500]))
+    return contacts
+
+
+def _resolve_sns_like_names(names: list[str], contact_db_path: Path, nicknames: Optional[dict[str, str]] = None, contacts: Optional[dict[str, dict[str, Any]]] = None) -> list[str]:
+    nicknames = nicknames or {}
+    if not names:
+        return []
+    try:
+        if contacts is None:
+            contacts = _load_sns_like_contacts(names, contact_db_path)
+        return [_pick_display_name(contacts.get(name), nicknames.get(name) or name) for name in names]
+    except sqlite3.Error:
+        logger.warning("[sns] unable to resolve like contact names", exc_info=True)
+        return [nicknames.get(name) or name for name in names]
+
+
 def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]:
     out: dict[str, Any] = {
         "username": fallback_username,
@@ -840,6 +862,7 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
         "sourceName": "",
         "media": [],
         "likes": [],
+        "likeNicknames": {},
         "comments": [],
         "type": 1,  # 默认类型
         "title": "",
@@ -1168,6 +1191,20 @@ def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]
             v = str(u.text).strip()
             if v:
                 likes.append(v)
+        nicknames: dict[str, str] = {}
+        for entry in root.findall(".//LocalExtraInfo/like_user_list/user_comment"):
+            if _safe_int(entry.findtext("b_deleted")) or _safe_int(entry.findtext("type")) == 2:
+                continue
+            if entry.findtext("content") or entry.find(".//emojiinfo") is not None or entry.find(".//imageinfo") is not None:
+                continue
+            username = (entry.findtext("username") or "").strip()
+            nickname = (entry.findtext("nickname") or "").strip()
+            name = username or nickname
+            if name and name not in likes:
+                likes.append(name)
+            if username and nickname:
+                nicknames[username] = nickname
+        out["likeNicknames"] = nicknames
     except Exception:
         likes = []
     out["likes"] = likes
@@ -2453,7 +2490,7 @@ def list_sns_timeline(
                     "location": str(parsed2.get("location") or ""),
                     "sourceName": str(parsed2.get("sourceName") or ""),
                     "media": parsed2.get("media") or [],
-                    "likes": parsed2.get("likes") or [],
+                    "likes": _resolve_sns_like_names(parsed2.get("likes") or [], contact_db_path, parsed2.get("likeNicknames")),
                     "comments": parsed2.get("comments") or [],
                     "type": post_type2,
                     "title": parsed2.get("title", ""),
@@ -2856,7 +2893,7 @@ def list_sns_timeline(
             content_desc = str(r.get("contentDesc") or "")
             media = r.get("media") if isinstance(r.get("media"), list) else []
             likes = r.get("likes") if isinstance(r.get("likes"), list) else []
-            likes = [_clean_name(x) for x in likes if _clean_name(x)]
+            likes = _resolve_sns_like_names([_clean_name(x) for x in likes if _clean_name(x)], contact_db_path)
             comments = r.get("comments") if isinstance(r.get("comments"), list) else []
 
             # WeFlow: live photo / SNS video decryption key comes from `<enc key="...">` in raw XML.
@@ -2890,6 +2927,8 @@ def list_sns_timeline(
                 xml = content_by_tid.get(int(tid_s))
                 if xml:
                     parsed = _parse_timeline_xml(xml, uname)
+                    if parsed.get("likes"):
+                        likes = _resolve_sns_like_names(parsed["likes"], contact_db_path, parsed.get("likeNicknames"))
                     if parsed.get("location"):
                         location = str(parsed.get("location") or "")
                     sn0 = str(parsed.get("sourceName") or "").strip()
