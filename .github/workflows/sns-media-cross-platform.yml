@@ -44,7 +44,7 @@ jobs:
             os: windows-2022
             arch: x64
           - name: macOS arm64
-            os: macos-14
+            os: macos-15
             arch: arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
