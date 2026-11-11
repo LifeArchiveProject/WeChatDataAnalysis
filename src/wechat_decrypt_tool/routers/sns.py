@@ -853,6 +853,32 @@ def _resolve_sns_like_names(names: list[str], contact_db_path: Path, nicknames: 
         return [nicknames.get(name) or name for name in names]
 
 
+def _resolve_sns_comment_names(comments: list[dict[str, Any]], contact_db_path: Path, contacts: Optional[dict[str, dict[str, Any]]] = None) -> list[dict[str, Any]]:
+    """Resolve reply targets from contacts or other comments on the same post."""
+    entries = [c for c in comments if isinstance(c, dict)]
+    names = [str(c.get("refUsername") or c.get("refUserName") or "").strip() for c in entries]
+    if contacts is None:
+        try:
+            contacts = _load_sns_like_contacts([name for name in names if name], contact_db_path)
+        except sqlite3.Error:
+            logger.warning("[sns] unable to resolve comment contact names", exc_info=True)
+            contacts = {}
+    participants = {str(c.get("username") or "").strip(): str(c.get("nickname") or "").strip()
+                    for c in entries if c.get("username") and c.get("nickname")}
+    resolved = []
+    for comment in comments:
+        if not isinstance(comment, dict):
+            resolved.append(comment)
+            continue
+        item = dict(comment)
+        username = str(item.get("refUsername") or item.get("refUserName") or "").strip()
+        if username:
+            fallback = str(item.get("refNickname") or participants.get(username) or username).strip()
+            item["refNickname"] = _pick_display_name(contacts.get(username), fallback)
+        resolved.append(item)
+    return resolved
+
+
 def _parse_timeline_xml(xml_text: str, fallback_username: str) -> dict[str, Any]:
     out: dict[str, Any] = {
         "username": fallback_username,
@@ -2491,7 +2517,7 @@ def list_sns_timeline(
                     "sourceName": str(parsed2.get("sourceName") or ""),
                     "media": parsed2.get("media") or [],
                     "likes": _resolve_sns_like_names(parsed2.get("likes") or [], contact_db_path, parsed2.get("likeNicknames")),
-                    "comments": parsed2.get("comments") or [],
+                    "comments": _resolve_sns_comment_names(parsed2.get("comments") or [], contact_db_path),
                     "type": post_type2,
                     "title": parsed2.get("title", ""),
                     "contentUrl": parsed2.get("contentUrl", ""),
@@ -2700,7 +2726,7 @@ def list_sns_timeline(
                     "sourceName": str(parsed3.get("sourceName") or ""),
                     "media": parsed3.get("media") or [],
                     "likes": parsed3.get("likes") or [],
-                    "comments": parsed3.get("comments") or [],
+                    "comments": _resolve_sns_comment_names(parsed3.get("comments") or [], contact_db_path),
                     "type": post_type3,
                     "title": parsed3.get("title", ""),
                     "contentUrl": parsed3.get("contentUrl", ""),
@@ -3015,7 +3041,7 @@ def list_sns_timeline(
                     "sourceName": str(source_name or ""),
                     "media": media,
                     "likes": likes,
-                    "comments": comments,
+                    "comments": _resolve_sns_comment_names(comments, contact_db_path),
                     "type": post_type,
                     "title": title,
                     "contentUrl": content_url,
