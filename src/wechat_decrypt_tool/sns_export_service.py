@@ -54,6 +54,7 @@ from .routers.sns import (  # pylint: disable=protected-access
     _image_size_from_bytes,
     _load_sns_like_contacts,
     _resolve_sns_like_names,
+    _resolve_sns_comment_names,
     _parse_timeline_xml,
     _resolve_sns_cached_video_path,
     _to_unsigned_i64_str,
@@ -1122,8 +1123,10 @@ def _load_sns_export_snapshot(
 
     parsed_rows = [(row, _parse_timeline_xml(str(row["content"] or ""), str(row["user_name"] or "").strip())) for row in rows]
     like_usernames = [name for _, parsed in parsed_rows for name in parsed.get("likes") or []]
+    comment_usernames = [str(c.get("refUsername") or c.get("refUserName") or "").strip()
+                         for _, parsed in parsed_rows for c in parsed.get("comments") or [] if isinstance(c, dict)]
     try:
-        like_contacts = _load_sns_like_contacts(like_usernames, contact_db_path)
+        like_contacts = _load_sns_like_contacts(like_usernames + comment_usernames, contact_db_path)
     except sqlite3.Error:
         logger.warning("[sns] unable to resolve like contact names", exc_info=True)
         like_contacts = {}
@@ -1162,9 +1165,12 @@ def _load_sns_export_snapshot(
                 official_usernames.add(official_username)
 
         resolved_likes = _resolve_sns_like_names(parsed.get("likes") or [], contact_db_path, parsed.get("likeNicknames"), like_contacts)
+        resolved_comments = _resolve_sns_comment_names(parsed.get("comments") or [], contact_db_path, like_contacts)
         fingerprint_data = content_xml.encode("utf-8", errors="replace")
         if resolved_likes:
             fingerprint_data += b"\0sns-like-names\0" + json.dumps(resolved_likes, ensure_ascii=False).encode("utf-8")
+        if resolved_comments:
+            fingerprint_data += b"\0sns-comment-names\0" + json.dumps(resolved_comments, ensure_ascii=False).encode("utf-8")
         post = {
             "id": post_id,
             "tid": tid,
@@ -1176,7 +1182,7 @@ def _load_sns_export_snapshot(
             "sourceName": str(parsed.get("sourceName") or ""),
             "media": parsed.get("media") or [],
             "likes": resolved_likes,
-            "comments": parsed.get("comments") or [],
+            "comments": resolved_comments,
             "type": post_type,
             "title": parsed.get("title", ""),
             "contentUrl": parsed.get("contentUrl", ""),

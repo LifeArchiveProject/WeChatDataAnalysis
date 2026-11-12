@@ -8,6 +8,33 @@ from wechat_decrypt_tool.routers import sns
 from wechat_decrypt_tool import sns_export_service
 
 
+def test_comment_reply_names_and_incremental_fingerprint(tmp_path):
+    account = tmp_path / "account"
+    account.mkdir()
+    xml = ('<SnsDataItem><TimelineObject><contentDesc>Post</contentDesc></TimelineObject>'
+           '<comment><username>alice</username><nickname>Alice</nickname><content>Hi</content></comment>'
+           '<comment><username>author</username><content>Reply</content><refUserName>alice</refUserName></comment>'
+           '<comment><username>author</username><content>Other</content><refUserName>unknown</refUserName></comment>'
+           '</SnsDataItem>')
+    with sqlite3.connect(account / "sns.db") as conn:
+        conn.execute("CREATE TABLE SnsTimeLine (tid INTEGER, user_name TEXT, content TEXT)")
+        conn.execute("INSERT INTO SnsTimeLine VALUES (?, ?, ?)", (42, "author", xml))
+    with sqlite3.connect(account / "contact.db") as conn:
+        conn.execute("CREATE TABLE contact (username TEXT, remark TEXT, nick_name TEXT, alias TEXT, big_head_url TEXT, small_head_url TEXT)")
+        conn.execute("INSERT INTO contact VALUES (?, ?, ?, ?, ?, ?)", ("alice", "备注", "Alice", "", "", ""))
+    with mock.patch.object(sns, "_resolve_account_dir", return_value=account):
+        timeline = sns.list_sns_timeline(account="account", source="decrypted", limit=20, offset=0)
+    snapshot = sns_export_service._load_sns_export_snapshot(account)[0]["posts"][0]
+    assert timeline["timeline"][0]["comments"][1]["refNickname"] == "备注"
+    assert snapshot["comments"][1]["refNickname"] == "备注"
+    assert snapshot["comments"][2]["refNickname"] == "unknown"
+    with sqlite3.connect(account / "contact.db") as conn:
+        conn.execute("DELETE FROM contact")
+    updated = sns_export_service._load_sns_export_snapshot(account)[0]["posts"][0]
+    assert updated["comments"][1]["refNickname"] == "Alice"
+    assert updated["_contentFingerprint"] != snapshot["_contentFingerprint"]
+
+
 def test_xml_likes_reach_timeline_and_export_snapshot(tmp_path):
     account = tmp_path / "account"
     account.mkdir()
