@@ -35,7 +35,7 @@ test("SNS media CI covers Windows x64 and macOS arm64 without release secrets", 
   assert.match(workflow, /pull_request:/);
   assert.match(workflow, /os:\s*windows-2022/);
   assert.match(workflow, /arch:\s*x64/);
-  assert.match(workflow, /os:\s*macos-14/);
+  assert.match(workflow, /os:\s*macos-15/);
   assert.match(workflow, /arch:\s*arm64/);
   assert.match(workflow, /tests\/sns-wasm-runtime\.test\.cjs/);
   assert.match(workflow, /tests\/sns-media-source\.test\.mjs/);
