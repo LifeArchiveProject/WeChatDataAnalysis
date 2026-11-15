@@ -444,9 +444,9 @@ img { display: block; }
 .r__p { display: grid; grid-template-columns: var(--hc) minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "h it" "d it"; column-gap: var(--hg); align-content: start; }
 /* 首行各件都按 --hl 这一行竖直居中，条目与说明第一行用 6px 上边距落到同一条中线上 */
 .p__h { grid-area: h; display: flex; align-items: center; gap: 10px; min-height: var(--hl); }
-/* 条数：品牌加深渐变（冰蓝 → 薰衣草 → 蜜桃）按组取一段，十三组从上到下顺着色相走（--i 0…12，每组 100% / 12） */
+/* 条数：品牌加深渐变（冰蓝 → 薰衣草 → 蜜桃）按组取一段，十四组从上到下顺着色相走（--i 0…13，每组 100% / 13） */
 .p__c { padding-right: .03em; font: 650 clamp(28px, 2.2vw, 34px)/1 var(--lat); letter-spacing: -.03em; font-variant-numeric: tabular-nums;
-  background: linear-gradient(90deg, #2f86f0, #7a5cf0 50%, #d9702f) calc(var(--i, 0) * 100% / 12) 0 / 1300% 100%;
+  background: linear-gradient(90deg, #2f86f0, #7a5cf0 50%, #d9702f) calc(var(--i, 0) * 100% / 13) 0 / 1400% 100%;
   -webkit-background-clip: text; background-clip: text; color: transparent; }
 .r--both .p__c { background: none; color: var(--ink-2); }
 .p__n { font: 600 17px/1.3 var(--cjk); color: var(--ink); white-space: nowrap; }

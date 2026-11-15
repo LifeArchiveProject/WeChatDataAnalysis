@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>你的微信数据，由你留存</title>
-<meta name="description" content="微信 4.x 数据库解密与分析工具：高仿微信界面、实时消息、朋友圈、全文搜索、聊天记录导出与年度总结，100% 本地离线运行，Windows 与 macOS 双平台。">
+<meta name="description" content="微信 4.x 数据库解密与分析工具：高仿微信界面、实时消息、朋友圈、全文搜索、聊天记录导出与年度总结，本地数据处理离线运行，Windows 与 macOS 双平台。高级版支持聊天原图自动下载与收藏媒体按需留存。">
 <meta property="og:title" content="你的微信数据，由你留存">
-<meta property="og:description" content="解密 · 浏览 · 搜索 · 导出 · 年度总结，全部在你自己的电脑上完成。Windows &amp; macOS 双平台。">
+<meta property="og:description" content="解密 · 浏览 · 搜索 · 导出 · 年度总结，全部在你自己的电脑上完成。Windows &amp; macOS 双平台。高级版支持聊天原图自动下载与收藏媒体按需留存。">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://wuuud.com/">
 <meta name="twitter:card" content="summary">
@@ -19,12 +19,12 @@
 <link rel="icon" href="data:,">
 <!-- 字体自托管（Geist / Geist Mono，SIL OFL 1.1，见 assets/fonts/OFL.txt）：不依赖境外字体服务，渲染也不等它 -->
 <link rel="preload" href="assets/fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/main.css?v=81bfc11f29ee">
-<link rel="modulepreload" href="assets/js/data.js">
+<link rel="stylesheet" href="assets/css/main.css?v=2e96b0b0f80b">
+<link rel="modulepreload" href="assets/js/data.js?v=92d8365a2585">
 <link rel="modulepreload" href="assets/js/card.js">
-<link rel="modulepreload" href="assets/js/compare.js?v=6a609d5f0fd9">
+<link rel="modulepreload" href="assets/js/compare.js?v=9db8175ff3c0">
 <script>window.__errs = []; addEventListener("error", function (e) { __errs.push(String(e.message)); }); addEventListener("unhandledrejection", function (e) { __errs.push(String(e.reason)); });</script>
-<script type="module" src="assets/js/main.js?v=c1cfd0b10008"></script>
+<script type="module" src="assets/js/main.js?v=94c32d844344"></script>
 </head>
 <body>
 <a class="skip" href="#main">跳到正文</a>
@@ -91,7 +91,7 @@
       <p class="hero__eyebrow"><span class="pro">PRO</span>高级版<a class="hero__upd" href="changelog" data-latest hidden>最近更新 <b></b><svg class="ic" aria-hidden="true"><use href="#i-arrow"/></svg></a></p>
       <div class="hero__copy">
         <h1 class="hero__h" id="hero-h">不止能读还能写</h1>
-        <p class="hero__sub">提供&nbsp;<span data-pro-total data-pro-at="hero-sub">108</span>&nbsp;项高级功能，外加人工支持；注册送&nbsp;1&nbsp;天试用。</p>
+        <p class="hero__sub">提供&nbsp;<span data-pro-total data-pro-at="hero-sub">123</span>&nbsp;项高级功能，外加人工支持；注册送&nbsp;1&nbsp;天试用。</p>
         <div class="hero__cta">
           <!-- 主按钮光效（main.css「开场主按钮」、main.js 第 0b 节）：.fx 整块是装饰（aria-hidden），垫在文字下面；链接与行为不变 -->
           <a class="btn btn--l btn--fx" href="https://t.me/knchudj" target="_blank" rel="noopener" aria-describedby="hero-buy-tip" data-fx><span class="fx" aria-hidden="true"><span class="fx__out"><span class="fx__ref"><span class="fx__aur"><b></b><b></b><b></b></span></span></span><span class="fx__rim"></span><span class="fx__face"><span class="fx__pan"></span><span class="fx__ref"></span></span></span>买断联系</a>
@@ -110,7 +110,7 @@
             <div class="card__shine"><span class="card__holo"></span><span class="card__sweep"></span></div>
             <div class="card__glint"><span class="card__glare"></span></div>
           </div>
-          <figcaption class="vh">高级版卡片：<span data-pro-groups>13</span> 组 <span data-pro-total data-pro-at="hero-card">108</span> 项高级功能，注册送 1 天试用</figcaption>
+          <figcaption class="vh">高级版卡片：<span data-pro-groups>14</span> 组 <span data-pro-total data-pro-at="hero-card">123</span> 项高级功能，注册送 1 天试用</figcaption>
         </figure>
       </div>
     </div>
@@ -121,7 +121,7 @@
     <div class="cmp__in wrap">
       <div class="cmp__top">
         <h2 id="cmp-h">高级功能</h2>
-        <p class="cmp__p">消息管理、在线操作与自动化功能，按类别完整展示。</p>
+        <p class="cmp__p">自动下载原图、消息管理、在线操作与自动化功能，按类别完整展示。</p>
       </div>
       <div class="cmp__tbl" id="cmp-tbl">
         <span class="cmp__pin" aria-hidden="true"></span>
@@ -137,7 +137,7 @@
 
           <!-- 卡顶：功能总数与全息卡面 -->
           <div class="r r--hero">
-            <div class="r__p"><p class="hk">高级版功能一览</p><p class="vc__big"><b data-pro-total data-pro-at="compare-big">108</b><span>项高级功能<small><span data-pro-groups>13</span> 组 · 注册送 1 天试用</small></span></p>
+            <div class="r__p"><p class="hk">高级版功能一览</p><p class="vc__big"><b data-pro-total data-pro-at="compare-big">123</b><span>项高级功能<small><span data-pro-groups>14</span> 组 · 注册送 1 天试用</small></span></p>
               <div class="vc__art" aria-hidden="true"><canvas class="vc__rose" width="0" height="0"></canvas><div class="vc__seal"><div class="vc__seal-c"></div><div class="vc__seal-r"></div><svg viewBox="-50 -50 100 100"><path d="M0 -46Q6 -6 46 0Q6 6 0 46Q-6 6 -46 0Q-6 -6 0 -46Z" fill="#fff"/></svg></div></div></div>
           </div>
 
@@ -147,46 +147,49 @@
               <dl class="p__defs"><div><dt>解密</dt><dd>数据库解密，支持微信 4.x。</dd></div><div><dt>浏览</dt><dd>聊天记录浏览，新消息实时同步。</dd></div><div><dt>搜索</dt><dd>聊天记录全文搜索。</dd></div><div><dt>朋友圈·收藏</dt><dd>朋友圈、收藏、小程序、视频号直播都能浏览。</dd></div><div><dt>导出</dt><dd>10 类内容导出：HTML / JSON / TXT / Excel，另有账号数据归档 ZIP。</dd></div><div><dt>年度总结</dt><dd>一年的聊天数据做成年度总结。</dd></div></dl></div>
           </div>
 
-          <!-- 高级功能：13 组 108 项 -->
-          <div class="r r--sec"><div class="r__p"><p><span>高级功能</span><em><b data-pro-total data-pro-at="compare">108</b> 项</em></p></div></div>
+          <!-- 高级功能：14 组 123 项 -->
+          <div class="r r--sec"><div class="r__p"><p><span>高级功能</span><em><b data-pro-total data-pro-at="compare">123</b> 项</em></p></div></div>
+          <div class="r r--x r--g" data-i="auto-download">
+            <div class="r__p" style="--i:0"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="auto-download" data-pro-at="compare">15</b><span class="p__n">自动下载原图</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">收消息时保存聊天媒体，浏览收藏、朋友圈或导出时按需加载。</span></p><ul class="p__its" data-items="auto-download"></ul></div>
+          </div>
           <div class="r r--x r--g r--no" data-i="edit">
-            <div class="r__p" style="--i:0"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="edit" data-pro-at="compare">8</b><span class="p__n">消息修改</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__both"><svg class="ic" aria-hidden="true"><use href="#i-pc"/></svg><svg class="ic" aria-hidden="true"><use href="#i-phone"/></svg>电脑、手机都生效</span><span class="p__t">直接改写<wbr>本机消息，改过头了<wbr>可一键恢复<wbr>原消息。</span></p><ul class="p__its" data-items="edit"></ul></div>
+            <div class="r__p" style="--i:1"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="edit" data-pro-at="compare">8</b><span class="p__n">消息修改</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__both"><svg class="ic" aria-hidden="true"><use href="#i-pc"/></svg><svg class="ic" aria-hidden="true"><use href="#i-phone"/></svg>电脑、手机都生效</span><span class="p__t">直接改写<wbr>本机消息，改过头了<wbr>可一键恢复<wbr>原消息。</span></p><ul class="p__its" data-items="edit"></ul></div>
           </div>
           <div class="r r--x r--g r--no" data-i="add">
-            <div class="r__p" style="--i:1"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="add" data-pro-at="compare">17</b><span class="p__n">消息补录</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__both"><svg class="ic" aria-hidden="true"><use href="#i-pc"/></svg><svg class="ic" aria-hidden="true"><use href="#i-phone"/></svg>电脑、手机都生效</span><span class="p__t">在任意位置<wbr>补录 <span data-pro-count="add" data-pro-at="compare-d">17</span>&nbsp;类消息。</span></p><ul class="p__its" data-items="add"></ul></div>
+            <div class="r__p" style="--i:2"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="add" data-pro-at="compare">17</b><span class="p__n">消息补录</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__both"><svg class="ic" aria-hidden="true"><use href="#i-pc"/></svg><svg class="ic" aria-hidden="true"><use href="#i-phone"/></svg>电脑、手机都生效</span><span class="p__t">在任意位置<wbr>补录 <span data-pro-count="add" data-pro-at="compare-d">17</span>&nbsp;类消息。</span></p><ul class="p__its" data-items="add"></ul></div>
           </div>
           <div class="r r--x r--g r--no" data-i="ai-mcp">
-            <div class="r__p" style="--i:2"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="ai-mcp" data-pro-at="compare">2</b><span class="p__n">AI 与 MCP</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">AI 助手围绕聊天记录<wbr>问答、总结，回答<wbr>带消息出处；MCP 让&nbsp;AI 客户端<wbr>接入聊天数据。</span></p><ul class="p__its" data-items="ai-mcp"></ul></div>
+            <div class="r__p" style="--i:3"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="ai-mcp" data-pro-at="compare">2</b><span class="p__n">AI 与 MCP</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">AI 助手围绕聊天记录<wbr>问答、总结，回答<wbr>带消息出处；MCP 让&nbsp;AI 客户端<wbr>接入聊天数据。</span></p><ul class="p__its" data-items="ai-mcp"></ul></div>
           </div>
           <div class="r r--x r--g r--no" data-i="action">
-            <div class="r__p" style="--i:3"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="action" data-pro-at="compare">22</b><span class="p__n">微信动作</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">发消息、文件、名片<wbr>与各类卡片，引用回复、撤回、<wbr>分组发图，以及<wbr>收消息<wbr>与历史补拉。</span></p><ul class="p__its" data-items="action"></ul></div>
+            <div class="r__p" style="--i:4"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="action" data-pro-at="compare">22</b><span class="p__n">微信动作</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">发消息、文件、名片<wbr>与各类卡片，引用回复、撤回、<wbr>分组发图，以及<wbr>收消息<wbr>与历史补拉。</span></p><ul class="p__its" data-items="action"></ul></div>
           </div>
           <div class="r r--x r--g r--no r--money" data-i="red-packet">
-            <div class="r__p" style="--i:4"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="red-packet" data-pro-at="compare">4</b><span class="p__n">红包与转账</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">在电脑上<wbr>直接领红包、收转账，<wbr>没收的转账<wbr>可以退还；另可查看<wbr>群红包领取明细。</span></p><ul class="p__its" data-items="red-packet"></ul></div>
+            <div class="r__p" style="--i:5"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="red-packet" data-pro-at="compare">4</b><span class="p__n">红包与转账</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">在电脑上<wbr>直接领红包、收转账，<wbr>没收的转账<wbr>可以退还；另可查看<wbr>群红包领取明细。</span></p><ul class="p__its" data-items="red-packet"></ul></div>
           </div>
           <div class="r r--x r--g r--part" data-i="moments">
-            <div class="r__p" style="--i:5"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="moments" data-pro-at="compare">8</b><span class="p__n">朋友圈</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">同步最新、点赞、评论<wbr>与回复，图文或视频<wbr>发圈与删除。</span></p><ul class="p__its" data-items="moments"></ul></div>
+            <div class="r__p" style="--i:6"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="moments" data-pro-at="compare">8</b><span class="p__n">朋友圈</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">同步最新、点赞、评论<wbr>与回复，图文或视频<wbr>发圈与删除。</span></p><ul class="p__its" data-items="moments"></ul></div>
           </div>
           <div class="r r--x r--g r--no" data-i="group">
-            <div class="r__p" style="--i:6"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="group" data-pro-at="compare">14</b><span class="p__n">群聊</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">建群、改群名与备注、<wbr>发群公告与接龙、<wbr>拉人进群<wbr>与移除成员。</span></p><ul class="p__its" data-items="group"></ul></div>
+            <div class="r__p" style="--i:7"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="group" data-pro-at="compare">14</b><span class="p__n">群聊</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">建群、改群名与备注、<wbr>发群公告与接龙、<wbr>拉人进群<wbr>与移除成员。</span></p><ul class="p__its" data-items="group"></ul></div>
           </div>
           <div class="r r--x r--g r--part" data-i="contact">
-            <div class="r__p" style="--i:7"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="contact" data-pro-at="compare">11</b><span class="p__n">联系人</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">改备注、加删好友、标签管理<wbr>与找人。</span></p><ul class="p__its" data-items="contact"></ul></div>
+            <div class="r__p" style="--i:8"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="contact" data-pro-at="compare">11</b><span class="p__n">联系人</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">改备注、加删好友、标签管理<wbr>与找人。</span></p><ul class="p__its" data-items="contact"></ul></div>
           </div>
           <div class="r r--x r--g r--no" data-i="search">
-            <div class="r__p" style="--i:8"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="search" data-pro-at="compare">9</b><span class="p__n">内容搜索</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">在线搜索<wbr>公众号、服务号、小程序、<wbr>视频号与直播；公众号文章<wbr>可整号下载。</span></p><ul class="p__its" data-items="search"></ul></div>
+            <div class="r__p" style="--i:9"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="search" data-pro-at="compare">9</b><span class="p__n">内容搜索</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">在线搜索<wbr>公众号、服务号、小程序、<wbr>视频号与直播；公众号文章<wbr>可整号下载。</span></p><ul class="p__its" data-items="search"></ul></div>
           </div>
           <div class="r r--x r--g r--part" data-i="finder">
-            <div class="r__p" style="--i:9"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="finder" data-pro-at="compare">4</b><span class="p__n">视频号与直播</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">在线浏览作品、评论<wbr>与关注列表，关注、<wbr>点赞、评论，进直播间<wbr>发言点赞。</span></p><ul class="p__its" data-items="finder"></ul></div>
+            <div class="r__p" style="--i:10"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="finder" data-pro-at="compare">4</b><span class="p__n">视频号与直播</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">在线浏览作品、评论<wbr>与关注列表，关注、<wbr>点赞、评论，进直播间<wbr>发言点赞。</span></p><ul class="p__its" data-items="finder"></ul></div>
           </div>
           <div class="r r--x r--g r--part" data-i="miniapp">
-            <div class="r__p" style="--i:10"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="miniapp" data-pro-at="compare">5</b><span class="p__n">小程序</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">发送小程序卡片，<wbr>登录授权、数据请求，<wbr>链接与小程序码<wbr>解析识别。</span></p><ul class="p__its" data-items="miniapp"></ul></div>
+            <div class="r__p" style="--i:11"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="miniapp" data-pro-at="compare">5</b><span class="p__n">小程序</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">发送小程序卡片，<wbr>登录授权、数据请求，<wbr>链接与小程序码<wbr>解析识别。</span></p><ul class="p__its" data-items="miniapp"></ul></div>
           </div>
           <div class="r r--x r--g r--no" data-i="automation">
-            <div class="r__p" style="--i:11"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="automation" data-pro-at="compare">3</b><span class="p__n">自动化任务</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">定时群发、新好友<wbr>自动处理<wbr>与朋友圈跟圈。</span></p><ul class="p__its" data-items="automation"></ul></div>
+            <div class="r__p" style="--i:12"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="automation" data-pro-at="compare">3</b><span class="p__n">自动化任务</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">定时群发、新好友<wbr>自动处理<wbr>与朋友圈跟圈。</span></p><ul class="p__its" data-items="automation"></ul></div>
           </div>
           <div class="r r--x r--g r--part" data-i="mac-key">
-            <div class="r__p" style="--i:12"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="mac-key" data-pro-at="compare">1</b><span class="p__n">macOS 取密钥</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">100% 获取<wbr>数据库密钥，不限制<wbr>微信版本，不用关闭&nbsp;SIP，<wbr>不重签、不&nbsp;Hook&nbsp;微信。</span></p><ul class="p__its" data-items="mac-key"></ul></div>
+            <div class="r__p" style="--i:13"><p class="p__h"><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><b class="p__c" data-pro-count="mac-key" data-pro-at="compare">1</b><span class="p__n">macOS 取密钥</span><small class="p__u">项</small></p><p class="p__d"><span class="lab lab--pro">高级版</span><svg class="st" role="img" aria-label="支持"><use href="#st-yes"/></svg><span class="p__t">100% 获取<wbr>数据库密钥，不限制<wbr>微信版本，不用关闭&nbsp;SIP，<wbr>不重签、不&nbsp;Hook&nbsp;微信。</span></p><ul class="p__its" data-items="mac-key"></ul></div>
           </div>
           <!-- 体验与服务：左状态 + 短说明，右完整说明 -->
           <div class="r r--sec r--sec-e"><div class="r__p"><p><span>体验与服务</span><em><b>8</b> 项</em></p></div></div>

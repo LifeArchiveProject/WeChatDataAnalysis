@@ -1,7 +1,7 @@
 /* 官网首页脚本：开场卡面与主按钮光效、当前区块下划线、「最近更新」小链接。
    导航外壳（实色底、手机菜单、浅 / 深主题）在 shell.js，高级功能在 compare.js。不用任何框架与 WebGL；动画交给 CSS。 */
 import { drawCard, drawMask, CW } from "./card.js";
-import { initCompare } from "./compare.js?v=6a609d5f0fd9";
+import { initCompare } from "./compare.js?v=9db8175ff3c0";
 import { initShell } from "./shell.js?v=2ecd34881f36";
 import { watchReleaseNotes } from "./release-notes.js?v=ca96dd18dbeb";
 
@@ -12,7 +12,7 @@ const reduce = matchMedia("(prefers-reduced-motion: reduce)");
 const navH = () => parseFloat(getComputedStyle(d.documentElement).getPropertyValue("--nav")) || 60;
 
 /* ═════════ 0. 开场卡面（照搬样张甲的 2D 全息卡，card.js 画在 canvas 上） ═════════
-   卡上的 77 与 9 取自卡下那行读屏文字（data-pro-total / data-pro-groups），与 sync-site-catalog --check 核对的是同一处。
+   卡上的功能总数与组数取自卡下那行读屏文字（data-pro-total / data-pro-groups），与 sync-site-catalog --check 核对的是同一处。
    画布分辨率 = 卡的布局宽 × 设备像素比 × 1.1（倾斜后近的一侧会放大一点），只在需要更清晰、或手机 / 桌面字号档切换时重画。
    卡上的拉丁字是 Geist（与甲一致）：先等它加载（已预加载，通常几十毫秒；最多等 1.5 秒）再画，卡本来就是画好才淡入，不会先露出一版回退字体。
    万一超时先用回退字体画了，Geist 一到就清掉缓存重画一次。
@@ -40,7 +40,7 @@ const navH = () => parseFloat(getComputedStyle(d.documentElement).getPropertyVal
     if (!ready) return;
     const w = cv.base.offsetWidth; if (!w) return;
     const S = Math.min(1, Math.ceil(w * Math.min(devicePixelRatio || 1, 3) * 1.1 / CW * 20) / 20);
-    const sub = innerWidth <= 640 ? 60 : 44; // 手机上卡只有 300 多像素宽：「9 组 · 注册送 1 天试用」放大一档，不让它缩到 9px 以下
+    const sub = innerWidth <= 640 ? 60 : 44; // 手机上卡只有 300 多像素宽：组数与试用说明放大一档，不让它缩到 9px 以下
     if (S <= maxS && key.endsWith(`|${sub}`)) return;
     maxS = Math.max(S, maxS); key = `${maxS}|${sub}`;
     try { drawCard(cv, maxS, { total, groups, sub }); tilt.classList.add("is-drawn"); } catch (e) { return; /* 画不出就留白 */ }

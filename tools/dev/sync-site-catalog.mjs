@@ -1,28 +1,28 @@
 #!/usr/bin/env node
-/* 官网高级功能 13 组 108 项的唯一来源是 frontend/lib/pro-demos/catalog.js。
-   官网把这 108 项放在 website/assets/js/data.js 的 PRO_GROUPS 里，由本脚本生成，夹在成对的标记之间：
+/* 官网高级功能 14 组 123 项的唯一来源是 frontend/lib/pro-demos/catalog.js。
+   官网把这 123 项放在 website/assets/js/data.js 的 PRO_GROUPS 里，由本脚本生成，夹在成对的标记之间：
      /* pro-catalog:start … *\/ … /* pro-catalog:end *\/
    页面（website/assets/js/compare.js）读 PRO_GROUPS，把每组全部条目名一行一个填进单列高级功能区的条目列表。
 
    标记之外，页面上的手写数字与单列高级功能结构由 --check 逐个核对：
-     - website/index.html 里所有 data-pro-total 元素的文字 = 总数 108，且每个都带 data-pro-at 标明位置；
+     - website/index.html 里所有 data-pro-total 元素的文字 = 总数 123，且每个都带 data-pro-at 标明位置；
        下面 WANT_AT 里的每个位置都必须出现：开场卡（hero-card，卡下那行读屏文字；canvas 卡面上的大字就从它取）、开场副标题（hero-sub）、
        高级功能分组标题（compare）、高级功能卡顶的箔压大字（compare-big）
-     - website/index.html 里所有 data-pro-groups 元素的文字 = 组数 13（开场卡的读屏文字、卡顶大字下的「13 组」）
+     - website/index.html 里所有 data-pro-groups 元素的文字 = 组数 14（开场卡的读屏文字、卡顶大字下的「14 组」）
      - website/index.html 里 data-pro-count="<组 key>" 元素的文字 = 该组条数（按数值比，08 = 8），每组恰好一处：
        高级功能该组那一行的条数大字（data-pro-at="compare"）；
        另外，组说明里提到条数的地方（如「在任意位置补录 17 类消息」）写 data-pro-at="compare-d"，可有可无，有就核对数值
      - 高级功能区块（<section … id="compare">）的结构：#cmp-duo 里每一行 <div class="r r--…"> 只有高级功能一格（r__p），没有普通版格（r__f）；
-       r--x 行的 data-i 依次是 catalog 的 13 个组 key 与 e0…e7；另有「基础功能」（data-i="both"）与平台、微信版本两行（v0、v1）；
-       13 组每组一个条目列表（data-items="<组 key>"，compare.js 往里一行一个填条目名），顺序与 catalog 一致；各组条数大字之和 = 108；
-       行总数 = 28；体验行（r--x r--e）数 = 8，且等于「体验与服务」分组标题（r--sec-e）里唯一一处手写的 <b>N</b>；
+       r--x 行的 data-i 依次是 catalog 的 14 个组 key 与 e0…e7；另有「基础功能」（data-i="both"）与平台、微信版本两行（v0、v1）；
+       14 组每组一个条目列表（data-items="<组 key>"，compare.js 往里一行一个填条目名），顺序与 catalog 一致；各组条数大字之和 = 123；
+       行总数 = 29；体验行（r--x r--e）数 = 8，且等于「体验与服务」分组标题（r--sec-e）里唯一一处手写的 <b>N</b>；
        区块里不得有浮层、弹框、抽屉或点击展开（role="dialog"、<details>、aria-expanded、hidden 都不该出现）
 
    用法：
      node tools/dev/sync-site-catalog.mjs          重新生成 PRO_GROUPS 并写回 data.js
      node tools/dev/sync-site-catalog.mjs --check  只比对：不一致、或数目不是下面的期望值时退出码 1（CI 用）
 
-   断言：总数 108，各组 8 / 17 / 2 / 22 / 4 / 8 / 14 / 11 / 9 / 4 / 5 / 3 / 1。catalog.js 增删条目时这里会先报错——
+   断言：总数 123，各组 15 / 8 / 17 / 2 / 22 / 4 / 8 / 14 / 11 / 9 / 4 / 5 / 3 / 1。catalog.js 增删条目时这里会先报错——
    先把 index.html 里手写的数字改对，再改 WANT。 */
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -35,8 +35,8 @@ const CATALOG = resolve(ROOT, "frontend/lib/pro-demos/catalog.js");
 const CHECK = process.argv.includes("--check");
 const WANT_AT = ["hero-card", "hero-sub", "compare", "compare-big"];
 
-const WANT_TOTAL = 108;
-const WANT = { edit: 8, add: 17, "ai-mcp": 2, action: 22, "red-packet": 4, moments: 8, group: 14, contact: 11, search: 9, finder: 4, miniapp: 5, automation: 3, "mac-key": 1 };
+const WANT_TOTAL = 123;
+const WANT = { "auto-download": 15, edit: 8, add: 17, "ai-mcp": 2, action: 22, "red-packet": 4, moments: 8, group: 14, contact: 11, search: 9, finder: 4, miniapp: 5, automation: 3, "mac-key": 1 };
 
 // 名字相近、容易和普通版混淆的条目，补一句辨析（按 catalog 的 key；中间插了条目，全局 index 会变）
 const AFTER = {
@@ -120,7 +120,7 @@ for (const [where, label, ks] of [["compare", "高级功能的条数大字", key
   }
 }
 // 单列高级功能区块的结构
-const WANT_ROWS = 28, WANT_E = 8;
+const WANT_ROWS = 29, WANT_E = 8;
 let cmpRows = 0, cmpE = 0;
 {
   const a = html.search(/<section\b[^>]*\bid="compare"/), b = a < 0 ? -1 : html.indexOf("</section>", a);
@@ -142,7 +142,7 @@ let cmpRows = 0, cmpE = 0;
     const gotX = rows.filter((r) => r.cls.includes("r--x")).map((r) => r.i).join(" ");
     if (gotX !== wantX) bad.push(`高级功能的组与体验行（${gotX || "没找到"}）应依次为 ${wantX}`);
     for (const want of ["both", "v0", "v1"]) if (!rows.some((r) => r.i === want)) bad.push(`高级功能缺少 data-i="${want}" 的行`);
-    // 行总数：卡顶 1 + 基础功能 1 + 分组标题 2 + 13 组 + 体验 8 + 平台 2 + 卡脚 1 = 28
+    // 行总数：卡顶 1 + 基础功能 1 + 分组标题 2 + 14 组 + 体验 8 + 平台 2 + 卡脚 1 = 29
     if (rows.length !== WANT_ROWS) bad.push(`高级功能共 ${rows.length} 行，应为 ${WANT_ROWS} 行（卡顶 · 基础功能 · 2 个分组标题 · ${keys.length} 组 · 体验 8 项 · 平台 2 行 · 卡脚）`);
     // 「体验与服务 N 项」：分组标题里唯一一处手写的 N 要等于实际体验行数（r--x r--e）
     cmpE = rows.filter((r) => r.cls.includes("r--x") && r.cls.includes("r--e")).length;
@@ -158,7 +158,9 @@ let cmpRows = 0, cmpE = 0;
     for (const k of keys) {
       const r = rows.find((x) => x.i === k);
       if (!r) continue;
+      const g = C.PRO_GROUPS.find((x) => x.key === k);
       if (!r.body.includes(`data-items="${k}"`)) bad.push(`高级功能「${k}」那一行没有条目列表（data-items="${k}"）`);
+      if (g.description && !r.body.includes(g.description)) bad.push(`高级功能「${k}」的组说明与 catalog.js 不一致`);
       if (!new RegExp(`data-pro-count="${k}" data-pro-at="compare"`).test(r.body)) bad.push(`高级功能「${k}」那一行没有条数大字（data-pro-count="${k}" data-pro-at="compare"）`);
     }
     const order = [...cmp.matchAll(/data-pro-count="([\w-]+)" data-pro-at="compare"/g)].map((m) => m[1]).join(" ");

@@ -10,7 +10,7 @@
       两个都只切类，不改尺寸，不抖动。
    4. 入场淡入与扫光、卡顶跟手转一点；以及截图脚本用的自检。
    滚动时不做任何事（没有滚动监听）。 */
-import { PRO_GROUPS } from "./data.js";
+import { PRO_GROUPS } from "./data.js?v=92d8365a2585";
 const PRO_TOTAL = Object.values(PRO_GROUPS).reduce((n, g) => n + g.items.length, 0);
 
 const d = document;
