@@ -10,6 +10,7 @@ official application after success, failure, cancellation, or the next launch.
 from __future__ import annotations
 
 import ctypes
+import errno
 import json
 import os
 import platform
@@ -305,7 +306,15 @@ def _remove_local_restore_staging(staged: Path) -> None:
             f"原版微信保护路径类型异常，已停止自动覆盖: {staged}",
             wechat_modified=True,
         )
-    shutil.rmtree(staged)
+    try:
+        shutil.rmtree(staged)
+    except OSError as exc:
+        if exc.errno not in (errno.EACCES, errno.EPERM):
+            raise
+        _run_as_administrator(
+            shlex.join(["/bin/rm", "-rf", "--", str(staged)]),
+            timeout=300,
+        )
 
 
 def _prepare_local_restore_staging(
@@ -328,10 +337,26 @@ def _prepare_local_restore_staging(
         error_number = ctypes.get_errno()
         if os.path.lexists(staged):
             _remove_local_restore_staging(staged)
-        raise MacOSDBKeyCaptureFailure(
-            "local_restore_clone_failed",
-            f"无法创建原版微信写时复制保护: {os.strerror(error_number)}",
-        )
+        if error_number not in (errno.EACCES, errno.EPERM):
+            raise MacOSDBKeyCaptureFailure(
+                "local_restore_clone_failed",
+                f"无法创建原版微信写时复制保护: {os.strerror(error_number)}",
+            )
+        # /Applications is commonly owned by root:wheel.  The old code
+        # rejected that normal installation before requesting administrator
+        # authorization, making the recoverable transaction unusable for the
+        # default macOS install.  Fall back to a privileged metadata-preserving
+        # copy only for the permission errors that require it.
+        try:
+            _run_as_administrator(
+                shlex.join(["/usr/bin/ditto", str(wechat_app), str(staged)]),
+                timeout=1800,
+            )
+        except MacOSDBKeyCaptureFailure as exc:
+            raise MacOSDBKeyCaptureFailure(
+                "local_restore_clone_failed",
+                f"无法创建原版微信写时复制保护: {exc}",
+            ) from exc
     signature = inspect_wechat_signature(staged)
     if (
         not _is_tencent_official_signature(signature)
@@ -736,12 +761,6 @@ def ensure_wechat_in_place_debuggable(
             "当前 /Applications/WeChat.app 不是有效的腾讯正式签名版本，已停止临时重签。",
             wechat_modified=bool(signature.get("ad_hoc")),
         )
-    if not os.access(wechat_app, os.W_OK) or not os.access(wechat_app.parent, os.W_OK):
-        raise MacOSDBKeyCaptureFailure(
-            "in_place_restore_permissions_unsafe",
-            "当前用户不能直接写入微信及其安装目录；为保证异常退出后无需再次授权也能恢复原版，已停止临时重签。",
-        )
-
     backup_path, backup_created = backup_original_wechat(wechat_app, backup_root)
     backup_verification = verify_original_wechat_backup(
         backup_path,
@@ -1039,6 +1058,42 @@ def _atomic_swap_paths(first: Path, second: Path) -> None:
     rename_swap = 0x00000002
     if renameatx_np(at_fdcwd, os.fsencode(first), at_fdcwd, os.fsencode(second), rename_swap) != 0:
         error_number = ctypes.get_errno()
+        if error_number in (errno.EACCES, errno.EPERM):
+            # A stock macOS /Applications directory is root-owned.  Keep the
+            # same recoverable three-step exchange, but perform it through the
+            # already explicit administrator authorization path when the
+            # unprivileged rename cannot access the directory.
+            temporary = first.with_name(f".{first.name}.wcda-swap-{os.getpid()}")
+            script = "\n".join(
+                [
+                    "set -eu",
+                    f"first={shlex.quote(str(first))}",
+                    f"second={shlex.quote(str(second))}",
+                    f"temporary={shlex.quote(str(temporary))}",
+                    "stage=0",
+                    "rollback() {",
+                    '  if [ "$stage" -eq 2 ]; then /bin/mv "$first" "$second" 2>/dev/null || true; fi',
+                    '  if [ "$stage" -ge 1 ] && [ -e "$temporary" ] && [ ! -e "$first" ]; then /bin/mv "$temporary" "$first" 2>/dev/null || true; fi',
+                    "}",
+                    "trap rollback EXIT",
+                    "/bin/mv \"$first\" \"$temporary\"",
+                    "stage=1",
+                    "/bin/mv \"$second\" \"$first\"",
+                    "stage=2",
+                    "/bin/mv \"$temporary\" \"$second\"",
+                    "stage=3",
+                    "trap - EXIT",
+                ]
+            )
+            try:
+                _run_as_administrator(script, timeout=300)
+                return
+            except MacOSDBKeyCaptureFailure as exc:
+                raise MacOSDBKeyCaptureFailure(
+                    "atomic_restore_failed",
+                    f"无法在管理员授权后交换微信原版与临时版本: {exc}",
+                    wechat_modified=True,
+                ) from exc
         raise MacOSDBKeyCaptureFailure(
             "atomic_restore_failed",
             f"无法原子交换微信原版与临时版本: {os.strerror(error_number)}",
