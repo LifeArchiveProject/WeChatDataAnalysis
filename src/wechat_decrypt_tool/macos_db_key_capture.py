@@ -102,6 +102,14 @@ def normalize_wechat_app_path(value: str | Path | None) -> Path:
     try:
         candidate = candidate.resolve(strict=True)
     except OSError as exc:
+        # A privileged three-step swap can be interrupted after the original
+        # bundle has moved to its hidden rollback path. Recovery must still be
+        # able to address the intended destination so it can complete the
+        # transaction from that path.
+        if candidate.suffix.lower() == ".app" and any(
+            candidate.parent.glob(f".{candidate.name}.wcda-swap-*")
+        ):
+            return candidate
         raise MacOSDBKeyCaptureFailure("wechat_missing", f"微信应用不存在: {candidate}") from exc
     if candidate.suffix.lower() != ".app" or not candidate.is_dir():
         raise MacOSDBKeyCaptureFailure("invalid_wechat_app", f"不是有效的微信 App: {candidate}")
@@ -199,6 +207,84 @@ def _debug_identity_matches(
         )
     except (OSError, ValueError, plistlib.InvalidFileException, MacOSDBKeyCaptureFailure):
         return False
+
+
+def _move_path_with_authorization(source: Path, target: Path) -> None:
+    """Move a bundle with one explicit admin retry for protected directories."""
+    command = ["/bin/mv", "--", str(source), str(target)]
+    try:
+        _run(command, timeout=600)
+    except MacOSDBKeyCaptureFailure as exc:
+        try:
+            _run_as_administrator(shlex.join(command), timeout=660)
+        except MacOSDBKeyCaptureFailure as admin_error:
+            raise MacOSDBKeyCaptureFailure(
+                "atomic_restore_failed",
+                f"无法移动微信恢复资产: {admin_error}",
+                wechat_modified=True,
+            ) from exc
+
+
+def _copy_path_with_authorization(source: Path, target: Path) -> None:
+    """Copy a protected bundle with one explicit admin retry."""
+    command = ["/usr/bin/ditto", str(source), str(target)]
+    try:
+        _run(command, timeout=1800)
+    except MacOSDBKeyCaptureFailure as exc:
+        try:
+            _run_as_administrator(shlex.join(command), timeout=1860)
+        except MacOSDBKeyCaptureFailure as admin_error:
+            raise MacOSDBKeyCaptureFailure(
+                "official_restore_staging_failed",
+                f"无法创建腾讯微信恢复暂存: {admin_error}",
+                wechat_modified=True,
+            ) from exc
+
+
+def _restore_from_interrupted_swap(
+    wechat_app: Path,
+    *,
+    expected_version: tuple[str, str],
+    expected_cdhash: str,
+    expected_debug_identity: dict[str, Any] | None,
+) -> bool:
+    """Recover an official bundle left in a hidden swap path after interruption."""
+    if wechat_app.exists():
+        return False
+    candidates = [_local_restore_staging_path(wechat_app)] + sorted(
+        wechat_app.parent.glob(f".{wechat_app.name}.wcda-swap-*")
+    )
+    official_source: Path | None = None
+    for candidate in candidates:
+        if not candidate.is_dir():
+            continue
+        try:
+            if _official_identity_matches(
+                candidate,
+                inspect_wechat_signature(candidate),
+                expected_version,
+                expected_cdhash,
+            ):
+                official_source = candidate
+                break
+        except (OSError, plistlib.InvalidFileException, MacOSDBKeyCaptureFailure):
+            continue
+    if official_source is None:
+        return False
+    _move_path_with_authorization(official_source, wechat_app)
+    installed = inspect_wechat_signature(wechat_app)
+    if not _official_identity_matches(wechat_app, installed, expected_version, expected_cdhash):
+        raise MacOSDBKeyCaptureFailure(
+            "official_restore_verify_failed",
+            "从中断交换路径恢复后的腾讯微信签名校验失败。",
+            wechat_modified=True,
+        )
+    for candidate in candidates:
+        if candidate == official_source or not candidate.is_dir():
+            continue
+        if _debug_identity_matches(candidate, expected_debug_identity):
+            _remove_local_restore_staging(candidate)
+    return True
 
 
 def _original_backup_path(wechat_app: Path, backup_root: Path) -> Path:
@@ -914,6 +1000,23 @@ def restore_official_wechat_if_needed(
     """Verify the normal Tencent build and restore it atomically when needed."""
 
     staged = _local_restore_staging_path(wechat_app)
+    if not wechat_app.exists():
+        if _restore_from_interrupted_swap(
+            wechat_app,
+            expected_version=expected_version or ("", ""),
+            expected_cdhash=str(expected_cdhash or "").lower(),
+            expected_debug_identity=expected_debug_identity,
+        ):
+            return {
+                "official_wechat_verified": True,
+                "official_wechat_restored": True,
+                "original_identity_verified": True,
+            }
+        raise MacOSDBKeyCaptureFailure(
+            "in_place_debug_identity_unknown",
+            "微信安装路径暂时缺失，且没有找到可验证的中断恢复资产；已保留恢复状态。",
+            wechat_modified=True,
+        )
     current = inspect_wechat_signature(wechat_app)
     if _is_tencent_official_signature(current):
         if not _official_identity_matches(wechat_app, current, expected_version, expected_cdhash):
@@ -984,8 +1087,8 @@ def restore_official_wechat_if_needed(
             if expected_cdhash and restored_cdhash != str(expected_cdhash).lower():
                 raise MacOSDBKeyCaptureFailure("official_backup_identity_mismatch", "所选目录中的微信原版备份身份不匹配，已停止恢复")
             try:
-                _run(["/usr/bin/ditto", str(extracted_app), str(staged)], timeout=1800)
-            except Exception:
+                _copy_path_with_authorization(extracted_app, staged)
+            except MacOSDBKeyCaptureFailure:
                 if os.path.lexists(staged):
                     _remove_local_restore_staging(staged)
                 raise
