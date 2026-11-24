@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from wechat_decrypt_tool import macos_inplace_capture as workflow
+from wechat_decrypt_tool import macos_db_key_capture as capture
 from wechat_decrypt_tool.macos_db_key_capture import MacOSDBKeyCaptureFailure
 
 OFFICIAL_SIGNATURE = {
@@ -85,6 +86,18 @@ class TestMacOSInPlaceCapture(unittest.TestCase):
         with self.assertRaises(MacOSDBKeyCaptureFailure) as context:
             workflow._safe_backup_from_state({"backup_path": str(self.root / "WeChat-original.zip")}, self.backups)
         self.assertEqual(context.exception.code, "official_backup_path_unsafe")
+
+    def test_root_owned_install_reaches_authorized_backup_flow(self) -> None:
+        """A standard /Applications install must not fail before admin auth."""
+        failure = MacOSDBKeyCaptureFailure("backup_missing", "synthetic backup failure")
+        with (
+            patch.object(capture, "inspect_wechat_signature", return_value=OFFICIAL_SIGNATURE),
+            patch.object(capture, "backup_original_wechat", side_effect=failure),
+            patch("os.access", return_value=False),
+        ):
+            with self.assertRaises(MacOSDBKeyCaptureFailure) as error:
+                capture.ensure_wechat_in_place_debuggable(self.app, self.backups)
+        self.assertEqual(error.exception.code, "backup_missing")
 
     def test_stale_state_restores_then_removes_state(self) -> None:
         backup = self.backups / "WeChat-4.1.12-original.zip"
