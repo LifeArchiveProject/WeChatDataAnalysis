@@ -1273,10 +1273,16 @@ def _build_lldb_capture_command(script_path: Path, timeout: int) -> str:
         "trap 'exit 130' INT\n"
         "trap 'exit 143' TERM\n"
         '/usr/bin/mkfifo "$capture_fifo"\n'
+        # LLDB treats piped stdin as an interactive session and defaults to
+        # asynchronous execution. On recent Apple LLDB this can leave the
+        # attached app suspended while commands wait on each other. Set the
+        # mode before attach/continue, so later commands run after the process
+        # has actually stopped or exited.
         # ``exec`` makes the recorded producer PID become the sleep process
         # after cat finishes, so SIGTERM actually ends the keepalive instead
         # of leaving a child sleep behind while the shell waits for it.
-        f"( /bin/cat {script_arg}; exec /bin/sleep {keepalive} ) > \"$capture_fifo\" &\n"
+        "( /usr/bin/printf '%s\\n' 'script lldb.debugger.SetAsync(False)'; "
+        f"/bin/cat {script_arg}; exec /bin/sleep {keepalive} ) > \"$capture_fifo\" &\n"
         "producer_pid=$!\n"
         '/usr/bin/env TERM=dumb /usr/bin/lldb < "$capture_fifo" 2>&1 &\n'
         "lldb_pid=$!\n"
