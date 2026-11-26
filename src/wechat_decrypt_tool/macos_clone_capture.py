@@ -59,6 +59,15 @@ WECHAT_PBKDF_STUB_POINTS = {
     "07EE7CDA-5F9B-38A2-9E0C-E4DF83DB22E4": 0x6CD0ACC,
 }
 
+# WeChat 4.2 moved some account/database derivation calls out of
+# ``wechat.dylib``. Keep the module list explicit: LLDB only receives
+# UUID-bound offsets after each binary has been inspected and verified.
+WECHAT_PBKDF_MODULES = (
+    Path("Contents/Resources/wechat.dylib"),
+    Path("Contents/Resources/roam_migration.framework/Versions/A/roam_migration"),
+    Path("Contents/Resources/roam_server.framework/Versions/A/roam_server"),
+)
+
 _LLDB_BREAKPOINT_VALIDATION_SOURCE = '''
 def _resolved_locations(breakpoint, target):
     count = 0
@@ -106,30 +115,33 @@ def resolve_lldb_pbkdf_stub_plan(wechat_app: str | Path | None) -> dict[str, int
     plan = _normalize_pbkdf_stub_plan(None)
     if not wechat_app:
         return plan
-    dylib = Path(wechat_app).expanduser() / "Contents/Resources/wechat.dylib"
-    try:
-        if not dylib.is_file():
-            return plan
-        before = dylib.stat()
-        load_commands = _run(["/usr/bin/otool", "-arch", "arm64", "-l", str(dylib)], timeout=60).stdout
-        uuids = re.findall(
-            r"(?m)^\s*cmd LC_UUID\s*\n\s*cmdsize \d+\s*\n\s*uuid ([0-9a-fA-F-]{36})\s*$",
-            load_commands,
-        )
-        if len(uuids) != 1:
-            return plan
-        from .macos_native_capture import _parse_pbkdf_stub_address
+    app = Path(wechat_app).expanduser()
+    from .macos_native_capture import _parse_pbkdf_stub_address
 
-        imports = _run(["/usr/bin/otool", "-arch", "arm64", "-Iv", str(dylib)], timeout=60).stdout
-        offset = _parse_pbkdf_stub_address(imports)
-        after = dylib.stat()
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
-        ):
-            return plan
-        return _normalize_pbkdf_stub_plan({**plan, uuids[0]: offset})
-    except (OSError, MacOSDBKeyCaptureFailure, ValueError):
-        return plan
+    for relative_path in WECHAT_PBKDF_MODULES:
+        binary = app / relative_path
+        try:
+            if not binary.is_file():
+                continue
+            before = binary.stat()
+            load_commands = _run(["/usr/bin/otool", "-arch", "arm64", "-l", str(binary)], timeout=60).stdout
+            uuids = re.findall(
+                r"(?m)^\s*cmd LC_UUID\s*\n\s*cmdsize \d+\s*\n\s*uuid ([0-9a-fA-F-]{36})\s*$",
+                load_commands,
+            )
+            if len(uuids) != 1:
+                continue
+            imports = _run(["/usr/bin/otool", "-arch", "arm64", "-Iv", str(binary)], timeout=60).stdout
+            offset = _parse_pbkdf_stub_address(imports)
+            after = binary.stat()
+            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+            ):
+                continue
+            plan = _normalize_pbkdf_stub_plan({**plan, uuids[0]: offset})
+        except (OSError, MacOSDBKeyCaptureFailure, ValueError):
+            continue
+    return plan
 
 
 def _state_path(debug_root: Path) -> Path:

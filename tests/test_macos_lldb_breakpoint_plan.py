@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from wechat_decrypt_tool.macos_clone_capture import (
     WECHAT_PBKDF_STUB_POINTS,
+    WECHAT_PBKDF_MODULES,
     build_lldb_breakpoint_preflight_script,
     build_lldb_salt_capture_script,
     capture_salt_matched_passphrase,
@@ -169,6 +170,30 @@ class TestMacOSLLDBBreakpointPlan(unittest.TestCase):
                         exit_script.assert_called_once_with(24)
                         self.assertEqual(writes, [])
                         process.Detach.assert_called_once()
+
+    def test_resolver_collects_pbkdf_stubs_from_wechat_42_frameworks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = Path(temp_dir) / "WeChat.app"
+            binaries = [app / rel for rel in WECHAT_PBKDF_MODULES]
+            for binary in binaries:
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                binary.write_bytes(b"synthetic")
+            uuids = [
+                "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                "11111111-2222-3333-4444-555555555555",
+                "99999999-AAAA-BBBB-CCCC-DDDDDDDDDDDD",
+            ]
+            outputs = []
+            for index, _binary in enumerate(binaries):
+                outputs.extend([
+                    types.SimpleNamespace(stdout=LOAD_COMMANDS.replace(SYNTHETIC_UUID, uuids[index])),
+                    types.SimpleNamespace(stdout=IMPORTS.replace(f"{STUB_OFFSET:x}", f"{STUB_OFFSET + index * 4:x}")),
+                ])
+            with patch("wechat_decrypt_tool.macos_clone_capture._run", side_effect=outputs):
+                plan = resolve_lldb_pbkdf_stub_plan(app)
+            assert plan[uuids[0]] == STUB_OFFSET
+            assert plan[uuids[1]] == STUB_OFFSET + 4
+            assert plan[uuids[2]] == STUB_OFFSET + 8
 
     def test_preflight_persists_the_same_resolver_plan_it_passes_to_lldb(self):
         plan = {**WECHAT_PBKDF_STUB_POINTS, SYNTHETIC_UUID: STUB_OFFSET}
