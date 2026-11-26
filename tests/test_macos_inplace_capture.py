@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from wechat_decrypt_tool import macos_inplace_capture as workflow
+from wechat_decrypt_tool import macos_db_key_capture as capture
 from wechat_decrypt_tool.macos_db_key_capture import MacOSDBKeyCaptureFailure
 
 OFFICIAL_SIGNATURE = {
@@ -85,6 +86,47 @@ class TestMacOSInPlaceCapture(unittest.TestCase):
         with self.assertRaises(MacOSDBKeyCaptureFailure) as context:
             workflow._safe_backup_from_state({"backup_path": str(self.root / "WeChat-original.zip")}, self.backups)
         self.assertEqual(context.exception.code, "official_backup_path_unsafe")
+
+    def test_root_owned_install_reaches_authorized_backup_flow(self) -> None:
+        """A standard /Applications install must not fail before admin auth."""
+        failure = MacOSDBKeyCaptureFailure("backup_missing", "synthetic backup failure")
+        with (
+            patch.object(capture, "inspect_wechat_signature", return_value=OFFICIAL_SIGNATURE),
+            patch.object(capture, "backup_original_wechat", side_effect=failure),
+            patch("os.access", return_value=False),
+        ):
+            with self.assertRaises(MacOSDBKeyCaptureFailure) as error:
+                capture.ensure_wechat_in_place_debuggable(self.app, self.backups)
+        self.assertEqual(error.exception.code, "backup_missing")
+
+    def test_copy_restore_asset_retries_with_admin_after_permission_denied(self) -> None:
+        permission_error = MacOSDBKeyCaptureFailure("command_failed", "Permission denied")
+        with (
+            patch.object(capture, "_run", side_effect=permission_error),
+            patch.object(capture, "_run_as_administrator", return_value="") as admin,
+        ):
+            capture._copy_path_with_authorization(self.root / "official.app", self.root / "staged.app")
+        admin.assert_called_once()
+        self.assertIn("ditto", admin.call_args.args[0])
+
+    def test_interrupted_swap_restores_official_bundle_from_hidden_path(self) -> None:
+        missing_app = self.root / "MissingWeChat.app"
+        hidden_official = self.root / ".MissingWeChat.app.wcda-swap-123"
+        (hidden_official / "Contents").mkdir(parents=True)
+        with (
+            patch.object(capture, "inspect_wechat_signature", return_value=OFFICIAL_SIGNATURE),
+            patch.object(capture, "_official_identity_matches", return_value=True),
+            patch.object(capture, "_move_path_with_authorization") as move,
+            patch.object(capture, "_debug_identity_matches", return_value=False),
+        ):
+            restored = capture._restore_from_interrupted_swap(
+                missing_app,
+                expected_version=("4.1.12", "269341"),
+                expected_cdhash="abc123",
+                expected_debug_identity={"cdhash": "debug"},
+            )
+        self.assertTrue(restored)
+        move.assert_called_once_with(hidden_official, missing_app)
 
     def test_stale_state_restores_then_removes_state(self) -> None:
         backup = self.backups / "WeChat-4.1.12-original.zip"
