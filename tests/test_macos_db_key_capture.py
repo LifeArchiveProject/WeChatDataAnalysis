@@ -21,6 +21,7 @@ from wechat_decrypt_tool.macos_db_key_capture import (
     _mark_debug_copy,
     _parse_passphrase,
     _quit_wechat,
+    _sign_in_place_debug_copy,
     backup_original_wechat,
     capture_and_cache_macos_passphrase,
     cleanup_macos_passphrase_capture,
@@ -48,6 +49,11 @@ DEBUG_SIGNATURE = {
 }
 DEBUG_IDENTITY = {
     "version": "4.1.12", "build": "269341", "cdhash": "debug123", "device": 1, "inode": 2,
+}
+SANDBOX_ENTITLEMENTS = {
+    "com.apple.security.app-sandbox": True,
+    "com.apple.security.application-groups": ["5A4RE8SF68.com.tencent.xinWeChat"],
+    "com.apple.security.network.client": True,
 }
 
 
@@ -90,6 +96,7 @@ class TestMacOSDBKeyCapture(unittest.TestCase):
                 return_value=Path("/tmp/staged.app"),
             ),
             patch("wechat_decrypt_tool.macos_db_key_capture._has_compatible_in_place_signature", return_value=True),
+            patch("wechat_decrypt_tool.macos_db_key_capture._read_wechat_entitlements", return_value=SANDBOX_ENTITLEMENTS),
             patch("wechat_decrypt_tool.macos_db_key_capture._wechat_bundle_identity", return_value=DEBUG_IDENTITY),
             patch("wechat_decrypt_tool.macos_db_key_capture._debug_identity_matches", return_value=True),
             patch("wechat_decrypt_tool.macos_db_key_capture._atomic_swap_paths") as swap,
@@ -99,7 +106,8 @@ class TestMacOSDBKeyCapture(unittest.TestCase):
 
         self.assertEqual(events, ["state", "sign", "state"])
         self.assertNotIn("--deep", sign_commands[0])
-        self.assertIn("--preserve-metadata=entitlements", sign_commands[0])
+        self.assertIn("--entitlements", sign_commands[0])
+        self.assertNotIn("--preserve-metadata=entitlements", sign_commands[0])
         self.assertEqual(sign_commands[0][-1], "/tmp/staged.app")
         swap.assert_called_once_with(official, Path("/tmp/staged.app"))
         self.assertTrue(result["wechat_resigned"])
@@ -224,7 +232,6 @@ class TestMacOSDBKeyCapture(unittest.TestCase):
             returncode=0,
             stdout="""<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
-<key>com.apple.application-identifier</key><string>5A4RE8SF68.com.tencent.xinWeChat</string>
 <key>com.apple.security.app-sandbox</key><true/>
 <key>com.apple.security.application-groups</key><array><string>5A4RE8SF68.com.tencent.xinWeChat</string></array>
 <key>com.apple.security.network.client</key><true/>
@@ -243,6 +250,40 @@ class TestMacOSDBKeyCapture(unittest.TestCase):
             patch("wechat_decrypt_tool.macos_db_key_capture.inspect_wechat_signature", return_value=helper_signature),
         ):
             self.assertTrue(_has_compatible_in_place_signature(app))
+
+    def test_app_store_identity_claims_are_removed_before_ad_hoc_signing(self) -> None:
+        original = {
+            **SANDBOX_ENTITLEMENTS,
+            "com.apple.application-identifier": "5A4RE8SF68.com.tencent.xinWeChat",
+            "com.apple.developer.team-identifier": "5A4RE8SF68",
+            "keychain-access-groups": ["5A4RE8SF68.com.tencent.xinWeChat"],
+        }
+        commands = []
+
+        def sign(args, **_kwargs):
+            commands.append(args)
+            entitlement_path = Path(args[args.index("--entitlements") + 1])
+            self.assertEqual(plistlib.loads(entitlement_path.read_bytes()), SANDBOX_ENTITLEMENTS)
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with (
+            patch("wechat_decrypt_tool.macos_db_key_capture._read_wechat_entitlements", return_value=original),
+            patch("wechat_decrypt_tool.macos_db_key_capture._run", side_effect=sign),
+        ):
+            _sign_in_place_debug_copy(Path("/tmp/staged.app"))
+        self.assertEqual(len(commands), 1)
+        self.assertNotIn("--deep", commands[0])
+        self.assertEqual(original["com.apple.developer.team-identifier"], "5A4RE8SF68")
+
+    def test_in_place_signature_rejects_restricted_identity_claims(self) -> None:
+        entitlements = {
+            **SANDBOX_ENTITLEMENTS,
+            "com.apple.application-identifier": "5A4RE8SF68.com.tencent.xinWeChat",
+        }
+        with patch(
+            "wechat_decrypt_tool.macos_db_key_capture._read_wechat_entitlements", return_value=entitlements,
+        ):
+            self.assertFalse(_has_compatible_in_place_signature(Path("/tmp/staged.app")))
 
     def test_in_place_signature_rejects_missing_outer_sandbox_entitlements(self) -> None:
         app = Path("/Applications/WeChat.app")
@@ -311,7 +352,7 @@ class TestMacOSDBKeyCapture(unittest.TestCase):
 
     def test_official_restore_skips_already_valid_tencent_build(self) -> None:
         with patch("wechat_decrypt_tool.macos_db_key_capture.inspect_wechat_signature", return_value=OFFICIAL_SIGNATURE), patch.object(
-            Path, "exists", return_value=False
+            Path, "exists", autospec=True, side_effect=lambda path: path == Path("/tmp/WeChat.app")
         ):
             result = restore_official_wechat_if_needed(Path("/tmp/WeChat.app"), Path("/tmp/original.zip"))
         self.assertTrue(result["official_wechat_verified"])

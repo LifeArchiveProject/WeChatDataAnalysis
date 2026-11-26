@@ -644,29 +644,65 @@ def _has_compatible_debug_entitlements(wechat_app: Path) -> bool:
     return True
 
 
+def _read_wechat_entitlements(wechat_app: Path) -> dict[str, Any]:
+    result = _run(
+        ["/usr/bin/codesign", "-d", "--entitlements", "-", "--xml", str(wechat_app)],
+    )
+    try:
+        entitlements = plistlib.loads(result.stdout.encode("utf-8"))
+    except (ValueError, plistlib.InvalidFileException) as exc:
+        raise MacOSDBKeyCaptureFailure(
+            "wechat_entitlements_invalid", "无法解析微信的签名权限，已停止临时重签。",
+        ) from exc
+    if not isinstance(entitlements, dict):
+        raise MacOSDBKeyCaptureFailure("wechat_entitlements_invalid", "微信签名权限不是有效的字典。")
+    return entitlements
+
+
+def _sign_in_place_debug_copy(staged_app: Path) -> None:
+    # App Store builds include application/team identifiers that require
+    # Apple's provisioning authorization. An ad-hoc signature cannot claim
+    # them: AMFI rejects the executable before LaunchServices starts it.
+    # Retain the sandbox, app-group, and runtime permissions WeChat needs,
+    # while leaving the nested Tencent-signed login helper untouched.
+    original = _read_wechat_entitlements(staged_app)
+    entitlements = {
+        key: value for key, value in original.items()
+        if key.startswith("com.apple.security.")
+    }
+    with tempfile.TemporaryDirectory(prefix="wcda-entitlements-") as temporary:
+        entitlement_path = Path(temporary) / "debug.plist"
+        entitlement_path.write_bytes(plistlib.dumps(entitlements))
+        sign_command = [
+            "/usr/bin/codesign", "--force", "--entitlements", str(entitlement_path),
+            "--sign", "-", str(staged_app),
+        ]
+        try:
+            _run(sign_command, timeout=300)
+        except MacOSDBKeyCaptureFailure:
+            _run_as_administrator(shlex.join(sign_command), timeout=345)
+
+
 def _has_compatible_in_place_signature(wechat_app: Path) -> bool:
-    """Allow LLDB without removing permissions required by WeChat 4.1.12.
+    """Keep WeChat's sandbox permissions without restricted identity claims.
 
     The installed build is sandboxed. Dropping the outer bundle's original
     entitlements lets the process start, but it exits immediately after its
     app-group/container initialization. Only the outer executable is signed
-    ad-hoc; its original permissions are retained and the login helper keeps
+    ad-hoc; its sandbox permissions are retained and the login helper keeps
     its untouched Tencent signature.
     """
 
-    outer_entitlements = _run(
-        ["/usr/bin/codesign", "-d", "--entitlements", ":-", str(wechat_app)],
-        check=False,
-    )
-    entitlement_output = f"{outer_entitlements.stdout}\n{outer_entitlements.stderr}"
-    required_entitlements = (
-        "<key>com.apple.application-identifier</key>",
-        "<string>5A4RE8SF68.com.tencent.xinWeChat</string>",
-        "<key>com.apple.security.app-sandbox</key>",
-        "<key>com.apple.security.application-groups</key>",
-        "<key>com.apple.security.network.client</key>",
-    )
-    if any(value not in entitlement_output for value in required_entitlements):
+    try:
+        entitlements = _read_wechat_entitlements(wechat_app)
+    except MacOSDBKeyCaptureFailure:
+        return False
+    if (
+        any(not key.startswith("com.apple.security.") for key in entitlements)
+        or entitlements.get("com.apple.security.app-sandbox") is not True
+        or entitlements.get("com.apple.security.network.client") is not True
+        or "5A4RE8SF68.com.tencent.xinWeChat" not in entitlements.get("com.apple.security.application-groups", [])
+    ):
         return False
 
     helper = wechat_app / DEBUG_LOGIN_HELPER
@@ -888,20 +924,7 @@ def ensure_wechat_in_place_debuggable(
         # it is writable.  The atomic exchange below installs the verified
         # debug clone while moving the untouched official bundle into the
         # recovery slot.
-        sign_command = [
-            "/usr/bin/codesign",
-            "--force",
-            "--preserve-metadata=entitlements",
-            "--sign",
-            "-",
-            str(staged_app),
-        ]
-        try:
-            _run(sign_command, timeout=300)
-        except MacOSDBKeyCaptureFailure:
-            # App Store / managed installations can be root-owned.  Match the
-            # upstream prerequisite while keeping the exact target quoted.
-            _run_as_administrator(shlex.join(sign_command), timeout=345)
+        _sign_in_place_debug_copy(staged_app)
         signature = inspect_wechat_signature(staged_app)
         if (
             not signature.get("valid")

@@ -274,7 +274,7 @@ class TestRestoreIdentity(unittest.TestCase):
             patch.object(capture, "verify_original_wechat_backup", return_value={"version": "4.1.7", "build": "100", "cdhash": "old"}),
             patch.object(capture, "_quit_wechat"),
             patch.object(capture, "_prepare_local_restore_staging", side_effect=clone),
-            patch.object(capture, "_run", side_effect=sign),
+            patch.object(capture, "_sign_in_place_debug_copy", side_effect=sign),
             patch.object(capture, "_has_compatible_in_place_signature", return_value=True),
             patch.object(capture, "_atomic_swap_paths", side_effect=swap),
         ):
