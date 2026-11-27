@@ -4,9 +4,11 @@ import os
 from pathlib import Path
 import select
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 
@@ -99,6 +101,37 @@ class TestLLDBCommandLifecycle(unittest.TestCase):
                 _stdout, returncode, elapsed = self.run_wrapper("/bin/sleep 10", interrupt)
                 self.assertEqual(returncode, 128 + interrupt)
                 self.assertLess(elapsed, 2.0, "interrupted capture left a timer holding output open")
+
+    @unittest.skipUnless(
+        sys.platform == "darwin" and shutil.which("lldb") and shutil.which("clang"),
+        "requires Apple LLDB and clang",
+    )
+    def test_piped_lldb_runs_inferior_to_exit_before_next_command(self) -> None:
+        # Exercise the actual interpreter: a sleeping stub cannot detect the
+        # asynchronous stdin mode that leaves the real app suspended.
+        with tempfile.TemporaryDirectory(prefix="wedata-lldb-lifecycle-") as temporary:
+            root = Path(temporary)
+            source, binary, script = root / "probe.c", root / "probe", root / "probe.lldb"
+            source.write_text("#include <unistd.h>\nint main(void) { usleep(100000); return 0; }\n")
+            subprocess.run(
+                [shutil.which("clang"), str(source), "-o", str(binary)],
+                check=True, capture_output=True, timeout=15,
+            )
+            script.write_text(
+                f'target create "{binary}"\n'
+                "process launch\n"
+                'script print("WEDATA_PROBE_EXITED", '
+                'lldb.debugger.GetSelectedTarget().GetProcess().GetState() == lldb.eStateExited)\n'
+                "settings set auto-confirm true\n"
+                "quit\n"
+            )
+            result = subprocess.run(
+                shlex.split(_build_lldb_capture_command(script, 8)),
+                capture_output=True, text=True, timeout=12,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("WEDATA_PROBE_EXITED True", result.stdout)
+            self.assertIn("WEDATA_LLDB_EXIT=0", result.stdout)
 
 
 if __name__ == "__main__":

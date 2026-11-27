@@ -26,6 +26,8 @@ from .macos_clone_capture import (
     capture_salt_matched_passphrase,
     _breakpoint_preflight_path,
     _remove_breakpoint_preflight,
+    resolve_lldb_pbkdf_stub_plan,
+    WECHAT_PBKDF_STUB_POINTS,
 )
 from .macos_db_key_capture import (
     DEFAULT_DEBUG_ROOT,
@@ -904,6 +906,15 @@ def _preferred_capture_backend(wechat_app: Path, state: dict[str, Any], debug_ro
         if remembered.get("backend") == "lldb" and remembered.get("identity") == _backend_identity(state):
             return "lldb"
     except (OSError, ValueError, AttributeError):
+        pass
+    # WeChat 4.2 loads account derivation through roam_migration/roam_server.
+    # The native helper can observe only one image, while the LLDB callback
+    # arms every UUID-bound PBKDF stub in the supported module set.
+    try:
+        discovered = resolve_lldb_pbkdf_stub_plan(wechat_app)
+        if set(discovered) - set(WECHAT_PBKDF_STUB_POINTS):
+            return "lldb"
+    except (OSError, ValueError, MacOSDBKeyCaptureFailure):
         pass
     # Older Mac builds need not contain the native helper's expected dylib.
     if not (wechat_app / "Contents/Resources/wechat.dylib").is_file():

@@ -51,6 +51,19 @@ def test_macos27_preflight_selects_software_without_running_native(tmp_path, cap
     software.assert_called_once()
 
 
+def test_wechat_42_extra_pbkdf_module_selects_software_on_macos26(tmp_path, capture_case):
+    app, state, _, _, stack = capture_case
+    stack.enter_context(patch.object(workflow, "resolve_lldb_pbkdf_stub_plan", return_value={
+        **workflow.WECHAT_PBKDF_STUB_POINTS,
+        "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE": 0x1234,
+    }))
+    stack.enter_context(patch.object(workflow, "preflight_native_wcdb_capture"))
+    software = stack.enter_context(patch("wechat_decrypt_tool.macos_clone_capture.preflight_capture_breakpoints", return_value={"pid": 321, "pbkdf_locations": 3, "key_return_locations": 0}))
+    result = workflow.preflight_prepared_in_place_capture(app, backup_root=tmp_path, debug_root=tmp_path)
+    assert result["capture_backend"] == "lldb"
+    software.assert_called_once()
+
+
 def test_native_preflight_failure_routes_to_software(tmp_path, capture_case):
     app, state, _, restore, stack = capture_case
     stack.enter_context(patch.object(workflow, "_preferred_capture_backend", return_value="native"))

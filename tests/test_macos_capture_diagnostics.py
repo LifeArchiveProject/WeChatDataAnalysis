@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -137,6 +138,31 @@ def test_embedded_administrator_error_preserves_safe_diagnostics(helper_call):
     assert raised.value.code == "native_capture_timeout"
     assert "未命中 PBKDF 断点" in str(raised.value)
     assert SECRET not in str(raised.value)
+
+
+def test_helper_error_exit_keeps_structured_stdout_for_the_privileged_shell(helper_call, monkeypatch, tmp_path):
+    invoke, _ = helper_call
+    payload = {
+        "status": "error", "code": "native_capture_timeout",
+        "diagnostics": {"pbkdf_calls": 0}, "message": "x" * 800 + SECRET,
+    }
+    helper = tmp_path / "helper"
+    helper.write_text("#!/bin/sh\nprintf '%s' " + shlex.quote(json.dumps(payload)) + "\nexit 1\n")
+    helper.chmod(0o700)
+    monkeypatch.setattr(native, "ensure_native_capture_helper", Mock(return_value=helper))
+
+    def run_shell(command, **_kwargs):
+        return subprocess.run(
+            ["/bin/sh", "-c", command], capture_output=True, text=True, check=True,
+        ).stdout
+
+    monkeypatch.setattr(native, "_run_as_administrator", run_shell)
+    with pytest.raises(MacOSDBKeyCaptureFailure) as raised:
+        invoke()
+    assert raised.value.code == "native_capture_timeout"
+    assert "pbkdf_calls=0" in str(raised.value)
+    assert SECRET not in str(raised.value)
+    assert SECRET not in str(native.get_logger.return_value.warning.call_args)
 
 
 @pytest.mark.parametrize("error", ["execution error (1009)", "Killed: 9", "SIGKILL", "terminated"])

@@ -305,8 +305,17 @@ def _run_helper(
         command.extend(["--transaction-id", transaction_id])
 
     try:
+        # The privileged shell can discard stdout when the helper exits 1.
+        # That status already has a structured JSON error; let its payload
+        # reach the parser. Keep signal and unexpected exit statuses intact.
+        helper_command = (
+            shlex.join(command)
+            + '\nwcda_helper_status=$?\n'
+            + 'if [ "$wcda_helper_status" -eq 1 ]; then exit 0; fi\n'
+            + 'exit "$wcda_helper_status"'
+        )
         raw_output = _run_as_administrator(
-            shlex.join(command),
+            helper_command,
             timeout=max(int(timeout), 30) + _HELPER_TIMEOUT_PAD,
         ).strip()
     except MacOSDBKeyCaptureFailure as exc:
